@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -175,15 +176,15 @@ func (s *source) editSQLitePart() error {
 	return err
 }
 
-func pollSQLiteSessions(sources []source) ([]int64, error) {
+func pollSQLiteSessions(ctx context.Context, sources []source) ([]int64, error) {
 	watermarks := make([]int64, len(sources))
 	for i, s := range sources {
-		mtime, err := parser.OpenCodeSourceMtime(parser.OpenCodeSQLiteVirtualPath(s.Path, s.ID))
+		mtime, err := parser.OpenCodeSourceMtime(ctx, parser.OpenCodeSQLiteVirtualPath(s.Path, s.ID))
 		if err != nil {
 			return nil, err
 		}
 		if mtime == 0 {
-			return nil, fmt.Errorf("active SQLite session missing a watermark")
+			return nil, errors.New("active SQLite session missing a watermark")
 		}
 		watermarks[i] = mtime
 	}
@@ -213,13 +214,13 @@ func measureSQLiteScans(ctx context.Context, r *report, sources []source, active
 		}
 	}
 	return r.measure("warm", "session_poll", func() error {
-		_, err := pollSQLiteSessions(sources[:active])
+		_, err := pollSQLiteSessions(ctx, sources[:active])
 		return err
 	})
 }
 
 func syncSQLiteChildEdits(ctx context.Context, r *report, engine *syncengine.Engine, database *db.DB, sources []source) error {
-	before, err := pollSQLiteSessions(sources)
+	before, err := pollSQLiteSessions(ctx, sources)
 	if err != nil {
 		return err
 	}
@@ -232,7 +233,7 @@ func syncSQLiteChildEdits(ctx context.Context, r *report, engine *syncengine.Eng
 		virtualPaths = append(virtualPaths, parser.OpenCodeSQLiteVirtualPath(s.Path, s.ID))
 	}
 	if err := r.measure("active", "session_poll", func() error {
-		after, err := pollSQLiteSessions(sources)
+		after, err := pollSQLiteSessions(ctx, sources)
 		if err != nil {
 			return err
 		}

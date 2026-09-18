@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -199,7 +198,7 @@ func TestExtractProjectFromCwdWithBranchContext_GitWorktreeMainRoot(t *testing.T
 	mustMkdirAll(t, subdir)
 
 	got := ExtractProjectFromCwdWithBranchContext(
-		context.Background(), subdir, "feature",
+		t.Context(), subdir, "feature",
 	)
 	assert.Equal(t, "agentsview", got,
 		"kit-backed worktree resolution should use the main repo name")
@@ -308,7 +307,7 @@ func TestExtractProjectFromCwdNoGitInvocationWhenLocalWalkMisses(t *testing.T) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	assert.Equal(t, "parser",
-		ExtractProjectFromCwdWithBranchContext(context.Background(), cwd, ""))
+		ExtractProjectFromCwdWithBranchContext(t.Context(), cwd, ""))
 	assert.NoFileExists(t, gitLog,
 		"passive discovery must not invoke git when the local walk misses")
 }
@@ -352,7 +351,7 @@ func TestExtractProjectFromCwdConservativeGitFileRootWithoutGit(
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	assert.Equal(t, "feature_worktree",
-		ExtractProjectFromCwdWithBranchContext(context.Background(), cwd, ""))
+		ExtractProjectFromCwdWithBranchContext(t.Context(), cwd, ""))
 	assert.NoFileExists(t, gitLog,
 		"passive discovery must not invoke git for a conservative gitfile root")
 }
@@ -1010,7 +1009,7 @@ func skipIfNoGit(t *testing.T) {
 
 func gitRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git %s: %s", strings.Join(args, " "), out)

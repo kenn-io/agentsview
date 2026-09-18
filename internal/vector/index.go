@@ -471,7 +471,7 @@ func (ix *Index) Close() error {
 // read-only, matching internal/db's read-only guard pattern.
 func (ix *Index) requireWritable() error {
 	if ix.readOnly {
-		return fmt.Errorf("vectors.db is opened read-only")
+		return errors.New("vectors.db is opened read-only")
 	}
 	return nil
 }

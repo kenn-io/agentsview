@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -37,24 +36,27 @@ func TestCJKFTSJapaneseAndKoreanSearch(t *testing.T) {
 		{"quoted korean phrase", `"검색 기능"`, "검색 기능을 추가합니다.", "기능을 추가해 검색합니다."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			d := testDB(t)
 			seedSearchSession(t, d, "match", "proj", [][2]string{{"user", tc.match}})
 			seedSearchSession(t, d, "miss", "proj", [][2]string{{"user", tc.miss}})
 
-			results, err := d.Search(context.Background(), SearchFilter{Query: tc.query, Limit: 20})
-			require.NoError(t, err)
-			require.Len(t, results.Results, 1, "session search must preserve term adjacency and order")
-			assert.Equal(t, "match", results.Results[0].SessionID)
+			results, err := d.Search(t.Context(), SearchFilter{Query: tc.query, Limit: 20})
+			require.NoError(err)
+			require.Len(results.Results, 1, "session search must preserve term adjacency and order")
+			assert.Equal("match", results.Results[0].SessionID)
 
-			content, err := d.SearchContent(context.Background(), ContentSearchFilter{
+			content, err := d.SearchContent(t.Context(), ContentSearchFilter{
 				Pattern: tc.query,
 				Mode:    "fts",
 				Sources: []string{"messages"},
 				Limit:   20,
 			})
-			require.NoError(t, err)
-			require.Len(t, content.Matches, 1, "content search must use the same CJK query preparation")
-			assert.Equal(t, "match", content.Matches[0].SessionID)
+			require.NoError(err)
+			require.Len(content.Matches, 1, "content search must use the same CJK query preparation")
+			assert.Equal("match", content.Matches[0].SessionID)
 		})
 	}
 }

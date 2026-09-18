@@ -71,9 +71,11 @@ type remoteSyncFailure struct {
 }
 
 type remoteSyncResponse struct {
+	cause      error
 	LocalStats *syncpkg.SyncStats  `json:"local_stats,omitempty"`
 	Failures   []remoteSyncFailure `json:"failures,omitempty"`
 	Error      string              `json:"error,omitempty"`
+	ErrorCode  string              `json:"error_code,omitempty"`
 }
 
 var runRemoteSync = func(
@@ -704,6 +706,10 @@ func (s *Server) runRemoteSyncRequest(
 		LocalStats: localStats,
 		Failures:   failures,
 		Error:      remoteSyncTopLevelError(blocked),
+		cause:      blocked,
+	}
+	if errors.Is(blocked, syncpkg.ErrUnifiedRebuildAborted) {
+		response.ErrorCode = "unified_rebuild_aborted"
 	}
 	return response
 }
@@ -711,8 +717,8 @@ func (s *Server) runRemoteSyncRequest(
 func remoteSyncRequestLifecycleOutcome(
 	ctx context.Context, response remoteSyncResponse,
 ) string {
-	if ctx.Err() != nil || response.Error == context.Canceled.Error() ||
-		response.Error == context.DeadlineExceeded.Error() {
+	if ctx.Err() != nil || errors.Is(response.cause, context.Canceled) ||
+		errors.Is(response.cause, context.DeadlineExceeded) {
 		return "canceled"
 	}
 	if response.Error != "" || len(response.Failures) > 0 {
@@ -921,9 +927,13 @@ func primaryRemoteCoordinatorError(err error) error {
 			err = first
 			continue
 		}
-		switch err.(type) {
-		case *syncpkg.RebuildContributorError, *remotesync.HostError:
-			return err
+		{
+			var errCase0 *syncpkg.RebuildContributorError
+			var errCase1 *remotesync.HostError
+			switch {
+			case errors.As(err, &errCase0), errors.As(err, &errCase1):
+				return err
+			}
 		}
 		unwrapped := errors.Unwrap(err)
 		if unwrapped == nil {

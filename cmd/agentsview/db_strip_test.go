@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -33,60 +32,66 @@ func commandImageMessage(sessionID string) db.Message {
 }
 
 func TestDBStripCommandControls(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := testDataDir(t)
 	cmd := newDBStripCommand()
 	cmd.SetArgs(nil)
 	err := cmd.Execute()
-	require.EqualError(t, err, "db strip requires --images")
+	require.EqualError(err, "db strip requires --images")
 
 	cmd = newDBStripCommand()
 	cmd.SetArgs([]string{"--images", "--format", "json"})
 	err = cmd.Execute()
-	require.EqualError(t, err, "--format json requires --yes for db strip --images")
+	require.EqualError(err, "--format json requires --yes for db strip --images")
 
 	seedCommandArchive(t)
 	cmd = newDBStripCommand()
 	cmd.SetArgs([]string{"--images", "--dry-run", "--format", "json"})
 	var dryRun bytes.Buffer
 	cmd.SetOut(&dryRun)
-	require.NoError(t, cmd.Execute())
-	assert.Contains(t, dryRun.String(), `"changed":1`)
+	require.NoError(cmd.Execute())
+	assert.Contains(dryRun.String(), `"changed":1`)
 	assertCommandArchiveStillContainsImage(t)
-	assert.NoFileExists(t, filepath.Join(dataDir, "config.toml"))
+	assert.NoFileExists(filepath.Join(dataDir, "config.toml"))
 
 	cmd = newDBStripCommand()
 	cmd.SetArgs([]string{"--images"})
 	cmd.SetIn(strings.NewReader("n\n"))
 	var declined bytes.Buffer
 	cmd.SetErr(&declined)
-	require.NoError(t, cmd.Execute())
-	assert.Contains(t, declined.String(), "Aborted.")
+	require.NoError(cmd.Execute())
+	assert.Contains(declined.String(), "Aborted.")
 	assertCommandArchiveStillContainsImage(t)
-	assert.NoFileExists(t, filepath.Join(dataDir, "config.toml"))
+	assert.NoFileExists(filepath.Join(dataDir, "config.toml"))
 
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(dataDir, "config.toml"),
 		[]byte("tool_result_images = \"drop\"\n"), 0o600,
 	))
 	loaded, err := config.LoadReadOnly()
-	require.NoError(t, err)
-	assert.Equal(t, config.ToolResultImagesDrop, loaded.ToolResultImages)
+	require.NoError(err)
+	assert.Equal(config.ToolResultImagesDrop, loaded.ToolResultImages)
 
 	cmd = newDBStripCommand()
 	cmd.SetArgs([]string{"--images", "--yes"})
 	var applied bytes.Buffer
 	cmd.SetOut(&applied)
-	require.NoError(t, cmd.Execute())
-	assert.Contains(t, applied.String(), "Image strip completed.")
-	assert.Contains(t, applied.String(), "Changed: 1")
-	assert.Contains(t, applied.String(), "project: 1 sessions, 1 changed, 1 payloads, 26 B stored, 3 B decoded")
+	require.NoError(cmd.Execute())
+	assert.Contains(applied.String(), "Image strip completed.")
+	assert.Contains(applied.String(), "Changed: 1")
+	assert.Contains(applied.String(), "project: 1 sessions, 1 changed, 1 payloads, 26 B stored, 3 B decoded")
 	assertCommandArchiveHasNoImage(t)
 }
 
 func TestDBStripCommandJSONApply(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := testDataDir(t)
 	seedCommandArchive(t)
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(dataDir, "config.toml"),
 		[]byte("tool_result_images = \"drop\"\n"), 0o600,
 	))
@@ -95,113 +100,121 @@ func TestDBStripCommandJSONApply(t *testing.T) {
 	cmd.SetArgs([]string{"--images", "--format", "json", "--yes"})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	require.NoError(t, cmd.Execute())
+	require.NoError(cmd.Execute())
 
-	assert.True(t, strings.HasSuffix(output.String(), "\n"), "JSON output must end with a newline")
+	assert.True(strings.HasSuffix(output.String(), "\n"), "JSON output must end with a newline")
 	var report db.StripImagesReport
-	require.NoError(t, json.Unmarshal(output.Bytes(), &report))
-	assert.Equal(t, 1, report.Sessions)
-	assert.Equal(t, 1, report.Changed)
-	assert.Equal(t, int64(26), report.StoredBytes)
-	assert.Equal(t, int64(3), report.DecodedBytes)
-	require.Len(t, report.Projects, 1)
-	assert.Equal(t, 1, report.Projects[0].Changed)
+	require.NoError(json.Unmarshal(output.Bytes(), &report))
+	assert.Equal(1, report.Sessions)
+	assert.Equal(1, report.Changed)
+	assert.Equal(int64(26), report.StoredBytes)
+	assert.Equal(int64(3), report.DecodedBytes)
+	require.Len(report.Projects, 1)
+	assert.Equal(1, report.Projects[0].Changed)
 	assertCommandArchiveHasNoImage(t)
 }
 
 func TestDBStripCommandRefreshesSecretFindings(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	testDataDir(t)
 	cfg, err := config.LoadReadOnly()
-	require.NoError(t, err)
+	require.NoError(err)
 	database, err := db.Open(cfg.DBPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	insertSessionForStripTest(t, database, "command")
 	message := commandImageMessage("command")
 	message.Content = "AKIA" + "7QHWN2DKR4FYPLJA"
-	require.NoError(t, database.InsertMessages([]db.Message{message}))
-	require.NoError(t, database.Close())
+	require.NoError(database.InsertMessages([]db.Message{message}))
+	require.NoError(database.Close())
 
 	cmd := newDBStripCommand()
 	cmd.SetArgs([]string{"--images", "--yes"})
 	cmd.SetOut(&bytes.Buffer{})
-	require.NoError(t, cmd.Execute())
+	require.NoError(cmd.Execute())
 
 	database, err = db.Open(cfg.DBPath)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, database.Close()) }()
+	require.NoError(err)
+	defer func() { require.NoError(database.Close()) }()
 	findings, err := database.SessionSecretFindings(t.Context(), "command")
-	require.NoError(t, err)
-	require.Len(t, findings, 1)
+	require.NoError(err)
+	require.Len(findings, 1)
 	source, ok, err := database.SecretFindingSource(t.Context(), findings[0])
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, message.Content, source[findings[0].MatchStart:findings[0].MatchEnd])
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(message.Content, source[findings[0].MatchStart:findings[0].MatchEnd])
 	session, err := database.GetSessionFull(t.Context(), "command")
-	require.NoError(t, err)
-	assert.Equal(t, 1, session.SecretLeakCount)
+	require.NoError(err)
+	assert.Equal(1, session.SecretLeakCount)
 }
 
 func TestDBStripLeavesSourceFiles(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := dbtest.OpenTestDB(t)
 	path := t.TempDir() + "\\provider.jsonl"
 	sourcePath := path
 	insertSessionForStripTest(t, database, "source", func(s *db.Session) {
 		s.FilePath = &sourcePath
 	})
-	require.NoError(t, database.InsertMessages([]db.Message{commandImageMessage("source")}))
+	require.NoError(database.InsertMessages([]db.Message{commandImageMessage("source")}))
 	database.SetToolResultImages(config.ToolResultImagesKeep)
 
 	before := "provider transcript remains byte-for-byte unchanged"
-	require.NoError(t, os.WriteFile(path, []byte(before), 0o600))
-	report, err := database.StripToolImages(context.Background(), db.StripImagesFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 1, report.Changed)
+	require.NoError(os.WriteFile(path, []byte(before), 0o600))
+	report, err := database.StripToolImages(t.Context(), db.StripImagesFilter{})
+	require.NoError(err)
+	assert.Equal(1, report.Changed)
 	after, err := os.ReadFile(path)
-	require.NoError(t, err)
-	assert.Equal(t, before, string(after))
+	require.NoError(err)
+	assert.Equal(before, string(after))
 }
 
 func TestStripThenCompactAccounting(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := dbtest.OpenTestDB(t)
 	insertSessionForStripTest(t, database, "accounting")
-	require.NoError(t, database.InsertMessages([]db.Message{
+	require.NoError(database.InsertMessages([]db.Message{
 		largeCommandImageMessage("accounting"),
 	}))
-	report, err := database.StripToolImages(context.Background(), db.StripImagesFilter{})
-	require.NoError(t, err)
+	report, err := database.StripToolImages(t.Context(), db.StripImagesFilter{})
+	require.NoError(err)
 	var output strings.Builder
-	require.NoError(t, writeDBImageReport(&output, report, false, "Image strip completed."))
-	assert.Contains(t, output.String(), "Stored content bytes:")
-	assert.Contains(t, output.String(), "Decoded image bytes:")
-	assert.NotContains(t, output.String(), "Reclaimed:")
+	require.NoError(writeDBImageReport(&output, report, false, "Image strip completed."))
+	assert.Contains(output.String(), "Stored content bytes:")
+	assert.Contains(output.String(), "Decoded image bytes:")
+	assert.NotContains(output.String(), "Reclaimed:")
 	t.Logf("strip report:\n%s", output.String())
 
-	before, err := database.EstimateCompact(context.Background())
-	require.NoError(t, err)
-	assert.Positive(t, before.FreeListBytes)
+	before, err := database.EstimateCompact(t.Context())
+	require.NoError(err)
+	assert.Positive(before.FreeListBytes)
 
-	result, err := database.Compact(context.Background(), db.CompactOptions{
+	result, err := database.Compact(t.Context(), db.CompactOptions{
 		StagingDir: t.TempDir(),
 	})
-	require.NoError(t, err)
-	assert.Equal(t, before.DatabaseBytes, result.Before.DatabaseBytes)
-	assert.Equal(t, before.TotalBytes, result.Before.TotalBytes)
-	assert.Positive(t, result.ReclaimedBytes)
-	assert.Greater(t, result.Before.TotalBytes, result.After.TotalBytes)
-	assert.Zero(t, result.After.FreeListCount)
-	assert.Equal(t,
-		result.Before.TotalBytes-result.After.TotalBytes,
+	require.NoError(err)
+	assert.Equal(before.DatabaseBytes, result.Before.DatabaseBytes)
+	assert.Equal(before.TotalBytes, result.Before.TotalBytes)
+	assert.Positive(result.ReclaimedBytes)
+	assert.Greater(result.Before.TotalBytes, result.After.TotalBytes)
+	assert.Zero(result.After.FreeListCount)
+	assert.Equal(result.Before.TotalBytes-result.After.TotalBytes,
 		result.ReclaimedBytes,
 	)
 	compactStat, err := os.Stat(database.Path())
-	require.NoError(t, err)
-	assert.Equal(t, result.After.DatabaseBytes, compactStat.Size())
+	require.NoError(err)
+	assert.Equal(result.After.DatabaseBytes, compactStat.Size())
 
 	var compactOutput strings.Builder
-	require.NoError(t, writeDBCompactResult(&compactOutput, result, false))
-	assert.Contains(t, compactOutput.String(), "Before:")
-	assert.Contains(t, compactOutput.String(), "After:")
-	assert.Contains(t, compactOutput.String(), "Reclaimed:")
+	require.NoError(writeDBCompactResult(&compactOutput, result, false))
+	assert.Contains(compactOutput.String(), "Before:")
+	assert.Contains(compactOutput.String(), "After:")
+	assert.Contains(compactOutput.String(), "Reclaimed:")
 	t.Logf("compact report:\n%sfile size: %d B", compactOutput.String(), compactStat.Size())
 }
 
@@ -234,7 +247,7 @@ func assertCommandArchiveStillContainsImage(t *testing.T) {
 	database, err := db.Open(cfg.DBPath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, database.Close()) }()
-	messages, err := database.GetAllMessages(context.Background(), "command")
+	messages, err := database.GetAllMessages(t.Context(), "command")
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Contains(t, messages[0].ToolCalls[0].ResultContent, "input_image")
@@ -247,7 +260,7 @@ func assertCommandArchiveHasNoImage(t *testing.T) {
 	database, err := db.Open(cfg.DBPath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, database.Close()) }()
-	messages, err := database.GetAllMessages(context.Background(), "command")
+	messages, err := database.GetAllMessages(t.Context(), "command")
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.NotContains(t, messages[0].ToolCalls[0].ResultContent, "input_image")

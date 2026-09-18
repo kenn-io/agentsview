@@ -10,6 +10,8 @@ import (
 )
 
 func TestDiscoverClaudeS3FoldsToolResultMetadata(t *testing.T) {
+	assert := assert.New(t)
+
 	oldList := listS3Objects
 	t.Cleanup(func() { listS3Objects = oldList })
 
@@ -38,14 +40,13 @@ func TestDiscoverClaudeS3FoldsToolResultMetadata(t *testing.T) {
 	got := ClaudeProjectSessionFiles("s3://bucket/laptop/raw/claude")
 	require.Len(t, got, 1)
 	assert.Equal(
-		t,
 		"s3://bucket/laptop/raw/claude/proj/session.jsonl",
 		got[0].Path,
 	)
-	assert.Equal(t, int64(33), got[0].SourceSize)
-	assert.Equal(t, sidecarMtime.UnixNano(), got[0].SourceMtime)
-	assert.Contains(t, got[0].SourceFingerprint, "session")
-	assert.Contains(t, got[0].SourceFingerprint, "sidecar")
+	assert.Equal(int64(33), got[0].SourceSize)
+	assert.Equal(sidecarMtime.UnixNano(), got[0].SourceMtime)
+	assert.Contains(got[0].SourceFingerprint, "session")
+	assert.Contains(got[0].SourceFingerprint, "sidecar")
 }
 
 func TestDiscoverClaudeS3RequiresSubagentsUnderParentSession(t *testing.T) {

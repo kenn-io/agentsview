@@ -259,7 +259,7 @@ func buildAnalyticsDBFixture(
 		)
 	}
 	stats := seed(t, &testEnv{db: database})
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	checkpointErr := database.CheckpointWALTruncate(ctx)
 	closeErr := database.Close()
@@ -332,16 +332,17 @@ func TestAnalyticsSummary(t *testing.T) {
 	te, stats := setupAnalyticsEnv(t)
 
 	t.Run("OK", func(t *testing.T) {
+		assert := assert.New(t)
+
 		w := te.get(t, buildURLWithRange("summary", map[string]string{"timezone": "UTC"}))
 		assertStatus(t, w, http.StatusOK)
 
 		resp := decode[db.AnalyticsSummary](t, w)
-		assert.Equal(t, stats.TotalSessions, resp.TotalSessions)
-		assert.Equal(t, stats.TotalMessages, resp.TotalMessages)
-		assert.Equal(t, stats.ActiveProjects, resp.ActiveProjects)
-		assert.Equal(t, stats.ActiveDays, resp.ActiveDays)
-		assert.Equal(t,
-			[]string{"claude-3-5-sonnet", "gpt-4o"},
+		assert.Equal(stats.TotalSessions, resp.TotalSessions)
+		assert.Equal(stats.TotalMessages, resp.TotalMessages)
+		assert.Equal(stats.ActiveProjects, resp.ActiveProjects)
+		assert.Equal(stats.ActiveDays, resp.ActiveDays)
+		assert.Equal([]string{"claude-3-5-sonnet", "gpt-4o"},
 			resp.Models,
 		)
 	})
@@ -689,6 +690,8 @@ func TestAnalyticsHeatmap(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			params := make(map[string]string)
 			if tt.metric != "" {
 				params["metric"] = tt.metric
@@ -702,9 +705,9 @@ func TestAnalyticsHeatmap(t *testing.T) {
 				if expectedMetric == "" {
 					expectedMetric = "messages" // default
 				}
-				assert.Equal(t, expectedMetric, resp.Metric)
+				assert.Equal(expectedMetric, resp.Metric)
 				if tt.wantEntries >= 0 {
-					assert.Len(t, resp.Entries, tt.wantEntries)
+					assert.Len(resp.Entries, tt.wantEntries)
 				}
 				if tt.wantEntries > 0 {
 					total := 0
@@ -713,9 +716,9 @@ func TestAnalyticsHeatmap(t *testing.T) {
 					}
 					switch expectedMetric {
 					case "messages":
-						assert.Equal(t, stats.TotalMessages, total)
+						assert.Equal(stats.TotalMessages, total)
 					case "sessions":
-						assert.Equal(t, stats.TotalSessions, total)
+						assert.Equal(stats.TotalSessions, total)
 					}
 				}
 			}
@@ -886,17 +889,19 @@ func TestAnalyticsTools(t *testing.T) {
 	te, stats := setupAnalyticsEnv(t)
 
 	t.Run("OK", func(t *testing.T) {
+		assert := assert.New(t)
+
 		w := te.get(t, buildURLWithRange("tools", map[string]string{"timezone": "UTC"}))
 		assertStatus(t, w, http.StatusOK)
 
 		resp := decode[db.ToolsAnalyticsResponse](t, w)
-		assert.Equal(t, stats.TotalToolCalls, resp.TotalCalls)
-		assert.NotEmpty(t, resp.ByCategory)
+		assert.Equal(stats.TotalToolCalls, resp.TotalCalls)
+		assert.NotEmpty(resp.ByCategory)
 		require.NotEmpty(t, resp.ByTool)
-		assert.NotEmpty(t, resp.ByTool[0].ToolName)
-		assert.NotZero(t, resp.ByTool[0].CallCount)
-		assert.NotZero(t, resp.ByTool[0].SessionCount)
-		assert.Len(t, resp.ByAgent, stats.Agents)
+		assert.NotEmpty(resp.ByTool[0].ToolName)
+		assert.NotZero(resp.ByTool[0].CallCount)
+		assert.NotZero(resp.ByTool[0].SessionCount)
+		assert.Len(resp.ByAgent, stats.Agents)
 	})
 
 	t.Run("WithProjectFilter", func(t *testing.T) {
@@ -917,14 +922,16 @@ func TestAnalyticsSkills(t *testing.T) {
 	te, stats := setupAnalyticsEnv(t)
 
 	t.Run("OK", func(t *testing.T) {
+		assert := assert.New(t)
+
 		w := te.get(t, buildURLWithRange("skills", map[string]string{"timezone": "UTC"}))
 		assertStatus(t, w, http.StatusOK)
 
 		resp := decode[db.SkillsAnalyticsResponse](t, w)
-		assert.Equal(t, stats.TotalSkillCalls, resp.TotalSkillCalls)
-		assert.Equal(t, 1, resp.DistinctSkills)
+		assert.Equal(stats.TotalSkillCalls, resp.TotalSkillCalls)
+		assert.Equal(1, resp.DistinctSkills)
 		require.NotEmpty(t, resp.BySkill)
-		assert.Equal(t, "review-code", resp.BySkill[0].SkillName)
+		assert.Equal("review-code", resp.BySkill[0].SkillName)
 	})
 
 	t.Run("WithProjectFilter", func(t *testing.T) {
@@ -959,6 +966,8 @@ func TestAnalyticsTopSessions(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			params := make(map[string]string)
 			if tt.metric != "" {
 				params["metric"] = tt.metric
@@ -979,15 +988,15 @@ func TestAnalyticsTopSessions(t *testing.T) {
 				if expectedMetric == "" {
 					expectedMetric = "messages"
 				}
-				assert.Equal(t, expectedMetric, resp.Metric)
+				assert.Equal(expectedMetric, resp.Metric)
 				if tt.project == "" {
 					expected := min(stats.TotalSessions, 10)
-					assert.Len(t, resp.Sessions, expected)
+					assert.Len(resp.Sessions, expected)
 				}
 				if tt.project != "" {
-					assert.NotEmpty(t, resp.Sessions, "project %q", tt.project)
+					assert.NotEmpty(resp.Sessions, "project %q", tt.project)
 					for _, s := range resp.Sessions {
-						assert.Equal(t, tt.project, s.Project)
+						assert.Equal(tt.project, s.Project)
 					}
 				}
 			}
@@ -1015,6 +1024,9 @@ func TestAnalyticsTopSessions_OutputTokens(t *testing.T) {
 // all agree. This catches regressions where one endpoint counts
 // sub-agent, fork, or empty sessions that others exclude.
 func TestSessionCountConsistency(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 
 	// Seed root sessions with messages (should be counted).
@@ -1120,17 +1132,17 @@ func TestSessionCountConsistency(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	summaryResp := decode[db.AnalyticsSummary](t, w)
 
-	assert.Equal(t, wantNavCount, listResp.Total, "session list total")
-	assert.Equal(t, wantNavCount, statsResp.SessionCount, "stats session_count")
-	assert.Equal(t, wantAnalyticsCount, summaryResp.TotalSessions,
+	assert.Equal(wantNavCount, listResp.Total, "session list total")
+	assert.Equal(wantNavCount, statsResp.SessionCount, "stats session_count")
+	assert.Equal(wantAnalyticsCount, summaryResp.TotalSessions,
 		"analytics total_sessions counts subagents")
 
 	// List and stats (navigation) agree; analytics counts subagents on
 	// top, so it is intentionally higher.
-	require.Equal(t, listResp.Total, statsResp.SessionCount,
+	require.Equal(listResp.Total, statsResp.SessionCount,
 		"navigation session counts disagree: list=%d stats=%d",
 		listResp.Total, statsResp.SessionCount)
-	require.Greater(t, summaryResp.TotalSessions, listResp.Total,
+	require.Greater(summaryResp.TotalSessions, listResp.Total,
 		"analytics should count more than navigation: analytics=%d list=%d",
 		summaryResp.TotalSessions, listResp.Total)
 }

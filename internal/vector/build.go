@@ -112,10 +112,10 @@ func (ix *Index) Build(
 		return BuildResult{}, err
 	}
 	if o.RepairInvalid && o.FullRebuild {
-		return BuildResult{}, fmt.Errorf("repair-invalid and full-rebuild are mutually exclusive")
+		return BuildResult{}, errors.New("repair-invalid and full-rebuild are mutually exclusive")
 	}
 	if o.RepairInvalid && o.Backstop {
-		return BuildResult{}, fmt.Errorf("repair-invalid and backstop are mutually exclusive")
+		return BuildResult{}, errors.New("repair-invalid and backstop are mutually exclusive")
 	}
 	if o.RepairInvalid {
 		return ix.buildInvalidRepair(ctx, enc, gen, o)
@@ -293,7 +293,7 @@ func (ix *Index) buildInvalidRepair(
 	}
 	if fill.Failed > 0 {
 		return result, fmt.Errorf(
-			"invalid vector repair incomplete: %d permanently rejected targets remain queued; first failure: %v",
+			"invalid vector repair incomplete: %d permanently rejected targets remain queued; first failure: %w",
 			fill.Failed, fill.FirstFailure)
 	}
 	if remaining > 0 {

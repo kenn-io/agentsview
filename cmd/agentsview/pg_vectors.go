@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -101,7 +102,7 @@ func openPGVectorTarget(targetName string) (*sql.DB, func(), error) {
 		return nil, nil, err
 	}
 	if target.PG.URL == "" {
-		return nil, nil, fmt.Errorf("url not configured")
+		return nil, nil, errors.New("url not configured")
 	}
 	applyClassifierConfig(appCfg)
 	pg, err := postgres.Open(

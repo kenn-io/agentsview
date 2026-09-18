@@ -33,7 +33,7 @@ func TestMachineLabelsFromStoreBackend(t *testing.T) {
 	}
 
 	got, err := service.MachineLabels(
-		context.Background(), service.NewReadOnlyBackend(store),
+		t.Context(), service.NewReadOnlyBackend(store),
 	)
 
 	require.NoError(t, err)
@@ -56,7 +56,7 @@ func TestMachineLabelsFromHTTPBackend(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	got, err := service.MachineLabels(
-		context.Background(), servicehttp.NewHTTPBackend(server.URL, "", true, ""),
+		t.Context(), servicehttp.NewHTTPBackend(server.URL, "", true, ""),
 	)
 
 	require.NoError(t, err)
@@ -67,7 +67,7 @@ func TestMachineLabelsFromHTTPBackend(t *testing.T) {
 func TestMachineLabelsUnsupportedServiceReturnsNil(t *testing.T) {
 	var svc unsupportedMachineLabelsService
 
-	got, err := service.MachineLabels(context.Background(), svc)
+	got, err := service.MachineLabels(t.Context(), svc)
 
 	require.NoError(t, err)
 	assert.Nil(t, got)

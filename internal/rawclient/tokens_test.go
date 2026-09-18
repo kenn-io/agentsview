@@ -1,7 +1,6 @@
 package rawclient
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -35,7 +34,7 @@ func newTokenTestServer(t *testing.T, exchanges *int32, ttl time.Duration) *http
 		assert.Equal(t, "/api/v1/raw-sync/tokens", r.URL.Path)
 		body, err := io.ReadAll(r.Body)
 		assert.NoError(t, err)
-		assert.Equal(t, `{"scopes":["negotiate","upload","commit"]}`, string(body))
+		assert.JSONEq(t, `{"scopes":["negotiate","upload","commit"]}`, string(body))
 		assert.Equal(t, "Bearer avdc_test", r.Header.Get("Authorization"))
 		assert.Equal(t, "dev_test", r.Header.Get("X-AgentsView-Device-ID"))
 		w.Header().Set("Content-Type", "application/json")
@@ -49,22 +48,28 @@ func newTokenTestServer(t *testing.T, exchanges *int32, ttl time.Duration) *http
 }
 
 func TestTokenProviderCachesUntilExpiryMargin(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	var exchanges int32
 	server := newTokenTestServer(t, &exchanges, 10*time.Minute)
 	client := newTestClient(t, server.URL, time.Minute)
 
 	first, err := client.tokens.token(t.Context())
-	require.NoError(t, err)
-	require.Equal(t, "avdt_1", first)
+	require.NoError(err)
+	require.Equal("avdt_1", first)
 
 	second, err := client.tokens.token(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, "avdt_1", second)
-	assert.EqualValues(t, 1, atomic.LoadInt32(&exchanges))
+	require.NoError(err)
+	assert.Equal("avdt_1", second)
+	assert.EqualValues(1, atomic.LoadInt32(&exchanges))
 }
 
 func TestTokenProviderRefreshesPastMargin(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	var exchanges int32
 	// TTL below the margin, so the issued token is already stale for this
@@ -73,11 +78,11 @@ func TestTokenProviderRefreshesPastMargin(t *testing.T) {
 	client := newTestClient(t, server.URL, 90*time.Second)
 
 	_, err := client.tokens.token(t.Context())
-	require.NoError(t, err)
+	require.NoError(err)
 	second, err := client.tokens.token(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, "avdt_2", second)
-	assert.EqualValues(t, 2, atomic.LoadInt32(&exchanges))
+	require.NoError(err)
+	assert.Equal("avdt_2", second)
+	assert.EqualValues(2, atomic.LoadInt32(&exchanges))
 }
 
 func TestTokenProviderSingleFlight(t *testing.T) {
@@ -92,7 +97,7 @@ func TestTokenProviderSingleFlight(t *testing.T) {
 		go func() {
 			// assert, not require: the send must be unconditional so the
 			// result loop below always drains.
-			token, err := client.tokens.token(context.Background())
+			token, err := client.tokens.token(t.Context())
 			assert.NoError(t, err)
 			results <- token
 		}()

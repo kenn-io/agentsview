@@ -50,6 +50,9 @@ func TestParseLiteLLMPricingBandsNormalizesSupportedThresholdFields(t *testing.T
 }
 
 func TestParseLiteLLMPricingReads1hCacheCreationRate(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	data := []byte(`{
 		"claude-fable-5": {
 			"input_cost_per_token": 0.00001,
@@ -61,15 +64,18 @@ func TestParseLiteLLMPricingReads1hCacheCreationRate(t *testing.T) {
 	}`)
 
 	prices, err := ParseLiteLLMPricing(data)
-	require.NoError(t, err)
-	require.Len(t, prices, 1)
-	assert.Equal(t, money.Money{Microdollars: 12_500_000},
+	require.NoError(err)
+	require.Len(prices, 1)
+	assert.Equal(money.Money{Microdollars: 12_500_000},
 		prices[0].CacheCreationPerMTok)
-	assert.Equal(t, money.Money{Microdollars: 20_000_000},
+	assert.Equal(money.Money{Microdollars: 20_000_000},
 		prices[0].CacheCreation1hPerMTok)
 }
 
 func TestParseLiteLLMPricingBands1hCacheCreationCompanion(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	data := []byte(`{
 		"banded-model": {
 			"input_cost_per_token": 0.000001,
@@ -82,18 +88,20 @@ func TestParseLiteLLMPricingBands1hCacheCreationCompanion(t *testing.T) {
 	}`)
 
 	prices, err := ParseLiteLLMPricing(data)
-	require.NoError(t, err)
-	require.Len(t, prices, 1)
-	require.Len(t, prices[0].Bands, 1)
+	require.NoError(err)
+	require.Len(prices, 1)
+	require.Len(prices[0].Bands, 1)
 	band := prices[0].Bands[0]
-	assert.Equal(t, money.Money{Microdollars: 500_000},
+	assert.Equal(money.Money{Microdollars: 500_000},
 		band.CacheCreationPerMTok,
 		"band inherits the base 5m rate when no companion overrides it")
-	assert.Equal(t, money.Money{Microdollars: 1_600_000},
+	assert.Equal(money.Money{Microdollars: 1_600_000},
 		band.CacheCreation1hPerMTok)
 }
 
 func TestParseLiteLLMPricingBands1hCacheCreationInherited(t *testing.T) {
+	require := require.New(t)
+
 	data := []byte(`{
 		"banded-model": {
 			"input_cost_per_token": 0.000001,
@@ -104,9 +112,9 @@ func TestParseLiteLLMPricingBands1hCacheCreationInherited(t *testing.T) {
 	}`)
 
 	prices, err := ParseLiteLLMPricing(data)
-	require.NoError(t, err)
-	require.Len(t, prices, 1)
-	require.Len(t, prices[0].Bands, 1)
+	require.NoError(err)
+	require.Len(prices, 1)
+	require.Len(prices[0].Bands, 1)
 	assert.Equal(t, money.Money{Microdollars: 800_000},
 		prices[0].Bands[0].CacheCreation1hPerMTok,
 		"band inherits the base 1h rate")
@@ -178,7 +186,7 @@ func TestFetchLiteLLMPricingHonorsCanceledContext(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(server.Close)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	_, err := fetchLiteLLMPricing(ctx, server.Client(), server.URL)

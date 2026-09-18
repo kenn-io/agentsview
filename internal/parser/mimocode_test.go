@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -10,6 +9,9 @@ import (
 )
 
 func TestMiMoCodeProviderParseRelabelsOpenCodeSession(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	sessionPath := filepath.Join(
 		root, "storage", "session_diff", "global", "ses_mimo.json",
@@ -51,31 +53,34 @@ func TestMiMoCodeProviderParseRelabelsOpenCodeSession(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "testmachine",
 	})
-	require.True(t, ok)
-	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{
+	require.True(ok)
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "mimocode:ses_mimo",
 	})
-	require.NoError(t, err)
-	require.True(t, found)
+	require.NoError(err)
+	require.True(found)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  source,
 		Machine: "testmachine",
 	})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
+	require.NoError(err)
+	require.Len(outcome.Results, 1)
 	sess := outcome.Results[0].Result.Session
 	msgs := outcome.Results[0].Result.Messages
-	require.Len(t, msgs, 1)
+	require.Len(msgs, 1)
 
-	assert.Equal(t, "mimocode:ses_mimo", sess.ID)
-	assert.Equal(t, "mimocode:ses_parent", sess.ParentSessionID)
-	assert.Equal(t, AgentMiMoCode, sess.Agent)
-	assert.Equal(t, "mimoapp", sess.Project)
-	assert.Equal(t, "Hello from MiMoCode", msgs[0].Content)
+	assert.Equal("mimocode:ses_mimo", sess.ID)
+	assert.Equal("mimocode:ses_parent", sess.ParentSessionID)
+	assert.Equal(AgentMiMoCode, sess.Agent)
+	assert.Equal("mimoapp", sess.Project)
+	assert.Equal("Hello from MiMoCode", msgs[0].Content)
 }
 
 func TestMiMoCodeProviderDiscoversSessions(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	sessionPath := filepath.Join(
 		root, "storage", "session_diff", "global", "ses_mimo.json",
@@ -90,27 +95,29 @@ func TestMiMoCodeProviderDiscoversSessions(t *testing.T) {
 	})
 
 	provider, ok := NewProvider(AgentMiMoCode, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	require.True(ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(sources, 1)
 
-	assert.Equal(t, sessionPath, sources[0].DisplayPath)
-	assert.Equal(t, "mimoapp", sources[0].ProjectHint)
-	assert.Equal(t, AgentMiMoCode, sources[0].Provider)
+	assert.Equal(sessionPath, sources[0].DisplayPath)
+	assert.Equal("mimoapp", sources[0].ProjectHint)
+	assert.Equal(AgentMiMoCode, sources[0].Provider)
 }
 
 func TestMiMoCodeSQLiteVirtualPathRoundTrips(t *testing.T) {
+	assert := assert.New(t)
+
 	wantDBPath := filepath.Join(t.TempDir(), "mimocode.db")
 	virtual := MiMoCodeSQLiteVirtualPath(wantDBPath, "ses_mimo")
 	dbPath, sessionID, ok := parseOpenCodeFormatVirtualPath(mimoFmt.dbName, virtual)
 	require.True(t, ok)
-	assert.Equal(t, wantDBPath, dbPath)
-	assert.Equal(t, "ses_mimo", sessionID)
+	assert.Equal(wantDBPath, dbPath)
+	assert.Equal("ses_mimo", sessionID)
 
 	_, _, ok = parseOpenCodeFormatVirtualPath(
 		mimoFmt.dbName,
 		filepath.Join(t.TempDir(), "opencode.db")+"#ses_mimo",
 	)
-	assert.False(t, ok)
+	assert.False(ok)
 }

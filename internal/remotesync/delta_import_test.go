@@ -68,6 +68,8 @@ func (p *deltaPlanProvider) Parse(context.Context, parser.ParseRequest) (parser.
 }
 
 func TestRemotePathMapStoredResolver(t *testing.T) {
+	assert := assert.New(t)
+
 	root := t.TempDir()
 	remoteDir := "/srv/agent/sessions"
 	localDir := remappedRemotePath(root, remoteDir)
@@ -79,18 +81,20 @@ func TestRemotePathMapStoredResolver(t *testing.T) {
 
 	local, ok := resolve("remote:/srv/agent/sessions/project/session.jsonl")
 	require.True(t, ok)
-	assert.Equal(t, filepath.Join(localDir, "project", "session.jsonl"), local)
-	assert.Equal(t, "remote:/srv/agent/sessions/project/session.jsonl", paths.pathRewriter()(local))
+	assert.Equal(filepath.Join(localDir, "project", "session.jsonl"), local)
+	assert.Equal("remote:/srv/agent/sessions/project/session.jsonl", paths.pathRewriter()(local))
 
 	_, ok = resolve("other:/srv/agent/sessions/project/session.jsonl")
-	assert.False(t, ok)
+	assert.False(ok)
 	_, ok = resolve("remote:/srv/other/session.jsonl")
-	assert.False(t, ok)
+	assert.False(ok)
 	_, ok = resolve("remote:/srv/agent/sessions/../escape.jsonl")
-	assert.False(t, ok)
+	assert.False(ok)
 }
 
 func TestPruneRemoteSkipCacheHostWideAndDisarmed(t *testing.T) {
+	assert := assert.New(t)
+
 	root := t.TempDir()
 	remoteDir := "/srv/agent/sessions"
 	layout := importLayout{
@@ -112,21 +116,24 @@ func TestPruneRemoteSkipCacheHostWideAndDisarmed(t *testing.T) {
 	pruned, stats := pruneRemoteSkipCache(cache, layout, syncpkg.ChangedPathPlan{}, MirrorChangeJournal{
 		Version: mirrorJournalVersion, InvalidateAll: true,
 	})
-	assert.Empty(t, pruned)
-	assert.True(t, stats.HostWideScope)
-	assert.Equal(t, 3, stats.HostWide)
+	assert.Empty(pruned)
+	assert.True(stats.HostWideScope)
+	assert.Equal(3, stats.HostWide)
 
 	pruned, stats = pruneRemoteSkipCache(cache, layout, syncpkg.ChangedPathPlan{}, MirrorChangeJournal{
 		Version: mirrorJournalVersion,
 	})
-	assert.Equal(t, cache, pruned)
-	assert.Zero(t, stats.Total())
+	assert.Equal(cache, pruned)
+	assert.Zero(stats.Total())
 }
 
 func TestPruneRemoteSkipCacheExactAndFallbackFamilies(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(database.Close()) })
 	root := t.TempDir()
 	remoteDir := "/srv/agent/sessions"
 	localDir := remappedRemotePath(root, remoteDir)
@@ -140,7 +147,7 @@ func TestPruneRemoteSkipCacheExactAndFallbackFamilies(t *testing.T) {
 	}
 	changed := filepath.Join(localDir, "changed.jsonl")
 	journalPath, err := mirrorRelativeLocalChangePath(root, changed)
-	require.NoError(t, err)
+	require.NoError(err)
 	journal := MirrorChangeJournal{Version: mirrorJournalVersion, Entries: []MirrorChangeEntry{{
 		Path: journalPath, InvalidateCache: true,
 	}}}
@@ -163,14 +170,14 @@ func TestPruneRemoteSkipCacheExactAndFallbackFamilies(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 	plan, err := engine.PlanChangedPathsContext(t.Context(), []string{changed})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	pruned, stats := pruneRemoteSkipCache(cache, layout, plan, journal)
-	assert.Equal(t, 1, stats.ExactScopes)
-	assert.Zero(t, stats.ProviderScopes)
-	assert.Equal(t, 3, stats.Exact)
-	assert.Zero(t, stats.Provider)
-	assert.Equal(t, map[string]int64{
+	assert.Equal(1, stats.ExactScopes)
+	assert.Zero(stats.ProviderScopes)
+	assert.Equal(3, stats.Exact)
+	assert.Zero(stats.Provider)
+	assert.Equal(map[string]int64{
 		remoteDir + "/changed.jsonl?agent=other":            4,
 		remoteDir + "/unchanged.jsonl?agent=delta-provider": 5,
 	}, pruned)
@@ -187,19 +194,19 @@ func TestPruneRemoteSkipCacheExactAndFallbackFamilies(t *testing.T) {
 	})
 	t.Cleanup(fallbackEngine.Close)
 	fallbackPlan, err := fallbackEngine.PlanChangedPathsContext(t.Context(), []string{changed})
-	require.NoError(t, err)
+	require.NoError(err)
 	pruned, stats = pruneRemoteSkipCache(cache, layout, fallbackPlan, journal)
-	assert.Zero(t, stats.ExactScopes)
-	assert.Equal(t, 1, stats.ProviderScopes)
-	assert.Equal(t, 4, stats.Provider)
-	assert.Equal(t, map[string]int64{
+	assert.Zero(stats.ExactScopes)
+	assert.Equal(1, stats.ProviderScopes)
+	assert.Equal(4, stats.Provider)
+	assert.Equal(map[string]int64{
 		remoteDir + "/changed.jsonl?agent=other": 4,
 	}, pruned)
 
 	disarmed := disarmMirrorChanges(journal)
 	pruned, stats = pruneRemoteSkipCache(cache, layout, plan, disarmed)
-	assert.Equal(t, cache, pruned)
-	assert.Zero(t, stats.Total())
+	assert.Equal(cache, pruned)
+	assert.Zero(stats.Total())
 }
 
 func TestJournalOutcomeClosedSet(t *testing.T) {
@@ -284,32 +291,37 @@ func TestPreparedDeltaImportPoisonProjectionDisarmsAndRearms(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			plan := buildPlan(tc.relevance)
 			cache := map[string]int64{
 				remoteDir + "/poison.jsonl?agent=delta-provider": 42,
 			}
 			_, armedStats := pruneRemoteSkipCache(cache, layout, plan, journal)
-			assert.Equal(t, 1, armedStats.Total())
+			assert.Equal(1, armedStats.Total())
 
 			disarmed := disarmMirrorChanges(journal)
 			preserved, replayStats := pruneRemoteSkipCache(cache, layout, plan, disarmed)
-			assert.Equal(t, cache, preserved)
-			assert.Zero(t, replayStats.Total())
-			assert.Equal(t, 1, countDisarmedCachedSuppressions(plan, disarmed, tc.result))
+			assert.Equal(cache, preserved)
+			assert.Zero(replayStats.Total())
+			assert.Equal(1, countDisarmedCachedSuppressions(plan, disarmed, tc.result))
 
 			rearmed, _, mergeErr := mergeMirrorChanges(disarmed, []string{journalPath})
 			require.NoError(t, mergeErr)
 			_, rearmedStats := pruneRemoteSkipCache(cache, layout, plan, rearmed)
-			assert.Equal(t, 1, rearmedStats.Total())
-			assert.Zero(t, countDisarmedCachedSuppressions(plan, rearmed, tc.result))
+			assert.Equal(1, rearmedStats.Total())
+			assert.Zero(countDisarmedCachedSuppressions(plan, rearmed, tc.result))
 		})
 	}
 }
 
 func TestPreparedDeltaImportPrepareDoesNotProcess(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(database.Close()) })
 	root := t.TempDir()
 	remoteDir := "/srv/agent/sessions"
 	pending, err := (Importer{
@@ -321,37 +333,40 @@ func TestPreparedDeltaImportPrepareDoesNotProcess(t *testing.T) {
 	}).PreparePending(t.Context(), DeltaImportRequest{
 		Journal: MirrorChangeJournal{Version: mirrorJournalVersion},
 	})
-	require.NoError(t, err)
-	require.NotNil(t, pending)
-	assert.Zero(t, pending.Stats.SessionsSynced)
-	assert.Equal(t, JournalAbortedBeforeProcessing, pending.Stats.JournalOutcome)
+	require.NoError(err)
+	require.NotNil(pending)
+	assert.Zero(pending.Stats.SessionsSynced)
+	assert.Equal(JournalAbortedBeforeProcessing, pending.Stats.JournalOutcome)
 }
 
 func TestPreparePendingExactChangeLoadsOnlyRelevantSkipCache(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := dbtest.OpenTestDB(t)
 	const host = "remote"
-	require.NoError(t, database.SetSyncState(
+	require.NoError(database.SetSyncState(
 		visualStudioCopilotRemoteSkipMigrationKey(host), "done",
 	))
 	root := t.TempDir()
 	remoteDir := "/srv/agent/sessions"
 	localDir := remappedRemotePath(root, remoteDir)
 	changedPath := filepath.Join(localDir, "project", "changed.jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(changedPath), 0o755))
-	require.NoError(t, os.WriteFile(changedPath, []byte(
+	require.NoError(os.MkdirAll(filepath.Dir(changedPath), 0o755))
+	require.NoError(os.WriteFile(changedPath, []byte(
 		testjsonl.NewSessionBuilder().AddClaudeUser(
 			"2026-08-15T10:00:00Z", "bounded cache fixture",
 		).String(),
 	), 0o600))
 	journalPath, err := mirrorRelativeLocalChangePath(root, changedPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	cache := map[string]int64{
 		remoteDir + "/project/changed.jsonl": 42,
 	}
 	for i := range 256 {
 		cache[fmt.Sprintf("%s/unrelated/session-%03d.jsonl", remoteDir, i)] = int64(i)
 	}
-	require.NoError(t, database.ReplaceRemoteSkippedFiles(host, cache))
+	require.NoError(database.ReplaceRemoteSkippedFiles(host, cache))
 	replaceCalls := 0
 	type mutationCount struct{ deletes, upserts int }
 	var mutations []mutationCount
@@ -377,22 +392,22 @@ func TestPreparePendingExactChangeLoadsOnlyRelevantSkipCache(t *testing.T) {
 			Entries: []MirrorChangeEntry{{Path: journalPath}},
 		},
 	})
-	require.NoError(t, err)
-	require.NotNil(t, pending)
-	assert.Len(t, pending.cache, 1,
+	require.NoError(err)
+	require.NotNil(pending)
+	assert.Len(pending.cache, 1,
 		"unrelated host cache entries must not enter a one-source import")
-	assert.Zero(t, replaceCalls,
+	assert.Zero(replaceCalls,
 		"a disarmed exact import must not rewrite unchanged cache rows")
 
 	stats, err := pending.Execute(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.SessionsSynced)
-	assert.Equal(t, []mutationCount{{deletes: 1}}, mutations,
+	require.NoError(err)
+	assert.Equal(1, stats.SessionsSynced)
+	assert.Equal([]mutationCount{{deletes: 1}}, mutations,
 		"processing must persist only the relevant cache-family change")
 	persisted, err := database.LoadRemoteSkippedFiles(host)
-	require.NoError(t, err)
-	assert.Len(t, persisted, 256)
-	assert.NotContains(t, persisted, remoteDir+"/project/changed.jsonl")
+	require.NoError(err)
+	assert.Len(persisted, 256)
+	assert.NotContains(persisted, remoteDir+"/project/changed.jsonl")
 }
 
 func TestPreparePendingPersistenceFailureAbortsBeforeProcessing(t *testing.T) {
@@ -465,8 +480,11 @@ func TestPreparePendingCancellationDoesNotPruneOrDisarm(t *testing.T) {
 }
 
 func TestPreparePendingCancellationAfterPrunePersistenceDoesNotReturnFlip(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := dbtest.OpenTestDB(t)
-	require.NoError(t, database.ReplaceRemoteSkippedFiles(
+	require.NoError(database.ReplaceRemoteSkippedFiles(
 		"remote", map[string]int64{"/srv/agent/sessions/pending.jsonl": 1},
 	))
 	ctx, cancel := context.WithCancel(t.Context())
@@ -487,16 +505,18 @@ func TestPreparePendingCancellationAfterPrunePersistenceDoesNotReturnFlip(t *tes
 			FullImportReason: FullImportJournalOverflow, InvalidateAll: true,
 		},
 	})
-	require.ErrorIs(t, err, context.Canceled)
-	assert.Nil(t, pending,
+	require.ErrorIs(err, context.Canceled)
+	assert.Nil(pending,
 		"the caller must not receive a disarmed journal after cancellation")
-	assert.Equal(t, 1, persistCalls)
+	assert.Equal(1, persistCalls)
 }
 
 func TestPreparedDeltaImportFinalCacheFailureRetainsJournal(t *testing.T) {
+	require := require.New(t)
+
 	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(database.Close()) })
 	sentinel := errors.New("final cache sentinel")
 	pending, err := (Importer{
 		Host: "remote", DB: database, Root: t.TempDir(),
@@ -509,8 +529,8 @@ func TestPreparedDeltaImportFinalCacheFailureRetainsJournal(t *testing.T) {
 	}).PreparePending(t.Context(), DeltaImportRequest{
 		Journal: MirrorChangeJournal{Version: mirrorJournalVersion},
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	stats, err := pending.Execute(t.Context())
-	require.ErrorIs(t, err, sentinel)
+	require.ErrorIs(err, sentinel)
 	assert.Equal(t, JournalCachePersistFailed, stats.JournalOutcome)
 }

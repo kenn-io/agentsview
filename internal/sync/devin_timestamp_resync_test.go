@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -34,7 +33,7 @@ func writeDevinMessageNodeOnlyFixture(
 	require.NoError(t, err)
 	defer func() { require.NoError(t, database.Close()) }()
 
-	_, err = database.Exec(`
+	_, err = database.ExecContext(t.Context(), `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
 			title TEXT,
@@ -59,7 +58,7 @@ func writeDevinMessageNodeOnlyFixture(
 
 	// created_at and last_activity_at stay NULL: this session's only timestamp
 	// source is message_nodes.created_at.
-	_, err = database.Exec(
+	_, err = database.ExecContext(t.Context(),
 		`INSERT INTO sessions (id, title, working_directory, model, hidden)
 		 VALUES (?, ?, ?, ?, 0)`,
 		sessionID, "Devin node-only fixture", "/src/agentsview", "devin-1",
@@ -77,7 +76,7 @@ func writeDevinMessageNodeOnlyFixture(
 		if i > 0 {
 			parent = int64(i - 1)
 		}
-		_, err = database.Exec(
+		_, err = database.ExecContext(t.Context(),
 			`INSERT INTO message_nodes
 				(session_id, node_id, parent_node_id, chat_message, created_at)
 			 VALUES (?, ?, ?, ?, ?)`,
@@ -104,11 +103,11 @@ func devinSourceFingerprint(t *testing.T, root string) parser.SourceFingerprint 
 	provider := factory.NewProvider(parser.ProviderConfig{
 		Roots: []string{root}, Machine: "local",
 	})
-	refs, err := provider.Discover(context.Background())
+	refs, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, refs, 1)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), refs[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), refs[0])
 	require.NoError(t, err)
 	require.NotEmpty(t, fingerprint.Hash)
 	return fingerprint
@@ -139,18 +138,18 @@ func writeStaleDevinTimestamps(t *testing.T, archivePath string, userVersion int
 	require.NoError(t, err)
 	defer func() { require.NoError(t, conn.Close()) }()
 
-	_, err = conn.Exec(
+	_, err = conn.ExecContext(t.Context(),
 		`UPDATE sessions SET started_at = ?, ended_at = ?`,
 		staleStartedAt, staleStartedAt,
 	)
 	require.NoError(t, err)
-	_, err = conn.Exec(fmt.Sprintf("PRAGMA user_version = %d", userVersion))
+	_, err = conn.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", userVersion))
 	require.NoError(t, err)
 }
 
 func requireOnlyStoredSession(t *testing.T, database *db.DB) db.Session {
 	t.Helper()
-	page, err := database.ListSessions(context.Background(), db.SessionFilter{Limit: 10})
+	page, err := database.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)
 	return page.Sessions[0]
@@ -166,6 +165,9 @@ func requireOnlyStoredSession(t *testing.T, database *db.DB) db.Session {
 // unchanged sources, this session would keep its wrong timestamps forever and
 // this test fails.
 func TestDevinMessageNodeSessionResyncsDespiteUnchangedFingerprint(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const (
 		sessionID = "node-only-session"
 		// 2023-11-14T22:13:20Z as epoch seconds. Read as milliseconds this is
@@ -179,16 +181,16 @@ func TestDevinMessageNodeSessionResyncsDespiteUnchangedFingerprint(t *testing.T)
 	archivePath := filepath.Join(t.TempDir(), "archive.db")
 
 	database, err := db.Open(archivePath)
-	require.NoError(t, err)
+	require.NoError(err)
 	engine := NewEngine(database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentDevin: {root}},
 		Machine:   "local",
 	})
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
 
 	stored := requireOnlyStoredSession(t, database)
-	require.NotNil(t, stored.StartedAt)
-	assert.Equal(t, wantStartedAt, *stored.StartedAt,
+	require.NotNil(stored.StartedAt)
+	assert.Equal(wantStartedAt, *stored.StartedAt,
 		"message_nodes.created_at is epoch seconds and must date the session")
 
 	fingerprintBefore := devinSourceFingerprint(t, root)
@@ -196,36 +198,36 @@ func TestDevinMessageNodeSessionResyncsDespiteUnchangedFingerprint(t *testing.T)
 	// Simulate the archive an older binary left behind: the same source, but
 	// stored timestamps the millisecond misreading produced.
 	engine.Close()
-	require.NoError(t, database.Close())
+	require.NoError(database.Close())
 	writeStaleDevinTimestamps(t, archivePath, staleUserVersion(false))
 
 	// An incremental sync cannot repair this. The source bytes never changed,
 	// so its fingerprint is what it always was, and the fix lives entirely in
 	// how the parser interprets integers the fingerprint hashes raw.
 	currentVersioned, err := db.Open(archivePath)
-	require.NoError(t, err)
-	require.False(t, currentVersioned.NeedsResync())
+	require.NoError(err)
+	require.False(currentVersioned.NeedsResync())
 	incremental := NewEngine(currentVersioned, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentDevin: {root}},
 		Machine:   "local",
 	})
-	incremental.SyncAll(context.Background(), nil)
+	incremental.SyncAll(t.Context(), nil)
 	skipped := requireOnlyStoredSession(t, currentVersioned)
-	require.NotNil(t, skipped.StartedAt)
-	assert.Equal(t, staleStartedAt, *skipped.StartedAt,
+	require.NotNil(skipped.StartedAt)
+	assert.Equal(staleStartedAt, *skipped.StartedAt,
 		"incremental sync must be unable to notice the correction, which is why "+
 			"this fix needs a data-version bump rather than a fingerprint change")
-	assert.Equal(t, fingerprintBefore.Hash, devinSourceFingerprint(t, root).Hash,
+	assert.Equal(fingerprintBefore.Hash, devinSourceFingerprint(t, root).Hash,
 		"the source is unchanged, so nothing source-side can signal the reparse")
 	incremental.Close()
-	require.NoError(t, currentVersioned.Close())
+	require.NoError(currentVersioned.Close())
 
 	// The data-version bump is the only thing that reaches this session.
 	writeStaleDevinTimestamps(t, archivePath, staleUserVersion(true))
 	reopened, err := db.Open(archivePath)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, reopened.Close()) }()
-	require.True(t, reopened.NeedsResync(),
+	require.NoError(err)
+	defer func() { require.NoError(reopened.Close()) }()
+	require.True(reopened.NeedsResync(),
 		"an archive below the current data version must ask for a resync")
 
 	upgraded := NewEngine(reopened, EngineConfig{
@@ -234,13 +236,13 @@ func TestDevinMessageNodeSessionResyncsDespiteUnchangedFingerprint(t *testing.T)
 	})
 	defer upgraded.Close()
 
-	resyncStats := upgraded.ResyncAll(context.Background(), nil)
-	require.False(t, resyncStats.Aborted)
+	resyncStats := upgraded.ResyncAll(t.Context(), nil)
+	require.False(resyncStats.Aborted)
 
 	corrected := requireOnlyStoredSession(t, reopened)
-	require.NotNil(t, corrected.StartedAt)
-	assert.Equal(t, wantStartedAt, *corrected.StartedAt,
+	require.NotNil(corrected.StartedAt)
+	assert.Equal(wantStartedAt, *corrected.StartedAt,
 		"resync must reparse the session and replace the 1970-era timestamp")
-	assert.False(t, reopened.NeedsResync(),
+	assert.False(reopened.NeedsResync(),
 		"a completed resync must clear the stale-data flag")
 }

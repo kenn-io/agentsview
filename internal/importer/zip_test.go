@@ -28,22 +28,25 @@ func createTestZip(t *testing.T, files map[string]string) string {
 }
 
 func TestExtractZip(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	zipPath := createTestZip(t, map[string]string{
 		"conversations.json": `[{"uuid":"test"}]`,
 		"subdir/file.txt":    "hello",
 	})
 
 	dir, cleanup, err := ExtractZip(zipPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	defer cleanup()
 
 	data, err := os.ReadFile(filepath.Join(dir, "conversations.json"))
-	require.NoError(t, err)
-	assert.Contains(t, string(data), "test")
+	require.NoError(err)
+	assert.Contains(string(data), "test")
 
 	data, err = os.ReadFile(filepath.Join(dir, "subdir", "file.txt"))
-	require.NoError(t, err)
-	assert.Equal(t, "hello", string(data))
+	require.NoError(err)
+	assert.Equal("hello", string(data))
 }
 
 func TestExtractZip_InvalidPath(t *testing.T) {

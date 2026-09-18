@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -44,7 +45,7 @@ func ParseUsageTokenTypes(raw string) (UsageTokenTypes, error) {
 		}
 	}
 	if selected == 0 {
-		return 0, fmt.Errorf("at least one token type is required")
+		return 0, errors.New("at least one token type is required")
 	}
 	return selected, nil
 }

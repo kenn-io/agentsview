@@ -248,41 +248,46 @@ func TestParseZedSessions_ZstdAndFiltersChildren(t *testing.T) {
 }
 
 func TestParseZedSessions_LegacyFiveColumnSchema(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dbPath := filepath.Join(t.TempDir(), "threads.db")
 	db, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	defer db.Close()
 	artifact, err := os.ReadFile(filepath.Join("testdata", "zed-legacy-threads.sql"))
-	require.NoError(t, err)
-	_, err = db.Exec(string(artifact))
-	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO threads (id, summary, updated_at, data_type, data) VALUES (?, ?, ?, ?, ?)`,
+	require.NoError(err)
+	_, err = db.ExecContext(t.Context(), string(artifact))
+	require.NoError(err)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO threads (id, summary, updated_at, data_type, data) VALUES (?, ?, ?, ?, ?)`,
 		"legacy", "Legacy thread", "2026-06-08T09:14:10Z", "json", []byte(`{"messages":[{"User":{"content":[{"Text":"hello"}]}}]}`))
-	require.NoError(t, err)
+	require.NoError(err)
 
 	results, err := parseZedAll(dbPath, "local")
-	require.NoError(t, err)
-	require.Len(t, results, 1)
+	require.NoError(err)
+	require.Len(results, 1)
 	sess := results[0].Session
-	assert.Equal(t, "zed:legacy", sess.ID)
-	assert.Equal(t, "Legacy thread", sess.SessionName)
-	assert.Equal(t, "", sess.ParentSessionID)
-	assert.Equal(t, "", sess.Cwd)
-	assert.Equal(t, "unknown", sess.Project)
-	assert.Equal(t, "2026-06-08T09:14:10Z", sess.StartedAt.Format(time.RFC3339))
+	assert.Equal("zed:legacy", sess.ID)
+	assert.Equal("Legacy thread", sess.SessionName)
+	assert.Equal("", sess.ParentSessionID)
+	assert.Equal("", sess.Cwd)
+	assert.Equal("unknown", sess.Project)
+	assert.Equal("2026-06-08T09:14:10Z", sess.StartedAt.Format(time.RFC3339))
 }
 
 func TestZedLegacyCompatibilityRequiresCoreColumns(t *testing.T) {
+	require := require.New(t)
+
 	dbPath := createZedThreadsDB(t, nil)
 	db, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
-	_, err = db.Exec(`ALTER TABLE threads RENAME TO old_threads`)
-	require.NoError(t, err)
-	_, err = db.Exec(`CREATE TABLE threads (id TEXT, summary TEXT, updated_at TEXT, data_type TEXT)`)
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
+	require.NoError(err)
+	_, err = db.ExecContext(t.Context(), `ALTER TABLE threads RENAME TO old_threads`)
+	require.NoError(err)
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE threads (id TEXT, summary TEXT, updated_at TEXT, data_type TEXT)`)
+	require.NoError(err)
+	require.NoError(db.Close())
 	_, err = parseZedAll(dbPath, "local")
-	require.Error(t, err)
+	require.Error(err)
 	assert.Contains(t, err.Error(), "missing required Zed threads column data")
 }
 
@@ -341,7 +346,7 @@ func createZedThreadsDBAt(
 		t.Fatal(err)
 	}
 	defer db.Close()
-	_, err = db.Exec(`CREATE TABLE threads (
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE threads (
 		id TEXT PRIMARY KEY,
 		summary TEXT NOT NULL,
 		updated_at TEXT NOT NULL,
@@ -356,7 +361,7 @@ func createZedThreadsDBAt(
 		t.Fatal(err)
 	}
 	for _, thread := range threads {
-		_, err = db.Exec(`INSERT INTO threads (
+		_, err = db.ExecContext(t.Context(), `INSERT INTO threads (
 			id, summary, updated_at, data_type, data,
 			parent_id, folder_paths, created_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,

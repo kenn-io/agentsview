@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -245,7 +246,7 @@ func evenerFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
 		return SourceFingerprint{}, err
 	}
 	if !info.Mode().IsRegular() {
-		return SourceFingerprint{}, fmt.Errorf("evener transcript is not a regular file")
+		return SourceFingerprint{}, errors.New("evener transcript is not a regular file")
 	}
 	// The warm stat-digest gate uses the primary transcript's mtime. Metadata
 	// freshness is represented by the per-file digest and required content hash.
@@ -262,7 +263,7 @@ func evenerFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
 		return SourceFingerprint{}, err
 	default:
 		if !mi.Mode().IsRegular() {
-			return SourceFingerprint{}, fmt.Errorf("evener metadata is not a regular file")
+			return SourceFingerprint{}, errors.New("evener metadata is not a regular file")
 		}
 		fp.Size += mi.Size()
 		if err := addSiblingMetadataFingerprintPart(h, "metadata", meta, mi); err != nil {
@@ -296,7 +297,7 @@ func evenerFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
 			}
 		}
 	}
-	fp.Hash = fmt.Sprintf("%x", h.Sum(nil))
+	fp.Hash = hex.EncodeToString(h.Sum(nil))
 	return fp, nil
 }
 

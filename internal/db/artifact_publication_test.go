@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -43,18 +42,21 @@ func TestArtifactPublicationChangesRejectMismatchedPersistedOrigin(t *testing.T)
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			database := testDB(t)
 			ctx := t.Context()
-			require.NoError(t, database.AdoptArtifactOrigin("origin-a1b2c3"))
-			require.NoError(t, database.UpsertSession(Session{
+			require.NoError(database.AdoptArtifactOrigin("origin-a1b2c3"))
+			require.NoError(database.UpsertSession(Session{
 				ID: "session", Project: "project", Machine: "local", Agent: "claude",
 			}))
 			claims, err := database.PendingArtifactExports(ctx, 10)
-			require.NoError(t, err)
-			require.Len(t, claims, 1)
+			require.NoError(err)
+			require.Len(claims, 1)
 			if tc.removeOrigin {
-				require.NoError(t, database.Update(func(tx *sql.Tx) error {
-					_, err := tx.Exec(
+				require.NoError(database.Update(func(tx *sql.Tx) error {
+					_, err := tx.ExecContext(ctx,
 						`DELETE FROM pg_sync_state WHERE key = 'artifact_origin_id'`,
 					)
 					return err
@@ -67,9 +69,9 @@ func TestArtifactPublicationChangesRejectMismatchedPersistedOrigin(t *testing.T)
 					ManifestHash: "manifest", SourceFingerprint: "fingerprint",
 				}},
 			)
-			require.ErrorIs(t, err, ErrArtifactOriginMismatch)
-			assert.Zero(t, revision)
-			assert.False(t, changed)
+			require.ErrorIs(err, ErrArtifactOriginMismatch)
+			assert.Zero(revision)
+			assert.False(changed)
 
 			var publications []ArtifactPublication
 			_, streamErr := database.StreamArtifactPublications(
@@ -78,30 +80,33 @@ func TestArtifactPublicationChangesRejectMismatchedPersistedOrigin(t *testing.T)
 					return nil
 				},
 			)
-			require.NoError(t, streamErr)
-			assert.Empty(t, publications)
+			require.NoError(streamErr)
+			assert.Empty(publications)
 			pending, pendingErr := database.PendingArtifactExports(ctx, 10)
-			require.NoError(t, pendingErr)
-			require.Equal(t, claims, pending)
+			require.NoError(pendingErr)
+			require.Equal(claims, pending)
 		})
 	}
 }
 
 func TestArtifactPublicationOriginValidationFollowsWriterReservation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "archive.db")
 	exporter, err := Open(path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, exporter.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(exporter.Close()) })
 	adopter, err := Open(path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, adopter.Close()) })
-	require.NoError(t, exporter.AdoptArtifactOrigin("origin-a1b2c3"))
-	require.NoError(t, exporter.UpsertSession(Session{
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(adopter.Close()) })
+	require.NoError(exporter.AdoptArtifactOrigin("origin-a1b2c3"))
+	require.NoError(exporter.UpsertSession(Session{
 		ID: "session", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	claims, err := exporter.PendingArtifactExports(t.Context(), 10)
-	require.NoError(t, err)
-	require.Len(t, claims, 1)
+	require.NoError(err)
+	require.Len(claims, 1)
 
 	originalPopulate := populateArtifactOriginQueueTx
 	adoptionStarted := make(chan struct{})
@@ -146,102 +151,111 @@ func TestArtifactPublicationOriginValidationFollowsWriterReservation(t *testing.
 	}()
 	<-applyAtLock
 	close(releaseAdoption)
-	require.NoError(t, <-adoptDone)
+	require.NoError(<-adoptDone)
 	close(releaseApply)
 
 	result := <-applyDone
-	require.ErrorIs(t, result.err, ErrArtifactOriginMismatch)
-	assert.Zero(t, result.revision)
-	assert.False(t, result.changed)
+	require.ErrorIs(result.err, ErrArtifactOriginMismatch)
+	assert.Zero(result.revision)
+	assert.False(result.changed)
 	revision, err := exporter.StreamArtifactPublications(
 		t.Context(), "origin-a1b2c3", func(ArtifactPublication) error {
 			return errors.New("stale origin must not gain publication authority")
 		},
 	)
-	require.NoError(t, err)
-	assert.Zero(t, revision)
+	require.NoError(err)
+	assert.Zero(revision)
 	pending, err := exporter.PendingArtifactExports(t.Context(), 10)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Greater(t, pending[0].Generation, claims[0].Generation,
+	require.NoError(err)
+	require.Len(pending, 1)
+	assert.Greater(pending[0].Generation, claims[0].Generation,
 		"the only queue change comes from the committed origin adoption")
 }
 
 func TestArtifactExportRejectionFinalizesExactGeneration(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	ctx := t.Context()
-	require.NoError(t, database.AdoptArtifactOrigin("origin-a1b2c3"))
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.AdoptArtifactOrigin("origin-a1b2c3"))
+	require.NoError(database.UpsertSession(Session{
 		ID: "rejected", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	claims, err := database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, claims, 1)
+	require.NoError(err)
+	require.Len(claims, 1)
 
-	require.NoError(t, database.FinalizeArtifactExports(ctx, []ArtifactExportOutcome{{
+	require.NoError(database.FinalizeArtifactExports(ctx, []ArtifactExportOutcome{{
 		Item: claims[0], Rejection: "session message limit exceeded",
 	}}))
 	pending, err := database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	assert.Empty(t, pending)
+	require.NoError(err)
+	assert.Empty(pending)
 	rejection, ok, err := database.GetArtifactExportRejection(ctx, "rejected")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, claims[0].Generation, rejection.Generation)
-	assert.Equal(t, "session message limit exceeded", rejection.Error)
-	assert.NotEmpty(t, rejection.RejectedAt)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(claims[0].Generation, rejection.Generation)
+	assert.Equal("session message limit exceeded", rejection.Error)
+	assert.NotEmpty(rejection.RejectedAt)
 
-	require.NoError(t, database.ReplaceSessionMessages("rejected", []Message{{
+	require.NoError(database.ReplaceSessionMessages("rejected", []Message{{
 		SessionID: "rejected", Ordinal: 0, Role: "user", Content: "changed",
 	}}))
 	pending, err = database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Greater(t, pending[0].Generation, claims[0].Generation)
+	require.NoError(err)
+	require.Len(pending, 1)
+	assert.Greater(pending[0].Generation, claims[0].Generation)
 	_, ok, err = database.GetArtifactExportRejection(ctx, "rejected")
-	require.NoError(t, err)
-	assert.False(t, ok)
+	require.NoError(err)
+	assert.False(ok)
 }
 
 func TestArtifactExportRejectionCannotConsumeNewerGeneration(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	ctx := t.Context()
-	require.NoError(t, database.AdoptArtifactOrigin("origin-a1b2c3"))
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.AdoptArtifactOrigin("origin-a1b2c3"))
+	require.NoError(database.UpsertSession(Session{
 		ID: "rejected", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	claims, err := database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, claims, 1)
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(err)
+	require.Len(claims, 1)
+	require.NoError(database.UpsertSession(Session{
 		ID: "rejected", Project: "changed", Machine: "local", Agent: "claude",
 	}))
 
 	err = database.FinalizeArtifactExports(ctx, []ArtifactExportOutcome{{
 		Item: claims[0], Rejection: "stale rejection",
 	}})
-	require.ErrorIs(t, err, ErrArtifactExportClaimStale)
+	require.ErrorIs(err, ErrArtifactExportClaimStale)
 	pending, err := database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Greater(t, pending[0].Generation, claims[0].Generation)
+	require.NoError(err)
+	require.Len(pending, 1)
+	assert.Greater(pending[0].Generation, claims[0].Generation)
 	_, ok, err := database.GetArtifactExportRejection(ctx, "rejected")
-	require.NoError(t, err)
-	assert.False(t, ok)
+	require.NoError(err)
+	assert.False(ok)
 }
 
 func TestArtifactCheckpointHeadAndRejectionsCommitAtomically(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	ctx := t.Context()
-	require.NoError(t, database.AdoptArtifactOrigin("origin-a1b2c3"))
+	require.NoError(database.AdoptArtifactOrigin("origin-a1b2c3"))
 	for _, id := range []string{"accepted", "rejected"} {
-		require.NoError(t, database.UpsertSession(Session{
+		require.NoError(database.UpsertSession(Session{
 			ID: id, Project: "project", Machine: "local", Agent: "claude",
 		}))
 	}
 	claims, err := database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, claims, 2)
+	require.NoError(err)
+	require.Len(claims, 2)
 	claimByID := map[string]ArtifactExportQueueItem{
 		claims[0].SessionID: claims[0],
 		claims[1].SessionID: claims[1],
@@ -251,7 +265,7 @@ func TestArtifactCheckpointHeadAndRejectionsCommitAtomically(t *testing.T) {
 		SessionMapSHA256: "map-one", CheckpointSHA256: "checkpoint-one",
 		CheckpointSize: 17,
 	}
-	require.NoError(t, database.RecordArtifactCheckpointHeadOutcomes(
+	require.NoError(database.RecordArtifactCheckpointHeadOutcomes(
 		ctx, head, []ArtifactExportOutcome{
 			{Item: claimByID["accepted"]},
 			{Item: claimByID["rejected"], Rejection: "message limit exceeded"},
@@ -259,30 +273,30 @@ func TestArtifactCheckpointHeadAndRejectionsCommitAtomically(t *testing.T) {
 	))
 
 	gotHead, ok, err := database.GetArtifactCheckpointHead(ctx, head.Origin)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, head, gotHead)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(head, gotHead)
 	pending, err := database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	assert.Empty(t, pending)
+	require.NoError(err)
+	assert.Empty(pending)
 	rejection, ok, err := database.GetArtifactExportRejection(ctx, "rejected")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, claimByID["rejected"].Generation, rejection.Generation)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(claimByID["rejected"].Generation, rejection.Generation)
 
 	for _, id := range []string{"accepted", "rejected"} {
-		require.NoError(t, database.UpsertSession(Session{
+		require.NoError(database.UpsertSession(Session{
 			ID: id, Project: "retry", Machine: "local", Agent: "claude",
 		}))
 	}
 	retryClaims, err := database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, retryClaims, 2)
+	require.NoError(err)
+	require.Len(retryClaims, 2)
 	retryByID := map[string]ArtifactExportQueueItem{
 		retryClaims[0].SessionID: retryClaims[0],
 		retryClaims[1].SessionID: retryClaims[1],
 	}
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "rejected", Project: "newer", Machine: "local", Agent: "claude",
 	}))
 
@@ -296,141 +310,152 @@ func TestArtifactCheckpointHeadAndRejectionsCommitAtomically(t *testing.T) {
 			{Item: retryByID["rejected"], Rejection: "stale rejection"},
 		},
 	)
-	require.ErrorIs(t, err, ErrArtifactExportClaimStale)
+	require.ErrorIs(err, ErrArtifactExportClaimStale)
 	gotHead, ok, err = database.GetArtifactCheckpointHead(ctx, head.Origin)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, head, gotHead)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(head, gotHead)
 	pending, err = database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, pending, 2)
+	require.NoError(err)
+	require.Len(pending, 2)
 	pendingByID := map[string]ArtifactExportQueueItem{
 		pending[0].SessionID: pending[0],
 		pending[1].SessionID: pending[1],
 	}
-	assert.Equal(t, retryByID["accepted"].Generation, pendingByID["accepted"].Generation)
-	assert.Greater(t, pendingByID["rejected"].Generation, retryByID["rejected"].Generation)
+	assert.Equal(retryByID["accepted"].Generation, pendingByID["accepted"].Generation)
+	assert.Greater(pendingByID["rejected"].Generation, retryByID["rejected"].Generation)
 	_, ok, err = database.GetArtifactExportRejection(ctx, "rejected")
-	require.NoError(t, err)
-	assert.False(t, ok)
+	require.NoError(err)
+	assert.False(ok)
 }
 
 func TestArtifactRequeueLifecycleClearsRejection(t *testing.T) {
 	t.Run("origin adoption", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		database := testDB(t)
 		ctx := t.Context()
-		require.NoError(t, database.AdoptArtifactOrigin("origin-a1b2c3"))
-		require.NoError(t, database.UpsertSession(Session{
+		require.NoError(database.AdoptArtifactOrigin("origin-a1b2c3"))
+		require.NoError(database.UpsertSession(Session{
 			ID: "session", Project: "project", Machine: "local", Agent: "claude",
 		}))
 		claims, err := database.PendingArtifactExports(ctx, 10)
-		require.NoError(t, err)
-		require.Len(t, claims, 1)
-		require.NoError(t, database.FinalizeArtifactExports(ctx, []ArtifactExportOutcome{{
+		require.NoError(err)
+		require.Len(claims, 1)
+		require.NoError(database.FinalizeArtifactExports(ctx, []ArtifactExportOutcome{{
 			Item: claims[0], Rejection: "message limit exceeded",
 		}}))
 
-		require.NoError(t, database.AdoptArtifactOrigin("origin-d4e5f6"))
+		require.NoError(database.AdoptArtifactOrigin("origin-d4e5f6"))
 		pending, err := database.PendingArtifactExports(ctx, 10)
-		require.NoError(t, err)
-		require.Len(t, pending, 1)
-		assert.Greater(t, pending[0].Generation, claims[0].Generation)
+		require.NoError(err)
+		require.Len(pending, 1)
+		assert.Greater(pending[0].Generation, claims[0].Generation)
 		_, ok, err := database.GetArtifactExportRejection(ctx, "session")
-		require.NoError(t, err)
-		assert.False(t, ok)
+		require.NoError(err)
+		assert.False(ok)
 	})
 
 	t.Run("resync", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		dir := t.TempDir()
 		sourcePath := filepath.Join(dir, "source.db")
 		source, err := Open(sourcePath)
-		require.NoError(t, err)
-		require.NoError(t, source.AdoptArtifactOrigin("origin-a1b2c3"))
-		require.NoError(t, source.UpsertSession(Session{
+		require.NoError(err)
+		require.NoError(source.AdoptArtifactOrigin("origin-a1b2c3"))
+		require.NoError(source.UpsertSession(Session{
 			ID: "session", Project: "project", Machine: "local", Agent: "claude",
 		}))
 		claims, err := source.PendingArtifactExports(t.Context(), 10)
-		require.NoError(t, err)
-		require.Len(t, claims, 1)
-		require.NoError(t, source.FinalizeArtifactExports(
+		require.NoError(err)
+		require.Len(claims, 1)
+		require.NoError(source.FinalizeArtifactExports(
 			t.Context(), []ArtifactExportOutcome{{
 				Item: claims[0], Rejection: "message limit exceeded",
 			}},
 		))
-		require.NoError(t, source.Close())
+		require.NoError(source.Close())
 
 		target, err := Open(filepath.Join(dir, "target.db"))
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, target.Close()) })
-		require.NoError(t, target.CopySyncStateFrom(sourcePath))
+		require.NoError(err)
+		t.Cleanup(func() { require.NoError(target.Close()) })
+		require.NoError(target.CopySyncStateFrom(sourcePath))
 		pending, err := target.PendingArtifactExports(t.Context(), 10)
-		require.NoError(t, err)
-		require.Len(t, pending, 1)
-		assert.Greater(t, pending[0].Generation, claims[0].Generation)
+		require.NoError(err)
+		require.Len(pending, 1)
+		assert.Greater(pending[0].Generation, claims[0].Generation)
 		_, ok, err := target.GetArtifactExportRejection(t.Context(), "session")
-		require.NoError(t, err)
-		assert.False(t, ok)
+		require.NoError(err)
+		assert.False(ok)
 	})
 }
 
 func TestArtifactExportQueueRejectionColumnMigration(t *testing.T) {
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "legacy-artifact-queue.db")
 	database, err := Open(path)
-	require.NoError(t, err)
-	require.NoError(t, database.AdoptArtifactOrigin("origin-a1b2c3"))
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(err)
+	require.NoError(database.AdoptArtifactOrigin("origin-a1b2c3"))
+	require.NoError(database.UpsertSession(Session{
 		ID: "preserved", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	claims, err := database.PendingArtifactExports(t.Context(), 10)
-	require.NoError(t, err)
-	require.Len(t, claims, 1)
-	require.NoError(t, database.Close())
+	require.NoError(err)
+	require.Len(claims, 1)
+	require.NoError(database.Close())
 
 	conn, err := sql.Open("sqlite3", makeDSN(path, false))
-	require.NoError(t, err)
-	_, err = conn.Exec(artifactSessionQueueTriggerDropsSQL)
-	require.NoError(t, err)
+	require.NoError(err)
+	_, err = conn.ExecContext(t.Context(), artifactSessionQueueTriggerDropsSQL)
+	require.NoError(err)
 	for _, column := range []string{"rejected_generation", "last_error", "rejected_at"} {
-		_, err = conn.Exec(`ALTER TABLE artifact_export_queue DROP COLUMN ` + column)
-		require.NoError(t, err)
+		_, err = conn.ExecContext(t.Context(), `ALTER TABLE artifact_export_queue DROP COLUMN `+column)
+		require.NoError(err)
 	}
-	require.NoError(t, conn.Close())
+	require.NoError(conn.Close())
 
 	migrated, err := Open(path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, migrated.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(migrated.Close()) })
 	rows, err := migrated.getReader().Query(
 		`SELECT name FROM pragma_table_info('artifact_export_queue')
 		 WHERE name IN ('rejected_generation', 'last_error', 'rejected_at')
 		 ORDER BY name`,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	defer rows.Close()
 	var columns []string
 	for rows.Next() {
 		var column string
-		require.NoError(t, rows.Scan(&column))
+		require.NoError(rows.Scan(&column))
 		columns = append(columns, column)
 	}
-	require.NoError(t, rows.Err())
+	require.NoError(rows.Err())
 	assert.Equal(t, []string{"last_error", "rejected_at", "rejected_generation"}, columns)
 	pending, err := migrated.PendingArtifactExports(t.Context(), 10)
-	require.NoError(t, err)
-	require.Equal(t, claims, pending)
+	require.NoError(err)
+	require.Equal(claims, pending)
 }
 
 func TestArtifactPublicationAtomicLifecycle(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	ctx := t.Context()
 	seedArtifactOrigin(t, database)
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "session-a", Project: "project", Machine: "local", Agent: "claude",
 	}))
 
 	pending, err := database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	require.Equal(t, []ArtifactExportQueueItem{{
+	require.NoError(err)
+	require.Len(pending, 1)
+	require.Equal([]ArtifactExportQueueItem{{
 		SessionID: "session-a", EnqueuedAt: pending[0].EnqueuedAt,
 		Generation: pending[0].Generation,
 	}}, pending)
@@ -438,117 +463,119 @@ func TestArtifactPublicationAtomicLifecycle(t *testing.T) {
 	// Merely reading work models a failed export: nothing is acknowledged until
 	// a checkpoint is durably created and its head is recorded.
 	pendingAgain, err := database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Equal(t, pending, pendingAgain)
+	require.NoError(err)
+	require.Equal(pending, pendingAgain)
 
 	revision, changed, err := database.ApplyArtifactPublicationChanges(ctx, "desktop-a1b2c3", []ArtifactPublicationChange{{
 		SessionID: "session-a", Generation: pending[0].Generation,
 		ManifestHash: "manifest-a", SourceFingerprint: "source-a",
 	}})
-	require.NoError(t, err)
-	assert.True(t, changed)
-	assert.Equal(t, int64(1), revision)
+	require.NoError(err)
+	assert.True(changed)
+	assert.Equal(int64(1), revision)
 
 	revision, changed, err = database.ApplyArtifactPublicationChanges(ctx, "desktop-a1b2c3", []ArtifactPublicationChange{{
 		SessionID: "session-a", Generation: pending[0].Generation,
 		ManifestHash: "manifest-a", SourceFingerprint: "source-a",
 	}})
-	require.NoError(t, err)
-	assert.False(t, changed, "identical publication state must not force a checkpoint")
+	require.NoError(err)
+	assert.False(changed, "identical publication state must not force a checkpoint")
 
 	head := ArtifactCheckpointHead{
 		Origin: "desktop-a1b2c3", Sequence: 7, PublicationRevision: revision,
 		SessionMapSHA256: "map-hash", CheckpointSHA256: "checkpoint-hash",
 	}
-	require.NoError(t, database.RecordArtifactCheckpointHead(ctx, head, pending))
+	require.NoError(database.RecordArtifactCheckpointHead(ctx, head, pending))
 	gotHead, ok, err := database.GetArtifactCheckpointHead(ctx, "desktop-a1b2c3")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, head, gotHead)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(head, gotHead)
 	pending, err = database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	assert.Empty(t, pending)
+	require.NoError(err)
+	assert.Empty(pending)
 
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "session-a", Project: "project-2", Machine: "local", Agent: "claude",
 	}))
 	pending, err = database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
+	require.NoError(err)
+	require.Len(pending, 1)
 	_, changed, err = database.ApplyArtifactPublicationChanges(ctx, "desktop-a1b2c3", []ArtifactPublicationChange{{
 		SessionID: "session-a", Generation: pending[0].Generation, Delete: true,
 	}})
-	require.NoError(t, err)
-	assert.True(t, changed)
+	require.NoError(err)
+	assert.True(changed)
 	staleHead, ok, err := database.GetArtifactCheckpointHead(ctx, "desktop-a1b2c3")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, revision, staleHead.PublicationRevision,
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(revision, staleHead.PublicationRevision,
 		"the retained head revision identifies it as stale")
 	pending, err = database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.NoError(t, database.AcknowledgeArtifactExports(ctx, pending))
+	require.NoError(err)
+	require.NoError(database.AcknowledgeArtifactExports(ctx, pending))
 	var publications []ArtifactPublication
 	_, err = database.StreamArtifactPublications(ctx, "desktop-a1b2c3", func(row ArtifactPublication) error {
 		publications = append(publications, row)
 		return nil
 	})
-	require.NoError(t, err)
-	assert.Empty(t, publications)
+	require.NoError(err)
+	assert.Empty(publications)
 }
 
 func TestArtifactCheckpointHeadRejectsStalePublicationRevision(t *testing.T) {
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "archive.db")
 	first, err := Open(path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, first.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(first.Close()) })
 	second, err := Open(path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, second.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(second.Close()) })
 	seedArtifactOrigin(t, first)
 
 	ctx := t.Context()
-	require.NoError(t, first.UpsertSession(Session{
+	require.NoError(first.UpsertSession(Session{
 		ID: "session-a", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	claimA, err := first.ArtifactExportClaims(ctx, []string{"session-a"})
-	require.NoError(t, err)
-	require.Len(t, claimA, 1)
+	require.NoError(err)
+	require.Len(claimA, 1)
 	revisionA, changed, err := first.ApplyArtifactPublicationChanges(
 		ctx, "desktop-a1b2c3", []ArtifactPublicationChange{{
 			SessionID: "session-a", Generation: claimA[0].Generation,
 			ManifestHash: "manifest-a", SourceFingerprint: "source-a",
 		}},
 	)
-	require.NoError(t, err)
-	require.True(t, changed)
+	require.NoError(err)
+	require.True(changed)
 	streamedRevisionA, err := first.StreamArtifactPublications(
 		ctx, "desktop-a1b2c3", func(ArtifactPublication) error { return nil },
 	)
-	require.NoError(t, err)
-	require.Equal(t, revisionA, streamedRevisionA)
+	require.NoError(err)
+	require.Equal(revisionA, streamedRevisionA)
 
-	require.NoError(t, second.UpsertSession(Session{
+	require.NoError(second.UpsertSession(Session{
 		ID: "session-b", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	claimB, err := second.ArtifactExportClaims(ctx, []string{"session-b"})
-	require.NoError(t, err)
-	require.Len(t, claimB, 1)
+	require.NoError(err)
+	require.Len(claimB, 1)
 	revisionB, changed, err := second.ApplyArtifactPublicationChanges(
 		ctx, "desktop-a1b2c3", []ArtifactPublicationChange{{
 			SessionID: "session-b", Generation: claimB[0].Generation,
 			ManifestHash: "manifest-b", SourceFingerprint: "source-b",
 		}},
 	)
-	require.NoError(t, err)
-	require.True(t, changed)
-	require.Greater(t, revisionB, revisionA)
+	require.NoError(err)
+	require.True(changed)
+	require.Greater(revisionB, revisionA)
 	streamedRevisionB, err := second.StreamArtifactPublications(
 		ctx, "desktop-a1b2c3", func(ArtifactPublication) error { return nil },
 	)
-	require.NoError(t, err)
-	require.Equal(t, revisionB, streamedRevisionB)
-	require.NoError(t, second.RecordArtifactCheckpointHead(ctx, ArtifactCheckpointHead{
+	require.NoError(err)
+	require.Equal(revisionB, streamedRevisionB)
+	require.NoError(second.RecordArtifactCheckpointHead(ctx, ArtifactCheckpointHead{
 		Origin: "desktop-a1b2c3", Sequence: 1, PublicationRevision: revisionB,
 		SessionMapSHA256: "map-b", CheckpointSHA256: "checkpoint-b", CheckpointSize: 12,
 	}, claimB))
@@ -557,15 +584,15 @@ func TestArtifactCheckpointHeadRejectsStalePublicationRevision(t *testing.T) {
 		Origin: "desktop-a1b2c3", Sequence: 2, PublicationRevision: streamedRevisionA,
 		SessionMapSHA256: "map-a", CheckpointSHA256: "checkpoint-a", CheckpointSize: 12,
 	}, claimA)
-	require.ErrorIs(t, err, ErrArtifactExportClaimStale)
+	require.ErrorIs(err, ErrArtifactExportClaimStale)
 	head, ok, err := first.GetArtifactCheckpointHead(ctx, "desktop-a1b2c3")
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, 1, head.Sequence)
-	require.Equal(t, revisionB, head.PublicationRevision)
+	require.NoError(err)
+	require.True(ok)
+	require.Equal(1, head.Sequence)
+	require.Equal(revisionB, head.PublicationRevision)
 	pending, err := first.ArtifactExportClaims(ctx, []string{"session-a"})
-	require.NoError(t, err)
-	require.Equal(t, claimA, pending, "stale recording cannot consume pending work")
+	require.NoError(err)
+	require.Equal(claimA, pending, "stale recording cannot consume pending work")
 
 	retryRevision, changed, err := first.ApplyArtifactPublicationChanges(
 		ctx, "desktop-a1b2c3", []ArtifactPublicationChange{{
@@ -573,136 +600,150 @@ func TestArtifactCheckpointHeadRejectsStalePublicationRevision(t *testing.T) {
 			ManifestHash: "manifest-a", SourceFingerprint: "source-a",
 		}},
 	)
-	require.NoError(t, err)
-	require.False(t, changed)
-	require.Equal(t, revisionB, retryRevision)
-	require.NoError(t, first.RecordArtifactCheckpointHead(ctx, ArtifactCheckpointHead{
+	require.NoError(err)
+	require.False(changed)
+	require.Equal(revisionB, retryRevision)
+	require.NoError(first.RecordArtifactCheckpointHead(ctx, ArtifactCheckpointHead{
 		Origin: "desktop-a1b2c3", Sequence: 3, PublicationRevision: retryRevision,
 		SessionMapSHA256: "map-b", CheckpointSHA256: "checkpoint-c", CheckpointSize: 12,
 	}, claimA))
 }
 
 func TestBootstrapArtifactExportQueueEnqueuesExistingLocalSessions(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "existing-local", Project: "project", Machine: "local", Agent: "claude",
 	}))
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "existing-peer", Project: "project", Machine: "peer-a1b2c3", Agent: "claude",
 	}))
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "existing-trash", Project: "project", Machine: "local", Agent: "claude",
 	}))
-	require.NoError(t, database.SoftDeleteSession("existing-trash"))
+	require.NoError(database.SoftDeleteSession("existing-trash"))
 
-	require.NoError(t, database.BootstrapArtifactExportQueue())
+	require.NoError(database.BootstrapArtifactExportQueue())
 	pending, err := database.PendingArtifactExports(t.Context(), 10)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Equal(t, "existing-local", pending[0].SessionID,
+	require.NoError(err)
+	require.Len(pending, 1)
+	assert.Equal("existing-local", pending[0].SessionID,
 		"only the live locally-owned session is bootstrapped")
-	assert.Equal(t, int64(1), pending[0].Generation)
+	assert.Equal(int64(1), pending[0].Generation)
 	firstEnqueuedAt := pending[0].EnqueuedAt
 
-	require.NoError(t, database.BootstrapArtifactExportQueue())
+	require.NoError(database.BootstrapArtifactExportQueue())
 	pendingAgain, err := database.PendingArtifactExports(t.Context(), 10)
-	require.NoError(t, err)
-	require.Len(t, pendingAgain, 1, "repeated bootstrap must not duplicate queue rows")
-	assert.Equal(t, "existing-local", pendingAgain[0].SessionID)
-	assert.Equal(t, int64(1), pendingAgain[0].Generation,
+	require.NoError(err)
+	require.Len(pendingAgain, 1, "repeated bootstrap must not duplicate queue rows")
+	assert.Equal("existing-local", pendingAgain[0].SessionID)
+	assert.Equal(int64(1), pendingAgain[0].Generation,
 		"INSERT OR IGNORE leaves the existing generation untouched")
-	assert.Equal(t, firstEnqueuedAt, pendingAgain[0].EnqueuedAt)
+	assert.Equal(firstEnqueuedAt, pendingAgain[0].EnqueuedAt)
 }
 
 func TestArtifactPublicationOwnsConfiguredHostnameSessions(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
-	require.NoError(t, database.SetSyncState(
+	require.NoError(database.SetSyncState(
 		"artifact_local_machine_name", "workstation.example",
 	))
 	seedArtifactOrigin(t, database)
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "hostname-local", Project: "project",
 		Machine: "workstation.example", Agent: "claude",
 	}))
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "foreign", Project: "project",
 		Machine: "peer.example", Agent: "claude",
 	}))
 
 	pending, err := database.PendingArtifactExports(t.Context(), 10)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Equal(t, "hostname-local", pending[0].SessionID)
+	require.NoError(err)
+	require.Len(pending, 1)
+	assert.Equal("hostname-local", pending[0].SessionID)
 	owned, err := database.ListOwnedSessionIDsForExport(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, []string{"hostname-local"}, owned)
+	require.NoError(err)
+	assert.Equal([]string{"hostname-local"}, owned)
 
 	clearArtifactExportQueue(t, database)
-	require.NoError(t, database.ReplaceSessionUsageEvents(
+	require.NoError(database.ReplaceSessionUsageEvents(
 		"hostname-local", []UsageEvent{{
 			SessionID: "hostname-local", Source: "event",
 			Model: "model", DedupKey: "hostname",
 		}},
 	))
-	assert.Equal(t, []string{"hostname-local"}, artifactExportQueueIDs(t, database),
+	assert.Equal([]string{"hostname-local"}, artifactExportQueueIDs(t, database),
 		"child-row fallback uses the configured local machine")
 }
 
 func TestBootstrapArtifactExportQueueOwnsConfiguredHostname(t *testing.T) {
+	require := require.New(t)
+
 	database := testDB(t)
-	require.NoError(t, database.SetSyncState(
+	require.NoError(database.SetSyncState(
 		"artifact_local_machine_name", "workstation.example",
 	))
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "existing-hostname", Project: "project",
 		Machine: "workstation.example", Agent: "claude",
 	}))
 
-	require.NoError(t, database.BootstrapArtifactExportQueue())
+	require.NoError(database.BootstrapArtifactExportQueue())
 	pending, err := database.PendingArtifactExports(t.Context(), 10)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
+	require.NoError(err)
+	require.Len(pending, 1)
 	assert.Equal(t, "existing-hostname", pending[0].SessionID)
 }
 
 func TestConfigureArtifactLocalMachineRequeuesExistingInstallationSession(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "existing-installation", Project: "project",
 		Machine: "00000000-0000-4000-8000-000000000001", Agent: "claude",
 	}))
 	seedArtifactOrigin(t, database)
-	assert.Empty(t, artifactExportQueueIDs(t, database))
+	assert.Empty(artifactExportQueueIDs(t, database))
 
-	require.NoError(t, database.ConfigureArtifactLocalMachine("00000000-0000-4000-8000-000000000001"))
+	require.NoError(database.ConfigureArtifactLocalMachine("00000000-0000-4000-8000-000000000001"))
 	pending, err := database.PendingArtifactExports(t.Context(), 10)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Equal(t, "existing-installation", pending[0].SessionID)
+	require.NoError(err)
+	require.Len(pending, 1)
+	assert.Equal("existing-installation", pending[0].SessionID)
 }
 
 func TestArtifactQueueUsesAdoptedInstallationOwnership(t *testing.T) {
+	parentAssert := assert.New(t)
+	parentRequire := require.New(t)
+
 	database := testDB(t)
 	seedArtifactOrigin(t, database)
-	require.NoError(t, database.SetSyncState("artifact_local_machine_name", "workstation.example"))
+	parentRequire.NoError(database.SetSyncState("artifact_local_machine_name", "workstation.example"))
 	for _, session := range []struct{ id, machine string }{
 		{"hostname", "workstation.example"},
 		{"installation", "00000000-0000-4000-8000-000000000001"},
 		{"legacy", "local"},
 		{"foreign", "peer.example"},
 	} {
-		require.NoError(t, database.UpsertSession(Session{
+		parentRequire.NoError(database.UpsertSession(Session{
 			ID: session.id, Project: "project", Machine: session.machine, Agent: "claude",
 		}))
 	}
 	_, err := database.EnsureInstallationIdentity(t.Context(), "00000000-0000-4000-8000-000000000001")
-	require.NoError(t, err)
-	require.NoError(t, database.UpsertSession(Session{ID: "retired-key-peer", Project: "project", Machine: "workstation.example", Agent: "claude"}))
+	parentRequire.NoError(err)
+	parentRequire.NoError(database.UpsertSession(Session{ID: "retired-key-peer", Project: "project", Machine: "workstation.example", Agent: "claude"}))
 	want := []string{"hostname", "installation", "legacy"}
-	assert.Equal(t, want, artifactExportQueueIDs(t, database), "inserts")
+	parentAssert.Equal(want, artifactExportQueueIDs(t, database), "inserts")
 	owned, err := database.ListOwnedSessionIDsForExport(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, want, owned)
+	parentRequire.NoError(err)
+	parentAssert.Equal(want, owned)
 
 	for _, operation := range []struct {
 		name string
@@ -740,7 +781,7 @@ func TestArtifactQueueUsesAdoptedInstallationOwnership(t *testing.T) {
 	} {
 		t.Run(operation.name, func(t *testing.T) {
 			require.NoError(t, database.Update(func(tx *sql.Tx) error {
-				_, err := tx.Exec(`DELETE FROM artifact_export_queue`)
+				_, err := tx.ExecContext(t.Context(), `DELETE FROM artifact_export_queue`)
 				return err
 			}))
 			require.NoError(t, operation.run())
@@ -750,8 +791,11 @@ func TestArtifactQueueUsesAdoptedInstallationOwnership(t *testing.T) {
 }
 
 func TestEnsureArtifactOriginPublishesOriginWithBootstrapQueue(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "session-a", Project: "project", Machine: "local", Agent: "claude",
 	}))
 
@@ -777,21 +821,21 @@ func TestEnsureArtifactOriginPublishesOriginWithBootstrapQueue(t *testing.T) {
 
 	<-started
 	visible, err := database.GetSyncState("artifact_origin_id")
-	require.NoError(t, err)
-	assert.Empty(t, visible,
+	require.NoError(err)
+	assert.Empty(visible,
 		"the origin must remain invisible until queue population commits")
 	close(release)
 
 	result := <-done
-	require.NoError(t, result.err)
-	assert.Equal(t, "desk-a1b2c3", result.origin)
+	require.NoError(result.err)
+	assert.Equal("desk-a1b2c3", result.origin)
 	stored, err := database.GetSyncState("artifact_origin_id")
-	require.NoError(t, err)
-	assert.Equal(t, "desk-a1b2c3", stored)
+	require.NoError(err)
+	assert.Equal("desk-a1b2c3", stored)
 	pending, err := database.PendingArtifactExports(t.Context(), 10)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Equal(t, "session-a", pending[0].SessionID)
+	require.NoError(err)
+	require.Len(pending, 1)
+	assert.Equal("session-a", pending[0].SessionID)
 }
 
 func TestEnsureArtifactOriginRequeuesExistingLedgerWhenOriginStateIsEmpty(t *testing.T) {
@@ -804,7 +848,7 @@ func TestEnsureArtifactOriginRequeuesExistingLedgerWhenOriginStateIsEmpty(t *tes
 			clearOrigin: func(t *testing.T, database *DB) {
 				t.Helper()
 				require.NoError(t, database.Update(func(tx *sql.Tx) error {
-					_, err := tx.Exec(
+					_, err := tx.ExecContext(t.Context(),
 						`DELETE FROM pg_sync_state WHERE key = 'artifact_origin_id'`,
 					)
 					return err
@@ -820,6 +864,9 @@ func TestEnsureArtifactOriginRequeuesExistingLedgerWhenOriginStateIsEmpty(t *tes
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			database := testDB(t)
 			ctx := t.Context()
 			for _, session := range []Session{
@@ -828,67 +875,70 @@ func TestEnsureArtifactOriginRequeuesExistingLedgerWhenOriginStateIsEmpty(t *tes
 				{ID: "foreign", Project: "project", Machine: "peer-a1b2c3", Agent: "claude"},
 				{ID: "deleted", Project: "project", Machine: "local", Agent: "claude"},
 			} {
-				require.NoError(t, database.UpsertSession(session))
+				require.NoError(database.UpsertSession(session))
 			}
-			require.NoError(t, database.SoftDeleteSession("deleted"))
-			require.NoError(t, database.AdoptArtifactOrigin("origin-a1b2c3"))
+			require.NoError(database.SoftDeleteSession("deleted"))
+			require.NoError(database.AdoptArtifactOrigin("origin-a1b2c3"))
 
 			claims, err := database.PendingArtifactExports(ctx, 10)
-			require.NoError(t, err)
-			require.Len(t, claims, 2)
+			require.NoError(err)
+			require.Len(claims, 2)
 			claimByID := map[string]ArtifactExportQueueItem{
 				claims[0].SessionID: claims[0],
 				claims[1].SessionID: claims[1],
 			}
-			require.NoError(t, database.FinalizeArtifactExports(
+			require.NoError(database.FinalizeArtifactExports(
 				ctx, []ArtifactExportOutcome{
 					{Item: claimByID["accepted"]},
 					{Item: claimByID["rejected"], Rejection: "message limit exceeded"},
 				},
 			))
 			drained, err := database.PendingArtifactExports(ctx, 10)
-			require.NoError(t, err)
-			require.Empty(t, drained)
+			require.NoError(err)
+			require.Empty(drained)
 			_, rejected, err := database.GetArtifactExportRejection(ctx, "rejected")
-			require.NoError(t, err)
-			require.True(t, rejected)
+			require.NoError(err)
+			require.True(rejected)
 
 			tt.clearOrigin(t, database)
 			origin, err := database.EnsureArtifactOrigin("origin-d4e5f6")
-			require.NoError(t, err)
-			assert.Equal(t, "origin-d4e5f6", origin)
+			require.NoError(err)
+			assert.Equal("origin-d4e5f6", origin)
 
 			pending, err := database.PendingArtifactExports(ctx, 10)
-			require.NoError(t, err)
-			require.Len(t, pending, 2)
-			assert.ElementsMatch(t, []string{"accepted", "rejected"}, []string{
+			require.NoError(err)
+			require.Len(pending, 2)
+			assert.ElementsMatch([]string{"accepted", "rejected"}, []string{
 				pending[0].SessionID, pending[1].SessionID,
 			})
 			for _, item := range pending {
-				assert.Greater(t, item.Generation, claimByID[item.SessionID].Generation)
+				assert.Greater(item.Generation, claimByID[item.SessionID].Generation)
 			}
 			_, rejected, err = database.GetArtifactExportRejection(ctx, "rejected")
-			require.NoError(t, err)
-			assert.False(t, rejected)
+			require.NoError(err)
+			assert.False(rejected)
 			excluded, err := database.ArtifactExportClaims(
 				ctx, []string{"foreign", "deleted"},
 			)
-			require.NoError(t, err)
-			assert.Empty(t, excluded)
+			require.NoError(err)
+			assert.Empty(excluded)
 		})
 	}
 }
 
 func TestArtifactOriginTransactionRollsBackQueuePopulationFailure(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
-	require.NoError(t, database.AdoptArtifactOrigin("before-a1b2c3"))
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.AdoptArtifactOrigin("before-a1b2c3"))
+	require.NoError(database.UpsertSession(Session{
 		ID: "session-a", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	pending, err := database.PendingArtifactExports(t.Context(), 10)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	require.NoError(t, database.AcknowledgeArtifactExports(t.Context(), pending))
+	require.NoError(err)
+	require.Len(pending, 1)
+	require.NoError(database.AcknowledgeArtifactExports(t.Context(), pending))
 
 	injected := errors.New("queue population failed")
 	originalPopulate := populateArtifactOriginQueueTx
@@ -896,19 +946,22 @@ func TestArtifactOriginTransactionRollsBackQueuePopulationFailure(t *testing.T) 
 	t.Cleanup(func() { populateArtifactOriginQueueTx = originalPopulate })
 
 	err = database.AdoptArtifactOrigin("after-d4e5f6")
-	require.ErrorIs(t, err, injected)
+	require.ErrorIs(err, injected)
 	stored, err := database.GetSyncState("artifact_origin_id")
-	require.NoError(t, err)
-	assert.Equal(t, "before-a1b2c3", stored)
+	require.NoError(err)
+	assert.Equal("before-a1b2c3", stored)
 	after, err := database.PendingArtifactExports(t.Context(), 10)
-	require.NoError(t, err)
-	assert.Empty(t, after,
+	require.NoError(err)
+	assert.Empty(after,
 		"failed adoption must leave the previous origin's clean queue unchanged")
 }
 
 func TestEnsureArtifactOriginRollsBackQueuePopulationFailure(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "session-a", Project: "project", Machine: "local", Agent: "claude",
 	}))
 
@@ -918,29 +971,32 @@ func TestEnsureArtifactOriginRollsBackQueuePopulationFailure(t *testing.T) {
 	t.Cleanup(func() { populateArtifactOriginQueueTx = originalPopulate })
 
 	origin, err := database.EnsureArtifactOrigin("desk-a1b2c3")
-	require.ErrorIs(t, err, injected)
-	assert.Empty(t, origin)
+	require.ErrorIs(err, injected)
+	assert.Empty(origin)
 	stored, err := database.GetSyncState("artifact_origin_id")
-	require.NoError(t, err)
-	assert.Empty(t, stored)
+	require.NoError(err)
+	assert.Empty(stored)
 	pending, err := database.PendingArtifactExports(t.Context(), 10)
-	require.NoError(t, err)
-	assert.Empty(t, pending,
+	require.NoError(err)
+	assert.Empty(pending,
 		"failed initialization must leave the export gate and queue unchanged")
 }
 
 func TestEnsureArtifactOriginSerializesAcrossDatabaseHandles(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "shared.db")
 	const handleCount = 8
 	handles := make([]*DB, handleCount)
 	for i := range handles {
 		database, err := Open(path)
-		require.NoError(t, err)
+		require.NoError(err)
 		handles[i] = database
 	}
 	t.Cleanup(func() {
 		for _, database := range handles {
-			require.NoError(t, database.Close())
+			require.NoError(database.Close())
 		}
 	})
 
@@ -968,125 +1024,136 @@ func TestEnsureArtifactOriginSerializesAcrossDatabaseHandles(t *testing.T) {
 	var winner string
 	for range handleCount {
 		got := <-results
-		require.NoError(t, got.err)
-		require.NotEmpty(t, got.origin)
+		require.NoError(got.err)
+		require.NotEmpty(got.origin)
 		if winner == "" {
 			winner = got.origin
 		}
-		assert.Equal(t, winner, got.origin)
+		assert.Equal(winner, got.origin)
 	}
 	stored, err := handles[0].GetSyncState("artifact_origin_id")
-	require.NoError(t, err)
-	assert.Equal(t, winner, stored)
+	require.NoError(err)
+	assert.Equal(winner, stored)
 }
 
 func TestArtifactExportClaimsSelectsExactPendingSessionSet(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	seedArtifactOrigin(t, database)
 	for _, id := range []string{"alpha", "bravo", "charlie"} {
-		require.NoError(t, database.UpsertSession(Session{
+		require.NoError(database.UpsertSession(Session{
 			ID: id, Project: "project", Machine: "local", Agent: "claude",
 		}))
 	}
 
 	claims, err := database.ArtifactExportClaims(t.Context(),
 		[]string{"charlie", "missing", "alpha", "charlie"})
-	require.NoError(t, err)
-	require.Len(t, claims, 2)
-	assert.Equal(t, "alpha", claims[0].SessionID)
-	assert.Equal(t, "charlie", claims[1].SessionID)
-	assert.Positive(t, claims[0].Generation)
-	assert.Positive(t, claims[1].Generation)
+	require.NoError(err)
+	require.Len(claims, 2)
+	assert.Equal("alpha", claims[0].SessionID)
+	assert.Equal("charlie", claims[1].SessionID)
+	assert.Positive(claims[0].Generation)
+	assert.Positive(claims[1].Generation)
 }
 
 func TestArtifactPublicationStaleClaimRollsBackEntireBatch(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	ctx := t.Context()
 	seedArtifactOrigin(t, database)
 	for _, id := range []string{"alpha", "bravo"} {
-		require.NoError(t, database.UpsertSession(Session{
+		require.NoError(database.UpsertSession(Session{
 			ID: id, Project: "project", Machine: "local", Agent: "claude",
 		}))
 	}
 	claimed, err := database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, claimed, 2)
+	require.NoError(err)
+	require.Len(claimed, 2)
 
 	_, err = database.getWriter().Exec(
 		`UPDATE sessions SET display_name = 'newer' WHERE id = 'bravo'`,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, _, err = database.ApplyArtifactPublicationChanges(ctx, "desktop-a1b2c3", []ArtifactPublicationChange{
 		{SessionID: "alpha", Generation: claimed[0].Generation, ManifestHash: "alpha", SourceFingerprint: "alpha"},
 		{SessionID: "bravo", Generation: claimed[1].Generation, ManifestHash: "bravo", SourceFingerprint: "bravo"},
 	})
-	require.ErrorIs(t, err, ErrArtifactExportClaimStale)
+	require.ErrorIs(err, ErrArtifactExportClaimStale)
 
 	var publications []ArtifactPublication
 	_, err = database.StreamArtifactPublications(ctx, "desktop-a1b2c3", func(row ArtifactPublication) error {
 		publications = append(publications, row)
 		return nil
 	})
-	require.NoError(t, err)
-	assert.Empty(t, publications, "a stale claim must not partially mutate publication state")
+	require.NoError(err)
+	assert.Empty(publications, "a stale claim must not partially mutate publication state")
 
 	fresh, err := database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, fresh, 2)
+	require.NoError(err)
+	require.Len(fresh, 2)
 	_, _, err = database.ApplyArtifactPublicationChanges(ctx, "desktop-a1b2c3", []ArtifactPublicationChange{
 		{SessionID: fresh[0].SessionID, Generation: fresh[0].Generation, ManifestHash: "fresh-0", SourceFingerprint: "fresh-0"},
 		{SessionID: fresh[1].SessionID, Generation: fresh[1].Generation, ManifestHash: "fresh-1", SourceFingerprint: "fresh-1"},
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	publications = nil
 	_, err = database.StreamArtifactPublications(ctx, "desktop-a1b2c3", func(row ArtifactPublication) error {
 		publications = append(publications, row)
 		return nil
 	})
-	require.NoError(t, err)
-	assert.Len(t, publications, 2, "fresh claims remain applicable after a stale retry")
+	require.NoError(err)
+	assert.Len(publications, 2, "fresh claims remain applicable after a stale retry")
 }
 
 func TestArtifactCheckpointHeadStaleClaimRollsBackHead(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	ctx := t.Context()
 	seedArtifactOrigin(t, database)
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "racing", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	claimed, err := database.PendingArtifactExports(ctx, 1)
-	require.NoError(t, err)
-	require.Len(t, claimed, 1)
+	require.NoError(err)
+	require.Len(claimed, 1)
 	_, err = database.getWriter().Exec(
 		`UPDATE sessions SET display_name = 'newer' WHERE id = 'racing'`,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	err = database.RecordArtifactCheckpointHead(ctx, ArtifactCheckpointHead{
 		Origin: "desktop-a1b2c3", Sequence: 1,
 		SessionMapSHA256: "map-1", CheckpointSHA256: "checkpoint-1",
 	}, claimed)
-	require.ErrorIs(t, err, ErrArtifactExportClaimStale)
+	require.ErrorIs(err, ErrArtifactExportClaimStale)
 	_, ok, err := database.GetArtifactCheckpointHead(ctx, "desktop-a1b2c3")
-	require.NoError(t, err)
-	assert.False(t, ok, "stale acknowledgement must roll back the checkpoint head")
+	require.NoError(err)
+	assert.False(ok, "stale acknowledgement must roll back the checkpoint head")
 	pending, err := database.PendingArtifactExports(ctx, 1)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Greater(t, pending[0].Generation, claimed[0].Generation)
+	require.NoError(err)
+	require.Len(pending, 1)
+	assert.Greater(pending[0].Generation, claimed[0].Generation)
 }
 
 func TestArtifactPublicationRowsStreamInCanonicalOrder(t *testing.T) {
+	require := require.New(t)
+
 	database := testDB(t)
 	ctx := t.Context()
 	seedArtifactOrigin(t, database)
 	for _, id := range []string{"zulu", "alpha"} {
-		require.NoError(t, database.UpsertSession(Session{
+		require.NoError(database.UpsertSession(Session{
 			ID: id, Project: "project", Machine: "local", Agent: "claude",
 		}))
 	}
 	claimed, err := database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
+	require.NoError(err)
 	claimGeneration := map[string]int64{}
 	for _, item := range claimed {
 		claimGeneration[item.SessionID] = item.Generation
@@ -1095,29 +1162,32 @@ func TestArtifactPublicationRowsStreamInCanonicalOrder(t *testing.T) {
 		{SessionID: "zulu", Generation: claimGeneration["zulu"], ManifestHash: "hash-z", SourceFingerprint: "source-z"},
 		{SessionID: "alpha", Generation: claimGeneration["alpha"], ManifestHash: "hash-a", SourceFingerprint: "source-a"},
 	})
-	require.NoError(t, err)
-	require.True(t, changed)
+	require.NoError(err)
+	require.True(changed)
 
 	var got []string
 	_, err = database.StreamArtifactPublications(ctx, "desktop-a1b2c3", func(row ArtifactPublication) error {
 		got = append(got, row.SessionID+"="+row.ManifestHash)
 		return nil
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Equal(t, []string{"alpha=hash-a", "zulu=hash-z"}, got)
 }
 
 func TestArtifactPublicationPageUsesCanonicalKeysetCursor(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	ctx := t.Context()
 	seedArtifactOrigin(t, database)
 	for _, id := range []string{"zulu", "bravo", "alpha"} {
-		require.NoError(t, database.UpsertSession(Session{
+		require.NoError(database.UpsertSession(Session{
 			ID: id, Project: "project", Machine: "local", Agent: "claude",
 		}))
 	}
 	claimed, err := database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
+	require.NoError(err)
 	claimGeneration := make(map[string]int64, len(claimed))
 	for _, item := range claimed {
 		claimGeneration[item.SessionID] = item.Generation
@@ -1131,17 +1201,17 @@ func TestArtifactPublicationPageUsesCanonicalKeysetCursor(t *testing.T) {
 			{SessionID: "alpha", Generation: claimGeneration["alpha"], ManifestHash: "hash-a", SourceFingerprint: "source-a"},
 		},
 	)
-	require.NoError(t, err)
-	require.True(t, changed)
+	require.NoError(err)
+	require.True(changed)
 
 	first, firstRevision, more, err := database.ArtifactPublicationPage(
 		ctx, "desktop-a1b2c3", "", 2,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, revision, firstRevision)
-	assert.True(t, more)
-	require.Len(t, first, 2)
-	assert.Equal(t, []string{"alpha", "bravo"}, []string{
+	require.NoError(err)
+	assert.Equal(revision, firstRevision)
+	assert.True(more)
+	require.Len(first, 2)
+	assert.Equal([]string{"alpha", "bravo"}, []string{
 		first[0].SessionID,
 		first[1].SessionID,
 	})
@@ -1149,121 +1219,130 @@ func TestArtifactPublicationPageUsesCanonicalKeysetCursor(t *testing.T) {
 	second, secondRevision, more, err := database.ArtifactPublicationPage(
 		ctx, "desktop-a1b2c3", first[1].SessionID, 2,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, revision, secondRevision)
-	assert.False(t, more)
-	require.Len(t, second, 1)
-	assert.Equal(t, "zulu", second[0].SessionID)
+	require.NoError(err)
+	assert.Equal(revision, secondRevision)
+	assert.False(more)
+	require.Len(second, 1)
+	assert.Equal("zulu", second[0].SessionID)
 }
 
 func TestArtifactCheckpointHeadRejectsRegressionWithoutAcknowledgingWork(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	ctx := t.Context()
 	seedArtifactOrigin(t, database)
-	require.NoError(t, database.RecordArtifactCheckpointHead(ctx, ArtifactCheckpointHead{
+	require.NoError(database.RecordArtifactCheckpointHead(ctx, ArtifactCheckpointHead{
 		Origin: "desktop-a1b2c3", Sequence: 7,
 		SessionMapSHA256: "map-7", CheckpointSHA256: "checkpoint-7",
 	}, nil))
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "still-pending", Project: "project", Machine: "local", Agent: "claude",
 	}))
 
 	pendingBefore, err := database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
+	require.NoError(err)
 	err = database.RecordArtifactCheckpointHead(ctx, ArtifactCheckpointHead{
 		Origin: "desktop-a1b2c3", Sequence: 6,
 		SessionMapSHA256: "map-6", CheckpointSHA256: "checkpoint-6",
 	}, pendingBefore)
-	require.Error(t, err)
+	require.Error(err)
 
 	pending, err := database.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Equal(t, "still-pending", pending[0].SessionID)
+	require.NoError(err)
+	require.Len(pending, 1)
+	assert.Equal("still-pending", pending[0].SessionID)
 	head, ok, err := database.GetArtifactCheckpointHead(ctx, "desktop-a1b2c3")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, 7, head.Sequence)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(7, head.Sequence)
 }
 
 func TestArtifactPublicationAcknowledgementCannotConsumeNewerMutation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	ctx := t.Context()
 	seedArtifactOrigin(t, database)
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "racing", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	claimed, err := database.PendingArtifactExports(ctx, 1)
-	require.NoError(t, err)
-	require.Len(t, claimed, 1)
+	require.NoError(err)
+	require.Len(claimed, 1)
 
 	// Both writes can share the same SQLite millisecond. Generation, not wall
 	// time, is the compare-and-ack token.
 	_, err = database.getWriter().Exec(
 		`UPDATE sessions SET display_name = 'newer' WHERE id = 'racing'`,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	newer, err := database.PendingArtifactExports(ctx, 1)
-	require.NoError(t, err)
-	require.Len(t, newer, 1)
-	assert.Equal(t, claimed[0].EnqueuedAt, newer[0].EnqueuedAt)
-	assert.Greater(t, newer[0].Generation, claimed[0].Generation)
+	require.NoError(err)
+	require.Len(newer, 1)
+	assert.Equal(claimed[0].EnqueuedAt, newer[0].EnqueuedAt)
+	assert.Greater(newer[0].Generation, claimed[0].Generation)
 
 	err = database.RecordArtifactCheckpointHead(ctx, ArtifactCheckpointHead{
 		Origin: "desktop-a1b2c3", Sequence: 1,
 		SessionMapSHA256: "map-1", CheckpointSHA256: "checkpoint-1",
 	}, claimed)
-	require.ErrorIs(t, err, ErrArtifactExportClaimStale)
+	require.ErrorIs(err, ErrArtifactExportClaimStale)
 	pending, err := database.PendingArtifactExports(ctx, 1)
-	require.NoError(t, err)
-	require.Equal(t, newer, pending, "stale acknowledgment must leave newer work pending")
+	require.NoError(err)
+	require.Equal(newer, pending, "stale acknowledgment must leave newer work pending")
 }
 
 func TestArtifactPublicationQueueGenerationSurvivesAcknowledgementABA(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	ctx := t.Context()
 	seedArtifactOrigin(t, database)
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "aba", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	oldClaim, err := database.PendingArtifactExports(ctx, 1)
-	require.NoError(t, err)
-	require.Len(t, oldClaim, 1)
+	require.NoError(err)
+	require.Len(oldClaim, 1)
 	_, _, err = database.ApplyArtifactPublicationChanges(ctx, "desktop-a1b2c3", []ArtifactPublicationChange{{
 		SessionID: "aba", Generation: oldClaim[0].Generation,
 		ManifestHash: "old-manifest", SourceFingerprint: "old-source",
 	}})
-	require.NoError(t, err)
-	require.NoError(t, database.AcknowledgeArtifactExports(ctx, oldClaim))
+	require.NoError(err)
+	require.NoError(database.AcknowledgeArtifactExports(ctx, oldClaim))
 	pending, err := database.PendingArtifactExports(ctx, 1)
-	require.NoError(t, err)
-	assert.Empty(t, pending)
+	require.NoError(err)
+	assert.Empty(pending)
 
 	_, err = database.getWriter().Exec(
 		`UPDATE sessions SET display_name = 'new mutation' WHERE id = 'aba'`,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	newClaim, err := database.PendingArtifactExports(ctx, 1)
-	require.NoError(t, err)
-	require.Len(t, newClaim, 1)
+	require.NoError(err)
+	require.Len(newClaim, 1)
 	_, err = database.getWriter().Exec(
 		`UPDATE artifact_export_queue SET enqueued_at = ? WHERE session_id = 'aba'`,
 		oldClaim[0].EnqueuedAt,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	newClaim, err = database.PendingArtifactExports(ctx, 1)
-	require.NoError(t, err)
-	require.Len(t, newClaim, 1)
-	assert.Equal(t, oldClaim[0].EnqueuedAt, newClaim[0].EnqueuedAt,
+	require.NoError(err)
+	require.Len(newClaim, 1)
+	assert.Equal(oldClaim[0].EnqueuedAt, newClaim[0].EnqueuedAt,
 		"the ABA guard cannot depend on timestamp precision")
-	assert.Greater(t, newClaim[0].Generation, oldClaim[0].Generation)
+	assert.Greater(newClaim[0].Generation, oldClaim[0].Generation)
 
 	revision, _, err := database.ApplyArtifactPublicationChanges(ctx, "desktop-a1b2c3", []ArtifactPublicationChange{{
 		SessionID: "aba", Generation: newClaim[0].Generation,
 		ManifestHash: "new-manifest", SourceFingerprint: "new-source",
 	}})
-	require.NoError(t, err)
-	require.NoError(t, database.RecordArtifactCheckpointHead(ctx, ArtifactCheckpointHead{
+	require.NoError(err)
+	require.NoError(database.RecordArtifactCheckpointHead(ctx, ArtifactCheckpointHead{
 		Origin: "desktop-a1b2c3", Sequence: 1, PublicationRevision: revision,
 		SessionMapSHA256: "map-1", CheckpointSHA256: "checkpoint-1",
 	}, nil))
@@ -1272,48 +1351,51 @@ func TestArtifactPublicationQueueGenerationSurvivesAcknowledgementABA(t *testing
 		SessionID: "aba", Generation: oldClaim[0].Generation,
 		ManifestHash: "stale-manifest", SourceFingerprint: "stale-source",
 	}})
-	require.ErrorIs(t, err, ErrArtifactExportClaimStale)
+	require.ErrorIs(err, ErrArtifactExportClaimStale)
 	err = database.RecordArtifactCheckpointHead(ctx, ArtifactCheckpointHead{
 		Origin: "desktop-a1b2c3", Sequence: 2,
 		SessionMapSHA256: "stale-map", CheckpointSHA256: "stale-checkpoint",
 	}, oldClaim)
-	require.ErrorIs(t, err, ErrArtifactExportClaimStale)
-	require.ErrorIs(t, database.AcknowledgeArtifactExports(ctx, oldClaim), ErrArtifactExportClaimStale)
+	require.ErrorIs(err, ErrArtifactExportClaimStale)
+	require.ErrorIs(database.AcknowledgeArtifactExports(ctx, oldClaim), ErrArtifactExportClaimStale)
 
 	var publications []ArtifactPublication
 	_, err = database.StreamArtifactPublications(ctx, "desktop-a1b2c3", func(row ArtifactPublication) error {
 		publications = append(publications, row)
 		return nil
 	})
-	require.NoError(t, err)
-	require.Len(t, publications, 1)
-	assert.Equal(t, "new-manifest", publications[0].ManifestHash)
+	require.NoError(err)
+	require.Len(publications, 1)
+	assert.Equal("new-manifest", publications[0].ManifestHash)
 	head, ok, err := database.GetArtifactCheckpointHead(ctx, "desktop-a1b2c3")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, 1, head.Sequence)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(1, head.Sequence)
 	pending, err = database.PendingArtifactExports(ctx, 1)
-	require.NoError(t, err)
-	assert.Equal(t, newClaim, pending)
+	require.NoError(err)
+	assert.Equal(newClaim, pending)
 }
 
 func TestArtifactPublicationUsageOnlyAtomicBatchEnqueuesExactlyOnce(t *testing.T) {
 	for _, machine := range []string{"local", "peer-a1b2c3"} {
 		t.Run(machine, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			database := testDB(t)
 			seedArtifactOrigin(t, database)
 			session := Session{
 				ID: "usage-batch", Project: "project", Machine: machine, Agent: "claude",
 			}
-			require.NoError(t, database.UpsertSession(session))
+			require.NoError(database.UpsertSession(session))
 			if machine == "local" {
 				claim, err := database.PendingArtifactExports(t.Context(), 1)
-				require.NoError(t, err)
-				require.NoError(t, database.AcknowledgeArtifactExports(t.Context(), claim))
+				require.NoError(err)
+				require.NoError(database.AcknowledgeArtifactExports(t.Context(), claim))
 			}
 			stored, err := database.GetSessionFull(t.Context(), session.ID)
-			require.NoError(t, err)
-			require.NotNil(t, stored)
+			require.NoError(err)
+			require.NotNil(stored)
 
 			_, err = database.WriteSessionBatchAtomic([]SessionBatchWrite{{
 				Session: *stored,
@@ -1323,15 +1405,15 @@ func TestArtifactPublicationUsageOnlyAtomicBatchEnqueuesExactlyOnce(t *testing.T
 				}},
 				ReplaceMessages: false,
 			}})
-			require.NoError(t, err)
+			require.NoError(err)
 			pending, err := database.PendingArtifactExports(t.Context(), 10)
-			require.NoError(t, err)
+			require.NoError(err)
 			if machine != "local" {
-				assert.Empty(t, pending)
+				assert.Empty(pending)
 				return
 			}
-			require.Len(t, pending, 1)
-			assert.Equal(t, int64(2), pending[0].Generation,
+			require.Len(pending, 1)
+			assert.Equal(int64(2), pending[0].Generation,
 				"usage-only batch advances the clean authority exactly once")
 		})
 	}
@@ -1342,13 +1424,16 @@ func TestArtifactClaimErrorsRemainDiscoverableWhenWrapped(t *testing.T) {
 }
 
 func TestArtifactCheckpointFloorReservationIsConcurrentAndNeverLowers(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "floor.db")
 	first, err := Open(path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, first.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(first.Close()) })
 	second, err := Open(path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, second.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(second.Close()) })
 
 	const reservations = 24
 	sequences := make(chan int, reservations)
@@ -1363,7 +1448,7 @@ func TestArtifactCheckpointFloorReservationIsConcurrentAndNeverLowers(t *testing
 				database = second
 			}
 			sequence, reserveErr := database.ReserveArtifactCheckpointSequence(
-				context.Background(), "desktop-a1b2c3", 10,
+				t.Context(), "desktop-a1b2c3", 10,
 			)
 			if reserveErr != nil {
 				errs <- reserveErr
@@ -1375,7 +1460,7 @@ func TestArtifactCheckpointFloorReservationIsConcurrentAndNeverLowers(t *testing
 	wg.Wait()
 	close(errs)
 	for reserveErr := range errs {
-		require.NoError(t, reserveErr)
+		require.NoError(reserveErr)
 	}
 	close(sequences)
 	var got []int
@@ -1387,20 +1472,23 @@ func TestArtifactCheckpointFloorReservationIsConcurrentAndNeverLowers(t *testing
 	for i := range want {
 		want[i] = 11 + i
 	}
-	assert.Equal(t, want, got)
+	assert.Equal(want, got)
 
 	// Simulate a crash after the committed floor reservation but before the
 	// checkpoint node is created, followed by a vault reset reporting no live
 	// sequence. The durable floor consumes the missing sequence permanently.
 	next, err := first.ReserveArtifactCheckpointSequence(t.Context(), "desktop-a1b2c3", 0)
-	require.NoError(t, err)
-	assert.Equal(t, 11+reservations, next)
+	require.NoError(err)
+	assert.Equal(11+reservations, next)
 }
 
 func TestArtifactCheckpointHeadAdvancesSequenceFloor(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	ctx := t.Context()
-	require.NoError(t, database.RecordArtifactCheckpointHead(
+	require.NoError(database.RecordArtifactCheckpointHead(
 		ctx, ArtifactCheckpointHead{
 			Origin: "desktop-a1b2c3", Sequence: 7,
 			SessionMapSHA256: "map", CheckpointSHA256: "checkpoint",
@@ -1410,21 +1498,24 @@ func TestArtifactCheckpointHeadAdvancesSequenceFloor(t *testing.T) {
 	floor, ok, err := database.GetArtifactCheckpointFloor(
 		ctx, "desktop-a1b2c3",
 	)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, 7, floor)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(7, floor)
 	next, err := database.ReserveArtifactCheckpointSequence(
 		ctx, "desktop-a1b2c3", 0,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, 8, next)
+	require.NoError(err)
+	assert.Equal(8, next)
 }
 
 func TestOpenBackfillsCheckpointFloorFromLegacyHeadWhenStoreIsEmpty(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "legacy-head.db")
 	database, err := Open(path)
-	require.NoError(t, err)
-	require.NoError(t, database.RecordArtifactCheckpointHead(
+	require.NoError(err)
+	require.NoError(database.RecordArtifactCheckpointHead(
 		t.Context(), ArtifactCheckpointHead{
 			Origin: "desktop-a1b2c3", Sequence: 7,
 			SessionMapSHA256: "map", CheckpointSHA256: "checkpoint",
@@ -1433,76 +1524,79 @@ func TestOpenBackfillsCheckpointFloorFromLegacyHeadWhenStoreIsEmpty(t *testing.T
 	_, err = database.getWriter().Exec(`
 		DELETE FROM artifact_checkpoint_floors
 		WHERE origin = 'desktop-a1b2c3'`)
-	require.NoError(t, err)
-	require.NoError(t, database.Close())
+	require.NoError(err)
+	require.NoError(database.Close())
 
 	reopened, err := Open(path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(reopened.Close()) })
 	floor, ok, err := reopened.GetArtifactCheckpointFloor(
 		t.Context(), "desktop-a1b2c3",
 	)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, 7, floor)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(7, floor)
 	// observedFloor=0 models recovery against an empty or reset artifact
 	// store: the migrated database head remains the sequence authority.
 	next, err := reopened.ReserveArtifactCheckpointSequence(
 		t.Context(), "desktop-a1b2c3", 0,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, 8, next)
+	require.NoError(err)
+	assert.Equal(8, next)
 }
 
 func TestArtifactPublicationStateSurvivesFullResyncCopy(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.db")
 	source, err := Open(sourcePath)
-	require.NoError(t, err)
+	require.NoError(err)
 	seedArtifactOrigin(t, source)
 
 	ctx := t.Context()
-	require.NoError(t, source.UpsertSession(Session{
+	require.NoError(source.UpsertSession(Session{
 		ID: "queued", Project: "project", Machine: "local", Agent: "claude",
 	}))
-	require.NoError(t, source.UpsertSession(Session{
+	require.NoError(source.UpsertSession(Session{
 		ID: "published", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	claims, err := source.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
+	require.NoError(err)
 	var publishedClaim ArtifactExportQueueItem
 	for _, claim := range claims {
 		if claim.SessionID == "published" {
 			publishedClaim = claim
 		}
 	}
-	require.NotZero(t, publishedClaim.Generation)
+	require.NotZero(publishedClaim.Generation)
 	revision, _, err := source.ApplyArtifactPublicationChanges(ctx, "desktop-a1b2c3", []ArtifactPublicationChange{{
 		SessionID: "published", Generation: publishedClaim.Generation,
 		ManifestHash: "manifest", SourceFingerprint: "source",
 	}})
-	require.NoError(t, err)
-	require.NoError(t, source.AcknowledgeArtifactExports(ctx, []ArtifactExportQueueItem{publishedClaim}))
-	require.NoError(t, source.RecordArtifactCheckpointHead(ctx, ArtifactCheckpointHead{
+	require.NoError(err)
+	require.NoError(source.AcknowledgeArtifactExports(ctx, []ArtifactExportQueueItem{publishedClaim}))
+	require.NoError(source.RecordArtifactCheckpointHead(ctx, ArtifactCheckpointHead{
 		Origin: "desktop-a1b2c3", Sequence: 4, PublicationRevision: revision,
 		SessionMapSHA256: "map", CheckpointSHA256: "checkpoint",
 	}, nil))
 	sequence, err := source.ReserveArtifactCheckpointSequence(ctx, "desktop-a1b2c3", 8)
-	require.NoError(t, err)
-	require.Equal(t, 9, sequence)
-	require.NoError(t, source.Close())
+	require.NoError(err)
+	require.Equal(9, sequence)
+	require.NoError(source.Close())
 
 	target, err := Open(filepath.Join(dir, "target.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, target.Close()) })
-	require.NoError(t, target.CopySyncStateFrom(sourcePath))
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(target.Close()) })
+	require.NoError(target.CopySyncStateFrom(sourcePath))
 
 	// A resync re-verifies every copied session, so the acknowledged
 	// "published" row is re-dirtied alongside the still-pending "queued" row.
 	pending, err := target.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, pending, 2)
-	assert.ElementsMatch(t, []string{"queued", "published"}, []string{
+	require.NoError(err)
+	require.Len(pending, 2)
+	assert.ElementsMatch([]string{"queued", "published"}, []string{
 		pending[0].SessionID, pending[1].SessionID,
 	})
 	var publications []ArtifactPublication
@@ -1510,38 +1604,38 @@ func TestArtifactPublicationStateSurvivesFullResyncCopy(t *testing.T) {
 		publications = append(publications, row)
 		return nil
 	})
-	require.NoError(t, err)
-	assert.Equal(t, revision, streamedRevision)
-	require.Len(t, publications, 1)
-	assert.Equal(t, "published", publications[0].SessionID)
+	require.NoError(err)
+	assert.Equal(revision, streamedRevision)
+	require.Len(publications, 1)
+	assert.Equal("published", publications[0].SessionID)
 	head, ok, err := target.GetArtifactCheckpointHead(ctx, "desktop-a1b2c3")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, 4, head.Sequence)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(4, head.Sequence)
 	next, err := target.ReserveArtifactCheckpointSequence(ctx, "desktop-a1b2c3", 0)
-	require.NoError(t, err)
-	assert.Equal(t, 10, next)
+	require.NoError(err)
+	assert.Equal(10, next)
 
 	// Clean authority rows survive the swap and copied generations are advanced,
 	// so an in-flight claim against the source database cannot become valid in
 	// the replacement archive after the same session is dirtied again.
-	require.NoError(t, target.UpsertSession(Session{
+	require.NoError(target.UpsertSession(Session{
 		ID: "published", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	pending, err = target.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
+	require.NoError(err)
 	var republished ArtifactExportQueueItem
 	for _, item := range pending {
 		if item.SessionID == "published" {
 			republished = item
 		}
 	}
-	require.Greater(t, republished.Generation, publishedClaim.Generation)
+	require.Greater(republished.Generation, publishedClaim.Generation)
 	_, _, err = target.ApplyArtifactPublicationChanges(ctx, "desktop-a1b2c3", []ArtifactPublicationChange{{
 		SessionID: "published", Generation: publishedClaim.Generation,
 		ManifestHash: "stale", SourceFingerprint: "stale",
 	}})
-	require.ErrorIs(t, err, ErrArtifactExportClaimStale)
+	require.ErrorIs(err, ErrArtifactExportClaimStale)
 }
 
 // TestCopySyncStateForcesPendingOnFreshCopiedQueueRows models the shipped
@@ -1550,98 +1644,104 @@ func TestArtifactPublicationStateSurvivesFullResyncCopy(t *testing.T) {
 // CopySyncStateFrom must re-dirty every copied row so the exporter re-verifies
 // the rebuilt archive. Covers the fresh-insert branch of the queue copy.
 func TestCopySyncStateForcesPendingOnFreshCopiedQueueRows(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.db")
 	source, err := Open(sourcePath)
-	require.NoError(t, err)
+	require.NoError(err)
 	seedArtifactOrigin(t, source)
 	ctx := t.Context()
 
 	for _, id := range []string{"sess-1", "sess-2"} {
-		require.NoError(t, source.UpsertSession(Session{
+		require.NoError(source.UpsertSession(Session{
 			ID: id, Project: "project", Machine: "local", Agent: "claude",
 		}))
 	}
 	claims, err := source.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, claims, 2)
-	require.NoError(t, source.AcknowledgeArtifactExports(ctx, claims))
+	require.NoError(err)
+	require.Len(claims, 2)
+	require.NoError(source.AcknowledgeArtifactExports(ctx, claims))
 	drained, err := source.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Empty(t, drained, "old queue rows are acknowledged before the resync")
+	require.NoError(err)
+	require.Empty(drained, "old queue rows are acknowledged before the resync")
 	oldGen := map[string]int64{}
 	for _, claim := range claims {
 		oldGen[claim.SessionID] = claim.Generation
 	}
-	require.NoError(t, source.Close())
+	require.NoError(source.Close())
 
 	target, err := Open(filepath.Join(dir, "target.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, target.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(target.Close()) })
 	for _, id := range []string{"sess-1", "sess-2"} {
-		require.NoError(t, target.UpsertSession(Session{
+		require.NoError(target.UpsertSession(Session{
 			ID: id, Project: "project", Machine: "local", Agent: "claude",
 		}))
 	}
 	emptyBefore, err := target.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Empty(t, emptyBefore, "no origin key: queue triggers stay gated during resync")
+	require.NoError(err)
+	require.Empty(emptyBefore, "no origin key: queue triggers stay gated during resync")
 
-	require.NoError(t, target.CopySyncStateFrom(sourcePath))
+	require.NoError(target.CopySyncStateFrom(sourcePath))
 
 	pending, err := target.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, pending, 2, "a resync must re-verify every copied session")
-	assert.ElementsMatch(t, []string{"sess-1", "sess-2"}, []string{
+	require.NoError(err)
+	require.Len(pending, 2, "a resync must re-verify every copied session")
+	assert.ElementsMatch([]string{"sess-1", "sess-2"}, []string{
 		pending[0].SessionID, pending[1].SessionID,
 	})
 	for _, item := range pending {
-		assert.Greater(t, item.Generation, oldGen[item.SessionID],
+		assert.Greater(item.Generation, oldGen[item.SessionID],
 			"copied generation must advance and never regress")
 	}
 }
 
 func TestCopySyncStateQueuesSessionsDiscoveredDuringRebuild(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.db")
 	source, err := Open(sourcePath)
-	require.NoError(t, err)
+	require.NoError(err)
 	seedArtifactOrigin(t, source)
 	ctx := t.Context()
 
-	require.NoError(t, source.UpsertSession(Session{
+	require.NoError(source.UpsertSession(Session{
 		ID: "existing", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	sourceClaims, err := source.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, sourceClaims, 1)
-	require.NoError(t, source.AcknowledgeArtifactExports(ctx, sourceClaims))
-	require.NoError(t, source.Close())
+	require.NoError(err)
+	require.Len(sourceClaims, 1)
+	require.NoError(source.AcknowledgeArtifactExports(ctx, sourceClaims))
+	require.NoError(source.Close())
 
 	target, err := Open(filepath.Join(dir, "target.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, target.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(target.Close()) })
 	for _, id := range []string{"existing", "discovered-during-rebuild"} {
-		require.NoError(t, target.UpsertSession(Session{
+		require.NoError(target.UpsertSession(Session{
 			ID: id, Project: "project", Machine: "local", Agent: "claude",
 		}))
 	}
 	before, err := target.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Empty(t, before, "the rebuild has no origin until sync state is restored")
+	require.NoError(err)
+	require.Empty(before, "the rebuild has no origin until sync state is restored")
 
-	require.NoError(t, target.CopySyncStateFrom(sourcePath))
+	require.NoError(target.CopySyncStateFrom(sourcePath))
 
 	pending, err := target.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, pending, 2)
+	require.NoError(err)
+	require.Len(pending, 2)
 	generations := make(map[string]int64, len(pending))
 	for _, item := range pending {
 		generations[item.SessionID] = item.Generation
 	}
-	assert.Equal(t, sourceClaims[0].Generation+1, generations["existing"],
+	assert.Equal(sourceClaims[0].Generation+1, generations["existing"],
 		"queue completion must preserve the copied ledger generation")
-	assert.Equal(t, int64(1), generations["discovered-during-rebuild"],
+	assert.Equal(int64(1), generations["discovered-during-rebuild"],
 		"a rebuilt-only session must receive a fresh queue row")
 }
 
@@ -1652,62 +1752,68 @@ func TestCopySyncStateQueuesSessionsDiscoveredDuringRebuild(t *testing.T) {
 // generation. After the copy the row is pending again and its generation is the
 // advanced maximum of both sources.
 func TestCopySyncStateMergesQueueRowsAsPending(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.db")
 	source, err := Open(sourcePath)
-	require.NoError(t, err)
+	require.NoError(err)
 	seedArtifactOrigin(t, source)
 	ctx := t.Context()
 
-	require.NoError(t, source.UpsertSession(Session{
+	require.NoError(source.UpsertSession(Session{
 		ID: "overlap", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	for i := range 3 {
 		_, err = source.getWriter().Exec(
 			`UPDATE sessions SET display_name = ? WHERE id = 'overlap'`, "v"+strconv.Itoa(i))
-		require.NoError(t, err)
+		require.NoError(err)
 	}
 	oldClaims, err := source.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, oldClaims, 1)
+	require.NoError(err)
+	require.Len(oldClaims, 1)
 	oldGen := oldClaims[0].Generation
-	require.Greater(t, oldGen, int64(1))
-	require.NoError(t, source.AcknowledgeArtifactExports(ctx, oldClaims))
-	require.NoError(t, source.Close())
+	require.Greater(oldGen, int64(1))
+	require.NoError(source.AcknowledgeArtifactExports(ctx, oldClaims))
+	require.NoError(source.Close())
 
 	target, err := Open(filepath.Join(dir, "target.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, target.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(target.Close()) })
 	seedArtifactOrigin(t, target)
-	require.NoError(t, target.UpsertSession(Session{
+	require.NoError(target.UpsertSession(Session{
 		ID: "overlap", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	newClaims, err := target.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, newClaims, 1)
+	require.NoError(err)
+	require.Len(newClaims, 1)
 	newGen := newClaims[0].Generation
-	require.NoError(t, target.AcknowledgeArtifactExports(ctx, newClaims))
+	require.NoError(target.AcknowledgeArtifactExports(ctx, newClaims))
 	acked, err := target.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Empty(t, acked, "both queue rows are acknowledged before the merge")
+	require.NoError(err)
+	require.Empty(acked, "both queue rows are acknowledged before the merge")
 
-	require.NoError(t, target.CopySyncStateFrom(sourcePath))
+	require.NoError(target.CopySyncStateFrom(sourcePath))
 
 	pending, err := target.PendingArtifactExports(ctx, 10)
-	require.NoError(t, err)
-	require.Len(t, pending, 1, "the merged row is re-dirtied by the resync")
-	assert.Equal(t, "overlap", pending[0].SessionID)
+	require.NoError(err)
+	require.Len(pending, 1, "the merged row is re-dirtied by the resync")
+	assert.Equal("overlap", pending[0].SessionID)
 	expected := max(oldGen+1, newGen) + 1
-	assert.Equal(t, expected, pending[0].Generation,
+	assert.Equal(expected, pending[0].Generation,
 		"merged generation is the advanced maximum of both sources")
 }
 
 func TestArtifactPublicationStateCopyAcceptsPreRevisionCheckpointHead(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "legacy.db")
 	legacy, err := sql.Open("sqlite3", sourcePath)
-	require.NoError(t, err)
-	_, err = legacy.Exec(`
+	require.NoError(err)
+	_, err = legacy.ExecContext(t.Context(), `
 		CREATE TABLE artifact_checkpoint_heads (
 			origin TEXT PRIMARY KEY,
 			sequence INTEGER NOT NULL,
@@ -1717,33 +1823,35 @@ func TestArtifactPublicationStateCopyAcceptsPreRevisionCheckpointHead(t *testing
 		INSERT INTO artifact_checkpoint_heads VALUES (
 			'desktop-a1b2c3', 4, 'map', 'checkpoint'
 		);`)
-	require.NoError(t, err)
-	require.NoError(t, legacy.Close())
+	require.NoError(err)
+	require.NoError(legacy.Close())
 
 	target := testDB(t)
-	require.NoError(t, target.CopySyncStateFrom(sourcePath))
+	require.NoError(target.CopySyncStateFrom(sourcePath))
 	head, ok, err := target.GetArtifactCheckpointHead(t.Context(), "desktop-a1b2c3")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, 4, head.Sequence)
-	assert.Zero(t, head.PublicationRevision)
-	assert.Zero(t, head.CheckpointSize)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(4, head.Sequence)
+	assert.Zero(head.PublicationRevision)
+	assert.Zero(head.CheckpointSize)
 	floor, ok, err := target.GetArtifactCheckpointFloor(
 		t.Context(), "desktop-a1b2c3",
 	)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, 4, floor)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(4, floor)
 	next, err := target.ReserveArtifactCheckpointSequence(
 		t.Context(), "desktop-a1b2c3", 0,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, 5, next)
+	require.NoError(err)
+	assert.Equal(5, next)
 }
 
 func TestArtifactPublicationExportCardinalityIsQueueBounded(t *testing.T) {
 	for _, unrelated := range []int{20, 2000} {
 		t.Run(strconv.Itoa(unrelated), func(t *testing.T) {
+			require := require.New(t)
+
 			database := testDB(t)
 			seedArtifactOrigin(t, database)
 			for i := range unrelated {
@@ -1752,68 +1860,74 @@ func TestArtifactPublicationExportCardinalityIsQueueBounded(t *testing.T) {
 					 VALUES (?, 'project', 'peer-a1b2c3', 'claude')`,
 					"peer-"+strconv.Itoa(i),
 				)
-				require.NoError(t, err)
+				require.NoError(err)
 			}
-			require.NoError(t, database.UpsertSession(Session{
+			require.NoError(database.UpsertSession(Session{
 				ID: "dirty", Project: "project", Machine: "local", Agent: "claude",
 			}))
 			pending, err := database.PendingArtifactExports(t.Context(), 1)
-			require.NoError(t, err)
-			require.Len(t, pending, 1)
+			require.NoError(err)
+			require.Len(pending, 1)
 			assert.Equal(t, "dirty", pending[0].SessionID)
 		})
 	}
 }
 
 func TestArtifactPublicationQueueTracksOnlyLocallyOwnedContent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	seedArtifactOrigin(t, database)
 
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "local-session", Project: "project", Machine: "local", Agent: "claude",
 	}))
-	require.Equal(t, []string{"local-session"}, artifactExportQueueIDs(t, database))
+	require.Equal([]string{"local-session"}, artifactExportQueueIDs(t, database))
 	clearArtifactExportQueue(t, database)
 
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "peer-session", Project: "project", Machine: "peer-a1b2c3", Agent: "claude",
 	}))
-	assert.Empty(t, artifactExportQueueIDs(t, database), "foreign inserts stay out of the local publication queue")
+	assert.Empty(artifactExportQueueIDs(t, database), "foreign inserts stay out of the local publication queue")
 
 	_, err := database.getWriter().Exec(
 		`UPDATE sessions SET display_name = 'renamed' WHERE id = 'local-session'`,
 	)
-	require.NoError(t, err)
-	require.Equal(t, []string{"local-session"}, artifactExportQueueIDs(t, database))
+	require.NoError(err)
+	require.Equal([]string{"local-session"}, artifactExportQueueIDs(t, database))
 	clearArtifactExportQueue(t, database)
 
 	_, err = database.getWriter().Exec(
 		`UPDATE sessions SET machine = 'peer-a1b2c3' WHERE id = 'local-session'`,
 	)
-	require.NoError(t, err)
-	require.Equal(t, []string{"local-session"}, artifactExportQueueIDs(t, database),
+	require.NoError(err)
+	require.Equal([]string{"local-session"}, artifactExportQueueIDs(t, database),
 		"local-to-foreign transition must publish removal")
 	clearArtifactExportQueue(t, database)
 
 	_, err = database.getWriter().Exec(
 		`UPDATE sessions SET machine = 'local' WHERE id = 'peer-session'`,
 	)
-	require.NoError(t, err)
-	require.Equal(t, []string{"peer-session"}, artifactExportQueueIDs(t, database),
+	require.NoError(err)
+	require.Equal([]string{"peer-session"}, artifactExportQueueIDs(t, database),
 		"foreign-to-local transition must publish content")
 	clearArtifactExportQueue(t, database)
 
 	_, err = database.getWriter().Exec(
 		`UPDATE sessions SET display_name = 'peer rename' WHERE id = 'local-session'`,
 	)
-	require.NoError(t, err)
-	assert.Empty(t, artifactExportQueueIDs(t, database), "unchanged foreign updates stay out of the queue")
+	require.NoError(err)
+	assert.Empty(artifactExportQueueIDs(t, database), "unchanged foreign updates stay out of the queue")
 }
 
 func TestArtifactPublicationQueueKeepsFirstDirtyTimeForFIFO(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	seedArtifactOrigin(t, database)
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "dirty", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	const firstDirty = "2026-01-02T03:04:05.000Z"
@@ -1821,25 +1935,28 @@ func TestArtifactPublicationQueueKeepsFirstDirtyTimeForFIFO(t *testing.T) {
 		`UPDATE artifact_export_queue SET enqueued_at = ? WHERE session_id = 'dirty'`,
 		firstDirty,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	_, err = database.getWriter().Exec(
 		`UPDATE sessions SET display_name = 'changed again' WHERE id = 'dirty'`,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	pending, err := database.PendingArtifactExports(t.Context(), 1)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Equal(t, firstDirty, pending[0].EnqueuedAt,
+	require.NoError(err)
+	require.Len(pending, 1)
+	assert.Equal(firstDirty, pending[0].EnqueuedAt,
 		"repeated changes retain FIFO position until acknowledgement")
-	assert.Greater(t, pending[0].Generation, int64(1),
+	assert.Greater(pending[0].Generation, int64(1),
 		"repeated changes advance the compare-and-ack generation")
 }
 
 func TestArtifactPublicationQueueRefreshesDirtyTimeOnlyAfterAcknowledgement(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	seedArtifactOrigin(t, database)
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "dirty", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	const oldDirty = "2020-01-02T03:04:05.000Z"
@@ -1847,82 +1964,87 @@ func TestArtifactPublicationQueueRefreshesDirtyTimeOnlyAfterAcknowledgement(t *t
 		`UPDATE artifact_export_queue SET enqueued_at = ? WHERE session_id = 'dirty'`,
 		oldDirty,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	claim, err := database.PendingArtifactExports(t.Context(), 1)
-	require.NoError(t, err)
-	require.NoError(t, database.AcknowledgeArtifactExports(t.Context(), claim))
+	require.NoError(err)
+	require.NoError(database.AcknowledgeArtifactExports(t.Context(), claim))
 
 	_, err = database.getWriter().Exec(
 		`UPDATE sessions SET display_name = 'first clean mutation' WHERE id = 'dirty'`,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	pending, err := database.PendingArtifactExports(t.Context(), 1)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.NotEqual(t, oldDirty, pending[0].EnqueuedAt,
+	require.NoError(err)
+	require.Len(pending, 1)
+	assert.NotEqual(oldDirty, pending[0].EnqueuedAt,
 		"clean-to-pending transition receives a fresh FIFO position")
 	firstDirty := pending[0].EnqueuedAt
 
 	_, err = database.getWriter().Exec(
 		`UPDATE sessions SET display_name = 'second pending mutation' WHERE id = 'dirty'`,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	pending, err = database.PendingArtifactExports(t.Context(), 1)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Equal(t, firstDirty, pending[0].EnqueuedAt,
+	require.NoError(err)
+	require.Len(pending, 1)
+	assert.Equal(firstDirty, pending[0].EnqueuedAt,
 		"repeated pending writes retain their FIFO position")
 }
 
 func TestArtifactPublicationQueueTracksMessagesUsageAndCascadeDeletion(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	seedArtifactOrigin(t, database)
 	for _, session := range []Session{
 		{ID: "local-session", Project: "project", Machine: "local", Agent: "claude"},
 		{ID: "peer-session", Project: "project", Machine: "peer-a1b2c3", Agent: "claude"},
 	} {
-		require.NoError(t, database.UpsertSession(session))
+		require.NoError(database.UpsertSession(session))
 	}
 	clearArtifactExportQueue(t, database)
 
-	require.NoError(t, database.InsertMessages([]Message{
+	require.NoError(database.InsertMessages([]Message{
 		{SessionID: "local-session", Ordinal: 0, Role: "user", Content: "local"},
 		{SessionID: "peer-session", Ordinal: 0, Role: "user", Content: "peer"},
 	}))
-	require.Equal(t, []string{"local-session"}, artifactExportQueueIDs(t, database))
+	require.Equal([]string{"local-session"}, artifactExportQueueIDs(t, database))
 	pending, err := database.PendingArtifactExports(t.Context(), 1)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Equal(t, int64(2), pending[0].Generation,
+	require.NoError(err)
+	require.Len(pending, 1)
+	assert.Equal(int64(2), pending[0].Generation,
 		"InsertMessages enqueues once for the owning session")
 	clearArtifactExportQueue(t, database)
 
-	require.NoError(t, database.ReplaceSessionUsageEvents("local-session", []UsageEvent{{
+	require.NoError(database.ReplaceSessionUsageEvents("local-session", []UsageEvent{{
 		SessionID: "local-session", Source: "event", Model: "model", DedupKey: "local",
 	}}))
-	require.NoError(t, database.ReplaceSessionUsageEvents("peer-session", []UsageEvent{{
+	require.NoError(database.ReplaceSessionUsageEvents("peer-session", []UsageEvent{{
 		SessionID: "peer-session", Source: "event", Model: "model", DedupKey: "peer",
 	}}))
-	require.Equal(t, []string{"local-session"}, artifactExportQueueIDs(t, database))
+	require.Equal([]string{"local-session"}, artifactExportQueueIDs(t, database))
 	pending, err = database.PendingArtifactExports(t.Context(), 1)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Equal(t, int64(3), pending[0].Generation,
+	require.NoError(err)
+	require.Len(pending, 1)
+	assert.Equal(int64(3), pending[0].Generation,
 		"usage replacement enqueues once independently of event rows")
 	clearArtifactExportQueue(t, database)
 
 	_, err = database.getWriter().Exec(`DELETE FROM sessions WHERE id = 'local-session'`)
-	require.NoError(t, err)
-	require.Equal(t, []string{"local-session"}, artifactExportQueueIDs(t, database),
+	require.NoError(err)
+	require.Equal([]string{"local-session"}, artifactExportQueueIDs(t, database),
 		"the owner signal must survive child-row cascade ordering")
 }
 
 func TestArtifactPublicationQueueMessageReplacementIsBatchBounded(t *testing.T) {
 	for _, count := range []int{2, 2000} {
 		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			require := require.New(t)
+
 			database := testDB(t)
 			seedArtifactOrigin(t, database)
-			require.NoError(t, database.UpsertSession(Session{
+			require.NoError(database.UpsertSession(Session{
 				ID: "session", Project: "project", Machine: "local", Agent: "claude",
 			}))
 			clearArtifactExportQueue(t, database)
@@ -1933,10 +2055,10 @@ func TestArtifactPublicationQueueMessageReplacementIsBatchBounded(t *testing.T) 
 					Content: "message " + strconv.Itoa(i),
 				}
 			}
-			require.NoError(t, database.ReplaceSessionMessages("session", messages))
+			require.NoError(database.ReplaceSessionMessages("session", messages))
 			pending, err := database.PendingArtifactExports(t.Context(), 1)
-			require.NoError(t, err)
-			require.Len(t, pending, 1)
+			require.NoError(err)
+			require.Len(pending, 1)
 			assert.Equal(t, int64(2), pending[0].Generation,
 				"one transaction advances the queue independently of message count")
 		})
@@ -1964,20 +2086,23 @@ func TestArtifactPublicationQueueTracksMetadataOnlyStandaloneReplacements(t *tes
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			database := testDB(t)
 			seedArtifactOrigin(t, database)
-			require.NoError(t, database.UpsertSession(Session{
+			require.NoError(database.UpsertSession(Session{
 				ID: "session", Project: "project", Machine: "local", Agent: "claude",
 			}))
 			original := Message{
 				SessionID: "session", Ordinal: 0, Role: "assistant",
 				Content: "unchanged", ContentLength: len("unchanged"),
 			}
-			require.NoError(t, test.replace(database, "session", []Message{original}))
+			require.NoError(test.replace(database, "session", []Message{original}))
 			clearArtifactExportQueue(t, database)
 
 			var generationBefore int64
-			require.NoError(t, database.getReader().QueryRow(`
+			require.NoError(database.getReader().QueryRow(`
 				SELECT generation FROM artifact_export_queue WHERE session_id = 'session'`,
 			).Scan(&generationBefore))
 
@@ -1986,19 +2111,19 @@ func TestArtifactPublicationQueueTracksMetadataOnlyStandaloneReplacements(t *tes
 			metadataOnly.TokenUsage = []byte(`{"input_tokens":17}`)
 			metadataOnly.ClaudeRequestID = "request-2"
 			metadataOnly.SourceUUID = "source-2"
-			require.NoError(t, test.replace(database, "session", []Message{metadataOnly}))
+			require.NoError(test.replace(database, "session", []Message{metadataOnly}))
 
 			pending, err := database.PendingArtifactExports(t.Context(), 10)
-			require.NoError(t, err)
-			require.Len(t, pending, 1)
-			assert.Equal(t, "session", pending[0].SessionID)
-			assert.Equal(t, generationBefore+1, pending[0].Generation)
+			require.NoError(err)
+			require.Len(pending, 1)
+			assert.Equal("session", pending[0].SessionID)
+			assert.Equal(generationBefore+1, pending[0].Generation)
 			stored, err := database.GetAllMessages(t.Context(), "session")
-			require.NoError(t, err)
-			require.Len(t, stored, 1)
-			assert.Equal(t, metadataOnly.TokenUsage, stored[0].TokenUsage)
-			assert.Equal(t, metadataOnly.ClaudeRequestID, stored[0].ClaudeRequestID)
-			assert.Equal(t, metadataOnly.SourceUUID, stored[0].SourceUUID)
+			require.NoError(err)
+			require.Len(stored, 1)
+			assert.Equal(metadataOnly.TokenUsage, stored[0].TokenUsage)
+			assert.Equal(metadataOnly.ClaudeRequestID, stored[0].ClaudeRequestID)
+			assert.Equal(metadataOnly.SourceUUID, stored[0].SourceUUID)
 		})
 	}
 }
@@ -2071,6 +2196,9 @@ func TestArtifactExportQueueStaysEmptyWithoutOrigin(t *testing.T) {
 // must not populate the queue before an artifact origin exists, and the
 // identical write must enqueue once an origin is seeded.
 func TestArtifactExportQueueHooksRespectOriginGate(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	write := SessionBatchWrite{
 		Session: Session{
@@ -2081,18 +2209,18 @@ func TestArtifactExportQueueHooksRespectOriginGate(t *testing.T) {
 		},
 	}
 	result, err := database.WriteSessionBatch([]SessionBatchWrite{write})
-	require.NoError(t, err)
-	require.Equal(t, 1, result.WrittenSessions)
-	assert.Empty(t, artifactExportQueueIDs(t, database),
+	require.NoError(err)
+	require.Equal(1, result.WrittenSessions)
+	assert.Empty(artifactExportQueueIDs(t, database),
 		"a batch write must not populate the export queue before an artifact origin exists")
 
 	seedArtifactOrigin(t, database)
 	write.Session.ID = "gated-session-2"
 	write.Messages[0].SessionID = "gated-session-2"
 	result, err = database.WriteSessionBatch([]SessionBatchWrite{write})
-	require.NoError(t, err)
-	require.Equal(t, 1, result.WrittenSessions)
-	assert.Equal(t, []string{"gated-session-2"}, artifactExportQueueIDs(t, database),
+	require.NoError(err)
+	require.Equal(1, result.WrittenSessions)
+	assert.Equal([]string{"gated-session-2"}, artifactExportQueueIDs(t, database),
 		"after an artifact origin exists, the identical batch write enqueues the session")
 }
 
@@ -2102,21 +2230,24 @@ func TestArtifactExportQueueHooksRespectOriginGate(t *testing.T) {
 // on its own end-of-batch generation check; see
 // TestArtifactPublicationUsageOnlyAtomicBatchEnqueuesExactlyOnce).
 func TestReplaceSessionUsageEventsEnqueuesArtifactExport(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	seedArtifactOrigin(t, database)
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "usage-standalone", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	clearArtifactExportQueue(t, database)
 
-	require.NoError(t, database.ReplaceSessionUsageEvents("usage-standalone", []UsageEvent{{
+	require.NoError(database.ReplaceSessionUsageEvents("usage-standalone", []UsageEvent{{
 		SessionID: "usage-standalone", Source: "event", Model: "model", DedupKey: "standalone",
 	}}))
 	pending, err := database.PendingArtifactExports(t.Context(), 1)
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Equal(t, "usage-standalone", pending[0].SessionID)
-	assert.Equal(t, int64(2), pending[0].Generation,
+	require.NoError(err)
+	require.Len(pending, 1)
+	assert.Equal("usage-standalone", pending[0].SessionID)
+	assert.Equal(int64(2), pending[0].Generation,
 		"standalone ReplaceSessionUsageEvents enqueues directly")
 }
 
@@ -2126,36 +2257,39 @@ func TestReplaceSessionUsageEventsEnqueuesArtifactExport(t *testing.T) {
 // trigger's change-detection list fires "no such column" against an archive
 // created before those columns existed.
 func TestArtifactSessionTriggersSurviveLegacySchemaMigration(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "legacy-artifact.db")
 	conn, err := sql.Open("sqlite3", makeDSN(path, false))
-	require.NoError(t, err)
+	require.NoError(err)
 	conn.SetMaxOpenConns(1)
-	_, err = conn.Exec(preParentLegacySchema)
-	require.NoError(t, err)
-	_, err = conn.Exec(legacyArchiveRows)
-	require.NoError(t, err)
-	_, err = conn.Exec(fmt.Sprintf("PRAGMA user_version = %d", dataVersion))
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	_, err = conn.ExecContext(t.Context(), preParentLegacySchema)
+	require.NoError(err)
+	_, err = conn.ExecContext(t.Context(), legacyArchiveRows)
+	require.NoError(err)
+	_, err = conn.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", dataVersion))
+	require.NoError(err)
+	require.NoError(conn.Close())
 
 	database, err := Open(path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	assert.True(t, database.NeedsResync())
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(database.Close()) })
+	assert.True(database.NeedsResync())
 	seedArtifactOrigin(t, database)
 
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(database.UpsertSession(Session{
 		ID: "legacy-fresh", Project: "project", Machine: "local", Agent: "claude",
 	}))
-	assert.Contains(t, artifactExportQueueIDs(t, database), "legacy-fresh",
+	assert.Contains(artifactExportQueueIDs(t, database), "legacy-fresh",
 		"insert trigger must fire cleanly on the migrated schema")
 
 	_, err = database.getWriter().Exec(
 		`UPDATE sessions SET display_name = 'renamed' WHERE id = 'legacy-session'`,
 	)
-	require.NoError(t, err,
+	require.NoError(err,
 		"update trigger must not fail with 'no such column' on a column added by migration")
-	assert.Contains(t, artifactExportQueueIDs(t, database), "legacy-session",
+	assert.Contains(artifactExportQueueIDs(t, database), "legacy-session",
 		"update trigger must enqueue the migrated legacy session")
 }
 

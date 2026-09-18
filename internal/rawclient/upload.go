@@ -31,7 +31,7 @@ func (c *Client) MissingObjects(
 	for _, object := range objects {
 		canonical, err := rawsync.NewObjectRef(object.SHA256, object.Length)
 		if err != nil || canonical != object {
-			return nil, fmt.Errorf("rawclient: invalid missing object request")
+			return nil, errors.New("rawclient: invalid missing object request")
 		}
 		if _, duplicate := positions[object]; duplicate {
 			continue
@@ -55,7 +55,7 @@ func (c *Client) MissingObjects(
 		canonical, err := rawsync.NewObjectRef(object.SHA256, object.Length)
 		position, requested := positions[object]
 		if err != nil || canonical != object || !requested || position <= lastPosition {
-			return nil, fmt.Errorf("rawclient: invalid missing objects response")
+			return nil, errors.New("rawclient: invalid missing objects response")
 		}
 		lastPosition = position
 		missing = append(missing, object)
@@ -212,16 +212,16 @@ func validateUploadIdentity(
 	uploadID string,
 ) error {
 	if response.Object.SHA256 != object.SHA256 || response.Object.Length != object.Length {
-		return fmt.Errorf("rawclient: upload response identifies a different object")
+		return errors.New("rawclient: upload response identifies a different object")
 	}
 	if uploadID != "" {
 		if response.UploadID == nil || *response.UploadID != uploadID {
-			return fmt.Errorf("rawclient: upload response identifies a different upload ID")
+			return errors.New("rawclient: upload response identifies a different upload ID")
 		}
 		return nil
 	}
 	if !response.Complete && (response.UploadID == nil || *response.UploadID == "") {
-		return fmt.Errorf("rawclient: incomplete upload response is missing upload ID")
+		return errors.New("rawclient: incomplete upload response is missing upload ID")
 	}
 	return nil
 }

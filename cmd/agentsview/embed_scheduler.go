@@ -398,7 +398,7 @@ func (a recallSearcherAdapter) SearchRecall(
 ) ([]db.RecallVectorHit, bool, db.RecallVectorSnapshot, error) {
 	identity, err := a.corpusIdentity(ctx)
 	if err != nil {
-		return nil, false, db.RecallVectorSnapshot{}, fmt.Errorf("%w: %v", db.ErrSemanticUnavailable, err)
+		return nil, false, db.RecallVectorSnapshot{}, fmt.Errorf("%w: %w", db.ErrSemanticUnavailable, err)
 	}
 	stale, err := a.ix.StaleActive(
 		ctx, identity.GenerationFingerprint, identity.CorpusRevision,
@@ -443,7 +443,7 @@ func (a recallSearcherAdapter) ValidateRecallSnapshot(
 	}
 	currentIdentity, err := a.corpusIdentity(ctx)
 	if err != nil {
-		return fmt.Errorf("%w: %v", db.ErrSemanticUnavailable, err)
+		return fmt.Errorf("%w: %w", db.ErrSemanticUnavailable, err)
 	}
 	if currentIdentity != identity {
 		return fmt.Errorf(
@@ -544,7 +544,7 @@ func translateSearchError(err error) error {
 		return fmt.Errorf("%w: index is building: %d%% complete",
 			db.ErrSemanticUnavailable, buildingErr.Percent)
 	case errors.Is(err, vector.ErrMirrorVersionMismatch):
-		return fmt.Errorf("%w: %v", db.ErrSemanticUnavailable, err)
+		return fmt.Errorf("%w: %w", db.ErrSemanticUnavailable, err)
 	case errors.Is(err, vector.ErrNoActiveGeneration):
 		return db.ErrSemanticUnavailable
 	case errors.As(err, &queryEncErr):

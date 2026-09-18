@@ -97,12 +97,12 @@ func zedClassifyPath(root, path string, allowMissing bool) (multiSessionMatch, b
 	)
 }
 
-func zedFindMember(root, rawID string) (multiSessionMatch, bool) {
+func zedFindMember(ctx context.Context, root, rawID string) (multiSessionMatch, bool) {
 	if root == "" || !IsValidSessionID(rawID) {
 		return multiSessionMatch{}, false
 	}
 	path := filepath.Join(root, zedThreadsDBRelPath)
-	if !ZedSQLiteSessionExists(path, rawID) {
+	if !ZedSQLiteSessionExists(ctx, path, rawID) {
 		return multiSessionMatch{}, false
 	}
 	return multiSessionMatch{
@@ -159,11 +159,11 @@ func zedFingerprintSource(ctx context.Context, src multiSessionSource) (SourceFi
 	}, nil
 }
 
-func zedMemberPresent(src multiSessionSource) bool {
+func zedMemberPresent(ctx context.Context, src multiSessionSource) bool {
 	if src.MemberID == "" {
 		return IsRegularFile(src.Container)
 	}
-	return ZedSQLiteSessionExists(src.Container, src.MemberID)
+	return ZedSQLiteSessionExists(ctx, src.Container, src.MemberID)
 }
 
 func zedParseMember(

@@ -1237,7 +1237,7 @@ func normalizePushMarkerMachineAliases(
 func (s *Sync) pushMarkerID() (string, error) {
 	state := s.local
 	if state == nil {
-		return "", fmt.Errorf("local db is required")
+		return "", errors.New("local db is required")
 	}
 	id, err := state.GetSyncState(pushMarkerIDStateKey)
 	if err != nil {
@@ -2105,7 +2105,7 @@ func sessionPushFingerprint(
 	fields := []string{
 		sess.ID,
 		sess.Project,
-		fmt.Sprintf("%t", sess.ProjectAssigned),
+		strconv.FormatBool(sess.ProjectAssigned),
 		pushedMachine,
 		sourceArchiveID,
 		ownerMarker,
@@ -2121,54 +2121,54 @@ func sessionPushFingerprint(
 		stringValue(sess.EndedAt),
 		stringValue(sess.DeletedAt),
 		stringValue(sess.DeletionCause),
-		fmt.Sprintf("%d", sess.MessageCount),
-		fmt.Sprintf("%d", sess.UserMessageCount),
-		fmt.Sprintf("%t", sess.IsAutomated),
-		fmt.Sprintf("%d", sess.TotalOutputTokens),
-		fmt.Sprintf("%d", sess.PeakContextTokens),
-		fmt.Sprintf("%t", sess.HasTotalOutputTokens),
-		fmt.Sprintf("%t", sess.HasPeakContextTokens),
+		strconv.Itoa(sess.MessageCount),
+		strconv.Itoa(sess.UserMessageCount),
+		strconv.FormatBool(sess.IsAutomated),
+		strconv.Itoa(sess.TotalOutputTokens),
+		strconv.Itoa(sess.PeakContextTokens),
+		strconv.FormatBool(sess.HasTotalOutputTokens),
+		strconv.FormatBool(sess.HasPeakContextTokens),
 		stringValue(sess.ParentSessionID),
 		stringValue(sess.ParserParentSessionID),
 		sess.RelationshipType,
 		stringValue(sess.FilePath),
 		stringValue(sess.FileHash),
 		sess.CreatedAt,
-		fmt.Sprintf("%d", sess.ToolFailureSignalCount),
-		fmt.Sprintf("%d", sess.ToolRetryCount),
-		fmt.Sprintf("%d", sess.EditChurnCount),
-		fmt.Sprintf("%d", sess.ConsecutiveFailureMax),
+		strconv.Itoa(sess.ToolFailureSignalCount),
+		strconv.Itoa(sess.ToolRetryCount),
+		strconv.Itoa(sess.EditChurnCount),
+		strconv.Itoa(sess.ConsecutiveFailureMax),
 		sess.Outcome,
 		sess.OutcomeConfidence,
 		sess.EndedWithRole,
-		fmt.Sprintf("%d", sess.FinalFailureStreak),
+		strconv.Itoa(sess.FinalFailureStreak),
 		stringValue(sess.SignalsPendingSince),
-		fmt.Sprintf("%d", sess.CompactionCount),
-		fmt.Sprintf("%d", sess.MidTaskCompactionCount),
+		strconv.Itoa(sess.CompactionCount),
+		strconv.Itoa(sess.MidTaskCompactionCount),
 		float64Value(sess.ContextPressureMax),
 		intPtrValue(sess.HealthScore),
 		stringValue(sess.HealthGrade),
-		fmt.Sprintf("%t", sess.HasToolCalls),
-		fmt.Sprintf("%t", sess.HasContextData),
-		fmt.Sprintf("%d", sess.QualitySignalVersion),
-		fmt.Sprintf("%d", sess.ShortPromptCount),
-		fmt.Sprintf("%t", sess.UnstructuredStart),
-		fmt.Sprintf("%d", sess.MissingSuccessCriteriaCount),
-		fmt.Sprintf("%d", sess.MissingVerificationCount),
-		fmt.Sprintf("%d", sess.DuplicatePromptCount),
-		fmt.Sprintf("%d", sess.NoCodeContextCount),
-		fmt.Sprintf("%d", sess.RunawayToolLoopCount),
-		fmt.Sprintf("%d", sess.DataVersion),
+		strconv.FormatBool(sess.HasToolCalls),
+		strconv.FormatBool(sess.HasContextData),
+		strconv.Itoa(sess.QualitySignalVersion),
+		strconv.Itoa(sess.ShortPromptCount),
+		strconv.FormatBool(sess.UnstructuredStart),
+		strconv.Itoa(sess.MissingSuccessCriteriaCount),
+		strconv.Itoa(sess.MissingVerificationCount),
+		strconv.Itoa(sess.DuplicatePromptCount),
+		strconv.Itoa(sess.NoCodeContextCount),
+		strconv.Itoa(sess.RunawayToolLoopCount),
+		strconv.Itoa(sess.DataVersion),
 		sess.Cwd,
 		sess.GitBranch,
 		sess.SourceSessionID,
 		sess.SourceVersion,
 		sess.TranscriptFidelity,
 		stringValue(sess.TranscriptRevision),
-		fmt.Sprintf("%d", sess.ParserMalformedLines),
-		fmt.Sprintf("%t", sess.IsTruncated),
+		strconv.Itoa(sess.ParserMalformedLines),
+		strconv.FormatBool(sess.IsTruncated),
 		stringValue(sess.TerminationStatus),
-		fmt.Sprintf("%d", sess.SecretLeakCount),
+		strconv.Itoa(sess.SecretLeakCount),
 		sess.SecretsRulesVersion,
 		usageEventFingerprint,
 	}
@@ -2233,7 +2233,7 @@ func intPtrValue(value *int) string {
 	if value == nil {
 		return ""
 	}
-	return fmt.Sprintf("%d", *value)
+	return strconv.Itoa(*value)
 }
 
 // nilStr converts a nil or empty *string to SQL NULL.

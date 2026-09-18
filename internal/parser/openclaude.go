@@ -245,7 +245,7 @@ func (s openClaudeSourceSet) Fingerprint(
 	}
 	path, ok := s.pathFromSource(source)
 	if !ok {
-		return SourceFingerprint{}, fmt.Errorf("openclaude source path unavailable")
+		return SourceFingerprint{}, errors.New("openclaude source path unavailable")
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -278,7 +278,7 @@ func (s openClaudeSourceSet) Parse(
 	}
 	path, ok := s.pathFromSource(req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("openclaude source path unavailable")
+		return ParseOutcome{}, errors.New("openclaude source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine)
 	project := GetProjectName(firstNonEmptyJSONLString(
@@ -516,8 +516,7 @@ func parseOpenClaudeSession(
 		}
 
 		content := gjson.Get(line, "message.content")
-		text, thinkingText, hasThinking, hasToolUse, toolCalls, toolResults :=
-			ExtractTextContent(context.Background(), content)
+		text, thinkingText, hasThinking, hasToolUse, toolCalls, toolResults := ExtractTextContent(context.Background(), content)
 		if strings.TrimSpace(text) == "" && len(toolResults) == 0 &&
 			len(toolCalls) == 0 && role != "system" {
 			continue

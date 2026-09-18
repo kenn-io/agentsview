@@ -1,7 +1,6 @@
 package vector
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,7 +16,7 @@ import (
 func explainVectorPlan(t *testing.T, ix *Index, query string, args ...any) []string {
 	t.Helper()
 	rows, err := ix.db.QueryContext(
-		context.Background(), "EXPLAIN QUERY PLAN "+query, args...)
+		t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
 	require.NoError(t, err)
 	defer rows.Close()
 
@@ -48,17 +47,20 @@ func TestMirrorRevisionIndexExists(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ix, err := OpenSpec(context.Background(),
+			assert := assert.New(t)
+			require := require.New(t)
+
+			ix, err := OpenSpec(t.Context(),
 				filepath.Join(t.TempDir(), "vectors.db"), tt.spec, false, 4000)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, ix.Close()) })
+			require.NoError(err)
+			t.Cleanup(func() { require.NoError(ix.Close()) })
 
 			var sql string
-			require.NoError(t, ix.db.QueryRow(
+			require.NoError(ix.db.QueryRowContext(t.Context(),
 				`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`,
 				tt.index).Scan(&sql))
-			assert.Contains(t, sql, tt.spec.DocsTable)
-			assert.Contains(t, strings.ReplaceAll(sql, " ", ""), "(doc_key,content_hash)")
+			assert.Contains(sql, tt.spec.DocsTable)
+			assert.Contains(strings.ReplaceAll(sql, " ", ""), "(doc_key,content_hash)")
 		})
 	}
 }
@@ -68,21 +70,23 @@ func TestMirrorRevisionIndexExists(t *testing.T) {
 // after-sync refresh. The pending set must resolve through the mirror's
 // covering index, and content must only be read per pending doc_key.
 func TestPendingContentQueryPlanSkipsStampedDocumentContent(t *testing.T) {
+	assert := assert.New(t)
+
 	ix, gen := builtPendingIndex(t)
-	ordinal, err := ix.ordinalForFingerprint(context.Background(), gen.Fingerprint())
+	ordinal, err := ix.ordinalForFingerprint(t.Context(), gen.Fingerprint())
 	require.NoError(t, err)
 
 	plan := explainVectorPlan(t, ix, ix.pendingContentQuery(), ordinal)
 	joined := strings.Join(plan, "\n")
 
-	assert.Contains(t, joined,
+	assert.Contains(joined,
 		"SCAN d USING COVERING INDEX idx_vector_messages_revision",
 		"the pending set must come from the covering index:\n%s", joined)
-	assert.Contains(t, joined,
+	assert.Contains(joined,
 		"SEARCH d USING INDEX sqlite_autoindex_vector_messages_1 (doc_key=?)",
 		"content must be fetched per pending doc_key:\n%s", joined)
 	for _, line := range plan {
-		assert.NotEqual(t, "SCAN d", line,
+		assert.NotEqual("SCAN d", line,
 			"no step may read every mirror row's content:\n%s", joined)
 	}
 }
@@ -113,7 +117,7 @@ func TestGenerationCoverageQueryPlanUsesRevisionIndex(t *testing.T) {
 // denominator against the same stamp anti-join `embeddings status` reports
 // as Missing, across the states a refresh can leave a mirror in.
 func TestCountPendingMatchesCoverageMissing(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	longContent := strings.Repeat("word ", 2000)
 
 	tests := []struct {
@@ -163,18 +167,21 @@ VALUES ('u:s1:u3', 's1', 'u3', 9, 9, ?, 'hash-u3')`, longContent)
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			ix, gen := builtPendingIndex(t)
 			tt.mutate(t, ix)
 			want := tt.wantChunks(t, ix)
 
 			total, err := ix.countPending(ctx, gen.Fingerprint())
-			require.NoError(t, err)
-			assert.Equal(t, want, total)
+			require.NoError(err)
+			assert.Equal(want, total)
 
 			gens, err := ix.Generations(ctx)
-			require.NoError(t, err)
-			require.Len(t, gens, 1)
-			assert.Equal(t, tt.wantMissing, gens[0].Missing,
+			require.NoError(err)
+			require.Len(gens, 1)
+			assert.Equal(tt.wantMissing, gens[0].Missing,
 				"countPending and the coverage query must agree on what is pending")
 		})
 	}
@@ -187,7 +194,7 @@ func builtPendingIndex(t *testing.T) (*Index, kitvec.Generation) {
 	ix := openTestIndex(t)
 	gen := fakeGeneration("fake-model")
 	_, err := ix.Build(
-		context.Background(), twoDocSource(), fakeBuildEncoder(), gen, BuildOptions{})
+		t.Context(), twoDocSource(), fakeBuildEncoder(), gen, BuildOptions{})
 	require.NoError(t, err)
 	return ix, gen
 }

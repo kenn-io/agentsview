@@ -18,6 +18,9 @@ import (
 )
 
 func TestHandleImportClaudeAI(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	srv := testServer(t, 5*time.Second)
 
 	conversations := `[
@@ -46,11 +49,11 @@ func TestHandleImportClaudeAI(t *testing.T) {
 	var body bytes.Buffer
 	writer := multipart.NewWriter(&body)
 	part, err := writer.CreateFormFile("file", "conversations.json")
-	require.NoError(t, err)
+	require.NoError(err)
 	_, _ = part.Write([]byte(conversations))
 	writer.Close()
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost,
 		"/api/v1/import/claude-ai",
 		&body,
@@ -60,12 +63,12 @@ func TestHandleImportClaudeAI(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	require.Equal(http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 
 	var stats importer.ImportStats
-	require.NoError(t, json.UnmarshalRead(rec.Body, &stats))
-	assert.Equal(t, 1, stats.Imported)
-	assert.Zero(t, stats.Updated)
+	require.NoError(json.UnmarshalRead(rec.Body, &stats))
+	assert.Equal(1, stats.Imported)
+	assert.Zero(stats.Updated)
 }
 
 // TestHandleImportRejectsWriterClosedBeforeStream pins the maintenance-mode
@@ -82,30 +85,33 @@ func TestHandleImportRejectsWriterClosedBeforeStream(t *testing.T) {
 		{name: "chatgpt", path: "/api/v1/import/chatgpt", filename: "export.zip"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			srv := testServer(t, 5*time.Second)
 			local, ok := srv.db.(*db.DB)
-			require.True(t, ok)
-			require.NoError(t, local.CloseWriter())
-			t.Cleanup(func() { require.NoError(t, local.ReopenWriter()) })
+			require.True(ok)
+			require.NoError(local.CloseWriter())
+			t.Cleanup(func() { require.NoError(local.ReopenWriter()) })
 
 			var body bytes.Buffer
 			writer := multipart.NewWriter(&body)
 			part, err := writer.CreateFormFile("file", tt.filename)
-			require.NoError(t, err)
+			require.NoError(err)
 			_, _ = part.Write([]byte("[]"))
 			writer.Close()
 
-			req := httptest.NewRequest(http.MethodPost, tt.path, &body)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, tt.path, &body)
 			req.Header.Set("Content-Type", writer.FormDataContentType())
 			req.Header.Set("Accept", "text/event-stream")
 			rec := httptest.NewRecorder()
 			srv.mux.ServeHTTP(rec, req)
 
-			require.Equal(t, http.StatusServiceUnavailable, rec.Code,
+			require.Equal(http.StatusServiceUnavailable, rec.Code,
 				"body: %s", rec.Body.String())
-			assert.Equal(t, writerClosedRetryAfterSeconds,
+			assert.Equal(writerClosedRetryAfterSeconds,
 				rec.Header().Get("Retry-After"))
-			assert.NotContains(t, rec.Body.String(), "event:",
+			assert.NotContains(rec.Body.String(), "event:",
 				"the rejection must not open an SSE stream")
 		})
 	}
@@ -121,7 +127,7 @@ func TestHandleImportChatGPT_RequiresZip(t *testing.T) {
 	_, _ = part.Write([]byte("[]"))
 	writer.Close()
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost,
 		"/api/v1/import/chatgpt",
 		&body,
@@ -137,6 +143,8 @@ func TestHandleImportChatGPT_RequiresZip(t *testing.T) {
 }
 
 func TestHandleImportClaudeAI_SSE(t *testing.T) {
+	require := require.New(t)
+
 	srv := testServer(t, 5*time.Second)
 
 	conversations := `[{
@@ -156,11 +164,11 @@ func TestHandleImportClaudeAI_SSE(t *testing.T) {
 	part, err := writer.CreateFormFile(
 		"file", "conversations.json",
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, _ = part.Write([]byte(conversations))
 	writer.Close()
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost,
 		"/api/v1/import/claude-ai",
 		&body,
@@ -173,9 +181,9 @@ func TestHandleImportClaudeAI_SSE(t *testing.T) {
 	rec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(rec, req)
 
-	require.Equal(t, http.StatusOK, rec.Code, "body: %s", rec.Body.String())
+	require.Equal(http.StatusOK, rec.Code, "body: %s", rec.Body.String())
 
-	require.Contains(t, rec.Header().Get("Content-Type"), "text/event-stream")
+	require.Contains(rec.Header().Get("Content-Type"), "text/event-stream")
 
 	// Parse the done event from the SSE body.
 	var stats importer.ImportStats
@@ -185,7 +193,7 @@ func TestHandleImportClaudeAI_SSE(t *testing.T) {
 			data := strings.TrimPrefix(
 				lines[i+1], "data: ",
 			)
-			require.NoError(t, json.Unmarshal([]byte(data), &stats))
+			require.NoError(json.Unmarshal([]byte(data), &stats))
 		}
 	}
 	assert.Equal(t, 1, stats.Imported)
@@ -198,7 +206,7 @@ func TestHandleImportClaudeAI_NoFile(t *testing.T) {
 	writer := multipart.NewWriter(&body)
 	writer.Close()
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost,
 		"/api/v1/import/claude-ai",
 		&body,

@@ -11,6 +11,8 @@ import (
 )
 
 func TestStatOpenCodeStorageSessionState(t *testing.T) {
+	parentRequire := require.New(t)
+
 	root := t.TempDir()
 	sessionPath := writeOpenCodeProviderStorageSession(
 		t, root, "session", "ses_state", "state-app", "State Session",
@@ -28,11 +30,11 @@ func TestStatOpenCodeStorageSessionState(t *testing.T) {
 	})
 
 	state, ok := StatOpenCodeStorageSessionState(sessionPath)
-	require.True(t, ok, "state capture must succeed")
-	require.NotEmpty(t, state)
+	parentRequire.True(ok, "state capture must succeed")
+	parentRequire.NotEmpty(state)
 
 	again, ok := StatOpenCodeStorageSessionState(sessionPath)
-	require.True(t, ok)
+	parentRequire.True(ok)
 	assert.Equal(t, state, again, "untouched tree must produce equal states")
 
 	t.Run("project content changes state", func(t *testing.T) {
@@ -78,11 +80,13 @@ func TestStatOpenCodeStorageSessionState(t *testing.T) {
 	})
 
 	t.Run("size change with restored mtime changes state", func(t *testing.T) {
+		require := require.New(t)
+
 		partPath := filepath.Join(
 			root, "storage", "part", "msg_1", "prt_2.json",
 		)
 		info, err := os.Stat(partPath)
-		require.NoError(t, err)
+		require.NoError(err)
 		writeOpenCodeStorageFile(t, partPath, map[string]any{
 			"id":        "prt_2",
 			"sessionID": "ses_state",
@@ -91,10 +95,9 @@ func TestStatOpenCodeStorageSessionState(t *testing.T) {
 			"text":      "appended part grown longer",
 			"time":      map[string]any{"created": int64(1700000001000)},
 		})
-		require.NoError(t,
-			os.Chtimes(partPath, info.ModTime(), info.ModTime()))
+		require.NoError(os.Chtimes(partPath, info.ModTime(), info.ModTime()))
 		next, ok := StatOpenCodeStorageSessionState(sessionPath)
-		require.True(t, ok)
+		require.True(ok)
 		assert.NotEqual(t, state, next,
 			"a size change must change the state even at a restored mtime")
 	})
@@ -108,6 +111,8 @@ func TestStatOpenCodeStorageSessionState(t *testing.T) {
 }
 
 func TestStatOpenCodeStorageSessionStateWithoutMessages(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	sessionPath := filepath.Join(
 		root, "storage", "session", "global", "ses_lonely.json",
@@ -123,28 +128,30 @@ func TestStatOpenCodeStorageSessionStateWithoutMessages(t *testing.T) {
 	})
 
 	state, ok := StatOpenCodeStorageSessionState(sessionPath)
-	require.True(t, ok,
+	require.True(ok,
 		"a session without a message dir is valid and capturable")
-	require.NotEmpty(t, state)
+	require.NotEmpty(state)
 
 	again, ok := StatOpenCodeStorageSessionState(sessionPath)
-	require.True(t, ok)
+	require.True(ok)
 	assert.Equal(t, state, again)
 }
 
 func TestStatOpenCodeStorageSessionStateSkipsUnusedProjectMetadata(
 	t *testing.T,
 ) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	sessionPath := writeOpenCodeProviderStorageSession(
 		t, root, "session", "ses_directory", "directory-app", "Directory Session",
 	)
 	projectPath := filepath.Join(root, "storage", "project", "global.json")
-	require.NoError(t, os.MkdirAll(filepath.Dir(projectPath), 0o755))
-	require.NoError(t, os.WriteFile(projectPath, []byte("{"), 0o644))
+	require.NoError(os.MkdirAll(filepath.Dir(projectPath), 0o755))
+	require.NoError(os.WriteFile(projectPath, []byte("{"), 0o644))
 
 	state, ok := StatOpenCodeStorageSessionState(sessionPath)
-	require.True(t, ok,
+	require.True(ok,
 		"a usable session directory must not depend on unused project metadata")
-	require.NotEmpty(t, state)
+	require.NotEmpty(state)
 }

@@ -40,6 +40,9 @@ func writeIndex(t *testing.T, home string, lines string, mtime time.Time) {
 }
 
 func TestCodexThreadNameReadsAliasHomeIndex(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	primary, alias := aliasedCodexHomes(t)
 	metadata := CodexMetadata{roots: map[string][]string{filepath.Join(primary, "sessions"): {primary, alias}}}
 	session := filepath.Join(primary, "sessions", "2026", "09", "03",
@@ -55,32 +58,34 @@ func TestCodexThreadNameReadsAliasHomeIndex(t *testing.T) {
 		now)
 
 	name, ok, err := metadata.ReadThreadName(session, "019f0000-0000-7000-8000-000000000003")
-	require.NoError(t, err)
-	assert.True(t, ok)
-	assert.Equal(t, "alias only", name)
+	require.NoError(err)
+	assert.True(ok)
+	assert.Equal("alias only", name)
 
 	name, ok, err = metadata.ReadThreadName(session, "019f0000-0000-7000-8000-000000000002")
-	require.NoError(t, err)
-	assert.True(t, ok)
-	assert.Equal(t, "primary only", name)
+	require.NoError(err)
+	assert.True(ok)
+	assert.Equal("primary only", name)
 
 	// Both homes name the same session: the newer index wins.
 	name, ok, err = metadata.ReadThreadName(session, "019f0000-0000-7000-8000-000000000001")
-	require.NoError(t, err)
-	assert.True(t, ok)
-	assert.Equal(t, "from alias", name)
+	require.NoError(err)
+	assert.True(ok)
+	assert.Equal("from alias", name)
 
 	writeIndex(t, primary,
 		`{"id":"019f0000-0000-7000-8000-000000000001","thread_name":"renamed in primary"}`+"\n",
 		now.Add(time.Minute))
 	name, ok, err = metadata.ReadThreadName(session, "019f0000-0000-7000-8000-000000000001")
-	require.NoError(t, err)
-	assert.True(t, ok)
-	assert.Equal(t, "renamed in primary", name)
-	assert.Equal(t, now.Add(time.Minute).UnixNano(), metadata.EffectiveMtime(session, 0))
+	require.NoError(err)
+	assert.True(ok)
+	assert.Equal("renamed in primary", name)
+	assert.Equal(now.Add(time.Minute).UnixNano(), metadata.EffectiveMtime(session, 0))
 }
 
 func TestCodexThreadNameAliasOnlyIndex(t *testing.T) {
+	assert := assert.New(t)
+
 	primary, alias := aliasedCodexHomes(t)
 	metadata := CodexMetadata{roots: map[string][]string{filepath.Join(primary, "sessions"): {primary, alias}}}
 	session := filepath.Join(primary, "sessions", "2026", "09", "03",
@@ -91,54 +96,60 @@ func TestCodexThreadNameAliasOnlyIndex(t *testing.T) {
 
 	name, ok, err := metadata.ReadThreadName(session, "019f0000-0000-7000-8000-000000000001")
 	require.NoError(t, err)
-	assert.True(t, ok)
-	assert.Equal(t, "alias title", name)
-	assert.NoError(t, metadata.Verify(session))
+	assert.True(ok)
+	assert.Equal("alias title", name)
+	assert.NoError(metadata.Verify(session))
 }
 
 func TestCodexAliasHomesShareHintsAndWatchIndexes(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	primary, alias := aliasedCodexHomes(t)
 	metadata := CodexMetadata{roots: map[string][]string{filepath.Join(primary, "sessions"): {primary, alias}}}
 	root := filepath.Join(primary, "sessions")
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}, MetadataDirs: metadata.roots})
-	require.True(t, ok)
+	require.True(ok)
 
 	// history.jsonl is one file reached through two homes: read it once.
 	sources, err := provider.(ActivityHintProvider).ActivityHintSources(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, []ActivityHintSource{{
+	require.NoError(err)
+	assert.Equal([]ActivityHintSource{{
 		Path: filepath.Join(primary, "history.jsonl"),
 	}}, sources)
 
 	// A home with its own hint log contributes a second source.
-	require.NoError(t, os.Remove(filepath.Join(alias, "history.jsonl")))
-	require.NoError(t, os.WriteFile(filepath.Join(alias, "history.jsonl"), nil, 0o600))
+	require.NoError(os.Remove(filepath.Join(alias, "history.jsonl")))
+	require.NoError(os.WriteFile(filepath.Join(alias, "history.jsonl"), nil, 0o600))
 	sources, err = provider.(ActivityHintProvider).ActivityHintSources(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, []ActivityHintSource{
+	require.NoError(err)
+	assert.Equal([]ActivityHintSource{
 		{Path: filepath.Join(primary, "history.jsonl")},
 		{Path: filepath.Join(alias, "history.jsonl")},
 	}, sources)
 
 	plan, err := provider.WatchPlan(t.Context())
-	require.NoError(t, err)
+	require.NoError(err)
 	var shallow []string
 	for _, watch := range plan.Roots {
 		if !watch.Recursive {
 			shallow = append(shallow, watch.Path)
 		}
 	}
-	assert.ElementsMatch(t, []string{primary, alias}, shallow)
+	assert.ElementsMatch([]string{primary, alias}, shallow)
 }
 
 func TestCodexRawCaptureIncludesAliasHomeIndexes(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	primary, alias := aliasedCodexHomes(t)
 	metadata := CodexMetadata{roots: map[string][]string{filepath.Join(primary, "sessions"): {primary, alias}}}
 	const id = "019f0000-0000-7000-8000-000000000009"
 	rollout := filepath.Join(primary, "sessions", "2026", "09", "03",
 		"rollout-2026-09-03T10-00-00-"+id+".jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(rollout), 0o755))
-	require.NoError(t, os.WriteFile(rollout,
+	require.NoError(os.MkdirAll(filepath.Dir(rollout), 0o755))
+	require.NoError(os.WriteFile(rollout,
 		[]byte(`{"timestamp":"2026-09-03T10:00:00Z","type":"session_meta","payload":{"id":"`+id+`","cwd":"/work"}}`+"\n"),
 		0o600))
 	writeIndex(t, primary, `{"id":"`+id+`","thread_name":"primary"}`+"\n", time.Now())
@@ -147,53 +158,55 @@ func TestCodexRawCaptureIncludesAliasHomeIndexes(t *testing.T) {
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{
 		Roots: []string{filepath.Join(primary, "sessions")}, MetadataDirs: metadata.roots,
 	})
-	require.True(t, ok)
+	require.True(ok)
 	source := requireCodexProviderSource(t, provider, id)
 
 	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, source)
-	require.NoError(t, err)
-	require.True(t, supported)
+	require.NoError(err)
+	require.True(supported)
 	byLogical := make(map[string]string, len(plan.Entries))
 	for _, entry := range plan.Entries {
 		byLogical[entry.Path] = entry.LocalPath
 	}
-	assert.ElementsMatch(t, []string{
+	assert.ElementsMatch([]string{
 		"sessions/2026/09/03/rollout-2026-09-03T10-00-00-" + id + ".jsonl",
 		CodexSessionIndexFilename,
 		"alias-homes/1/" + CodexSessionIndexFilename,
 	}, slices.Collect(maps.Keys(byLogical)))
 	// Validation resolves symlinks in local paths, so compare resolved forms.
 	wantAliasIndex, err := filepath.EvalSymlinks(filepath.Join(alias, CodexSessionIndexFilename))
-	require.NoError(t, err)
-	assert.Equal(t, wantAliasIndex, byLogical["alias-homes/1/"+CodexSessionIndexFilename])
-	require.Len(t, plan.SidecarRoots, 1)
+	require.NoError(err)
+	assert.Equal(wantAliasIndex, byLogical["alias-homes/1/"+CodexSessionIndexFilename])
+	require.Len(plan.SidecarRoots, 1)
 	gotRoot, err := filepath.EvalSymlinks(plan.SidecarRoots[0])
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Dir(wantAliasIndex), gotRoot)
+	require.NoError(err)
+	assert.Equal(filepath.Dir(wantAliasIndex), gotRoot)
 }
 
 func TestCodexProvidersKeepIndependentMetadata(t *testing.T) {
+	require := require.New(t)
+
 	primary, alternate := aliasedCodexHomes(t)
 	const id = "019f0000-0000-7000-8000-000000000009"
 	root := filepath.Join(primary, "sessions")
 	path := filepath.Join(root, "rollout-2026-09-03T10-00-00-"+id+".jsonl")
-	require.NoError(t, os.WriteFile(path, []byte(
+	require.NoError(os.WriteFile(path, []byte(
 		`{"timestamp":"2026-09-03T10:00:00Z","type":"session_meta","payload":{"id":"`+id+`","cwd":"/work"}}`+"\n"+
 			`{"timestamp":"2026-09-03T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Original prompt"}]}}`+"\n"), 0o600))
 	writeIndex(t, primary, `{"id":"`+id+`","thread_name":"Primary title"}`+"\n", time.Now())
 	writeIndex(t, alternate, `{"id":"`+id+`","thread_name":"Alternate title"}`+"\n", time.Now())
 	first, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}, MetadataDirs: map[string][]string{root: {primary}}})
-	require.True(t, ok)
+	require.True(ok)
 	second, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}, MetadataDirs: map[string][]string{root: {alternate}}})
-	require.True(t, ok)
+	require.True(ok)
 	for _, tc := range []struct {
 		provider Provider
 		title    string
 	}{{first, "Primary title"}, {second, "Alternate title"}, {first, "Primary title"}} {
 		source := requireCodexProviderSource(t, tc.provider, id)
 		result, err := tc.provider.Parse(t.Context(), ParseRequest{Source: source})
-		require.NoError(t, err)
-		require.Len(t, result.Results, 1)
+		require.NoError(err)
+		require.Len(result.Results, 1)
 		assert.Equal(t, tc.title, result.Results[0].Result.Session.SessionName)
 	}
 }

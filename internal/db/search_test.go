@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -75,13 +74,16 @@ func TestIsGoalContextPrefixed(t *testing.T) {
 }
 
 func TestSystemPrefixSQL(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	postgresSQL := PostgresSystemPrefixSQL("content", "role")
-	assert.Contains(t, postgresSQL, "POSITION('</system-reminder>' IN")
-	assert.Contains(t, postgresSQL, "WITH RECURSIVE reminder_remainder")
-	assert.NotContains(t, postgresSQL, "instr(")
+	assert.Contains(postgresSQL, "POSITION('</system-reminder>' IN")
+	assert.Contains(postgresSQL, "WITH RECURSIVE reminder_remainder")
+	assert.NotContains(postgresSQL, "instr(")
 
 	d := testDB(t)
-	rows, err := d.getReader().QueryContext(context.Background(), `
+	rows, err := d.getReader().QueryContext(t.Context(), `
 		WITH candidates(label, role, content) AS (
 			VALUES
 				('normal', 'user', 'regular message'),
@@ -109,17 +111,17 @@ real prompt'),
 		SELECT label FROM candidates
 		WHERE `+SystemPrefixSQL("content", "role")+`
 		ORDER BY label`)
-	require.NoError(t, err)
+	require.NoError(err)
 	defer rows.Close()
 
 	var got []string
 	for rows.Next() {
 		var label string
-		require.NoError(t, rows.Scan(&label))
+		require.NoError(rows.Scan(&label))
 		got = append(got, label)
 	}
-	require.NoError(t, rows.Err())
-	assert.Equal(t, []string{
+	require.NoError(rows.Err())
+	assert.Equal([]string{
 		"assistant-goal",
 		"data-source",
 		"missing-close",
@@ -240,7 +242,7 @@ func TestSearch(t *testing.T) {
 		"<system-reminder>remember this</system-reminder>\n\nreminderpromptterm real prompt"))
 
 	t.Run("deduplication: two messages in same session → one result", func(t *testing.T) {
-		page, err := d.Search(context.Background(), SearchFilter{
+		page, err := d.Search(t.Context(), SearchFilter{
 			Query: "alpha", Limit: 10,
 		})
 		require.NoError(t, err, "Search")
@@ -249,17 +251,20 @@ func TestSearch(t *testing.T) {
 	})
 
 	t.Run("agent field populated from sessions join", func(t *testing.T) {
-		page, err := d.Search(context.Background(), SearchFilter{
+		assert := assert.New(t)
+		require := require.New(t)
+
+		page, err := d.Search(t.Context(), SearchFilter{
 			Query: "alpha beta", Limit: 10,
 		})
-		require.NoError(t, err, "Search")
-		require.NotEmpty(t, page.Results, "expected at least one result")
-		assert.NotEmpty(t, page.Results[0].Agent, "Agent field empty")
-		assert.Equal(t, "claude", page.Results[0].Agent, "Agent")
+		require.NoError(err, "Search")
+		require.NotEmpty(page.Results, "expected at least one result")
+		assert.NotEmpty(page.Results[0].Agent, "Agent field empty")
+		assert.Equal("claude", page.Results[0].Agent, "Agent")
 	})
 
 	t.Run("session_ended_at populated from COALESCE(ended_at, started_at)", func(t *testing.T) {
-		page, err := d.Search(context.Background(), SearchFilter{
+		page, err := d.Search(t.Context(), SearchFilter{
 			Query: "alpha beta", Limit: 10,
 		})
 		require.NoError(t, err, "Search")
@@ -268,7 +273,7 @@ func TestSearch(t *testing.T) {
 	})
 
 	t.Run("sort recency: newer session appears first", func(t *testing.T) {
-		page, err := d.Search(context.Background(), SearchFilter{
+		page, err := d.Search(t.Context(), SearchFilter{
 			Query: "alpha", Limit: 10, Sort: "recency",
 		})
 		require.NoError(t, err, "Search")
@@ -278,7 +283,7 @@ func TestSearch(t *testing.T) {
 	})
 
 	t.Run("system messages excluded from results", func(t *testing.T) {
-		page, err := d.Search(context.Background(), SearchFilter{
+		page, err := d.Search(t.Context(), SearchFilter{
 			Query: "system hidden", Limit: 10,
 		})
 		require.NoError(t, err, "Search")
@@ -288,7 +293,7 @@ func TestSearch(t *testing.T) {
 	t.Run("name branch excludes system-only sessions via session_name", func(t *testing.T) {
 		// s-sysonly-dn has session_name matching "sysonlydnterm" but only
 		// system messages. The EXISTS guard must prevent it from appearing.
-		page, err := d.Search(context.Background(), SearchFilter{
+		page, err := d.Search(t.Context(), SearchFilter{
 			Query: "sysonlydnterm", Limit: 10,
 		})
 		require.NoError(t, err, "Search")
@@ -299,7 +304,7 @@ func TestSearch(t *testing.T) {
 	t.Run("name branch excludes system-only sessions via first_message", func(t *testing.T) {
 		// s-sysonly-fm has first_message matching "sysonlyfmterm" but only
 		// system messages. The EXISTS guard must prevent it from appearing.
-		page, err := d.Search(context.Background(), SearchFilter{
+		page, err := d.Search(t.Context(), SearchFilter{
 			Query: "sysonlyfmterm", Limit: 10,
 		})
 		require.NoError(t, err, "Search")
@@ -311,7 +316,7 @@ func TestSearch(t *testing.T) {
 		// s-prefixonly has session_name matching "prefixonlydnterm" but only
 		// prefix-detected system messages (is_system=false). The EXISTS guard
 		// with prefix exclusion must prevent it from appearing.
-		page, err := d.Search(context.Background(), SearchFilter{
+		page, err := d.Search(t.Context(), SearchFilter{
 			Query: "prefixonlydnterm", Limit: 10,
 		})
 		require.NoError(t, err, "Search")
@@ -319,7 +324,7 @@ func TestSearch(t *testing.T) {
 	})
 
 	t.Run("name branch excludes system-reminder-only sessions", func(t *testing.T) {
-		page, err := d.Search(context.Background(), SearchFilter{
+		page, err := d.Search(t.Context(), SearchFilter{
 			Query: "reminderonlydnterm", Limit: 10,
 		})
 		require.NoError(t, err, "Search")
@@ -327,7 +332,7 @@ func TestSearch(t *testing.T) {
 	})
 
 	t.Run("content branch keeps reminder-prefixed real prompts", func(t *testing.T) {
-		page, err := d.Search(context.Background(), SearchFilter{
+		page, err := d.Search(t.Context(), SearchFilter{
 			Query: "reminderpromptterm", Limit: 10,
 		})
 		require.NoError(t, err, "Search")
@@ -337,7 +342,7 @@ func TestSearch(t *testing.T) {
 
 	t.Run("invalid sort value defaults to relevance (SQL injection guard)", func(t *testing.T) {
 		// Must not return an error or panic — just treats as relevance
-		_, err := d.Search(context.Background(), SearchFilter{
+		_, err := d.Search(t.Context(), SearchFilter{
 			Query: "alpha", Limit: 10, Sort: "'; DROP TABLE sessions; --",
 		})
 		assert.NoError(t, err, "invalid Sort caused error")
@@ -345,7 +350,7 @@ func TestSearch(t *testing.T) {
 
 	t.Run("pagination at session level", func(t *testing.T) {
 		// Limit 1 should return 1 session with a NextCursor
-		page, err := d.Search(context.Background(), SearchFilter{
+		page, err := d.Search(t.Context(), SearchFilter{
 			Query: "alpha", Limit: 1,
 		})
 		require.NoError(t, err, "Search")
@@ -354,6 +359,9 @@ func TestSearch(t *testing.T) {
 	})
 
 	t.Run("multi-word FTS query matches session name via plain text", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		// s6: display_name contains two-word phrase; search with a multi-word
 		// query that prepareFTSQuery would wrap in quotes ("unique phrase").
 		// The name branch must strip those quotes before LIKE matching.
@@ -361,42 +369,45 @@ func TestSearch(t *testing.T) {
 			s.Agent = "claude"
 			s.StartedAt = new("2024-01-06T10:00:00Z")
 		})
-		require.NoError(t, d.RenameSession("s6", new("unique phrase session")),
+		require.NoError(d.RenameSession("s6", new("unique phrase session")),
 			"RenameSession")
 		insertMessages(t, d, userMsg("s6", 0, "no match here"))
 
 		// Simulate prepareFTSQuery wrapping: multi-word queries get quoted.
-		page, err := d.Search(context.Background(), SearchFilter{
+		page, err := d.Search(t.Context(), SearchFilter{
 			Query: `"unique phrase"`, Limit: 10,
 		})
-		require.NoError(t, err, "Search")
-		require.Len(t, page.Results, 1, "quoted query results")
-		assert.Equal(t, "s6", page.Results[0].SessionID, "session")
-		assert.Equal(t, -1, page.Results[0].Ordinal, "ordinal (name-only match)")
+		require.NoError(err, "Search")
+		require.Len(page.Results, 1, "quoted query results")
+		assert.Equal("s6", page.Results[0].SessionID, "session")
+		assert.Equal(-1, page.Results[0].Ordinal, "ordinal (name-only match)")
 	})
 
 	t.Run("session name match via display_name", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		// s4: display_name contains "uniquename", no messages match
 		insertSession(t, d, "s4", "proj-d", func(s *Session) {
 			s.Agent = "claude"
 			s.StartedAt = new("2024-01-04T10:00:00Z")
 		})
-		require.NoError(t, d.RenameSession("s4", new("my uniquename session")),
+		require.NoError(d.RenameSession("s4", new("my uniquename session")),
 			"RenameSession")
 		// message that does NOT contain "uniquename"
 		insertMessages(t, d, userMsg("s4", 0, "hello world"))
 
-		page, err := d.Search(context.Background(), SearchFilter{
+		page, err := d.Search(t.Context(), SearchFilter{
 			Query: "uniquename", Limit: 10,
 		})
-		require.NoError(t, err, "Search")
-		require.Len(t, page.Results, 1)
-		assert.Equal(t, "s4", page.Results[0].SessionID, "session")
-		assert.Equal(t, -1, page.Results[0].Ordinal, "ordinal (name-only match)")
+		require.NoError(err, "Search")
+		require.Len(page.Results, 1)
+		assert.Equal("s4", page.Results[0].SessionID, "session")
+		assert.Equal(-1, page.Results[0].Ordinal, "ordinal (name-only match)")
 	})
 
 	t.Run("name field populated on message-content match", func(t *testing.T) {
-		page, err := d.Search(context.Background(), SearchFilter{
+		page, err := d.Search(t.Context(), SearchFilter{
 			Query: "alpha", Limit: 10,
 		})
 		require.NoError(t, err, "Search")
@@ -408,53 +419,59 @@ func TestSearch(t *testing.T) {
 	})
 
 	t.Run("snippet shows matching field when display_name set but first_message matches", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		// s7: display_name is set to something else; only first_message matches
 		insertSession(t, d, "s7", "proj-g", func(s *Session) {
 			s.Agent = "claude"
 			s.FirstMessage = new("firstmsgonlyterm present here")
 			s.StartedAt = new("2024-01-07T10:00:00Z")
 		})
-		require.NoError(t, d.RenameSession("s7", new("unrelated display name")),
+		require.NoError(d.RenameSession("s7", new("unrelated display name")),
 			"RenameSession")
 		// message that does NOT contain the search term
 		insertMessages(t, d, userMsg("s7", 0, "no match content"))
 
-		page, err := d.Search(context.Background(), SearchFilter{
+		page, err := d.Search(t.Context(), SearchFilter{
 			Query: "firstmsgonlyterm", Limit: 10,
 		})
-		require.NoError(t, err, "Search")
-		require.Len(t, page.Results, 1)
+		require.NoError(err, "Search")
+		require.Len(page.Results, 1)
 		r := page.Results[0]
-		assert.Equal(t, "s7", r.SessionID, "session")
-		assert.Equal(t, -1, r.Ordinal, "ordinal (name-only match)")
+		assert.Equal("s7", r.SessionID, "session")
+		assert.Equal(-1, r.Ordinal, "ordinal (name-only match)")
 		// Snippet must be the first_message (the matching field), not display_name
-		assert.Equal(t, "firstmsgonlyterm present here", r.Snippet,
+		assert.Equal("firstmsgonlyterm present here", r.Snippet,
 			"snippet should be first_message")
 	})
 
 	t.Run("no duplicate when session matches both name and content", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		// s5: display_name AND message content both contain "doublehit"
 		insertSession(t, d, "s5", "proj-e", func(s *Session) {
 			s.Agent = "claude"
 			s.StartedAt = new("2024-01-05T10:00:00Z")
 		})
-		require.NoError(t, d.RenameSession("s5", new("doublehit session")),
+		require.NoError(d.RenameSession("s5", new("doublehit session")),
 			"RenameSession")
 		insertMessages(t, d, userMsg("s5", 0, "doublehit in message too"))
 
-		page, err := d.Search(context.Background(), SearchFilter{
+		page, err := d.Search(t.Context(), SearchFilter{
 			Query: "doublehit", Limit: 10,
 		})
-		require.NoError(t, err, "Search")
+		require.NoError(err, "Search")
 		seen := map[string]int{}
 		for _, r := range page.Results {
 			seen[r.SessionID]++
 		}
-		assert.Equal(t, 1, seen["s5"], "s5 occurrences")
+		assert.Equal(1, seen["s5"], "s5 occurrences")
 		// When matched by both, FTS branch wins — ordinal should not be -1
 		for _, r := range page.Results {
 			if r.SessionID == "s5" {
-				assert.NotEqual(t, -1, r.Ordinal,
+				assert.NotEqual(-1, r.Ordinal,
 					"expected real ordinal (message match)")
 			}
 		}
@@ -472,7 +489,7 @@ func TestSearchEmptyQueryGuard(t *testing.T) {
 	insertMessages(t, d, userMsg("s1", 0, "hello world"))
 
 	for _, q := range []string{"", `""`} {
-		page, err := d.Search(context.Background(), SearchFilter{Query: q, Limit: 10})
+		page, err := d.Search(t.Context(), SearchFilter{Query: q, Limit: 10})
 		require.NoError(t, err, "Search(%q)", q)
 		assert.Empty(t, page.Results, "Search(%q) results", q)
 	}
@@ -580,7 +597,7 @@ func TestSearchOperatorTokenNoError(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			page, err := d.Search(context.Background(), SearchFilter{
+			page, err := d.Search(t.Context(), SearchFilter{
 				Query: PrepareFTSQuery(tt.raw), Limit: 10,
 			})
 			require.NoError(t, err, "Search(%q)", tt.raw)
@@ -604,7 +621,7 @@ func TestSearchNormalizesRawOperatorToken(t *testing.T) {
 		userMsg("s1", 0, "encountered error-401 from the api"),
 	)
 
-	page, err := d.Search(context.Background(), SearchFilter{
+	page, err := d.Search(t.Context(), SearchFilter{
 		Query: "error-401", Limit: 10,
 	})
 	require.NoError(t, err, "Search should normalize raw FTS input")
@@ -634,7 +651,7 @@ func TestSearchMultiTermAND(t *testing.T) {
 	})
 	insertMessages(t, d, userMsg("one", 0, "only quick here"))
 
-	page, err := d.Search(context.Background(), SearchFilter{
+	page, err := d.Search(t.Context(), SearchFilter{
 		Query: PrepareFTSQuery("quick fox"), Limit: 10,
 	})
 	require.NoError(t, err, "Search")
@@ -654,7 +671,7 @@ func TestSearchContentFTSOperatorToken(t *testing.T) {
 	})
 
 	for _, raw := range []string{"error-401", "status:500"} {
-		got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		got, err := d.SearchContent(t.Context(), ContentSearchFilter{
 			Pattern: raw, Mode: "fts",
 			Sources: []string{"messages"}, Limit: 50,
 		})
@@ -703,7 +720,7 @@ func TestSearchDeduplicationManyMessages(t *testing.T) {
 	}
 	insertMessages(t, d, extra...)
 
-	page, err := d.Search(context.Background(), SearchFilter{
+	page, err := d.Search(t.Context(), SearchFilter{
 		Query: "needle", Limit: 10,
 	})
 	require.NoError(t, err, "Search")
@@ -734,7 +751,7 @@ func TestSearchTieBreak(t *testing.T) {
 		userMsg("s1", 0, "tiebreak unique phrase alpha"),
 	)
 
-	page, err := d.Search(context.Background(), SearchFilter{
+	page, err := d.Search(t.Context(), SearchFilter{
 		Query: "tiebreak unique phrase alpha", Limit: 10,
 	})
 	require.NoError(t, err, "Search")
@@ -934,7 +951,7 @@ func TestSearchSession(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := d.SearchSession(context.Background(), tt.sessionID, tt.query)
+			got, err := d.SearchSession(t.Context(), tt.sessionID, tt.query)
 			require.NoError(t, err, "SearchSession(%q, %q)", tt.sessionID, tt.query)
 			if got == nil {
 				got = []int{}
@@ -946,6 +963,9 @@ func TestSearchSession(t *testing.T) {
 }
 
 func TestSearchPaginationStability(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	d := testDB(t)
 	requireFTS(t, d)
@@ -965,23 +985,23 @@ func TestSearchPaginationStability(t *testing.T) {
 	var allIDs []string
 	cursor := 0
 	for i := range 3 {
-		page, err := d.Search(context.Background(), SearchFilter{
+		page, err := d.Search(t.Context(), SearchFilter{
 			Query:  "stability",
 			Sort:   "recency",
 			Limit:  1,
 			Cursor: cursor,
 		})
-		require.NoError(t, err, "page %d", i)
-		require.Len(t, page.Results, 1, "page %d", i)
+		require.NoError(err, "page %d", i)
+		require.Len(page.Results, 1, "page %d", i)
 		allIDs = append(allIDs, page.Results[0].SessionID)
 		cursor = page.NextCursor
 	}
 
 	// Verify no duplicates and ascending session_id order (tie-breaker).
 	for i := 1; i < len(allIDs); i++ {
-		assert.NotEqual(t, allIDs[i-1], allIDs[i],
+		assert.NotEqual(allIDs[i-1], allIDs[i],
 			"duplicate session at pages %d-%d: %s", i-1, i, allIDs[i])
-		assert.GreaterOrEqual(t, allIDs[i], allIDs[i-1],
+		assert.GreaterOrEqual(allIDs[i], allIDs[i-1],
 			"unstable order: page %d=%s, page %d=%s",
 			i-1, allIDs[i-1], i, allIDs[i])
 	}
@@ -1019,7 +1039,7 @@ func TestSearch_DateRange(t *testing.T) {
 				filter := SearchFilter{Query: query, Project: "project-a", DateFrom: tc.from, DateTo: tc.to, Limit: 1}
 				var ids []string
 				for range len(fixtures) + 1 {
-					out, err := store.Search(context.Background(), filter)
+					out, err := store.Search(t.Context(), filter)
 					require.NoError(t, err)
 					for _, hit := range out.Results {
 						ids = append(ids, hit.SessionID)

@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -72,7 +71,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	t.Run("blank model returns nil", func(t *testing.T) {
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
-			context.Background(),
+			t.Context(),
 			[]string{sessionA},
 			AnalyticsFilter{},
 			false,
@@ -82,52 +81,58 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	})
 
 	t.Run("matching session has rows", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
-			context.Background(),
+			t.Context(),
 			[]string{sessionA, sessionB},
 			AnalyticsFilter{Model: model},
 			true,
 		)
-		require.NoError(t, err)
-		require.NotNil(t, scope)
+		require.NoError(err)
+		require.NotNil(scope)
 
 		bySession := scope.MessagesBySession()
 
 		// sessionA: user + assistant pair both emitted
 		rowsA := bySession[sessionA]
-		require.Len(t, rowsA, 2, "sessionA should have 2 matched rows")
-		assert.Equal(t, "user", rowsA[0].Role)
-		assert.Equal(t, "assistant", rowsA[1].Role)
+		require.Len(rowsA, 2, "sessionA should have 2 matched rows")
+		assert.Equal("user", rowsA[0].Role)
+		assert.Equal("assistant", rowsA[1].Role)
 
 		// sessionB: no rows (assistant used a different model)
-		assert.Empty(t, bySession[sessionB],
+		assert.Empty(bySession[sessionB],
 			"sessionB should yield no rows")
 	})
 
 	t.Run("StatsBySession counts user and assistant", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
-			context.Background(),
+			t.Context(),
 			[]string{sessionA},
 			AnalyticsFilter{Model: model},
 			false,
 		)
-		require.NoError(t, err)
-		require.NotNil(t, scope)
+		require.NoError(err)
+		require.NotNil(scope)
 
 		stats := scope.StatsBySession()
 		sA, ok := stats[sessionA]
-		require.True(t, ok, "sessionA stats must exist")
-		assert.Equal(t, 1, sA.UserMessages, "user message count")
-		assert.Equal(t, 1, sA.AssistantMessages, "assistant message count")
-		assert.Equal(t, 2, sA.Messages, "total message count")
+		require.True(ok, "sessionA stats must exist")
+		assert.Equal(1, sA.UserMessages, "user message count")
+		assert.Equal(1, sA.AssistantMessages, "assistant message count")
+		assert.Equal(2, sA.Messages, "total message count")
 	})
 
 	t.Run("TimingBySession returns one entry per row", func(t *testing.T) {
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
-			context.Background(),
+			t.Context(),
 			[]string{sessionA},
 			AnalyticsFilter{Model: model},
 			false,
@@ -141,39 +146,44 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	})
 
 	t.Run("includeContent=false omits content", func(t *testing.T) {
+		require := require.New(t)
+
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
-			context.Background(),
+			t.Context(),
 			[]string{sessionA},
 			AnalyticsFilter{Model: model},
 			false,
 		)
-		require.NoError(t, err)
-		require.NotNil(t, scope)
+		require.NoError(err)
+		require.NotNil(scope)
 
 		rows := scope.MessagesBySession()[sessionA]
-		require.Len(t, rows, 2)
+		require.Len(rows, 2)
 		for _, row := range rows {
 			assert.Empty(t, row.Content, "content should be empty when includeContent=false")
 		}
 	})
 
 	t.Run("includeContent=true populates content", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
-			context.Background(),
+			t.Context(),
 			[]string{sessionA},
 			AnalyticsFilter{Model: model},
 			true,
 		)
-		require.NoError(t, err)
-		require.NotNil(t, scope)
+		require.NoError(err)
+		require.NotNil(scope)
 
 		rows := scope.MessagesBySession()[sessionA]
-		require.Len(t, rows, 2)
-		assert.Equal(t, "hello content", rows[0].Content,
+		require.Len(rows, 2)
+		assert.Equal("hello content", rows[0].Content,
 			"user row content should be populated")
-		assert.Equal(t, "world content", rows[1].Content,
+		assert.Equal("world content", rows[1].Content,
 			"assistant row content should be populated")
 	})
 
@@ -181,7 +191,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 		d := setup(t)
 		// Pass sessionA twice; resolver must not error or double-count.
 		scope, err := d.resolveAnalyticsMessageScope(
-			context.Background(),
+			t.Context(),
 			[]string{sessionA, sessionA},
 			AnalyticsFilter{Model: model},
 			false,

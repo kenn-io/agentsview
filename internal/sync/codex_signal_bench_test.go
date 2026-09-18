@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -39,7 +38,7 @@ func BenchmarkCodexQuietAppendSignals15000(b *testing.B) {
 
 func benchCodexQuietAppendSignals(b *testing.B, turns int) {
 	routeBenchLogs(b)
-	ctx := context.Background()
+	ctx := b.Context()
 	root, path, uuid := writeCodexSignalBenchmarkTranscript(b, turns)
 
 	database, err := db.Open(filepath.Join(b.TempDir(), "bench.db"))
@@ -125,7 +124,7 @@ func benchCodexQuietAppendSignals(b *testing.B, turns int) {
 // source read pass (as the pre-fix checkpoint persistence did).
 func BenchmarkCodexColdFullSync(b *testing.B) {
 	routeBenchLogs(b)
-	ctx := context.Background()
+	ctx := b.Context()
 	root, _, _ := writeCodexSignalBenchmarkTranscript(b, 7500)
 
 	b.ReportAllocs()

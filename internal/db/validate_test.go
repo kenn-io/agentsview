@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -102,7 +101,7 @@ func TestSelfParentNeverPersists(t *testing.T) {
 			write: func(t *testing.T, d *DB) string {
 				gid := origin + "~import-self"
 				result, err := d.ApplyArtifactImportedSession(
-					context.Background(),
+					t.Context(),
 					ArtifactImportedSession{
 						Origin: origin, GID: gid,
 						ManifestHash:      strings.Repeat("b", 64),
@@ -121,13 +120,16 @@ func TestSelfParentNeverPersists(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			d := testDB(t)
 			id := tc.write(t, d)
-			s, err := d.GetSession(context.Background(), id)
-			require.NoError(t, err)
-			require.NotNil(t, s)
-			assert.Nil(t, s.ParentSessionID)
-			assert.Equal(t, "subagent", s.RelationshipType)
+			s, err := d.GetSession(t.Context(), id)
+			require.NoError(err)
+			require.NotNil(s)
+			assert.Nil(s.ParentSessionID)
+			assert.Equal("subagent", s.RelationshipType)
 		})
 	}
 }

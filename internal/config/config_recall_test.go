@@ -242,10 +242,10 @@ func TestRecallExtractConfigValidate(t *testing.T) {
 
 func TestRecallExtractServerConfigAPIKeyEnv(t *testing.T) {
 	var server RecallExtractServerConfig
-	assert.Equal(t, "", server.APIKey(), "no env var configured")
+	assert.Empty(t, server.APIKey(), "no env var configured")
 
 	server.APIKeyEnv = "AGENTSVIEW_TEST_RECALL_API_KEY"
-	assert.Equal(t, "", server.APIKey(), "configured env var not set in environment")
+	assert.Empty(t, server.APIKey(), "configured env var not set in environment")
 
 	t.Setenv("AGENTSVIEW_TEST_RECALL_API_KEY", "secret-123")
 	assert.Equal(t, "secret-123", server.APIKey())
@@ -256,6 +256,8 @@ func TestRecallExtractServerConfigAPIKeyEnv(t *testing.T) {
 // stderr and in CI logs, and endpoints may carry Basic-auth userinfo or
 // API keys in query parameters.
 func TestRecallExtractValidationRedactsEndpointCredentials(t *testing.T) {
+	assert := assert.New(t)
+
 	cfg := validRecallExtractConfig()
 	s := cfg.Servers["local"]
 	s.Endpoint = "http://tester:hunter2@lan-host:9000/v1?api_key=sekret"
@@ -264,11 +266,11 @@ func TestRecallExtractValidationRedactsEndpointCredentials(t *testing.T) {
 
 	err := cfg.Validate()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "lan-host",
+	assert.Contains(err.Error(), "lan-host",
 		"the host stays visible for diagnostics")
-	assert.NotContains(t, err.Error(), "hunter2")
-	assert.NotContains(t, err.Error(), "tester:")
-	assert.NotContains(t, err.Error(), "sekret")
+	assert.NotContains(err.Error(), "hunter2")
+	assert.NotContains(err.Error(), "tester:")
+	assert.NotContains(err.Error(), "sekret")
 }
 
 func TestRedactedEndpointStripsSensitiveParts(t *testing.T) {
@@ -363,46 +365,54 @@ func TestRedactedEndpointStripsSensitiveParts(t *testing.T) {
 }
 
 func TestRecallExtractServerResolution(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	cfg := validRecallExtractConfig()
 	name, server, err := cfg.ResolvedServer()
-	require.NoError(t, err)
-	assert.Equal(t, "local", name)
-	assert.Equal(t, "http://127.0.0.1:30000/v1", server.Endpoint)
+	require.NoError(err)
+	assert.Equal("local", name)
+	assert.Equal("http://127.0.0.1:30000/v1", server.Endpoint)
 
 	cfg.Server = "remote"
 	name, server, err = cfg.ResolvedServer()
-	require.NoError(t, err)
-	assert.Equal(t, "remote", name)
-	assert.Equal(t, "http://build-box:30000/v1", server.Endpoint)
+	require.NoError(err)
+	assert.Equal("remote", name)
+	assert.Equal("http://build-box:30000/v1", server.Endpoint)
 
 	cfg.Server = ""
 	_, _, err = cfg.ResolvedServer()
-	require.Error(t, err, "ambiguous selection with two servers")
+	require.Error(err, "ambiguous selection with two servers")
 
 	cfg.Servers = map[string]RecallExtractServerConfig{
 		"only": {Endpoint: "http://one/v1", Timeout: "120s"},
 	}
 	name, _, err = cfg.ResolvedServer()
-	require.NoError(t, err)
-	assert.Equal(t, "only", name, "a single server resolves without selection")
+	require.NoError(err)
+	assert.Equal("only", name, "a single server resolves without selection")
 }
 
 func TestRecallExtractConfigDefaults(t *testing.T) {
+	assert := assert.New(t)
+
 	cfg, err := Default()
 	require.NoError(t, err)
 
 	extract := cfg.Recall.Extract
-	assert.False(t, extract.Enabled)
-	assert.Equal(t, 50000, extract.MaxWindowChars)
-	assert.Equal(t, "30m", extract.QuietPeriod)
-	assert.Equal(t, "1h", extract.BackstopInterval)
-	assert.Equal(t, "1h", extract.FailureBackoff)
-	assert.Zero(t, extract.MaxTokens,
+	assert.False(extract.Enabled)
+	assert.Equal(50000, extract.MaxWindowChars)
+	assert.Equal("30m", extract.QuietPeriod)
+	assert.Equal("1h", extract.BackstopInterval)
+	assert.Equal("1h", extract.FailureBackoff)
+	assert.Zero(extract.MaxTokens,
 		"unset max_tokens defers to the prompt profile default")
-	assert.Empty(t, extract.Servers)
+	assert.Empty(extract.Servers)
 }
 
 func TestRecallExtractConfigTOMLLoad(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	cfg := loadMinimalWithConfig(t, map[string]any{
 		"recall": map[string]any{
 			"extract": map[string]any{
@@ -438,28 +448,28 @@ func TestRecallExtractConfigTOMLLoad(t *testing.T) {
 	})
 
 	extract := cfg.Recall.Extract
-	require.True(t, extract.Enabled)
-	assert.Equal(t, "qwen3.5-27b", extract.Model)
-	assert.Equal(t, "gpu-a", extract.Deployment)
-	assert.Equal(t, "local", extract.Server)
-	assert.Equal(t, 8192, extract.MaxTokens)
-	assert.Equal(t, 50000, extract.MaxWindowChars, "unset keeps default")
-	assert.Equal(t, "30m", extract.QuietPeriod, "unset keeps default")
-	assert.Equal(t, "1h", extract.BackstopInterval, "unset keeps default")
-	assert.Equal(t, "http://127.0.0.1:30000/v1",
+	require.True(extract.Enabled)
+	assert.Equal("qwen3.5-27b", extract.Model)
+	assert.Equal("gpu-a", extract.Deployment)
+	assert.Equal("local", extract.Server)
+	assert.Equal(8192, extract.MaxTokens)
+	assert.Equal(50000, extract.MaxWindowChars, "unset keeps default")
+	assert.Equal("30m", extract.QuietPeriod, "unset keeps default")
+	assert.Equal("1h", extract.BackstopInterval, "unset keeps default")
+	assert.Equal("http://127.0.0.1:30000/v1",
 		extract.Servers["local"].Endpoint)
-	assert.Equal(t, "120s", extract.Servers["local"].Timeout,
+	assert.Equal("120s", extract.Servers["local"].Timeout,
 		"unset timeout keeps default")
-	assert.Equal(t, "600s", extract.Servers["slow"].Timeout)
-	assert.True(t, extract.Servers["slow"].AllowHTTP,
+	assert.Equal("600s", extract.Servers["slow"].Timeout)
+	assert.True(extract.Servers["slow"].AllowHTTP,
 		"allow_http opts a non-loopback plaintext endpoint in")
-	assert.Equal(t, "qwen", extract.Prompts.Profile)
-	assert.Equal(t, "/etc/agentsview/prompts", extract.Prompts.Dir)
-	require.NotNil(t, extract.Request.Temperature)
-	assert.Equal(t, 0.2, *extract.Request.Temperature)
+	assert.Equal("qwen", extract.Prompts.Profile)
+	assert.Equal("/etc/agentsview/prompts", extract.Prompts.Dir)
+	require.NotNil(extract.Request.Temperature)
+	assert.InDelta(0.2, *extract.Request.Temperature, 0)
 	kwargs, ok := extract.Request.ExtraBody["chat_template_kwargs"].(map[string]any)
-	require.True(t, ok, "extra_body nested tables decode as maps")
-	assert.Equal(t, false, kwargs["enable_thinking"])
+	require.True(ok, "extra_body nested tables decode as maps")
+	assert.Equal(false, kwargs["enable_thinking"])
 }
 
 func TestRecallExtractConfigTOMLLoadInvalid(t *testing.T) {

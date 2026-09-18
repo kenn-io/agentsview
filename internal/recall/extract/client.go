@@ -559,7 +559,7 @@ func (c *Client) distill(
 	if len(parsed.Choices) == 0 {
 		// The body parsed, so its usage is real cost even without choices.
 		return nil, parsed.Usage, &transientError{
-			err: fmt.Errorf("distill response has no choices"),
+			err: errors.New("distill response has no choices"),
 		}
 	}
 	// From here the server reports token usage even when the attempt fails,
@@ -584,9 +584,8 @@ func (c *Client) distill(
 		// Empty content with a normal finish reason means the token budget
 		// went somewhere invisible (typically hidden reasoning the request
 		// shape should have disabled).
-		return nil, parsed.Usage, fmt.Errorf(
-			"distill response content is empty; check the model profile's " +
-				"request shape",
+		return nil, parsed.Usage, errors.New("distill response content is empty; check the model profile's " +
+			"request shape",
 		)
 	}
 	entries, err := parseEntries(choice.Message.Content)
@@ -841,7 +840,7 @@ func strictObject(
 	data jsontext.Value, keys []string,
 ) (map[string]jsontext.Value, error) {
 	if isJSONNull(data) {
-		return nil, fmt.Errorf("expected an object, got null")
+		return nil, errors.New("expected an object, got null")
 	}
 	var object map[string]jsontext.Value
 	if err := json.Unmarshal(data, &object); err != nil {

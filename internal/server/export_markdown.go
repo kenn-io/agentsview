@@ -7,6 +7,7 @@ import (
 	"html"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -269,7 +270,7 @@ func renderMarkdownMessage(
 ) {
 	attrs := map[string]string{
 		"role":    msg.Role,
-		"ordinal": fmt.Sprintf("%d", msg.Ordinal),
+		"ordinal": strconv.Itoa(msg.Ordinal),
 	}
 	if msg.Timestamp != "" {
 		attrs["timestamp"] = msg.Timestamp
@@ -607,7 +608,7 @@ func markdownSessionAttrs(s *db.Session, root bool) map[string]string {
 		attrs["ended_at"] = *s.EndedAt
 	}
 	if s.MessageCount > 0 {
-		attrs["message_count"] = fmt.Sprintf("%d", s.MessageCount)
+		attrs["message_count"] = strconv.Itoa(s.MessageCount)
 	}
 	return attrs
 }

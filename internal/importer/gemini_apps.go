@@ -3,7 +3,6 @@ package importer
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -30,13 +29,11 @@ func ImportGeminiApps(
 		parser.AgentGeminiApps, parser.ProviderConfig{},
 	)
 	if !ok {
-		return stats, fmt.Errorf("gemini apps provider unavailable")
+		return stats, errors.New("gemini apps provider unavailable")
 	}
 	exporter, ok := provider.(parser.GeminiAppsExportParser)
 	if !ok {
-		return stats, fmt.Errorf(
-			"gemini apps provider does not support exports",
-		)
+		return stats, errors.New("gemini apps provider does not support exports")
 	}
 
 	parseSummary, err := exporter.ParseGeminiAppsExport(

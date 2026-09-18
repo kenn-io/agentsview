@@ -48,7 +48,7 @@ func TestHandlers_Internal_DeadlineExceeded(t *testing.T) {
 			ctx, cancel := expiredCtx(t)
 			defer cancel()
 
-			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			req := httptest.NewRequestWithContext(ctx, http.MethodGet, tt.path, nil)
 			req = req.WithContext(ctx)
 
 			w := httptest.NewRecorder()

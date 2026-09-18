@@ -72,7 +72,7 @@ func writeSQLiteSnapshot(dstPath, srcPath string) (err error) {
 				)
 			}
 			if !done {
-				return fmt.Errorf("copy sqlite online backup: backup incomplete")
+				return errors.New("copy sqlite online backup: backup incomplete")
 			}
 			return nil
 		})

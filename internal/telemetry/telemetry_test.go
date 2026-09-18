@@ -11,18 +11,20 @@ import (
 )
 
 func TestEnabledFromEnvHonorsAgentsViewAndGenericOptOut(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Setenv(EnabledEnv, "0")
-	assert.False(t, EnabledFromEnv())
+	assert.False(EnabledFromEnv())
 
 	t.Setenv(EnabledEnv, "1")
 	if kittelemetry.PostHogTelemetryDisabled() {
-		assert.False(t, EnabledFromEnv())
+		assert.False(EnabledFromEnv())
 		return
 	}
-	assert.True(t, EnabledFromEnv())
+	assert.True(EnabledFromEnv())
 
 	t.Setenv(GenericEnabledEnv, "0")
-	assert.False(t, EnabledFromEnv())
+	assert.False(EnabledFromEnv())
 }
 
 func TestNewReporterDisabledByEnv(t *testing.T) {
@@ -54,19 +56,22 @@ func TestNewReporterDisabledDuringTestsDespiteEnabledEnv(t *testing.T) {
 }
 
 func TestAllowedEventOptionsConfigureDaemonActiveShape(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Setenv(EnabledEnv, "1")
 	t.Setenv(GenericEnabledEnv, "1")
 
 	client, err := newKitReporter(
 		"anonymous-install-id", "v1.2.3", "abc123",
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, client.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(client.Close()) })
 
 	reporter := &Reporter{client: client}
 
-	assert.True(t, reporter.EventAllowed(EventDaemonActive))
-	assert.False(t, reporter.EventAllowed("daemon_started"))
+	assert.True(reporter.EventAllowed(EventDaemonActive))
+	assert.False(reporter.EventAllowed("daemon_started"))
 
 	props, err := reporter.SanitizeProperties(EventDaemonActive, map[string]any{
 		"$process_person_profile": true,
@@ -81,19 +86,19 @@ func TestAllowedEventOptionsConfigureDaemonActiveShape(t *testing.T) {
 		"project":                 "private-project",
 		"session":                 "private-session",
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.False(t, props["$process_person_profile"].(bool))
-	assert.True(t, props["$geoip_disable"].(bool))
-	assert.Equal(t, "agentsview", props["application"])
-	assert.Equal(t, "v1.2.3", props["version"])
-	assert.Equal(t, "abc123", props["commit"])
-	assert.Equal(t, runtime.GOOS, props["goos"])
-	assert.Equal(t, runtime.GOARCH, props["goarch"])
-	assert.Equal(t, "daemon", props["source"])
-	assert.NotContains(t, props, "app")
-	assert.NotContains(t, props, "project")
-	assert.NotContains(t, props, "session")
+	assert.False(props["$process_person_profile"].(bool))
+	assert.True(props["$geoip_disable"].(bool))
+	assert.Equal("agentsview", props["application"])
+	assert.Equal("v1.2.3", props["version"])
+	assert.Equal("abc123", props["commit"])
+	assert.Equal(runtime.GOOS, props["goos"])
+	assert.Equal(runtime.GOARCH, props["goarch"])
+	assert.Equal("daemon", props["source"])
+	assert.NotContains(props, "app")
+	assert.NotContains(props, "project")
+	assert.NotContains(props, "session")
 }
 
 func TestReporterCaptureDaemonActiveNoopsDuringTests(t *testing.T) {
@@ -109,14 +114,14 @@ func TestReporterCaptureDaemonActiveNoopsDuringTests(t *testing.T) {
 	reporter := &Reporter{client: client}
 	assert.True(t, reporter.Enabled())
 
-	err = reporter.CaptureDaemonActive(context.Background())
+	err = reporter.CaptureDaemonActive(t.Context())
 	require.NoError(t, err)
 }
 
 func TestReporterCaptureDaemonActiveTestBlockerWinsOverCanceledContext(t *testing.T) {
 	client := kittelemetry.DisabledPostHogReporter()
 	reporter := &Reporter{client: client}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	err := reporter.CaptureDaemonActive(ctx)

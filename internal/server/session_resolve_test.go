@@ -23,6 +23,8 @@ func TestResolveSessionIDsEndpoint(t *testing.T) {
 }
 
 func TestResolveSessionIDsEndpointRawSuffix(t *testing.T) {
+	assert := assert.New(t)
+
 	te := setup(t)
 	te.seedSession(t, "host~uuid", "host", 1)
 	te.seedSession(t, "host~uuid-fork", "fork", 1)
@@ -34,7 +36,7 @@ func TestResolveSessionIDsEndpointRawSuffix(t *testing.T) {
 		RawSuffix bool     `json:"raw_suffix"`
 	}](t, w)
 	require.Equal(t, []string{"host~uuid"}, raw.IDs)
-	assert.True(t, raw.RawSuffix)
+	assert.True(raw.RawSuffix)
 
 	w = te.get(t, "/api/v1/session-ids/resolve?partial=uuid&limit=2")
 	assertStatus(t, w, http.StatusOK)
@@ -42,7 +44,7 @@ func TestResolveSessionIDsEndpointRawSuffix(t *testing.T) {
 		IDs       []string `json:"ids"`
 		RawSuffix bool     `json:"raw_suffix"`
 	}](t, w)
-	assert.ElementsMatch(t, []string{"host~uuid", "host~uuid-fork"}, partial.IDs)
-	assert.False(t, partial.RawSuffix)
+	assert.ElementsMatch([]string{"host~uuid", "host~uuid-fork"}, partial.IDs)
+	assert.False(partial.RawSuffix)
 	t.Logf("head: raw_response=%+v partial_response=%+v", raw, partial)
 }

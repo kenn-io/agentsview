@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -14,13 +13,15 @@ import (
 )
 
 func TestFetchHTTPProjects(t *testing.T) {
+	assert := assert.New(t)
+
 	var gotAuth string
 	var gotQuery url.Values
 	ts := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter,
 		r *http.Request,
 	) {
-		assert.Equal(t, "/api/v1/projects", r.URL.Path)
+		assert.Equal("/api/v1/projects", r.URL.Path)
 		gotAuth = r.Header.Get("Authorization")
 		gotQuery = r.URL.Query()
 		writeJSONResponse(w, `{
@@ -33,7 +34,7 @@ func TestFetchHTTPProjects(t *testing.T) {
 	defer ts.Close()
 
 	projects, err := fetchHTTPProjects(
-		context.Background(),
+		t.Context(),
 		transport{Mode: transportHTTP, URL: ts.URL},
 		"secret-token",
 		true,
@@ -41,10 +42,10 @@ func TestFetchHTTPProjects(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	assert.Equal(t, "Bearer secret-token", gotAuth)
-	assert.Equal(t, "false", gotQuery.Get("include_one_shot"))
-	assert.Equal(t, "false", gotQuery.Get("include_automated"))
-	assert.Equal(t, []db.ProjectInfo{
+	assert.Equal("Bearer secret-token", gotAuth)
+	assert.Equal("false", gotQuery.Get("include_one_shot"))
+	assert.Equal("false", gotQuery.Get("include_automated"))
+	assert.Equal([]db.ProjectInfo{
 		{Name: "alpha", SessionCount: 3},
 		{Name: "beta", SessionCount: 1},
 	}, projects)
@@ -64,7 +65,7 @@ func TestFetchHTTPProjectsTimesOutStalledDaemon(t *testing.T) {
 	t.Cleanup(func() { projectsHTTPClient = oldClient })
 
 	_, err := fetchHTTPProjects(
-		context.Background(),
+		t.Context(),
 		transport{Mode: transportHTTP, URL: ts.URL},
 		"",
 		false,

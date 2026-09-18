@@ -181,7 +181,7 @@ func (s *RawIngestStore) CommitManifest(
 		}
 	}
 	if head.Generation == math.MaxInt64 {
-		return rawsync.CommitResult{}, fmt.Errorf("raw source generation exhausted")
+		return rawsync.CommitResult{}, errors.New("raw source generation exhausted")
 	}
 	generation := head.Generation + 1
 	receipt, err := s.newReceipt()

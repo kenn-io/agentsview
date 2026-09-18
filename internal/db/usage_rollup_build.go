@@ -483,7 +483,7 @@ func buildUsageRollupSessions(
 	cross usageDedupIdentitySet,
 ) ([]usageRollupBuild, error) {
 	if location == nil {
-		location = time.Local
+		location = time.Local //nolint:forbidigo // Report date buckets use the local calendar timezone; source timestamps remain UTC.
 	}
 	for index := range facts {
 		facts[index].LocalDate = usageRollupLocalDate(facts[index], location)

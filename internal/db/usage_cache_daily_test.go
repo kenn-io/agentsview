@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"math"
 	"testing"
@@ -34,21 +33,23 @@ func TestRecordUsageFactsPricingSeparatesReportedAndBilledProvenance(t *testing.
 }
 
 func TestRecordUsageFactsPricingSkipsUnusedOverflowingReportedRate(t *testing.T) {
+	require := require.New(t)
+
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "model",
 		Rates:        export.ModelRates{OutputPerMTok: money.Money{Microdollars: math.MaxInt64}},
 	}})
-	require.NoError(t, recordUsageFactsPricing(resolver, usageFactsGroup{
+	require.NoError(recordUsageFactsPricing(resolver, usageFactsGroup{
 		Agent: "posit-assistant", ProviderID: "positai", Model: "model", PricedModel: "model",
 		ReportedCount: 1,
 	}))
 	block, err := resolver.BuildBlock()
-	require.NoError(t, err)
-	require.Contains(t, block.Models, "model")
+	require.NoError(err)
+	require.Contains(block.Models, "model")
 	resolutions := block.Models["model"].Resolutions
-	require.Len(t, resolutions, 1)
+	require.Len(resolutions, 1)
 	asserted := resolutions[0].OutputCostPerMTok.Microdollars
-	require.Equal(t, int64(math.MaxInt64), asserted)
+	require.Equal(int64(math.MaxInt64), asserted)
 }
 
 func TestAssembleDailyUsageFactsPropagatesBillingError(t *testing.T) {
@@ -57,7 +58,7 @@ func TestAssembleDailyUsageFactsPropagatesBillingError(t *testing.T) {
 		Rates:        export.ModelRates{OutputPerMTok: money.Money{Microdollars: math.MaxInt64}},
 	}})
 	_, err := (&DB{}).assembleDailyUsageFacts(
-		context.Background(), UsageFilter{}, usageFactsResult{
+		t.Context(), UsageFilter{}, usageFactsResult{
 			Groups: []usageFactsGroup{{
 				Agent: "posit-assistant", ProviderID: "positai", Model: "model", PricedModel: "model",
 				ComputedAggregateCount: 1,
@@ -68,8 +69,10 @@ func TestAssembleDailyUsageFactsPropagatesBillingError(t *testing.T) {
 }
 
 func TestPositBillingPublicAPIReproduction(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+	require.NoError(d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern: "repro-model",
 		InputPerMTok: money.MustParseDollars("1"),
 	}}))
@@ -77,38 +80,44 @@ func TestPositBillingPublicAPIReproduction(t *testing.T) {
 		s.Agent = "posit-assistant"
 		s.StartedAt = new("2024-06-15T10:00:00Z")
 	})
-	insertMessages(t, d, Message{SessionID: "posit-repro", Ordinal: 0,
+	insertMessages(t, d, Message{
+		SessionID: "posit-repro", Ordinal: 0,
 		Role: "assistant", Timestamp: "2024-06-15T10:30:00Z",
 		Model: "repro-model", ProviderID: "positai",
-		TokenUsage: jsontext.Value(`{"input_tokens":1000000}`)})
+		TokenUsage: jsontext.Value(`{"input_tokens":1000000}`),
+	})
 	insertSession(t, d, "plain-repro", "repro", func(s *Session) {
 		s.Agent = "claude"
 		s.StartedAt = new("2024-06-15T10:00:00Z")
 	})
-	insertMessages(t, d, Message{SessionID: "plain-repro", Ordinal: 0,
+	insertMessages(t, d, Message{
+		SessionID: "plain-repro", Ordinal: 0,
 		Role: "assistant", Timestamp: "2024-06-15T10:30:00Z",
-		Model: "repro-model", TokenUsage: jsontext.Value(`{"input_tokens":1000000}`)})
+		Model: "repro-model", TokenUsage: jsontext.Value(`{"input_tokens":1000000}`),
+	})
 	filter := UsageFilter{
 		From: "2024-06-01", To: "2024-06-30", Breakdowns: true,
 	}
 	for range 2 {
-		result, err := d.GetDailyUsage(context.Background(), filter)
-		require.NoError(t, err)
-		require.Len(t, result.Daily, 1)
+		result, err := d.GetDailyUsage(t.Context(), filter)
+		require.NoError(err)
+		require.Len(result.Daily, 1)
 		costs := make(map[string]money.Money, len(result.Daily[0].AgentBreakdowns))
 		for _, breakdown := range result.Daily[0].AgentBreakdowns {
 			costs[breakdown.Agent] = breakdown.Cost
 		}
-		require.Equal(t, money.MustParseDollars("1.1"), costs["posit-assistant"])
-		require.Equal(t, money.MustParseDollars("1"), costs["claude"])
+		require.Equal(money.MustParseDollars("1.1"), costs["posit-assistant"])
+		require.Equal(money.MustParseDollars("1"), costs["claude"])
 		t.Logf("observed cost: posit=$%.6f", float64(costs["posit-assistant"].Microdollars)/1_000_000)
 		t.Logf("observed non-Posit cost: $%.6f", float64(costs["claude"].Microdollars)/1_000_000)
 	}
 }
 
 func TestPositBillingUsesProviderPerUsageRow(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+	require.NoError(d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern: "mixed-provider-model",
 		InputPerMTok: money.MustParseDollars("1"),
 	}}))
@@ -117,25 +126,29 @@ func TestPositBillingUsesProviderPerUsageRow(t *testing.T) {
 		s.StartedAt = new("2024-06-15T10:00:00Z")
 	})
 	insertMessages(t, d,
-		Message{SessionID: "mixed-provider", Ordinal: 0, Role: "assistant",
+		Message{
+			SessionID: "mixed-provider", Ordinal: 0, Role: "assistant",
 			Timestamp: "2024-06-15T10:30:00Z", Model: "mixed-provider-model",
 			ProviderID: "positai",
-			TokenUsage: jsontext.Value(`{"input_tokens":1000000}`)},
-		Message{SessionID: "mixed-provider", Ordinal: 1, Role: "assistant",
+			TokenUsage: jsontext.Value(`{"input_tokens":1000000}`),
+		},
+		Message{
+			SessionID: "mixed-provider", Ordinal: 1, Role: "assistant",
 			Timestamp: "2024-06-15T10:31:00Z", Model: "mixed-provider-model",
 			ProviderID: "anthropic",
-			TokenUsage: jsontext.Value(`{"input_tokens":1000000}`)},
+			TokenUsage: jsontext.Value(`{"input_tokens":1000000}`),
+		},
 	)
 
-	usage, err := d.GetSessionUsage(context.Background(), "mixed-provider", true)
-	require.NoError(t, err)
-	require.NotNil(t, usage)
-	require.Equal(t, money.MustParseDollars("2.1"), usage.Cost)
+	usage, err := d.GetSessionUsage(t.Context(), "mixed-provider", true)
+	require.NoError(err)
+	require.NotNil(usage)
+	require.Equal(money.MustParseDollars("2.1"), usage.Cost)
 
-	daily, err := d.GetDailyUsage(context.Background(), UsageFilter{
+	daily, err := d.GetDailyUsage(t.Context(), UsageFilter{
 		From: "2024-06-01", To: "2024-06-30", Timezone: "UTC",
 	})
-	require.NoError(t, err)
-	require.Len(t, daily.Daily, 1)
-	require.Equal(t, money.MustParseDollars("2.1"), daily.Totals.TotalCost)
+	require.NoError(err)
+	require.Len(daily.Daily, 1)
+	require.Equal(money.MustParseDollars("2.1"), daily.Totals.TotalCost)
 }

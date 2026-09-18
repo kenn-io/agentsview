@@ -99,17 +99,20 @@ func TestEngineClassifyKimiWorkPaths(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			files, err := eng.classifyPaths(t.Context(), []string{tt.path})
-			require.NoError(t, err)
+			require.NoError(err)
 			if !tt.want {
-				assert.Empty(t, files)
+				assert.Empty(files)
 				return
 			}
-			require.Len(t, files, 1)
+			require.Len(files, 1)
 			got := files[0]
-			assert.Equal(t, parser.AgentKimiWork, got.Agent)
-			assert.Equal(t, tt.project, got.Project)
-			assert.Equal(t, tt.path, got.Path)
+			assert.Equal(parser.AgentKimiWork, got.Agent)
+			assert.Equal(tt.project, got.Project)
+			assert.Equal(tt.path, got.Path)
 		})
 	}
 }

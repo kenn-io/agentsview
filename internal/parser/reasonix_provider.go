@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -205,7 +206,7 @@ func hashReasonixSourceFile(path string) (string, error) {
 	meta, err := os.Open(metaPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Sprintf("%x", h.Sum(nil)), nil
+			return hex.EncodeToString(h.Sum(nil)), nil
 		}
 		return "", fmt.Errorf("open %s: %w", metaPath, err)
 	}
@@ -217,7 +218,7 @@ func hashReasonixSourceFile(path string) (string, error) {
 	if _, err := io.Copy(h, meta); err != nil {
 		return "", fmt.Errorf("hash %s: %w", metaPath, err)
 	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // reasonixLayoutProject validates a root-relative transcript path against the

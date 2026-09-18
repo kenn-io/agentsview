@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -729,7 +730,7 @@ func reconstructJSONL(path string) ([]byte, error) {
 
 func reconstructJSONLWithLimit(path string, hardRecordLimit int) ([]byte, error) {
 	if hardRecordLimit <= 0 {
-		return nil, fmt.Errorf("VS Code Copilot hard replay limit must be positive")
+		return nil, errors.New("VS Code Copilot hard replay limit must be positive")
 	}
 
 	f, err := os.Open(path)
@@ -744,7 +745,7 @@ func reconstructJSONLWithLimit(path string, hardRecordLimit int) ([]byte, error)
 
 	for {
 		record, err := readVSCodeCopilotRecord(reader, hardRecordLimit)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -858,7 +859,7 @@ const (
 )
 
 func classifyVSCodeCopilotDestination(keys []string) vscodeCopilotDestination {
-	for i := range len(keys) {
+	for i := range keys {
 		if keys[i] != "resultDetails" {
 			continue
 		}

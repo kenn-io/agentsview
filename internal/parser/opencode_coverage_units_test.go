@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,30 +25,33 @@ func openCodeUnitProvider(t *testing.T, root string) Provider {
 // was spent registered no native watch at all and the live container went
 // uncovered. A shallow unit never draws on it.
 func TestOpenCodeWatchPlanKeepsTheContainerOffTheRecursiveBudget(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(root, "opencode.db"), []byte("db"), 0o600,
 	))
-	require.NoError(t, os.MkdirAll(
+	require.NoError(os.MkdirAll(
 		filepath.Join(root, "storage", "session", "project"), 0o755,
 	))
 
-	plan, err := openCodeUnitProvider(t, root).WatchPlan(context.Background())
-	require.NoError(t, err)
-	require.Len(t, plan.Roots, 2)
+	plan, err := openCodeUnitProvider(t, root).WatchPlan(t.Context())
+	require.NoError(err)
+	require.Len(plan.Roots, 2)
 
 	container := plan.Roots[0]
-	assert.Equal(t, root, container.Path)
-	assert.False(t, container.Recursive,
+	assert.Equal(root, container.Path)
+	assert.False(container.Recursive,
 		"the container unit must never enter the recursive budget")
-	assert.Equal(t, []string{"opencode*.db", "opencode*.db-wal"}, container.IncludeGlobs)
+	assert.Equal([]string{"opencode*.db", "opencode*.db-wal"}, container.IncludeGlobs)
 
 	storage := plan.Roots[1]
-	assert.Equal(t, filepath.Join(root, "storage"), storage.Path)
-	assert.True(t, storage.Recursive)
-	assert.Equal(t, []string{"*.json"}, storage.IncludeGlobs)
+	assert.Equal(filepath.Join(root, "storage"), storage.Path)
+	assert.True(storage.Recursive)
+	assert.Equal([]string{"*.json"}, storage.IncludeGlobs)
 
-	assert.NotEqual(t, container.DebounceKey, storage.DebounceKey,
+	assert.NotEqual(container.DebounceKey, storage.DebounceKey,
 		"units sharing a configured root need independent debounce keys")
 }
 
@@ -61,17 +63,20 @@ func TestOpenCodeWatchPlanKeepsTheContainerOffTheRecursiveBudget(t *testing.T) {
 // recursive unit costs one native watch and still covers a storage tree
 // created later.
 func TestOpenCodeWatchPlanStaysWholeWhileStorageIsAbsent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(root, "opencode.db"), []byte("db"), 0o600,
 	))
-	require.NoDirExists(t, filepath.Join(root, "storage"))
+	require.NoDirExists(filepath.Join(root, "storage"))
 
-	plan, err := openCodeUnitProvider(t, root).WatchPlan(context.Background())
-	require.NoError(t, err)
-	require.Len(t, plan.Roots, 1)
-	assert.Equal(t, root, plan.Roots[0].Path)
-	assert.True(t, plan.Roots[0].Recursive)
+	plan, err := openCodeUnitProvider(t, root).WatchPlan(t.Context())
+	require.NoError(err)
+	require.Len(plan.Roots, 1)
+	assert.Equal(root, plan.Roots[0].Path)
+	assert.True(plan.Roots[0].Recursive)
 }
 
 // TestOpenCodeWatchPlanNamesNoAbsentRootForAnUninstalledAgent is the cold-start
@@ -79,12 +84,14 @@ func TestOpenCodeWatchPlanStaysWholeWhileStorageIsAbsent(t *testing.T) {
 // exactly one probe, on the dir, rather than a deeper path that appears only
 // afterwards.
 func TestOpenCodeWatchPlanNamesNoAbsentRootForAnUninstalledAgent(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "not-installed")
-	require.NoDirExists(t, root)
+	require := require.New(t)
 
-	plan, err := openCodeUnitProvider(t, root).WatchPlan(context.Background())
-	require.NoError(t, err)
-	require.Len(t, plan.Roots, 1)
+	root := filepath.Join(t.TempDir(), "not-installed")
+	require.NoDirExists(root)
+
+	plan, err := openCodeUnitProvider(t, root).WatchPlan(t.Context())
+	require.NoError(err)
+	require.Len(plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 }
 
@@ -95,29 +102,32 @@ func TestOpenCodeWatchPlanNamesNoAbsentRootForAnUninstalledAgent(t *testing.T) {
 // slip past it while the storage unit walked the link's target anyway, leaving
 // the dir recursively watched through the link with no availability probe.
 func TestOpenCodeWatchPlanKeepsASymlinkedRootRecursive(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	base := t.TempDir()
 	target := filepath.Join(base, "target")
-	require.NoError(t, os.MkdirAll(filepath.Join(target, "storage"), 0o755))
+	require.NoError(os.MkdirAll(filepath.Join(target, "storage"), 0o755))
 	link := filepath.Join(base, "link")
 	if err := os.Symlink(target, link); err != nil {
 		t.Skipf("symlink creation unavailable: %v", err)
 	}
 
-	plan, err := openCodeUnitProvider(t, link).WatchPlan(context.Background())
-	require.NoError(t, err)
-	require.Len(t, plan.Roots, 1)
-	assert.Equal(t, link, plan.Roots[0].Path)
-	assert.True(t, plan.Roots[0].Recursive)
+	plan, err := openCodeUnitProvider(t, link).WatchPlan(t.Context())
+	require.NoError(err)
+	require.Len(plan.Roots, 1)
+	assert.Equal(link, plan.Roots[0].Path)
+	assert.True(plan.Roots[0].Recursive)
 
 	// The single unit must still claim its own paths, or the symlinked root
 	// would be watched and then classify nothing.
 	set := newOpenCodeFormatSourceSet(
 		[]string{link}, openCodeProviderSpecForAgent(AgentOpenCode), nil,
 	)
-	assert.True(t, set.unitScopeAllows(ChangedPathRequest{
+	assert.True(set.unitScopeAllows(ChangedPathRequest{
 		Path: filepath.Join(link, "storage", "session", "p", "s.json"), WatchRoot: link,
 	}))
-	assert.True(t, set.unitScopeAllows(ChangedPathRequest{
+	assert.True(set.unitScopeAllows(ChangedPathRequest{
 		Path: filepath.Join(link, "opencode.db-wal"), WatchRoot: link,
 	}))
 }
@@ -126,6 +136,8 @@ func TestOpenCodeWatchPlanKeepsASymlinkedRootRecursive(t *testing.T) {
 // that nest. Every containing root's units would otherwise claim the path, so
 // the deepest root owns it and the ancestor's units stand down.
 func TestOpenCodeNestedConfiguredRootsClaimEachPathOnce(t *testing.T) {
+	assert := assert.New(t)
+
 	outer := t.TempDir()
 	inner := filepath.Join(outer, "nested")
 	require.NoError(t, os.MkdirAll(filepath.Join(inner, "storage"), 0o755))
@@ -135,18 +147,18 @@ func TestOpenCodeNestedConfiguredRootsClaimEachPathOnce(t *testing.T) {
 	)
 	innerWAL := filepath.Join(inner, "opencode.db-wal")
 
-	assert.True(t, set.unitScopeAllows(ChangedPathRequest{
+	assert.True(set.unitScopeAllows(ChangedPathRequest{
 		Path: innerWAL, WatchRoot: inner,
 	}))
-	assert.False(t, set.unitScopeAllows(ChangedPathRequest{
+	assert.False(set.unitScopeAllows(ChangedPathRequest{
 		Path: innerWAL, WatchRoot: outer,
 	}), "the outer container unit must not re-run the inner root's fan-out")
 
 	innerSession := filepath.Join(inner, "storage", "session", "p", "s.json")
-	assert.True(t, set.unitScopeAllows(ChangedPathRequest{
+	assert.True(set.unitScopeAllows(ChangedPathRequest{
 		Path: innerSession, WatchRoot: filepath.Join(inner, "storage"),
 	}))
-	assert.False(t, set.unitScopeAllows(ChangedPathRequest{
+	assert.False(set.unitScopeAllows(ChangedPathRequest{
 		Path: innerSession, WatchRoot: outer,
 	}))
 }
@@ -157,41 +169,44 @@ func TestOpenCodeNestedConfiguredRootsClaimEachPathOnce(t *testing.T) {
 // container's session listing twice for one change. Storage paths are not
 // scoped this way; see TestOpenCodeStorageSessionSurvivesAStaleDispatchSet.
 func TestOpenCodeChangedPathClaimedByExactlyOneUnit(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	dbPath := filepath.Join(root, "opencode.db")
 	seedHybridSQLiteDB(t, dbPath, "ses_container")
 	storage := filepath.Join(root, "storage")
 	sessionDir := filepath.Join(storage, "session", "project")
-	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	require.NoError(os.MkdirAll(sessionDir, 0o755))
 	sessionPath := filepath.Join(sessionDir, "ses_unit.json")
-	require.NoError(t, os.WriteFile(sessionPath, []byte(`{"id":"ses_unit"}`), 0o600))
+	require.NoError(os.WriteFile(sessionPath, []byte(`{"id":"ses_unit"}`), 0o600))
 
 	provider := openCodeUnitProvider(t, root)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	walPath := filepath.Join(root, "opencode.db-wal")
-	require.NoError(t, os.WriteFile(walPath, make([]byte, 4096), 0o600))
+	require.NoError(os.WriteFile(walPath, make([]byte, 4096), 0o600))
 
 	fromStorageUnit, err := provider.SourcesForChangedPath(ctx, ChangedPathRequest{
 		Path: walPath, EventKind: "write", WatchRoot: storage,
 	})
-	require.NoError(t, err)
-	assert.Empty(t, fromStorageUnit,
+	require.NoError(err)
+	assert.Empty(fromStorageUnit,
 		"the storage unit must not claim a change outside its own subtree")
 
 	fromContainerUnit, err := provider.SourcesForChangedPath(ctx, ChangedPathRequest{
 		Path: walPath, EventKind: "write", WatchRoot: root,
 	})
-	require.NoError(t, err)
-	assert.NotEmpty(t, fromContainerUnit,
+	require.NoError(err)
+	assert.NotEmpty(fromContainerUnit,
 		"the container unit owns its database and WAL")
 
 	sessionFromStorage, err := provider.SourcesForChangedPath(ctx, ChangedPathRequest{
 		Path: sessionPath, EventKind: "write", WatchRoot: storage,
 	})
-	require.NoError(t, err)
-	require.Len(t, sessionFromStorage, 1)
-	assert.Equal(t, sessionPath, sessionFromStorage[0].DisplayPath)
+	require.NoError(err)
+	require.Len(sessionFromStorage, 1)
+	assert.Equal(sessionPath, sessionFromStorage[0].DisplayPath)
 }
 
 // TestOpenCodeStorageSessionSurvivesAStaleDispatchSet is the skew case. The
@@ -201,36 +216,38 @@ func TestOpenCodeChangedPathClaimedByExactlyOneUnit(t *testing.T) {
 // storage unit would leave them claimed by no unit at all until the next
 // daemon start.
 func TestOpenCodeStorageSessionSurvivesAStaleDispatchSet(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(root, "opencode.db"), []byte("db"), 0o600,
 	))
 	provider := openCodeUnitProvider(t, root)
 
 	// The dispatch set the engine caches: storage does not exist yet, so the
 	// plan is the single recursive unit at the configured root.
-	plan, err := provider.WatchPlan(context.Background())
-	require.NoError(t, err)
-	require.Len(t, plan.Roots, 1)
+	plan, err := provider.WatchPlan(t.Context())
+	require.NoError(err)
+	require.Len(plan.Roots, 1)
 	cachedWatchRoot := plan.Roots[0].Path
 
 	sessionDir := filepath.Join(root, "storage", "session", "project")
-	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	require.NoError(os.MkdirAll(sessionDir, 0o755))
 	sessionPath := filepath.Join(sessionDir, "ses_skew.json")
-	require.NoError(t, os.WriteFile(sessionPath, []byte(`{"id":"ses_skew"}`), 0o600))
+	require.NoError(os.WriteFile(sessionPath, []byte(`{"id":"ses_skew"}`), 0o600))
 
-	refreshed, err := provider.WatchPlan(context.Background())
-	require.NoError(t, err)
-	require.Len(t, refreshed.Roots, 2, "the live plan has split by now")
+	refreshed, err := provider.WatchPlan(t.Context())
+	require.NoError(err)
+	require.Len(refreshed.Roots, 2, "the live plan has split by now")
 
 	sources, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path: sessionPath, EventKind: "write", WatchRoot: cachedWatchRoot,
 		},
 	)
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	require.NoError(err)
+	require.Len(sources, 1)
 	assert.Equal(t, sessionPath, sources[0].DisplayPath)
 }
 
@@ -239,23 +256,25 @@ func TestOpenCodeStorageSessionSurvivesAStaleDispatchSet(t *testing.T) {
 // classification both send an empty WatchRoot, and gating them would drop
 // every source they resolve.
 func TestOpenCodeUnscopedChangedPathStaysUnfiltered(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(root, "opencode.db"), []byte("db"), 0o600,
 	))
 	sessionDir := filepath.Join(root, "storage", "session", "project")
-	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	require.NoError(os.MkdirAll(sessionDir, 0o755))
 	sessionPath := filepath.Join(sessionDir, "ses_unscoped.json")
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		sessionPath, []byte(`{"id":"ses_unscoped"}`), 0o600,
 	))
 
 	sources, err := openCodeUnitProvider(t, root).SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sessionPath, EventKind: "write"},
 	)
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	require.NoError(err)
+	require.Len(sources, 1)
 	assert.Equal(t, sessionPath, sources[0].DisplayPath)
 }
 

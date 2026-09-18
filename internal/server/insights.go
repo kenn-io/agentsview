@@ -130,7 +130,7 @@ func insightGenerateClientMessage(
 	agent string, err error,
 ) string {
 	if err == nil {
-		return fmt.Sprintf("%s generation failed", agent)
+		return agent + " generation failed"
 	}
 	msg := err.Error()
 	// Strip stderr dump after newline for the short client message; full details

@@ -2,7 +2,6 @@ package artifact
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"testing"
@@ -33,7 +32,7 @@ func BenchmarkWireEncode(b *testing.B) {
 				b.SetBytes(int64(len(body)))
 				b.ResetTimer()
 				for b.Loop() {
-					if err := EncodeWire(context.Background(), ref, bytes.NewReader(body), io.Discard); err != nil {
+					if err := EncodeWire(b.Context(), ref, bytes.NewReader(body), io.Discard); err != nil {
 						b.Fatal(err)
 					}
 				}
@@ -59,7 +58,7 @@ func BenchmarkWireDecode(b *testing.B) {
 					b.Fatal(err)
 				}
 				var encoded bytes.Buffer
-				if err := EncodeWire(context.Background(), ref, bytes.NewReader(body), &encoded); err != nil {
+				if err := EncodeWire(b.Context(), ref, bytes.NewReader(body), &encoded); err != nil {
 					b.Fatal(err)
 				}
 				limits := WireLimits{
@@ -70,7 +69,7 @@ func BenchmarkWireDecode(b *testing.B) {
 				b.SetBytes(int64(len(body)))
 				b.ResetTimer()
 				for b.Loop() {
-					if err := DecodeWire(context.Background(), wire,
+					if err := DecodeWire(b.Context(), wire,
 						bytes.NewReader(encoded.Bytes()), io.Discard, limits); err != nil {
 						b.Fatal(err)
 					}

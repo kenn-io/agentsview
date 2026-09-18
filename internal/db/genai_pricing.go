@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -92,7 +93,7 @@ func (db *DB) writeGenAIPricing(
 		return err
 	}
 	if document.Version == "" || len(document.Data) == 0 {
-		return fmt.Errorf("writing GenAI pricing document: missing version or data")
+		return errors.New("writing GenAI pricing document: missing version or data")
 	}
 	if document.Source != GenAIPricingSourceEmbedded &&
 		document.Source != GenAIPricingSourceFetched {

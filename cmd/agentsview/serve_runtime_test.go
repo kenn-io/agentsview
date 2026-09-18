@@ -26,18 +26,21 @@ func testBackendReadyConfig(ts *httptest.Server, token string) config.Config {
 
 func heldLoopbackPort(t *testing.T) (net.Listener, int) {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	port := listener.Addr().(*net.TCPAddr).Port
 	return listener, port
 }
 
 func TestPrepareServeRuntimeConfigExplicitPortCollision(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	listener, port := heldLoopbackPort(t)
 	defer listener.Close()
 	_ = testDataDir(t)
 	cmd := newServeCommand()
-	require.NoError(t, cmd.Flags().Parse([]string{
+	require.NoError(cmd.Flags().Parse([]string{
 		"--host", "127.0.0.1", "--port", strconv.Itoa(port),
 	}))
 	publicURL := fmt.Sprintf("https://viewer.example.test:%d/archive/", port)
@@ -53,13 +56,13 @@ func TestPrepareServeRuntimeConfigExplicitPortCollision(t *testing.T) {
 		})
 	})
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), fmt.Sprintf("requested port %d", port))
-	assert.Contains(t, err.Error(), "127.0.0.1")
-	assert.Equal(t, cfg, got)
-	assert.NotContains(t, output, "in use, using")
-	assert.Equal(t, publicURL, got.PublicURL)
-	assert.Equal(t, []string{publicURL}, got.PublicOrigins)
+	require.Error(err)
+	assert.Contains(err.Error(), fmt.Sprintf("requested port %d", port))
+	assert.Contains(err.Error(), "127.0.0.1")
+	assert.Equal(cfg, got)
+	assert.NotContains(output, "in use, using")
+	assert.Equal(publicURL, got.PublicURL)
+	assert.Equal([]string{publicURL}, got.PublicOrigins)
 }
 
 func TestPrepareServeRuntimeConfigPortPolicy(t *testing.T) {
@@ -145,6 +148,9 @@ func TestPrepareServeRuntimeConfigPortPolicy(t *testing.T) {
 }
 
 func TestPrepareRunServeRuntimeConfigRestartPreservesConfiguredURLRewrite(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	listener, runtimePort := heldLoopbackPort(t)
 	defer listener.Close()
 	configuredPort := runtimePort - 1
@@ -156,23 +162,23 @@ func TestPrepareRunServeRuntimeConfigRestartPreservesConfiguredURLRewrite(t *tes
 		PublicURL:     publicURL,
 		PublicOrigins: []string{publicURL},
 	}, runtimePort, nil)
-	require.NoError(t, err)
-	assert.NotEqual(t, runtimePort, got.Port)
-	assert.False(t, got.PortExplicit)
-	assert.Equal(t, configuredPort, rtOpts.RequestedPort)
-	assert.Equal(t, fmt.Sprintf(
+	require.NoError(err)
+	assert.NotEqual(runtimePort, got.Port)
+	assert.False(got.PortExplicit)
+	assert.Equal(configuredPort, rtOpts.RequestedPort)
+	assert.Equal(fmt.Sprintf(
 		"https://viewer.example.test:%d", got.Port,
 	), got.PublicURL)
-	assert.Equal(t, []string{got.PublicURL}, got.PublicOrigins)
+	assert.Equal([]string{got.PublicURL}, got.PublicOrigins)
 
 	srv := server.New(got, nil, nil)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	runtime, err := startServerWithOptionalCaddy(ctx, got, srv, rtOpts)
-	require.NoError(t, err)
-	assert.Equal(t, got.PublicURL, runtime.PublicURL)
-	require.NoError(t, srv.Shutdown(context.Background()))
-	require.ErrorIs(t, <-runtime.ServeErrCh, http.ErrServerClosed)
+	require.NoError(err)
+	assert.Equal(got.PublicURL, runtime.PublicURL)
+	require.NoError(srv.Shutdown(t.Context()))
+	require.ErrorIs(<-runtime.ServeErrCh, http.ErrServerClosed)
 }
 
 func TestWaitForBackendReadyRejectsUnrelatedHTTPListener(t *testing.T) {
@@ -189,7 +195,7 @@ func TestWaitForBackendReadyRejectsUnrelatedHTTPListener(t *testing.T) {
 	defer ts.Close()
 
 	err := waitForBackendReady(
-		context.Background(), testBackendReadyConfig(ts, "persistent-token"),
+		t.Context(), testBackendReadyConfig(ts, "persistent-token"),
 		server.New(config.Config{}, nil, nil), "", 300*time.Millisecond, nil,
 	)
 	require.Error(t, err,
@@ -212,7 +218,7 @@ func TestWaitForBackendReadyRejectsCounterfeitStartupProof(t *testing.T) {
 	defer ts.Close()
 
 	err := waitForBackendReady(
-		context.Background(), testBackendReadyConfig(ts, ""),
+		t.Context(), testBackendReadyConfig(ts, ""),
 		server.New(config.Config{}, nil, nil), "", 300*time.Millisecond, nil,
 	)
 	require.Error(t, err,
@@ -229,7 +235,7 @@ func TestWaitForBackendReadyRejectsRedirectToServingServer(t *testing.T) {
 	defer redirector.Close()
 
 	err := waitForBackendReady(
-		context.Background(), testBackendReadyConfig(redirector, ""),
+		t.Context(), testBackendReadyConfig(redirector, ""),
 		srv, "", 300*time.Millisecond, nil,
 	)
 	require.Error(t, err,
@@ -246,7 +252,7 @@ func TestWaitForBackendReadyAcceptsAuthenticatedServerStartupProof(t *testing.T)
 	defer ts.Close()
 
 	err := waitForBackendReady(
-		context.Background(), testBackendReadyConfig(ts, token),
+		t.Context(), testBackendReadyConfig(ts, token),
 		srv, "", 2*time.Second, nil,
 	)
 	require.NoError(t, err,
@@ -259,32 +265,34 @@ func TestWaitForBackendReadyAcceptsAuthenticatedServerStartupProof(t *testing.T)
 }
 
 func TestStartServerWithOptionalCaddyWaitsForBasePathBackend(t *testing.T) {
+	require := require.New(t)
+
 	port, err := server.FindAvailablePort("127.0.0.1", 0)
-	require.NoError(t, err)
+	require.NoError(err)
 	cfg := config.Config{
 		Host: "127.0.0.1",
 		Port: port,
 	}
 	srv := server.New(cfg, nil, nil, server.WithBasePath("/viewer/"))
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 
 	runtime, err := startServerWithOptionalCaddy(
 		ctx, cfg, srv, serveRuntimeOptions{Mode: "test", BasePath: "/viewer/"},
 	)
-	require.NoError(t, err,
+	require.NoError(err,
 		"a server mounted below a base path must satisfy backend readiness")
 
-	require.Equal(t, fmt.Sprintf("http://127.0.0.1:%d/viewer", port), runtime.PublicURL)
+	require.Equal(fmt.Sprintf("http://127.0.0.1:%d/viewer", port), runtime.PublicURL)
 	resp, err := http.Get(runtime.PublicURL + "/api/ping")
-	require.NoError(t, err)
+	require.NoError(err)
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.Equal(http.StatusOK, resp.StatusCode)
 
 	shutdownCtx, shutdownCancel := context.WithTimeout(
-		context.Background(), time.Second,
+		t.Context(), time.Second,
 	)
 	defer shutdownCancel()
-	require.NoError(t, srv.Shutdown(shutdownCtx))
-	require.ErrorIs(t, <-runtime.ServeErrCh, http.ErrServerClosed)
+	require.NoError(srv.Shutdown(shutdownCtx))
+	require.ErrorIs(<-runtime.ServeErrCh, http.ErrServerClosed)
 }

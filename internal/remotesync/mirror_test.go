@@ -31,6 +31,8 @@ func writeMirrorFile(t *testing.T, root, remotePath, content string, mtime time.
 }
 
 func TestMirrorDiffFetchesNewChangedAndDeletesStale(t *testing.T) {
+	assert := assert.New(t)
+
 	root := t.TempDir()
 	base := time.Date(2026, 7, 8, 10, 0, 0, 111222333, time.UTC)
 	unchanged := "/home/u/.claude/projects/p/unchanged.jsonl"
@@ -49,13 +51,13 @@ func TestMirrorDiffFetchesNewChangedAndDeletesStale(t *testing.T) {
 	}}
 	delta, err := MirrorDiff(root, m)
 	require.NoError(t, err)
-	assert.Equal(t, []string{
+	assert.Equal([]string{
 		changedSize,
 		"/home/u/.claude/projects/p/new.jsonl",
 		changedMtime,
 	}, delta.Fetch)
-	assert.Equal(t, []string{staleLocal}, delta.Deletions)
-	assert.Equal(t, 4, delta.Total)
+	assert.Equal([]string{staleLocal}, delta.Deletions)
+	assert.Equal(4, delta.Total)
 }
 
 func TestMirrorDiffTruncatesMtimeToMicroseconds(t *testing.T) {
@@ -85,20 +87,25 @@ func TestMirrorDiffEmptyMirrorFetchesEverything(t *testing.T) {
 }
 
 func TestApplyMirrorDeletionsConfinedToRoot(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	outside := filepath.Join(t.TempDir(), "victim.txt")
-	require.NoError(t, os.WriteFile(outside, []byte("x"), 0o644))
+	require.NoError(os.WriteFile(outside, []byte("x"), 0o644))
 	err := ApplyMirrorDeletions(root, []string{outside})
-	require.Error(t, err)
-	assert.FileExists(t, outside)
+	require.Error(err)
+	assert.FileExists(outside)
 
 	inside := writeMirrorFile(t, root, "/home/u/.claude/projects/p/s.jsonl", "x",
 		time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC))
-	require.NoError(t, ApplyMirrorDeletions(root, []string{inside}))
-	assert.NoFileExists(t, inside)
+	require.NoError(ApplyMirrorDeletions(root, []string{inside}))
+	assert.NoFileExists(inside)
 }
 
 func TestApplyMirrorDeletionsPrunesEmptyDirs(t *testing.T) {
+	assert := assert.New(t)
+
 	root := t.TempDir()
 	mtime := time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC)
 	inside := writeMirrorFile(t,
@@ -108,72 +115,79 @@ func TestApplyMirrorDeletionsPrunesEmptyDirs(t *testing.T) {
 
 	require.NoError(t, ApplyMirrorDeletions(root, []string{inside}))
 
-	assert.NoDirExists(t, filepath.Dir(inside))
-	assert.NoDirExists(t, filepath.Dir(filepath.Dir(inside)))
-	assert.FileExists(t, sibling)
-	assert.DirExists(t, filepath.Dir(sibling))
+	assert.NoDirExists(filepath.Dir(inside))
+	assert.NoDirExists(filepath.Dir(filepath.Dir(inside)))
+	assert.FileExists(sibling)
+	assert.DirExists(filepath.Dir(sibling))
 }
 
 func TestAcquireMirrorLockIsExclusive(t *testing.T) {
+	require := require.New(t)
+
 	root := filepath.Join(t.TempDir(), "mirror")
-	lock, err := AcquireMirrorLock(context.Background(), root)
-	require.NoError(t, err)
+	lock, err := AcquireMirrorLock(t.Context(), root)
+	require.NoError(err)
 	t.Cleanup(func() { _ = lock.Close() })
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 	_, err = AcquireMirrorLock(ctx, root)
-	require.Error(t, err)
+	require.Error(err)
 
-	require.NoError(t, lock.Close())
-	second, err := AcquireMirrorLock(context.Background(), root)
-	require.NoError(t, err)
-	require.NoError(t, second.Close())
+	require.NoError(lock.Close())
+	second, err := AcquireMirrorLock(t.Context(), root)
+	require.NoError(err)
+	require.NoError(second.Close())
 }
 
 func TestAcquireMirrorLockCanonicalizesSymlinkedParent(t *testing.T) {
+	require := require.New(t)
+
 	base := t.TempDir()
 	realParent := filepath.Join(base, "real")
-	require.NoError(t, os.MkdirAll(realParent, 0o755))
+	require.NoError(os.MkdirAll(realParent, 0o755))
 	linkParent := filepath.Join(base, "link")
 	if err := os.Symlink(realParent, linkParent); err != nil {
 		t.Skipf("symlinks unavailable: %v", err)
 	}
 	realRoot := filepath.Join(realParent, "data", "remote-mirrors", "shared")
 	aliasRoot := filepath.Join(linkParent, "data", "remote-mirrors", "shared")
-	lock, err := AcquireMirrorLock(context.Background(), realRoot)
-	require.NoError(t, err)
+	lock, err := AcquireMirrorLock(t.Context(), realRoot)
+	require.NoError(err)
 	t.Cleanup(func() { _ = lock.Close() })
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	aliasLock, err := AcquireMirrorLock(ctx, aliasRoot)
 	cancel()
 	if aliasLock != nil {
-		require.NoError(t, aliasLock.Close())
+		require.NoError(aliasLock.Close())
 	}
-	assert.Error(t, err, "symlink aliases must contend on one canonical lock")
+	require.Error(err, "symlink aliases must contend on one canonical lock")
 
-	require.NoError(t, lock.Close())
-	aliasLock, err = AcquireMirrorLock(context.Background(), aliasRoot)
-	require.NoError(t, err)
-	require.NoError(t, aliasLock.Close())
+	require.NoError(lock.Close())
+	aliasLock, err = AcquireMirrorLock(t.Context(), aliasRoot)
+	require.NoError(err)
+	require.NoError(aliasLock.Close())
 }
 
 func TestRemoveMirrorTypeConflictsRemovesDirAtFetchPath(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	wedged := "/archives/claude/projects/p/s.jsonl"
 	local, err := safeRemappedRemotePath(root, wedged)
-	require.NoError(t, err)
-	require.NoError(t, os.MkdirAll(local, 0o755))
+	require.NoError(err)
+	require.NoError(os.MkdirAll(local, 0o755))
 
 	kept := writeMirrorFile(t, root, "/home/u/.claude/projects/p/other.jsonl",
 		"x", time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC))
 
-	require.NoError(t, RemoveMirrorTypeConflicts(root, []string{
+	require.NoError(RemoveMirrorTypeConflicts(root, []string{
 		wedged,
 		"/home/u/.claude/projects/p/other.jsonl",
 		"/home/u/.claude/projects/p/absent.jsonl",
 	}))
-	assert.NoDirExists(t, local)
-	assert.FileExists(t, kept)
+	assert.NoDirExists(local)
+	assert.FileExists(kept)
 }

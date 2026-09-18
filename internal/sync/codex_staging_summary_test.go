@@ -1,7 +1,7 @@
 package sync
 
 import (
-	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -21,38 +21,40 @@ func TestStagedSingleEventSummaryThenAdditionalEvent(t *testing.T) {
 		{"sanitized", "ok\x00", 2, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			require := require.New(t)
+
 			sink, err := newCodexStagingSink(t.TempDir(), nil)
-			require.NoError(t, err)
-			defer func() { require.NoError(t, sink.Close()) }()
+			require.NoError(err)
+			defer func() { require.NoError(sink.Close()) }()
 			sink.AppendMessage(parser.ParsedMessage{ToolCalls: []parser.ParsedToolCall{{
 				ToolUseID: "call", ToolName: "exec_command", Category: "Bash",
 			}}})
 			sink.AppendToolResultEvent("call", nil, parser.ParsedToolResultEvent{
 				Source: "function_call_output", Content: tc.content,
 			})
-			require.NoError(t, sink.Err())
+			require.NoError(sink.Err())
 			key := db.StagedToolCallKey("call", 0)
 			summary, length, err := sink.ResolveSummary(t.Context(), key)
-			require.NoError(t, err)
-			require.Empty(t, summary)
-			require.Equal(t, tc.length, length)
-			require.Equal(t, tc.failure, sink.ContentFailures()[key])
+			require.NoError(err)
+			require.Empty(summary)
+			require.Equal(tc.length, length)
+			require.Equal(tc.failure, sink.ContentFailures()[key])
 			sink.AppendToolResultEvent("call", nil, parser.ParsedToolResultEvent{
 				Source: "function_call_output", Content: "done",
 			})
-			require.NoError(t, sink.Err())
+			require.NoError(sink.Err())
 			summary, length, err = sink.ResolveSummary(t.Context(), key)
-			require.NoError(t, err)
-			require.Equal(t, "done", summary)
-			require.Equal(t, 4, length)
-			require.False(t, sink.ContentFailures()[key])
+			require.NoError(err)
+			require.Equal("done", summary)
+			require.Equal(4, length)
+			require.False(sink.ContentFailures()[key])
 		})
 	}
 }
 
 func BenchmarkStagedSingleEventSummary(b *testing.B) {
 	for _, size := range []int{1024, 1 << 20} {
-		b.Run(fmt.Sprint(size), func(b *testing.B) {
+		b.Run(strconv.Itoa(size), func(b *testing.B) {
 			sink, err := newCodexStagingSink(b.TempDir(), nil)
 			require.NoError(b, err)
 			defer func() { require.NoError(b, sink.Close()) }()

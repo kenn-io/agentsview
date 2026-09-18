@@ -14,6 +14,9 @@ import (
 )
 
 func TestCheckpointFloorBootstrapsFromLiveAndQuarantinedNodes(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	_, store := newTestDocbankStore(t, docbank.Config{})
@@ -24,15 +27,15 @@ func TestCheckpointFloorBootstrapsFromLiveAndQuarantinedNodes(t *testing.T) {
 		createCheckpointBody(t, store, sequence, body)
 	}
 	quarantinedName := fmt.Sprintf("cp-%010d.json", checkpointFloorPageSize+2)
-	require.NoError(t, store.Quarantine(t.Context(),
+	require.NoError(store.Quarantine(t.Context(),
 		requireContractRef(t, origin, KindCheckpoints, quarantinedName),
 		"test quarantine"))
 
 	sequence, err := reserveCheckpointSequenceFromStore(
 		t.Context(), database, store, origin,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, 131, sequence)
+	require.NoError(err)
+	assert.Equal(131, sequence)
 
 	// A fresh vault may report no sequence after reset or quarantine expiry, but
 	// the SQLite floor remains authoritative and may never be lowered.
@@ -40,14 +43,17 @@ func TestCheckpointFloorBootstrapsFromLiveAndQuarantinedNodes(t *testing.T) {
 	sequence, err = reserveCheckpointSequenceFromStore(
 		t.Context(), database, emptyStore, origin,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, 132, sequence)
+	require.NoError(err)
+	assert.Equal(132, sequence)
 
 	// If both SQLite and the vault are lost simultaneously, local prevention is
 	// impossible; peer common-checkpoint conflict handling is the final backstop.
 }
 
 func TestCheckpointFloorTraversesStoreOnlyBeforeBootstrap(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	database := testDB(t)
@@ -56,14 +62,14 @@ func TestCheckpointFloorTraversesStoreOnlyBeforeBootstrap(t *testing.T) {
 	sequence, err := reserveCheckpointSequenceFromStore(
 		t.Context(), database, store, contractOrigin,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, 41, sequence)
+	require.NoError(err)
+	assert.Equal(41, sequence)
 	sequence, err = reserveCheckpointSequenceFromStore(
 		t.Context(), database, store, contractOrigin,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, 42, sequence)
-	assert.Equal(t, 1, store.calls, "durable floor avoids repeated vault traversal")
+	require.NoError(err)
+	assert.Equal(42, sequence)
+	assert.Equal(1, store.calls, "durable floor avoids repeated vault traversal")
 }
 
 type countingCheckpointFloorStore struct {
@@ -78,6 +84,8 @@ func (s *countingCheckpointFloorStore) checkpointFloor(context.Context, string) 
 }
 
 func TestExportCheckpointBootstrapReadsLargeSessionMap(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 
 	sessions := make(map[string]string, 2000)
@@ -87,12 +95,12 @@ func TestExportCheckpointBootstrapReadsLargeSessionMap(t *testing.T) {
 	body, err := canonicalJSON(checkpoint{
 		Version: checkpointFormatVersion, Origin: contractOrigin, Sequence: 42, Sessions: sessions,
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	head, err := decodeCanonicalCheckpointHead(strings.NewReader(string(body)), contractOrigin,
 		"cp-0000000042.json", identityForBytes(t, body))
-	require.NoError(t, err)
+	require.NoError(err)
 	mapBytes, err := canonicalJSON(sessions)
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Equal(t, hashHex(mapBytes), head.SessionMapSHA256)
 }
 
@@ -114,6 +122,9 @@ func TestExportCheckpointBootstrapSkipsNoncanonicalJSON(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			database := testExportDB(t)
 			store := newTestArtifactStore(t)
 			createCheckpointBody(t, store, 1, []byte(tt.body))
@@ -122,20 +133,23 @@ func TestExportCheckpointBootstrapSkipsNoncanonicalJSON(t *testing.T) {
 				t.Context(), database, store,
 				ExportOptions{Origin: contractOrigin},
 			)
-			require.NoError(t, err)
-			assert.True(t, result.CheckpointCreated)
-			assert.Equal(t, 2, result.CheckpointSequence)
+			require.NoError(err)
+			assert.True(result.CheckpointCreated)
+			assert.Equal(2, result.CheckpointSequence)
 			head, ok, err := database.GetArtifactCheckpointHead(
 				t.Context(), contractOrigin,
 			)
-			require.NoError(t, err)
-			require.True(t, ok)
-			assert.Equal(t, 2, head.Sequence)
+			require.NoError(err)
+			require.True(ok)
+			assert.Equal(2, head.Sequence)
 		})
 	}
 }
 
 func TestExportCheckpointBootstrapSkipsMalformedCheckpointBeforeEOF(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	database := testExportDB(t)
@@ -147,15 +161,15 @@ func TestExportCheckpointBootstrapSkipsMalformedCheckpointBeforeEOF(t *testing.T
 		t.Context(), database, store,
 		ExportOptions{Origin: contractOrigin},
 	)
-	require.NoError(t, err)
-	assert.True(t, result.CheckpointCreated)
-	assert.Equal(t, 2, result.CheckpointSequence)
+	require.NoError(err)
+	assert.True(result.CheckpointCreated)
+	assert.Equal(2, result.CheckpointSequence)
 	head, ok, err := database.GetArtifactCheckpointHead(
 		t.Context(), contractOrigin,
 	)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, 2, head.Sequence)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(2, head.Sequence)
 }
 
 func TestExportCheckpointBootstrapDefersOnlyValidFutureCheckpoint(t *testing.T) {
@@ -218,6 +232,9 @@ func TestExportCheckpointBootstrapDefersOnlyValidFutureCheckpoint(t *testing.T) 
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			database := testExportDB(t)
 			baseStore := newTestArtifactStore(t)
 			createCheckpointBody(t, baseStore, 1, []byte(tt.body))
@@ -234,25 +251,25 @@ func TestExportCheckpointBootstrapDefersOnlyValidFutureCheckpoint(t *testing.T) 
 				ExportOptions{Origin: contractOrigin},
 			)
 			if tt.wantFuture {
-				require.ErrorIs(t, err, errFutureArtifactVersion)
-				assert.False(t, result.CheckpointCreated)
+				require.ErrorIs(err, errFutureArtifactVersion)
+				assert.False(result.CheckpointCreated)
 				page, listErr := firstStoreEntryPage(
 					t.Context(), baseStore, contractOrigin, KindCheckpoints, 10,
 				)
-				require.NoError(t, listErr)
-				assert.Len(t, page.Items, 1)
+				require.NoError(listErr)
+				assert.Len(page.Items, 1)
 				return
 			}
 
-			require.NoError(t, err)
-			assert.True(t, result.CheckpointCreated)
-			assert.Equal(t, 2, result.CheckpointSequence)
+			require.NoError(err)
+			assert.True(result.CheckpointCreated)
+			assert.Equal(2, result.CheckpointSequence)
 			head, ok, headErr := database.GetArtifactCheckpointHead(
 				t.Context(), contractOrigin,
 			)
-			require.NoError(t, headErr)
-			require.True(t, ok)
-			assert.Equal(t, 2, head.Sequence)
+			require.NoError(headErr)
+			require.True(ok)
+			assert.Equal(2, head.Sequence)
 		})
 	}
 }

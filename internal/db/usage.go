@@ -347,14 +347,14 @@ var usageLocationCache sync.Map
 
 func (f UsageFilter) location() *time.Location {
 	if f.Timezone == "" {
-		return time.Local
+		return time.Local //nolint:forbidigo // Usage reports group UTC timestamps into local calendar dates when no timezone is selected.
 	}
 	if cached, ok := usageLocationCache.Load(f.Timezone); ok {
 		return cached.(*time.Location)
 	}
 	loc, err := time.LoadLocation(f.Timezone)
 	if err != nil {
-		return time.Local
+		return time.Local //nolint:forbidigo // Usage reports group UTC timestamps into local calendar dates when no timezone is selected.
 	}
 	actual, _ := usageLocationCache.LoadOrStore(f.Timezone, loc)
 	return actual.(*time.Location)

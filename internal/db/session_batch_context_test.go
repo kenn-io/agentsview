@@ -40,6 +40,9 @@ func (ctx *cancelAfterChecksContext) Err() error {
 func (ctx *cancelAfterChecksContext) Value(any) any { return nil }
 
 func TestWriteSessionBatchContextStopsDuringMessagePreparation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	messages := make([]Message, 100)
 	for i := range messages {
@@ -54,14 +57,17 @@ func TestWriteSessionBatchContextStopsDuringMessagePreparation(t *testing.T) {
 		}},
 	)
 
-	require.ErrorIs(t, err, context.Canceled)
-	assert.Zero(t, result.WrittenSessions)
+	require.ErrorIs(err, context.Canceled)
+	assert.Zero(result.WrittenSessions)
 	session, readErr := database.GetSessionFull(t.Context(), "message-cancel")
-	require.NoError(t, readErr)
-	assert.Nil(t, session)
+	require.NoError(readErr)
+	assert.Nil(session)
 }
 
 func TestWriteSessionBatchContextStopsDuringUsagePreparation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	events := make([]UsageEvent, 100)
 	for i := range events {
@@ -77,16 +83,19 @@ func TestWriteSessionBatchContextStopsDuringUsagePreparation(t *testing.T) {
 		}},
 	)
 
-	require.ErrorIs(t, err, context.Canceled)
-	assert.Zero(t, result.WrittenSessions)
+	require.ErrorIs(err, context.Canceled)
+	assert.Zero(result.WrittenSessions)
 	session, readErr := database.GetSessionFull(t.Context(), "usage-cancel")
-	require.NoError(t, readErr)
-	assert.Nil(t, session)
+	require.NoError(readErr)
+	assert.Nil(session)
 }
 
 func TestWriteSessionBatchKeepsMessageAggregatePrecedenceAfterSanitization(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	const sessionID = "aggregate-precedence"
 	overLimit := MaxPlausibleTokens + 1
@@ -116,14 +125,14 @@ func TestWriteSessionBatchKeepsMessageAggregatePrecedenceAfterSanitization(
 			DataVersion: CurrentDataVersion(),
 		}},
 	)
-	require.NoError(t, err)
-	assert.Equal(t, 1, result.WrittenSessions)
+	require.NoError(err)
+	assert.Equal(1, result.WrittenSessions)
 
 	stored, err := database.GetSessionFull(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	assert.Equal(t, MaxPlausibleTokens, stored.TotalOutputTokens)
-	assert.True(t, stored.HasTotalOutputTokens)
-	assert.Equal(t, MaxPlausibleTokens, stored.PeakContextTokens)
-	assert.True(t, stored.HasPeakContextTokens)
+	require.NoError(err)
+	require.NotNil(stored)
+	assert.Equal(MaxPlausibleTokens, stored.TotalOutputTokens)
+	assert.True(stored.HasTotalOutputTokens)
+	assert.Equal(MaxPlausibleTokens, stored.PeakContextTokens)
+	assert.True(stored.HasPeakContextTokens)
 }

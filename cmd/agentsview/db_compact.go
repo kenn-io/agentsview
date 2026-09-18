@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,7 +41,7 @@ func newDBCompactCommand() *cobra.Command {
 			ctx := cmd.Context()
 			jsonOutput := outputFormat(cmd) == "json"
 			if jsonOutput && !yes && !dryRun {
-				return fmt.Errorf("--format json requires --yes for db compact")
+				return errors.New("--format json requires --yes for db compact")
 			}
 			cfg, err := config.LoadMinimal()
 			if err != nil {
@@ -152,9 +153,7 @@ func runDBCompact(
 func decideCompactRoute(tr transport, stagingDir string) (delegate bool, err error) {
 	if tr.Mode == transportHTTP && !tr.ReadOnly {
 		if stagingDir != "" {
-			return false, fmt.Errorf(
-				"--staging-dir requires direct archive access; stop the daemon before using it",
-			)
+			return false, errors.New("--staging-dir requires direct archive access; stop the daemon before using it")
 		}
 		return true, nil
 	}

@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,6 +24,9 @@ func writeSyncPositAssistantFile(t *testing.T, path, content string) {
 // provider fingerprint — both its mtime (the incremental cutoff signal) and
 // its content hash (the skip gate).
 func TestSyncPositAssistantSidecarAppendResyncsWithoutWatchEvents(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	convID := "11111111-1111-4111-8111-111111111111"
 	convDir := filepath.Join(root, "ws1", convID)
@@ -58,9 +60,9 @@ func TestSyncPositAssistantSidecarAppendResyncsWithoutWatchEvents(t *testing.T) 
 
 	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
 	sessionID := "posit-assistant:" + convID
-	usage, err := database.GetUsageEvents(context.Background(), sessionID)
-	require.NoError(t, err)
-	require.Empty(t, usage, "no sidecar yet, no usage events")
+	usage, err := database.GetUsageEvents(t.Context(), sessionID)
+	require.NoError(err)
+	require.Empty(usage, "no sidecar yet, no usage events")
 
 	// Sidecar-only change: no other file is touched, so the session resyncs
 	// only if the sidecar participates in the provider fingerprint.
@@ -69,11 +71,11 @@ func TestSyncPositAssistantSidecarAppendResyncsWithoutWatchEvents(t *testing.T) 
 		`{"type":"usage","kind":"keepalive","timestamp":1735693200000,"anchorMessageId":"n1","providerId":"anthropic","modelId":"claude-sonnet-4-6","inputTokens":2,"outputTokens":1,"totalTokens":24642,"cacheReadTokens":24639,"cacheWriteTokens":0}`+"\n")
 
 	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
-	usage, err = database.GetUsageEvents(context.Background(), sessionID)
-	require.NoError(t, err)
-	require.Len(t, usage, 1,
+	usage, err = database.GetUsageEvents(t.Context(), sessionID)
+	require.NoError(err)
+	require.Len(usage, 1,
 		"a sidecar-only append must resync the session without a watch event")
-	assert.Equal(t, "posit-assistant-keepalive", usage[0].Source)
-	assert.Equal(t, 24639, usage[0].CacheReadInputTokens)
-	assert.Equal(t, 2, usage[0].InputTokens)
+	assert.Equal("posit-assistant-keepalive", usage[0].Source)
+	assert.Equal(24639, usage[0].CacheReadInputTokens)
+	assert.Equal(2, usage[0].InputTokens)
 }

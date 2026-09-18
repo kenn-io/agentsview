@@ -169,31 +169,33 @@ func TestQuoteIdentifier(t *testing.T) {
 }
 
 func TestPGTargetFingerprint(t *testing.T) {
+	parentAssert := assert.New(t)
+
 	base, err := pgTargetFingerprint(
 		"postgres://alice:secret@db.example.com:5432/agents?sslmode=require&application_name=agentsview",
 		"agentsview",
 	)
-	assert.NoError(t, err)
+	parentAssert.NoError(err)
 
 	samePasswordChanged, err := pgTargetFingerprint(
 		"postgres://alice:new-secret@db.example.com:5432/agents?sslmode=require&application_name=other",
 		"agentsview",
 	)
-	assert.NoError(t, err)
-	assert.Equal(t, base, samePasswordChanged)
+	parentAssert.NoError(err)
+	parentAssert.Equal(base, samePasswordChanged)
 
 	baseWithFallback, err := pgTargetFingerprint(
 		"postgres://alice:secret@db.example.com:5432/agents?sslmode=require&application_name=agentsview&host=db.example.com,standby-a.example.com&port=5432,6432",
 		"agentsview",
 	)
-	assert.NoError(t, err)
+	parentAssert.NoError(err)
 
 	sameFallbackNoiseChanged, err := pgTargetFingerprint(
 		"postgres://alice:new-secret@db.example.com:5432/agents?sslmode=require&application_name=other&host=DB.EXAMPLE.COM,standby-a.example.com&port=5432,6432",
 		"agentsview",
 	)
-	assert.NoError(t, err)
-	assert.Equal(t, baseWithFallback, sameFallbackNoiseChanged)
+	parentAssert.NoError(err)
+	parentAssert.Equal(baseWithFallback, sameFallbackNoiseChanged)
 
 	cases := []struct {
 		name   string

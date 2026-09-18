@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -12,7 +11,7 @@ import (
 // listSortedIDs returns the session IDs in the order ListSessions returns them.
 func listSortedIDs(t *testing.T, d *DB, f SessionFilter) []string {
 	t.Helper()
-	page, err := d.ListSessions(context.Background(), f)
+	page, err := d.ListSessions(t.Context(), f)
 	require.NoError(t, err, "ListSessions")
 	ids := make([]string, len(page.Sessions))
 	for i, s := range page.Sessions {
@@ -266,20 +265,22 @@ func TestListSessions_SortPaginationWalk(t *testing.T) {
 
 	for _, desc := range []bool{false, true} {
 		t.Run(fmt.Sprintf("desc=%v", desc), func(t *testing.T) {
+			require := require.New(t)
+
 			var got []string
 			seen := map[string]bool{}
 			cursor := ""
 			for pages := 0; ; pages++ {
-				require.LessOrEqual(t, pages, n+1, "pagination did not terminate")
-				page, err := d.ListSessions(context.Background(), SessionFilter{
+				require.LessOrEqual(pages, n+1, "pagination did not terminate")
+				page, err := d.ListSessions(t.Context(), SessionFilter{
 					Limit:      2,
 					OrderBy:    "messages",
 					Descending: Ptr(desc),
 					Cursor:     cursor,
 				})
-				require.NoError(t, err, "ListSessions page")
+				require.NoError(err, "ListSessions page")
 				for _, s := range page.Sessions {
-					require.False(t, seen[s.ID], "duplicate %s", s.ID)
+					require.False(seen[s.ID], "duplicate %s", s.ID)
 					seen[s.ID] = true
 					got = append(got, s.ID)
 				}
@@ -305,6 +306,8 @@ func TestListSessions_SortPaginationWalk(t *testing.T) {
 // rows last in both directions and that keyset pagination crosses the NULL
 // boundary without dropping or duplicating rows.
 func TestListSessions_SortNullsLast(t *testing.T) {
+	assert := assert.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "h10", "p")
 	updateSignals(t, d, "h10", SessionSignalUpdate{HealthScore: Ptr(10)})
@@ -314,13 +317,13 @@ func TestListSessions_SortNullsLast(t *testing.T) {
 	insertSession(t, d, "hnull-b", "p") // health_score NULL
 
 	// Ascending: non-null ascending, NULLs last (id ascending among NULLs).
-	assert.Equal(t, []string{"h10", "h90", "hnull-a", "hnull-b"},
+	assert.Equal([]string{"h10", "h90", "hnull-a", "hnull-b"},
 		listSortedIDs(t, d, filterWith(func(f *SessionFilter) {
 			f.OrderBy = "health"
 			f.Descending = Ptr(false)
 		})))
 	// Descending: non-null descending, NULLs still last (id descending among NULLs).
-	assert.Equal(t, []string{"h90", "h10", "hnull-b", "hnull-a"},
+	assert.Equal([]string{"h90", "h10", "hnull-b", "hnull-a"},
 		listSortedIDs(t, d, filterWith(func(f *SessionFilter) {
 			f.OrderBy = "health"
 			f.Descending = Ptr(true)
@@ -331,7 +334,7 @@ func TestListSessions_SortNullsLast(t *testing.T) {
 	var got []string
 	cursor := ""
 	for {
-		page, err := d.ListSessions(context.Background(), SessionFilter{
+		page, err := d.ListSessions(t.Context(), SessionFilter{
 			Limit: 1, OrderBy: "health", Descending: Ptr(false), Cursor: cursor,
 		})
 		require.NoError(t, err)
@@ -343,12 +346,14 @@ func TestListSessions_SortNullsLast(t *testing.T) {
 		}
 		cursor = page.NextCursor
 	}
-	assert.Equal(t, []string{"h10", "h90", "hnull-a", "hnull-b"}, got, "paginated null walk")
+	assert.Equal([]string{"h10", "h90", "hnull-a", "hnull-b"}, got, "paginated null walk")
 }
 
 // TestListSessions_CursorSortMismatch rejects a cursor reused under a different
 // sort or direction, while accepting it under the same ordering.
 func TestListSessions_CursorSortMismatch(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
 	for i := 1; i <= 4; i++ {
 		insertSession(t, d, fmt.Sprintf("x%d", i), "p", func(s *Session) {
@@ -356,30 +361,30 @@ func TestListSessions_CursorSortMismatch(t *testing.T) {
 		})
 	}
 
-	page, err := d.ListSessions(context.Background(), SessionFilter{
+	page, err := d.ListSessions(t.Context(), SessionFilter{
 		Limit: 2, OrderBy: "messages", Descending: Ptr(false),
 	})
-	require.NoError(t, err)
-	require.NotEmpty(t, page.NextCursor, "expected a next cursor")
+	require.NoError(err)
+	require.NotEmpty(page.NextCursor, "expected a next cursor")
 	cursor := page.NextCursor
 
 	// Same sort + direction: accepted.
-	_, err = d.ListSessions(context.Background(), SessionFilter{
+	_, err = d.ListSessions(t.Context(), SessionFilter{
 		Limit: 2, OrderBy: "messages", Descending: Ptr(false), Cursor: cursor,
 	})
-	require.NoError(t, err, "same sort should accept cursor")
+	require.NoError(err, "same sort should accept cursor")
 
 	// Different sort key: rejected.
-	_, err = d.ListSessions(context.Background(), SessionFilter{
+	_, err = d.ListSessions(t.Context(), SessionFilter{
 		Limit: 2, OrderBy: "failures", Descending: Ptr(false), Cursor: cursor,
 	})
-	require.ErrorIs(t, err, ErrInvalidCursor, "cross-sort cursor")
+	require.ErrorIs(err, ErrInvalidCursor, "cross-sort cursor")
 
 	// Same sort, flipped direction: rejected.
-	_, err = d.ListSessions(context.Background(), SessionFilter{
+	_, err = d.ListSessions(t.Context(), SessionFilter{
 		Limit: 2, OrderBy: "messages", Descending: Ptr(true), Cursor: cursor,
 	})
-	require.ErrorIs(t, err, ErrInvalidCursor, "flipped-direction cursor")
+	require.ErrorIs(err, ErrInvalidCursor, "flipped-direction cursor")
 }
 
 // TestListSessions_LegacyCursorRecent confirms a cursor minted in the old shape
@@ -387,15 +392,17 @@ func TestListSessions_CursorSortMismatch(t *testing.T) {
 // This exercises the cur.Sort == "" backward-compatibility path directly, rather
 // than a cursor produced by the current implementation.
 func TestListSessions_LegacyCursorRecent(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
 	for i := 1; i <= 4; i++ {
 		insertSession(t, d, fmt.Sprintf("rc%d", i), "p", func(s *Session) {
 			s.EndedAt = Ptr(fmt.Sprintf("2024-0%d-01T00:00:00Z", i))
 		})
 	}
-	page1, err := d.ListSessions(context.Background(), SessionFilter{Limit: 2})
-	require.NoError(t, err)
-	require.Equal(t, []string{"rc4", "rc3"}, idsOf(page1.Sessions))
+	page1, err := d.ListSessions(t.Context(), SessionFilter{Limit: 2})
+	require.NoError(err)
+	require.Equal([]string{"rc4", "rc3"}, idsOf(page1.Sessions))
 
 	// Mint a legacy-shaped cursor by hand: no Sort/Desc/Value fields, just the
 	// activity timestamp + id + total a pre-sort build would have produced.
@@ -405,13 +412,13 @@ func TestListSessions_LegacyCursorRecent(t *testing.T) {
 		Total:   page1.Total,
 	})
 	cur, err := d.DecodeCursor(legacy)
-	require.NoError(t, err)
-	require.Empty(t, cur.Sort, "legacy cursor must carry no sort key")
+	require.NoError(err)
+	require.Empty(cur.Sort, "legacy cursor must carry no sort key")
 
-	page2, err := d.ListSessions(context.Background(), SessionFilter{
+	page2, err := d.ListSessions(t.Context(), SessionFilter{
 		Limit: 2, Cursor: legacy,
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Equal(t, []string{"rc2", "rc1"}, idsOf(page2.Sessions))
 }
 
@@ -427,11 +434,14 @@ func idsOf(sessions []Session) []string {
 // the displayed (version-gated) count, and that gating flows through the keyset
 // cursor on a paginated request.
 func TestListSessions_SecretsSortVersionGated(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "sec-cur", "p")
-	require.NoError(t, d.ReplaceSessionSecretFindings("sec-cur", nil, 5, "v1"))
+	require.NoError(d.ReplaceSessionSecretFindings("sec-cur", nil, 5, "v1"))
 	insertSession(t, d, "sec-stale", "p")
-	require.NoError(t, d.ReplaceSessionSecretFindings("sec-stale", nil, 9, "old"))
+	require.NoError(d.ReplaceSessionSecretFindings("sec-stale", nil, 9, "old"))
 	insertSession(t, d, "sec-none", "p")
 
 	// With active version v1: the stale count (9) gates to 0, so the
@@ -441,15 +451,15 @@ func TestListSessions_SecretsSortVersionGated(t *testing.T) {
 		f.Descending = Ptr(true)
 		f.SecretsRulesVersions = []string{"v1"}
 	}))
-	require.Len(t, gated, 3)
-	assert.Equal(t, "sec-cur", gated[0], "current-version session ranks first")
+	require.Len(gated, 3)
+	assert.Equal("sec-cur", gated[0], "current-version session ranks first")
 
 	// Without active versions: raw counts, so the stale 9 ranks first.
 	raw := listSortedIDs(t, d, filterWith(func(f *SessionFilter) {
 		f.OrderBy = "secrets"
 		f.Descending = Ptr(true)
 	}))
-	assert.Equal(t, "sec-stale", raw[0], "raw counts rank stale 9 first")
+	assert.Equal("sec-stale", raw[0], "raw counts rank stale 9 first")
 
 	// Paginated, gated: the cursor must carry the gated value so the
 	// current-version session still leads and pages do not duplicate.
@@ -457,16 +467,16 @@ func TestListSessions_SecretsSortVersionGated(t *testing.T) {
 	seen := map[string]bool{}
 	cursor := ""
 	for {
-		page, err := d.ListSessions(context.Background(), SessionFilter{
+		page, err := d.ListSessions(t.Context(), SessionFilter{
 			Limit:                1,
 			OrderBy:              "secrets",
 			Descending:           Ptr(true),
 			SecretsRulesVersions: []string{"v1"},
 			Cursor:               cursor,
 		})
-		require.NoError(t, err)
+		require.NoError(err)
 		for _, s := range page.Sessions {
-			require.False(t, seen[s.ID], "duplicate %s", s.ID)
+			require.False(seen[s.ID], "duplicate %s", s.ID)
 			seen[s.ID] = true
 			got = append(got, s.ID)
 		}
@@ -475,16 +485,18 @@ func TestListSessions_SecretsSortVersionGated(t *testing.T) {
 		}
 		cursor = page.NextCursor
 	}
-	require.Len(t, got, 3)
-	assert.Equal(t, "sec-cur", got[0], "paginated gated order leads with current-version session")
+	require.Len(got, 3)
+	assert.Equal("sec-cur", got[0], "paginated gated order leads with current-version session")
 }
 
 func TestValidSortKeyAndDefaultDirection(t *testing.T) {
-	assert.True(t, ValidSortKey(""), "empty key is valid (default)")
-	assert.True(t, ValidSortKey("failures"))
-	assert.False(t, ValidSortKey("bogus"))
+	assert := assert.New(t)
 
-	assert.True(t, SortDefaultDescending("recent"), "recent defaults descending")
-	assert.True(t, SortDefaultDescending(""), "empty key defaults to recent (descending)")
-	assert.False(t, SortDefaultDescending("messages"), "non-recent keys default ascending")
+	assert.True(ValidSortKey(""), "empty key is valid (default)")
+	assert.True(ValidSortKey("failures"))
+	assert.False(ValidSortKey("bogus"))
+
+	assert.True(SortDefaultDescending("recent"), "recent defaults descending")
+	assert.True(SortDefaultDescending(""), "empty key defaults to recent (descending)")
+	assert.False(SortDefaultDescending("messages"), "non-recent keys default ascending")
 }

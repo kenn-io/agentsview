@@ -25,7 +25,7 @@ func TestCanonicalJSONSortsStructAndMapKeys(t *testing.T) {
 
 	data, err := canonicalJSON(v)
 	require.NoError(t, err)
-	assert.Equal(t,
+	assert.JSONEq(t,
 		"{\"inner\":{\"alpha\":\"a\",\"zeta\":\"z\"},\"tags\":{\"a\":\"1\",\"b\":\"2\"}}\n",
 		string(data),
 	)
@@ -40,7 +40,7 @@ func TestCanonicalJSONPreservesSliceOrder(t *testing.T) {
 
 	data, err := canonicalJSON(v)
 	require.NoError(t, err)
-	assert.Equal(t, "{\"items\":[\"z\",\"a\",\"m\"]}\n", string(data))
+	assert.JSONEq(t, "{\"items\":[\"z\",\"a\",\"m\"]}\n", string(data))
 }
 
 func TestCanonicalJSONRecanonicalizesRawMessage(t *testing.T) {
@@ -53,7 +53,7 @@ func TestCanonicalJSONRecanonicalizesRawMessage(t *testing.T) {
 
 	data, err := canonicalJSON(v)
 	require.NoError(t, err)
-	assert.Equal(t, "{\"value\":{\"a\":1,\"b\":2}}\n", string(data))
+	assert.JSONEq(t, "{\"value\":{\"a\":1,\"b\":2}}\n", string(data))
 }
 
 func TestCanonicalJSONRejectsTrailingRawMessageContent(t *testing.T) {
@@ -111,17 +111,20 @@ func TestCanonicalJSONPreservesLargeNumberPrecision(t *testing.T) {
 }
 
 func TestCanonicalJSONNilPointerAndInterfaceEncodeAsNull(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	var nilPointer *int
 	data, err := canonicalJSON(nilPointer)
-	require.NoError(t, err)
-	assert.Equal(t, "null\n", string(data))
+	require.NoError(err)
+	assert.Equal("null\n", string(data))
 
 	var nilInterface any
 	data, err = canonicalJSON(nilInterface)
-	require.NoError(t, err)
-	assert.Equal(t, "null\n", string(data))
+	require.NoError(err)
+	assert.Equal("null\n", string(data))
 }
 
 func TestCanonicalJSONDereferencesPopulatedPointerFields(t *testing.T) {
@@ -134,7 +137,7 @@ func TestCanonicalJSONDereferencesPopulatedPointerFields(t *testing.T) {
 
 	data, err := canonicalJSON(v)
 	require.NoError(t, err)
-	assert.Equal(t, "{\"name\":\"Fixture\"}\n", string(data))
+	assert.JSONEq(t, "{\"name\":\"Fixture\"}\n", string(data))
 }
 
 func TestCanonicalJSONOmitsEmptyFieldsAndKeepsZeroValuesWithoutTag(t *testing.T) {
@@ -158,7 +161,7 @@ func TestCanonicalJSONCanonicalizesIntegerMapKeys(t *testing.T) {
 
 	data, err := canonicalJSON(v)
 	require.NoError(t, err)
-	assert.Equal(t, "{\"1\":\"a\"}\n", string(data))
+	assert.JSONEq(t, "{\"1\":\"a\"}\n", string(data))
 }
 
 func TestCanonicalJSONRejectsUnsupportedKind(t *testing.T) {

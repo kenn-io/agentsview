@@ -1525,17 +1525,15 @@ func rejectLiveWritableDaemonBeforeDirectWrite(cfg config.Config) error {
 	}
 	dataDir := writeLockDataDir(cfg)
 	if isExternalDaemonStarting(dataDir) || isLegacyDaemonStarting(dataDir) {
-		return fmt.Errorf(
-			"local daemon is starting and owns the SQLite archive; " +
-				"refusing to write directly. Retry once it is ready",
+		return errors.New("local daemon is starting and owns the SQLite archive; " +
+			"refusing to write directly. Retry once it is ready",
 		)
 	}
 	if isBackgroundLaunchActive(dataDir) &&
 		!ownsForegroundServeLaunchLock(dataDir) &&
 		!runningAsBackgroundChild() {
-		return fmt.Errorf(
-			"local daemon launch is in progress and owns the SQLite archive; " +
-				"refusing to write directly. Retry once it is ready",
+		return errors.New("local daemon launch is in progress and owns the SQLite archive; " +
+			"refusing to write directly. Retry once it is ready",
 		)
 	}
 	if !hasLiveWritableDaemonRuntime(dataDir, cfg.AuthToken) {
@@ -3096,7 +3094,7 @@ func remoteHostSyncFunc(
 ) func() (int, error) {
 	return func() (int, error) {
 		if runner == nil {
-			return 0, fmt.Errorf("scheduled remote sync missing exclusive runner")
+			return 0, errors.New("scheduled remote sync missing exclusive runner")
 		}
 		runExclusive := func() (remotesync.SyncStats, error) {
 			var stats remotesync.SyncStats

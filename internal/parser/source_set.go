@@ -192,17 +192,17 @@ func (p *SourceSetProvider) SourceForReconciliationWithState(
 	return resolver.SourceForReconciliationWithState(ctx, path, project, state)
 }
 
-func (p *SourceSetProvider) ReconciliationSourceState(
+func (p *SourceSetProvider) ReconciliationSourceState(ctx context.Context,
 	source SourceRef,
 ) (ReconciliationSourceState, bool) {
 	provider, ok := p.sources.(ReconciliationSourceStateProvider)
 	if !ok {
 		return ReconciliationSourceState{}, false
 	}
-	return provider.ReconciliationSourceState(source)
+	return provider.ReconciliationSourceState(ctx, source)
 }
 
-func (p *SourceSetProvider) ApplyReconciliationSourceState(
+func (p *SourceSetProvider) ApplyReconciliationSourceState(ctx context.Context,
 	source *SourceRef, state ReconciliationSourceState,
 ) error {
 	provider, ok := p.sources.(ReconciliationSourceStateProvider)
@@ -214,7 +214,7 @@ func (p *SourceSetProvider) ApplyReconciliationSourceState(
 			Provider: p.Def.Type, Feature: "reconciliation source state",
 		}
 	}
-	return provider.ApplyReconciliationSourceState(source, state)
+	return provider.ApplyReconciliationSourceState(ctx, source, state)
 }
 
 func (p *SourceSetProvider) ReconciliationMemberIdentity(

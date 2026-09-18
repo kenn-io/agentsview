@@ -8,15 +8,18 @@ import (
 )
 
 func TestMoneySQLUsesIntegersOnly(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	var value Money
-	require.NoError(t, value.Scan(int64(420_000)))
-	assert.Equal(t, Money{Microdollars: 420_000}, value)
+	require.NoError(value.Scan(int64(420_000)))
+	assert.Equal(Money{Microdollars: 420_000}, value)
 
 	driverValue, err := value.Value()
-	require.NoError(t, err)
-	assert.Equal(t, int64(420_000), driverValue)
+	require.NoError(err)
+	assert.Equal(int64(420_000), driverValue)
 
 	err = value.Scan(float64(0.42))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "integer required")
+	require.Error(err)
+	assert.Contains(err.Error(), "integer required")
 }

@@ -484,7 +484,7 @@ func formatGeminiToolCall(tc gjson.Result) string {
 		)
 	case "run_command", "execute_command", "run_shell_command":
 		cmd := args.Get("command").Str
-		return fmt.Sprintf("[Bash]\n$ %s", cmd)
+		return "[Bash]\n$ " + cmd
 	case "list_directory":
 		return fmt.Sprintf(
 			"[List: %s]", args.Get("dir_path").Str,

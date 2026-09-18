@@ -99,6 +99,8 @@ func (s *rollupStore) GetChildSessions(
 }
 
 func TestGetSessionUsageRollupIncludesOnlyPricedSubagentsOnce(t *testing.T) {
+	require := require.New(t)
+
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
 			"root": {SessionID: "root", HasCost: true, Cost: money.MustParseDollars("1"), BreakdownCount: 1},
@@ -118,14 +120,16 @@ func TestGetSessionUsageRollupIncludesOnlyPricedSubagentsOnce(t *testing.T) {
 		},
 	}
 
-	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
-	require.NoError(t, err)
-	require.Equal(t, 3, got.SubagentCount)
-	require.Zero(t, got.Cost)
-	require.False(t, got.HasCost, "unpriced contributing row must make the aggregate incomplete")
+	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
+	require.NoError(err)
+	require.Equal(3, got.SubagentCount)
+	require.Zero(got.Cost)
+	require.False(got.HasCost, "unpriced contributing row must make the aggregate incomplete")
 }
 
 func TestGetSessionUsageRollupIncludesNestedPricedSubagents(t *testing.T) {
+	require := require.New(t)
+
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
 			"root": {SessionID: "root", HasCost: true, Cost: money.MustParseDollars("1"), BreakdownCount: 1},
@@ -138,16 +142,19 @@ func TestGetSessionUsageRollupIncludesNestedPricedSubagents(t *testing.T) {
 		},
 	}
 
-	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
-	require.NoError(t, err)
-	require.Equal(t, 2, got.SubagentCount)
-	require.Equal(t, money.MustParseDollars("7"), got.Cost)
-	require.True(t, got.HasCost)
+	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
+	require.NoError(err)
+	require.Equal(2, got.SubagentCount)
+	require.Equal(money.MustParseDollars("7"), got.Cost)
+	require.True(got.HasCost)
 }
 
 func TestSessionUsageWithSubagentsFallbackMarksRowlessTokensIncomplete(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
 			"root": {
@@ -169,11 +176,11 @@ func TestSessionUsageWithSubagentsFallbackMarksRowlessTokensIncomplete(
 	}
 
 	got, err := service.SessionUsageWithSubagents(
-		context.Background(), store, "root", false)
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.Equal(t, 700, got.TotalOutputTokens)
-	assert.False(t, got.HasCost,
+		t.Context(), store, "root", false)
+	require.NoError(err)
+	require.NotNil(got)
+	assert.Equal(700, got.TotalOutputTokens)
+	assert.False(got.HasCost,
 		"rowless child tokens make the fallback aggregate incomplete")
 }
 
@@ -188,13 +195,15 @@ func TestGetSessionUsageRollupCountsEmptySubagentAndTerminatesCycle(t *testing.T
 		},
 	}
 
-	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
+	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
 	require.NoError(t, err)
 	require.Equal(t, 1, got.SubagentCount)
 	require.False(t, got.HasCost)
 }
 
 func TestGetSessionUsageRollupRequiresContributingSubagentForHasCost(t *testing.T) {
+	require := require.New(t)
+
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
 			"root":  {SessionID: "root", HasCost: true, Cost: money.MustParseDollars("1"), BreakdownCount: 1},
@@ -205,11 +214,11 @@ func TestGetSessionUsageRollupRequiresContributingSubagentForHasCost(t *testing.
 		},
 	}
 
-	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
-	require.NoError(t, err)
-	require.Equal(t, 1, got.SubagentCount)
-	require.Zero(t, got.Cost)
-	require.False(t, got.HasCost, "root-only priced usage must not be labeled as a total")
+	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
+	require.NoError(err)
+	require.Equal(1, got.SubagentCount)
+	require.Zero(got.Cost)
+	require.False(got.HasCost, "root-only priced usage must not be labeled as a total")
 }
 
 func TestGetSessionUsageRollupReturnsChildSessionError(t *testing.T) {
@@ -222,7 +231,7 @@ func TestGetSessionUsageRollupReturnsChildSessionError(t *testing.T) {
 		},
 	}
 
-	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
+	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
 	require.Nil(t, got)
 	require.EqualError(t, err, "child lookup failed")
 }
@@ -240,12 +249,14 @@ func TestGetSessionUsageRollupReturnsChildUsageError(t *testing.T) {
 		},
 	}
 
-	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
+	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
 	require.Nil(t, got)
 	require.EqualError(t, err, "child usage failed")
 }
 
 func TestGetSessionUsageRollupTraversesNonSubagentAndDedupesRowsAcrossSessions(t *testing.T) {
+	require := require.New(t)
+
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
 			"root":   {SessionID: "root", HasCost: true, Cost: money.MustParseDollars("1"), BreakdownCount: 1},
@@ -261,14 +272,16 @@ func TestGetSessionUsageRollupTraversesNonSubagentAndDedupesRowsAcrossSessions(t
 		},
 	}
 
-	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
-	require.NoError(t, err)
-	require.Equal(t, 1, got.SubagentCount)
-	require.True(t, got.HasCost)
-	require.Equal(t, money.MustParseDollars("3"), got.Cost)
+	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
+	require.NoError(err)
+	require.Equal(1, got.SubagentCount)
+	require.True(got.HasCost)
+	require.Equal(money.MustParseDollars("3"), got.Cost)
 }
 
 func TestGetSessionUsageRollupIncludesForkInsideSubagentTree(t *testing.T) {
+	require := require.New(t)
+
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
 			"root": {SessionID: "root"},
@@ -291,15 +304,17 @@ func TestGetSessionUsageRollupIncludesForkInsideSubagentTree(t *testing.T) {
 	}
 
 	got, err := service.GetSessionUsageRollup(
-		context.Background(), store, "root", false)
-	require.NoError(t, err)
-	require.Equal(t, 1, got.SubagentCount)
-	require.True(t, got.HasCost)
-	require.Equal(t, money.MustParseDollars("7"), got.Cost,
+		t.Context(), store, "root", false)
+	require.NoError(err)
+	require.Equal(1, got.SubagentCount)
+	require.True(got.HasCost)
+	require.Equal(money.MustParseDollars("7"), got.Cost,
 		"the delegated fork is included without including the root fork")
 }
 
 func TestGetSessionUsageRollupCombinesProvenanceAcrossSessions(t *testing.T) {
+	require := require.New(t)
+
 	rootSessionCost := money.MustParseDollars("1")
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
@@ -330,14 +345,16 @@ func TestGetSessionUsageRollupCombinesProvenanceAcrossSessions(t *testing.T) {
 		},
 	}
 
-	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
-	require.NoError(t, err)
-	require.True(t, got.HasCost)
-	require.Equal(t, money.MustParseDollars("3"), got.Cost)
-	require.Equal(t, export.CostSourceMixed, got.CostSource)
+	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
+	require.NoError(err)
+	require.True(got.HasCost)
+	require.Equal(money.MustParseDollars("3"), got.Cost)
+	require.Equal(export.CostSourceMixed, got.CostSource)
 }
 
 func TestGetSessionUsageRollupDoesNotLabelDedupedRootCostAsTotal(t *testing.T) {
+	require := require.New(t)
+
 	store := &rollupStore{
 		usages: map[string]*db.SessionUsage{
 			"root":   {SessionID: "root", HasCost: true, Cost: money.MustParseDollars("1"), BreakdownCount: 1},
@@ -351,9 +368,9 @@ func TestGetSessionUsageRollupDoesNotLabelDedupedRootCostAsTotal(t *testing.T) {
 		},
 	}
 
-	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
-	require.NoError(t, err)
-	require.Equal(t, 1, got.SubagentCount)
-	require.False(t, got.HasCost)
-	require.Zero(t, got.Cost)
+	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
+	require.NoError(err)
+	require.Equal(1, got.SubagentCount)
+	require.False(got.HasCost)
+	require.Zero(got.Cost)
 }

@@ -86,7 +86,7 @@ func openCacheDB(t *testing.T, withSchema bool) *sql.DB {
 	require.NoError(t, err, "sql.Open")
 	t.Cleanup(func() { _ = db.Close() })
 	if withSchema {
-		_, err = db.Exec(cacheSchema)
+		_, err = db.ExecContext(t.Context(), cacheSchema)
 		require.NoError(t, err, "init git_cache schema")
 	}
 	return db
@@ -99,7 +99,7 @@ func callTestCache(
 ) ([]byte, error) {
 	t.Helper()
 	return cache.GetOrCompute(
-		context.Background(),
+		t.Context(),
 		testCacheKey,
 		testCacheKind,
 		testCacheTTL,
@@ -138,7 +138,7 @@ func seedCacheRow(t *testing.T, db *sql.DB, row cacheRow) {
 	if row.ComputedAt.IsZero() {
 		row.ComputedAt = time.Now().UTC()
 	}
-	_, err := db.Exec(
+	_, err := db.ExecContext(t.Context(),
 		`INSERT OR REPLACE INTO git_cache(cache_key, kind, payload, computed_at)
 		 VALUES (?, ?, ?, ?)`,
 		row.Key, row.Kind, row.Payload,
@@ -151,7 +151,7 @@ func requireCacheRow(t *testing.T, db *sql.DB, key string) cacheRow {
 	t.Helper()
 	var row cacheRow
 	var computedAt string
-	err := db.QueryRow(
+	err := db.QueryRowContext(t.Context(),
 		`SELECT cache_key, kind, payload, computed_at
 		 FROM git_cache WHERE cache_key = ?`,
 		key,
@@ -165,7 +165,7 @@ func requireCacheRow(t *testing.T, db *sql.DB, key string) cacheRow {
 func requireCacheRowCount(t *testing.T, db *sql.DB, key string) int {
 	t.Helper()
 	var n int
-	err := db.QueryRow(
+	err := db.QueryRowContext(t.Context(),
 		`SELECT count(*) FROM git_cache WHERE cache_key = ?`, key,
 	).Scan(&n)
 	require.NoError(t, err, "count")
@@ -174,7 +174,7 @@ func requireCacheRowCount(t *testing.T, db *sql.DB, key string) int {
 
 func backdateCacheRow(t *testing.T, db *sql.DB, key string, age time.Duration) {
 	t.Helper()
-	_, err := db.Exec(
+	_, err := db.ExecContext(t.Context(),
 		`UPDATE git_cache SET computed_at = ? WHERE cache_key = ?`,
 		time.Now().Add(-age).UTC().Format(time.RFC3339Nano), key,
 	)
@@ -182,37 +182,45 @@ func backdateCacheRow(t *testing.T, db *sql.DB, key string, age time.Duration) {
 }
 
 func TestCache_GetOrCompute_FirstCallInvokesCompute(t *testing.T) {
+	assert := assert.New(t)
+
 	db := newCacheDB(t)
 	cache := NewCache(db)
 
 	compute := newComputeSpy(`{"commits":3}`)
 	got, err := callTestCache(t, cache, compute.Compute)
 	require.NoError(t, err, "GetOrCompute")
-	assert.Equal(t, 1, compute.calls, "compute call count")
-	assert.Equal(t, `{"commits":3}`, string(got), "payload")
+	assert.Equal(1, compute.calls, "compute call count")
+	assert.Equal(`{"commits":3}`, string(got), "payload")
 
 	// Verify the row landed in git_cache with the expected kind.
 	row := requireCacheRow(t, db, testCacheKey)
-	assert.Equal(t, testCacheKind, row.Kind, "row kind")
-	assert.Equal(t, `{"commits":3}`, row.Payload, "row payload")
+	assert.Equal(testCacheKind, row.Kind, "row kind")
+	assert.Equal(`{"commits":3}`, row.Payload, "row payload")
 }
 
 func TestCache_GetOrCompute_WithinTTLReturnsCached(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	db := newCacheDB(t)
 	cache := NewCache(db)
 
 	compute := newComputeSpy(`{"n":1}`)
 	_, err := callTestCache(t, cache, compute.Compute)
-	require.NoError(t, err, "first GetOrCompute")
-	require.Equal(t, 1, compute.calls, "after first call")
+	require.NoError(err, "first GetOrCompute")
+	require.Equal(1, compute.calls, "after first call")
 
 	got, err := callTestCache(t, cache, compute.Compute)
-	require.NoError(t, err, "second GetOrCompute")
-	assert.Equal(t, 1, compute.calls, "compute called again within TTL")
-	assert.Equal(t, `{"n":1}`, string(got), "cached payload")
+	require.NoError(err, "second GetOrCompute")
+	assert.Equal(1, compute.calls, "compute called again within TTL")
+	assert.Equal(`{"n":1}`, string(got), "cached payload")
 }
 
 func TestCache_GetOrCompute_PastTTLRecomputes(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	db := newCacheDB(t)
 	cache := NewCache(db)
 
@@ -223,13 +231,13 @@ func TestCache_GetOrCompute_PastTTLRecomputes(t *testing.T) {
 	// Seed the cache with a timestamp well in the past so the second call
 	// sees an expired row.
 	_, err := callTestCache(t, cache, compute.Compute)
-	require.NoError(t, err, "first GetOrCompute")
+	require.NoError(err, "first GetOrCompute")
 	backdateCacheRow(t, db, testCacheKey, 2*time.Hour)
 
 	got, err := callTestCache(t, cache, compute.Compute)
-	require.NoError(t, err, "second GetOrCompute")
-	assert.Equal(t, 2, compute.calls, "compute invocations (past TTL)")
-	assert.Equal(t, `{"call":2}`, string(got), "recomputed payload")
+	require.NoError(err, "second GetOrCompute")
+	assert.Equal(2, compute.calls, "compute invocations (past TTL)")
+	assert.Equal(`{"call":2}`, string(got), "recomputed payload")
 }
 
 func TestCache_GetOrCompute_ErrorDoesNotWriteRow(t *testing.T) {
@@ -245,16 +253,18 @@ func TestCache_GetOrCompute_ErrorDoesNotWriteRow(t *testing.T) {
 }
 
 func TestReadOnlyCache_GetOrCompute_MissComputesWithoutWriting(t *testing.T) {
+	assert := assert.New(t)
+
 	db := newCacheDB(t)
 	cache := NewReadOnlyCache(db)
 
 	compute := newComputeSpy(`{"commits":4}`)
 	got, err := callTestCache(t, cache, compute.Compute)
 	require.NoError(t, err, "GetOrCompute")
-	assert.Equal(t, 1, compute.calls, "compute call count")
-	assert.Equal(t, `{"commits":4}`, string(got), "payload")
+	assert.Equal(1, compute.calls, "compute call count")
+	assert.Equal(`{"commits":4}`, string(got), "payload")
 
-	assert.Zero(t, requireCacheRowCount(t, db, testCacheKey),
+	assert.Zero(requireCacheRowCount(t, db, testCacheKey),
 		"read-only cache must not write rows")
 }
 

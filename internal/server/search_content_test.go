@@ -41,7 +41,7 @@ func TestHandleSearchContentInvalidParams(t *testing.T) {
 				mux: http.NewServeMux(),
 			}
 			srv.routes()
-			req := httptest.NewRequest(http.MethodGet,
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet,
 				"/api/v1/search/content?"+tt.query, nil)
 			req.RemoteAddr = tt.remoteAddr
 			if tt.xff != "" {
@@ -77,7 +77,7 @@ func TestIsLocalhostRequest(t *testing.T) {
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/settings", nil)
 			req.RemoteAddr = tt.remoteAddr
 			if tt.header != "" {
 				req.Header.Set(tt.header, tt.value)

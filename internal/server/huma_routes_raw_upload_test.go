@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -24,6 +23,9 @@ import (
 )
 
 func TestRawUploadStartUsesScopedIdentityAndReturnsResumeState(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	identity := rawsync.AuthIdentity{TenantID: "tenant-auth", DeviceID: "device-auth"}
@@ -36,9 +38,9 @@ func TestRawUploadStartUsesScopedIdentityAndReturnsResumeState(t *testing.T) {
 			provider parser.AgentType,
 			gotObject rawsync.ObjectRef,
 		) (rawsync.UploadSession, bool, error) {
-			assert.Equal(t, identity, gotIdentity)
-			assert.Equal(t, parser.AgentCodex, provider)
-			assert.Equal(t, object, gotObject)
+			assert.Equal(identity, gotIdentity)
+			assert.Equal(parser.AgentCodex, provider)
+			assert.Equal(object, gotObject)
 			return rawsync.UploadSession{
 				ID: "upl_AQEBAQEBAQEBAQEBAQEBAQ", Identity: identity,
 				Provider: provider, Object: object, Offset: 5,
@@ -52,22 +54,22 @@ func TestRawUploadStartUsesScopedIdentityAndReturnsResumeState(t *testing.T) {
 		"provider": parser.AgentCodex,
 		"object":   object,
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	recorder := serveRawSyncJSON(
 		t, srv, http.MethodPost, "/api/v1/raw-sync/uploads",
 		string(body), "avdt_upload", "",
 	)
 
-	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Equal(http.StatusOK, recorder.Code, recorder.Body.String())
 	var response rawSyncUploadResponse
-	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
-	assert.Equal(t, "upl_AQEBAQEBAQEBAQEBAQEBAQ", response.UploadID)
-	assert.Equal(t, object, response.Object)
-	assert.Equal(t, int64(5), response.Offset)
-	assert.False(t, response.Complete)
-	assert.False(t, response.Created)
-	assert.Equal(t, 1, uploads.startCalls)
+	require.NoError(json.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal("upl_AQEBAQEBAQEBAQEBAQEBAQ", response.UploadID)
+	assert.Equal(object, response.Object)
+	assert.Equal(int64(5), response.Offset)
+	assert.False(response.Complete)
+	assert.False(response.Created)
+	assert.Equal(1, uploads.startCalls)
 }
 
 func TestRawUploadStartLocationIncludesBasePath(t *testing.T) {
@@ -111,6 +113,8 @@ func TestRawUploadStartLocationIncludesBasePath(t *testing.T) {
 }
 
 func TestRawUploadHeadReportsAuthoritativeOffset(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Parallel()
 
 	identity := rawsync.AuthIdentity{TenantID: "tenant-auth", DeviceID: "device-auth"}
@@ -122,8 +126,8 @@ func TestRawUploadHeadReportsAuthoritativeOffset(t *testing.T) {
 			gotIdentity rawsync.AuthIdentity,
 			gotUploadID string,
 		) (rawsync.UploadSession, error) {
-			assert.Equal(t, identity, gotIdentity)
-			assert.Equal(t, uploadID, gotUploadID)
+			assert.Equal(identity, gotIdentity)
+			assert.Equal(uploadID, gotUploadID)
 			return rawsync.UploadSession{
 				ID: uploadID, Identity: identity, Provider: parser.AgentCodex,
 				Object: object, Offset: 5,
@@ -140,15 +144,18 @@ func TestRawUploadHeadReportsAuthoritativeOffset(t *testing.T) {
 	)
 
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	assert.Empty(t, recorder.Body.String())
-	assert.Equal(t, "5", recorder.Header().Get(rawSyncUploadOffsetHeader))
-	assert.Equal(t, strconv.FormatInt(object.Length, 10),
+	assert.Empty(recorder.Body.String())
+	assert.Equal("5", recorder.Header().Get(rawSyncUploadOffsetHeader))
+	assert.Equal(strconv.FormatInt(object.Length, 10),
 		recorder.Header().Get(rawSyncUploadLengthHeader))
-	assert.Equal(t, "false", recorder.Header().Get(rawSyncUploadCompleteHeader))
-	assert.Equal(t, 1, uploads.statusCalls)
+	assert.Equal("false", recorder.Header().Get(rawSyncUploadCompleteHeader))
+	assert.Equal(1, uploads.statusCalls)
 }
 
 func TestRawUploadPatchAppendsOpaqueChunkAndReturnsCompletion(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	identity := rawsync.AuthIdentity{TenantID: "tenant-auth", DeviceID: "device-auth"}
@@ -163,10 +170,10 @@ func TestRawUploadPatchAppendsOpaqueChunkAndReturnsCompletion(t *testing.T) {
 			offset int64,
 			gotChunk []byte,
 		) (rawsync.UploadSession, error) {
-			assert.Equal(t, identity, gotIdentity)
-			assert.Equal(t, uploadID, gotUploadID)
-			assert.Zero(t, offset)
-			assert.Equal(t, chunk, gotChunk)
+			assert.Equal(identity, gotIdentity)
+			assert.Equal(uploadID, gotUploadID)
+			assert.Zero(offset)
+			assert.Equal(chunk, gotChunk)
 			return rawsync.UploadSession{
 				ID: uploadID, Identity: identity, Provider: parser.AgentCodex,
 				Object: object, Offset: object.Length, Complete: true,
@@ -182,15 +189,15 @@ func TestRawUploadPatchAppendsOpaqueChunkAndReturnsCompletion(t *testing.T) {
 		"avdt_upload", 0, chunk,
 	)
 
-	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	assert.Equal(t, strconv.FormatInt(object.Length, 10),
+	require.Equal(http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Equal(strconv.FormatInt(object.Length, 10),
 		recorder.Header().Get(rawSyncUploadOffsetHeader))
-	assert.Equal(t, "true", recorder.Header().Get(rawSyncUploadCompleteHeader))
+	assert.Equal("true", recorder.Header().Get(rawSyncUploadCompleteHeader))
 	var response rawSyncUploadResponse
-	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
-	assert.True(t, response.Complete)
-	assert.Equal(t, object.Length, response.Offset)
-	assert.Equal(t, 1, uploads.appendCalls)
+	require.NoError(json.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.True(response.Complete)
+	assert.Equal(object.Length, response.Offset)
+	assert.Equal(1, uploads.appendCalls)
 }
 
 func TestRawUploadPatchIsNotWrappedByShortWriteTimeout(t *testing.T) {
@@ -236,6 +243,8 @@ func TestRawUploadPatchIsNotWrappedByShortWriteTimeout(t *testing.T) {
 }
 
 func TestRawUploadPatchExtendsRealServerReadDeadline(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 
 	identity := rawsync.AuthIdentity{TenantID: "tenant-auth", DeviceID: "device-auth"}
@@ -261,25 +270,25 @@ func TestRawUploadPatchExtendsRealServerReadDeadline(t *testing.T) {
 	}
 	srv := newRawUploadHTTPTestServer(t, rawUploadAuthStub(t, identity), uploads)
 	srv.httpReadTimeout = 50 * time.Millisecond
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
+	require.NoError(err)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- srv.Serve(listener) }()
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
-		require.NoError(t, srv.Shutdown(ctx))
+		require.NoError(srv.Shutdown(ctx))
 		err := <-serveErr
-		require.True(t, errors.Is(err, http.ErrServerClosed), "Serve returned %v", err)
+		require.ErrorIs(err, http.ErrServerClosed, "Serve returned %v", err)
 	})
 
 	reader, writer := io.Pipe()
-	request, err := http.NewRequest(
+	request, err := http.NewRequestWithContext(t.Context(),
 		http.MethodPatch,
 		"http://"+listener.Addr().String()+"/api/v1/raw-sync/uploads/"+uploadID,
 		reader,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	request.ContentLength = int64(len(chunk))
 	request.Header.Set("Authorization", "Bearer avdt_upload")
 	request.Header.Set("Content-Type", "application/octet-stream")
@@ -294,7 +303,7 @@ func TestRawUploadPatchExtendsRealServerReadDeadline(t *testing.T) {
 		}
 		response <- result
 	}()
-	require.NoError(t, writeSlowUploadBody(writer, chunk, 150*time.Millisecond))
+	require.NoError(writeSlowUploadBody(writer, chunk, 150*time.Millisecond))
 
 	select {
 	case err := <-requestErr:
@@ -319,6 +328,9 @@ func writeSlowUploadBody(writer *io.PipeWriter, body []byte, delay time.Duration
 }
 
 func TestRawUploadOffsetConflictReturnsResumeOffset(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	identity := rawsync.AuthIdentity{TenantID: "tenant-auth", DeviceID: "device-auth"}
@@ -343,15 +355,18 @@ func TestRawUploadOffsetConflictReturnsResumeOffset(t *testing.T) {
 		"avdt_upload", 0, []byte("chunk"),
 	)
 
-	require.Equal(t, http.StatusConflict, recorder.Code, recorder.Body.String())
+	require.Equal(http.StatusConflict, recorder.Code, recorder.Body.String())
 	var response apiErrorResponse
-	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
-	assert.Equal(t, "upload_offset_conflict", response.Code)
-	require.NotNil(t, response.CurrentUploadOffset)
-	assert.Equal(t, int64(5), *response.CurrentUploadOffset)
+	require.NoError(json.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal("upload_offset_conflict", response.Code)
+	require.NotNil(response.CurrentUploadOffset)
+	assert.Equal(int64(5), *response.CurrentUploadOffset)
 }
 
 func TestRawUploadChecksumMismatchReturnsResetOffset(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	identity := rawsync.AuthIdentity{TenantID: "tenant-auth", DeviceID: "device-auth"}
@@ -376,12 +391,12 @@ func TestRawUploadChecksumMismatchReturnsResetOffset(t *testing.T) {
 		"avdt_upload", 0, []byte("chunk"),
 	)
 
-	require.Equal(t, http.StatusConflict, recorder.Code, recorder.Body.String())
+	require.Equal(http.StatusConflict, recorder.Code, recorder.Body.String())
 	var response apiErrorResponse
-	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
-	assert.Equal(t, "checksum_mismatch", response.Code)
-	require.NotNil(t, response.CurrentUploadOffset)
-	assert.Zero(t, *response.CurrentUploadOffset)
+	require.NoError(json.Unmarshal(recorder.Body.Bytes(), &response))
+	assert.Equal("checksum_mismatch", response.Code)
+	require.NotNil(response.CurrentUploadOffset)
+	assert.Zero(*response.CurrentUploadOffset)
 }
 
 func TestRawUploadBoundsChunkBeforeService(t *testing.T) {
@@ -413,6 +428,9 @@ func TestRawUploadBoundsChunkBeforeService(t *testing.T) {
 }
 
 func TestRawUploadCORSAllowsAndExposesResumeHeaders(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	identity := rawsync.AuthIdentity{TenantID: "tenant-auth", DeviceID: "device-auth"}
@@ -433,7 +451,7 @@ func TestRawUploadCORSAllowsAndExposesResumeHeaders(t *testing.T) {
 		},
 	}
 	srv := newRawUploadHTTPTestServer(t, rawUploadAuthStub(t, identity), uploads)
-	preflight := httptest.NewRequest(
+	preflight := httptest.NewRequestWithContext(t.Context(),
 		http.MethodOptions, "/api/v1/raw-sync/uploads/"+uploadID, nil,
 	)
 	preflight.Host = "127.0.0.1:8080"
@@ -447,13 +465,12 @@ func TestRawUploadCORSAllowsAndExposesResumeHeaders(t *testing.T) {
 
 	srv.Handler().ServeHTTP(preflightRecorder, preflight)
 
-	require.Equal(t, http.StatusNoContent, preflightRecorder.Code)
-	assert.Contains(t,
-		preflightRecorder.Header().Get("Access-Control-Allow-Headers"),
+	require.Equal(http.StatusNoContent, preflightRecorder.Code)
+	assert.Contains(preflightRecorder.Header().Get("Access-Control-Allow-Headers"),
 		rawSyncUploadOffsetHeader,
 	)
 
-	req := httptest.NewRequest(http.MethodHead, "/api/v1/raw-sync/uploads/"+uploadID, nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodHead, "/api/v1/raw-sync/uploads/"+uploadID, nil)
 	req.Host = "127.0.0.1:8080"
 	req.RemoteAddr = "192.0.2.10:54321"
 	req.Header.Set("Origin", "https://client.example")
@@ -461,9 +478,8 @@ func TestRawUploadCORSAllowsAndExposesResumeHeaders(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(recorder, req)
 
-	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	assert.Contains(t,
-		recorder.Header().Get("Access-Control-Expose-Headers"),
+	require.Equal(http.StatusOK, recorder.Code, recorder.Body.String())
+	assert.Contains(recorder.Header().Get("Access-Control-Expose-Headers"),
 		rawSyncUploadOffsetHeader,
 	)
 }
@@ -514,7 +530,7 @@ func serveRawUploadChunk(
 	body []byte,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, path, bytes.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), method, path, bytes.NewReader(body))
 	req.Host = "127.0.0.1:8080"
 	req.RemoteAddr = "192.0.2.10:54321"
 	req.Header.Set("Authorization", "Bearer "+bearer)

@@ -14,16 +14,19 @@ import (
 )
 
 func TestReconcileWatchRootsCommandCodeCompanionOnlyChangeReparsesOwner(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	project := filepath.Join(root, "project")
-	require.NoError(t, os.MkdirAll(project, 0o755))
+	require.NoError(os.MkdirAll(project, 0o755))
 	transcript := filepath.Join(project, "sess_123.jsonl")
 	meta := filepath.Join(project, "sess_123.meta.json")
-	require.NoError(t, os.WriteFile(transcript, []byte(
+	require.NoError(os.WriteFile(transcript, []byte(
 		`{"id":"m1","timestamp":"2026-06-01T10:00:00Z","sessionId":"sess_123","role":"user","content":[{"type":"text","text":"Inspect logs"}],"metadata":{"version":2,"cwd":"/workspace/project"}}`+"\n"+
 			`{"id":"m2","timestamp":"2026-06-01T10:00:01Z","sessionId":"sess_123","role":"assistant","content":[{"type":"text","text":"Done"}],"metadata":{"version":2}}`+"\n",
 	), 0o644))
-	require.NoError(t, os.WriteFile(meta, []byte(`{"title":"Original title"}`), 0o644))
+	require.NoError(os.WriteFile(meta, []byte(`{"title":"Original title"}`), 0o644))
 	database := dbtest.OpenTestDB(t)
 	engine := NewEngine(database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCommandCode: {root}},
@@ -31,24 +34,24 @@ func TestReconcileWatchRootsCommandCodeCompanionOnlyChangeReparsesOwner(t *testi
 	})
 	defer engine.Close()
 
-	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
+	require.NoError(engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
 	before, err := database.GetSessionFull(t.Context(), "commandcode:sess_123")
-	require.NoError(t, err)
-	require.NotNil(t, before)
-	require.NotNil(t, before.SessionName)
-	assert.Equal(t, "Original title", *before.SessionName)
+	require.NoError(err)
+	require.NotNil(before)
+	require.NotNil(before.SessionName)
+	assert.Equal("Original title", *before.SessionName)
 
-	require.NoError(t, os.WriteFile(meta, []byte(`{"title":"Companion-only rename"}`), 0o644))
+	require.NoError(os.WriteFile(meta, []byte(`{"title":"Companion-only rename"}`), 0o644))
 	future := time.Now().Add(time.Second)
-	require.NoError(t, os.Chtimes(meta, future, future))
-	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
+	require.NoError(os.Chtimes(meta, future, future))
+	require.NoError(engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
 
 	after, err := database.GetSessionFull(t.Context(), "commandcode:sess_123")
-	require.NoError(t, err)
-	require.NotNil(t, after)
-	require.NotNil(t, after.SessionName)
-	assert.Equal(t, "Companion-only rename", *after.SessionName)
+	require.NoError(err)
+	require.NotNil(after)
+	require.NotNil(after.SessionName)
+	assert.Equal("Companion-only rename", *after.SessionName)
 	active, err := database.GetSession(t.Context(), "commandcode:sess_123")
-	require.NoError(t, err)
-	assert.NotNil(t, active, "companion-only reconciliation must not tombstone its owner")
+	require.NoError(err)
+	assert.NotNil(active, "companion-only reconciliation must not tombstone its owner")
 }

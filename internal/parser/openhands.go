@@ -503,7 +503,7 @@ func formatOpenHandsAction(
 				"[Bash: %s]\n$ %s", summary, cmd,
 			)
 		}
-		return fmt.Sprintf("[Bash]\n$ %s", cmd)
+		return "[Bash]\n$ " + cmd
 	case "file_editor":
 		path := action.Get("path").Str
 		switch action.Get("command").Str {

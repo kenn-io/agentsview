@@ -351,7 +351,7 @@ CREATE TABLE IF NOT EXISTS model_pricing (
 CREATE TABLE IF NOT EXISTS model_pricing_bands (
     model_pattern TEXT NOT NULL
         REFERENCES model_pricing(model_pattern) ON DELETE CASCADE,
-    above_input_tokens BIGINT NOT NULL CHECK (above_input_tokens > 0),
+    above_input_tokens BIGINT NOT NULL,
     input_microdollars_per_mtok BIGINT NOT NULL,
     output_microdollars_per_mtok BIGINT NOT NULL,
     cache_creation_microdollars_per_mtok BIGINT NOT NULL,
@@ -362,10 +362,10 @@ CREATE TABLE IF NOT EXISTS model_pricing_bands (
 );
 
 CREATE TABLE IF NOT EXISTS genai_pricing (
-    singleton SMALLINT PRIMARY KEY CHECK (singleton = 1),
+    singleton SMALLINT PRIMARY KEY,
     version TEXT NOT NULL,
     source_ref TEXT NOT NULL DEFAULT '',
-    source TEXT NOT NULL CHECK (source IN ('embedded', 'fetched')),
+    source TEXT NOT NULL,
     data_json BYTEA NOT NULL,
     updated_at TEXT NOT NULL DEFAULT ''
 );

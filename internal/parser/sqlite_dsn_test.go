@@ -35,52 +35,57 @@ func TestSQLiteURIPath(t *testing.T) {
 }
 
 func TestOpenSQLiteWithSpecialCharPath(t *testing.T) {
+	require := require.New(t)
+
 	// '#' would end the URI path (dropping mode=ro into the fragment) and
 	// '%41' would percent-decode to 'A' if the path were not escaped.
 	dir := filepath.Join(t.TempDir(), "pro#ject %41")
-	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(os.MkdirAll(dir, 0o755))
 	dbPath := filepath.Join(dir, "opencode.db")
 
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
-	_, err = writer.Exec("CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1)")
-	require.NoError(t, err)
-	require.NoError(t, writer.Close())
+	require.NoError(err)
+	_, err = writer.ExecContext(t.Context(), "CREATE TABLE t (x INTEGER); INSERT INTO t VALUES (1)")
+	require.NoError(err)
+	require.NoError(writer.Close())
 
 	db, err := openOpenCodeDB(dbPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	defer db.Close()
 
 	var n int
-	require.NoError(t, db.QueryRow("SELECT count(*) FROM t").Scan(&n))
+	require.NoError(db.QueryRowContext(t.Context(), "SELECT count(*) FROM t").Scan(&n))
 	assert.Equal(t, 1, n)
 
-	_, err = db.Exec("INSERT INTO t VALUES (2)")
-	require.Error(t, err, "mode=ro must survive special characters in the path")
+	_, err = db.ExecContext(t.Context(), "INSERT INTO t VALUES (2)")
+	require.Error(err, "mode=ro must survive special characters in the path")
 }
 
 func TestOpenSQLiteReadOnlyStableSnapshot(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dbPath := filepath.Join(t.TempDir(), "snapshot.db")
 	writer, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
-	_, err = writer.Exec(`PRAGMA journal_mode=WAL;
+	require.NoError(err)
+	_, err = writer.ExecContext(t.Context(), `PRAGMA journal_mode=WAL;
 		CREATE TABLE messages (content TEXT);
 		INSERT INTO messages VALUES ('snapshot content')`)
-	require.NoError(t, err)
-	require.NoError(t, writer.Close())
+	require.NoError(err)
+	require.NoError(writer.Close())
 
 	reader, err := openSQLiteReadOnly(dbPath, sqliteReadOptions{
 		stableSnapshot: true,
 		busyTimeoutMS:  3000,
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reader.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(reader.Close()) })
 	var content string
-	require.NoError(t, reader.QueryRow("SELECT content FROM messages").Scan(&content))
-	assert.Equal(t, "snapshot content", content)
+	require.NoError(reader.QueryRowContext(t.Context(), "SELECT content FROM messages").Scan(&content))
+	assert.Equal("snapshot content", content)
 	// Immutable archive copies must not create live WAL coordination files.
-	assert.NoFileExists(t, dbPath+"-wal")
-	assert.NoFileExists(t, dbPath+"-shm")
-	_, err = reader.Exec("DELETE FROM messages")
-	require.Error(t, err)
+	assert.NoFileExists(dbPath + "-wal")
+	assert.NoFileExists(dbPath + "-shm")
+	_, err = reader.ExecContext(t.Context(), "DELETE FROM messages")
+	require.Error(err)
 }

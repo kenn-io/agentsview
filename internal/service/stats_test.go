@@ -1,7 +1,6 @@
 package service_test
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -15,6 +14,9 @@ import (
 )
 
 func TestHTTPBackendStats(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	var gotPath string
 	var gotQuery url.Values
@@ -33,7 +35,7 @@ func TestHTTPBackendStats(t *testing.T) {
 	t.Cleanup(srv.Close)
 	svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
 
-	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+	stats, err := svc.Stats(t.Context(), service.StatsFilter{
 		Since:                 "2026-04-01",
 		Until:                 "2026-04-15",
 		Agent:                 "codex",
@@ -46,23 +48,26 @@ func TestHTTPBackendStats(t *testing.T) {
 		IncludeGitHubOutcomes: true,
 	})
 
-	require.NoError(t, err)
-	require.NotNil(t, stats)
-	assert.Equal(t, "/api/v1/session-stats", gotPath)
-	assert.Equal(t, "2026-04-01", gotQuery.Get("since"))
-	assert.Equal(t, "2026-04-15", gotQuery.Get("until"))
-	assert.Equal(t, "codex", gotQuery.Get("agent"))
-	assert.Equal(t, "true", gotQuery.Get("include_one_shot"))
-	assert.Equal(t, "true", gotQuery.Get("include_automated"))
-	assert.Equal(t, "alpha", gotQuery.Get("include_project"))
-	assert.Equal(t, "beta", gotQuery.Get("exclude_project"))
-	assert.Equal(t, "UTC", gotQuery.Get("timezone"))
-	assert.Equal(t, "true", gotQuery.Get("include_git_outcomes"))
-	assert.Equal(t, "true", gotQuery.Get("include_github_outcomes"))
-	assert.Equal(t, 7, stats.Totals.SessionsAll)
+	require.NoError(err)
+	require.NotNil(stats)
+	assert.Equal("/api/v1/session-stats", gotPath)
+	assert.Equal("2026-04-01", gotQuery.Get("since"))
+	assert.Equal("2026-04-15", gotQuery.Get("until"))
+	assert.Equal("codex", gotQuery.Get("agent"))
+	assert.Equal("true", gotQuery.Get("include_one_shot"))
+	assert.Equal("true", gotQuery.Get("include_automated"))
+	assert.Equal("alpha", gotQuery.Get("include_project"))
+	assert.Equal("beta", gotQuery.Get("exclude_project"))
+	assert.Equal("UTC", gotQuery.Get("timezone"))
+	assert.Equal("true", gotQuery.Get("include_git_outcomes"))
+	assert.Equal("true", gotQuery.Get("include_github_outcomes"))
+	assert.Equal(7, stats.Totals.SessionsAll)
 }
 
 func TestHTTPBackendStatsDisablesDefaultVisibilityWithExplicitIncludes(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	var gotQuery url.Values
 	srv := httptest.NewServer(http.HandlerFunc(
@@ -74,13 +79,13 @@ func TestHTTPBackendStatsDisablesDefaultVisibilityWithExplicitIncludes(t *testin
 	t.Cleanup(srv.Close)
 	svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
 
-	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+	stats, err := svc.Stats(t.Context(), service.StatsFilter{
 		Since: "28d",
 		Agent: "all",
 	})
 
-	require.NoError(t, err)
-	require.NotNil(t, stats)
-	assert.Equal(t, "true", gotQuery.Get("include_one_shot"))
-	assert.Equal(t, "true", gotQuery.Get("include_automated"))
+	require.NoError(err)
+	require.NotNil(stats)
+	assert.Equal("true", gotQuery.Get("include_one_shot"))
+	assert.Equal("true", gotQuery.Get("include_automated"))
 }

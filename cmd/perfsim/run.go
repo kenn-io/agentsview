@@ -112,13 +112,13 @@ func run(ctx context.Context, o options, dir string) (report, error) {
 	defer stopProfile()
 	// No sleep or filesystem watcher debounce is included: each measurement
 	// exercises a completed engine batch, making equal workloads comparable.
-	for i := 0; i < o.Iterations; i++ {
+	for i := range o.Iterations {
 		if err := ctx.Err(); err != nil {
 			return r, err
 		}
 
 		var changed []string
-		for j := 0; j < o.Active; j++ {
+		for j := range o.Active {
 			s := &sources[j]
 			if err := s.appendTurns(1, o.ContentBytes); err != nil {
 				return r, err

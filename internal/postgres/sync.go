@@ -5,11 +5,15 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
-	"strings"
+	"strconv"
+
 	"sync"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -128,29 +132,23 @@ func (s *scopedSyncStateStore) GetOrCreateSyncState(
 // only the SQLSTATE code to avoid false positives from other
 // "does not exist" errors (missing columns, functions, etc.).
 func isUndefinedTable(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), "42P01")
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && pgErr.Code == "42P01"
 }
 
 // isUndefinedColumn returns true when a query references a column
 // that does not exist (PG SQLSTATE 42703).
 func isUndefinedColumn(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), "42703")
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && pgErr.Code == "42703"
 }
 
 // isInsufficientPrivilege returns true when the role lacks a required
 // privilege (PG SQLSTATE 42501) — e.g. a restricted push role that cannot
 // create vector tables in a schema provisioned by a privileged role.
 func isInsufficientPrivilege(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), "42501")
+	pgErr, ok := errors.AsType[*pgconn.PgError](err)
+	return ok && pgErr.Code == "42501"
 }
 
 // Sync manages push-only sync from local SQLite to a remote
@@ -240,12 +238,10 @@ func New(
 	opts SyncOptions,
 ) (*Sync, error) {
 	if pgURL == "" {
-		return nil, fmt.Errorf("postgres URL is required")
+		return nil, errors.New("postgres URL is required")
 	}
 	if machine == "" {
-		return nil, fmt.Errorf(
-			"machine name must not be empty",
-		)
+		return nil, errors.New("machine name must not be empty")
 	}
 	if machine == "local" {
 		return nil, fmt.Errorf(
@@ -255,7 +251,7 @@ func New(
 		)
 	}
 	if local == nil {
-		return nil, fmt.Errorf("local db is required")
+		return nil, errors.New("local db is required")
 	}
 	if err := ValidateProjectFilters(
 		opts.Projects,
@@ -315,9 +311,7 @@ func hasProjectFilter(projects, excludeProjects []string) bool {
 // ValidateProjectFilters rejects ambiguous include/exclude project filters.
 func ValidateProjectFilters(projects, excludeProjects []string) error {
 	if len(projects) > 0 && len(excludeProjects) > 0 {
-		return fmt.Errorf(
-			"projects and exclude_projects are mutually exclusive",
-		)
+		return errors.New("projects and exclude_projects are mutually exclusive")
 	}
 	return nil
 }
@@ -337,12 +331,12 @@ func pushSyncStateScope(
 	writeSyncScopeField(sum, "target")
 	writeSyncScopeField(sum, target)
 	writeSyncScopeField(sum, "include")
-	writeSyncScopeField(sum, fmt.Sprintf("%d", len(includeValues)))
+	writeSyncScopeField(sum, strconv.Itoa(len(includeValues)))
 	for _, value := range includeValues {
 		writeSyncScopeField(sum, value)
 	}
 	writeSyncScopeField(sum, "exclude")
-	writeSyncScopeField(sum, fmt.Sprintf("%d", len(excludeValues)))
+	writeSyncScopeField(sum, strconv.Itoa(len(excludeValues)))
 	for _, value := range excludeValues {
 		writeSyncScopeField(sum, value)
 	}
@@ -484,9 +478,7 @@ func ReadStatus(
 	lastPush string,
 ) (SyncStatus, error) {
 	if machine == "" {
-		return SyncStatus{}, fmt.Errorf(
-			"machine name must not be empty",
-		)
+		return SyncStatus{}, errors.New("machine name must not be empty")
 	}
 	if machine == "local" {
 		return SyncStatus{}, fmt.Errorf(
@@ -557,7 +549,7 @@ func ReadLastPushAt(
 	migrateLegacy bool,
 ) (string, error) {
 	if local == nil {
-		return "", fmt.Errorf("local sync state is required")
+		return "", errors.New("local sync state is required")
 	}
 	scope := pushSyncStateScope(target, projects, excludeProjects)
 	if scope == "" {

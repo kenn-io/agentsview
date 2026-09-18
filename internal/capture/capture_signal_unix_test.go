@@ -4,7 +4,6 @@ package capture
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"io"
 	"os"
@@ -21,6 +20,9 @@ import (
 )
 
 func TestInterruptedChildStillSealsRecoverableUsage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	marker := filepath.Join(t.TempDir(), "child-started")
 	captureDir := filepath.Join(t.TempDir(), "capture")
@@ -38,7 +40,7 @@ func TestInterruptedChildStillSealsRecoverableUsage(t *testing.T) {
 	done := make(chan response, 1)
 	limits := testLimits()
 	go func() {
-		outcome, err := Run(context.Background(), RunOptions{
+		outcome, err := Run(t.Context(), RunOptions{
 			Provider: ProviderClaude, OccurrenceID: "interrupted",
 			CaptureDir: captureDir, ResultPath: resultPath,
 			ProviderRoot: root, WorkDir: workDir,
@@ -49,8 +51,8 @@ func TestInterruptedChildStillSealsRecoverableUsage(t *testing.T) {
 		done <- response{outcome: outcome, err: err}
 	}()
 	childProcessGroup := waitForCaptureSignalMarker(t, marker)
-	assert.NotEqual(t, syscall.Getpgrp(), childProcessGroup)
-	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGTERM))
+	assert.NotEqual(syscall.Getpgrp(), childProcessGroup)
+	require.NoError(syscall.Kill(os.Getpid(), syscall.SIGTERM))
 
 	var got response
 	select {
@@ -58,25 +60,28 @@ func TestInterruptedChildStillSealsRecoverableUsage(t *testing.T) {
 	case <-time.After(limits.FinalizationWait + 5*time.Second):
 		t.Fatal("capture did not finish after forwarding SIGTERM")
 	}
-	require.NoError(t, got.err)
-	assert.Equal(t, 128+int(syscall.SIGTERM), got.outcome.ExitCode)
+	require.NoError(got.err)
+	assert.Equal(128+int(syscall.SIGTERM), got.outcome.ExitCode)
 	data, err := os.ReadFile(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	result, err := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, err)
-	assert.Equal(t, "SIGTERM", result.Execution.Signal)
-	require.NotNil(t, result.Usage)
+	require.NoError(err)
+	assert.Equal("SIGTERM", result.Execution.Signal)
+	require.NotNil(result.Usage)
 
 	var replay bytes.Buffer
-	_, err = Report(context.Background(), ReportOptions{
+	_, err = Report(t.Context(), ReportOptions{
 		CaptureDir: captureDir, ResultPath: "-", Stdout: &replay,
 		CustomPricing: testPricing(),
 	})
-	require.NoError(t, err)
-	assert.Equal(t, data, replay.Bytes())
+	require.NoError(err)
+	assert.Equal(data, replay.Bytes())
 }
 
 func TestWrapperSignalOverridesSuccessfulChildExit(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	marker := filepath.Join(t.TempDir(), "child-started")
 	handledMarker := filepath.Join(t.TempDir(), "signal-handled")
@@ -104,21 +109,24 @@ func TestWrapperSignalOverridesSuccessfulChildExit(t *testing.T) {
 		done <- response{outcome: outcome, code: code, err: err}
 	}()
 	childProcessGroup := waitForCaptureSignalMarker(t, marker)
-	assert.NotEqual(t, syscall.Getpgrp(), childProcessGroup)
-	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGTERM))
+	assert.NotEqual(syscall.Getpgrp(), childProcessGroup)
+	require.NoError(syscall.Kill(os.Getpid(), syscall.SIGTERM))
 
 	select {
 	case got := <-done:
-		require.NoError(t, got.err)
-		assert.Equal(t, "SIGTERM", got.outcome.Signal)
-		assert.Equal(t, 128+int(syscall.SIGTERM), got.code)
-		assert.FileExists(t, handledMarker)
+		require.NoError(got.err)
+		assert.Equal("SIGTERM", got.outcome.Signal)
+		assert.Equal(128+int(syscall.SIGTERM), got.code)
+		assert.FileExists(handledMarker)
 	case <-time.After(2 * time.Second):
 		t.Fatal("capture did not retain the wrapper signal after the child exited")
 	}
 }
 
 func TestRepeatedWrapperSignalEscalatesIgnoredChild(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	marker := filepath.Join(t.TempDir(), "child-started")
 	producer := copyCaptureHelper(t, "claude")
@@ -144,46 +152,49 @@ func TestRepeatedWrapperSignalEscalatesIgnoredChild(t *testing.T) {
 		done <- response{outcome: outcome, code: code, err: err}
 	}()
 	childProcessGroup := waitForCaptureSignalMarker(t, marker)
-	require.NotEqual(t, syscall.Getpgrp(), childProcessGroup)
-	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGTERM))
+	require.NotEqual(syscall.Getpgrp(), childProcessGroup)
+	require.NoError(syscall.Kill(os.Getpid(), syscall.SIGTERM))
 	select {
 	case early := <-done:
 		t.Fatalf("signal-ignoring child exited before escalation: %+v", early)
 	case <-time.After(50 * time.Millisecond):
 	}
-	require.NoError(t, syscall.Kill(os.Getpid(), syscall.SIGTERM))
+	require.NoError(syscall.Kill(os.Getpid(), syscall.SIGTERM))
 
 	select {
 	case got := <-done:
-		require.NoError(t, got.err)
-		assert.Equal(t, "SIGTERM", got.outcome.Signal)
-		assert.Equal(t, 128+int(syscall.SIGTERM), got.code)
+		require.NoError(got.err)
+		assert.Equal("SIGTERM", got.outcome.Signal)
+		assert.Equal(128+int(syscall.SIGTERM), got.code)
 	case <-time.After(2 * time.Second):
-		require.Positive(t, childProcessGroup)
+		require.Positive(childProcessGroup)
 		_ = syscall.Kill(-childProcessGroup, syscall.SIGKILL)
 		t.Fatal("repeated signal did not terminate the child process group")
 	}
 }
 
 func TestForwardSignalsDeliversSignalBufferedBeforeChildAvailable(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	producer := copyCaptureHelper(t, "claude")
-	cmd := exec.Command(producer, "-p", "prompt")
+	cmd := exec.CommandContext(t.Context(), producer, "-p", "prompt")
 	cmd.Env = helperEnvironment(t.TempDir(), "claude-wait-signal", 0)
 	configureChildProcess(cmd)
 	signals := make(chan os.Signal, 2)
 	signals <- syscall.SIGTERM
-	require.NoError(t, cmd.Start())
+	require.NoError(cmd.Start())
 	stopForwarding := forwardSignals(cmd.Process, signals)
 
 	err := cmd.Wait()
 	wrapperSignal, wrapperCode := stopForwarding()
 
-	require.Error(t, err)
-	assert.Equal(t, "SIGTERM", wrapperSignal)
-	assert.Equal(t, 128+int(syscall.SIGTERM), wrapperCode)
+	require.Error(err)
+	assert.Equal("SIGTERM", wrapperSignal)
+	assert.Equal(128+int(syscall.SIGTERM), wrapperCode)
 	childSignal, childCode := processSignal(cmd.ProcessState)
-	assert.Equal(t, "SIGTERM", childSignal)
-	assert.Equal(t, 128+int(syscall.SIGTERM), childCode)
+	assert.Equal("SIGTERM", childSignal)
+	assert.Equal(128+int(syscall.SIGTERM), childCode)
 }
 
 func waitForCaptureSignalMarker(t *testing.T, marker string) int {

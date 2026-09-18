@@ -2,6 +2,7 @@ package export
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -125,7 +126,7 @@ func DigestCanonical(v any) (string, error) {
 
 func digestCanonicalBytes(canonical []byte) string {
 	sum := sha256.Sum256(canonical)
-	return "sha256:" + fmt.Sprintf("%x", sum)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func canonicalPricingRowLess(a, b EffectivePricingRow) bool {

@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -64,6 +63,8 @@ func seedCodebuffSingleSession(t *testing.T) (root, chatPath string) {
 // write-failure invariant for both agent labels — a separate Freebuff test
 // would exercise identical code paths with no additional coverage.
 func TestSyncCodebuffWriteFailureDoesNotPersistStatHash(t *testing.T) {
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -88,17 +89,17 @@ func TestSyncCodebuffWriteFailureDoesNotPersistStatHash(t *testing.T) {
 		return 0, 0, len(batch), 0
 	}
 
-	failed := engine.SyncAll(context.Background(), nil)
-	require.Equal(t, 1, failed.Failed,
+	failed := engine.SyncAll(t.Context(), nil)
+	require.Equal(1, failed.Failed,
 		"the injected archive write must fail and be counted as failed")
 	assert.Zero(t, failed.Synced,
 		"no session may be reported synced when the write failed")
 
 	_, has, err := database.GetProviderStatHash(
-		context.Background(), parser.AgentCodebuff, chatPath,
+		t.Context(), parser.AgentCodebuff, chatPath,
 	)
-	require.NoError(t, err)
-	require.False(t, has,
+	require.NoError(err)
+	require.False(has,
 		"a failed write must not persist provider_freshness; a matching "+
 			"digest stamped before a confirmed outcome would suppress "+
 			"every later retry of this source")
@@ -107,16 +108,16 @@ func TestSyncCodebuffWriteFailureDoesNotPersistStatHash(t *testing.T) {
 	// suppressed — the session must now parse and commit, and the
 	// successful-write flush gate must stamp the digest.
 	engine.writeBatchOverride = nil
-	retry := engine.SyncAll(context.Background(), nil)
-	require.Equal(t, 1, retry.Synced,
+	retry := engine.SyncAll(t.Context(), nil)
+	require.Equal(1, retry.Synced,
 		"the retry after a transient write failure must parse and store "+
 			"the session; a skip here means a digest was stamped before "+
 			"the write outcome was confirmed")
 
 	_, hasAfter, err := database.GetProviderStatHash(
-		context.Background(), parser.AgentCodebuff, chatPath,
+		t.Context(), parser.AgentCodebuff, chatPath,
 	)
-	require.NoError(t, err)
-	require.True(t, hasAfter,
+	require.NoError(err)
+	require.True(hasAfter,
 		"the successful retry write must persist provider_freshness")
 }

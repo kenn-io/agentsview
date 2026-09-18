@@ -23,6 +23,8 @@ import (
 // every poll. SourceMtime must return the newer ui_messages.json mtime
 // from stat information alone.
 func TestSourceMtimeRooCodeUsesCompositeStat(t *testing.T) {
+	require := require.New(t)
+
 	database := openTestDB(t)
 	root := t.TempDir()
 	engine := NewEngine(database, EngineConfig{
@@ -34,30 +36,30 @@ func TestSourceMtimeRooCodeUsesCompositeStat(t *testing.T) {
 
 	rawID := "mtime-task"
 	taskDir := filepath.Join(root, "tasks", rawID)
-	require.NoError(t, os.MkdirAll(taskDir, 0o755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyPath := filepath.Join(taskDir, "history_item.json")
 	messagesPath := filepath.Join(taskDir, "ui_messages.json")
-	require.NoError(t, os.WriteFile(historyPath, []byte(
+	require.NoError(os.WriteFile(historyPath, []byte(
 		`{"id":"mtime-task","number":1,"ts":1688836851000,`+
 			`"task":"Test task","tokensIn":10,"tokensOut":20,`+
 			`"workspace":"/tmp/roocode","mode":"code","status":"completed"}`,
 	), 0o644))
-	require.NoError(t, os.WriteFile(messagesPath, []byte(
+	require.NoError(os.WriteFile(messagesPath, []byte(
 		`[{"ts":1688836851000,"type":"say","say":"text","text":"Test task"}]`,
 	), 0o644))
 
 	historyTime := time.Date(2026, time.June, 4, 10, 0, 0, 0, time.UTC)
 	messagesTime := historyTime.Add(5 * time.Minute)
-	require.NoError(t, os.Chtimes(historyPath, historyTime, historyTime))
-	require.NoError(t, os.Chtimes(messagesPath, messagesTime, messagesTime))
+	require.NoError(os.Chtimes(historyPath, historyTime, historyTime))
+	require.NoError(os.Chtimes(messagesPath, messagesTime, messagesTime))
 
 	if runtime.GOOS != "windows" {
 		// The lookup must be stat-only: make the contents unreadable so
 		// any attempt to hash them fails loudly (SourceMtime returns 0
 		// when the fingerprint errors).
-		require.NoError(t, os.Chmod(historyPath, 0o000))
-		require.NoError(t, os.Chmod(messagesPath, 0o000))
+		require.NoError(os.Chmod(historyPath, 0o000))
+		require.NoError(os.Chmod(messagesPath, 0o000))
 		t.Cleanup(func() {
 			_ = os.Chmod(historyPath, 0o644)
 			_ = os.Chmod(messagesPath, 0o644)
@@ -67,7 +69,7 @@ func TestSourceMtimeRooCodeUsesCompositeStat(t *testing.T) {
 	assert.Equal(
 		t,
 		messagesTime.UnixNano(),
-		engine.SourceMtime("roocode:"+rawID),
+		engine.SourceMtime(t.Context(), "roocode:"+rawID),
 		"SourceMtime must return the newer ui_messages.json mtime",
 	)
 }

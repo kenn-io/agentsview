@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -386,7 +387,7 @@ func generateCodex(
 	if waitErr := cmd.Wait(); waitErr != nil {
 		if parseErr != nil {
 			return Result{}, fmt.Errorf(
-				"codex failed: %w (parse: %v)\nstderr: %s",
+				"codex failed: %w (parse: %w)\nstderr: %s",
 				waitErr, parseErr, stderrText,
 			)
 		}
@@ -549,9 +550,7 @@ func generateCopilot(
 
 	content := strings.TrimSpace(string(stdoutBytes))
 	if content == "" {
-		return Result{}, fmt.Errorf(
-			"copilot returned empty result",
-		)
+		return Result{}, errors.New("copilot returned empty result")
 	}
 
 	return Result{
@@ -567,9 +566,7 @@ func generateGemini(
 	cfg AgentConfig,
 ) (Result, error) {
 	if strings.TrimSpace(cfg.Sandbox) == "" && !cfg.AllowUnsafe {
-		return Result{}, fmt.Errorf(
-			"gemini insights require an explicit sandbox or unsafe opt-in; set [agent.gemini].sandbox to a Gemini sandbox provider or [agent.gemini].allow_unsafe = true",
-		)
+		return Result{}, errors.New("gemini insights require an explicit sandbox or unsafe opt-in; set [agent.gemini].sandbox to a Gemini sandbox provider or [agent.gemini].allow_unsafe = true")
 	}
 	cmd := exec.CommandContext(
 		ctx, path,
@@ -615,7 +612,7 @@ func generateGemini(
 	if waitErr := cmd.Wait(); waitErr != nil {
 		if parseErr != nil {
 			return Result{}, fmt.Errorf(
-				"gemini failed: %w (parse: %v)\nstderr: %s",
+				"gemini failed: %w (parse: %w)\nstderr: %s",
 				waitErr, parseErr, stderrText,
 			)
 		}
@@ -805,7 +802,7 @@ func generateKiro(
 	}
 	content := strings.TrimSpace(strings.Join(lines, "\n"))
 	if content == "" {
-		return Result{}, fmt.Errorf("kiro returned empty result")
+		return Result{}, errors.New("kiro returned empty result")
 	}
 
 	return Result{

@@ -374,9 +374,7 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 			if cfg.Host == "" {
 				if cmd.Flags().Changed("user") ||
 					cmd.Flags().Changed("port") {
-					return fmt.Errorf(
-						"--user and --port require --host",
-					)
+					return errors.New("--user and --port require --host")
 				}
 			}
 			return nil
@@ -701,9 +699,7 @@ func newPGPushCommand() *cobra.Command {
 			if cfg.AllTargets && cfg.Watch {
 				return fmt.Errorf(
 					"pg push --watch: %w",
-					fmt.Errorf(
-						"--all cannot be combined with --watch",
-					),
+					errors.New("--all cannot be combined with --watch"),
 				)
 			}
 			if cfg.Watch {
@@ -913,7 +909,6 @@ func newVersionCommand() *cobra.Command {
 					Commit:        commit,
 					BuildDate:     buildDate,
 				})
-
 			}
 			printVersion(cmd.OutOrStdout())
 			return nil

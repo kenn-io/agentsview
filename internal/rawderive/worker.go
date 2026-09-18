@@ -446,7 +446,7 @@ func stripCanceledLeaves(err error) (error, bool) {
 	if err == nil {
 		return nil, false
 	}
-	if err == context.Canceled {
+	if errors.Is(err, context.Canceled) {
 		return nil, true
 	}
 	if tree, ok := err.(interface{ Unwrap() []error }); ok {

@@ -99,13 +99,15 @@ func TestTraeXUsesIncrementalAppend(t *testing.T) {
 // TestParseDiffLiveMtimeTraeXUsesTranscriptStat pins TraeX to the same
 // transcript-only live mtime Codex uses for the parse-diff raced guard.
 func TestParseDiffLiveMtimeTraeXUsesTranscriptStat(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "rollout-2026-08-01T18-07-03-x.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o644))
-	info, err := os.Stat(path)
-	require.NoError(t, err)
+	require := require.New(t)
 
-	got, err := parseDiffLiveMtime(parser.AgentTraeX, path)
-	require.NoError(t, err)
+	path := filepath.Join(t.TempDir(), "rollout-2026-08-01T18-07-03-x.jsonl")
+	require.NoError(os.WriteFile(path, []byte("{}\n"), 0o644))
+	info, err := os.Stat(path)
+	require.NoError(err)
+
+	got, err := parseDiffLiveMtime(t.Context(), parser.AgentTraeX, path)
+	require.NoError(err)
 	assert.Equal(t, info.ModTime().UnixNano(), got)
 }
 

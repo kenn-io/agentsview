@@ -22,6 +22,9 @@ import (
 )
 
 func TestUsageOnlyStoragePreservesUsageWithoutTranscriptContent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	codexRoot := t.TempDir()
 	sessionID := "019eb791-cf7d-75c1-8439-9ed74c1229e1"
 	path := filepath.Join(
@@ -29,8 +32,8 @@ func TestUsageOnlyStoragePreservesUsageWithoutTranscriptContent(t *testing.T) {
 		"2026", "08", "31",
 		"rollout-2026-08-31T10-00-00-"+sessionID+".jsonl",
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(
+	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(os.WriteFile(path, []byte(testjsonl.JoinJSONL(
 		testjsonl.CodexSessionMetaJSON(
 			sessionID, "/workspace/private-project", "codex_cli_rs",
 			"2026-08-31T10:00:00Z",
@@ -61,7 +64,7 @@ func TestUsageOnlyStoragePreservesUsageWithoutTranscriptContent(t *testing.T) {
 	claudePath := filepath.Join(
 		claudeRoot, "private-project", claudeSessionID+".jsonl",
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(claudePath), 0o755))
+	require.NoError(os.MkdirAll(filepath.Dir(claudePath), 0o755))
 	claudeBuilder := testjsonl.NewSessionBuilder().
 		AddClaudeUserWithSessionID(
 			"2026-08-31T11:00:00Z",
@@ -84,7 +87,7 @@ func TestUsageOnlyStoragePreservesUsageWithoutTranscriptContent(t *testing.T) {
 				OutputTokens: 200,
 			},
 		)
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		claudePath, []byte(claudeBuilder.String()), 0o600,
 	))
 
@@ -106,8 +109,8 @@ func TestUsageOnlyStoragePreservesUsageWithoutTranscriptContent(t *testing.T) {
 	})
 	t.Cleanup(usageEngine.Close)
 
-	require.Equal(t, 2, fullEngine.SyncAll(t.Context(), nil).Synced)
-	require.Equal(t, 2, usageEngine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(2, fullEngine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(2, usageEngine.SyncAll(t.Context(), nil).Synced)
 
 	appendBuilder := testjsonl.NewSessionBuilder().AddClaudeAssistantUsage(
 		"2026-08-31T11:00:02Z",
@@ -121,111 +124,113 @@ func TestUsageOnlyStoragePreservesUsageWithoutTranscriptContent(t *testing.T) {
 		},
 	)
 	appendFile, err := os.OpenFile(claudePath, os.O_APPEND|os.O_WRONLY, 0o600)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = appendFile.WriteString(appendBuilder.String())
-	require.NoError(t, err)
-	require.NoError(t, appendFile.Close())
+	require.NoError(err)
+	require.NoError(appendFile.Close())
 	fullEngine.SyncPathsContext(t.Context(), []string{claudePath})
 	usageEngine.SyncPathsContext(t.Context(), []string{claudePath})
 	resyncStats := usageEngine.ResyncAll(t.Context(), nil)
-	require.False(t, resyncStats.Aborted)
-	require.Zero(t, resyncStats.Failed)
+	require.False(resyncStats.Aborted)
+	require.Zero(resyncStats.Failed)
 
 	for _, agent := range []string{"claude", "codex"} {
 		filter := db.UsageFilter{
 			From: "2026-08-31", To: "2026-08-31",
 			Agent: agent, Timezone: "UTC", Breakdowns: true,
 		}
-		fullUsage, err := fullDB.GetDailyUsage(context.Background(), filter)
-		require.NoError(t, err)
+		fullUsage, err := fullDB.GetDailyUsage(t.Context(), filter)
+		require.NoError(err)
 		usageOnlyUsage, err := usageDB.GetDailyUsage(
-			context.Background(), filter,
+			t.Context(), filter,
 		)
-		require.NoError(t, err)
-		assert.Equal(t, fullUsage.Totals, usageOnlyUsage.Totals)
-		assert.Equal(t, fullUsage.Daily, usageOnlyUsage.Daily)
-		assert.Equal(t, fullUsage.SessionCounts, usageOnlyUsage.SessionCounts)
+		require.NoError(err)
+		assert.Equal(fullUsage.Totals, usageOnlyUsage.Totals)
+		assert.Equal(fullUsage.Daily, usageOnlyUsage.Daily)
+		assert.Equal(fullUsage.SessionCounts, usageOnlyUsage.SessionCounts)
 
 		fullMatching, err := fullDB.GetUsageMatchingSessionCount(
-			context.Background(), filter,
+			t.Context(), filter,
 		)
-		require.NoError(t, err)
+		require.NoError(err)
 		usageOnlyMatching, err := usageDB.GetUsageMatchingSessionCount(
-			context.Background(), filter,
+			t.Context(), filter,
 		)
-		require.NoError(t, err)
-		assert.Equal(t, fullMatching, usageOnlyMatching)
+		require.NoError(err)
+		assert.Equal(fullMatching, usageOnlyMatching)
 
 		automatedFilter := filter
 		automatedFilter.AutomatedScope = "automated"
 		fullAutomated, err := fullDB.GetDailyUsage(
-			context.Background(), automatedFilter,
+			t.Context(), automatedFilter,
 		)
-		require.NoError(t, err)
+		require.NoError(err)
 		usageOnlyAutomated, err := usageDB.GetDailyUsage(
-			context.Background(), automatedFilter,
+			t.Context(), automatedFilter,
 		)
-		require.NoError(t, err)
-		assert.Equal(t, fullAutomated, usageOnlyAutomated)
+		require.NoError(err)
+		assert.Equal(fullAutomated, usageOnlyAutomated)
 	}
 
-	messages, err := usageDB.GetAllMessages(context.Background(), "codex:"+sessionID)
-	require.NoError(t, err)
-	require.NotEmpty(t, messages)
+	messages, err := usageDB.GetAllMessages(t.Context(), "codex:"+sessionID)
+	require.NoError(err)
+	require.NotEmpty(messages)
 	for _, message := range messages {
-		assert.Empty(t, message.Content)
-		assert.Empty(t, message.ThinkingText)
-		assert.Empty(t, message.ToolCalls)
-		assert.Empty(t, message.ToolResults)
+		assert.Empty(message.Content)
+		assert.Empty(message.ThinkingText)
+		assert.Empty(message.ToolCalls)
+		assert.Empty(message.ToolResults)
 	}
 
 	session, err := usageDB.GetSessionFull(
-		context.Background(), "codex:"+sessionID,
+		t.Context(), "codex:"+sessionID,
 	)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Nil(t, session.FirstMessage)
-	assert.Nil(t, session.DisplayName)
-	assert.Nil(t, session.SessionName)
-	assert.Equal(t, 0, session.SecretLeakCount)
+	require.NoError(err)
+	require.NotNil(session)
+	assert.Nil(session.FirstMessage)
+	assert.Nil(session.DisplayName)
+	assert.Nil(session.SessionName)
+	assert.Equal(0, session.SecretLeakCount)
 
 	fullClaudeMessages, err := fullDB.GetAllMessages(
-		context.Background(), claudeSessionID,
+		t.Context(), claudeSessionID,
 	)
-	require.NoError(t, err)
-	require.NotEmpty(t, fullClaudeMessages)
+	require.NoError(err)
+	require.NotEmpty(fullClaudeMessages)
 	var fullClaudeText strings.Builder
 	for _, message := range fullClaudeMessages {
 		fullClaudeText.WriteString(message.Content)
 	}
-	assert.Contains(t, fullClaudeText.String(), "private Claude prompt")
-	assert.Contains(t, fullClaudeText.String(), "incrementally appended")
+	assert.Contains(fullClaudeText.String(), "private Claude prompt")
+	assert.Contains(fullClaudeText.String(), "incrementally appended")
 
 	usageClaudeMessages, err := usageDB.GetAllMessages(
-		context.Background(), claudeSessionID,
+		t.Context(), claudeSessionID,
 	)
-	require.NoError(t, err)
-	require.Less(t, len(usageClaudeMessages), len(fullClaudeMessages),
+	require.NoError(err)
+	require.Less(len(usageClaudeMessages), len(fullClaudeMessages),
 		"usage-only storage must omit rows unrelated to accounting")
 	for _, message := range usageClaudeMessages {
-		assert.True(t,
-			(message.TokenUsage != nil && message.Model != "" &&
-				message.Model != "<synthetic>") ||
-				(message.Role == "assistant" && message.Model != "<synthetic>"),
+		assert.True((message.TokenUsage != nil && message.Model != "" &&
+			message.Model != "<synthetic>") ||
+			(message.Role == "assistant" && message.Model != "<synthetic>"),
 			"stored message %d is unrelated to usage accounting", message.Ordinal,
 		)
-		assert.Empty(t, message.Content)
-		assert.Empty(t, message.ThinkingText)
-		assert.Empty(t, message.ToolCalls)
-		assert.Empty(t, message.ToolResults)
+		assert.Empty(message.Content)
+		assert.Empty(message.ThinkingText)
+		assert.Empty(message.ToolCalls)
+		assert.Empty(message.ToolResults)
 	}
 }
 
 func TestUsageOnlyStorageClaudeUserAppendStaysIncremental(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	claudeRoot := t.TempDir()
 	sessionID := "usage-only-incremental-claude"
 	path := filepath.Join(claudeRoot, "project", sessionID+".jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
 	initial := testjsonl.NewSessionBuilder().
 		AddClaudeUserWithSessionID(
 			"2026-08-31T10:00:00Z", "initial private prompt",
@@ -238,7 +243,7 @@ func TestUsageOnlyStorageClaudeUserAppendStaysIncremental(t *testing.T) {
 				Model: "claude-sonnet-4-6", InputTokens: 100, OutputTokens: 10,
 			},
 		)
-	require.NoError(t, os.WriteFile(path, []byte(initial.String()), 0o600))
+	require.NoError(os.WriteFile(path, []byte(initial.String()), 0o600))
 
 	database := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(database, sync.EngineConfig{
@@ -248,33 +253,36 @@ func TestUsageOnlyStorageClaudeUserAppendStaysIncremental(t *testing.T) {
 		Machine: "local", ArchiveContent: config.ArchiveContentUsage,
 	})
 	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
 
 	appendFile, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = appendFile.WriteString(
 		testjsonl.ClaudeUserJSON(
 			"second private prompt", "2026-08-31T10:00:02Z",
 		) + "\n",
 	)
-	require.NoError(t, err)
-	require.NoError(t, appendFile.Close())
+	require.NoError(err)
+	require.NoError(appendFile.Close())
 	engine.SyncPathsContext(t.Context(), []string{path})
 
 	stored, err := database.GetSessionFull(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	assert.True(t, stored.LastWriteIncremental,
+	require.NoError(err)
+	require.NotNil(stored)
+	assert.True(stored.LastWriteIncremental,
 		"discarded previews cannot force a full parse on every user append")
-	assert.Equal(t, 2, stored.UserMessageCount)
-	assert.Nil(t, stored.FirstMessage)
+	assert.Equal(2, stored.UserMessageCount)
+	assert.Nil(stored.FirstMessage)
 }
 
 func TestUsageOnlyStorageClaudeAITitleAppendStaysIncremental(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	claudeRoot := t.TempDir()
 	sessionID := "usage-only-ai-title"
 	path := filepath.Join(claudeRoot, "project", sessionID+".jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
 	initial := testjsonl.NewSessionBuilder().
 		AddClaudeUserWithSessionID(
 			"2026-08-31T10:00:00Z", "private initial prompt",
@@ -287,7 +295,7 @@ func TestUsageOnlyStorageClaudeAITitleAppendStaysIncremental(t *testing.T) {
 				Model: "claude-sonnet-4-6", InputTokens: 100, OutputTokens: 10,
 			},
 		)
-	require.NoError(t, os.WriteFile(path, []byte(initial.String()), 0o600))
+	require.NoError(os.WriteFile(path, []byte(initial.String()), 0o600))
 
 	database := dbtest.OpenTestDB(t)
 	database.SetArchiveContent(config.ArchiveContentUsage)
@@ -298,50 +306,53 @@ func TestUsageOnlyStorageClaudeAITitleAppendStaysIncremental(t *testing.T) {
 		Machine: "local", ArchiveContent: config.ArchiveContentUsage,
 	})
 	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
 
 	appendFile, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = appendFile.WriteString(
 		`{"type":"ai-title","aiTitle":"Generated title"}` + "\n",
 	)
-	require.NoError(t, err)
-	require.NoError(t, appendFile.Close())
+	require.NoError(err)
+	require.NoError(appendFile.Close())
 	engine.SyncPathsContext(t.Context(), []string{path})
 
 	stored, err := database.GetSessionFull(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	assert.True(t, stored.LastWriteIncremental)
-	assert.Nil(t, stored.SessionName)
-	assert.Nil(t, stored.FirstMessage)
-	assert.True(t, stored.HasTotalOutputTokens)
-	assert.Equal(t, 10, stored.TotalOutputTokens)
+	require.NoError(err)
+	require.NotNil(stored)
+	assert.True(stored.LastWriteIncremental)
+	assert.Nil(stored.SessionName)
+	assert.Nil(stored.FirstMessage)
+	assert.True(stored.HasTotalOutputTokens)
+	assert.Equal(10, stored.TotalOutputTokens)
 	messages := fetchMessages(t, database, sessionID)
-	require.NotEmpty(t, messages)
+	require.NotEmpty(messages)
 	for _, message := range messages {
-		assert.Empty(t, message.Content)
-		assert.Empty(t, message.ThinkingText)
-		assert.Empty(t, message.ToolCalls)
-		assert.Empty(t, message.ToolResults)
+		assert.Empty(message.Content)
+		assert.Empty(message.ThinkingText)
+		assert.Empty(message.ToolCalls)
+		assert.Empty(message.ToolResults)
 	}
 	t.Logf("LastWriteIncremental=%t SessionName=nil FirstMessage=nil TotalOutputTokens=%d transcript_content=%q", stored.LastWriteIncremental, stored.TotalOutputTokens, messages[0].Content)
 }
 
 func TestUsageOnlyStorageSettlesLegacySignalBackfillOnce(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "legacy-usage.db")
 	seedDatabase, err := db.Open(path)
-	require.NoError(t, err)
+	require.NoError(err)
 	startedAt := "2026-08-31T10:00:00Z"
-	require.NoError(t, seedDatabase.UpsertSession(db.Session{
+	require.NoError(seedDatabase.UpsertSession(db.Session{
 		ID: "legacy-signals", Project: "project", Agent: "claude",
 		Machine: "local", StartedAt: &startedAt, MessageCount: 1,
 	}))
-	require.NoError(t, seedDatabase.InsertMessages([]db.Message{{
+	require.NoError(seedDatabase.InsertMessages([]db.Message{{
 		SessionID: "legacy-signals", Ordinal: 0, Role: "assistant",
 		Model: "model-a", TokenUsage: []byte(`{"input_tokens":10,"output_tokens":2}`),
 	}}))
-	require.NoError(t, seedDatabase.UpdateSessionSignals(
+	require.NoError(seedDatabase.UpdateSessionSignals(
 		"legacy-signals", db.SessionSignalUpdate{
 			ToolFailureSignalCount: 3,
 			Outcome:                "failure",
@@ -351,21 +362,21 @@ func TestUsageOnlyStorageSettlesLegacySignalBackfillOnce(t *testing.T) {
 			},
 		},
 	))
-	require.NoError(t, seedDatabase.ReplaceSessionSecretFindings(
+	require.NoError(seedDatabase.ReplaceSessionSecretFindings(
 		"legacy-signals", nil, 2, "legacy-rules",
 	))
-	require.NoError(t, seedDatabase.Close())
+	require.NoError(seedDatabase.Close())
 
 	database, err := db.OpenWithArchiveContent(path, config.ArchiveContentUsage)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(database.Close()) })
 
 	engine := sync.NewEngine(database, sync.EngineConfig{ArchiveContent: config.ArchiveContentUsage})
 	t.Cleanup(engine.Close)
 	compute := engine.BackfillSignalComputer()
 	calls := 0
 	runBackfill := func() {
-		require.NoError(t, database.BackfillSignals(
+		require.NoError(database.BackfillSignals(
 			t.Context(), func(ctx context.Context, sessionID string) error {
 				calls++
 				return compute(ctx, sessionID)
@@ -374,48 +385,51 @@ func TestUsageOnlyStorageSettlesLegacySignalBackfillOnce(t *testing.T) {
 	}
 
 	runBackfill()
-	require.Equal(t, 1, calls)
+	require.Equal(1, calls)
 	stored, err := database.GetSessionFull(t.Context(), "legacy-signals")
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	assert.Equal(t, db.CurrentQualitySignalVersion, stored.QualitySignalVersion)
-	assert.Zero(t, stored.ToolFailureSignalCount)
-	assert.Empty(t, stored.Outcome)
-	assert.Zero(t, stored.ShortPromptCount)
-	assert.Zero(t, stored.SecretLeakCount)
-	assert.Empty(t, stored.SecretsRulesVersion)
+	require.NoError(err)
+	require.NotNil(stored)
+	assert.Equal(db.CurrentQualitySignalVersion, stored.QualitySignalVersion)
+	assert.Zero(stored.ToolFailureSignalCount)
+	assert.Empty(stored.Outcome)
+	assert.Zero(stored.ShortPromptCount)
+	assert.Zero(stored.SecretLeakCount)
+	assert.Empty(stored.SecretsRulesVersion)
 
 	calls = 0
 	runBackfill()
-	assert.Zero(t, calls,
+	assert.Zero(calls,
 		"the current marker must keep later startups from revisiting the row")
 }
 
 func TestUsageOnlyStoragePreservesNestedToolLinkedSubagentUsage(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	fullDB := dbtest.OpenTestDB(t)
 	usageDB := dbtest.OpenTestDB(t)
 	usageDB.SetArchiveContent(config.ArchiveContentUsage)
 
 	for _, database := range []*db.DB{fullDB, usageDB} {
 		seedUsageOnlySubagentUsage(t, database)
-		require.NoError(t, database.LinkSubagentSessions())
+		require.NoError(database.LinkSubagentSessions())
 	}
 
 	fullUsage, err := service.SessionUsageWithSubagents(
 		t.Context(), fullDB, "root", true,
 	)
-	require.NoError(t, err)
-	require.NotNil(t, fullUsage)
+	require.NoError(err)
+	require.NotNil(fullUsage)
 	usageOnly, err := service.SessionUsageWithSubagents(
 		t.Context(), usageDB, "root", true,
 	)
-	require.NoError(t, err)
-	require.NotNil(t, usageOnly)
+	require.NoError(err)
+	require.NotNil(usageOnly)
 
-	require.Equal(t, 2, fullUsage.SubagentCount)
-	assert.Equal(t, fullUsage, usageOnly,
+	require.Equal(2, fullUsage.SubagentCount)
+	assert.Equal(fullUsage, usageOnly,
 		"content compaction must preserve nested delegated token and cost totals")
 
 	for _, tc := range []struct {
@@ -426,16 +440,16 @@ func TestUsageOnlyStoragePreservesNestedToolLinkedSubagentUsage(
 		{sessionID: "child", childID: "grandchild"},
 	} {
 		messages, err := usageDB.GetAllMessages(t.Context(), tc.sessionID)
-		require.NoError(t, err)
-		require.Len(t, messages, 1)
-		require.Len(t, messages[0].ToolCalls, 1)
+		require.NoError(err)
+		require.Len(messages, 1)
+		require.Len(messages[0].ToolCalls, 1)
 		call := messages[0].ToolCalls[0]
-		assert.Equal(t, tc.childID, call.SubagentSessionID)
-		assert.Equal(t, "subagent", call.ToolName)
-		assert.Equal(t, "Task", call.Category)
-		assert.Empty(t, call.InputJSON)
-		assert.Empty(t, call.ResultContent)
-		assert.Empty(t, call.ResultEvents)
+		assert.Equal(tc.childID, call.SubagentSessionID)
+		assert.Equal("subagent", call.ToolName)
+		assert.Equal("Task", call.Category)
+		assert.Empty(call.InputJSON)
+		assert.Empty(call.ResultContent)
+		assert.Empty(call.ResultEvents)
 	}
 }
 
@@ -548,6 +562,9 @@ func joinedContent(messages []db.Message) string {
 func TestTranscriptsArchiveContentSyncKeepsTranscriptWithoutToolPayloads(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	claudeRoot := t.TempDir()
 	const sessionID = "transcripts-claude-session"
 	writeTranscriptsFixture(t, claudeRoot, sessionID)
@@ -561,39 +578,39 @@ func TestTranscriptsArchiveContentSyncKeepsTranscriptWithoutToolPayloads(
 		ArchiveContent: config.ArchiveContentTranscripts,
 	})
 	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
 
 	stored, err := database.GetSessionFull(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	require.NotNil(t, stored.FirstMessage)
-	assert.Equal(t, "please run the tests", *stored.FirstMessage)
+	require.NoError(err)
+	require.NotNil(stored)
+	require.NotNil(stored.FirstMessage)
+	assert.Equal("please run the tests", *stored.FirstMessage)
 
 	messages, err := database.GetAllMessages(t.Context(), sessionID)
-	require.NoError(t, err)
+	require.NoError(err)
 	joined := joinedContent(messages)
-	assert.Contains(t, joined, "the build tool is missing")
-	assert.Contains(t, joined, "[Bash]",
+	assert.Contains(joined, "the build tool is missing")
+	assert.Contains(joined, "[Bash]",
 		"the transcript still shows that a tool ran")
-	assert.NotContains(t, joined, "make test",
+	assert.NotContains(joined, "make test",
 		"the command itself is a tool input and leaves the archive")
 	calls := toolCallsOf(messages)
-	require.Len(t, calls, 1)
-	assert.Equal(t, "Bash", calls[0].ToolName)
-	assert.Empty(t, calls[0].InputJSON)
-	assert.Empty(t, calls[0].ResultContent)
-	assert.Equal(t, len("make: command not found"), calls[0].ResultContentLength)
+	require.Len(calls, 1)
+	assert.Equal("Bash", calls[0].ToolName)
+	assert.Empty(calls[0].InputJSON)
+	assert.Empty(calls[0].ResultContent)
+	assert.Equal(len("make: command not found"), calls[0].ResultContentLength)
 
 	// Signals come from the rows as stored, so a recompute from the archive
 	// reproduces the write-time values instead of resetting them.
-	assert.Zero(t, stored.ToolFailureSignalCount,
+	assert.Zero(stored.ToolFailureSignalCount,
 		"failure text is not stored, so it cannot count at write time")
-	require.NoError(t, engine.BackfillSignalComputer()(t.Context(), sessionID))
+	require.NoError(engine.BackfillSignalComputer()(t.Context(), sessionID))
 	recomputed, err := database.GetSessionFull(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, recomputed)
-	assert.Equal(t, stored.ToolFailureSignalCount, recomputed.ToolFailureSignalCount)
-	assert.Equal(t, stored.Outcome, recomputed.Outcome)
+	require.NoError(err)
+	require.NotNil(recomputed)
+	assert.Equal(stored.ToolFailureSignalCount, recomputed.ToolFailureSignalCount)
+	assert.Equal(stored.Outcome, recomputed.Outcome)
 }
 
 // TestResyncProjectsArchivedSessionsOntoArchiveContent switches an existing
@@ -605,6 +622,9 @@ func TestResyncProjectsArchivedSessionsOntoArchiveContent(t *testing.T) {
 		config.ArchiveContentTranscripts, config.ArchiveContentUsage,
 	} {
 		t.Run(string(policy), func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			claudeRoot := t.TempDir()
 			sessionID := "archived-" + string(policy)
 			sourcePath := writeTranscriptsFixture(t, claudeRoot, sessionID)
@@ -617,54 +637,54 @@ func TestResyncProjectsArchivedSessionsOntoArchiveContent(t *testing.T) {
 
 			dbPath := filepath.Join(t.TempDir(), "sessions.db")
 			full, err := db.Open(dbPath)
-			require.NoError(t, err)
+			require.NoError(err)
 			fullEngine := sync.NewEngine(full, sync.EngineConfig{
 				AgentDirs: agentDirs, Machine: "local",
 			})
-			require.Equal(t, 2, fullEngine.SyncAll(t.Context(), nil).Synced)
+			require.Equal(2, fullEngine.SyncAll(t.Context(), nil).Synced)
 			fullEngine.Close()
-			require.NoError(t, full.Close())
-			require.NoError(t, os.Remove(sourcePath))
+			require.NoError(full.Close())
+			require.NoError(os.Remove(sourcePath))
 
 			database, err := db.OpenWithArchiveContent(dbPath, policy)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			require.NoError(err)
+			t.Cleanup(func() { require.NoError(database.Close()) })
 			engine := sync.NewEngine(database, sync.EngineConfig{
 				AgentDirs: agentDirs, Machine: "local", ArchiveContent: policy,
 			})
 			t.Cleanup(engine.Close)
 			stats := engine.ResyncAll(t.Context(), nil)
-			require.False(t, stats.Aborted, "warnings: %v", stats.Warnings)
-			require.Equal(t, 1, stats.OrphanedCopied)
+			require.False(stats.Aborted, "warnings: %v", stats.Warnings)
+			require.Equal(1, stats.OrphanedCopied)
 
 			stored, err := database.GetSessionFull(t.Context(), sessionID)
-			require.NoError(t, err)
-			require.NotNil(t, stored, "archived session must survive the rebuild")
+			require.NoError(err)
+			require.NotNil(stored, "archived session must survive the rebuild")
 			messages, err := database.GetAllMessages(t.Context(), sessionID)
-			require.NoError(t, err)
-			require.NotEmpty(t, messages)
+			require.NoError(err)
+			require.NotEmpty(messages)
 			calls := toolCallsOf(messages)
 
 			switch policy {
 			case config.ArchiveContentTranscripts:
-				require.NotNil(t, stored.FirstMessage)
-				assert.Contains(t, joinedContent(messages), "the build tool is missing")
-				require.Len(t, calls, 1)
-				assert.Empty(t, calls[0].InputJSON)
-				assert.Empty(t, calls[0].ResultContent)
-				assert.Equal(t, len("make: command not found"), calls[0].ResultContentLength)
+				require.NotNil(stored.FirstMessage)
+				assert.Contains(joinedContent(messages), "the build tool is missing")
+				require.Len(calls, 1)
+				assert.Empty(calls[0].InputJSON)
+				assert.Empty(calls[0].ResultContent)
+				assert.Equal(len("make: command not found"), calls[0].ResultContentLength)
 			case config.ArchiveContentUsage:
-				assert.Nil(t, stored.FirstMessage)
-				assert.Empty(t, calls)
+				assert.Nil(stored.FirstMessage)
+				assert.Empty(calls)
 				billed := 0
 				for _, message := range messages {
-					assert.Empty(t, message.Content, "ordinal %d", message.Ordinal)
-					assert.Equal(t, "assistant", message.Role, "ordinal %d", message.Ordinal)
+					assert.Empty(message.Content, "ordinal %d", message.Ordinal)
+					assert.Equal("assistant", message.Role, "ordinal %d", message.Ordinal)
 					if len(message.TokenUsage) > 0 {
 						billed++
 					}
 				}
-				assert.Equal(t, 1, billed)
+				assert.Equal(1, billed)
 			}
 		})
 	}
@@ -682,6 +702,9 @@ func TestResyncCopiesDerivedTextOnlyOutsideUsagePolicy(t *testing.T) {
 		{policy: config.ArchiveContentUsage, kept: false},
 	} {
 		t.Run(string(tc.policy), func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			claudeRoot := t.TempDir()
 			sessionID := "derived-" + string(tc.policy)
 			writeTranscriptsFixture(t, claudeRoot, sessionID)
@@ -691,45 +714,45 @@ func TestResyncCopiesDerivedTextOnlyOutsideUsagePolicy(t *testing.T) {
 
 			dbPath := filepath.Join(t.TempDir(), "sessions.db")
 			full, err := db.Open(dbPath)
-			require.NoError(t, err)
+			require.NoError(err)
 			fullEngine := sync.NewEngine(full, sync.EngineConfig{
 				AgentDirs: agentDirs, Machine: "local",
 			})
-			require.Equal(t, 1, fullEngine.SyncAll(t.Context(), nil).Synced)
+			require.Equal(1, fullEngine.SyncAll(t.Context(), nil).Synced)
 			fullEngine.Close()
 			_, err = full.InsertInsight(db.Insight{
 				Type: "daily", DateFrom: "2026-08-31", DateTo: "2026-08-31",
 				Agent: "claude", Content: "summary quoting private transcript text",
 			})
-			require.NoError(t, err)
+			require.NoError(err)
 			_, err = full.InsertRecallEntry(db.RecallEntry{
 				ID: "entry-1", Type: "fact", Scope: "project", Status: "accepted",
 				Title: "build tool", Body: "the build tool is missing",
 				Project: "project", Agent: "claude", SourceSessionID: sessionID,
 			})
-			require.NoError(t, err)
-			require.NoError(t, full.Close())
+			require.NoError(err)
+			require.NoError(full.Close())
 
 			database, err := db.OpenWithArchiveContent(dbPath, tc.policy)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, database.Close()) })
+			require.NoError(err)
+			t.Cleanup(func() { require.NoError(database.Close()) })
 			engine := sync.NewEngine(database, sync.EngineConfig{
 				AgentDirs: agentDirs, Machine: "local", ArchiveContent: tc.policy,
 			})
 			t.Cleanup(engine.Close)
 			stats := engine.ResyncAll(t.Context(), nil)
-			require.False(t, stats.Aborted, "warnings: %v", stats.Warnings)
+			require.False(stats.Aborted, "warnings: %v", stats.Warnings)
 
 			insights, err := database.ListInsights(t.Context(), db.InsightFilter{})
-			require.NoError(t, err)
+			require.NoError(err)
 			entry, err := database.GetRecallEntry(t.Context(), "entry-1")
-			require.NoError(t, err)
+			require.NoError(err)
 			if tc.kept {
-				assert.Len(t, insights, 1)
-				assert.NotNil(t, entry)
+				assert.Len(insights, 1)
+				assert.NotNil(entry)
 			} else {
-				assert.Empty(t, insights)
-				assert.Nil(t, entry)
+				assert.Empty(insights)
+				assert.Nil(entry)
 			}
 		})
 	}
@@ -747,18 +770,21 @@ func TestArchivePolicyOrphanToolResultsDoNotChangeAutomation(t *testing.T) {
 	)), 0o600))
 	for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
 		t.Run(string(policy), func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			database := dbtest.OpenTestDB(t)
 			engine := sync.NewEngine(database, sync.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
 				Machine:   "local", ArchiveContent: policy,
 			})
 			t.Cleanup(engine.Close)
-			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
 			stored, err := database.GetSessionFull(t.Context(), "codex:orphan-prompts")
-			require.NoError(t, err)
-			require.NotNil(t, stored)
-			assert.Equal(t, 1, stored.UserMessageCount)
-			assert.True(t, stored.IsAutomated)
+			require.NoError(err)
+			require.NotNil(stored)
+			assert.Equal(1, stored.UserMessageCount)
+			assert.True(stored.IsAutomated)
 		})
 	}
 }
@@ -788,18 +814,21 @@ func TestArchivePolicyCortexToolResultsDoNotChangeAutomation(t *testing.T) {
 			require.NoError(t, os.WriteFile(filepath.Join(root, id+".json"), []byte(source), 0o600))
 			for _, policy := range []config.ArchiveContent{config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
 				t.Run(string(policy), func(t *testing.T) {
+					assert := assert.New(t)
+					require := require.New(t)
+
 					database := dbtest.OpenTestDB(t)
 					engine := sync.NewEngine(database, sync.EngineConfig{
 						AgentDirs: map[parser.AgentType][]string{parser.AgentCortex: {root}},
 						Machine:   "local", ArchiveContent: policy,
 					})
 					t.Cleanup(engine.Close)
-					require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+					require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
 					stored, err := database.GetSessionFull(t.Context(), "cortex:"+id)
-					require.NoError(t, err)
-					require.NotNil(t, stored)
-					assert.Equal(t, tc.wantUserCount, stored.UserMessageCount)
-					assert.Equal(t, tc.wantAutomated, stored.IsAutomated)
+					require.NoError(err)
+					require.NotNil(stored)
+					assert.Equal(tc.wantUserCount, stored.UserMessageCount)
+					assert.Equal(tc.wantAutomated, stored.IsAutomated)
 				})
 			}
 		})

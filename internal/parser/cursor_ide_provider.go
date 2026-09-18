@@ -76,12 +76,12 @@ func cursorIDEClassifyPath(
 	)
 }
 
-func cursorIDEFindMember(root, rawID string) (multiSessionMatch, bool) {
+func cursorIDEFindMember(ctx context.Context, root, rawID string) (multiSessionMatch, bool) {
 	if root == "" || !IsValidSessionID(rawID) {
 		return multiSessionMatch{}, false
 	}
 	dbPath := filepath.Join(root, CursorIDEDBRelPath)
-	if !CursorIDEComposerExists(dbPath, rawID) {
+	if !CursorIDEComposerExists(ctx, dbPath, rawID) {
 		return multiSessionMatch{}, false
 	}
 	return multiSessionMatch{
@@ -212,11 +212,11 @@ func IsCursorIDEContainerSource(source SourceRef) bool {
 	return !virtual
 }
 
-func cursorIDEMemberPresent(src multiSessionSource) bool {
+func cursorIDEMemberPresent(ctx context.Context, src multiSessionSource) bool {
 	if src.MemberID == "" {
 		return IsRegularFile(src.Container)
 	}
-	return CursorIDEComposerExists(src.Container, src.MemberID)
+	return CursorIDEComposerExists(ctx, src.Container, src.MemberID)
 }
 
 // cursorIDEBatchMemberPresent reports current composer membership for the
@@ -224,7 +224,7 @@ func cursorIDEMemberPresent(src multiSessionSource) bool {
 // instead of one CursorIDEComposerExists database open per member. On any
 // failure it reports every member present, so a transiently unreadable
 // database never tombstones archived sessions.
-func cursorIDEBatchMemberPresent(
+func cursorIDEBatchMemberPresent(ctx context.Context,
 	container multiSessionSource, members []multiSessionSource,
 ) map[string]bool {
 	present := make(map[string]bool, len(members))

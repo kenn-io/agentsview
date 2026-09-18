@@ -1,7 +1,6 @@
 package catalog
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -94,7 +93,7 @@ func TestFetchOpenRouterPricing(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	prices, err := fetchOpenRouterPricing(
-		context.Background(), server.Client(), server.URL,
+		t.Context(), server.Client(), server.URL,
 	)
 	require.NoError(t, err)
 	require.Len(t, prices, 1)
@@ -110,7 +109,7 @@ func TestFetchOpenRouterPricingRejectsErrorStatus(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	_, err := fetchOpenRouterPricing(
-		context.Background(), server.Client(), server.URL,
+		t.Context(), server.Client(), server.URL,
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "status 503")

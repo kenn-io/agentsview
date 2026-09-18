@@ -279,14 +279,13 @@ func TestExtractProjectFromCwd_AutofsConcurrent_SingleProbe(t *testing.T) {
 		}()
 	}
 	started.Wait()
-	// Give the workers a moment to actually enter the probe.
-	time.Sleep(50 * time.Millisecond)
 	close(release)
 	done.Wait()
 
 	assert.Equal(t, int64(1), count.Load(),
 		"concurrent probes issued osStat calls; "+
 			"expected exactly 1 under %d-way concurrency", workers)
+
 }
 
 // TestExtractProjectFromCwd_AutofsProbe_TTLExpires guards against

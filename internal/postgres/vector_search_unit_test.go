@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"errors"
 	"math"
 	"testing"
 
@@ -62,6 +61,9 @@ func TestHNSWEfSearch(t *testing.T) {
 }
 
 func TestRollupChunkHits(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	// Best-first order in, one row per doc out (first seen wins), truncated.
 	hits := []chunkHit{
 		{docKey: "a", chunkIndex: 0, score: 0.9},
@@ -71,18 +73,18 @@ func TestRollupChunkHits(t *testing.T) {
 	}
 
 	rolled := rollupChunkHits(hits, 10)
-	require.Len(t, rolled, 3)
-	assert.Equal(t, "a", rolled[0].docKey)
-	assert.Equal(t, 0, rolled[0].chunkIndex, "best chunk kept for doc a")
-	assert.Equal(t, "b", rolled[1].docKey)
-	assert.Equal(t, "c", rolled[2].docKey)
+	require.Len(rolled, 3)
+	assert.Equal("a", rolled[0].docKey)
+	assert.Equal(0, rolled[0].chunkIndex, "best chunk kept for doc a")
+	assert.Equal("b", rolled[1].docKey)
+	assert.Equal("c", rolled[2].docKey)
 
 	truncated := rollupChunkHits(hits, 2)
-	require.Len(t, truncated, 2)
-	assert.Equal(t, "a", truncated[0].docKey)
-	assert.Equal(t, "b", truncated[1].docKey)
+	require.Len(truncated, 2)
+	assert.Equal("a", truncated[0].docKey)
+	assert.Equal("b", truncated[1].docKey)
 
-	assert.Empty(t, rollupChunkHits(nil, 5))
+	assert.Empty(rollupChunkHits(nil, 5))
 }
 
 func TestSemanticUnavailableError(t *testing.T) {
@@ -90,11 +92,11 @@ func TestSemanticUnavailableError(t *testing.T) {
 
 	// No reason set: bare sentinel.
 	err := s.semanticUnavailableError()
-	assert.True(t, errors.Is(err, db.ErrSemanticUnavailable))
+	assert.ErrorIs(t, err, db.ErrSemanticUnavailable)
 
 	s.SetSemanticUnavailableReason("pgvector extension not installed")
 	err = s.semanticUnavailableError()
-	assert.True(t, errors.Is(err, db.ErrSemanticUnavailable),
+	assert.ErrorIs(t, err, db.ErrSemanticUnavailable,
 		"reasoned error still wraps the sentinel")
 	assert.Contains(t, err.Error(), "pgvector extension not installed")
 }

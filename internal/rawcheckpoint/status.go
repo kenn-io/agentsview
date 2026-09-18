@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -241,7 +242,7 @@ func opaqueSourceStatusID(
 	digest := sha256.Sum256([]byte(
 		string(provider) + "\x00" + configuredRootID + "\x00" + sourceKey,
 	))
-	return fmt.Sprintf("%x", digest[:16])
+	return hex.EncodeToString(digest[:16])
 }
 
 func clientCoverageStatuses(

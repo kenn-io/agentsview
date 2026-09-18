@@ -12,50 +12,53 @@ import (
 )
 
 func TestDBAdoptMachineRepairsSelectedHistoryAndBareCodebuffLookup(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	isolateDirectCLISources(t)
 	dir := testDataDir(t)
 	database, err := db.Open(filepath.Join(dir, "sessions.db"))
-	require.NoError(t, err)
+	require.NoError(err)
 	const sessionID = "codebuff:project:1704067200"
 	for id, machine := range map[string]string{
 		sessionID: "oldhost.example", "older-session": "olderhost.example", "peer-session": "peer.example",
 	} {
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(database.UpsertSession(db.Session{
 			ID: id, Machine: machine, Project: "project", Agent: "codebuff", UserMessageCount: 2,
 		}))
 	}
-	require.NoError(t, database.Close())
+	require.NoError(database.Close())
 	cfg, err := config.LoadMinimal()
-	require.NoError(t, err)
+	require.NoError(err)
 	// Startup records the installation without claiming unowned history.
 	database, err = openDB(cfg)
-	require.NoError(t, err)
+	require.NoError(err)
 	history, err := database.GetSession(t.Context(), sessionID)
-	require.NoError(t, err)
-	assert.Equal(t, "oldhost.example", history.Machine)
-	require.NoError(t, database.Close())
+	require.NoError(err)
+	assert.Equal("oldhost.example", history.Machine)
+	require.NoError(database.Close())
 	output, err := executeCommand(newRootCommand(), "db", "adopt-machine", "--list")
-	require.NoError(t, err)
-	assert.Contains(t, output, "oldhost.example")
-	assert.Contains(t, output, "peer.example")
+	require.NoError(err)
+	assert.Contains(output, "oldhost.example")
+	assert.Contains(output, "peer.example")
 	_, err = executeCommand(newRootCommand(), "db", "adopt-machine", "misspelled.example")
-	require.ErrorContains(t, err, "not recorded")
+	require.ErrorContains(err, "not recorded")
 	_, err = executeCommand(newRootCommand(), "db", "adopt-machine", "oldhost.example", "olderhost.example")
-	require.NoError(t, err)
+	require.NoError(err)
 	database, err = openDB(cfg)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(database.Close()) })
 	for _, id := range []string{sessionID, "older-session"} {
 		session, err := database.GetSession(t.Context(), id)
-		require.NoError(t, err)
-		assert.Equal(t, cfg.InstallationID, session.Machine)
+		require.NoError(err)
+		assert.Equal(cfg.InstallationID, session.Machine)
 	}
 	peer, err := database.GetSession(t.Context(), "peer-session")
-	require.NoError(t, err)
-	assert.Equal(t, "peer.example", peer.Machine)
+	require.NoError(err)
+	assert.Equal("peer.example", peer.Machine)
 	resolved, err := resolveBareCodebuffID(t.Context(), service.NewDirectBackend(database, nil), &cfg, "1704067200", "local")
-	require.NoError(t, err)
-	assert.Equal(t, sessionID, resolved)
+	require.NoError(err)
+	assert.Equal(sessionID, resolved)
 }
 
 func TestDBAdoptMachineRequiresExplicitSelection(t *testing.T) {

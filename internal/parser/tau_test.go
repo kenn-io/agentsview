@@ -30,10 +30,10 @@ func parseTauTestSource(t *testing.T, name, content string) ParseResult {
 		Roots: []string{root}, Machine: "test-machine",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0], Fingerprint: SourceFingerprint{Key: path},
 	})
 	require.NoError(t, err)
@@ -57,6 +57,8 @@ func tauBaseEntries() []string {
 }
 
 func TestTauParsesActiveLeafAndCanonicalFields(t *testing.T) {
+	assert := assert.New(t)
+
 	lines := tauBaseEntries()
 	lines = append(lines,
 		`{"id":"old","parent_id":"u1","type":"message","timestamp":1700000004,"message":{"role":"assistant","content":"abandoned","usage":{"input":99,"output":99}}}`,
@@ -66,31 +68,31 @@ func TestTauParsesActiveLeafAndCanonicalFields(t *testing.T) {
 	)
 	result := parseTauTestSource(t, "session.with-hyphen.jsonl", tauLines(lines...))
 
-	assert.Equal(t, "tau:session.with-hyphen", result.Session.ID)
-	assert.Equal(t, AgentTau, result.Session.Agent)
-	assert.Equal(t, "test-machine", result.Session.Machine)
-	assert.Equal(t, "/tmp/project", result.Session.Cwd)
-	assert.Equal(t, "project", result.Session.Project)
-	assert.Equal(t, "first request", result.Session.FirstMessage)
-	assert.Equal(t, "first request", result.Session.SessionName)
-	assert.Equal(t, 5, result.Session.MessageCount)
-	assert.Equal(t, 2, result.Session.UserMessageCount)
-	assert.Equal(t, 20, result.Session.PeakContextTokens)
-	assert.Equal(t, 5+7, result.Session.TotalOutputTokens)
-	assert.True(t, result.Session.HasPeakContextTokens)
-	assert.True(t, result.Session.HasTotalOutputTokens)
-	assert.Equal(t, time.UnixMilli(1700000001100).UTC(), result.Messages[0].Timestamp)
-	assert.Equal(t, time.Unix(1700000000, 250000000).UTC(), result.Session.StartedAt)
-	assert.Equal(t, "chosen-model", result.Messages[1].Model)
-	assert.Equal(t, "toolUse", result.Messages[1].StopReason)
-	assert.Equal(t, "think", result.Messages[1].ThinkingText)
-	assert.True(t, result.Messages[1].HasThinking)
-	assert.Equal(t, "tool-1", result.Messages[1].ToolCalls[0].ToolUseID)
-	assert.JSONEq(t, `{"path":"a.txt"}`, result.Messages[1].ToolCalls[0].InputJSON)
-	assert.Equal(t, "tool-1", result.Messages[2].ToolResults[0].ToolUseID)
-	assert.Equal(t, "file contents", DecodeContent(result.Messages[2].ToolResults[0].ContentRaw))
-	assert.Empty(t, result.Messages[1].ProviderID)
-	assert.NotContains(t, result.Messages[3].Content, "abandoned")
+	assert.Equal("tau:session.with-hyphen", result.Session.ID)
+	assert.Equal(AgentTau, result.Session.Agent)
+	assert.Equal("test-machine", result.Session.Machine)
+	assert.Equal("/tmp/project", result.Session.Cwd)
+	assert.Equal("project", result.Session.Project)
+	assert.Equal("first request", result.Session.FirstMessage)
+	assert.Equal("first request", result.Session.SessionName)
+	assert.Equal(5, result.Session.MessageCount)
+	assert.Equal(2, result.Session.UserMessageCount)
+	assert.Equal(20, result.Session.PeakContextTokens)
+	assert.Equal(5+7, result.Session.TotalOutputTokens)
+	assert.True(result.Session.HasPeakContextTokens)
+	assert.True(result.Session.HasTotalOutputTokens)
+	assert.Equal(time.UnixMilli(1700000001100).UTC(), result.Messages[0].Timestamp)
+	assert.Equal(time.Unix(1700000000, 250000000).UTC(), result.Session.StartedAt)
+	assert.Equal("chosen-model", result.Messages[1].Model)
+	assert.Equal("toolUse", result.Messages[1].StopReason)
+	assert.Equal("think", result.Messages[1].ThinkingText)
+	assert.True(result.Messages[1].HasThinking)
+	assert.Equal("tool-1", result.Messages[1].ToolCalls[0].ToolUseID)
+	assert.JSONEq(`{"path":"a.txt"}`, result.Messages[1].ToolCalls[0].InputJSON)
+	assert.Equal("tool-1", result.Messages[2].ToolResults[0].ToolUseID)
+	assert.Equal("file contents", DecodeContent(result.Messages[2].ToolResults[0].ContentRaw))
+	assert.Empty(result.Messages[1].ProviderID)
+	assert.NotContains(result.Messages[3].Content, "abandoned")
 }
 
 func TestTauSourceDerivedReplayAndMetadata(t *testing.T) {
@@ -142,20 +144,22 @@ func TestTauSourceDerivedReplayAndMetadata(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			result := parseTauTestSource(t, "source.jsonl", tc.content)
-			assert.Equal(t, tc.wantCount, result.Session.MessageCount)
+			assert.Equal(tc.wantCount, result.Session.MessageCount)
 			if tc.wantName != "" {
-				assert.Equal(t, tc.wantName, result.Session.SessionName)
+				assert.Equal(tc.wantName, result.Session.SessionName)
 			}
 			if tc.wantEmpty {
-				assert.Empty(t, result.Messages)
+				assert.Empty(result.Messages)
 				return
 			}
 			got := make([]string, 0, len(result.Messages))
 			for _, message := range result.Messages {
 				got = append(got, message.Content)
 			}
-			assert.Equal(t, tc.want, got)
+			assert.Equal(tc.want, got)
 		})
 	}
 }
@@ -205,6 +209,8 @@ func TestTauSelectedAncestryErrors(t *testing.T) {
 }
 
 func TestTauMapsCompactionThinkingErrorsAndUsage(t *testing.T) {
+	assert := assert.New(t)
+
 	result := parseTauTestSource(t, "usage.jsonl", tauLines(
 		`{"id":"info","type":"session_info","cwd":"/tmp/p"}`,
 		`{"id":"u","type":"message","message":{"role":"user","content":"request"}}`,
@@ -214,15 +220,15 @@ func TestTauMapsCompactionThinkingErrorsAndUsage(t *testing.T) {
 		`{"id":"leaf","type":"leaf","entry_id":"b"}`,
 	))
 	require.Len(t, result.Messages, 4)
-	assert.True(t, result.Messages[1].HasThinking)
-	assert.Equal(t, "failed", result.Messages[1].Content)
-	assert.Equal(t, 26, result.Messages[1].ContextTokens)
-	assert.NotContains(t, string(result.Messages[1].TokenUsage), "cacheWrite1h")
-	assert.NotContains(t, string(result.Messages[1].TokenUsage), "reasoning")
-	assert.True(t, result.Messages[2].IsSystem)
-	assert.True(t, result.Messages[2].IsCompactBoundary)
-	assert.Equal(t, "compact_boundary", result.Messages[2].SourceSubtype)
-	assert.Contains(t, result.Messages[3].Content, "returned branch")
+	assert.True(result.Messages[1].HasThinking)
+	assert.Equal("failed", result.Messages[1].Content)
+	assert.Equal(26, result.Messages[1].ContextTokens)
+	assert.NotContains(string(result.Messages[1].TokenUsage), "cacheWrite1h")
+	assert.NotContains(string(result.Messages[1].TokenUsage), "reasoning")
+	assert.True(result.Messages[2].IsSystem)
+	assert.True(result.Messages[2].IsCompactBoundary)
+	assert.Equal("compact_boundary", result.Messages[2].SourceSubtype)
+	assert.Contains(result.Messages[3].Content, "returned branch")
 }
 
 func TestTauReadValidationAndFinalRecord(t *testing.T) {
@@ -264,58 +270,66 @@ func TestTauLineSizeLimit(t *testing.T) {
 		{name: "oversized", size: maxLineSize + 1, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			_, path := writeTauTestSource(t, "size.jsonl", "")
-			require.NoError(t, os.WriteFile(path, makeRecord(tc.size), 0o644))
+			require.NoError(os.WriteFile(path, makeRecord(tc.size), 0o644))
 			entries, err := readTauEntries(t.Context(), path)
 			if tc.wantErr {
-				assert.Error(t, err)
+				assert.Error(err)
 				return
 			}
-			require.NoError(t, err)
-			assert.Len(t, entries, 1)
+			require.NoError(err)
+			assert.Len(entries, 1)
 		})
 	}
 }
 
 func TestTauNonTauContentSkips(t *testing.T) {
+	require := require.New(t)
+
 	root, path := writeTauTestSource(t, "pi.jsonl", `{"type":"session","id":"pi"}`+"\n")
 	provider, ok := NewProvider(AgentTau, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
+	require.True(ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	require.NoError(err)
+	require.Len(sources, 1)
 	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0], Fingerprint: SourceFingerprint{Key: path}})
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Equal(t, SkipNoSession, outcome.SkipReason)
 }
 
 func TestTauDefaultIdentityAndCapabilities(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root, path := writeTauTestSource(t, "default.jsonl", `{"type":"session_info"}`+"\n")
 	provider, ok := NewProvider(AgentTau, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
+	require.True(ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	require.NoError(err)
+	require.Len(sources, 1)
 	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: tauSessionIDFromPath(root, path),
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, path, found.DisplayPath)
-	assert.Equal(t, CapabilitySupported, provider.Capabilities().Source.ForceReplaceOnParse)
-	assert.Equal(t, CapabilitySupported, provider.Capabilities().Content.StopReason)
-	assert.Equal(t, CapabilityUnsupported, provider.Capabilities().Content.Relationships)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(path, found.DisplayPath)
+	assert.Equal(CapabilitySupported, provider.Capabilities().Source.ForceReplaceOnParse)
+	assert.Equal(CapabilitySupported, provider.Capabilities().Content.StopReason)
+	assert.Equal(CapabilityUnsupported, provider.Capabilities().Content.Relationships)
 	plan, err := provider.WatchPlan(t.Context())
-	require.NoError(t, err)
-	require.Len(t, plan.Roots, 1)
-	assert.True(t, plan.Roots[0].Recursive)
-	assert.Equal(t, []string{"*.jsonl"}, plan.Roots[0].IncludeGlobs)
+	require.NoError(err)
+	require.Len(plan.Roots, 1)
+	assert.True(plan.Roots[0].Recursive)
+	assert.Equal([]string{"*.jsonl"}, plan.Roots[0].IncludeGlobs)
 }
 
 func TestTauCancellation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cancel.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte(`{"type":"session_info"}`), 0o644))
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, err := readTauEntries(ctx, path)
 	assert.ErrorIs(t, err, context.Canceled)

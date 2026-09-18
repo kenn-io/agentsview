@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -505,7 +506,7 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 		`SELECT 1 FROM sqlite_master
 		 WHERE type = 'table' AND name = 'cursor_usage_events'`,
 	).Scan(&tableExists)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return []activity.UsageRow{}, nil
 	}
 	if err != nil {
@@ -1329,7 +1330,7 @@ func resolveReportingExportRange(
 		date.Minute() != 0 ||
 		date.Second() != 0 ||
 		date.Nanosecond() != 0 {
-		err = fmt.Errorf("reporting date must be UTC midnight")
+		err = errors.New("reporting date must be UTC midnight")
 		return
 	}
 	date = date.UTC()
@@ -1341,7 +1342,7 @@ func resolveReportingExportRange(
 	now = now.UTC()
 	closedThrough := now.Truncate(time.Hour)
 	if date.After(closedThrough) {
-		err = fmt.Errorf("reporting date is in the future")
+		err = errors.New("reporting date is in the future")
 		return
 	}
 
@@ -1351,7 +1352,7 @@ func resolveReportingExportRange(
 	}
 	hourCount = int(closedThrough.Sub(date) / time.Hour)
 	if hourCount < 0 {
-		err = fmt.Errorf("reporting date is in the future")
+		err = errors.New("reporting date is in the future")
 	}
 	return
 }

@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -12,6 +11,9 @@ import (
 )
 
 func TestVibeProviderSourceMethods(t *testing.T) {
+	parentAssert := assert.New(t)
+	parentRequire := require.New(t)
+
 	root := t.TempDir()
 	sessionDir := "session_20260613_123456_abc123def"
 	messagesPath := filepath.Join(root, sessionDir, "messages.jsonl")
@@ -27,59 +29,58 @@ func TestVibeProviderSourceMethods(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
+	parentRequire.True(ok)
 
-	plan, err := provider.WatchPlan(context.Background())
-	require.NoError(t, err)
-	require.Len(t, plan.Roots, 1)
-	assert.Equal(t, root, plan.Roots[0].Path)
-	assert.True(t, plan.Roots[0].Recursive)
-	assert.Equal(t, []string{"messages.jsonl", "meta.json"}, plan.Roots[0].IncludeGlobs)
+	plan, err := provider.WatchPlan(t.Context())
+	parentRequire.NoError(err)
+	parentRequire.Len(plan.Roots, 1)
+	parentAssert.Equal(root, plan.Roots[0].Path)
+	parentAssert.True(plan.Roots[0].Recursive)
+	parentAssert.Equal([]string{"messages.jsonl", "meta.json"}, plan.Roots[0].IncludeGlobs)
 
-	discovered, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, discovered, 1)
+	discovered, err := provider.Discover(t.Context())
+	parentRequire.NoError(err)
+	parentRequire.Len(discovered, 1)
 	source := discovered[0]
-	assert.Equal(t, AgentVibe, source.Provider)
-	assert.Equal(t, messagesPath, source.DisplayPath)
-	assert.Equal(t, messagesPath, source.FingerprintKey)
-	assert.Equal(t, sessionDir, source.ProjectHint)
+	parentAssert.Equal(AgentVibe, source.Provider)
+	parentAssert.Equal(messagesPath, source.DisplayPath)
+	parentAssert.Equal(messagesPath, source.FingerprintKey)
+	parentAssert.Equal(sessionDir, source.ProjectHint)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "remote~vibe:uuid-1234",
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, messagesPath, found.DisplayPath)
+	parentRequire.NoError(err)
+	parentRequire.True(ok)
+	parentAssert.Equal(messagesPath, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: sessionDir,
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, messagesPath, found.DisplayPath)
+	parentRequire.NoError(err)
+	parentRequire.True(ok)
+	parentAssert.Equal(messagesPath, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: messagesPath,
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, messagesPath, found.DisplayPath)
+	parentRequire.NoError(err)
+	parentRequire.True(ok)
+	parentAssert.Equal(messagesPath, found.DisplayPath)
 
 	messageInfo, err := os.Stat(messagesPath)
-	require.NoError(t, err)
+	parentRequire.NoError(err)
 	metaInfo, err := os.Stat(metaPath)
-	require.NoError(t, err)
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
-	require.NoError(t, err)
-	assert.Equal(t, messagesPath, fingerprint.Key)
-	assert.Equal(t, messageInfo.Size()+metaInfo.Size(), fingerprint.Size)
-	assert.Equal(
-		t,
+	parentRequire.NoError(err)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
+	parentRequire.NoError(err)
+	parentAssert.Equal(messagesPath, fingerprint.Key)
+	parentAssert.Equal(messageInfo.Size()+metaInfo.Size(), fingerprint.Size)
+	parentAssert.Equal(
 		max(messageInfo.ModTime().UnixNano(), metaInfo.ModTime().UnixNano()),
 		fingerprint.MTimeNS,
 	)
-	assert.NotEmpty(t, fingerprint.Hash)
+	parentAssert.NotEmpty(fingerprint.Hash)
 
 	for _, tc := range []struct {
 		name string
@@ -91,7 +92,7 @@ func TestVibeProviderSourceMethods(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			changed, err := provider.SourcesForChangedPath(
-				context.Background(),
+				t.Context(),
 				ChangedPathRequest{Path: tc.path, EventKind: "write", WatchRoot: root},
 			)
 			require.NoError(t, err)
@@ -100,56 +101,59 @@ func TestVibeProviderSourceMethods(t *testing.T) {
 		})
 	}
 
-	require.NoError(t, os.Remove(metaPath))
+	parentRequire.NoError(os.Remove(metaPath))
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: metaPath, EventKind: "remove", WatchRoot: root},
 	)
-	require.NoError(t, err)
-	require.Len(t, changed, 1)
-	assert.Equal(t, messagesPath, changed[0].DisplayPath)
+	parentRequire.NoError(err)
+	parentRequire.Len(changed, 1)
+	parentAssert.Equal(messagesPath, changed[0].DisplayPath)
 
 	ignored, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      filepath.Join(root, "scratch", "messages.jsonl"),
 			EventKind: "write",
 			WatchRoot: root,
 		},
 	)
-	require.NoError(t, err)
-	assert.Empty(t, ignored)
+	parentRequire.NoError(err)
+	parentAssert.Empty(ignored)
 
 	nested, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: nestedPath, EventKind: "write", WatchRoot: root},
 	)
-	require.NoError(t, err)
-	assert.Empty(t, nested)
+	parentRequire.NoError(err)
+	parentAssert.Empty(nested)
 
-	require.NoError(t, os.Remove(messagesPath))
+	parentRequire.NoError(os.Remove(messagesPath))
 	changed, err = provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: messagesPath, EventKind: "remove", WatchRoot: root},
 	)
-	require.NoError(t, err)
-	require.Len(t, changed, 1)
-	assert.Equal(t, messagesPath, changed[0].DisplayPath)
-	assert.Equal(t, sessionDir, changed[0].ProjectHint)
+	parentRequire.NoError(err)
+	parentRequire.Len(changed, 1)
+	parentAssert.Equal(messagesPath, changed[0].DisplayPath)
+	parentAssert.Equal(sessionDir, changed[0].ProjectHint)
 
 	wrongRoot, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      messagesPath,
 			EventKind: "write",
 			WatchRoot: filepath.Join(root, "..", "other-root"),
 		},
 	)
-	require.NoError(t, err)
-	assert.Empty(t, wrongRoot)
+	parentRequire.NoError(err)
+	parentAssert.Empty(wrongRoot)
 }
 
 func TestVibeProviderDiscoversSymlinkedSessionDirectory(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	targetRoot := t.TempDir()
 	sessionDir := "session_20260613_123456_symlinked"
@@ -169,19 +173,19 @@ func TestVibeProviderDiscoversSymlinkedSessionDirectory(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
+	require.True(ok)
 
-	discovered, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, discovered, 1)
-	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(discovered, 1)
+	assert.Equal(sourcePath, discovered[0].DisplayPath)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: sessionDir,
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, sourcePath, found.DisplayPath)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(sourcePath, found.DisplayPath)
 }
 
 // A followed session-directory symlink whose target cannot be resolved must
@@ -214,30 +218,36 @@ func TestVibeProviderStreamingDiscoveryPropagatesSessionSymlinkErrors(t *testing
 	}
 
 	t.Run("dangling session symlink", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		root := t.TempDir()
 		healthy := writeHealthySession(t, root)
 		target := filepath.Join(t.TempDir(), "linked-session")
-		require.NoError(t, os.MkdirAll(target, 0o755))
+		require.NoError(os.MkdirAll(target, 0o755))
 		link := filepath.Join(root, "session_20260613_123456_linked")
 		if err := os.Symlink(target, link); err != nil {
 			t.Skipf("symlink not supported: %v", err)
 		}
-		require.NoError(t, os.RemoveAll(target))
+		require.NoError(os.RemoveAll(target))
 
 		_, err := discoverEach(t, root)
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, os.ErrNotExist)
+		require.Error(err)
+		assert.ErrorIs(err, os.ErrNotExist)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(t, err, &incomplete)
+		assert.ErrorAs(err, &incomplete)
 
-		require.NoError(t, os.Remove(link))
+		require.NoError(os.Remove(link))
 		yielded, err := discoverEach(t, root)
-		require.NoError(t, err)
-		assert.Equal(t, []string{healthy}, yielded)
+		require.NoError(err)
+		assert.Equal([]string{healthy}, yielded)
 	})
 
 	t.Run("unstatable session symlink target", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		if runtime.GOOS == "windows" {
 			t.Skip("directory read permissions are not enforced on Windows")
 		}
@@ -248,29 +258,32 @@ func TestVibeProviderStreamingDiscoveryPropagatesSessionSymlinkErrors(t *testing
 		healthy := writeHealthySession(t, root)
 		targetParent := t.TempDir()
 		target := filepath.Join(targetParent, "linked-session")
-		require.NoError(t, os.MkdirAll(target, 0o755))
+		require.NoError(os.MkdirAll(target, 0o755))
 		link := filepath.Join(root, "session_20260613_123456_linked")
 		if err := os.Symlink(target, link); err != nil {
 			t.Skipf("symlink not supported: %v", err)
 		}
-		require.NoError(t, os.Chmod(targetParent, 0o000))
+		require.NoError(os.Chmod(targetParent, 0o000))
 		t.Cleanup(func() { _ = os.Chmod(targetParent, 0o755) })
 
 		_, err := discoverEach(t, root)
 
-		require.Error(t, err)
-		assert.ErrorIs(t, err, os.ErrPermission)
+		require.Error(err)
+		assert.ErrorIs(err, os.ErrPermission)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(t, err, &incomplete)
+		assert.ErrorAs(err, &incomplete)
 
-		require.NoError(t, os.Chmod(targetParent, 0o755))
+		require.NoError(os.Chmod(targetParent, 0o755))
 		yielded, err := discoverEach(t, root)
-		require.NoError(t, err)
-		assert.Equal(t, []string{healthy}, yielded)
+		require.NoError(err)
+		assert.Equal([]string{healthy}, yielded)
 	})
 }
 
 func TestVibeProviderParse(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	sessionDir := "session_20260613_123456_abc123def"
 	messagesPath := filepath.Join(root, sessionDir, "messages.jsonl")
@@ -282,35 +295,35 @@ func TestVibeProviderParse(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
-	require.NoError(t, err)
+	require.True(ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(sources, 1)
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+	require.NoError(err)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fingerprint,
 	})
-	require.NoError(t, err)
-	require.True(t, outcome.ResultSetComplete)
-	require.False(t, outcome.ForceReplace)
-	require.Len(t, outcome.Results, 1)
+	require.NoError(err)
+	require.True(outcome.ResultSetComplete)
+	require.False(outcome.ForceReplace)
+	require.Len(outcome.Results, 1)
 	result := outcome.Results[0]
-	assert.Equal(t, DataVersionCurrent, result.DataVersion)
-	assert.Equal(t, "vibe:uuid-1234", result.Result.Session.ID)
-	assert.Equal(t, AgentVibe, result.Result.Session.Agent)
-	assert.Equal(t, "vibe", result.Result.Session.Project)
-	assert.Equal(t, "devbox", result.Result.Session.Machine)
-	assert.Equal(t, messagesPath, result.Result.Session.File.Path)
-	assert.Equal(t, fingerprint.Size, result.Result.Session.File.Size)
-	assert.Equal(t, fingerprint.MTimeNS, result.Result.Session.File.Mtime)
-	assert.Equal(t, fingerprint.Hash, result.Result.Session.File.Hash)
-	assert.Equal(t, "Provider title", result.Result.Session.SessionName)
-	assert.Equal(t, "parse question", result.Result.Session.FirstMessage)
-	assert.Contains(t, outcome.ExcludedSessionIDs, "vibe:"+sessionDir)
-	assert.Len(t, result.Result.Messages, 2)
+	assert.Equal(DataVersionCurrent, result.DataVersion)
+	assert.Equal("vibe:uuid-1234", result.Result.Session.ID)
+	assert.Equal(AgentVibe, result.Result.Session.Agent)
+	assert.Equal("vibe", result.Result.Session.Project)
+	assert.Equal("devbox", result.Result.Session.Machine)
+	assert.Equal(messagesPath, result.Result.Session.File.Path)
+	assert.Equal(fingerprint.Size, result.Result.Session.File.Size)
+	assert.Equal(fingerprint.MTimeNS, result.Result.Session.File.Mtime)
+	assert.Equal(fingerprint.Hash, result.Result.Session.File.Hash)
+	assert.Equal("Provider title", result.Result.Session.SessionName)
+	assert.Equal("parse question", result.Result.Session.FirstMessage)
+	assert.Contains(outcome.ExcludedSessionIDs, "vibe:"+sessionDir)
+	assert.Len(result.Result.Messages, 2)
 }
 
 // TestVibeProviderParseEmitsUsageEvents locks in the usage-event and
@@ -318,6 +331,9 @@ func TestVibeProviderParse(t *testing.T) {
 // meta.json carries a model and token stats, Parse must surface a single
 // session-level usage event and exclude the directory-name fallback ID.
 func TestVibeProviderParseEmitsUsageEvents(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	sessionDir := "session_20260616_083518_abc123"
 	sessionID := "uuid-1234"
@@ -330,29 +346,29 @@ func TestVibeProviderParseEmitsUsageEvents(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
-	require.NoError(t, err)
+	require.True(ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(sources, 1)
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+	require.NoError(err)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fingerprint,
 	})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
+	require.NoError(err)
+	require.Len(outcome.Results, 1)
 	result := outcome.Results[0]
-	assert.Equal(t, "vibe:"+sessionID, result.Result.Session.ID)
-	assert.Equal(t, []string{"vibe:" + sessionDir}, outcome.ExcludedSessionIDs)
+	assert.Equal("vibe:"+sessionID, result.Result.Session.ID)
+	assert.Equal([]string{"vibe:" + sessionDir}, outcome.ExcludedSessionIDs)
 
-	require.Len(t, result.Result.UsageEvents, 1)
+	require.Len(result.Result.UsageEvents, 1)
 	usageEvent := result.Result.UsageEvents[0]
-	assert.Equal(t, "vibe:"+sessionID, usageEvent.SessionID)
-	assert.Equal(t, "mistral-medium-3.5", usageEvent.Model)
-	assert.Equal(t, 100, usageEvent.InputTokens)
-	assert.Equal(t, 40, usageEvent.OutputTokens)
+	assert.Equal("vibe:"+sessionID, usageEvent.SessionID)
+	assert.Equal("mistral-medium-3.5", usageEvent.Model)
+	assert.Equal(100, usageEvent.InputTokens)
+	assert.Equal(40, usageEvent.OutputTokens)
 }
 
 func vibeProviderMessagesFixture(firstMessage string) string {

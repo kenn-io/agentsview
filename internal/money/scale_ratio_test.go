@@ -1,6 +1,7 @@
 package money
 
 import (
+	"errors"
 	"math"
 	"testing"
 )
@@ -34,11 +35,11 @@ func TestScaleRatioRejectsInvalidAndOverflow(t *testing.T) {
 	}{
 		{1, 0, ErrInvalidDecimal}, {1, -1, ErrInvalidDecimal}, {-1, 1, ErrNegative},
 	} {
-		if _, err := ScaleRatio(Money{Microdollars: 1}, tt.numerator, tt.denominator); err != tt.want {
+		if _, err := ScaleRatio(Money{Microdollars: 1}, tt.numerator, tt.denominator); !errors.Is(err, tt.want) {
 			t.Errorf("got %v, want %v", err, tt.want)
 		}
 	}
-	if _, err := ScaleRatio(Money{Microdollars: math.MaxInt64}, math.MaxInt64, 1); err != ErrOverflow {
+	if _, err := ScaleRatio(Money{Microdollars: math.MaxInt64}, math.MaxInt64, 1); !errors.Is(err, ErrOverflow) {
 		t.Fatalf("got %v, want overflow", err)
 	}
 }

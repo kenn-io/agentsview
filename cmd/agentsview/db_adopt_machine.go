@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"text/tabwriter"
 
@@ -19,7 +20,7 @@ func newDBAdoptMachineCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, machines []string) error {
 			if list {
 				if len(machines) != 0 {
-					return fmt.Errorf("use --list alone to inspect machine keys")
+					return errors.New("use --list alone to inspect machine keys")
 				}
 				cfg, err := config.LoadReadOnly()
 				if err != nil {
@@ -42,7 +43,7 @@ func newDBAdoptMachineCommand() *cobra.Command {
 				return out.Flush()
 			}
 			if len(machines) == 0 {
-				return fmt.Errorf("select one or more old machine keys")
+				return errors.New("select one or more old machine keys")
 			}
 			cfg, err := config.LoadMinimal()
 			if err != nil {

@@ -60,7 +60,7 @@ func TestCheckDBForChanges_FileDisappears(t *testing.T) {
 	var lastCount int
 	var lastDBMtime int64
 
-	changed := w.checkDBForChanges(
+	changed := w.checkDBForChanges(t.Context(),
 		"test-session",
 		&lastCount,
 		&lastDBMtime,
@@ -101,7 +101,7 @@ func TestCheckDBForChanges_FileHashChange(t *testing.T) {
 	sourcePath := ""
 	var lastFileMtime int64
 	var mchanged time.Time
-	changed := w.checkDBForChanges(
+	changed := w.checkDBForChanges(t.Context(),
 		sessionID,
 		&lastCount,
 		&lastDBMtime,
@@ -117,6 +117,9 @@ func TestCheckDBForChanges_FileHashChange(t *testing.T) {
 func TestCheckDBForChangesPositAssistantSidecarAppendFallsBackToSync(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	const conversationID = "11111111-1111-4111-8111-111111111111"
 	conversationDir := filepath.Join(root, "workspace-1", conversationID)
@@ -138,7 +141,7 @@ func TestCheckDBForChangesPositAssistantSidecarAppendFallsBackToSync(
 	))
 	baseTime := time.Date(2026, time.August, 28, 10, 0, 0, 0, time.UTC)
 	for _, path := range []string{workspacePath, conversationPath, lmMessagesPath} {
-		require.NoError(t, os.Chtimes(path, baseTime, baseTime))
+		require.NoError(os.Chtimes(path, baseTime, baseTime))
 	}
 
 	database := dbtest.OpenTestDB(t)
@@ -149,25 +152,25 @@ func TestCheckDBForChangesPositAssistantSidecarAppendFallsBackToSync(
 		Machine: "test",
 	})
 	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
 
 	const sessionID = "posit-assistant:" + conversationID
 	lastCount, lastDBVersion, ok := database.GetSessionVersion(sessionID)
-	require.True(t, ok)
+	require.True(ok)
 	sourcePath := engine.FindSourceFile(sessionID)
-	require.Equal(t, conversationPath, sourcePath)
-	lastFileMtime := engine.SourceMtime(sessionID)
-	require.Equal(t, baseTime.UnixNano(), lastFileMtime)
+	require.Equal(conversationPath, sourcePath)
+	lastFileMtime := engine.SourceMtime(t.Context(), sessionID)
+	require.Equal(baseTime.UnixNano(), lastFileMtime)
 
 	dbtest.WriteTestFile(t, usageEventsPath, []byte(
 		`{"type":"usage","kind":"keepalive","timestamp":1735693200000,"anchorMessageId":"node-1","providerId":"anthropic","modelId":"claude-sonnet-4-6","inputTokens":2,"outputTokens":1,"totalTokens":24642,"cacheReadTokens":24639,"cacheWriteTokens":0}`+"\n",
 	))
 	sidecarTime := baseTime.Add(time.Minute)
-	require.NoError(t, os.Chtimes(usageEventsPath, sidecarTime, sidecarTime))
+	require.NoError(os.Chtimes(usageEventsPath, sidecarTime, sidecarTime))
 
 	watcher := New(database, engine)
 	var fileMtimeChangedAt time.Time
-	changed := watcher.checkDBForChanges(
+	changed := watcher.checkDBForChanges(t.Context(),
 		sessionID,
 		&lastCount,
 		&lastDBVersion,
@@ -175,13 +178,13 @@ func TestCheckDBForChangesPositAssistantSidecarAppendFallsBackToSync(
 		&lastFileMtime,
 		&fileMtimeChangedAt,
 	)
-	assert.False(t, changed, "the fallback delay must elapse before direct sync")
-	require.False(t, fileMtimeChangedAt.IsZero(),
+	assert.False(changed, "the fallback delay must elapse before direct sync")
+	require.False(fileMtimeChangedAt.IsZero(),
 		"the sidecar mtime must start the fallback timer")
-	assert.Equal(t, sidecarTime.UnixNano(), lastFileMtime)
+	assert.Equal(sidecarTime.UnixNano(), lastFileMtime)
 
 	fileMtimeChangedAt = time.Now().Add(-SyncFallbackDelay)
-	changed = watcher.checkDBForChanges(
+	changed = watcher.checkDBForChanges(t.Context(),
 		sessionID,
 		&lastCount,
 		&lastDBVersion,
@@ -189,11 +192,11 @@ func TestCheckDBForChangesPositAssistantSidecarAppendFallsBackToSync(
 		&lastFileMtime,
 		&fileMtimeChangedAt,
 	)
-	require.True(t, changed, "the elapsed fallback must sync the sidecar")
+	require.True(changed, "the elapsed fallback must sync the sidecar")
 
 	usageEvents, err := database.GetUsageEvents(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.Len(t, usageEvents, 1)
-	assert.Equal(t, "posit-assistant-keepalive", usageEvents[0].Source)
-	assert.Equal(t, 24639, usageEvents[0].CacheReadInputTokens)
+	require.NoError(err)
+	require.Len(usageEvents, 1)
+	assert.Equal("posit-assistant-keepalive", usageEvents[0].Source)
+	assert.Equal(24639, usageEvents[0].CacheReadInputTokens)
 }

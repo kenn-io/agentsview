@@ -61,37 +61,40 @@ func TestSessionDetailDecodeConfidence(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			detail := buildSessionDetail(&db.Session{
 				ID:            "s1",
 				Agent:         tt.agent,
 				SourceVersion: tt.sourceVersion,
 			})
 			if tt.wantPresent {
-				assert.Equal(t, tt.wantValue, detail.DecodeConfidence,
+				assert.Equal(tt.wantValue, detail.DecodeConfidence,
 					"buildSessionDetail should derive DecodeConfidence")
 			} else {
-				assert.Empty(t, detail.DecodeConfidence,
+				assert.Empty(detail.DecodeConfidence,
 					"DecodeConfidence should be empty")
 			}
 
 			raw, err := json.Marshal(detail)
-			require.NoError(t, err)
+			require.NoError(err)
 
 			var decoded map[string]any
-			require.NoError(t, json.Unmarshal(raw, &decoded))
+			require.NoError(json.Unmarshal(raw, &decoded))
 
 			got, present := decoded["decode_confidence"]
-			assert.Equal(t, tt.wantPresent, present,
+			assert.Equal(tt.wantPresent, present,
 				"decode_confidence presence")
 			if tt.wantPresent {
-				assert.Equal(t, tt.wantValue, got)
+				assert.Equal(tt.wantValue, got)
 			}
 
 			// The HTTP backend decodes the response into a SessionDetail, so the
 			// field must round-trip rather than being dropped.
 			var roundTripped SessionDetail
-			require.NoError(t, json.Unmarshal(raw, &roundTripped))
-			assert.Equal(t, detail.DecodeConfidence,
+			require.NoError(json.Unmarshal(raw, &roundTripped))
+			assert.Equal(detail.DecodeConfidence,
 				roundTripped.DecodeConfidence,
 				"decode_confidence should round-trip through UnmarshalJSON")
 		})

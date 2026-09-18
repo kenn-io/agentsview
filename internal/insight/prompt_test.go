@@ -1,7 +1,6 @@
 package insight
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -271,7 +270,7 @@ func TestBuildPrompt(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			d := dbtest.OpenTestDB(t)
-			ctx := context.Background()
+			ctx := t.Context()
 
 			if tt.seed != nil {
 				tt.seed(t, d)

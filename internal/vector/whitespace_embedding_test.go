@@ -40,8 +40,11 @@ func recordingEncoder(seen *[]string) kitvec.EncodeFunc {
 // embeddings request, so no provider ever gets the chance to reject it. The
 // build still completes and auto-activates.
 func TestBuildStampsWhitespaceOnlyDocumentWithoutEmbeddingIt(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{unit: userDoc("s1", "", 0, "   \n\t   "), endedAt: "2024-01-01T00:00:00Z"},
 		{unit: userDoc("s1", "", 1, "real content"), endedAt: "2024-01-01T00:00:01Z"},
@@ -50,21 +53,21 @@ func TestBuildStampsWhitespaceOnlyDocumentWithoutEmbeddingIt(t *testing.T) {
 	var seen []string
 	result, err := ix.Build(ctx, src, recordingEncoder(&seen), fakeGeneration("fake-model"),
 		BuildOptions{BatchSize: 32})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"real content"}, seen,
+	require.NoError(err)
+	assert.Equal([]string{"real content"}, seen,
 		"whitespace-only content must never reach the embeddings endpoint")
-	assert.True(t, result.Activated,
+	assert.True(result.Activated,
 		"a stamped-without-vectors blank document still counts as covered")
 
 	var stamps int
-	require.NoError(t, ix.db.QueryRow(
+	require.NoError(ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_stamps`).Scan(&stamps))
-	assert.Equal(t, 2, stamps, "both documents are stamped")
+	assert.Equal(2, stamps, "both documents are stamped")
 
 	var chunks int
-	require.NoError(t, ix.db.QueryRow(
+	require.NoError(ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_chunks`).Scan(&chunks))
-	assert.Equal(t, 1, chunks, "only the non-blank document has a chunk")
+	assert.Equal(1, chunks, "only the non-blank document has a chunk")
 }
 
 // TestEmptyEmbeddingInputIsPermanent pins the structured signal that replaced
@@ -83,8 +86,10 @@ func TestEmptyEmbeddingInputIsPermanent(t *testing.T) {
 // with no attribution. The build must still isolate the offending document and
 // skip only it; aborting would wedge every later build at the same document.
 func TestBuildSkipsPermanentlyRejectedDocumentSharingABatch(t *testing.T) {
+	assert := assert.New(t)
+
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{unit: userDoc("s1", "", 0, "one"), endedAt: "2024-01-01T00:00:00Z"},
 		{unit: userDoc("s1", "", 1, "poison"), endedAt: "2024-01-01T00:00:01Z"},
@@ -108,9 +113,9 @@ func TestBuildSkipsPermanentlyRejectedDocumentSharingABatch(t *testing.T) {
 		BuildOptions{BatchSize: 32})
 	require.NoError(t, err,
 		"one poison document in a shared batch must not abort the whole build")
-	assert.Equal(t, 2, result.Fill.Documents, "the two good documents still embed")
-	assert.Equal(t, 1, result.Fill.Skipped, "only the poison document is skipped")
-	assert.True(t, result.Activated)
+	assert.Equal(2, result.Fill.Documents, "the two good documents still embed")
+	assert.Equal(1, result.Fill.Skipped, "only the poison document is skipped")
+	assert.True(result.Activated)
 }
 
 // TestBuildTransientBatchErrorStillAborts guards the other side of batch
@@ -118,7 +123,7 @@ func TestBuildSkipsPermanentlyRejectedDocumentSharingABatch(t *testing.T) {
 // without probing each document slice separately.
 func TestBuildTransientBatchErrorStillAborts(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{unit: userDoc("s1", "", 0, "one"), endedAt: "2024-01-01T00:00:00Z"},
 		{unit: userDoc("s1", "", 1, "two"), endedAt: "2024-01-01T00:00:01Z"},
@@ -141,17 +146,20 @@ func TestBuildTransientBatchErrorStillAborts(t *testing.T) {
 // document with a blank window: its chunk indexes have a gap, so resolving a
 // snippet by slice position would return the wrong chunk's text (or none).
 func TestChunkSnippetResolvesIndexAcrossADroppedWindow(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	split := kitvec.SplitOptions{MaxRunes: 10}
 	content := strings.Repeat("a", 10) + strings.Repeat(" ", 10) + strings.Repeat("b", 10)
 	chunks := kitvec.Split(content, split)
-	require.Len(t, chunks, 2, "the all-whitespace middle window is dropped")
-	require.Equal(t, []int{0, 2}, []int{chunks[0].Index, chunks[1].Index},
+	require.Len(chunks, 2, "the all-whitespace middle window is dropped")
+	require.Equal([]int{0, 2}, []int{chunks[0].Index, chunks[1].Index},
 		"the surviving chunks keep their window numbers")
 
-	assert.Equal(t, strings.Repeat("a", 10), chunkSnippet(content, 0, split))
-	assert.Equal(t, strings.Repeat("b", 10), chunkSnippet(content, 2, split),
+	assert.Equal(strings.Repeat("a", 10), chunkSnippet(content, 0, split))
+	assert.Equal(strings.Repeat("b", 10), chunkSnippet(content, 2, split),
 		"the second stored chunk resolves by its index, not its slice position")
-	assert.Empty(t, chunkSnippet(content, 1, split),
+	assert.Empty(chunkSnippet(content, 1, split),
 		"the dropped window has no snippet")
 }
 
@@ -160,8 +168,10 @@ func TestChunkSnippetResolvesIndexAcrossADroppedWindow(t *testing.T) {
 // repair must leave the document alone. Treating the gap as a missing chunk
 // would re-embed the document on every repair run, forever.
 func TestRepairKeepsDocumentWithADroppedWindow(t *testing.T) {
+	require := require.New(t)
+
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{unit: userDoc("s1", "", 0, blankWindowContent()), endedAt: "2024-01-01T00:00:00Z"},
 	}}
@@ -169,12 +179,12 @@ func TestRepairKeepsDocumentWithADroppedWindow(t *testing.T) {
 
 	var seen []string
 	built, err := ix.Build(ctx, src, recordingEncoder(&seen), gen, BuildOptions{BatchSize: 32})
-	require.NoError(t, err)
-	require.Equal(t, 2, built.Fill.Chunks)
+	require.NoError(err)
+	require.Equal(2, built.Fill.Chunks)
 
 	repaired, err := ix.Build(ctx, src, recordingEncoder(&seen), gen,
 		BuildOptions{BatchSize: 32, RepairInvalid: true})
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Zero(t, repaired.Repair.Documents,
 		"a document whose chunk indexes skip a blank window is healthy")
 }

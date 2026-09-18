@@ -10,6 +10,9 @@ import (
 )
 
 func TestParsePoolsideSession(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	trajectoryPath := filepath.Join(tmpDir, "trajectory-standalone_019e658b-56c3-7cb2-a9d1-8af2ea649438.ndjson")
 
@@ -20,38 +23,41 @@ func TestParsePoolsideSession(t *testing.T) {
 {"id":"event-5","step_id":"step-event-5","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"tool_call.inference.start","tool_call_inference_start":{"chat_completion_request":{"model":"poolside/laguna-m.1"}}}
 {"id":"event-6","step_id":"step-event-5","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"tool_call.inference.end","tool_call_inference_end":{"input_tokens":1000,"output_tokens":50,"cache_read_input_tokens":500,"cache_write_input_tokens":0}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	sess, msgs, usageEvents, err := parsePoolsideSession(trajectoryPath, "", "test-machine")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.Contains(t, sess.ID, "poolside:")
-	assert.Equal(t, AgentPoolside, sess.Agent)
-	assert.Equal(t, 2, sess.MessageCount)
-	assert.Equal(t, 1, sess.UserMessageCount)
-	assert.Len(t, msgs, 2)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.Equal(t, "/Users/test/project", sess.Cwd)
-	assert.Equal(t, "test-machine", sess.Machine)
-	assert.Equal(t, "poolside-trajectory-v1", sess.SourceVersion)
-	assert.Equal(t, "I can help you with that.", msgs[1].Content)
+	assert.Contains(sess.ID, "poolside:")
+	assert.Equal(AgentPoolside, sess.Agent)
+	assert.Equal(2, sess.MessageCount)
+	assert.Equal(1, sess.UserMessageCount)
+	assert.Len(msgs, 2)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal(RoleAssistant, msgs[1].Role)
+	assert.Equal("/Users/test/project", sess.Cwd)
+	assert.Equal("test-machine", sess.Machine)
+	assert.Equal("poolside-trajectory-v1", sess.SourceVersion)
+	assert.Equal("I can help you with that.", msgs[1].Content)
 
 	// Usage events.
-	require.Len(t, usageEvents, 1)
-	assert.Equal(t, "poolside/laguna-m.1", usageEvents[0].Model)
-	assert.Equal(t, 1000, usageEvents[0].InputTokens)
-	assert.Equal(t, 50, usageEvents[0].OutputTokens)
-	assert.Equal(t, 500, usageEvents[0].CacheReadInputTokens)
+	require.Len(usageEvents, 1)
+	assert.Equal("poolside/laguna-m.1", usageEvents[0].Model)
+	assert.Equal(1000, usageEvents[0].InputTokens)
+	assert.Equal(50, usageEvents[0].OutputTokens)
+	assert.Equal(500, usageEvents[0].CacheReadInputTokens)
 
 	// Session-level token aggregates.
-	assert.True(t, sess.HasTotalOutputTokens)
-	assert.Equal(t, 50, sess.TotalOutputTokens)
-	assert.True(t, sess.HasPeakContextTokens)
-	assert.Equal(t, 1500, sess.PeakContextTokens)
+	assert.True(sess.HasTotalOutputTokens)
+	assert.Equal(50, sess.TotalOutputTokens)
+	assert.True(sess.HasPeakContextTokens)
+	assert.Equal(1500, sess.PeakContextTokens)
 }
 
 func TestParsePoolsideSessionWithToolCalls(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	trajectoryPath := filepath.Join(tmpDir, "trajectory-standalone_test123.ndjson")
 
@@ -62,23 +68,26 @@ func TestParsePoolsideSessionWithToolCalls(t *testing.T) {
 {"id":"result-1","step_id":"step-1","timestamp":"2026-07-08T07:20:57.000000-04:00","type":"tool_call.result","tool_call_result":{"id":"chatcmpl-tool-1","tool_name":"read","observation":"file contents here"}}
 {"id":"event-6","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"Here is the file content."}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	sess, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.Equal(t, 2, sess.MessageCount)
-	assert.True(t, msgs[1].HasToolUse)
-	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, "read", msgs[1].ToolCalls[0].ToolName)
-	assert.Equal(t, "Read", msgs[1].ToolCalls[0].Category)
-	assert.Contains(t, msgs[1].ToolCalls[0].ToolUseID, "poolside:read:")
+	assert.Equal(2, sess.MessageCount)
+	assert.True(msgs[1].HasToolUse)
+	require.Len(msgs[1].ToolCalls, 1)
+	assert.Equal("read", msgs[1].ToolCalls[0].ToolName)
+	assert.Equal("Read", msgs[1].ToolCalls[0].Category)
+	assert.Contains(msgs[1].ToolCalls[0].ToolUseID, "poolside:read:")
 }
 
 // TestParsePoolsideMultipleCallsSameStep verifies that multiple
 // tool_call.parsed events sharing the same step_id each get their
 // own result paired correctly, not overwritten by a later call.
 func TestParsePoolsideMultipleCallsSameStep(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	trajectoryPath := filepath.Join(tmpDir, "trajectory-standalone_multicall.ndjson")
 
@@ -94,22 +103,22 @@ func TestParsePoolsideMultipleCallsSameStep(t *testing.T) {
 {"id":"result-2","step_id":"step-multi","timestamp":"2026-07-08T07:20:54.100000-04:00","type":"tool_call.result","tool_call_result":{"id":"call-b","tool_name":"read","observation":"contents of B"}}
 {"id":"event-6","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"Here are both files."}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.Len(t, msgs, 2)
+	require.Len(msgs, 2)
 	assistant := msgs[1]
-	assert.True(t, assistant.HasToolUse)
-	require.Len(t, assistant.ToolCalls, 2, "both tool calls must be present")
+	assert.True(assistant.HasToolUse)
+	require.Len(assistant.ToolCalls, 2, "both tool calls must be present")
 
 	// Each call must have its own result paired correctly.
-	require.Len(t, assistant.ToolCalls[0].ResultEvents, 1)
-	assert.Equal(t, "contents of A", assistant.ToolCalls[0].ResultEvents[0].Content,
+	require.Len(assistant.ToolCalls[0].ResultEvents, 1)
+	assert.Equal("contents of A", assistant.ToolCalls[0].ResultEvents[0].Content,
 		"first call must get its own result")
-	require.Len(t, assistant.ToolCalls[1].ResultEvents, 1)
-	assert.Equal(t, "contents of B", assistant.ToolCalls[1].ResultEvents[0].Content,
+	require.Len(assistant.ToolCalls[1].ResultEvents, 1)
+	assert.Equal("contents of B", assistant.ToolCalls[1].ResultEvents[0].Content,
 		"second call must get its own result, not overwrite the first")
 }
 
@@ -117,6 +126,9 @@ func TestParsePoolsideMultipleCallsSameStep(t *testing.T) {
 // shell tool calls in the same step each get their shell_id correctly
 // enriched, not mixed up by a step_id-keyed map.
 func TestParsePoolsideMultipleShellCallsSameStep(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	trajectoryPath := filepath.Join(tmpDir, "trajectory-standalone_multishell.ndjson")
 
@@ -132,10 +144,10 @@ func TestParsePoolsideMultipleShellCallsSameStep(t *testing.T) {
 {"id":"parsed-status-b","step_id":"step-status-b","timestamp":"2026-07-08T07:21:00.100000-04:00","type":"tool_call.parsed","tool_call_parsed":{"id":"status-b","name":"shell_status","args":{"shell_id":"shell-lint"}}}
 {"id":"event-end","timestamp":"2026-07-08T07:22:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"Both commands finished."}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// Find shell_status calls and verify enrichment.
 	var statusA, statusB *ParsedToolCall
@@ -152,20 +164,23 @@ func TestParsePoolsideMultipleShellCallsSameStep(t *testing.T) {
 		}
 	}
 
-	require.NotNil(t, statusA, "first shell_status call not found")
-	require.NotNil(t, statusB, "second shell_status call not found")
+	require.NotNil(statusA, "first shell_status call not found")
+	require.NotNil(statusB, "second shell_status call not found")
 
 	// Each shell_status must be enriched with the correct original
 	// command, not mixed up by a step_id-keyed map.
-	assert.Contains(t, statusA.InputJSON, "npm test",
+	assert.Contains(statusA.InputJSON, "npm test",
 		"first shell_status must be enriched with its shell's command")
-	assert.Contains(t, statusA.InputJSON, "shell-test")
-	assert.Contains(t, statusB.InputJSON, "npm run lint",
+	assert.Contains(statusA.InputJSON, "shell-test")
+	assert.Contains(statusB.InputJSON, "npm run lint",
 		"second shell_status must be enriched with its shell's command")
-	assert.Contains(t, statusB.InputJSON, "shell-lint")
+	assert.Contains(statusB.InputJSON, "shell-lint")
 }
 
 func TestParsePoolsideSessionWithThinking(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	trajectoryPath := filepath.Join(tmpDir, "trajectory-standalone_thinking.ndjson")
 
@@ -176,33 +191,36 @@ func TestParsePoolsideSessionWithThinking(t *testing.T) {
 {"id":"event-5","timestamp":"2026-07-08T07:20:57.000000-04:00","type":"thought.end","thought_end":{"thought":"Let me think about this carefully..."}}
 {"id":"event-6","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"After thinking, here is my answer."}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	sess, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(2, sess.MessageCount)
 	// The assistant message should have thinking text.
 	assistantMsg := msgs[1]
-	assert.Equal(t, RoleAssistant, assistantMsg.Role)
-	assert.True(t, assistantMsg.HasThinking)
-	assert.Contains(t, assistantMsg.ThinkingText, "Let me think about this carefully")
+	assert.Equal(RoleAssistant, assistantMsg.Role)
+	assert.True(assistantMsg.HasThinking)
+	assert.Contains(assistantMsg.ThinkingText, "Let me think about this carefully")
 }
 
 func TestParsePoolsideSessionEmpty(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	trajectoryPath := filepath.Join(tmpDir, "trajectory-standalone_empty.ndjson")
 
 	content := `{"id":"event-1","timestamp":"2026-07-08T07:20:51.089334-04:00","type":"session.start","session_start":{"workspace":"","working_directories":["/test"],"prompt":""}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	sess, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.Contains(t, sess.ID, "poolside:")
-	assert.Equal(t, 0, sess.MessageCount)
-	assert.Empty(t, msgs)
+	assert.Contains(sess.ID, "poolside:")
+	assert.Equal(0, sess.MessageCount)
+	assert.Empty(msgs)
 }
 
 func TestParsePoolsideSessionTermination(t *testing.T) {
@@ -298,6 +316,9 @@ func TestClassifyPoolsideTruncationPrecedence(t *testing.T) {
 // TestParsePoolsideMultipleThoughts verifies that multiple thought.end
 // events in one assistant turn are concatenated, not overwritten.
 func TestParsePoolsideMultipleThoughts(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	trajectoryPath := filepath.Join(tmpDir, "trajectory-standalone_multthought.ndjson")
 
@@ -308,16 +329,16 @@ func TestParsePoolsideMultipleThoughts(t *testing.T) {
 {"id":"thought-2","timestamp":"2026-07-08T07:20:54.000000-04:00","type":"thought.end","thought_end":{"thought":"Second reasoning block."}}
 {"id":"event-4","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"Here is my answer."}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.Len(t, msgs, 2)
+	require.Len(msgs, 2)
 	assistant := msgs[1]
-	assert.Equal(t, RoleAssistant, assistant.Role)
-	assert.True(t, assistant.HasThinking)
-	assert.Equal(t, "First reasoning block.\nSecond reasoning block.",
+	assert.Equal(RoleAssistant, assistant.Role)
+	assert.True(assistant.HasThinking)
+	assert.Equal("First reasoning block.\nSecond reasoning block.",
 		assistant.ThinkingText,
 		"multiple thought.end events must be concatenated with newline")
 }
@@ -325,6 +346,9 @@ func TestParsePoolsideMultipleThoughts(t *testing.T) {
 // TestParsePoolsideMalformedFinalLineSetsTruncated verifies that a
 // trajectory with a malformed final line sets IsTruncated.
 func TestParsePoolsideMalformedFinalLineSetsTruncated(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	trajectoryPath := filepath.Join(tmpDir, "trajectory-standalone_truncated.ndjson")
 
@@ -335,16 +359,16 @@ func TestParsePoolsideMalformedFinalLineSetsTruncated(t *testing.T) {
 {"id":"event-3","timestamp":"2026-07-08T07:20:52.000000-04:00","type":"assistant_message.start","assistant_message_start":{}}
 {"id":"event-4","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"response"}}
 {"id":"malformed`
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	sess, _, _, err := parsePoolsideSession(trajectoryPath, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.True(t, sess.IsTruncated,
+	assert.True(sess.IsTruncated,
 		"a malformed final line must set IsTruncated")
-	assert.Equal(t, TerminationTruncated, sess.TerminationStatus,
+	assert.Equal(TerminationTruncated, sess.TerminationStatus,
 		"truncation must take precedence in termination classification")
-	assert.Equal(t, 1, sess.MalformedLines)
+	assert.Equal(1, sess.MalformedLines)
 }
 
 func TestPoolsideToolCategory(t *testing.T) {
@@ -432,6 +456,8 @@ func TestPoolsideTerminationWithEmbeddedResults(t *testing.T) {
 }
 
 func TestParsePoolsideShellEnrichment(t *testing.T) {
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	trajectoryPath := filepath.Join(tmpDir, "trajectory-standalone_shelltest.ndjson")
 
@@ -447,10 +473,10 @@ func TestParsePoolsideShellEnrichment(t *testing.T) {
 {"id":"result-status","step_id":"step-status","timestamp":"2026-07-08T07:21:01.000000-04:00","type":"tool_call.result","tool_call_result":{"id":"call-2","tool_name":"shell_status","observation":"running"}}
 {"id":"event-8","timestamp":"2026-07-08T07:22:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"Tests passed."}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// Find the shell_status tool call
 	var shellStatusTC *ParsedToolCall
@@ -463,14 +489,17 @@ func TestParsePoolsideShellEnrichment(t *testing.T) {
 		}
 	}
 
-	require.NotNil(t, shellStatusTC, "shell_status tool call not found")
-	assert.Equal(t,
+	require.NotNil(shellStatusTC, "shell_status tool call not found")
+	assert.JSONEq(t,
 		`{"cmd":"npm test","shell_id":"shell-npm-test"}`,
 		shellStatusTC.InputJSON,
 	)
 }
 
 func TestParsePoolsideDeniedToolCall(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	trajectoryPath := filepath.Join(tmpDir, "trajectory-standalone_denied.ndjson")
 
@@ -481,18 +510,18 @@ func TestParsePoolsideDeniedToolCall(t *testing.T) {
 {"id":"result-denied","step_id":"step-denied","timestamp":"2026-07-08T07:20:57.000000-04:00","type":"tool_call.result","tool_call_result":{"id":"chatcmpl-tool-1","tool_name":"shell","execution_latency":0,"observation":"user denied tool","is_error":true,"execution_error_kind":"approval_denied"}}
 {"id":"event-6","timestamp":"2026-07-08T07:21:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"I won't do that."}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.Equal(t, 2, len(msgs))
-	assert.True(t, msgs[1].HasToolUse)
-	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, "shell", msgs[1].ToolCalls[0].ToolName)
-	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
-	assert.Equal(t, "denied", msgs[1].ToolCalls[0].ResultEvents[0].Status)
-	assert.Equal(t, "user denied tool", msgs[1].ToolCalls[0].ResultEvents[0].Content)
+	assert.Len(msgs, 2)
+	assert.True(msgs[1].HasToolUse)
+	require.Len(msgs[1].ToolCalls, 1)
+	assert.Equal("shell", msgs[1].ToolCalls[0].ToolName)
+	require.Len(msgs[1].ToolCalls[0].ResultEvents, 1)
+	assert.Equal("denied", msgs[1].ToolCalls[0].ResultEvents[0].Status)
+	assert.Equal("user denied tool", msgs[1].ToolCalls[0].ResultEvents[0].Content)
 }
 
 func TestParsePoolsideSkillToolName(t *testing.T) {
@@ -520,6 +549,9 @@ func TestParsePoolsideSkillToolName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			tmpDir := t.TempDir()
 			trajectoryPath := filepath.Join(tmpDir, "trajectory-standalone_skill.ndjson")
 
@@ -530,19 +562,22 @@ func TestParsePoolsideSkillToolName(t *testing.T) {
 {"id":"result-skill","step_id":"step-skill","timestamp":"2026-07-08T07:20:54.000000-04:00","type":"tool_call.result","tool_call_result":{"id":"call-1","tool_name":"skill","observation":"skill output"}}
 {"id":"event-6","timestamp":"2026-07-08T07:22:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"Skill completed."}}
 `
-			require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+			require.NoError(os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 			_, msgs, _, err := parsePoolsideSession(trajectoryPath, "", "")
-			require.NoError(t, err)
+			require.NoError(err)
 
-			require.Len(t, msgs[1].ToolCalls, 1)
-			assert.Equal(t, "skill", msgs[1].ToolCalls[0].ToolName)
-			assert.Equal(t, tt.expectedName, msgs[1].ToolCalls[0].SkillName)
+			require.Len(msgs[1].ToolCalls, 1)
+			assert.Equal("skill", msgs[1].ToolCalls[0].ToolName)
+			assert.Equal(tt.expectedName, msgs[1].ToolCalls[0].SkillName)
 		})
 	}
 }
 
 func TestParsePoolsideSkillInferenceFromReadTool(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	trajectoryPath := filepath.Join(tmpDir, "trajectory-standalone_skillinfer.ndjson")
 
@@ -554,14 +589,14 @@ func TestParsePoolsideSkillInferenceFromReadTool(t *testing.T) {
 {"id":"result-skillread","step_id":"step-skillread","timestamp":"2026-07-08T07:20:54.000000-04:00","type":"tool_call.result","tool_call_result":{"id":"call-1","tool_name":"read","observation":"skill content"}}
 {"id":"event-6","timestamp":"2026-07-08T07:22:00.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"Read skill."}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	sess, msgs, _, err := parsePoolsideSession(trajectoryPath, "/test", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, "read", msgs[1].ToolCalls[0].ToolName)
-	assert.Equal(t, "foo", msgs[1].ToolCalls[0].SkillName, "should infer skill name from SKILL.md path")
+	require.Len(msgs[1].ToolCalls, 1)
+	assert.Equal("read", msgs[1].ToolCalls[0].ToolName)
+	assert.Equal("foo", msgs[1].ToolCalls[0].SkillName, "should infer skill name from SKILL.md path")
 	_ = sess // avoid unused variable error
 }
 
@@ -571,6 +606,9 @@ func TestParsePoolsideSkillInferenceFromReadTool(t *testing.T) {
 // tool_call.inference.start / end step_id pairing real Poolside
 // trajectories use.
 func TestParsePoolsideSessionModelSwitch(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	trajectoryPath := filepath.Join(tmpDir, "trajectory-standalone_modelswitch.ndjson")
 
@@ -594,56 +632,56 @@ func TestParsePoolsideSessionModelSwitch(t *testing.T) {
 {"id":"turn2-end","step_id":"step-s21","timestamp":"2026-07-08T07:20:58.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"second turn response"}}
 {"id":"inf2-end","step_id":"step-s21","timestamp":"2026-07-08T07:20:59.000000-04:00","type":"tool_call.inference.end","tool_call_inference_end":{"input_tokens":2000,"output_tokens":100,"cache_read_input_tokens":0,"cache_write_input_tokens":150}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	sess, msgs, usageEvents, err := parsePoolsideSession(trajectoryPath, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// Two inferences -> two usage events, one per model.
-	require.Len(t, usageEvents, 2, "each inference must emit its own usage event")
+	require.Len(usageEvents, 2, "each inference must emit its own usage event")
 
 	// Tokens per event match the inference.end payloads; models are
 	// attributed via step_id pairing, not from currentModel order.
-	assert.Equal(t, "poolside/laguna-m.1", usageEvents[0].Model)
-	assert.Equal(t, 800, usageEvents[0].InputTokens)
-	assert.Equal(t, 40, usageEvents[0].OutputTokens)
-	assert.Equal(t, 300, usageEvents[0].CacheReadInputTokens)
+	assert.Equal("poolside/laguna-m.1", usageEvents[0].Model)
+	assert.Equal(800, usageEvents[0].InputTokens)
+	assert.Equal(40, usageEvents[0].OutputTokens)
+	assert.Equal(300, usageEvents[0].CacheReadInputTokens)
 
-	assert.Equal(t, "poolside/laguna-s-2.1", usageEvents[1].Model)
-	assert.Equal(t, 2000, usageEvents[1].InputTokens)
-	assert.Equal(t, 100, usageEvents[1].OutputTokens)
-	assert.Equal(t, 0, usageEvents[1].CacheReadInputTokens)
-	assert.Equal(t, 150, usageEvents[1].CacheCreationInputTokens)
+	assert.Equal("poolside/laguna-s-2.1", usageEvents[1].Model)
+	assert.Equal(2000, usageEvents[1].InputTokens)
+	assert.Equal(100, usageEvents[1].OutputTokens)
+	assert.Equal(0, usageEvents[1].CacheReadInputTokens)
+	assert.Equal(150, usageEvents[1].CacheCreationInputTokens)
 
 	// Dedup keys encode step_id so re-parsing the same trajectory
 	// does not duplicate events in storage.
-	assert.Contains(t, usageEvents[0].DedupKey, "step-m1")
-	assert.Contains(t, usageEvents[1].DedupKey, "step-s21")
+	assert.Contains(usageEvents[0].DedupKey, "step-m1")
+	assert.Contains(usageEvents[1].DedupKey, "step-s21")
 	for i, ev := range usageEvents {
-		assert.Equal(t, "inference", ev.Source,
+		assert.Equal("inference", ev.Source,
 			"event %d must be Source=inference", i)
 	}
 
 	// Session-level aggregates roll up across both models.
-	assert.True(t, sess.HasTotalOutputTokens)
-	assert.Equal(t, 140, sess.TotalOutputTokens,
+	assert.True(sess.HasTotalOutputTokens)
+	assert.Equal(140, sess.TotalOutputTokens,
 		"TotalOutputTokens sums output across inferences, not per-model")
-	assert.True(t, sess.HasPeakContextTokens)
-	assert.Equal(t, 2150, sess.PeakContextTokens,
+	assert.True(sess.HasPeakContextTokens)
+	assert.Equal(2150, sess.PeakContextTokens,
 		"PeakContextTokens is the max of total context (input + cache read + cache write) across inferences")
 
 	// Assistant messages carry the model that produced the turn.
 	// Turn order in msgs: [user@1, asst@2, user@3, asst@4]. The
 	// second assistant is msgs[3], not msgs[2] (which is the
 	// second user message).
-	require.GreaterOrEqual(t, len(msgs), 4) // user + asst + user + asst
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.Equal(t, RoleUser, msgs[2].Role)
-	assert.Equal(t, RoleAssistant, msgs[3].Role)
-	assert.Equal(t, "poolside/laguna-m.1", msgs[1].Model,
+	require.GreaterOrEqual(len(msgs), 4) // user + asst + user + asst
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal(RoleAssistant, msgs[1].Role)
+	assert.Equal(RoleUser, msgs[2].Role)
+	assert.Equal(RoleAssistant, msgs[3].Role)
+	assert.Equal("poolside/laguna-m.1", msgs[1].Model,
 		"first assistant message tags the model from its inference")
-	assert.Equal(t, "poolside/laguna-s-2.1", msgs[3].Model,
+	assert.Equal("poolside/laguna-s-2.1", msgs[3].Model,
 		"second assistant message tags the switched model")
 }
 
@@ -651,6 +689,9 @@ func TestParsePoolsideSessionModelSwitch(t *testing.T) {
 // tool-only assistant turns (no text content) still get their model
 // attributed from the pendingInferences step_id lookup.
 func TestParsePoolsideSessionToolOnlyModelAttribution(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	trajectoryPath := filepath.Join(tmpDir, "trajectory-standalone_toolonly.ndjson")
 
@@ -664,42 +705,44 @@ func TestParsePoolsideSessionToolOnlyModelAttribution(t *testing.T) {
 {"id":"asst-end","step_id":"step-to1","timestamp":"2026-07-08T07:20:54.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":""}}
 {"id":"inf-end","step_id":"step-to1","timestamp":"2026-07-08T07:20:55.000000-04:00","type":"tool_call.inference.end","tool_call_inference_end":{"input_tokens":500,"output_tokens":30,"cache_read_input_tokens":0,"cache_write_input_tokens":0}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	sess, msgs, usageEvents, err := parsePoolsideSession(trajectoryPath, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.Len(t, msgs, 2, "user + assistant")
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	require.Len(msgs, 2, "user + assistant")
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal(RoleAssistant, msgs[1].Role)
 
 	// Tool-only turn: no text content.
-	assert.Empty(t, msgs[1].Content, "tool-only turn must have no content")
-	assert.True(t, msgs[1].HasToolUse)
-	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, "read", msgs[1].ToolCalls[0].ToolName)
+	assert.Empty(msgs[1].Content, "tool-only turn must have no content")
+	assert.True(msgs[1].HasToolUse)
+	require.Len(msgs[1].ToolCalls, 1)
+	assert.Equal("read", msgs[1].ToolCalls[0].ToolName)
 
 	// Model must still be attributed despite empty content.
-	assert.Equal(t, "poolside/laguna-m.1", msgs[1].Model,
+	assert.Equal("poolside/laguna-m.1", msgs[1].Model,
 		"tool-only assistant turn must still receive model attribution")
 
 	// Usage event emitted.
-	require.Len(t, usageEvents, 1)
-	assert.Equal(t, "poolside/laguna-m.1", usageEvents[0].Model)
-	assert.Equal(t, 500, usageEvents[0].InputTokens)
-	assert.Equal(t, 30, usageEvents[0].OutputTokens)
+	require.Len(usageEvents, 1)
+	assert.Equal("poolside/laguna-m.1", usageEvents[0].Model)
+	assert.Equal(500, usageEvents[0].InputTokens)
+	assert.Equal(30, usageEvents[0].OutputTokens)
 
 	// Session aggregates.
-	assert.True(t, sess.HasTotalOutputTokens)
-	assert.Equal(t, 30, sess.TotalOutputTokens)
-	assert.True(t, sess.HasPeakContextTokens)
-	assert.Equal(t, 500, sess.PeakContextTokens)
+	assert.True(sess.HasTotalOutputTokens)
+	assert.Equal(30, sess.TotalOutputTokens)
+	assert.True(sess.HasPeakContextTokens)
+	assert.Equal(500, sess.PeakContextTokens)
 }
 
 // TestParsePoolsideSessionPeakContextIsMax ensures peak context is
 // measured as the largest single inference input, not a cumulative sum
 // across rapid back-to-back inferences.
 func TestParsePoolsideSessionPeakContextIsMax(t *testing.T) {
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	trajectoryPath := filepath.Join(tmpDir, "trajectory-standalone_peak.ndjson")
 
@@ -716,12 +759,12 @@ func TestParsePoolsideSessionPeakContextIsMax(t *testing.T) {
 {"id":"e3","step_id":"step-c","timestamp":"2026-07-08T07:20:58.000000-04:00","type":"tool_call.inference.end","tool_call_inference_end":{"input_tokens":500,"output_tokens":5,"cache_read_input_tokens":0,"cache_write_input_tokens":0}}
 {"id":"x","timestamp":"2026-07-08T07:20:59.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"done"}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	sess, _, usageEvents, err := parsePoolsideSession(trajectoryPath, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.Len(t, usageEvents, 3)
+	require.Len(usageEvents, 3)
 	assert.Equal(t, 2500, sess.PeakContextTokens,
 		"PeakContextTokens must be the max of total context (input + cache read + cache write) across inferences")
 }
@@ -732,6 +775,9 @@ func TestParsePoolsideSessionPeakContextIsMax(t *testing.T) {
 // the session aggregates and attributed to last-known currentModel so
 // the cost engine can still price the row (or mark it unpriced).
 func TestParsePoolsideSessionInferenceWithoutStart(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	trajectoryPath := filepath.Join(
 		tmpDir, "trajectory-standalone_unpaired.ndjson",
@@ -750,20 +796,23 @@ func TestParsePoolsideSessionInferenceWithoutStart(t *testing.T) {
 {"id":"e2","step_id":"step-y","timestamp":"2026-07-08T07:20:55.000000-04:00","type":"tool_call.inference.end","tool_call_inference_end":{"input_tokens":200,"output_tokens":20,"cache_read_input_tokens":0,"cache_write_input_tokens":0}}
 {"id":"end","timestamp":"2026-07-08T07:20:56.000000-04:00","type":"assistant_message.end","assistant_message_end":{"assistant_message":"done"}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	_, _, usageEvents, err := parsePoolsideSession(trajectoryPath, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.Len(t, usageEvents, 2)
-	assert.Equal(t, "poolside/laguna-m.1", usageEvents[0].Model)
-	assert.Equal(t, 100, usageEvents[0].InputTokens)
-	assert.Equal(t, "poolside/laguna-m.1", usageEvents[1].Model,
+	require.Len(usageEvents, 2)
+	assert.Equal("poolside/laguna-m.1", usageEvents[0].Model)
+	assert.Equal(100, usageEvents[0].InputTokens)
+	assert.Equal("poolside/laguna-m.1", usageEvents[1].Model,
 		"unpaired end falls back to last-known currentModel")
-	assert.Equal(t, 200, usageEvents[1].InputTokens)
+	assert.Equal(200, usageEvents[1].InputTokens)
 }
 
 func TestPoolsideInferenceSourceAndDedupKeyShape(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	trajectoryPath := filepath.Join(
 		tmpDir, "trajectory-standalone_inference_shape.ndjson",
@@ -774,17 +823,17 @@ func TestPoolsideInferenceSourceAndDedupKeyShape(t *testing.T) {
 {"id":"s","step_id":"step-1","timestamp":"2026-07-08T07:20:52.000000-04:00","type":"tool_call.inference.start","tool_call_inference_start":{"chat_completion_request":{"model":"poolside/laguna-m.1"}}}
 {"id":"e","step_id":"step-1","timestamp":"2026-07-08T07:20:53.000000-04:00","type":"tool_call.inference.end","tool_call_inference_end":{"input_tokens":50,"output_tokens":5,"cache_read_input_tokens":0,"cache_write_input_tokens":0}}
 `
-	require.NoError(t, os.WriteFile(trajectoryPath, []byte(content), 0644))
+	require.NoError(os.WriteFile(trajectoryPath, []byte(content), 0o644))
 
 	_, _, usageEvents, err := parsePoolsideSession(trajectoryPath, "", "")
-	require.NoError(t, err)
-	require.Len(t, usageEvents, 1)
+	require.NoError(err)
+	require.Len(usageEvents, 1)
 	ev := usageEvents[0]
-	assert.Equal(t, "inference", ev.Source)
-	assert.Contains(t, ev.DedupKey, "step-1",
+	assert.Equal("inference", ev.Source)
+	assert.Contains(ev.DedupKey, "step-1",
 		"dedup_key must incorporate step_id so per-inference rows are not double-counted on reparse")
-	assert.Contains(t, ev.SessionID, "poolside:")
-	assert.NotEmpty(t, ev.OccurredAt)
+	assert.Contains(ev.SessionID, "poolside:")
+	assert.NotEmpty(ev.OccurredAt)
 }
 
 func TestPoolsideTrajectoriesDir(t *testing.T) {

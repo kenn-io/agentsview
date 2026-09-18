@@ -10,6 +10,9 @@ import (
 )
 
 func TestPageSessionsDefaultOrderMembershipAndCursorPosition(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	five, ten := 5.0, 10.0
 	rows := []SessionRow{
 		{SessionID: "untimed"},
@@ -24,19 +27,19 @@ func TestPageSessionsDefaultOrderMembershipAndCursorPosition(t *testing.T) {
 	page, err := PageSessions(rows, membership, SessionPageOptions{
 		Limit: 1, BucketRange: &bucketRange,
 	})
-	require.NoError(t, err)
-	require.Equal(t, 2, page.Total)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "a", page.Sessions[0].SessionID)
-	assert.True(t, page.HasNext)
-	assert.Equal(t, 1, page.Next)
+	require.NoError(err)
+	require.Equal(2, page.Total)
+	require.Len(page.Sessions, 1)
+	assert.Equal("a", page.Sessions[0].SessionID)
+	assert.True(page.HasNext)
+	assert.Equal(1, page.Next)
 
 	page, err = PageSessions(rows, membership, SessionPageOptions{
 		Limit: 10, Offset: page.Next, BucketRange: &bucketRange,
 	})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "b", page.Sessions[0].SessionID)
+	require.NoError(err)
+	require.Len(page.Sessions, 1)
+	assert.Equal("b", page.Sessions[0].SessionID)
 }
 
 func TestPageSessionsFiltersByHalfOpenBucketRange(t *testing.T) {
@@ -116,6 +119,9 @@ func TestPageSessionsTimingSortsKeepUntimedRowsLast(t *testing.T) {
 }
 
 func TestArtifactDigestIsIndependentOfMembershipMapOrder(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	left := CandidateArtifacts{
 		Report:     Report{Timezone: "UTC"},
 		Sessions:   []SessionRow{{SessionID: "a"}, {SessionID: "b"}},
@@ -126,12 +132,12 @@ func TestArtifactDigestIsIndependentOfMembershipMapOrder(t *testing.T) {
 		Membership: map[string]BucketMembership{"b": {2}, "a": {1}},
 	}
 	leftDigest, err := ArtifactDigest(left)
-	require.NoError(t, err)
+	require.NoError(err)
 	rightDigest, err := ArtifactDigest(right)
-	require.NoError(t, err)
-	assert.Equal(t, leftDigest, rightDigest)
+	require.NoError(err)
+	assert.Equal(leftDigest, rightDigest)
 	right.Sessions[0].Agent = "changed"
 	changed, err := ArtifactDigest(right)
-	require.NoError(t, err)
-	assert.NotEqual(t, leftDigest, changed)
+	require.NoError(err)
+	assert.NotEqual(leftDigest, changed)
 }

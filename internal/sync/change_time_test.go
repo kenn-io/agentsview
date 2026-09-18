@@ -13,34 +13,36 @@ import (
 )
 
 func TestFileChangeTimeDetectsSameStatRewrite(t *testing.T) {
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "session.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte("before"), 0o600))
+	require.NoError(os.WriteFile(path, []byte("before"), 0o600))
 
 	beforeInfo, err := os.Stat(path)
-	require.NoError(t, err)
+	require.NoError(err)
 	beforeChange, ok := fileChangeTime(path, beforeInfo)
-	require.True(t, ok, "native change time unavailable")
+	require.True(ok, "native change time unavailable")
 
 	var afterInfo os.FileInfo
 	afterChange := beforeChange
 	deadline := time.Now().Add(2 * time.Second)
 	for afterChange == beforeChange && time.Now().Before(deadline) {
-		require.NoError(t, os.WriteFile(path, []byte("after!"), 0o600))
-		require.NoError(t, os.Chtimes(
+		require.NoError(os.WriteFile(path, []byte("after!"), 0o600))
+		require.NoError(os.Chtimes(
 			path, beforeInfo.ModTime(), beforeInfo.ModTime(),
 		))
 		afterInfo, err = os.Stat(path)
-		require.NoError(t, err)
+		require.NoError(err)
 		afterChange, ok = fileChangeTime(path, afterInfo)
-		require.True(t, ok, "native change time unavailable after rewrite")
+		require.True(ok, "native change time unavailable after rewrite")
 		if afterChange == beforeChange {
 			time.Sleep(time.Millisecond)
 		}
 	}
 
-	require.Equal(t, beforeInfo.Size(), afterInfo.Size(),
+	require.Equal(beforeInfo.Size(), afterInfo.Size(),
 		"fixture must preserve size")
-	require.Equal(t, beforeInfo.ModTime().UnixNano(), afterInfo.ModTime().UnixNano(),
+	require.Equal(beforeInfo.ModTime().UnixNano(), afterInfo.ModTime().UnixNano(),
 		"fixture must restore mtime")
 	assert.NotEqual(t, beforeChange, afterChange,
 		"change time must catch a same-size rewrite with restored mtime")

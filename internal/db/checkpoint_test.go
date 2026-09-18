@@ -8,6 +8,9 @@ import (
 )
 
 func TestParserCheckpointRoundTrip(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	cp := ParserCheckpoint{
 		SessionID:        "codex:019eb791-cf7d-75c1-8439-9ed74c122b02",
@@ -27,40 +30,43 @@ func TestParserCheckpointRoundTrip(t *testing.T) {
 		Cursor:    []byte("cursor-bytes"),
 		HashState: []byte("hash-state"),
 	}
-	require.NoError(t, d.UpsertParserCheckpoint(cp, blobs))
+	require.NoError(d.UpsertParserCheckpoint(cp, blobs))
 
 	got, ok, err := d.GetParserCheckpoint(cp.SessionID)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, cp.SessionID, got.SessionID)
-	assert.Equal(t, cp.Agent, got.Agent)
-	assert.Equal(t, cp.FilePath, got.FilePath)
-	assert.Equal(t, cp.FileInode, got.FileInode)
-	assert.Equal(t, cp.FileDevice, got.FileDevice)
-	assert.Equal(t, cp.FileMTime, got.FileMTime)
-	assert.Equal(t, cp.Offset, got.Offset)
-	assert.Equal(t, cp.TailAnchorDigest, got.TailAnchorDigest)
-	assert.Equal(t, cp.Hash, got.Hash)
-	assert.Equal(t, cp.NextOrdinal, got.NextOrdinal)
-	assert.Equal(t, cp.Version, got.Version)
-	assert.NotEmpty(t, got.UpdatedAt)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(cp.SessionID, got.SessionID)
+	assert.Equal(cp.Agent, got.Agent)
+	assert.Equal(cp.FilePath, got.FilePath)
+	assert.Equal(cp.FileInode, got.FileInode)
+	assert.Equal(cp.FileDevice, got.FileDevice)
+	assert.Equal(cp.FileMTime, got.FileMTime)
+	assert.Equal(cp.Offset, got.Offset)
+	assert.Equal(cp.TailAnchorDigest, got.TailAnchorDigest)
+	assert.Equal(cp.Hash, got.Hash)
+	assert.Equal(cp.NextOrdinal, got.NextOrdinal)
+	assert.Equal(cp.Version, got.Version)
+	assert.NotEmpty(got.UpdatedAt)
 
 	gotBlobs, ok, err := d.GetParserCheckpointBlobs(cp.SessionID)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, blobs.Cursor, gotBlobs.Cursor)
-	assert.Equal(t, blobs.HashState, gotBlobs.HashState)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(blobs.Cursor, gotBlobs.Cursor)
+	assert.Equal(blobs.HashState, gotBlobs.HashState)
 
-	require.NoError(t, d.DeleteParserCheckpoint(cp.SessionID))
+	require.NoError(d.DeleteParserCheckpoint(cp.SessionID))
 	_, ok, err = d.GetParserCheckpoint(cp.SessionID)
-	require.NoError(t, err)
-	assert.False(t, ok)
+	require.NoError(err)
+	assert.False(ok)
 	_, ok, err = d.GetParserCheckpointBlobs(cp.SessionID)
-	require.NoError(t, err)
-	assert.False(t, ok, "delete must remove the blob payload too")
+	require.NoError(err)
+	assert.False(ok, "delete must remove the blob payload too")
 }
 
 func TestReplaceSessionContentWithCheckpointUsesPrefixedSessionID(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	const storedID = "host:codex:native"
 	insertSession(t, d, storedID, "proj")
@@ -99,31 +105,34 @@ func TestReplaceSessionContentWithCheckpointUsesPrefixedSessionID(t *testing.T) 
 	err := d.ReplaceSessionContentWithCheckpoint(
 		storedID, msgs, SessionSignalUpdate{}, nil, cp, blobs,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	var nativeCount, prefixedCount int
-	require.NoError(t, d.Reader().QueryRow(
+	require.NoError(d.Reader().QueryRow(
 		`SELECT COUNT(*) FROM parser_checkpoints WHERE session_id = ?`,
 		"codex:native",
 	).Scan(&nativeCount))
-	require.NoError(t, d.Reader().QueryRow(
+	require.NoError(d.Reader().QueryRow(
 		`SELECT COUNT(*) FROM parser_checkpoints WHERE session_id = ?`,
 		storedID,
 	).Scan(&prefixedCount))
-	assert.Zero(t, nativeCount,
+	assert.Zero(nativeCount,
 		"the checkpoint must not be stored under the parser-native id")
-	assert.Equal(t, 1, prefixedCount,
+	assert.Equal(1, prefixedCount,
 		"the checkpoint must be stored under the rewritten session id")
 
 	var blobCount int
-	require.NoError(t, d.Reader().QueryRow(
+	require.NoError(d.Reader().QueryRow(
 		`SELECT COUNT(*) FROM parser_checkpoint_blobs WHERE session_id = ?`,
 		storedID,
 	).Scan(&blobCount))
-	assert.Equal(t, 1, blobCount)
+	assert.Equal(1, blobCount)
 }
 
 func TestWriteSessionIncrementalPersistsCheckpointInSameTx(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "s1", "proj")
 	insertMessages(t, d, Message{
@@ -162,34 +171,37 @@ func TestWriteSessionIncrementalPersistsCheckpointInSameTx(t *testing.T) {
 		Checkpoint:      &cp,
 		CheckpointBlobs: &blobs,
 	})
-	require.NoError(t, werr)
+	require.NoError(werr)
 
 	got, ok, err := d.GetParserCheckpoint("s1")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, int64(1024), got.Offset)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(int64(1024), got.Offset)
 	gotBlobs, ok, err := d.GetParserCheckpointBlobs("s1")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, []byte("c"), gotBlobs.Cursor)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal([]byte("c"), gotBlobs.Cursor)
 
 	// A delta without a checkpoint must not disturb the stored one.
 	_, werr = d.WriteSessionIncremental("s1", nil, IncrementalSessionUpdate{
 		MsgCount:    1,
 		NextOrdinal: 2,
 	})
-	require.NoError(t, werr)
+	require.NoError(werr)
 	got, ok, err = d.GetParserCheckpoint("s1")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, int64(1024), got.Offset)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(int64(1024), got.Offset)
 }
 
 func TestParserCheckpointRollsBackWithTransaction(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	tx, err := d.getWriter().Begin()
-	require.NoError(t, err)
-	require.NoError(t, upsertParserCheckpointTx(tx, ParserCheckpoint{
+	require.NoError(err)
+	require.NoError(upsertParserCheckpointTx(tx, ParserCheckpoint{
 		SessionID:        "s-rollback",
 		Agent:            "codex",
 		FilePath:         "/sessions/rollout-s-rollback.jsonl",
@@ -203,14 +215,14 @@ func TestParserCheckpointRollsBackWithTransaction(t *testing.T) {
 		Cursor:    []byte("c"),
 		HashState: []byte("h"),
 	}))
-	require.NoError(t, tx.Rollback())
+	require.NoError(tx.Rollback())
 
 	_, ok, err := d.GetParserCheckpoint("s-rollback")
-	require.NoError(t, err)
-	assert.False(t, ok,
+	require.NoError(err)
+	assert.False(ok,
 		"an aborted transaction must not leave a checkpoint behind")
 	_, ok, err = d.GetParserCheckpointBlobs("s-rollback")
-	require.NoError(t, err)
-	assert.False(t, ok,
+	require.NoError(err)
+	assert.False(ok,
 		"an aborted transaction must not leave checkpoint blobs behind")
 }

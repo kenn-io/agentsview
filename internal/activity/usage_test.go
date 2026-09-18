@@ -1,7 +1,6 @@
 package activity
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -19,6 +18,8 @@ func mustStart(t *testing.T, s string) time.Time {
 }
 
 func TestApplyUsage_DedupAndDayFilter(t *testing.T) {
+	assert := assert.New(t)
+
 	p := baseParams(t, "2026-06-16", "UTC")
 	// Same logical usage from message source and usage_events source share
 	// no claude IDs but share a dedup key -> must count once. A row outside
@@ -37,18 +38,21 @@ func TestApplyUsage_DedupAndDayFilter(t *testing.T) {
 	require.NoError(t, err)
 	r := Report{Buckets: make([]Bucket, len(windows))}
 	applyUsage(&r, p, windows, start, end, usage, nil)
-	assert.Equal(t, 100, r.Totals.OutputTokens)
-	assert.Equal(t, money.MustParseDollars("1.0"), r.Totals.Cost)
+	assert.Equal(100, r.Totals.OutputTokens)
+	assert.Equal(money.MustParseDollars("1.0"), r.Totals.Cost)
 	// A nil automated set classifies every session as interactive.
-	assert.Equal(t, money.MustParseDollars("1.0"), r.Totals.InteractiveCost)
-	assert.Equal(t, money.MustParseDollars("0.0"), r.Totals.AutomatedCost)
+	assert.Equal(money.MustParseDollars("1.0"), r.Totals.InteractiveCost)
+	assert.Equal(money.MustParseDollars("0.0"), r.Totals.AutomatedCost)
 	// 10:00 UTC -> bucket 120 (10*12).
-	assert.Equal(t, 1000, r.Buckets[120].InputTokens)
-	assert.Equal(t, 100, r.Buckets[120].OutputTokens)
-	assert.Equal(t, money.MustParseDollars("1.0"), r.Buckets[120].Cost)
+	assert.Equal(1000, r.Buckets[120].InputTokens)
+	assert.Equal(100, r.Buckets[120].OutputTokens)
+	assert.Equal(money.MustParseDollars("1.0"), r.Buckets[120].Cost)
 }
 
 func TestApplyUsage_PrefersCompleteClaudeSnapshotAcrossSessions(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	p := baseParams(t, "2026-06-16", "UTC")
 	usage := []UsageRow{
 		{
@@ -67,20 +71,22 @@ func TestApplyUsage_PrefersCompleteClaudeSnapshotAcrossSessions(t *testing.T) {
 	start := mustStart(t, "2026-06-16T00:00:00Z")
 	end := mustStart(t, "2026-06-17T00:00:00Z")
 	windows, err := BuildBuckets(start, end, p.Bucket, p.Loc)
-	require.NoError(t, err)
+	require.NoError(err)
 	r := Report{Buckets: make([]Bucket, len(windows))}
 	deduped := dedupUsage(start, end, p.EffectiveEnd, usage)
-	require.Len(t, deduped, 1)
-	assert.Equal(t, "root", deduped[0].SessionID)
-	assert.Equal(t, 631, deduped[0].OutputTokens)
+	require.Len(deduped, 1)
+	assert.Equal("root", deduped[0].SessionID)
+	assert.Equal(631, deduped[0].OutputTokens)
 
 	applyUsage(&r, p, windows, start, end, usage, nil)
 
-	assert.Equal(t, 631, r.Totals.OutputTokens)
-	assert.Equal(t, money.MustParseDollars("6.31"), r.Totals.Cost)
+	assert.Equal(631, r.Totals.OutputTokens)
+	assert.Equal(money.MustParseDollars("6.31"), r.Totals.Cost)
 }
 
 func TestDedupUsagePrefersLatestEqualOutputClaudeSnapshot(t *testing.T) {
+	assert := assert.New(t)
+
 	start := mustStart(t, "2026-06-16T00:00:00Z")
 	end := mustStart(t, "2026-06-17T00:00:00Z")
 	usage := []UsageRow{
@@ -107,14 +113,14 @@ func TestDedupUsagePrefersLatestEqualOutputClaudeSnapshot(t *testing.T) {
 
 	deduped := dedupUsage(start, end, end, usage)
 	require.Len(t, deduped, 1)
-	assert.Equal(t, "root", deduped[0].SessionID,
+	assert.Equal("root", deduped[0].SessionID,
 		"the earliest session retains attribution")
-	assert.Equal(t, 900, deduped[0].InputTokens)
-	assert.Equal(t, 100, deduped[0].OutputTokens)
-	assert.Equal(t, 200, deduped[0].CacheCreationTokens)
-	assert.Equal(t, 300, deduped[0].CacheReadTokens)
-	assert.Equal(t, 2, deduped[0].WebSearchRequests)
-	assert.Equal(t, money.MustParseDollars("9"), deduped[0].Cost)
+	assert.Equal(900, deduped[0].InputTokens)
+	assert.Equal(100, deduped[0].OutputTokens)
+	assert.Equal(200, deduped[0].CacheCreationTokens)
+	assert.Equal(300, deduped[0].CacheReadTokens)
+	assert.Equal(2, deduped[0].WebSearchRequests)
+	assert.Equal(money.MustParseDollars("9"), deduped[0].Cost)
 }
 
 func TestCanonicalSessionTokenCoverageCreditsEquivalentSnapshotCategories(t *testing.T) {
@@ -133,7 +139,7 @@ func TestCanonicalSessionTokenCoverageCreditsEquivalentSnapshotCategories(t *tes
 	}
 
 	coverage, err := CanonicalSessionTokenCoverageContext(
-		context.Background(), usage)
+		t.Context(), usage)
 	require.NoError(t, err)
 
 	want := SessionTokenCoverage{OutputTokens: 100, PeakContextTokens: 1400}
@@ -154,7 +160,7 @@ func TestCanonicalSessionTokenCoverageCreditsGenericDuplicateCategories(t *testi
 	}
 
 	coverage, err := CanonicalSessionTokenCoverageContext(
-		context.Background(), usage)
+		t.Context(), usage)
 	require.NoError(t, err)
 
 	want := SessionTokenCoverage{OutputTokens: 80, PeakContextTokens: 800}
@@ -204,16 +210,20 @@ func TestClaudeSnapshotEquivalentInstantUsesSemanticTieBreakers(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			mask, attribution, _ := ClaudeSnapshotSurvivorSelection(tt.usage)
 			require.Len(t, mask, 2)
-			assert.False(t, mask[1-tt.want])
-			assert.True(t, mask[tt.want])
-			assert.Equal(t, tt.usage[0].SessionID, attribution[tt.want])
+			assert.False(mask[1-tt.want])
+			assert.True(mask[tt.want])
+			assert.Equal(tt.usage[0].SessionID, attribution[tt.want])
 		})
 	}
 }
 
 func TestDedupUsagePreservesWebSearchesFromEarlierClaudeSnapshot(t *testing.T) {
+	assert := assert.New(t)
+
 	start := mustStart(t, "2026-06-16T00:00:00Z")
 	end := mustStart(t, "2026-06-17T00:00:00Z")
 	usage := []UsageRow{
@@ -235,12 +245,14 @@ func TestDedupUsagePreservesWebSearchesFromEarlierClaudeSnapshot(t *testing.T) {
 
 	deduped := dedupUsage(start, end, end, usage)
 	require.Len(t, deduped, 1)
-	assert.Equal(t, "root", deduped[0].SessionID)
-	assert.Equal(t, 200, deduped[0].OutputTokens)
-	assert.Equal(t, 2, deduped[0].WebSearchRequests)
+	assert.Equal("root", deduped[0].SessionID)
+	assert.Equal(200, deduped[0].OutputTokens)
+	assert.Equal(2, deduped[0].WebSearchRequests)
 }
 
 func TestApplyUsage_DedupBySourceUUIDFallback(t *testing.T) {
+	assert := assert.New(t)
+
 	p := baseParams(t, "2026-06-16", "UTC")
 	usage := []UsageRow{
 		{SessionID: "earlier", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
@@ -256,8 +268,8 @@ func TestApplyUsage_DedupBySourceUUIDFallback(t *testing.T) {
 	require.NoError(t, err)
 	r := Report{Buckets: make([]Bucket, len(windows))}
 	applyUsage(&r, p, windows, start, end, usage, nil)
-	assert.Equal(t, 500, r.Totals.OutputTokens)
-	assert.Equal(t, money.MustParseDollars("5.0"), r.Totals.Cost)
-	assert.Equal(t, 500, r.Buckets[120].OutputTokens)
-	assert.Equal(t, money.MustParseDollars("5.0"), r.Buckets[120].Cost)
+	assert.Equal(500, r.Totals.OutputTokens)
+	assert.Equal(money.MustParseDollars("5.0"), r.Totals.Cost)
+	assert.Equal(500, r.Buckets[120].OutputTokens)
+	assert.Equal(money.MustParseDollars("5.0"), r.Buckets[120].Cost)
 }

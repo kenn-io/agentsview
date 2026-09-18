@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -441,9 +442,7 @@ func (db *DB) importAcceptedRecallEntry(
 
 	if recall.SupersedesEntryID != "" {
 		if recall.SupersedesEntryID == recall.ID {
-			return false, fmt.Errorf(
-				"replacement entry id must differ from superseded entry id",
-			)
+			return false, errors.New("replacement entry id must differ from superseded entry id")
 		}
 		recall.SupersededByEntryID = ""
 		if err := supersedeRecallEntryTx(
@@ -560,7 +559,7 @@ func requireRecallImportEvidenceWithQueryer(
 	recall RecallEntry,
 ) error {
 	if len(recall.Evidence) == 0 {
-		return fmt.Errorf("missing recall evidence")
+		return errors.New("missing recall evidence")
 	}
 	rangesChecked := map[string]struct{}{}
 	toolUsesChecked := map[string]struct{}{}
@@ -603,7 +602,7 @@ func bindVerifiedRecallImportEvidenceWithQueryer(
 	recall *RecallEntry,
 ) error {
 	if len(recall.Evidence) == 0 {
-		return fmt.Errorf("missing recall evidence")
+		return errors.New("missing recall evidence")
 	}
 	first := recall.Evidence[0]
 	toolUseIDs := make([]string, 0, len(recall.Evidence))
@@ -611,7 +610,7 @@ func bindVerifiedRecallImportEvidenceWithQueryer(
 		if evidence.SessionID != first.SessionID ||
 			evidence.MessageStartOrdinal != first.MessageStartOrdinal ||
 			evidence.MessageEndOrdinal != first.MessageEndOrdinal {
-			return fmt.Errorf("recall evidence spans multiple windows")
+			return errors.New("recall evidence spans multiple windows")
 		}
 		if evidence.ToolUseID != "" {
 			toolUseIDs = append(toolUseIDs, evidence.ToolUseID)
@@ -809,16 +808,16 @@ func probeRecallImportItem(m probeAcceptedRecallEntry, reason string) RecallImpo
 
 func probeRecallEntryToDB(m probeAcceptedRecallEntry) (RecallEntry, error) {
 	if m.CandidateID == "" {
-		return RecallEntry{}, fmt.Errorf("missing candidate_id")
+		return RecallEntry{}, errors.New("missing candidate_id")
 	}
 	if m.SessionID == "" {
-		return RecallEntry{}, fmt.Errorf("missing session_id")
+		return RecallEntry{}, errors.New("missing session_id")
 	}
 	if err := validateImportedRecallEntryIdentities(m); err != nil {
 		return RecallEntry{}, err
 	}
 	if m.Title == "" || m.Body == "" {
-		return RecallEntry{}, fmt.Errorf("missing title or body")
+		return RecallEntry{}, errors.New("missing title or body")
 	}
 	if !validImportedRecallEntryType(m.Type) {
 		return RecallEntry{}, fmt.Errorf("invalid recall type %q", m.Type)
@@ -833,11 +832,11 @@ func probeRecallEntryToDB(m probeAcceptedRecallEntry) (RecallEntry, error) {
 		)
 	}
 	if m.Evidence.OrdinalStart == nil || m.Evidence.OrdinalEnd == nil {
-		return RecallEntry{}, fmt.Errorf("missing evidence ordinal range")
+		return RecallEntry{}, errors.New("missing evidence ordinal range")
 	}
 	if *m.Evidence.OrdinalStart < 0 ||
 		*m.Evidence.OrdinalEnd < *m.Evidence.OrdinalStart {
-		return RecallEntry{}, fmt.Errorf("invalid evidence ordinal range")
+		return RecallEntry{}, errors.New("invalid evidence ordinal range")
 	}
 	evidence := probeEvidenceToDB(m.CandidateID, m.SessionID, m.Evidence)
 	return RecallEntry{
@@ -886,9 +885,7 @@ func validateImportedRecallEntryIdentities(m probeAcceptedRecallEntry) error {
 		}
 	}
 	if slices.ContainsFunc(m.Evidence.ToolUseIDs, containsImportedControlCharacter) {
-		return fmt.Errorf(
-			"tool_use_id must not contain control characters",
-		)
+		return errors.New("tool_use_id must not contain control characters")
 	}
 	return nil
 }

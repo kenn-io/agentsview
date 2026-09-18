@@ -17,10 +17,13 @@ import (
 const windowsStatusDLLInitFailed = uint32(0xc0000142)
 
 func TestHydrateAssetsForceFetchesRemoteAssetBranches(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tempDir := t.TempDir()
 	remoteRepo := filepath.Join(tempDir, "remote")
 	localRepo := filepath.Join(tempDir, "local")
-	require.NoError(t, os.MkdirAll(localRepo, 0o755))
+	require.NoError(os.MkdirAll(localRepo, 0o755))
 
 	git(t, tempDir, "init", "--bare", remoteRepo)
 	oldStaticDir := filepath.Join(tempDir, "old-static")
@@ -49,7 +52,7 @@ func TestHydrateAssetsForceFetchesRemoteAssetBranches(t *testing.T) {
 	updateBareBranch(t, remoteRepo, "docs-generated-assets", generatedCommit)
 
 	docsAssetsDir := filepath.Join(localRepo, "docs", "assets")
-	require.NoError(t, os.MkdirAll(docsAssetsDir, 0o755))
+	require.NoError(os.MkdirAll(docsAssetsDir, 0o755))
 	writeStaticAssets(t, filepath.Join(docsAssetsDir, "static"), "stale local static")
 	writeAssetFiles(
 		t, filepath.Join(docsAssetsDir, "generated"),
@@ -57,27 +60,27 @@ func TestHydrateAssetsForceFetchesRemoteAssetBranches(t *testing.T) {
 	)
 
 	script, err := os.ReadFile(filepath.Join("..", "docs", "assets", "hydrate-assets.sh"))
-	require.NoError(t, err)
+	require.NoError(err)
 	scriptPath := filepath.Join(docsAssetsDir, "hydrate-assets.sh")
-	require.NoError(t, os.WriteFile(scriptPath, script, 0o755))
+	require.NoError(os.WriteFile(scriptPath, script, 0o755))
 
 	output, err := runBash(t, localRepo, nil, scriptPath)
-	require.NoError(t, err, string(output))
+	require.NoError(err, string(output))
 
 	logo, err := os.ReadFile(filepath.Join(localRepo, "docs", "assets", "static", "og-image.png"))
-	require.NoError(t, err)
-	assert.Equal(t, "new static", strings.TrimRight(string(logo), "\r\n"))
+	require.NoError(err)
+	assert.Equal("new static", strings.TrimRight(string(logo), "\r\n"))
 
 	screenshot, err := os.ReadFile(filepath.Join(localRepo, "docs", "assets", "generated", "screenshots", "dashboard.png"))
-	require.NoError(t, err)
-	assert.Equal(t, "generated", strings.TrimRight(string(screenshot), "\r\n"))
+	require.NoError(err)
+	assert.Equal("generated", strings.TrimRight(string(screenshot), "\r\n"))
 
 	semanticSetup, err := os.ReadFile(filepath.Join(
 		localRepo, "docs", "assets", "generated", "screenshots",
 		"semantic-search-setup.png",
 	))
-	require.NoError(t, err)
-	assert.Equal(t, "generated", strings.TrimRight(
+	require.NoError(err)
+	assert.Equal("generated", strings.TrimRight(
 		string(semanticSetup), "\r\n",
 	))
 }
@@ -102,30 +105,34 @@ func TestAssetPublishersRejectUnexpectedFiles(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
 
 			tempDir := t.TempDir()
 			repo := filepath.Join(tempDir, "repo")
 			sourceDir := filepath.Join(tempDir, "source")
-			require.NoError(t, os.MkdirAll(repo, 0o755))
+			require.NoError(os.MkdirAll(repo, 0o755))
 			git(t, repo, "init")
 			tc.write(t, sourceDir, "asset")
-			require.NoError(t, os.WriteFile(filepath.Join(sourceDir, ".env.local"), []byte("TOKEN=secret\n"), 0o600))
+			require.NoError(os.WriteFile(filepath.Join(sourceDir, ".env.local"), []byte("TOKEN=secret\n"), 0o600))
 
 			scriptPath := installScript(t, repo, tc.scriptRel)
 			output, err := runBash(t, repo, nil, scriptPath, "--source", sourceDir)
 
-			require.Error(t, err, string(output))
-			assert.Contains(t, string(output), "unexpected")
-			assert.Contains(t, string(output), ".env.local")
+			require.Error(err, string(output))
+			assert.Contains(string(output), "unexpected")
+			assert.Contains(string(output), ".env.local")
 		})
 	}
 }
 
 func TestGeneratedAssetPublisherAcceptsSemanticSetupScreenshot(t *testing.T) {
+	require := require.New(t)
+
 	tempDir := t.TempDir()
 	repo := filepath.Join(tempDir, "repo")
 	sourceDir := filepath.Join(tempDir, "source")
-	require.NoError(t, os.MkdirAll(repo, 0o755))
+	require.NoError(os.MkdirAll(repo, 0o755))
 	git(t, repo, "init")
 	writeGeneratedAssets(t, sourceDir, "asset")
 
@@ -134,32 +141,35 @@ func TestGeneratedAssetPublisherAcceptsSemanticSetupScreenshot(t *testing.T) {
 		filepath.Join("docs", "screenshots", "update-generated-assets-branch.sh"),
 	)
 	output, err := runBash(t, repo, nil, scriptPath, "--source", sourceDir)
-	require.NoError(t, err, string(output))
+	require.NoError(err, string(output))
 
-	show := exec.Command(
+	show := exec.CommandContext(t.Context(),
 		"git", "show",
 		"docs-generated-assets:screenshots/semantic-search-setup.png",
 	)
 	show.Dir = repo
 	published, err := show.Output()
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Equal(t, "asset", strings.TrimRight(string(published), "\r\n"))
 }
 
 func TestCheckDocsRejectsCorruptedMarkdownSyntax(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tempDir := t.TempDir()
 	repo := filepath.Join(tempDir, "repo")
-	require.NoError(t, os.MkdirAll(repo, 0o755))
+	require.NoError(os.MkdirAll(repo, 0o755))
 
 	checkScript := installScript(t, repo, filepath.Join("scripts", "check-docs.sh"))
 	installScript(t, repo, filepath.Join("docs", "scripts", "check_markdown_sources.py"))
-	require.NoError(t, os.MkdirAll(filepath.Join(repo, "docs", "assets"), 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(filepath.Join(repo, "docs", "assets"), 0o755))
+	require.NoError(os.WriteFile(
 		filepath.Join(repo, "docs", "assets", "hydrate-assets.sh"),
 		[]byte("#!/usr/bin/env bash\nset -euo pipefail\n"),
 		0o755,
 	))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(repo, "docs", "activity.md"),
 		[]byte(strings.Join([]string{
 			"______________________________________________________________________",
@@ -176,25 +186,27 @@ func TestCheckDocsRejectsCorruptedMarkdownSyntax(t *testing.T) {
 	env := append(envWithout("PATH", "PYTHON"), "PYTHON="+pythonPath, "PATH=/usr/bin:/bin")
 	output, err := runBash(t, repo, env, checkScript)
 
-	require.Error(t, err, string(output))
-	assert.Contains(t, string(output), "docs markdown")
-	assert.Contains(t, string(output), "activity.md")
+	require.Error(err, string(output))
+	assert.Contains(string(output), "docs markdown")
+	assert.Contains(string(output), "activity.md")
 }
 
 func TestCheckDocsRequiresRipgrepForMediaReferenceChecks(t *testing.T) {
+	require := require.New(t)
+
 	tempDir := t.TempDir()
 	repo := filepath.Join(tempDir, "repo")
-	require.NoError(t, os.MkdirAll(repo, 0o755))
+	require.NoError(os.MkdirAll(repo, 0o755))
 
 	checkScript := installScript(t, repo, filepath.Join("scripts", "check-docs.sh"))
 	installScript(t, repo, filepath.Join("docs", "scripts", "check_markdown_sources.py"))
-	require.NoError(t, os.MkdirAll(filepath.Join(repo, "docs", "assets"), 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(filepath.Join(repo, "docs", "assets"), 0o755))
+	require.NoError(os.WriteFile(
 		filepath.Join(repo, "docs", "assets", "hydrate-assets.sh"),
 		[]byte("#!/usr/bin/env bash\nset -euo pipefail\n"),
 		0o755,
 	))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(repo, "docs", "activity.md"),
 		[]byte(strings.Join([]string{
 			"---",
@@ -210,11 +222,11 @@ func TestCheckDocsRequiresRipgrepForMediaReferenceChecks(t *testing.T) {
 
 	pythonPath := requireRunnablePython3(t)
 	emptyBin := filepath.Join(tempDir, "empty-bin")
-	require.NoError(t, os.MkdirAll(emptyBin, 0o755))
+	require.NoError(os.MkdirAll(emptyBin, 0o755))
 	env := append(envWithout("PATH", "PYTHON"), "PYTHON="+pythonPath, "PATH="+emptyBin)
 	output, err := runBash(t, repo, env, checkScript)
 
-	require.Error(t, err, string(output))
+	require.Error(err, string(output))
 	assert.Contains(t, string(output), "rg not found")
 }
 
@@ -227,7 +239,7 @@ func TestBuiltSiteCheckRequiresMarkdownCompanions(t *testing.T) {
 	writeMinimalBuiltDocsSite(t, filepath.Join(repo, "docs", "site"))
 
 	pythonPath := requireRunnablePython3(t)
-	cmd := exec.Command(pythonPath, checkScript)
+	cmd := exec.CommandContext(t.Context(), pythonPath, checkScript)
 	cmd.Dir = filepath.Join(repo, "docs")
 	output, err := cmd.CombinedOutput()
 
@@ -254,9 +266,12 @@ func TestBuiltSiteCheckRejectsSvgUsePlainHref(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			tempDir := t.TempDir()
 			repo := filepath.Join(tempDir, "repo")
-			require.NoError(t, os.MkdirAll(repo, 0o755))
+			require.NoError(os.MkdirAll(repo, 0o755))
 
 			checkScript := installScript(t, repo, filepath.Join("docs", "scripts", "check_built_site.py"))
 			siteDir := filepath.Join(repo, "docs", "site")
@@ -265,40 +280,43 @@ func TestBuiltSiteCheckRejectsSvgUsePlainHref(t *testing.T) {
 
 			indexPath := filepath.Join(siteDir, "index.html")
 			page, err := os.ReadFile(indexPath)
-			require.NoError(t, err)
+			require.NoError(err)
 			patched := strings.Replace(string(page), "</body>", tt.useTag+"</body>", 1)
-			require.NoError(t, os.WriteFile(indexPath, []byte(patched), 0o644))
+			require.NoError(os.WriteFile(indexPath, []byte(patched), 0o644))
 
 			pythonPath := requireRunnablePython3(t)
-			cmd := exec.Command(pythonPath, checkScript)
+			cmd := exec.CommandContext(t.Context(), pythonPath, checkScript)
 			cmd.Dir = filepath.Join(repo, "docs")
 			output, err := cmd.CombinedOutput()
 
 			if tt.wantPass {
-				require.NoError(t, err, string(output))
-				assert.Contains(t, string(output), "built site checks passed")
+				require.NoError(err, string(output))
+				assert.Contains(string(output), "built site checks passed")
 			} else {
-				require.Error(t, err, string(output))
-				assert.Contains(t, string(output), "Use xlink:href instead")
+				require.Error(err, string(output))
+				assert.Contains(string(output), "Use xlink:href instead")
 			}
 		})
 	}
 }
 
 func TestZensicalDocsBuildExcludesScreenshotToolchain(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tempDir := t.TempDir()
 	repo := filepath.Join(tempDir, "repo")
 	docsDir := filepath.Join(repo, "docs")
-	require.NoError(t, os.MkdirAll(docsDir, 0o755))
+	require.NoError(os.MkdirAll(docsDir, 0o755))
 
 	scriptPath := installScript(t, repo,
 		filepath.Join("docs", "zensical-docs.sh"))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(docsDir, "zensical.toml"),
 		[]byte("[project]\ndocs_dir = \"docs\"\nsite_dir = \"site\"\n"),
 		0o644,
 	))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(docsDir, "index.md"),
 		[]byte("---\ntitle: Home\ndescription: Home page\n---\n"),
 		0o644,
@@ -308,34 +326,34 @@ func TestZensicalDocsBuildExcludesScreenshotToolchain(t *testing.T) {
 		docsDir, "screenshots", "node_modules", "playwright-core",
 		"trace-viewer.html",
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(toolchainFile), 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(filepath.Dir(toolchainFile), 0o755))
+	require.NoError(os.WriteFile(
 		toolchainFile, []byte("private screenshot toolchain\n"), 0o644,
 	))
 	testResultFile := filepath.Join(
 		docsDir, "screenshots", "test-results", "trace.zip",
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(testResultFile), 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(filepath.Dir(testResultFile), 0o755))
+	require.NoError(os.WriteFile(
 		testResultFile, []byte("private test trace\n"), 0o644,
 	))
 	publicScreenshot := filepath.Join(
 		docsDir, "assets", "generated", "screenshots", "dashboard.png",
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(publicScreenshot), 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(filepath.Dir(publicScreenshot), 0o755))
+	require.NoError(os.WriteFile(
 		publicScreenshot, []byte("public screenshot\n"), 0o644,
 	))
 	agentGuide := filepath.Join(docsDir, "agents", "testing.md")
-	require.NoError(t, os.MkdirAll(filepath.Dir(agentGuide), 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(filepath.Dir(agentGuide), 0o755))
+	require.NoError(os.WriteFile(
 		agentGuide, []byte("contributor-only instructions\n"), 0o644,
 	))
 	writeWebsiteTierFixture(t, docsDir)
 
 	fakeZensical := filepath.Join(docsDir, ".venv", "bin", "zensical")
-	require.NoError(t, os.MkdirAll(filepath.Dir(fakeZensical), 0o755))
-	require.NoError(t, os.WriteFile(fakeZensical, []byte(`#!/usr/bin/env bash
+	require.NoError(os.MkdirAll(filepath.Dir(fakeZensical), 0o755))
+	require.NoError(os.WriteFile(fakeZensical, []byte(`#!/usr/bin/env bash
 set -euo pipefail
 public_docs="$(find . -maxdepth 1 -type d -name 'zensical-public-docs.*' -print -quit)"
 mkdir -p site/docs
@@ -344,25 +362,25 @@ printf '<urlset></urlset>\n' > site/docs/sitemap.xml
 `), 0o755))
 
 	output, err := runBash(t, docsDir, nil, scriptPath, "build")
-	require.NoError(t, err, string(output))
-	assert.FileExists(t, filepath.Join(docsDir, "site", "docs", "index.md"))
-	assert.FileExists(t, filepath.Join(
+	require.NoError(err, string(output))
+	assert.FileExists(filepath.Join(docsDir, "site", "docs", "index.md"))
+	assert.FileExists(filepath.Join(
 		docsDir, "site", "docs", "assets", "generated", "screenshots",
 		"dashboard.png",
 	))
-	assert.FileExists(t, filepath.Join(docsDir, "site", "index.html"))
-	assert.FileExists(t, filepath.Join(docsDir, "site", "guide", "index.html"))
-	assert.FileExists(t, filepath.Join(docsDir, "site", "llms.txt"))
-	assert.FileExists(t, filepath.Join(docsDir, "site", "sitemap.xml"))
-	assert.FileExists(t, filepath.Join(docsDir, "site", "docs", "sitemap.xml"))
-	assert.NoDirExists(t, filepath.Join(docsDir, "site", "docs", "website"))
-	assert.NoDirExists(t, filepath.Join(docsDir, "site", "docs", "agents"))
-	assert.NoFileExists(t, filepath.Join(docsDir, "site", "docs", "llms.txt"))
-	assert.NoFileExists(t, filepath.Join(
+	assert.FileExists(filepath.Join(docsDir, "site", "index.html"))
+	assert.FileExists(filepath.Join(docsDir, "site", "guide", "index.html"))
+	assert.FileExists(filepath.Join(docsDir, "site", "llms.txt"))
+	assert.FileExists(filepath.Join(docsDir, "site", "sitemap.xml"))
+	assert.FileExists(filepath.Join(docsDir, "site", "docs", "sitemap.xml"))
+	assert.NoDirExists(filepath.Join(docsDir, "site", "docs", "website"))
+	assert.NoDirExists(filepath.Join(docsDir, "site", "docs", "agents"))
+	assert.NoFileExists(filepath.Join(docsDir, "site", "docs", "llms.txt"))
+	assert.NoFileExists(filepath.Join(
 		docsDir, "site", "docs", "screenshots", "node_modules",
 		"playwright-core", "trace-viewer.html",
 	))
-	assert.NoFileExists(t, filepath.Join(
+	assert.NoFileExists(filepath.Join(
 		docsDir, "site", "docs", "screenshots", "test-results", "trace.zip",
 	))
 }
@@ -409,7 +427,7 @@ func runBash(
 	require.NoError(t, err)
 	var output []byte
 	for attempt := range 3 {
-		cmd := exec.Command(bashPath, args...)
+		cmd := exec.CommandContext(t.Context(), bashPath, args...)
 		cmd.Dir = dir
 		if env != nil {
 			cmd.Env = env
@@ -441,7 +459,7 @@ func requireRunnablePython3(t *testing.T) string {
 	if err != nil {
 		t.Skipf("python3 not available on PATH: %v", err)
 	}
-	cmd := exec.Command(pythonPath, "--version")
+	cmd := exec.CommandContext(t.Context(), pythonPath, "--version")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if runtime.GOOS == "windows" {
 			t.Skipf("python3 is not runnable: %v\n%s", err, out)
@@ -721,7 +739,7 @@ func updateBareBranch(t *testing.T, bareRepo, branch, commit string) {
 
 func git(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = dir
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))

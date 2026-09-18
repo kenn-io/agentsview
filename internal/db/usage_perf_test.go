@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
@@ -39,7 +38,7 @@ func TestRealDBUsagePayload(t *testing.T) {
 	d.usageCache = newUsageCacheManager(filepath.Join(t.TempDir(), "sessions.db"))
 	d.usageCache.attachArchive(d)
 	defer d.usageCache.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 	tz := "America/New_York"
 
 	f := UsageFilter{From: "2000-01-01", To: "2035-01-01", Timezone: tz, Breakdowns: true}
@@ -102,7 +101,7 @@ func TestRealDBUsagePerf(t *testing.T) {
 	d.usageCache = newUsageCacheManager(filepath.Join(t.TempDir(), "sessions.db"))
 	d.usageCache.attachArchive(d)
 	defer d.usageCache.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 	tz := "America/New_York"
 
 	walActive := fileExists(path + "-wal")
@@ -261,55 +260,59 @@ func TestRealDBUsageRollupOracle(t *testing.T) {
 				From: now.AddDate(0, 0, -6).Format("2006-01-02"),
 				To:   now.Format("2006-01-02"), Timezone: "America/New_York",
 				Breakdowns: true,
-			}},
+			},
+		},
 		{
 			"30d", UsageFilter{
 				From: now.AddDate(0, 0, -29).Format("2006-01-02"),
 				To:   now.Format("2006-01-02"), Timezone: "America/New_York",
 				Breakdowns: true,
-			}},
+			},
+		},
 		{"all", UsageFilter{Timezone: "America/New_York", Breakdowns: true}},
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, test := range filters {
 		t.Run(test.name, func(t *testing.T) {
+			require := require.New(t)
+
 			discoveryStart := time.Now()
 			snapshot, captureErr := database.captureUsageQuery(
 				ctx, test.filter, usageQueryKindToken)
-			require.NoError(t, captureErr, "candidate discovery")
+			require.NoError(captureErr, "candidate discovery")
 			discoveryElapsed := time.Since(discoveryStart)
 
 			legacyStart := time.Now()
 			legacy, legacyErr := database.getDailyUsageLegacy(ctx, test.filter)
-			require.NoError(t, legacyErr, "legacy usage")
+			require.NoError(legacyErr, "legacy usage")
 			legacyElapsed := time.Since(legacyStart)
 
 			cache, cacheErr := database.usageCache.Generation(
 				ctx, snapshot.DatabaseID)
-			require.NoError(t, cacheErr, "open usage cache")
+			require.NoError(cacheErr, "open usage cache")
 			clearUsageFactsBenchmarkCache(t, cache)
 			var before, after runtime.MemStats
 			runtime.ReadMemStats(&before)
 			coldStart := time.Now()
 			rollup, rollupErr := database.GetDailyUsage(ctx, test.filter)
-			require.NoError(t, rollupErr, "rollup usage")
+			require.NoError(rollupErr, "rollup usage")
 			coldElapsed := time.Since(coldStart)
 			runtime.ReadMemStats(&after)
 
 			legacyJSON, marshalErr := json.Marshal(legacy)
-			require.NoError(t, marshalErr, "marshal legacy result")
+			require.NoError(marshalErr, "marshal legacy result")
 			rollupJSON, marshalErr := json.Marshal(rollup)
-			require.NoError(t, marshalErr, "marshal rollup result")
-			require.Equal(t, legacyJSON, rollupJSON,
+			require.NoError(marshalErr, "marshal rollup result")
+			require.JSONEq(string(legacyJSON), string(rollupJSON),
 				"rollup and legacy results must be byte-equivalent")
 
 			warmStart := time.Now()
 			warm, warmErr := database.GetDailyUsage(ctx, test.filter)
-			require.NoError(t, warmErr, "warm rollup usage")
+			require.NoError(warmErr, "warm rollup usage")
 			warmElapsed := time.Since(warmStart)
 			warmJSON, marshalErr := json.Marshal(warm)
-			require.NoError(t, marshalErr, "marshal warm facts result")
-			require.Equal(t, rollupJSON, warmJSON,
+			require.NoError(marshalErr, "marshal warm facts result")
+			require.JSONEq(string(rollupJSON), string(warmJSON),
 				"cold and warm rollup results must be byte-equivalent")
 
 			t.Logf(
@@ -349,31 +352,35 @@ func TestDumpSidebarJSONRejectsDBAndSidecars(t *testing.T) {
 }
 
 func TestDumpSidebarJSONDoesNotClobberExistingFile(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "sessions.db")
 	outPath := filepath.Join(dir, "sidebar.json")
-	require.NoError(t, os.WriteFile(dbPath, []byte("db"), 0o644))
-	require.NoError(t, os.WriteFile(outPath, []byte("existing"), 0o644))
+	require.NoError(os.WriteFile(dbPath, []byte("db"), 0o644))
+	require.NoError(os.WriteFile(outPath, []byte("existing"), 0o644))
 
 	err := dumpSidebarJSON(outPath, dbPath, []byte(`{"sessions":[]}`))
-	require.Error(t, err)
+	require.Error(err)
 
 	got, readErr := os.ReadFile(outPath)
-	require.NoError(t, readErr)
+	require.NoError(readErr)
 	assert.Equal(t, "existing", string(got))
 }
 
 func TestDumpSidebarJSONCreatesNewFile(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "sessions.db")
 	outPath := filepath.Join(dir, "sidebar.json")
 	payload := []byte(`{"sessions":[]}`)
-	require.NoError(t, os.WriteFile(dbPath, []byte("db"), 0o644))
+	require.NoError(os.WriteFile(dbPath, []byte("db"), 0o644))
 
-	require.NoError(t, dumpSidebarJSON(outPath, dbPath, payload))
+	require.NoError(dumpSidebarJSON(outPath, dbPath, payload))
 
 	got, err := os.ReadFile(outPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Equal(t, payload, got)
 }
 

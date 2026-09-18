@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,6 +10,9 @@ import (
 )
 
 func TestIflowProviderSourceMethods(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "test-project")
 	rawID := "5de701fc-7454-4858-a249-95cac4fd3b51"
@@ -22,41 +24,44 @@ func TestIflowProviderSourceMethods(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
+	require.True(ok)
 
-	discovered, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, discovered, 1)
-	assert.Equal(t, AgentIflow, discovered[0].Provider)
-	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
-	assert.Equal(t, "test-project", discovered[0].ProjectHint)
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(discovered, 1)
+	assert.Equal(AgentIflow, discovered[0].Provider)
+	assert.Equal(sourcePath, discovered[0].DisplayPath)
+	assert.Equal("test-project", discovered[0].ProjectHint)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~iflow:" + rawID,
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, sourcePath, found.DisplayPath)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(sourcePath, found.DisplayPath)
 
 	forkID := rawID + "-6f5d8718-7a95-4bb8-965f-faa23246c82d"
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: forkID,
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, sourcePath, found.DisplayPath)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(sourcePath, found.DisplayPath)
 
-	require.NoError(t, os.Remove(sourcePath))
+	require.NoError(os.Remove(sourcePath))
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: root},
 	)
-	require.NoError(t, err)
-	require.Len(t, changed, 1)
-	assert.Equal(t, sourcePath, changed[0].DisplayPath)
+	require.NoError(err)
+	require.Len(changed, 1)
+	assert.Equal(sourcePath, changed[0].DisplayPath)
 }
 
 func TestIflowProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	realProjectDir := filepath.Join(t.TempDir(), "real-project")
 	linkProjectDir := filepath.Join(root, "linked-project")
@@ -78,23 +83,26 @@ func TestIflowProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
+	require.True(ok)
 
-	discovered, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, discovered, 1)
-	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
-	assert.Equal(t, "linked-project", discovered[0].ProjectHint)
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(discovered, 1)
+	assert.Equal(sourcePath, discovered[0].DisplayPath)
+	assert.Equal("linked-project", discovered[0].ProjectHint)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: rawID,
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, sourcePath, found.DisplayPath)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(sourcePath, found.DisplayPath)
 }
 
 func TestIflowProviderParse(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	project := "test-project"
 	rawID := "5de701fc-7454-4858-a249-95cac4fd3b51"
@@ -105,27 +113,27 @@ func TestIflowProviderParse(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	require.True(ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: SourceFingerprint{Key: sourcePath, Hash: "abc123"},
 	})
-	require.NoError(t, err)
-	require.True(t, outcome.ResultSetComplete)
-	require.Len(t, outcome.Results, 1)
-	assert.Equal(t, DataVersionCurrent, outcome.Results[0].DataVersion)
-	assert.Equal(t, "iflow:"+rawID, outcome.Results[0].Result.Session.ID)
+	require.NoError(err)
+	require.True(outcome.ResultSetComplete)
+	require.Len(outcome.Results, 1)
+	assert.Equal(DataVersionCurrent, outcome.Results[0].DataVersion)
+	assert.Equal("iflow:"+rawID, outcome.Results[0].Result.Session.ID)
 	// The provider mirrors the legacy sync project resolution, deriving the
 	// canonical project from the session's recorded cwd rather than the raw
 	// project directory name.
-	assert.Equal(t, "docker_image_retagger", outcome.Results[0].Result.Session.Project)
-	assert.Equal(t, "devbox", outcome.Results[0].Result.Session.Machine)
-	assert.Equal(t, "abc123", outcome.Results[0].Result.Session.File.Hash)
-	assert.Len(t, outcome.Results[0].Result.Messages, 11)
+	assert.Equal("docker_image_retagger", outcome.Results[0].Result.Session.Project)
+	assert.Equal("devbox", outcome.Results[0].Result.Session.Machine)
+	assert.Equal("abc123", outcome.Results[0].Result.Session.File.Hash)
+	assert.Len(outcome.Results[0].Result.Messages, 11)
 }
 
 func copyFixtureFile(t *testing.T, src, dst string) {

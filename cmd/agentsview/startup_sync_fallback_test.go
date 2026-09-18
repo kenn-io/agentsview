@@ -15,6 +15,9 @@ import (
 )
 
 func TestRunDeferredStartupSyncFallbackPerformsSkippedSync(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := dbtest.OpenTestDB(t)
 	reconciled := make(chan struct{}, 1)
 	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{
@@ -34,14 +37,14 @@ func TestRunDeferredStartupSyncFallbackPerformsSkippedSync(t *testing.T) {
 		t.Context(), config.Config{}, engine, database, nil, nil, timeout,
 	)
 
-	require.NoError(t, err)
-	assert.True(t, ran)
-	assert.False(t, engine.LastSyncStartedAt().IsZero(),
+	require.NoError(err)
+	assert.True(ran)
+	assert.False(engine.LastSyncStartedAt().IsZero(),
 		"timeout fallback must perform the skipped local sync")
 	select {
 	case <-reconciled:
 	case <-time.After(time.Second):
-		require.FailNow(t, "deferred fallback did not reconcile watcher startup")
+		require.FailNow("deferred fallback did not reconcile watcher startup")
 	}
 }
 
@@ -49,6 +52,9 @@ func TestRunDeferredStartupSyncFallbackPerformsSkippedSync(t *testing.T) {
 // that avoids a redundant pass: once a foreground request has driven startup
 // reconciliation, the deferred fallback performs no sync.
 func TestRunDeferredStartupSyncFallbackSkipsWhenAlreadyReconciled(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := dbtest.OpenTestDB(t)
 	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{
 		Machine:                 "local",
@@ -56,7 +62,7 @@ func TestRunDeferredStartupSyncFallbackSkipsWhenAlreadyReconciled(t *testing.T) 
 	})
 	t.Cleanup(engine.Close)
 	engine.RecordStartupReconciled(syncpkg.SyncStats{}, nil)
-	require.True(t, engine.StartupReconciled())
+	require.True(engine.StartupReconciled())
 
 	timeout := make(chan time.Time, 1)
 	timeout <- time.Now()
@@ -64,9 +70,9 @@ func TestRunDeferredStartupSyncFallbackSkipsWhenAlreadyReconciled(t *testing.T) 
 		t.Context(), config.Config{}, engine, database, nil, nil, timeout,
 	)
 
-	require.NoError(t, err)
-	assert.False(t, ran, "already-reconciled startup must skip the deferred sync")
-	assert.True(t, engine.LastSyncStartedAt().IsZero(),
+	require.NoError(err)
+	assert.False(ran, "already-reconciled startup must skip the deferred sync")
+	assert.True(engine.LastSyncStartedAt().IsZero(),
 		"no redundant local sync should run")
 }
 
@@ -76,6 +82,9 @@ func TestRunDeferredStartupSyncFallbackSkipsWhenAlreadyReconciled(t *testing.T) 
 // takes the in-process SyncThenRun arm, which reconciles natively; production's
 // worker arm mirrors it with RecordStartupReconciled.
 func TestForegroundSyncRunnerReconcilesStartup(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	cfg := testConfigWithClaudeFixture(t)
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
 	opened := make(chan struct{}, 1)
@@ -96,16 +105,16 @@ func TestForegroundSyncRunnerReconcilesStartup(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	runner := newForegroundSyncRunner(context.Background(), cfg, engine, database, nil)
+	runner := newForegroundSyncRunner(t.Context(), cfg, engine, database, nil)
 	stats, err := runner(t.Context(), nil)
 
-	require.NoError(t, err)
-	assert.Equal(t, 3, stats.Synced, "foreground runner syncs the fixture archive")
-	assert.True(t, engine.StartupReconciled(),
+	require.NoError(err)
+	assert.Equal(3, stats.Synced, "foreground runner syncs the fixture archive")
+	assert.True(engine.StartupReconciled(),
 		"foreground sync must reconcile startup")
 	select {
 	case <-opened:
 	case <-time.After(2 * time.Second):
-		require.FailNow(t, "foreground runner did not open watcher dispatch")
+		require.FailNow("foreground runner did not open watcher dispatch")
 	}
 }

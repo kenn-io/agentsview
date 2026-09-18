@@ -141,6 +141,8 @@ func TestPGAutomatedScopeOneShotExemption(t *testing.T) {
 }
 
 func TestPGUsageProjectLabelsPreserveCommas(t *testing.T) {
+	assert := assert.New(t)
+
 	pb := &paramBuilder{}
 	sql := appendPGUsageSessionFilterClauses(
 		"WHERE true",
@@ -151,14 +153,16 @@ func TestPGUsageProjectLabelsPreserveCommas(t *testing.T) {
 		},
 	)
 
-	assert.Contains(t, sql, "s.project = $1")
-	assert.Contains(t, sql, "s.project != $2")
+	assert.Contains(sql, "s.project = $1")
+	assert.Contains(sql, "s.project != $2")
 	require.Len(t, pb.args, 2)
-	assert.Equal(t, "team,core", pb.args[0])
-	assert.Equal(t, "other,group", pb.args[1])
+	assert.Equal("team,core", pb.args[0])
+	assert.Equal("other,group", pb.args[1])
 }
 
 func TestPGAnalyticsMachineMultiSelectPredicate(t *testing.T) {
+	assert := assert.New(t)
+
 	pb := &paramBuilder{}
 	sql := buildAnalyticsWhereWithDate(
 		db.AnalyticsFilter{
@@ -171,10 +175,10 @@ func TestPGAnalyticsMachineMultiSelectPredicate(t *testing.T) {
 	)
 
 	want := "machine IN ($1,$2)"
-	assert.Contains(t, sql, want, "analytics SQL missing machine IN predicate")
-	assert.NotContains(t, sql, "machine = ",
+	assert.Contains(sql, want, "analytics SQL missing machine IN predicate")
+	assert.NotContains(sql, "machine = ",
 		"analytics SQL used literal machine equality")
 	require.Len(t, pb.args, 2)
-	assert.Equal(t, "laptop", pb.args[0])
-	assert.Equal(t, "server", pb.args[1])
+	assert.Equal("laptop", pb.args[0])
+	assert.Equal("server", pb.args[1])
 }

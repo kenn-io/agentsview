@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
@@ -35,7 +34,7 @@ const (
 
 func assertSessionState(t *testing.T, database *db.DB, sessionID string, check func(*db.Session)) {
 	t.Helper()
-	sess, err := database.GetSession(context.Background(), sessionID)
+	sess, err := database.GetSession(t.Context(), sessionID)
 	require.NoError(t, err, "GetSession(%q)", sessionID)
 	require.NotNil(t, sess, "Session %q not found", sessionID)
 	if check != nil {
@@ -69,7 +68,7 @@ func assertSessionProjectAndCwd(
 
 func runSyncAndAssert(t *testing.T, engine *sync.Engine, want sync.SyncStats) sync.SyncStats {
 	t.Helper()
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	diff := cmp.Diff(want, stats,
 		cmpopts.IgnoreUnexported(sync.SyncStats{}),
 	)
@@ -87,7 +86,7 @@ func (e *testEnv) assertResyncRoundTrip(
 
 	// Clear mtime to force resync on next check.
 	err := e.db.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+		_, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET file_mtime = NULL"+
 				" WHERE id = ?",
 			sessionID,
@@ -107,7 +106,7 @@ func (e *testEnv) assertResyncRoundTrip(
 
 func fetchMessages(t *testing.T, database *db.DB, sessionID string) []db.Message {
 	t.Helper()
-	msgs, err := database.GetAllMessages(context.Background(), sessionID)
+	msgs, err := database.GetAllMessages(t.Context(), sessionID)
 	require.NoError(t, err, "GetAllMessages(%q)", sessionID)
 	return msgs
 }
@@ -165,7 +164,7 @@ func (e *testEnv) updateSessionProject(
 ) {
 	t.Helper()
 	sess, err := e.db.GetSessionFull(
-		context.Background(), sessionID,
+		t.Context(), sessionID,
 	)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, sess, "session %q not found", sessionID)
@@ -364,7 +363,7 @@ func sqliteSchemaTemplateBytes(
 			*templateErr = fmt.Errorf("open %s schema template: %w", label, err)
 			return
 		}
-		if _, err = d.Exec(schema); err != nil {
+		if _, err = d.ExecContext(t.Context(), schema); err != nil {
 			_ = d.Close()
 			*templateErr = fmt.Errorf("create %s schema template: %w", label, err)
 			return
@@ -403,7 +402,7 @@ func (ks *kiroSQLiteTestDB) addSession(
 	createdAt, updatedAt int64,
 ) {
 	t.Helper()
-	_, err := ks.db.Exec(
+	_, err := ks.db.ExecContext(t.Context(),
 		`INSERT INTO conversations_v2
 			(key, conversation_id, value, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?)`,
@@ -416,7 +415,7 @@ func (ks *kiroSQLiteTestDB) updateSession(
 	t *testing.T, id, payload string, updatedAt int64,
 ) {
 	t.Helper()
-	_, err := ks.db.Exec(
+	_, err := ks.db.ExecContext(t.Context(),
 		`UPDATE conversations_v2
 		    SET value = ?, updated_at = ?
 		  WHERE conversation_id = ?`,
@@ -461,7 +460,7 @@ func (oc *openCodeTestDB) inTransaction(
 	seed func(*openCodeTestDB),
 ) {
 	t.Helper()
-	tx, err := oc.db.Begin()
+	tx, err := oc.db.BeginTx(t.Context(), nil)
 	require.NoError(t, err, "begin OpenCode seed transaction")
 	defer func() { _ = tx.Rollback() }()
 
@@ -623,8 +622,8 @@ func (oc *openCodeTestDB) replaceTextContent(
 	oc.deleteMessages(t, sessionID)
 	oc.deleteParts(t, sessionID)
 
-	umID := fmt.Sprintf("%s-msg-user-v2", sessionID)
-	amID := fmt.Sprintf("%s-msg-asst-v2", sessionID)
+	umID := sessionID + "-msg-user-v2"
+	amID := sessionID + "-msg-asst-v2"
 	oc.addMessage(t, umID, sessionID, "user", timeCreated)
 	oc.addMessage(
 		t, amID, sessionID, "assistant", timeCreated+1,

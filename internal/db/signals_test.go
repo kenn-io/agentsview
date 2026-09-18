@@ -2,17 +2,19 @@ package db
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestUpdateSessionSignals(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "sig-1", "proj", func(s *Session) {
 		s.MessageCount = 5
@@ -43,41 +45,41 @@ func TestUpdateSessionSignals(t *testing.T) {
 			RunawayToolLoopCount:        1,
 		},
 	}
-	require.NoError(t, d.UpdateSessionSignals("sig-1", update),
+	require.NoError(d.UpdateSessionSignals("sig-1", update),
 		"UpdateSessionSignals")
 
 	got, err := d.GetSessionFull(ctx, "sig-1")
-	require.NoError(t, err, "GetSessionFull")
-	require.NotNil(t, got, "session not found after update")
+	require.NoError(err, "GetSessionFull")
+	require.NotNil(got, "session not found after update")
 
-	assert.Equal(t, 3, got.ToolFailureSignalCount, "ToolFailureSignalCount")
-	assert.Equal(t, 2, got.ToolRetryCount, "ToolRetryCount")
-	assert.Equal(t, 1, got.EditChurnCount, "EditChurnCount")
-	assert.Equal(t, 4, got.ConsecutiveFailureMax, "ConsecutiveFailureMax")
-	assert.Equal(t, "completed", got.Outcome, "Outcome")
-	assert.Equal(t, "high", got.OutcomeConfidence, "OutcomeConfidence")
-	assert.Equal(t, "assistant", got.EndedWithRole, "EndedWithRole")
-	assert.Equal(t, 0, got.FinalFailureStreak, "FinalFailureStreak")
-	assert.Equal(t, 2, got.CompactionCount, "CompactionCount")
-	assert.Equal(t, CurrentQualitySignalVersion, got.QualitySignalVersion,
+	assert.Equal(3, got.ToolFailureSignalCount, "ToolFailureSignalCount")
+	assert.Equal(2, got.ToolRetryCount, "ToolRetryCount")
+	assert.Equal(1, got.EditChurnCount, "EditChurnCount")
+	assert.Equal(4, got.ConsecutiveFailureMax, "ConsecutiveFailureMax")
+	assert.Equal("completed", got.Outcome, "Outcome")
+	assert.Equal("high", got.OutcomeConfidence, "OutcomeConfidence")
+	assert.Equal("assistant", got.EndedWithRole, "EndedWithRole")
+	assert.Equal(0, got.FinalFailureStreak, "FinalFailureStreak")
+	assert.Equal(2, got.CompactionCount, "CompactionCount")
+	assert.Equal(CurrentQualitySignalVersion, got.QualitySignalVersion,
 		"QualitySignalVersion")
-	assert.Equal(t, 2, got.ShortPromptCount, "ShortPromptCount")
-	assert.True(t, got.UnstructuredStart, "UnstructuredStart")
-	assert.Equal(t, 1, got.MissingSuccessCriteriaCount,
+	assert.Equal(2, got.ShortPromptCount, "ShortPromptCount")
+	assert.True(got.UnstructuredStart, "UnstructuredStart")
+	assert.Equal(1, got.MissingSuccessCriteriaCount,
 		"MissingSuccessCriteriaCount")
-	assert.Equal(t, 1, got.MissingVerificationCount,
+	assert.Equal(1, got.MissingVerificationCount,
 		"MissingVerificationCount")
-	assert.Equal(t, 3, got.DuplicatePromptCount, "DuplicatePromptCount")
-	assert.Equal(t, 1, got.NoCodeContextCount, "NoCodeContextCount")
-	assert.Equal(t, 1, got.RunawayToolLoopCount, "RunawayToolLoopCount")
+	assert.Equal(3, got.DuplicatePromptCount, "DuplicatePromptCount")
+	assert.Equal(1, got.NoCodeContextCount, "NoCodeContextCount")
+	assert.Equal(1, got.RunawayToolLoopCount, "RunawayToolLoopCount")
 
-	assert.Nil(t, got.SignalsPendingSince, "SignalsPendingSince")
-	require.NotNil(t, got.ContextPressureMax, "ContextPressureMax")
-	assert.Equal(t, 0.85, *got.ContextPressureMax, "ContextPressureMax")
-	require.NotNil(t, got.HealthScore, "HealthScore")
-	assert.Equal(t, 72, *got.HealthScore, "HealthScore")
-	require.NotNil(t, got.HealthGrade, "HealthGrade")
-	assert.Equal(t, "B", *got.HealthGrade, "HealthGrade")
+	assert.Nil(got.SignalsPendingSince, "SignalsPendingSince")
+	require.NotNil(got.ContextPressureMax, "ContextPressureMax")
+	assert.Equal(0.85, *got.ContextPressureMax, "ContextPressureMax")
+	require.NotNil(got.HealthScore, "HealthScore")
+	assert.Equal(72, *got.HealthScore, "HealthScore")
+	require.NotNil(got.HealthGrade, "HealthGrade")
+	assert.Equal("B", *got.HealthGrade, "HealthGrade")
 
 	// Update again with pending since set and nullable fields
 	// cleared.
@@ -87,27 +89,27 @@ func TestUpdateSessionSignals(t *testing.T) {
 		OutcomeConfidence:   "low",
 		SignalsPendingSince: &pending,
 	}
-	require.NoError(t, d.UpdateSessionSignals("sig-1", update2),
+	require.NoError(d.UpdateSessionSignals("sig-1", update2),
 		"UpdateSessionSignals (2nd)")
 
 	got2, err := d.GetSessionFull(ctx, "sig-1")
-	require.NoError(t, err, "GetSessionFull (2nd)")
+	require.NoError(err, "GetSessionFull (2nd)")
 
 	// Verify signals_pending_since is loaded by GetSessionFull
 	// (was previously absent from the column lists).
-	require.NotNil(t, got2.SignalsPendingSince, "SignalsPendingSince")
-	assert.Equal(t, pending, *got2.SignalsPendingSince, "SignalsPendingSince")
+	require.NotNil(got2.SignalsPendingSince, "SignalsPendingSince")
+	assert.Equal(pending, *got2.SignalsPendingSince, "SignalsPendingSince")
 
 	pendingIDs, err := d.PendingSignalSessions(
 		ctx, "2024-07-01T00:00:00Z",
 	)
-	require.NoError(t, err, "PendingSignalSessions")
-	assert.Equal(t, []string{"sig-1"}, pendingIDs, "PendingSignalSessions")
+	require.NoError(err, "PendingSignalSessions")
+	assert.Equal([]string{"sig-1"}, pendingIDs, "PendingSignalSessions")
 
-	assert.Nil(t, got2.ContextPressureMax, "ContextPressureMax")
-	assert.Nil(t, got2.HealthScore, "HealthScore")
-	assert.Nil(t, got2.HealthGrade, "HealthGrade")
-	assert.Nil(t, got2.StoredQualitySignals(), "StoredQualitySignals")
+	assert.Nil(got2.ContextPressureMax, "ContextPressureMax")
+	assert.Nil(got2.HealthScore, "HealthScore")
+	assert.Nil(got2.HealthGrade, "HealthGrade")
+	assert.Nil(got2.StoredQualitySignals(), "StoredQualitySignals")
 }
 
 // TestUpdateSessionSignalsBumpsLocalModifiedAt ensures that
@@ -117,25 +119,26 @@ func TestUpdateSessionSignals(t *testing.T) {
 // migration adds new signal columns) would never propagate to
 // PG-backed deployments.
 func TestUpdateSessionSignalsBumpsLocalModifiedAt(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "lm-1", "proj")
 
+	_, err := d.getWriter().Exec("UPDATE sessions SET local_modified_at = ? WHERE id = ?", "2000-01-01T00:00:00.000Z", "lm-1")
+	require.NoError(err)
+
 	// Snapshot local_modified_at after the initial upsert.
 	beforeRow, err := d.GetSessionFull(ctx, "lm-1")
-	require.NoError(t, err, "GetSessionFull")
-	require.NotNil(t, beforeRow, "session not found before update")
+	require.NoError(err, "GetSessionFull")
+	require.NotNil(beforeRow, "session not found before update")
 	before := ""
 	if beforeRow.LocalModifiedAt != nil {
 		before = *beforeRow.LocalModifiedAt
 	}
 
-	// SQLite's strftime('now') ticks at millisecond precision.
-	// Sleep a few ms so a re-set produces a strictly later value.
-	time.Sleep(5 * time.Millisecond)
-
-	require.NoError(t, d.UpdateSessionSignals("lm-1", SessionSignalUpdate{
+	require.NoError(d.UpdateSessionSignals("lm-1", SessionSignalUpdate{
 		ToolFailureSignalCount: 1,
 		Outcome:                "completed",
 		OutcomeConfidence:      "high",
@@ -143,18 +146,20 @@ func TestUpdateSessionSignalsBumpsLocalModifiedAt(t *testing.T) {
 	}), "UpdateSessionSignals")
 
 	afterRow, err := d.GetSessionFull(ctx, "lm-1")
-	require.NoError(t, err, "GetSessionFull (after)")
-	require.NotNil(t, afterRow.LocalModifiedAt,
+	require.NoError(err, "GetSessionFull (after)")
+	require.NotNil(afterRow.LocalModifiedAt,
 		"local_modified_at not set after signal update")
-	require.NotEmpty(t, *afterRow.LocalModifiedAt,
+	require.NotEmpty(*afterRow.LocalModifiedAt,
 		"local_modified_at not set after signal update")
 	assert.Greater(t, *afterRow.LocalModifiedAt, before,
 		"local_modified_at not bumped")
 }
 
 func TestPendingSignalSessions(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	cutoff := "2024-06-01T12:00:00Z"
 
@@ -165,7 +170,7 @@ func TestPendingSignalSessions(t *testing.T) {
 		OutcomeConfidence:   "low",
 		SignalsPendingSince: new("2024-06-01T10:00:00Z"),
 	}
-	require.NoError(t, d.UpdateSessionSignals("ps-old", old),
+	require.NoError(d.UpdateSessionSignals("ps-old", old),
 		"UpdateSessionSignals ps-old")
 
 	// Session with pending_since after cutoff -- should NOT match.
@@ -175,15 +180,15 @@ func TestPendingSignalSessions(t *testing.T) {
 		OutcomeConfidence:   "low",
 		SignalsPendingSince: new("2024-06-01T14:00:00Z"),
 	}
-	require.NoError(t, d.UpdateSessionSignals("ps-new", newer),
+	require.NoError(d.UpdateSessionSignals("ps-new", newer),
 		"UpdateSessionSignals ps-new")
 
 	// Session with no pending_since -- should NOT match.
 	insertSession(t, d, "ps-none", "proj")
 
 	ids, err := d.PendingSignalSessions(ctx, cutoff)
-	require.NoError(t, err, "PendingSignalSessions")
-	require.Len(t, ids, 1)
+	require.NoError(err, "PendingSignalSessions")
+	require.Len(ids, 1)
 	assert.Equal(t, "ps-old", ids[0])
 }
 
@@ -194,8 +199,11 @@ func TestPendingSignalSessions(t *testing.T) {
 // mid-backfill) must leave the marker unset so the next
 // startup retries.
 func TestBackfillSignalsMarkerOnlyOnSuccess(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "ok-1", "p")
 	insertSession(t, d, "ok-2", "p")
@@ -206,7 +214,7 @@ func TestBackfillSignalsMarkerOnlyOnSuccess(t *testing.T) {
 	compute := func(_ context.Context, id string) error {
 		if id == "fail-1" && failOnce {
 			failOnce = false
-			return fmt.Errorf("simulated failure")
+			return errors.New("simulated failure")
 		}
 		return d.UpdateSessionSignals(id, SessionSignalUpdate{
 			QualitySignals: QualitySignals{
@@ -219,7 +227,7 @@ func TestBackfillSignalsMarkerOnlyOnSuccess(t *testing.T) {
 		ctx,
 		compute,
 	)
-	require.Error(t, err, "expected error from partial backfill")
+	require.Error(err, "expected error from partial backfill")
 
 	// Marker check: a second BackfillSignals call must NOT
 	// short-circuit since the marker is unset. It resumes with
@@ -233,8 +241,8 @@ func TestBackfillSignalsMarkerOnlyOnSuccess(t *testing.T) {
 			return compute(ctx, id)
 		},
 	)
-	require.NoError(t, err, "retry")
-	assert.Equal(t, 1, calls,
+	require.NoError(err, "retry")
+	assert.Equal(1, calls,
 		"second backfill should resume with only the failed session")
 
 	// Now the marker should be set; a third call short-circuits.
@@ -246,8 +254,8 @@ func TestBackfillSignalsMarkerOnlyOnSuccess(t *testing.T) {
 			return nil
 		},
 	)
-	require.NoError(t, err, "third call")
-	assert.Equal(t, 0, calls,
+	require.NoError(err, "third call")
+	assert.Equal(0, calls,
 		"third backfill should see 0 sessions (marker set after clean run)")
 }
 
@@ -260,7 +268,7 @@ func TestBackfillSignalsMarkerOnlyOnSuccess(t *testing.T) {
 // instead of freezing pre-append derived data as current. Only the
 // signal update itself restores the version.
 func TestMessageWritesInvalidateQualitySignalVersion(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	tests := []struct {
 		name  string
 		write func(t *testing.T, d *DB, id string)
@@ -299,11 +307,13 @@ func TestMessageWritesInvalidateQualitySignalVersion(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			require := require.New(t)
+
 			d := testDB(t)
 			const id = "sess"
 			insertSession(t, d, id, "p")
 			insertMessages(t, d, userMsg(id, 0, "hello"))
-			require.NoError(t, d.UpdateSessionSignals(id, SessionSignalUpdate{
+			require.NoError(d.UpdateSessionSignals(id, SessionSignalUpdate{
 				QualitySignals: QualitySignals{
 					Version: CurrentQualitySignalVersion,
 				},
@@ -312,8 +322,8 @@ func TestMessageWritesInvalidateQualitySignalVersion(t *testing.T) {
 			tt.write(t, d, id)
 
 			sess, err := d.GetSessionFull(ctx, id)
-			require.NoError(t, err, "GetSessionFull")
-			require.NotNil(t, sess)
+			require.NoError(err, "GetSessionFull")
+			require.NotNil(sess)
 			assert.Zero(t, sess.QualitySignalVersion,
 				"message write must invalidate the signal version")
 		})
@@ -327,28 +337,30 @@ func TestMessageWritesInvalidateQualitySignalVersion(t *testing.T) {
 // Backfill must recompute only sessions below the current signal
 // version instead of walking the whole archive.
 func TestBackfillSignalsSkipsCurrentVersionsWithoutMarker(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "current-1", "p")
 	insertSession(t, d, "current-2", "p")
 	insertSession(t, d, "stale", "p")
 
 	for _, id := range []string{"current-1", "current-2"} {
-		require.NoError(t, d.UpdateSessionSignals(id, SessionSignalUpdate{
+		require.NoError(d.UpdateSessionSignals(id, SessionSignalUpdate{
 			QualitySignals: QualitySignals{
 				Version: CurrentQualitySignalVersion,
 			},
 		}), "UpdateSessionSignals %s", id)
 	}
-	require.NoError(t, d.UpdateSessionSignals("stale", SessionSignalUpdate{
+	require.NoError(d.UpdateSessionSignals("stale", SessionSignalUpdate{
 		QualitySignals: QualitySignals{
 			Version: CurrentQualitySignalVersion - 1,
 		},
 	}), "UpdateSessionSignals stale")
 
 	var calls []string
-	require.NoError(t, d.BackfillSignals(
+	require.NoError(d.BackfillSignals(
 		ctx,
 		func(_ context.Context, id string) error {
 			calls = append(calls, id)
@@ -365,7 +377,7 @@ func TestBackfillSignalsSkipsCurrentVersionsWithoutMarker(t *testing.T) {
 
 func TestBackfillSignalsRecomputesStaleQualityVersions(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "stale", "p")
 	insertSession(t, d, "current", "p")

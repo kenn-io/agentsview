@@ -379,9 +379,7 @@ func (hs HTTPSync) prepare(
 		return nil, err
 	}
 	dirScoped, fileScoped := targets.SplitFileScoped()
-	hs.reportProgressDetail(fmt.Sprintf(
-		"Fetching session manifest from %s", hs.Host,
-	))
+	hs.reportProgressDetail("Fetching session manifest from " + hs.Host)
 	manifest, supported, err := hs.fetchManifest(ctx, client, dirScoped)
 	if err != nil {
 		return nil, err
@@ -417,7 +415,7 @@ func (p *PreparedHTTP) Targets() TargetSet { return p.targets }
 // ImportActive imports the prepared source into the active database.
 func (p *PreparedHTTP) ImportActive(ctx context.Context) (SyncStats, error) {
 	if p == nil || p.closing || p.closed {
-		return SyncStats{}, fmt.Errorf("prepared HTTP source is closed")
+		return SyncStats{}, errors.New("prepared HTTP source is closed")
 	}
 	if p.mirrorImport == nil {
 		if p.legacy {
@@ -487,9 +485,7 @@ func (p *PreparedHTTP) reportDeltaImport(stats SyncStats) {
 // callers must Close it after the rebuild finishes.
 func (p *PreparedHTTP) RebuildContributor() (syncpkg.RebuildContributor, error) {
 	if p == nil || p.closing || p.closed {
-		return syncpkg.RebuildContributor{}, fmt.Errorf(
-			"prepared HTTP source is closed",
-		)
+		return syncpkg.RebuildContributor{}, errors.New("prepared HTTP source is closed")
 	}
 	layout, config, err := newImportInputs(
 		p.sync.Host, p.sync.BlockedResultCategories, p.targets, p.root,
@@ -556,8 +552,7 @@ func (p *PreparedHTTP) RebuildContributor() (syncpkg.RebuildContributor, error) 
 	}
 	if p.mirrorImport != nil {
 		contributor.ForceParse = p.mirrorImport.pending.forceParse
-		contributor.ForceFullParseAfterCache =
-			p.mirrorImport.pending.forceFullParse
+		contributor.ForceFullParseAfterCache = p.mirrorImport.pending.forceFullParse
 		contributor.Config.InitialSkipCache = p.mirrorImport.pending.cache
 	}
 	if p.sync.Lifecycle != nil {
@@ -601,7 +596,7 @@ func (p *PreparedHTTP) Commit() error {
 		return nil
 	}
 	if !p.commitReady {
-		return fmt.Errorf("prepared HTTP journal is not ready to commit")
+		return errors.New("prepared HTTP journal is not ready to commit")
 	}
 	start := time.Now()
 	if err := p.retireJournal(p.mirrorImport.journalPath); err != nil {
@@ -652,7 +647,7 @@ func (p *PreparedHTTP) Close() error {
 }
 
 func (hs HTTPSync) reportProgressResolvingTargets() {
-	hs.reportProgressDetail(fmt.Sprintf("Resolving agent directories on %s", hs.Host))
+	hs.reportProgressDetail("Resolving agent directories on " + hs.Host)
 }
 
 func (hs HTTPSync) reportLegacyFallback() {

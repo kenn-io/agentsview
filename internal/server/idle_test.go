@@ -73,7 +73,7 @@ func serveWrappedNoContent(
 	rec := httptest.NewRecorder()
 	tracker.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
-	})).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	})).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 	return rec
 }
 
@@ -97,6 +97,9 @@ func assertBeginWorkRejected(t *testing.T, tracker *IdleTracker) {
 }
 
 func TestIdleTrackerExternalRequestResetsIdle(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	timeout := 40 * time.Millisecond
 	f := newIdleTrackerFixture(t, timeout)
 	entered := make(chan struct{})
@@ -115,14 +118,14 @@ func TestIdleTrackerExternalRequestResetsIdle(t *testing.T) {
 			close(entered)
 			<-release
 			w.WriteHeader(http.StatusNoContent)
-		})).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+		})).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 		requestDone <- rec
 	}()
 
 	select {
 	case <-entered:
 	case <-time.After(time.Second):
-		require.FailNow(t, "wrapped request did not enter handler")
+		require.FailNow("wrapped request did not enter handler")
 	}
 
 	f.run(t)
@@ -140,19 +143,19 @@ func TestIdleTrackerExternalRequestResetsIdle(t *testing.T) {
 	select {
 	case rec = <-requestDone:
 	case <-time.After(time.Second):
-		require.FailNow(t, "wrapped request did not complete after release")
+		require.FailNow("wrapped request did not complete after release")
 	}
-	assert.Equal(t, http.StatusNoContent, rec.Code)
+	assert.Equal(http.StatusNoContent, rec.Code)
 
 	f.tracker.mu.Lock()
 	lastExternalAfterRelease := f.tracker.lastExternal
 	f.tracker.mu.Unlock()
-	assert.True(t, lastExternalAfterRelease.After(lastExternalBeforeRelease),
+	assert.True(lastExternalAfterRelease.After(lastExternalBeforeRelease),
 		"request completion did not advance external activity timestamp")
 
 	firedAt := f.requireFiredWithin(t, time.Second,
 		"idle did not fire after external activity became idle")
-	assert.GreaterOrEqual(t, firedAt.Sub(releasedAt), timeout)
+	assert.GreaterOrEqual(firedAt.Sub(releasedAt), timeout)
 }
 
 func TestIdleTrackerInternalWorkBlocksWithoutResettingIdle(t *testing.T) {
@@ -171,7 +174,7 @@ func TestIdleTrackerInternalWorkBlocksWithoutResettingIdle(t *testing.T) {
 
 func TestIdleTrackerTouchResetsIdleBeforeRun(t *testing.T) {
 	f := newIdleTrackerFixture(t, 30*time.Millisecond)
-	time.Sleep(45 * time.Millisecond)
+	f.tracker.lastExternal = time.Now().Add(-45 * time.Millisecond)
 	f.tracker.Touch()
 
 	f.run(t)

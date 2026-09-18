@@ -53,6 +53,8 @@ func TestTraeXSessionIDRelabel(t *testing.T) {
 }
 
 func TestRelabelCodexResultAsTraeX(t *testing.T) {
+	assert := assert.New(t)
+
 	sess := &ParsedSession{
 		ID:              "codex:child",
 		ParentSessionID: "codex:parent",
@@ -73,21 +75,20 @@ func TestRelabelCodexResultAsTraeX(t *testing.T) {
 
 	relabelCodexResultAsTraeX(sess, msgs, nil)
 
-	assert.Equal(t, "traex:child", sess.ID)
-	assert.Equal(t, "traex:parent", sess.ParentSessionID)
-	assert.Equal(t, "traex:origin", sess.SourceSessionID)
-	assert.Equal(t, AgentTraeX, sess.Agent)
+	assert.Equal("traex:child", sess.ID)
+	assert.Equal("traex:parent", sess.ParentSessionID)
+	assert.Equal("traex:origin", sess.SourceSessionID)
+	assert.Equal(AgentTraeX, sess.Agent)
 	assert.Equal(
-		t, "traex:spawned", msgs[0].ToolCalls[0].SubagentSessionID,
+		"traex:spawned", msgs[0].ToolCalls[0].SubagentSessionID,
 	)
 	assert.Equal(
-		t,
 		"traex:spawned",
 		msgs[0].ToolCalls[0].ResultEvents[0].SubagentSessionID,
 	)
 	// AgentID is the raw upstream thread ID, not an agentsview session ID,
 	// so it must survive the relabel unchanged.
-	assert.Equal(t, "spawned", msgs[0].ToolCalls[0].ResultEvents[0].AgentID)
+	assert.Equal("spawned", msgs[0].ToolCalls[0].ResultEvents[0].AgentID)
 }
 
 // TestRelabelCodexResultAsTraeXIncremental covers the provider's incremental
@@ -107,21 +108,27 @@ func TestRelabelCodexResultAsTraeXIncremental(t *testing.T) {
 }
 
 func TestTraeXRegistryEntry(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	def, ok := AgentByType(AgentTraeX)
-	require.True(t, ok)
-	assert.Equal(t, "traex:", def.IDPrefix)
-	assert.True(t, def.FileBased)
+	require.True(ok)
+	assert.Equal("traex:", def.IDPrefix)
+	assert.True(def.FileBased)
 	// TraeX writes plaintext rollouts, so unlike the Trae IDE entry it must
 	// stay eligible for remote sync.
-	assert.False(t, def.RemoteSyncExcluded)
+	assert.False(def.RemoteSyncExcluded)
 
 	// traex: must not be swallowed by the Trae IDE entry's trae: prefix.
 	byPrefix, ok := AgentByPrefix("traex:019fbcca")
-	require.True(t, ok)
-	assert.Equal(t, AgentTraeX, byPrefix.Type)
+	require.True(ok)
+	assert.Equal(AgentTraeX, byPrefix.Type)
 }
 
 func TestTraeXProviderParseRelabelsCodexSession(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	const (
 		uuid     = "019fbcca-9fd4-7d20-83dc-0762b2f839b3"
@@ -150,34 +157,34 @@ func TestTraeXProviderParseRelabelsCodexSession(t *testing.T) {
 			"2026-08-01T18:07:06Z",
 		),
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(os.WriteFile(path, []byte(content), 0o644))
 
 	provider, ok := NewProvider(AgentTraeX, ProviderConfig{
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
+	require.True(ok)
 
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	assert.Equal(t, AgentTraeX, sources[0].Provider)
-	assert.Equal(t, path, sources[0].DisplayPath)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(sources, 1)
+	assert.Equal(AgentTraeX, sources[0].Provider)
+	assert.Equal(path, sources[0].DisplayPath)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  sources[0],
 		Machine: "devbox",
 	})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
+	require.NoError(err)
+	require.Len(outcome.Results, 1)
 	sess := outcome.Results[0].Result.Session
 	msgs := outcome.Results[0].Result.Messages
 
-	assert.Equal(t, AgentTraeX, sess.Agent)
-	assert.Equal(t, "traex:"+uuid, sess.ID)
-	assert.Equal(t, "traex:"+parent, sess.ParentSessionID)
-	assert.Equal(t, "devbox", sess.Machine)
+	assert.Equal(AgentTraeX, sess.Agent)
+	assert.Equal("traex:"+uuid, sess.ID)
+	assert.Equal("traex:"+parent, sess.ParentSessionID)
+	assert.Equal("devbox", sess.Machine)
 
 	var subagentIDs []string
 	for _, msg := range msgs {
@@ -187,10 +194,13 @@ func TestTraeXProviderParseRelabelsCodexSession(t *testing.T) {
 			}
 		}
 	}
-	assert.Equal(t, []string{"traex:" + spawned}, subagentIDs)
+	assert.Equal([]string{"traex:" + spawned}, subagentIDs)
 }
 
 func TestTraeXProviderIgnoresCopiedCodexSessionIndex(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	sessionsRoot := filepath.Join(root, "sessions")
 	const uuid = "019fbcca-9fd4-7d20-83dc-0762b2f839b3"
@@ -207,50 +217,50 @@ func TestTraeXProviderIgnoresCopiedCodexSessionIndex(t *testing.T) {
 			"user", "transcript prompt", "2026-08-01T18:07:04Z",
 		),
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(os.WriteFile(path, []byte(content), 0o644))
 
 	indexPath := filepath.Join(root, CodexSessionIndexFilename)
 	alphaIndex := `{"id":"` + uuid +
 		`","thread_name":"Alpha title"}` + "\n"
 	bravoIndex := `{"id":"` + uuid +
 		`","thread_name":"Bravo title"}` + "\n"
-	require.Equal(t, len(alphaIndex), len(bravoIndex))
-	require.NoError(t, os.WriteFile(indexPath, []byte(alphaIndex), 0o644))
+	require.Equal(len(alphaIndex), len(bravoIndex))
+	require.NoError(os.WriteFile(indexPath, []byte(alphaIndex), 0o644))
 	rolloutTime := time.Now().Add(-2 * time.Hour)
 	indexTime := rolloutTime.Add(time.Hour)
-	require.NoError(t, os.Chtimes(path, rolloutTime, rolloutTime))
-	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
-	assert.Equal(t, "Alpha title", LookupCodexThreadName(path, uuid))
+	require.NoError(os.Chtimes(path, rolloutTime, rolloutTime))
+	require.NoError(os.Chtimes(indexPath, indexTime, indexTime))
+	assert.Equal("Alpha title", LookupCodexThreadName(path, uuid))
 
-	require.NoError(t, os.WriteFile(indexPath, []byte(bravoIndex), 0o644))
-	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
+	require.NoError(os.WriteFile(indexPath, []byte(bravoIndex), 0o644))
+	require.NoError(os.Chtimes(indexPath, indexTime, indexTime))
 
 	provider, ok := NewProvider(AgentTraeX, ProviderConfig{
 		Roots: []string{sessionsRoot}, Machine: "host",
 	})
-	require.True(t, ok)
+	require.True(ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	require.NoError(err)
+	require.Len(sources, 1)
 	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
-	require.NoError(t, err)
+	require.NoError(err)
 	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0], Fingerprint: fingerprint, ForceParse: true,
 	})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
+	require.NoError(err)
+	require.Len(outcome.Results, 1)
 
 	rolloutInfo, err := os.Stat(path)
-	require.NoError(t, err)
+	require.NoError(err)
 	sess := outcome.Results[0].Result.Session
-	assert.Equal(t, rolloutInfo.ModTime().UnixNano(), fingerprint.MTimeNS)
-	assert.Equal(t, rolloutInfo.ModTime().UnixNano(), sess.File.Mtime)
-	assert.Empty(t, sess.SessionName)
+	assert.Equal(rolloutInfo.ModTime().UnixNano(), fingerprint.MTimeNS)
+	assert.Equal(rolloutInfo.ModTime().UnixNano(), sess.File.Mtime)
+	assert.Empty(sess.SessionName)
 	codexSessionIndexCache.mu.Lock()
 	cachedTitle := codexSessionIndexCache.entries[indexPath].titles[uuid]
 	codexSessionIndexCache.mu.Unlock()
-	assert.Equal(t, "Alpha title", cachedTitle,
+	assert.Equal("Alpha title", cachedTitle,
 		"TraeX force parse must not evict or reload the Codex index cache")
 }
 
@@ -259,54 +269,57 @@ func TestTraeXProviderIgnoresCopiedCodexSessionIndex(t *testing.T) {
 // prompts, and identifiers replaced), guarding the claim that TraeX rollouts
 // are byte-compatible with the Codex format.
 func TestTraeXProviderParsesDeidentifiedRollout(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	const uuid = "019fbcca-9fd4-7d20-83dc-0762b2f839b3"
 	dst := filepath.Join(
 		root, "2026", "08", "01",
 		"rollout-2026-08-01T18-07-03-"+uuid+".jsonl",
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(dst), 0o755))
+	require.NoError(os.MkdirAll(filepath.Dir(dst), 0o755))
 	fixture, err := os.ReadFile(filepath.Join(
 		"testdata", "traex", "rollout_subagent.jsonl",
 	))
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(dst, fixture, 0o644))
+	require.NoError(err)
+	require.NoError(os.WriteFile(dst, fixture, 0o644))
 
 	provider, ok := NewProvider(AgentTraeX, ProviderConfig{
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
+	require.True(ok)
 
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  sources[0],
 		Machine: "devbox",
 	})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
+	require.NoError(err)
+	require.Len(outcome.Results, 1)
 	sess := outcome.Results[0].Result.Session
 	msgs := outcome.Results[0].Result.Messages
 
-	assert.Equal(t, AgentTraeX, sess.Agent)
-	assert.Equal(t, "traex:"+uuid, sess.ID)
+	assert.Equal(AgentTraeX, sess.Agent)
+	assert.Equal("traex:"+uuid, sess.ID)
 	assert.Equal(
-		t, "traex:019fbc4a-48b9-7472-a0da-6d92901383db",
+		"traex:019fbc4a-48b9-7472-a0da-6d92901383db",
 		sess.ParentSessionID,
 	)
-	assert.Equal(t, "api", sess.Project)
-	require.NotEmpty(t, msgs)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, "Explore the parser package.", msgs[0].Content)
-	assert.Equal(t, "gpt-5-codex", msgs[len(msgs)-1].Model)
-	assert.Positive(t, sess.TotalOutputTokens)
+	assert.Equal("api", sess.Project)
+	require.NotEmpty(msgs)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal("Explore the parser package.", msgs[0].Content)
+	assert.Equal("gpt-5-codex", msgs[len(msgs)-1].Model)
+	assert.Positive(sess.TotalOutputTokens)
 
 	for _, msg := range msgs {
 		for _, call := range msg.ToolCalls {
-			assert.NotContains(t, call.SubagentSessionID, "codex:")
+			assert.NotContains(call.SubagentSessionID, "codex:")
 		}
 	}
 }
@@ -330,6 +343,9 @@ func TestTraeXAndCodexProvidersKeepSeparateSourceKeys(t *testing.T) {
 // an S3 root through the Codex scanner would stamp AgentCodex, silently moving
 // the sessions into Codex's identity namespace.
 func TestTraeXProviderIgnoresCodexSidecars(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	base := filepath.Join(t.TempDir(), ".trae", "cli")
 	root := filepath.Join(base, "sessions")
 	const uuid = "019fbcca-9fd4-7d20-83dc-0762b2f839b3"
@@ -337,8 +353,8 @@ func TestTraeXProviderIgnoresCodexSidecars(t *testing.T) {
 		root, "2026", "08", "01",
 		"rollout-2026-08-01T18-07-03-"+uuid+".jsonl",
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-	require.NoError(t, os.WriteFile(path, []byte(testjsonl.JoinJSONL(
+	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(os.WriteFile(path, []byte(testjsonl.JoinJSONL(
 		testjsonl.CodexSessionMetaJSON(
 			uuid, "/home/user/code/api", "codex-tui",
 			"2026-08-01T18:07:03.636Z",
@@ -347,7 +363,7 @@ func TestTraeXProviderIgnoresCodexSidecars(t *testing.T) {
 	// A stray index file: copied in, or left by a Codex root that used to own
 	// this directory. It must not fan out to every TraeX session.
 	indexPath := filepath.Join(base, CodexSessionIndexFilename)
-	require.NoError(t, os.WriteFile(indexPath, []byte(
+	require.NoError(os.WriteFile(indexPath, []byte(
 		`{"id":"`+uuid+`","thread_name":"Renamed","updated_at":`+
 			`"2026-08-01T18:07:03Z"}`+"\n",
 	), 0o644))
@@ -356,25 +372,25 @@ func TestTraeXProviderIgnoresCodexSidecars(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
+	require.True(ok)
 
-	plan, err := provider.WatchPlan(context.Background())
-	require.NoError(t, err)
-	require.Len(t, plan.Roots, 1, "no shallow session_index.jsonl watch")
-	assert.Equal(t, root, plan.Roots[0].Path)
-	assert.True(t, plan.Roots[0].Recursive)
+	plan, err := provider.WatchPlan(t.Context())
+	require.NoError(err)
+	require.Len(plan.Roots, 1, "no shallow session_index.jsonl watch")
+	assert.Equal(root, plan.Roots[0].Path)
+	assert.True(plan.Roots[0].Recursive)
 
 	classifier, ok := provider.(interface {
 		SourcesForChangedPath(
 			context.Context, ChangedPathRequest,
 		) ([]SourceRef, error)
 	})
-	require.True(t, ok)
+	require.True(ok)
 	sources, err := classifier.SourcesForChangedPath(
-		context.Background(), ChangedPathRequest{Path: indexPath},
+		t.Context(), ChangedPathRequest{Path: indexPath},
 	)
-	require.NoError(t, err)
-	assert.Empty(t, sources, "index events must not fan out for a fork")
+	require.NoError(err)
+	assert.Empty(sources, "index events must not fan out for a fork")
 
 	oldList := listS3Objects
 	t.Cleanup(func() { listS3Objects = oldList })
@@ -390,10 +406,10 @@ func TestTraeXProviderIgnoresCodexSidecars(t *testing.T) {
 	s3Provider, ok := NewProvider(AgentTraeX, ProviderConfig{
 		Roots: []string{"s3://bucket/devbox/raw/codex"},
 	})
-	require.True(t, ok)
-	s3Sources, err := s3Provider.Discover(context.Background())
-	require.NoError(t, err)
-	assert.Empty(t, s3Sources,
+	require.True(ok)
+	s3Sources, err := s3Provider.Discover(t.Context())
+	require.NoError(err)
+	assert.Empty(s3Sources,
 		"TraeX has no S3 archive convention and must not import one as Codex")
 }
 

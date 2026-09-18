@@ -26,8 +26,11 @@ func TestRenderSessionUsageHuman_WithCost(t *testing.T) {
 }
 
 func TestRenderSessionUsageHuman_ReportedCostOmitsEstimateMarker(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	var out sessionUsageOutput
-	require.NoError(t, json.Unmarshal([]byte(`{
+	require.NoError(json.Unmarshal([]byte(`{
 		"session_id":"hermes:s1",
 		"agent":"hermes",
 		"cost":{"microdollars":30000},
@@ -37,16 +40,19 @@ func TestRenderSessionUsageHuman_ReportedCostOmitsEstimateMarker(t *testing.T) {
 	}`), &out))
 
 	var b strings.Builder
-	require.NoError(t, renderSessionUsageHuman(&b, &out))
-	assert.Contains(t, b.String(), "$0.03 (model-a)")
-	assert.NotContains(t, b.String(), "~$0.03")
+	require.NoError(renderSessionUsageHuman(&b, &out))
+	assert.Contains(b.String(), "$0.03 (model-a)")
+	assert.NotContains(b.String(), "~$0.03")
 }
 
 func TestRenderSessionUsageHuman_AuthoritativeCostWithoutModelsOmitsEstimateMarker(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	var out sessionUsageOutput
-	require.NoError(t, json.Unmarshal([]byte(`{
+	require.NoError(json.Unmarshal([]byte(`{
 		"session_id":"copilot:cost-only",
 		"agent":"copilot",
 		"cost":{"microdollars":30000},
@@ -56,10 +62,10 @@ func TestRenderSessionUsageHuman_AuthoritativeCostWithoutModelsOmitsEstimateMark
 	}`), &out))
 
 	var b strings.Builder
-	require.NoError(t, renderSessionUsageHuman(&b, &out))
-	assert.Contains(t, b.String(), "$0.03")
-	assert.NotContains(t, b.String(), "~$0.03")
-	assert.NotContains(t, b.String(), "()")
+	require.NoError(renderSessionUsageHuman(&b, &out))
+	assert.Contains(b.String(), "$0.03")
+	assert.NotContains(b.String(), "~$0.03")
+	assert.NotContains(b.String(), "()")
 }
 
 func TestRenderSessionUsageHuman_NoCostNoModels(t *testing.T) {
@@ -90,6 +96,8 @@ func TestRenderSessionUsageHuman_NoCost(t *testing.T) {
 }
 
 func TestRenderSessionUsageHuman_CopilotWithAICredits(t *testing.T) {
+	assert := assert.New(t)
+
 	out := &sessionUsageOutput{
 		SessionID:         "copilot:s1",
 		Agent:             "copilot",
@@ -105,9 +113,9 @@ func TestRenderSessionUsageHuman_CopilotWithAICredits(t *testing.T) {
 	var b strings.Builder
 	require.NoError(t, renderSessionUsageHuman(&b, out))
 	s := b.String()
-	assert.Contains(t, s, "~$10.00", "output missing cost")
-	assert.Contains(t, s, "1000", "output missing AI Credits")
-	assert.Contains(t, s, "AI Credits", "output missing AI Credits label")
+	assert.Contains(s, "~$10.00", "output missing cost")
+	assert.Contains(s, "1000", "output missing AI Credits")
+	assert.Contains(s, "AI Credits", "output missing AI Credits label")
 }
 
 func TestRenderSessionUsageHuman_NonCopilotNoAICredits(t *testing.T) {
@@ -218,6 +226,9 @@ func TestSessionUsageJSONSchemaOmitsCostUSDWhenNoCost(t *testing.T) {
 // subagent rollup adds. Both are omitempty, which is what keeps the
 // no-subagent contract above byte-identical.
 func TestSessionUsageJSONSchemaIncludesSubagentContract(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	out := &sessionUsageOutput{
 		SessionID:      "parent-1",
 		Agent:          "claude",
@@ -237,24 +248,24 @@ func TestSessionUsageJSONSchemaIncludesSubagentContract(t *testing.T) {
 	}
 
 	data, err := json.Marshal(out)
-	require.NoError(t, err)
+	require.NoError(err)
 	var raw map[string]any
-	require.NoError(t, json.Unmarshal(data, &raw))
+	require.NoError(json.Unmarshal(data, &raw))
 
-	assert.Equal(t, float64(1), raw["subagent_count"])
+	assert.Equal(float64(1), raw["subagent_count"])
 	rows, ok := raw["breakdown"].([]any)
-	require.True(t, ok, "breakdown must serialize as an array")
-	require.Len(t, rows, 2)
+	require.True(ok, "breakdown must serialize as an array")
+	require.Len(rows, 2)
 
 	own, ok := rows[0].(map[string]any)
-	require.True(t, ok)
-	assert.NotContains(t, own, "subagent_session_id",
+	require.True(ok)
+	assert.NotContains(own, "subagent_session_id",
 		"the parent's own rows must not gain the field")
 
 	child, ok := rows[1].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, "agent-9f2c", child["subagent_session_id"])
-	assert.Equal(t, "message", child["source"],
+	require.True(ok)
+	assert.Equal("agent-9f2c", child["subagent_session_id"])
+	assert.Equal("message", child["source"],
 		"subagent rows keep their real source")
 }
 

@@ -1,5 +1,7 @@
 package remotesync
 
+import "context"
+
 import (
 	"archive/tar"
 	"fmt"
@@ -12,7 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-func WriteArchive(w io.Writer, targets TargetSet) error {
+func WriteArchive(ctx context.Context, w io.Writer, targets TargetSet) error {
 	tw := tar.NewWriter(w)
 	forbidden := newForbiddenRootMatcher(targets.ForbiddenRoots)
 	snapshotSQLite := make(map[string]string)
@@ -57,7 +59,7 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 			continue
 		}
 		if agent == parser.AgentWindsurf {
-			if err := writeWindsurfArchiveFiles(tw, files, forbidden); err != nil {
+			if err := writeWindsurfArchiveFiles(ctx, tw, files, forbidden); err != nil {
 				return err
 			}
 			continue
@@ -118,7 +120,7 @@ func writeSQLiteStateDBSnapshot(tw *tar.Writer, stateDB string) error {
 
 var writeSQLiteSnapshotFile = writeSQLiteSnapshot
 
-func writeWindsurfArchiveFiles(
+func writeWindsurfArchiveFiles(ctx context.Context,
 	tw *tar.Writer, files []string, forbidden forbiddenRootMatcher,
 ) error {
 	seen := make(map[string]struct{}, len(files))
@@ -132,7 +134,7 @@ func writeWindsurfArchiveFiles(
 		seen[path] = struct{}{}
 		switch filepath.Base(path) {
 		case parser.WindsurfStateDBName:
-			if err := writeSanitizedWindsurfStateDB(tw, path); err != nil {
+			if err := writeSanitizedWindsurfStateDB(ctx, tw, path); err != nil {
 				return err
 			}
 		case parser.WindsurfStateDBName + "-wal",
@@ -149,7 +151,7 @@ func writeWindsurfArchiveFiles(
 	return nil
 }
 
-func writeSanitizedWindsurfStateDB(tw *tar.Writer, dbPath string) error {
+func writeSanitizedWindsurfStateDB(ctx context.Context, tw *tar.Writer, dbPath string) error {
 	info, err := os.Stat(dbPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -166,7 +168,7 @@ func writeSanitizedWindsurfStateDB(tw *tar.Writer, dbPath string) error {
 	}
 	defer os.RemoveAll(tmpDir)
 	tmpPath := filepath.Join(tmpDir, parser.WindsurfStateDBName)
-	if err := parser.WriteSanitizedWindsurfStateDB(tmpPath, dbPath); err != nil {
+	if err := parser.WriteSanitizedWindsurfStateDB(ctx, tmpPath, dbPath); err != nil {
 		return fmt.Errorf("sanitize windsurf state db %q: %w", dbPath, err)
 	}
 	mtime := windsurfArchiveModTime(info, dbPath)

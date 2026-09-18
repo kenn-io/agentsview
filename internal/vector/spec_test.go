@@ -1,7 +1,6 @@
 package vector
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -36,7 +35,7 @@ CREATE TABLE IF NOT EXISTS vector_aux_meta (
 
 func openSpecT(t *testing.T, path string, spec IndexSpec, readOnly bool) *Index {
 	t.Helper()
-	ix, err := OpenSpec(context.Background(), path, spec, readOnly, 8192)
+	ix, err := OpenSpec(t.Context(), path, spec, readOnly, 8192)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ix.Close() })
 	return ix
@@ -48,46 +47,52 @@ func testGen(model string) kitvec.Generation {
 
 // Two stores in one vectors.db: generations and metadata stay disjoint.
 func TestSpecCoexistenceGenerationsAndMetaAreDisjoint(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "vectors.db")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	msg := openSpecT(t, path, MessageIndexSpec(), false)
 	aux := openSpecT(t, path, auxSpec(), false)
 
 	_, err := msg.EnsureGeneration(ctx, testGen("model-msg"), sqlitevec.StateActive)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = aux.EnsureGeneration(ctx, testGen("model-aux"), sqlitevec.StateActive)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	msgGens, err := msg.Generations(ctx)
-	require.NoError(t, err)
+	require.NoError(err)
 	auxGens, err := aux.Generations(ctx)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.Len(t, msgGens, 1)
-	require.Len(t, auxGens, 1)
-	assert.Equal(t, "model-msg", msgGens[0].Model)
-	assert.Equal(t, "model-aux", auxGens[0].Model)
+	require.Len(msgGens, 1)
+	require.Len(auxGens, 1)
+	assert.Equal("model-msg", msgGens[0].Model)
+	assert.Equal("model-aux", auxGens[0].Model)
 
 	// gen_model metadata landed in each store's own meta table.
 	_, ok, err := aux.metaGet(ctx, "gen_model:"+msgGens[0].Fingerprint)
-	require.NoError(t, err)
-	assert.False(t, ok, "message-store gen_model key leaked into aux meta table")
+	require.NoError(err)
+	assert.False(ok, "message-store gen_model key leaked into aux meta table")
 }
 
 // A schema-version reset of one store must leave the other store's tables,
 // metadata, and generations intact.
 func TestSpecResetLeavesOtherStoreIntact(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "vectors.db")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	msg := openSpecT(t, path, MessageIndexSpec(), false)
 	aux := openSpecT(t, path, auxSpec(), false)
 	_, err := msg.EnsureGeneration(ctx, testGen("model-msg"), sqlitevec.StateActive)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = aux.EnsureGeneration(ctx, testGen("model-aux"), sqlitevec.StateActive)
-	require.NoError(t, err)
-	require.NoError(t, msg.Close())
+	require.NoError(err)
+	require.NoError(msg.Close())
 
 	// Re-open the message store as if built by an older schema version:
 	// the write path must drop and recreate ONLY message-store tables.
@@ -96,13 +101,13 @@ func TestSpecResetLeavesOtherStoreIntact(t *testing.T) {
 	msg = openSpecT(t, path, stale, false)
 
 	msgGens, err := msg.Generations(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, msgGens, "message store should have been reset")
+	require.NoError(err)
+	assert.Empty(msgGens, "message store should have been reset")
 
 	auxGens, err := aux.Generations(ctx)
-	require.NoError(t, err)
-	require.Len(t, auxGens, 1, "aux store must survive the message-store reset")
-	assert.Equal(t, "model-aux", auxGens[0].Model)
+	require.NoError(err)
+	require.Len(auxGens, 1, "aux store must survive the message-store reset")
+	assert.Equal("model-aux", auxGens[0].Model)
 }
 
 // The reset's prefix match must be literal, not LIKE: "_" in a prefix such
@@ -110,21 +115,23 @@ func TestSpecResetLeavesOtherStoreIntact(t *testing.T) {
 // match would drop a table like "messageXvectors_generations" (X at the
 // wildcard position) that belongs to no store owned by the spec.
 func TestSpecResetPrefixMatchIsLiteral(t *testing.T) {
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "vectors.db")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	msg := openSpecT(t, path, MessageIndexSpec(), false)
 	_, err := msg.db.ExecContext(ctx,
 		`CREATE TABLE "messageXvectors_generations" (id INTEGER PRIMARY KEY)`)
-	require.NoError(t, err)
-	require.NoError(t, msg.Close())
+	require.NoError(err)
+	require.NoError(msg.Close())
 
 	stale := MessageIndexSpec()
 	stale.MirrorSchemaVersion = "999"
 	msg = openSpecT(t, path, stale, false)
 
 	var n int
-	require.NoError(t, msg.db.QueryRowContext(ctx, `
+	require.NoError(msg.db.QueryRowContext(ctx, `
 SELECT COUNT(*) FROM sqlite_master
  WHERE type = 'table' AND name = 'messageXvectors_generations'`).Scan(&n))
 	assert.Equal(t, 1, n, "wildcard-position decoy table must survive a message-store reset")
@@ -133,23 +140,26 @@ SELECT COUNT(*) FROM sqlite_master
 // The read path fails closed per store: a version mismatch on one store
 // must not affect reads on the other.
 func TestSpecReadPathMismatchIsPerStore(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "vectors.db")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	msg := openSpecT(t, path, MessageIndexSpec(), false)
 	aux := openSpecT(t, path, auxSpec(), false)
 	_, err := aux.EnsureGeneration(ctx, testGen("model-aux"), sqlitevec.StateActive)
-	require.NoError(t, err)
-	require.NoError(t, msg.Close())
+	require.NoError(err)
+	require.NoError(msg.Close())
 
 	stale := MessageIndexSpec()
 	stale.MirrorSchemaVersion = "999"
 	msgRO := openSpecT(t, path, stale, true)
 
 	_, err = msgRO.Generations(ctx)
-	assert.ErrorIs(t, err, ErrMirrorVersionMismatch)
+	assert.ErrorIs(err, ErrMirrorVersionMismatch)
 
 	auxGens, err := aux.Generations(ctx)
-	require.NoError(t, err)
-	assert.Len(t, auxGens, 1)
+	require.NoError(err)
+	assert.Len(auxGens, 1)
 }

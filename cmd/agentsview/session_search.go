@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -141,7 +142,7 @@ func validateScopeFlag(scope string, useSemantic, useHybrid bool) error {
 		return nil
 	}
 	if !useSemantic && !useHybrid {
-		return fmt.Errorf("--scope requires --semantic or --hybrid")
+		return errors.New("--scope requires --semantic or --hybrid")
 	}
 	switch scope {
 	case "top", "all", "subordinate":
@@ -164,8 +165,7 @@ func resolveContentSearchMode(
 		}
 	}
 	if modes > 1 {
-		return "", fmt.Errorf(
-			"--regex, --fts, --semantic and --hybrid are mutually exclusive")
+		return "", errors.New("--regex, --fts, --semantic and --hybrid are mutually exclusive")
 	}
 	mode := "substring"
 	switch {
@@ -181,8 +181,7 @@ func resolveContentSearchMode(
 	if useFTS {
 		for _, s := range sources {
 			if s != "messages" {
-				return "", fmt.Errorf(
-					"--fts searches messages only; drop --in or --fts")
+				return "", errors.New("--fts searches messages only; drop --in or --fts")
 			}
 		}
 	}

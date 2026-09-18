@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"testing"
 )
@@ -139,7 +138,7 @@ func BenchmarkSearchContentSubstringPage(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		page, err := d.SearchContent(context.Background(), f)
+		page, err := d.SearchContent(b.Context(), f)
 		if err != nil || len(page.Matches) != 50 {
 			b.Fatalf("search: %v (%d matches, want a full 50-hit page)", err, len(page.Matches))
 		}
@@ -161,7 +160,7 @@ func BenchmarkSearchContentFTSPage(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		page, err := d.SearchContent(context.Background(), f)
+		page, err := d.SearchContent(b.Context(), f)
 		if err != nil || len(page.Matches) != 50 {
 			b.Fatalf("search: %v (%d matches, want a full 50-hit page)", err, len(page.Matches))
 		}

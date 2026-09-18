@@ -36,7 +36,7 @@ func TestServerTimeouts(t *testing.T) {
 	)
 
 	// Seed the DB.
-	te.engine.SyncAll(context.Background(), nil)
+	te.engine.SyncAll(t.Context(), nil)
 
 	baseURL := te.listenAndServe(t)
 
@@ -45,7 +45,7 @@ func TestServerTimeouts(t *testing.T) {
 		"%s/api/v1/sessions/%s/watch", baseURL, "watch-test",
 	)
 	ctx, cancel := context.WithTimeout(
-		context.Background(), 5*time.Second,
+		t.Context(), 5*time.Second,
 	)
 	defer cancel()
 
@@ -65,7 +65,7 @@ func TestServerTimeouts(t *testing.T) {
 	go func() {
 		time.Sleep(sleepDuration)
 		f, err := os.OpenFile(
-			sessionPath, os.O_APPEND|os.O_WRONLY, 0644,
+			sessionPath, os.O_APPEND|os.O_WRONLY, 0o644,
 		)
 		if err != nil {
 			errCh <- fmt.Errorf("opening file: %w", err)

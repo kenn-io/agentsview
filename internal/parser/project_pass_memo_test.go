@@ -9,7 +9,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,7 +28,7 @@ func TestProjectRootMemoRepeatedCwdCost(t *testing.T) {
 		return origLstat(path)
 	}
 
-	ctx := WithProjectRootMemo(context.Background())
+	ctx := WithProjectRootMemo(t.Context())
 	first := ExtractProjectFromCwdWithBranchContext(ctx, cwd, "")
 	firstCalls := calls.Load()
 	for range 7 {
@@ -46,7 +45,7 @@ func TestProjectRootMemoRepeatedCwdCost(t *testing.T) {
 func TestProjectRootMemoAncestorScanKeepsCwdAssociation(t *testing.T) {
 	container, knownCwd, _ := projectRootMemoFixture(t)
 	otherCwd := filepath.Join(container, "unrelated-child")
-	ctx := WithProjectRootMemo(context.Background())
+	ctx := WithProjectRootMemo(t.Context())
 
 	assert.Equal(t, "main_repo",
 		ExtractProjectFromCwdWithBranchContext(ctx, knownCwd, ""))
@@ -71,7 +70,7 @@ func TestProjectRootMemoConcurrentFill(t *testing.T) {
 		return origLstat(path)
 	}
 
-	baselineMemo := WithProjectRootMemo(context.Background())
+	baselineMemo := WithProjectRootMemo(t.Context())
 	_ = ExtractProjectFromCwdWithBranchContext(baselineMemo, cwd, "")
 	baselineCalls := calls.Load()
 
@@ -87,7 +86,7 @@ func TestProjectRootMemoConcurrentFill(t *testing.T) {
 		}
 		return origStat(path)
 	}
-	ctx := WithProjectRootMemo(context.Background())
+	ctx := WithProjectRootMemo(t.Context())
 	results := make([]string, 16)
 	var wg sync.WaitGroup
 	ready := make(chan struct{}, len(results))
@@ -106,7 +105,6 @@ func TestProjectRootMemoConcurrentFill(t *testing.T) {
 	}
 	close(goStart)
 	<-started
-	time.Sleep(50 * time.Millisecond)
 	close(release)
 	wg.Wait()
 
@@ -116,13 +114,14 @@ func TestProjectRootMemoConcurrentFill(t *testing.T) {
 	}
 	t.Logf("concurrent fills=1; underlying calls baseline=%d concurrent=%d; project=%s",
 		baselineCalls, calls.Load(), results[0])
+
 }
 
 func TestProjectRootMemoAbsentContextValue(t *testing.T) {
 	cwd := filepath.Join(t.TempDir(), "missing-project", "src")
 	assert.Equal(t, "src", ExtractProjectFromCwd(cwd))
 	assert.Equal(t, "src",
-		ExtractProjectFromCwdWithBranchContext(context.Background(), cwd, ""))
+		ExtractProjectFromCwdWithBranchContext(t.Context(), cwd, ""))
 }
 
 func TestProjectRootMemoPolicyGates(t *testing.T) {
@@ -141,13 +140,13 @@ func TestProjectRootMemoPolicyGates(t *testing.T) {
 	}
 
 	disabled := WithProjectRootMemo(
-		WithoutFilesystemProjectDiscovery(context.Background()),
+		WithoutFilesystemProjectDiscovery(t.Context()),
 	)
 	assert.Equal(t, "src",
 		ExtractProjectFromCwdWithBranchContext(disabled, cwd, ""))
 
 	probeGitRootForCwd = func(string) bool { return false }
-	refused := WithProjectRootMemo(context.Background())
+	refused := WithProjectRootMemo(t.Context())
 	assert.Equal(t, "src",
 		ExtractProjectFromCwdWithBranchContext(refused, cwd, ""))
 
@@ -162,7 +161,7 @@ func TestProjectRootMemoPolicyGates(t *testing.T) {
 	}
 	cleaned := filepath.Clean(norm)
 	if filepath.IsAbs(cleaned) && isForeignOSPath(foreign, cleaned, winPath) {
-		foreignCtx := WithProjectRootMemo(context.Background())
+		foreignCtx := WithProjectRootMemo(t.Context())
 		assert.Equal(t, "src",
 			ExtractProjectFromCwdWithBranchContext(foreignCtx, foreign, ""))
 	}
@@ -184,6 +183,8 @@ func TestProjectRootMemoStandaloneRefreshes(t *testing.T) {
 
 func TestProjectRootMemoProviderRoutes(t *testing.T) {
 	t.Run("OpenCode storage", func(t *testing.T) {
+		require := require.New(t)
+
 		root, cwd := projectRootMemoProviderFixture(t)
 		sessionPath := filepath.Join(
 			root, "storage", "session", "global", "session.json",
@@ -199,23 +200,21 @@ func TestProjectRootMemoProviderRoutes(t *testing.T) {
 			root, "storage", "message", "session", "msg.json",
 		), map[string]any{
 			"id": "msg", "sessionID": "session", "role": "user",
-			"time": map[string]any{"created": int64(1700000000000)},
 		})
 		writeOpenCodeStorageFile(t, filepath.Join(
 			root, "storage", "part", "msg", "part.json",
 		), map[string]any{
 			"id": "part", "sessionID": "session", "messageID": "msg",
 			"type": "text", "text": "storage message",
-			"time": map[string]any{"created": int64(1700000000000)},
 		})
 
 		provider, ok := NewProvider(AgentOpenCode, ProviderConfig{Roots: []string{root}})
-		require.True(t, ok)
-		sources, err := provider.Discover(context.Background())
-		require.NoError(t, err)
-		require.Len(t, sources, 1)
-		fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
-		require.NoError(t, err)
+		require.True(ok)
+		sources, err := provider.Discover(t.Context())
+		require.NoError(err)
+		require.Len(sources, 1)
+		fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+		require.NoError(err)
 		assertProjectRootMemoProviderRoute(t, provider, ParseRequest{
 			Source: sources[0], Fingerprint: fingerprint,
 		})
@@ -231,7 +230,7 @@ func TestProjectRootMemoProviderRoutes(t *testing.T) {
 		))
 		provider, ok := NewProvider(AgentCommandCode, ProviderConfig{Roots: []string{root}})
 		require.True(t, ok)
-		sources, err := provider.Discover(context.Background())
+		sources, err := provider.Discover(t.Context())
 		require.NoError(t, err)
 		require.Len(t, sources, 1)
 		assertProjectRootMemoProviderRoute(t, provider, ParseRequest{Source: sources[0]})
@@ -247,7 +246,7 @@ func TestProjectRootMemoProviderRoutes(t *testing.T) {
 		))
 		provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 		require.True(t, ok)
-		sources, err := provider.Discover(context.Background())
+		sources, err := provider.Discover(t.Context())
 		require.NoError(t, err)
 		require.Len(t, sources, 1)
 		assertProjectRootMemoProviderRoute(t, provider, ParseRequest{Source: sources[0]})
@@ -264,7 +263,7 @@ func TestProjectRootMemoProviderRoutes(t *testing.T) {
 			fmt.Sprintf(`{"workspacePaths":[%q],"createdAt":"2026-06-01T10:00:00Z","lastModifiedAt":"2026-06-01T10:01:00Z"}`+"\n", cwd))
 		provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 		require.True(t, ok)
-		sources, err := provider.Discover(context.Background())
+		sources, err := provider.Discover(t.Context())
 		require.NoError(t, err)
 		require.Len(t, sources, 1)
 		assertProjectRootMemoProviderRoute(t, provider, ParseRequest{Source: sources[0]})
@@ -296,12 +295,12 @@ func assertProjectRootMemoProviderRoute(
 	assert.Equal(t, "src", parse(WithoutFilesystemProjectDiscovery(t.Context())))
 	assert.Zero(t, calls.Load(), "disabled discovery must not inspect local repositories")
 
-	uncachedProject := parse(context.Background())
-	uncachedProjectAgain := parse(context.Background())
+	uncachedProject := parse(t.Context())
+	uncachedProjectAgain := parse(t.Context())
 	uncachedCalls := calls.Load()
 
 	calls.Store(0)
-	memoCtx := WithProjectRootMemo(context.Background())
+	memoCtx := WithProjectRootMemo(t.Context())
 	memoProject := parse(memoCtx)
 	memoProjectAgain := parse(memoCtx)
 	memoCalls := calls.Load()
@@ -310,7 +309,7 @@ func assertProjectRootMemoProviderRoute(
 	assert.Equal(t, memoProject, memoProjectAgain)
 	assert.Equal(t, uncachedProject, memoProject)
 	assert.Greater(t, uncachedCalls, memoCalls)
-	assert.Greater(t, memoCalls, int64(0))
+	assert.Positive(t, memoCalls)
 	t.Logf("provider=%s uncached_calls=%d memo_calls=%d project=%s",
 		provider.Definition().Type, uncachedCalls, memoCalls, memoProject)
 }

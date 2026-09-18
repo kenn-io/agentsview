@@ -102,7 +102,7 @@ func newEmbeddingsTestServer(t *testing.T, m EmbeddingsManager) *Server {
 }
 
 func TestEmbeddingsRoutesRegisteredWhenManagerNil(t *testing.T) {
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/embeddings/status", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/embeddings/status", nil)
 
 	withoutManager := newEmbeddingsTestServer(t, nil)
 	_, patternWithout := withoutManager.mux.Handler(req)
@@ -151,6 +151,9 @@ func TestOpenAPIDocumentsEmbeddingsRoutesWithoutManager(t *testing.T) {
 }
 
 func TestEmbeddingsBuildReturnsAcceptedAndStartsBuild(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	fake := &fakeEmbeddingsManager{}
 	s := newEmbeddingsTestServer(t, fake)
 
@@ -161,12 +164,12 @@ func TestEmbeddingsBuildReturnsAcceptedAndStartsBuild(t *testing.T) {
 	var body struct {
 		Started bool `json:"started"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-	assert.True(t, body.Started)
+	require.NoError(json.Unmarshal(w.Body.Bytes(), &body))
+	assert.True(body.Started)
 
-	require.Len(t, fake.startBuildCalls, 1)
-	assert.True(t, fake.startBuildCalls[0].FullRebuild)
-	assert.False(t, fake.startBuildCalls[0].RepairInvalid)
+	require.Len(fake.startBuildCalls, 1)
+	assert.True(fake.startBuildCalls[0].FullRebuild)
+	assert.False(fake.startBuildCalls[0].RepairInvalid)
 }
 
 func TestEmbeddingsBuildHoldsIdleLeaseUntilManagerCompletes(t *testing.T) {
@@ -201,6 +204,9 @@ func TestEmbeddingsBuildHoldsIdleLeaseUntilManagerCompletes(t *testing.T) {
 }
 
 func TestEmbeddingsRoutesSelectRecallStoreManager(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	messages := &fakeEmbeddingsManager{status: vector.BuildStatus{Done: 1}}
 	recall := &fakeEmbeddingsManager{status: vector.BuildStatus{Done: 2}}
 	s := testServer(t, 0,
@@ -214,17 +220,17 @@ func TestEmbeddingsRoutesSelectRecallStoreManager(t *testing.T) {
 			"include_automated": true,
 		})
 	assertRecorderStatus(t, w, http.StatusAccepted)
-	assert.Empty(t, messages.startBuildCalls)
-	require.Len(t, recall.startBuildCalls, 1)
-	assert.True(t, recall.startBuildCalls[0].FullRebuild)
-	assert.False(t, recall.startBuildCalls[0].IncludeAutomated,
+	assert.Empty(messages.startBuildCalls)
+	require.Len(recall.startBuildCalls, 1)
+	assert.True(recall.startBuildCalls[0].FullRebuild)
+	assert.False(recall.startBuildCalls[0].IncludeAutomated,
 		"Recall has no automated-session scope and must normalize it")
 
 	statusResponse := serveGet(t, s, "/api/v1/embeddings/status?store=recall")
 	assertRecorderStatus(t, statusResponse, http.StatusOK)
 	var status vector.BuildStatus
-	require.NoError(t, json.Unmarshal(statusResponse.Body.Bytes(), &status))
-	assert.Equal(t, int64(2), status.Done)
+	require.NoError(json.Unmarshal(statusResponse.Body.Bytes(), &status))
+	assert.Equal(int64(2), status.Done)
 }
 
 // TestEmbeddingsBuildIncludeAutomatedDefaulting pins the tri-state contract:
@@ -240,10 +246,14 @@ func TestEmbeddingsBuildIncludeAutomatedDefaulting(t *testing.T) {
 	}{
 		{"omitted uses configured true", true, `{}`, true},
 		{"omitted uses configured false", false, `{}`, false},
-		{"explicit false overrides configured true", true,
-			`{"include_automated":false}`, false},
-		{"explicit true overrides configured false", false,
-			`{"include_automated":true}`, true},
+		{
+			"explicit false overrides configured true", true,
+			`{"include_automated":false}`, false,
+		},
+		{
+			"explicit true overrides configured false", false,
+			`{"include_automated":true}`, true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -253,7 +263,7 @@ func TestEmbeddingsBuildIncludeAutomatedDefaulting(t *testing.T) {
 				WithEmbeddingsIncludeAutomatedDefault(tt.configured),
 			)
 
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/embeddings/build",
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/embeddings/build",
 				strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
@@ -435,7 +445,7 @@ func TestEmbeddingsRetireRefusalReturnsConflict(t *testing.T) {
 	w := serveJSON(t, s.mux, http.MethodPost, "/api/v1/embeddings/generations/7/retire",
 		map[string]bool{"force": false})
 	assertRecorderStatus(t, w, http.StatusConflict)
-	assert.True(t, strings.Contains(w.Body.String(), "is active"))
+	assert.Contains(t, w.Body.String(), "is active")
 }
 
 func TestEmbeddingsRetireUnknownGenerationReturnsNotFound(t *testing.T) {

@@ -8,29 +8,32 @@ import (
 )
 
 func TestMachineLabelsPersistUpdatesAndSurviveResync(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ctx := t.Context()
 	source := testDB(t)
-	require.NoError(t, source.SetSyncState("last_push_at", "unrelated metadata"))
-	require.NoError(t, source.SetSyncState("machineXlabel:other", "not a label"))
-	require.NoError(t, source.SetSyncState("machine_label:installation-a", "Laptop"))
-	require.NoError(t, source.SetSyncState("machine_label:installation-b", "Desktop"))
-	require.NoError(t, source.SetSyncState("machine_label:installation-a", "Work laptop"))
+	require.NoError(source.SetSyncState("last_push_at", "unrelated metadata"))
+	require.NoError(source.SetSyncState("machineXlabel:other", "not a label"))
+	require.NoError(source.SetSyncState("machine_label:installation-a", "Laptop"))
+	require.NoError(source.SetSyncState("machine_label:installation-b", "Desktop"))
+	require.NoError(source.SetSyncState("machine_label:installation-a", "Work laptop"))
 
-	require.NoError(t, source.SetSyncState("machine_alias:oldhost.example", "installation-a"))
+	require.NoError(source.SetSyncState("machine_alias:oldhost.example", "installation-a"))
 	labels, err := source.GetMachineLabels(ctx)
-	require.NoError(t, err)
+	require.NoError(err)
 	want := map[string]string{
 		"installation-a": "Work laptop",
 		"installation-b": "Desktop",
 	}
-	assert.Equal(t, want, labels)
+	assert.Equal(want, labels)
 
 	replacement := testDB(t)
-	require.NoError(t, replacement.CopySyncStateFrom(source.Path()))
+	require.NoError(replacement.CopySyncStateFrom(source.Path()))
 	labels, err = replacement.GetMachineLabels(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, want, labels)
+	require.NoError(err)
+	assert.Equal(want, labels)
 	aliases, err := replacement.GetMachineAliases(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, map[string]string{"oldhost.example": "installation-a"}, aliases)
+	require.NoError(err)
+	assert.Equal(map[string]string{"oldhost.example": "installation-a"}, aliases)
 }

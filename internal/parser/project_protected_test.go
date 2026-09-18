@@ -70,17 +70,19 @@ func TestExtractProjectFromCwdContextCanDisableFilesystemDiscovery(t *testing.T)
 // exec git, which reads the same target. The main repository name must not
 // leak into the result.
 func TestExtractProjectFromCwdProtectedGitdirTargetFallsBack(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	guarded := filepath.Join(root, "guarded")
 	mainGitDir := filepath.Join(guarded, "main", ".git")
 	worktreeGitDir := filepath.Join(mainGitDir, "worktrees", "wt")
-	require.NoError(t, os.MkdirAll(worktreeGitDir, 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(worktreeGitDir, 0o755))
+	require.NoError(os.WriteFile(
 		filepath.Join(worktreeGitDir, "commondir"), []byte("../..\n"), 0o644,
 	))
 	worktree := filepath.Join(root, "work", "wt-checkout")
-	require.NoError(t, os.MkdirAll(worktree, 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(worktree, 0o755))
+	require.NoError(os.WriteFile(
 		filepath.Join(worktree, ".git"),
 		[]byte("gitdir: "+worktreeGitDir+"\n"), 0o644,
 	))
@@ -102,24 +104,26 @@ func TestExtractProjectFromCwdProtectedGitdirTargetFallsBack(t *testing.T) {
 // valid gitfile pointing at a safe main repository, so a missing vet is
 // caught by the main repository's name leaking into the result.
 func TestExtractProjectFromCwdSymlinkedGitFileFallsBack(t *testing.T) {
+	require := require.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("the probe classifier walks POSIX paths and symlinks")
 	}
 	home := t.TempDir()
 	mainGitDir := filepath.Join(home, "src", "main-repo", ".git")
 	worktreeGitDir := filepath.Join(mainGitDir, "worktrees", "wt")
-	require.NoError(t, os.MkdirAll(worktreeGitDir, 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(worktreeGitDir, 0o755))
+	require.NoError(os.WriteFile(
 		filepath.Join(worktreeGitDir, "commondir"), []byte("../..\n"), 0o644,
 	))
 	guardedFile := filepath.Join(home, "Documents", "redirect.git")
-	require.NoError(t, os.MkdirAll(filepath.Dir(guardedFile), 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(filepath.Dir(guardedFile), 0o755))
+	require.NoError(os.WriteFile(
 		guardedFile, []byte("gitdir: "+worktreeGitDir+"\n"), 0o644,
 	))
 	worktree := filepath.Join(home, "work", "wt-link")
-	require.NoError(t, os.MkdirAll(worktree, 0o755))
-	require.NoError(t, os.Symlink(
+	require.NoError(os.MkdirAll(worktree, 0o755))
+	require.NoError(os.Symlink(
 		guardedFile, filepath.Join(worktree, ".git"),
 	))
 
@@ -142,24 +146,27 @@ func TestExtractProjectFromCwdSymlinkedGitFileFallsBack(t *testing.T) {
 // runtime.GOOS; the resolution logic itself is covered cross-platform in
 // internal/export.
 func TestDefaultProbeGitRootForCwdHonorsProtectedHome(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if runtime.GOOS != "darwin" {
 		t.Skip("the default guard only restricts paths on darwin")
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	protected := filepath.Join(home, "Documents", "proj")
-	require.NoError(t, os.MkdirAll(protected, 0o755))
+	require.NoError(os.MkdirAll(protected, 0o755))
 	plain := filepath.Join(home, "src", "proj")
-	require.NoError(t, os.MkdirAll(plain, 0o755))
+	require.NoError(os.MkdirAll(plain, 0o755))
 
-	assert.False(t, defaultProbeGitRootForCwd(protected),
+	assert.False(defaultProbeGitRootForCwd(protected),
 		"protected cwd must be refused by default")
-	assert.True(t, defaultProbeGitRootForCwd(plain),
+	assert.True(defaultProbeGitRootForCwd(plain),
 		"unprotected cwd must stay probeable")
 
 	SetAllowProtectedPathProbes(true)
 	t.Cleanup(func() { SetAllowProtectedPathProbes(false) })
-	assert.True(t, defaultProbeGitRootForCwd(protected),
+	assert.True(defaultProbeGitRootForCwd(protected),
 		"opting in must allow protected cwd probes")
 }
 
@@ -169,18 +176,20 @@ func TestDefaultProbeGitRootForCwdHonorsProtectedHome(t *testing.T) {
 // its commondir read or its main repository's name recovered. The deleted
 // cwd falls back to its own basename instead.
 func TestRepoRootFromSiblingsSkipsRefusedGitfileTargets(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	guarded := filepath.Join(root, "guarded")
 	mainGitDir := filepath.Join(guarded, "main-docs", ".git")
 	worktreeGitDir := filepath.Join(mainGitDir, "worktrees", "wt1")
-	require.NoError(t, os.MkdirAll(worktreeGitDir, 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(worktreeGitDir, 0o755))
+	require.NoError(os.WriteFile(
 		filepath.Join(worktreeGitDir, "commondir"), []byte("../..\n"), 0o644,
 	))
 	parent := filepath.Join(root, "worktrees")
 	sibling := filepath.Join(parent, "wt1")
-	require.NoError(t, os.MkdirAll(sibling, 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(sibling, 0o755))
+	require.NoError(os.WriteFile(
 		filepath.Join(sibling, ".git"),
 		[]byte("gitdir: "+worktreeGitDir+"\n"), 0o644,
 	))
@@ -203,16 +212,18 @@ func TestRepoRootFromSiblingsSkipsRefusedGitfileTargets(t *testing.T) {
 // symlink without following it: the old following stat traversed the link
 // into the guarded target before any vet ran.
 func TestRepoRootFromSiblingsBoundaryCheckDoesNotFollowRefusedSymlink(t *testing.T) {
+	require := require.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("the probe classifier walks POSIX paths and symlinks")
 	}
 	home := t.TempDir()
 	guarded := filepath.Join(home, "Documents", "main", ".git")
-	require.NoError(t, os.MkdirAll(guarded, 0o755))
+	require.NoError(os.MkdirAll(guarded, 0o755))
 	ancestor := filepath.Join(home, "work")
-	require.NoError(t, os.MkdirAll(ancestor, 0o755))
+	require.NoError(os.MkdirAll(ancestor, 0o755))
 	gitLink := filepath.Join(ancestor, ".git")
-	require.NoError(t, os.Symlink(guarded, gitLink))
+	require.NoError(os.Symlink(guarded, gitLink))
 
 	// Exercise the real classifier with an injected darwin home: the guard
 	// receives the symlink's own path and must refuse it by resolving to
@@ -247,25 +258,27 @@ func TestRepoRootFromSiblingsBoundaryCheckDoesNotFollowRefusedSymlink(t *testing
 // into a guarded location must not be read through, so the main repository
 // it names cannot be recovered.
 func TestExtractProjectFromCwdSymlinkedCommondirFallsBack(t *testing.T) {
+	require := require.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("the probe classifier walks POSIX paths and symlinks")
 	}
 	home := t.TempDir()
 	mainRepo := filepath.Join(home, "src", "main-repo")
-	require.NoError(t, os.MkdirAll(filepath.Join(mainRepo, ".git"), 0o755))
+	require.NoError(os.MkdirAll(filepath.Join(mainRepo, ".git"), 0o755))
 	gitStore := filepath.Join(home, "gitstore", "wt-git")
-	require.NoError(t, os.MkdirAll(gitStore, 0o755))
+	require.NoError(os.MkdirAll(gitStore, 0o755))
 	target := filepath.Join(home, "Documents", "commondir-target")
-	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(filepath.Dir(target), 0o755))
+	require.NoError(os.WriteFile(
 		target, []byte(filepath.Join(mainRepo, ".git")+"\n"), 0o644,
 	))
-	require.NoError(t, os.Symlink(
+	require.NoError(os.Symlink(
 		target, filepath.Join(gitStore, "commondir"),
 	))
 	worktree := filepath.Join(home, "work", "wt-x")
-	require.NoError(t, os.MkdirAll(worktree, 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(worktree, 0o755))
+	require.NoError(os.WriteFile(
 		filepath.Join(worktree, ".git"),
 		[]byte("gitdir: "+gitStore+"\n"), 0o644,
 	))
@@ -316,18 +329,20 @@ func TestRepoRootFromSiblingsSkipsGuardedSiblings(t *testing.T) {
 // the deleted child, so a missing vet is caught by the sibling's name being
 // recovered.
 func TestDeletedChildIsWorktreeSkipsSymlinkedWorktreesDir(t *testing.T) {
+	require := require.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("the probe classifier walks POSIX paths and symlinks")
 	}
 	home := t.TempDir()
 	store := filepath.Join(home, "Documents", "wt-store")
-	require.NoError(t, os.MkdirAll(
+	require.NoError(os.MkdirAll(
 		filepath.Join(store, "gone-child"), 0o755,
 	))
 	parent := filepath.Join(home, "work")
 	mainRepo := filepath.Join(parent, "mainrepo")
-	require.NoError(t, os.MkdirAll(filepath.Join(mainRepo, ".git"), 0o755))
-	require.NoError(t, os.Symlink(
+	require.NoError(os.MkdirAll(filepath.Join(mainRepo, ".git"), 0o755))
+	require.NoError(os.Symlink(
 		store, filepath.Join(mainRepo, ".git", "worktrees"),
 	))
 
@@ -349,19 +364,22 @@ func TestDeletedChildIsWorktreeSkipsSymlinkedWorktreesDir(t *testing.T) {
 // whose git exec reads them, so a config symlink into a guarded folder would
 // be read through despite the vetted gitdir.
 func TestGitFileTargetsProbeableVetsSubmoduleConfig(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("the probe classifier walks POSIX paths and symlinks")
 	}
 	home := t.TempDir()
 	gitDir := filepath.Join(home, "src", "parent", ".git", "modules", "sub")
-	require.NoError(t, os.MkdirAll(gitDir, 0o755))
+	require.NoError(os.MkdirAll(gitDir, 0o755))
 	guardedConfig := filepath.Join(home, "Documents", "config-target")
-	require.NoError(t, os.MkdirAll(filepath.Dir(guardedConfig), 0o755))
-	require.NoError(t, os.WriteFile(guardedConfig, []byte("[core]\n"), 0o644))
+	require.NoError(os.MkdirAll(filepath.Dir(guardedConfig), 0o755))
+	require.NoError(os.WriteFile(guardedConfig, []byte("[core]\n"), 0o644))
 	worktree := filepath.Join(home, "src", "parent", "sub")
-	require.NoError(t, os.MkdirAll(worktree, 0o755))
+	require.NoError(os.MkdirAll(worktree, 0o755))
 	gitPath := filepath.Join(worktree, ".git")
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		gitPath, []byte("gitdir: "+gitDir+"\n"), 0o644,
 	))
 
@@ -372,17 +390,17 @@ func TestGitFileTargetsProbeableVetsSubmoduleConfig(t *testing.T) {
 			export.LocalPathProbeSafe
 	}
 
-	require.NoError(t, os.Symlink(
+	require.NoError(os.Symlink(
 		guardedConfig, filepath.Join(gitDir, "config"),
 	))
-	assert.False(t, gitFileTargetsProbeable(worktree, gitPath),
+	assert.False(gitFileTargetsProbeable(worktree, gitPath),
 		"a guarded config symlink must refuse the submodule gitdir")
 
-	require.NoError(t, os.Remove(filepath.Join(gitDir, "config")))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.Remove(filepath.Join(gitDir, "config")))
+	require.NoError(os.WriteFile(
 		filepath.Join(gitDir, "config"), []byte("[core]\n"), 0o644,
 	))
-	assert.True(t, gitFileTargetsProbeable(worktree, gitPath),
+	assert.True(gitFileTargetsProbeable(worktree, gitPath),
 		"a plain submodule gitdir stays probeable")
 }
 
@@ -405,6 +423,8 @@ func TestDefaultProbeGitfileTargetRefusesAutomount(t *testing.T) {
 // all), a non-root path, and — without the opt-in — a path outside the
 // network home's own guarded folders.
 func TestAutomountCwdProbeAllowed(t *testing.T) {
+	assert := assert.New(t)
+
 	if runtime.GOOS != "darwin" {
 		t.Skip("the guard reads runtime.GOOS")
 	}
@@ -424,25 +444,25 @@ func TestAutomountCwdProbeAllowed(t *testing.T) {
 	}
 	t.Setenv("HOME", "/home/user")
 
-	assert.True(t, automountCwdProbeAllowed("/home/user/repo"),
+	assert.True(automountCwdProbeAllowed("/home/user/repo"),
 		"a resolving first-level entry clears the walk")
-	assert.False(t, automountCwdProbeAllowed("/home/ghost/repo"),
+	assert.False(automountCwdProbeAllowed("/home/ghost/repo"),
 		"an unresolved first-level entry must stay refused")
-	assert.False(t, automountCwdProbeAllowed("/home"),
+	assert.False(automountCwdProbeAllowed("/home"),
 		"the namespace root has no first-level entry to vet")
-	assert.False(t, automountCwdProbeAllowed("/System/Volumes/Data/home/user"),
+	assert.False(automountCwdProbeAllowed("/System/Volumes/Data/home/user"),
 		"the data-volume spelling was never autofs-examined")
-	assert.False(t, automountCwdProbeAllowed("/HOME/user/repo"),
+	assert.False(automountCwdProbeAllowed("/HOME/user/repo"),
 		"a case-folded spelling was never autofs-examined")
-	assert.False(t, automountCwdProbeAllowed("/home/user/Documents/proj"),
+	assert.False(automountCwdProbeAllowed("/home/user/Documents/proj"),
 		"a network home's guarded folders stay refused")
 	SetAllowProtectedPathProbes(true)
 	t.Cleanup(func() { SetAllowProtectedPathProbes(false) })
-	assert.True(t, automountCwdProbeAllowed("/home/user/Documents/proj"),
+	assert.True(automountCwdProbeAllowed("/home/user/Documents/proj"),
 		"the opt-in lifts the guarded-folder refusal for network homes")
 
 	autofsPrefixes = nil
-	assert.True(t, automountCwdProbeAllowed("/home/user/repo"),
+	assert.True(automountCwdProbeAllowed("/home/user/repo"),
 		"an unmanaged namespace has no automountd to wake")
 }
 
@@ -451,6 +471,8 @@ func TestAutomountCwdProbeAllowed(t *testing.T) {
 // it classify as automount, and clearance still requires a resolving
 // first-level probe and refuses the mount root.
 func TestAutomountCwdProbeAllowedCustomPrefix(t *testing.T) {
+	assert := assert.New(t)
+
 	if runtime.GOOS != "darwin" {
 		t.Skip("the guard reads runtime.GOOS")
 	}
@@ -472,10 +494,10 @@ func TestAutomountCwdProbeAllowedCustomPrefix(t *testing.T) {
 		return nil, os.ErrNotExist
 	}
 
-	assert.True(t, automountCwdProbeAllowed("/corp/home/user/repo"),
+	assert.True(automountCwdProbeAllowed("/corp/home/user/repo"),
 		"a resolving custom-mount entry clears the walk")
-	assert.False(t, automountCwdProbeAllowed("/corp/home/ghost/repo"),
+	assert.False(automountCwdProbeAllowed("/corp/home/ghost/repo"),
 		"an unresolved custom-mount entry must stay refused")
-	assert.False(t, automountCwdProbeAllowed("/corp/home"),
+	assert.False(automountCwdProbeAllowed("/corp/home"),
 		"the custom mount root has no first-level entry to vet")
 }

@@ -61,6 +61,8 @@ func TestSessionListIncludeSource(t *testing.T) {
 	}
 
 	t.Run("enabled", func(t *testing.T) {
+		assert := assert.New(t)
+
 		dataDir := newAgentDataDir(t)
 		seed(t, dataDir)
 
@@ -71,15 +73,15 @@ func TestSessionListIncludeSource(t *testing.T) {
 		for _, session := range sessions {
 			switch session["id"] {
 			case "with-source":
-				assert.Equal(t, filepath.Join(
+				assert.Equal(filepath.Join(
 					dataDir, ".claude", "projects", "agentsview", "session-source.jsonl",
 				), session["file_path"])
 			case "odd-source":
-				assert.Equal(t, filepath.Join(
+				assert.Equal(filepath.Join(
 					dataDir, "odd path", "session [special].jsonl",
 				), session["file_path"])
 			case "without-source":
-				assert.NotContains(t, session, "file_path")
+				assert.NotContains(session, "file_path")
 			}
 		}
 	})
@@ -196,6 +198,9 @@ func TestSessionListResumeRespectsExplicitSince(t *testing.T) {
 }
 
 func TestSessionListReportsDefaultExclusionsOnStderr(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := newAgentDataDir(t)
 	seedSessionsWithOpts(t, dataDir,
 		sessionSeed{id: "included", project: "proj"},
@@ -224,16 +229,16 @@ func TestSessionListReportsDefaultExclusionsOnStderr(t *testing.T) {
 	root.SetArgs([]string{"session", "list", "--format", "json"})
 
 	_, err := root.ExecuteC()
-	require.NoError(t, err)
+	require.NoError(err)
 	got := decodeCLIJSON[cliSessionList](t, stdout.String())
-	require.Equal(t, 1, got.Total)
-	require.Len(t, got.Sessions, 1)
-	assert.Equal(t, "included", got.Sessions[0]["id"])
-	assert.Contains(t, stderr.String(), "Excluded 2 sessions by default")
-	assert.Contains(t, stderr.String(), "1 one-shot")
-	assert.Contains(t, stderr.String(), "1 automated")
-	assert.Contains(t, stderr.String(), "--include-one-shot")
-	assert.Contains(t, stderr.String(), "--include-automated")
+	require.Equal(1, got.Total)
+	require.Len(got.Sessions, 1)
+	assert.Equal("included", got.Sessions[0]["id"])
+	assert.Contains(stderr.String(), "Excluded 2 sessions by default")
+	assert.Contains(stderr.String(), "1 one-shot")
+	assert.Contains(stderr.String(), "1 automated")
+	assert.Contains(stderr.String(), "--include-one-shot")
+	assert.Contains(stderr.String(), "--include-automated")
 }
 
 // TestResolveSinceFlag_ResolvesRelativeWindow is a fast unit test of the
@@ -242,17 +247,20 @@ func TestSessionListReportsDefaultExclusionsOnStderr(t *testing.T) {
 // RFC3339 boundary is asserted to fall within a tolerance window around
 // now minus the requested duration rather than an exact instant.
 func TestResolveSinceFlag_ResolvesRelativeWindow(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	before := time.Now().Add(-14 * 24 * time.Hour)
 	got, err := resolveSinceFlag("14d", "")
 	after := time.Now().Add(-14 * 24 * time.Hour)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	parsed, err := time.Parse(time.RFC3339, got)
-	require.NoError(t, err)
-	assert.False(t, parsed.Before(before.Add(-time.Second)),
+	require.NoError(err)
+	assert.False(parsed.Before(before.Add(-time.Second)),
 		"resolved active_since %v earlier than expected window start %v",
 		parsed, before)
-	assert.False(t, parsed.After(after.Add(time.Second)),
+	assert.False(parsed.After(after.Add(time.Second)),
 		"resolved active_since %v later than expected window end %v",
 		parsed, after)
 }

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,12 +12,15 @@ import (
 )
 
 func TestCreateProjectReclassificationFixture(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(database.Close()) })
 
 	base := time.Date(2026, 7, 1, 10, 0, 0, 0, time.UTC)
-	require.NoError(t, createProjectReclassificationFixture(database, base))
+	require.NoError(createProjectReclassificationFixture(database, base))
 
 	const (
 		machine      = "remote-example-host"
@@ -30,24 +32,24 @@ func TestCreateProjectReclassificationFixture(t *testing.T) {
 		"test-session-project-reclassification-nested": worktreeRoot + "/cmd/server",
 	}
 	for sessionID, wantCwd := range wantCwds {
-		session, getErr := database.GetSession(context.Background(), sessionID)
-		require.NoError(t, getErr)
-		require.NotNil(t, session)
-		assert.Equal(t, machine, session.Machine)
-		assert.Equal(t, wrongProject, session.Project)
-		assert.Equal(t, wantCwd, session.Cwd)
+		session, getErr := database.GetSession(t.Context(), sessionID)
+		require.NoError(getErr)
+		require.NotNil(session)
+		assert.Equal(machine, session.Machine)
+		assert.Equal(wrongProject, session.Project)
+		assert.Equal(wantCwd, session.Cwd)
 	}
 
 	snapshots, err := database.ListSessionProjectIdentitySnapshots(
-		context.Background(),
+		t.Context(),
 	)
-	require.NoError(t, err)
-	require.Len(t, snapshots, 2)
+	require.NoError(err)
+	require.Len(snapshots, 2)
 	for _, snapshot := range snapshots {
-		assert.Equal(t, machine, snapshot.Machine)
-		assert.Equal(t, wrongProject, snapshot.Project)
-		assert.Equal(t, worktreeRoot, snapshot.RootPath)
-		assert.Equal(t, worktreeRoot, snapshot.WorktreeRootPath)
-		assert.NotEmpty(t, snapshot.Key)
+		assert.Equal(machine, snapshot.Machine)
+		assert.Equal(wrongProject, snapshot.Project)
+		assert.Equal(worktreeRoot, snapshot.RootPath)
+		assert.Equal(worktreeRoot, snapshot.WorktreeRootPath)
+		assert.NotEmpty(snapshot.Key)
 	}
 }

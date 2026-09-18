@@ -16,29 +16,32 @@ import (
 // TestCopyAssetNormalizesJPEGExtension verifies that a .jpeg source and Put
 // with image/jpeg produce the same file and reference.
 func TestCopyAssetNormalizesJPEGExtension(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	assetsDir := t.TempDir()
 	body := []byte{0xff, 0xd8, 0xff, 0xe0} // JPEG magic bytes
 
 	// Write source file with .jpeg extension.
 	srcPath := filepath.Join(t.TempDir(), "photo.jpeg")
-	require.NoError(t, os.WriteFile(srcPath, body, 0o644))
+	require.NoError(os.WriteFile(srcPath, body, 0o644))
 
 	// CopyAsset normalizes .jpeg → .jpg before building the destination path.
 	refCopy, err := assets.CopyAsset(srcPath, assetsDir)
-	require.NoError(t, err)
-	assert.Contains(t, refCopy, ".jpg")
-	assert.NotContains(t, refCopy, ".jpeg")
+	require.NoError(err)
+	assert.Contains(refCopy, ".jpg")
+	assert.NotContains(refCopy, ".jpeg")
 
 	// Put with image/jpeg maps to .jpg.
 	refPut, _, err := assets.Put(assetsDir, "image/jpeg", body)
-	require.NoError(t, err)
-	assert.Contains(t, refPut, ".jpg")
+	require.NoError(err)
+	assert.Contains(refPut, ".jpg")
 
 	// Same bytes through both paths yield one reference and one file.
-	assert.Equal(t, refCopy, refPut)
+	assert.Equal(refCopy, refPut)
 	entries, err := os.ReadDir(assetsDir)
-	require.NoError(t, err)
-	assert.Len(t, entries, 1)
+	require.NoError(err)
+	assert.Len(entries, 1)
 	t.Logf("1 file for 2 writes (CopyAsset .jpeg and Put image/jpeg): %d on disk", len(entries))
 }
 
@@ -48,42 +51,45 @@ func TestCopyAssetNormalizesJPEGExtension(t *testing.T) {
 //   - exactly one file is written after two calls with identical bytes
 //   - image/svg+xml is rejected with an error
 func TestPutContract(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	assetsDir := t.TempDir()
 
 	body := []byte{0x89, 0x50, 0x4e, 0x47} // PNG magic bytes
 
 	ref1, created1, err := assets.Put(assetsDir, "image/png", body)
-	require.NoError(t, err)
-	assert.True(t, created1)
-	assert.Contains(t, ref1, "asset://")
-	assert.Contains(t, ref1, ".png")
+	require.NoError(err)
+	assert.True(created1)
+	assert.Contains(ref1, "asset://")
+	assert.Contains(ref1, ".png")
 
 	ref2, created2, err := assets.Put(assetsDir, "image/png", body)
-	require.NoError(t, err)
-	assert.False(t, created2)
-	assert.Equal(t, ref1, ref2)
+	require.NoError(err)
+	assert.False(created2)
+	assert.Equal(ref1, ref2)
 
 	// Boundary: exactly 1 file on disk after 2 writes.
 	entries, err := os.ReadDir(assetsDir)
-	require.NoError(t, err)
-	assert.Len(t, entries, 1)
+	require.NoError(err)
+	assert.Len(entries, 1)
 	t.Logf("1 file on disk after 2 writes: %d", len(entries))
 
 	// Verify the stored file matches the written bytes.
 	filename := entries[0].Name()
 	stored, err := os.ReadFile(filepath.Join(assetsDir, filename))
-	require.NoError(t, err)
-	assert.Equal(t, body, stored)
+	require.NoError(err)
+	assert.Equal(body, stored)
 
 	// Verify the sha256 in the filename matches the content.
 	sum := sha256.Sum256(body)
 	wantFilename := fmt.Sprintf("%x.png", sum[:])
-	assert.Equal(t, wantFilename, filename)
+	assert.Equal(wantFilename, filename)
 
 	// svg+xml is not in the passive format set.
 	_, _, err = assets.Put(assetsDir, "image/svg+xml", []byte("<svg/>"))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported asset type")
+	require.Error(err)
+	assert.Contains(err.Error(), "unsupported asset type")
 }
 
 // TestPutReplacesIncompleteObject covers truncated and equal-length corrupt
@@ -102,28 +108,31 @@ func TestPutReplacesIncompleteObject(t *testing.T) {
 		{name: "same-size-corrupt", existing: corrupt},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			assetsDir := t.TempDir()
 			destPath := filepath.Join(assetsDir, fmt.Sprintf("%x.png", sum[:]))
-			require.NoError(t, os.WriteFile(destPath, tt.existing, 0o644))
+			require.NoError(os.WriteFile(destPath, tt.existing, 0o644))
 
 			ref, created, err := assets.Put(assetsDir, "image/png", body)
-			require.NoError(t, err)
-			assert.Equal(t, "asset://"+filepath.Base(destPath), ref)
-			assert.True(t, created)
+			require.NoError(err)
+			assert.Equal("asset://"+filepath.Base(destPath), ref)
+			assert.True(created)
 
 			stored, err := os.ReadFile(destPath)
-			require.NoError(t, err)
-			assert.Equal(t, body, stored)
-			assert.Equal(t, sum, sha256.Sum256(stored))
+			require.NoError(err)
+			assert.Equal(body, stored)
+			assert.Equal(sum, sha256.Sum256(stored))
 
 			entries, err := os.ReadDir(assetsDir)
-			require.NoError(t, err)
-			assert.Len(t, entries, 1)
+			require.NoError(err)
+			assert.Len(entries, 1)
 
 			ref2, created2, err := assets.Put(assetsDir, "image/png", body)
-			require.NoError(t, err)
-			assert.Equal(t, ref, ref2)
-			assert.False(t, created2)
+			require.NoError(err)
+			assert.Equal(ref, ref2)
+			assert.False(created2)
 			t.Logf("%s object repaired: %d bytes, digest=%x, files=%d", tt.name, len(stored), sum, len(entries))
 		})
 	}
@@ -132,31 +141,34 @@ func TestPutReplacesIncompleteObject(t *testing.T) {
 // TestCopyAssetContract covers the path-in entry point, deduplication, repair
 // of incomplete objects, and rejection of a non-image extension.
 func TestCopyAssetContract(t *testing.T) {
+	parentAssert := assert.New(t)
+	parentRequire := require.New(t)
+
 	src := filepath.Join(t.TempDir(), "source.webp")
 	body := []byte("image data")
 	sum := sha256.Sum256(body)
-	require.NoError(t, os.WriteFile(src, body, 0o644))
+	parentRequire.NoError(os.WriteFile(src, body, 0o644))
 
 	assetsDir := filepath.Join(t.TempDir(), "assets")
 
 	ref, err := assets.CopyAsset(src, assetsDir)
-	require.NoError(t, err)
-	assert.Contains(t, ref, "asset://")
-	assert.Contains(t, ref, ".webp")
+	parentRequire.NoError(err)
+	parentAssert.Contains(ref, "asset://")
+	parentAssert.Contains(ref, ".webp")
 
 	destPath := filepath.Join(assetsDir, strings.TrimPrefix(ref, "asset://"))
 	stored, err := os.ReadFile(destPath)
-	require.NoError(t, err)
-	assert.Equal(t, body, stored)
-	assert.Equal(t, sum, sha256.Sum256(stored))
+	parentRequire.NoError(err)
+	parentAssert.Equal(body, stored)
+	parentAssert.Equal(sum, sha256.Sum256(stored))
 
 	// A repeat copy returns the same reference without a second file.
 	ref2, err := assets.CopyAsset(src, assetsDir)
-	require.NoError(t, err)
-	assert.Equal(t, ref, ref2)
+	parentRequire.NoError(err)
+	parentAssert.Equal(ref, ref2)
 	entries, err := os.ReadDir(assetsDir)
-	require.NoError(t, err)
-	assert.Len(t, entries, 1)
+	parentRequire.NoError(err)
+	parentAssert.Len(entries, 1)
 
 	corrupt := append([]byte(nil), body...)
 	corrupt[0] ^= 0xff
@@ -168,22 +180,25 @@ func TestCopyAssetContract(t *testing.T) {
 		{name: "same-size-corrupt", existing: corrupt},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			require.NoError(t, os.WriteFile(destPath, tt.existing, 0o644))
+			assert := assert.New(t)
+			require := require.New(t)
+
+			require.NoError(os.WriteFile(destPath, tt.existing, 0o644))
 			ref3, err := assets.CopyAsset(src, assetsDir)
-			require.NoError(t, err)
-			assert.Equal(t, ref, ref3)
+			require.NoError(err)
+			assert.Equal(ref, ref3)
 			stored, err := os.ReadFile(destPath)
-			require.NoError(t, err)
-			assert.Equal(t, body, stored)
-			assert.Equal(t, sum, sha256.Sum256(stored))
+			require.NoError(err)
+			assert.Equal(body, stored)
+			assert.Equal(sum, sha256.Sum256(stored))
 		})
 	}
 	entries, err = os.ReadDir(assetsDir)
-	require.NoError(t, err)
-	assert.Len(t, entries, 1)
+	parentRequire.NoError(err)
+	parentAssert.Len(entries, 1)
 
 	// Active content is rejected on extension.
 	_, err = assets.CopyAsset(filepath.Join(t.TempDir(), "payload.svg"), assetsDir)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unsupported asset type")
+	parentRequire.Error(err)
+	parentAssert.Contains(err.Error(), "unsupported asset type")
 }

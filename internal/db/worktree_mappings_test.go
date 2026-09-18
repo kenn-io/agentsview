@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"path/filepath"
@@ -15,8 +14,11 @@ import (
 )
 
 func TestWorktreeProjectMappingsCRUDNormalizesAndScopesByMachine(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	prefix := filepath.Join(t.TempDir(), "my-app.worktrees")
 	m, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
@@ -25,26 +27,29 @@ func TestWorktreeProjectMappingsCRUDNormalizesAndScopesByMachine(t *testing.T) {
 		Project:    "my-app",
 		Enabled:    true,
 	})
-	require.NoError(t, err, "create mapping")
-	assert.Equal(t, "laptop", m.Machine, "machine")
-	assert.Equal(t, filepath.ToSlash(prefix), m.PathPrefix, "path_prefix")
-	assert.Equal(t, WorktreeMappingLayoutExplicit, m.Layout, "layout")
-	assert.Equal(t, "my_app", m.Project, "project")
+	require.NoError(err, "create mapping")
+	assert.Equal("laptop", m.Machine, "machine")
+	assert.Equal(filepath.ToSlash(prefix), m.PathPrefix, "path_prefix")
+	assert.Equal(WorktreeMappingLayoutExplicit, m.Layout, "layout")
+	assert.Equal("my_app", m.Project, "project")
 
 	got, err := d.ListWorktreeProjectMappings(ctx, "laptop")
-	require.NoError(t, err, "list laptop mappings")
-	require.Len(t, got, 1, "laptop mappings")
-	assert.Equal(t, m.ID, got[0].ID, "laptop mapping ID")
-	assert.Equal(t, WorktreeMappingLayoutExplicit, got[0].Layout, "listed layout")
+	require.NoError(err, "list laptop mappings")
+	require.Len(got, 1, "laptop mappings")
+	assert.Equal(m.ID, got[0].ID, "laptop mapping ID")
+	assert.Equal(WorktreeMappingLayoutExplicit, got[0].Layout, "listed layout")
 
 	other, err := d.ListWorktreeProjectMappings(ctx, "server")
-	require.NoError(t, err, "list server mappings")
-	assert.Empty(t, other, "server mappings")
+	require.NoError(err, "list server mappings")
+	assert.Empty(other, "server mappings")
 }
 
 func TestWorktreeProjectMappingOriginalProjectIsSetOnce(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	prefix := filepath.Join(t.TempDir(), "service.worktrees")
 
 	created, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
@@ -54,8 +59,8 @@ func TestWorktreeProjectMappingOriginalProjectIsSetOnce(t *testing.T) {
 		OriginalProject: "branch-label",
 		Enabled:         true,
 	})
-	require.NoError(t, err, "create mapping with original project")
-	assert.Equal(t, "branch-label", created.OriginalProject)
+	require.NoError(err, "create mapping with original project")
+	assert.Equal("branch-label", created.OriginalProject)
 
 	edited, err := d.UpdateWorktreeProjectMapping(
 		ctx,
@@ -68,8 +73,8 @@ func TestWorktreeProjectMappingOriginalProjectIsSetOnce(t *testing.T) {
 			Enabled:         true,
 		},
 	)
-	require.NoError(t, err, "edit mapping with an existing original project")
-	assert.Equal(t, "branch-label", edited.OriginalProject,
+	require.NoError(err, "edit mapping with an existing original project")
+	assert.Equal("branch-label", edited.OriginalProject,
 		"non-empty original_project cannot be overwritten")
 
 	settingsCreated, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
@@ -78,8 +83,8 @@ func TestWorktreeProjectMappingOriginalProjectIsSetOnce(t *testing.T) {
 		Project:    "other-service",
 		Enabled:    true,
 	})
-	require.NoError(t, err, "create Settings-style mapping")
-	assert.Empty(t, settingsCreated.OriginalProject)
+	require.NoError(err, "create Settings-style mapping")
+	assert.Empty(settingsCreated.OriginalProject)
 
 	filled, err := d.UpdateWorktreeProjectMapping(
 		ctx,
@@ -92,99 +97,108 @@ func TestWorktreeProjectMappingOriginalProjectIsSetOnce(t *testing.T) {
 			Enabled:         true,
 		},
 	)
-	require.NoError(t, err, "fill original project once")
-	assert.Equal(t, "activity-label", filled.OriginalProject,
+	require.NoError(err, "fill original project once")
+	assert.Equal("activity-label", filled.OriginalProject,
 		"an empty Settings-created value may be filled once")
 }
 
 func TestWorktreeProjectMappingMachinesIncludeSessionsAndMappings(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
-	require.NoError(t, d.UpsertSession(Session{
+	ctx := t.Context()
+	require.NoError(d.UpsertSession(Session{
 		ID: "remote-session", Machine: "host-a.example", Agent: "claude",
 		Project: "service",
 	}), "insert remote session")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID: "deleted-session", Machine: "deleted.example", Agent: "claude",
 		Project: "service",
 	}), "insert deleted remote session")
 	_, err := d.getWriter().ExecContext(ctx,
 		`UPDATE sessions SET deleted_at = ? WHERE id = ?`,
 		"2026-07-16T00:00:00Z", "deleted-session")
-	require.NoError(t, err, "mark remote session deleted")
+	require.NoError(err, "mark remote session deleted")
 	_, err = d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "host-b.example", PathPrefix: filepath.Join(t.TempDir(), "service"),
 		Project: "service", Enabled: true,
 	})
-	require.NoError(t, err, "create remote mapping")
+	require.NoError(err, "create remote mapping")
 
 	machines, err := d.ListWorktreeProjectMappingMachines(ctx)
-	require.NoError(t, err, "list mapping machines")
+	require.NoError(err, "list mapping machines")
 	assert.Equal(t, []string{"host-a.example", "host-b.example"}, machines)
 }
 
 func TestSchemaColumnMigrationAddsWorktreeOriginalProject(t *testing.T) {
-	ctx := context.Background()
+	require := require.New(t)
+
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "archive.db")
 	d, err := Open(path)
-	require.NoError(t, err, "open current archive")
-	require.NoError(t, d.Close(), "close current archive")
+	require.NoError(err, "open current archive")
+	require.NoError(d.Close(), "close current archive")
 
 	legacy, err := sql.Open("sqlite3", path)
-	require.NoError(t, err, "open archive as legacy sqlite")
-	_, err = legacy.Exec(
+	require.NoError(err, "open archive as legacy sqlite")
+	_, err = legacy.ExecContext(ctx,
 		`ALTER TABLE worktree_project_mappings DROP COLUMN original_project`,
 	)
-	require.NoError(t, err, "remove post-legacy column")
-	_, err = legacy.Exec(`
+	require.NoError(err, "remove post-legacy column")
+	_, err = legacy.ExecContext(ctx, `
 		INSERT INTO worktree_project_mappings
 			(machine, path_prefix, layout, project, enabled)
 		VALUES ('host-a.example', '/srv/worktrees/service', 'explicit', 'service', 1)`)
-	require.NoError(t, err, "seed legacy mapping")
-	require.NoError(t, legacy.Close(), "close legacy sqlite")
+	require.NoError(err, "seed legacy mapping")
+	require.NoError(legacy.Close(), "close legacy sqlite")
 
 	migrated, err := Open(path)
-	require.NoError(t, err, "open and migrate archive")
+	require.NoError(err, "open and migrate archive")
 	defer migrated.Close()
 	mappings, err := migrated.ListWorktreeProjectMappings(ctx, "host-a.example")
-	require.NoError(t, err, "list migrated mapping")
-	require.Len(t, mappings, 1)
+	require.NoError(err, "list migrated mapping")
+	require.Len(mappings, 1)
 	assert.Empty(t, mappings[0].OriginalProject,
 		"legacy mappings default original project to empty")
 }
 
 func TestWorktreeProjectMappingsRejectInvalidAndDuplicateRows(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	prefix := filepath.Join(t.TempDir(), "repo.worktrees")
 
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: " ", Project: "repo", Enabled: true,
 	})
-	require.Error(t, err, "empty path prefix accepted")
+	require.Error(err, "empty path prefix accepted")
 	_, err = d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: prefix, Project: " ", Enabled: true,
 	})
-	require.Error(t, err, "empty project accepted")
+	require.Error(err, "empty project accepted")
 
 	_, err = d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: prefix, Project: "repo", Enabled: true,
 	})
-	require.NoError(t, err, "create first mapping")
+	require.NoError(err, "create first mapping")
 	_, err = d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: prefix, Layout: "bogus", Project: "repo",
 		Enabled: true,
 	})
-	require.Error(t, err, "invalid layout accepted")
+	require.Error(err, "invalid layout accepted")
 	_, err = d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: prefix, Project: "repo2", Enabled: true,
 	})
-	require.ErrorIs(t, err, ErrWorktreeMappingDuplicate)
+	require.ErrorIs(err, ErrWorktreeMappingDuplicate)
 }
 
 func TestWorktreeProjectMappingsLayoutResolution(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	layoutRoot := filepath.Join(root, "service")
 	layoutPrefix := filepath.Join(layoutRoot, "service.worktrees")
@@ -195,8 +209,8 @@ func TestWorktreeProjectMappingsLayoutResolution(t *testing.T) {
 		Project:    "feature-service",
 		Enabled:    true,
 	})
-	require.NoError(t, err, "create explicit mapping")
-	require.Equal(t, WorktreeMappingLayoutExplicit, explicitMapping.Layout)
+	require.NoError(err, "create explicit mapping")
+	require.Equal(WorktreeMappingLayoutExplicit, explicitMapping.Layout)
 
 	layoutMapping, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine:    "laptop",
@@ -204,29 +218,31 @@ func TestWorktreeProjectMappingsLayoutResolution(t *testing.T) {
 		Layout:     WorktreeMappingLayoutRepoDotWorktrees,
 		Enabled:    true,
 	})
-	require.NoError(t, err, "create layout mapping")
-	assert.Equal(t, WorktreeMappingLayoutRepoDotWorktrees, layoutMapping.Layout)
-	assert.Empty(t, layoutMapping.Project, "layout rows should not persist a project")
+	require.NoError(err, "create layout mapping")
+	assert.Equal(WorktreeMappingLayoutRepoDotWorktrees, layoutMapping.Layout)
+	assert.Empty(layoutMapping.Project, "layout rows should not persist a project")
 
 	project, ok, err := d.ResolveWorktreeProjectMapping(ctx, "laptop",
 		filepath.Join(layoutPrefix, "feature", "src"), "leaf")
-	require.NoError(t, err, "resolve explicit")
-	assert.True(t, ok, "explicit resolve")
-	assert.Equal(t, "feature_service", project, "explicit resolve")
+	require.NoError(err, "resolve explicit")
+	assert.True(ok, "explicit resolve")
+	assert.Equal("feature_service", project, "explicit resolve")
 
 	project, ok, err = d.ResolveWorktreeProjectMapping(ctx, "laptop",
 		filepath.Join(layoutRoot, "service.worktrees", "main"), "leaf")
-	require.NoError(t, err, "resolve layout")
-	assert.True(t, ok, "layout resolve")
-	assert.Equal(t, "service", project, "layout resolve")
+	require.NoError(err, "resolve layout")
+	assert.True(ok, "layout resolve")
+	assert.Equal("service", project, "layout resolve")
 
 	_, ok, err = d.ResolveWorktreeProjectMapping(ctx, "laptop",
 		filepath.Join(layoutRoot, "service.worktrees-other", "main"), "leaf")
-	require.NoError(t, err, "resolve boundary miss")
-	assert.False(t, ok, "shared string prefix must not match")
+	require.NoError(err, "resolve boundary miss")
+	assert.False(ok, "shared string prefix must not match")
 }
 
 func TestResolveWorktreeProjectFromSortedMappings(t *testing.T) {
+	assert := assert.New(t)
+
 	root := t.TempDir()
 	layoutRoot := filepath.Join(root, "service")
 	layoutPrefix := filepath.Join(layoutRoot, "service.worktrees")
@@ -245,8 +261,8 @@ func TestResolveWorktreeProjectFromSortedMappings(t *testing.T) {
 	}
 
 	project, ok := ResolveWorktreeProjectFromSortedMappings(mappings, cwd, "leaf")
-	assert.True(t, ok, "longest prefix resolve")
-	assert.Equal(t, "feature-service", project, "longest prefix resolve")
+	assert.True(ok, "longest prefix resolve")
+	assert.Equal("feature-service", project, "longest prefix resolve")
 
 	project, ok = ResolveWorktreeProjectFromMappings([]WorktreeProjectMapping{
 		{
@@ -259,8 +275,8 @@ func TestResolveWorktreeProjectFromSortedMappings(t *testing.T) {
 			Project:    "feature-service",
 		},
 	}, cwd, "leaf")
-	assert.True(t, ok, "unsorted resolve")
-	assert.Equal(t, "feature-service", project, "unsorted resolve")
+	assert.True(ok, "unsorted resolve")
+	assert.Equal("feature-service", project, "unsorted resolve")
 
 	project, ok = ResolveWorktreeProjectFromSortedMappings([]WorktreeProjectMapping{
 		{
@@ -268,8 +284,8 @@ func TestResolveWorktreeProjectFromSortedMappings(t *testing.T) {
 			Layout:     WorktreeMappingLayoutRepoDotWorktrees,
 		},
 	}, filepath.Join(layoutRoot, "service.worktrees", "main"), "leaf")
-	assert.True(t, ok, "layout resolve")
-	assert.Equal(t, "service", project, "layout resolve")
+	assert.True(ok, "layout resolve")
+	assert.Equal("service", project, "layout resolve")
 
 	project, ok = ResolveWorktreeProjectFromSortedMappings([]WorktreeProjectMapping{
 		{
@@ -277,8 +293,8 @@ func TestResolveWorktreeProjectFromSortedMappings(t *testing.T) {
 			Layout:     WorktreeMappingLayoutRepoDotWorktrees,
 		},
 	}, filepath.Join(layoutRoot, "service.worktrees"), "leaf")
-	assert.False(t, ok, "branchless layout root should not resolve")
-	assert.Equal(t, "leaf", project, "branchless layout root project")
+	assert.False(ok, "branchless layout root should not resolve")
+	assert.Equal("leaf", project, "branchless layout root project")
 
 	project, ok = ResolveWorktreeProjectFromSortedMappings([]WorktreeProjectMapping{
 		{
@@ -291,13 +307,16 @@ func TestResolveWorktreeProjectFromSortedMappings(t *testing.T) {
 			Project:    "root-fallback",
 		},
 	}, filepath.Join(layoutRoot, "plain-worktree", "src"), "leaf")
-	assert.True(t, ok, "fallback resolve")
-	assert.Equal(t, "root-fallback", project, "fallback resolve")
+	assert.True(ok, "fallback resolve")
+	assert.Equal("root-fallback", project, "fallback resolve")
 }
 
 func TestApplyWorktreeProjectMappingsLayout(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	layoutRoot := filepath.Join(root, "service")
 	layoutPrefix := filepath.Join(layoutRoot, "service.worktrees")
@@ -308,9 +327,9 @@ func TestApplyWorktreeProjectMappingsLayout(t *testing.T) {
 		Layout:     WorktreeMappingLayoutRepoDotWorktrees,
 		Enabled:    true,
 	})
-	require.NoError(t, err, "create layout mapping")
+	require.NoError(err, "create layout mapping")
 
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:      "bulk",
 		Project: "leaf",
 		Machine: "laptop",
@@ -319,12 +338,12 @@ func TestApplyWorktreeProjectMappingsLayout(t *testing.T) {
 	}), "insert bulk session")
 
 	result, err := d.ApplyWorktreeProjectMappings(ctx, "laptop")
-	require.NoError(t, err, "apply mappings")
-	assert.Equal(t, 1, result.MatchedSessions, "matched sessions")
-	assert.Equal(t, 1, result.UpdatedSessions, "updated sessions")
+	require.NoError(err, "apply mappings")
+	assert.Equal(1, result.MatchedSessions, "matched sessions")
+	assert.Equal(1, result.UpdatedSessions, "updated sessions")
 	assertSessionProject(t, d, "bulk", "service")
 
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:      "single",
 		Project: "leaf",
 		Machine: "laptop",
@@ -334,12 +353,12 @@ func TestApplyWorktreeProjectMappingsLayout(t *testing.T) {
 	updated, err := d.ApplyWorktreeProjectMappingToSession(
 		ctx, "laptop", "single", filepath.Join(layoutPrefix, "single"), "leaf",
 	)
-	require.NoError(t, err, "ApplyWorktreeProjectMappingToSession")
-	assert.True(t, updated, "single session updated")
+	require.NoError(err, "ApplyWorktreeProjectMappingToSession")
+	assert.True(updated, "single session updated")
 	assertSessionProject(t, d, "single", "service")
 
 	filePath := filepath.Join(root, "session.jsonl")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "path",
 		Project:  "leaf",
 		Machine:  "laptop",
@@ -348,15 +367,18 @@ func TestApplyWorktreeProjectMappingsLayout(t *testing.T) {
 		FilePath: &filePath,
 	}), "insert path session")
 	result, err = d.ApplyWorktreeProjectMappingsToSessionsByPath(ctx, filePath)
-	require.NoError(t, err, "apply mappings by path")
-	assert.Equal(t, 1, result.MatchedSessions, "matched sessions by path")
-	assert.Equal(t, 1, result.UpdatedSessions, "updated sessions by path")
+	require.NoError(err, "apply mappings by path")
+	assert.Equal(1, result.MatchedSessions, "matched sessions by path")
+	assert.Equal(1, result.UpdatedSessions, "updated sessions by path")
 	assertSessionProject(t, d, "path", "service")
 }
 
 func TestWorktreeMappingEmptyCWD(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	filePath := filepath.Join(root, "session.jsonl")
 	layoutRoot := filepath.Join(root, "service")
@@ -368,8 +390,8 @@ func TestWorktreeMappingEmptyCWD(t *testing.T) {
 		Layout:     WorktreeMappingLayoutRepoDotWorktrees,
 		Enabled:    true,
 	})
-	require.NoError(t, err, "create layout mapping")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(err, "create layout mapping")
+	require.NoError(d.UpsertSession(Session{
 		ID:       "empty-cwd",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -377,7 +399,7 @@ func TestWorktreeMappingEmptyCWD(t *testing.T) {
 		Cwd:      "",
 		FilePath: &filePath,
 	}), "insert empty cwd row")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "reference",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -387,16 +409,19 @@ func TestWorktreeMappingEmptyCWD(t *testing.T) {
 	}), "insert reference row")
 
 	result, err := d.ApplyWorktreeProjectMappings(ctx, "laptop")
-	require.NoError(t, err, "apply mappings")
-	assert.Equal(t, 2, result.MatchedSessions, "matched sessions")
-	assert.Equal(t, 2, result.UpdatedSessions, "updated sessions")
+	require.NoError(err, "apply mappings")
+	assert.Equal(2, result.MatchedSessions, "matched sessions")
+	assert.Equal(2, result.UpdatedSessions, "updated sessions")
 	assertSessionProject(t, d, "empty-cwd", "service")
 	assertSessionProject(t, d, "reference", "service")
 }
 
 func TestResolveWorktreeProjectMappingUsesLongestPrefixAndBoundaries(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	broad := filepath.Join(root, "repo.worktrees")
 	nested := filepath.Join(broad, "special")
@@ -404,27 +429,27 @@ func TestResolveWorktreeProjectMappingUsesLongestPrefixAndBoundaries(t *testing.
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: broad, Project: "repo", Enabled: true,
 	})
-	require.NoError(t, err, "create broad mapping")
+	require.NoError(err, "create broad mapping")
 	_, err = d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: nested, Project: "special-repo", Enabled: true,
 	})
-	require.NoError(t, err, "create nested mapping")
+	require.NoError(err, "create nested mapping")
 
 	project, ok, err := d.ResolveWorktreeProjectMapping(ctx, "laptop",
 		filepath.Join(nested, "feat", "thing"), "leaf")
-	require.NoError(t, err, "resolve nested")
-	assert.True(t, ok, "nested resolve")
-	assert.Equal(t, "special_repo", project, "nested resolve")
+	require.NoError(err, "resolve nested")
+	assert.True(ok, "nested resolve")
+	assert.Equal("special_repo", project, "nested resolve")
 
 	project, ok, err = d.ResolveWorktreeProjectMapping(ctx, "laptop",
 		filepath.Join(broad, "feat", "thing"), "leaf")
-	require.NoError(t, err, "resolve broad")
-	assert.True(t, ok, "broad resolve")
-	assert.Equal(t, "repo", project, "broad resolve")
+	require.NoError(err, "resolve broad")
+	assert.True(ok, "broad resolve")
+	assert.Equal("repo", project, "broad resolve")
 
 	_, ok, err = d.ResolveWorktreeProjectMapping(ctx, "laptop", broad+"-other", "leaf")
-	require.NoError(t, err, "resolve boundary miss")
-	assert.False(t, ok,
+	require.NoError(err, "resolve boundary miss")
+	assert.False(ok,
 		"path with shared string prefix matched across component boundary")
 
 	project, ok = ResolveWorktreeProjectFromMappings(
@@ -435,13 +460,16 @@ func TestResolveWorktreeProjectMappingUsesLongestPrefixAndBoundaries(t *testing.
 		filepath.Join(nested, "feat", "thing"),
 		"leaf",
 	)
-	assert.True(t, ok, "unsorted resolve")
-	assert.Equal(t, "special_repo", project, "unsorted resolve")
+	assert.True(ok, "unsorted resolve")
+	assert.Equal("special_repo", project, "unsorted resolve")
 }
 
 func TestResolveWorktreeProjectMappingMatchesRootPrefix(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine:    "laptop",
@@ -449,13 +477,13 @@ func TestResolveWorktreeProjectMappingMatchesRootPrefix(t *testing.T) {
 		Project:    "root-project",
 		Enabled:    true,
 	})
-	require.NoError(t, err, "create root mapping")
+	require.NoError(err, "create root mapping")
 
 	project, ok, err := d.ResolveWorktreeProjectMapping(ctx, "laptop",
 		filepath.Join(string(filepath.Separator), "tmp", "worktree"), "leaf")
-	require.NoError(t, err, "resolve root")
-	assert.True(t, ok, "root resolve")
-	assert.Equal(t, "root_project", project, "root resolve")
+	require.NoError(err, "resolve root")
+	assert.True(ok, "root resolve")
+	assert.Equal("root_project", project, "root resolve")
 }
 
 func TestResolveWorktreeProjectMappingPreservesPortableRootIdentity(t *testing.T) {
@@ -490,34 +518,40 @@ func TestResolveWorktreeProjectMappingPreservesPortableRootIdentity(t *testing.T
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			d := testDB(t)
 			mapping, err := d.CreateWorktreeProjectMapping(
-				context.Background(),
+				t.Context(),
 				WorktreeProjectMapping{
 					Machine: "portable.example", PathPrefix: tt.prefix,
 					Project: tt.project, Enabled: true,
 				},
 			)
-			require.NoError(t, err)
-			assert.Equal(t, tt.wantStored, mapping.PathPrefix)
+			require.NoError(err)
+			assert.Equal(tt.wantStored, mapping.PathPrefix)
 
 			project, matched, err := d.ResolveWorktreeProjectMapping(
-				context.Background(), "portable.example", tt.cwd, "leaf",
+				t.Context(), "portable.example", tt.cwd, "leaf",
 			)
-			require.NoError(t, err)
-			assert.Equal(t, tt.wantMatch, matched)
+			require.NoError(err)
+			assert.Equal(tt.wantMatch, matched)
 			if tt.wantMatch {
-				assert.Equal(t, tt.wantProject, project)
+				assert.Equal(tt.wantProject, project)
 			} else {
-				assert.Equal(t, "leaf", project)
+				assert.Equal("leaf", project)
 			}
 		})
 	}
 }
 
 func TestApplyWorktreeProjectMappingsUpdatesOnlyCurrentMachineAndEnabledRows(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	prefix := filepath.Join(root, "repo.worktrees")
 	disabledPrefix := filepath.Join(root, "disabled.worktrees")
@@ -525,30 +559,30 @@ func TestApplyWorktreeProjectMappingsUpdatesOnlyCurrentMachineAndEnabledRows(t *
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: prefix, Project: "repo", Enabled: true,
 	})
-	require.NoError(t, err, "create enabled mapping")
+	require.NoError(err, "create enabled mapping")
 	_, err = d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: disabledPrefix, Project: "disabled", Enabled: false,
 	})
-	require.NoError(t, err, "create disabled mapping")
+	require.NoError(err, "create disabled mapping")
 
 	insert := func(id, machine, project, cwd string) {
 		t.Helper()
 		err := d.UpsertSession(Session{
 			ID: id, Project: project, Machine: machine, Agent: "claude", Cwd: cwd,
 		})
-		require.NoError(t, err, "insert %s", id)
+		require.NoError(err, "insert %s", id)
 	}
 	insert("match", "laptop", "leaf", filepath.Join(prefix, "feat", "thing"))
 	insert("same-project", "laptop", "repo", filepath.Join(prefix, "bugfix"))
 	insert("other-machine", "server", "leaf", filepath.Join(prefix, "feat", "thing"))
 	insert("disabled", "laptop", "leaf", filepath.Join(disabledPrefix, "feat"))
 	insert("trashed", "laptop", "leaf", filepath.Join(prefix, "trashed"))
-	require.NoError(t, d.SoftDeleteSession("trashed"), "trash session")
+	require.NoError(d.SoftDeleteSession("trashed"), "trash session")
 
 	result, err := d.ApplyWorktreeProjectMappings(ctx, "laptop")
-	require.NoError(t, err, "apply mappings")
-	assert.Equal(t, 2, result.MatchedSessions, "matched sessions")
-	assert.Equal(t, 1, result.UpdatedSessions, "updated sessions")
+	require.NoError(err, "apply mappings")
+	assert.Equal(2, result.MatchedSessions, "matched sessions")
+	assert.Equal(1, result.UpdatedSessions, "updated sessions")
 	assertSessionProject(t, d, "match", "repo")
 	assertSessionProject(t, d, "same-project", "repo")
 	assertSessionProject(t, d, "other-machine", "leaf")
@@ -557,37 +591,43 @@ func TestApplyWorktreeProjectMappingsUpdatesOnlyCurrentMachineAndEnabledRows(t *
 }
 
 func TestApplyWorktreeProjectMappingsBumpsLocalModifiedAt(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	prefix := filepath.Join(t.TempDir(), "repo.worktrees")
 
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: prefix, Project: "repo", Enabled: true,
 	})
-	require.NoError(t, err, "create mapping")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(err, "create mapping")
+	require.NoError(d.UpsertSession(Session{
 		ID: "match", Project: "leaf", Machine: "laptop", Agent: "claude",
 		Cwd: filepath.Join(prefix, "feat"),
 	}), "insert match")
 
 	before, err := d.GetSessionFull(ctx, "match")
-	require.NoError(t, err, "GetSessionFull before")
-	require.Nil(t, before.LocalModifiedAt, "local_modified_at before")
+	require.NoError(err, "GetSessionFull before")
+	require.Nil(before.LocalModifiedAt, "local_modified_at before")
 
 	result, err := d.ApplyWorktreeProjectMappings(ctx, "laptop")
-	require.NoError(t, err, "apply mappings")
-	require.Equal(t, 1, result.UpdatedSessions, "updated sessions")
+	require.NoError(err, "apply mappings")
+	require.Equal(1, result.UpdatedSessions, "updated sessions")
 
 	after, err := d.GetSessionFull(ctx, "match")
-	require.NoError(t, err, "GetSessionFull after")
-	assert.Equal(t, "repo", after.Project, "project")
-	require.NotNil(t, after.LocalModifiedAt, "local_modified_at after")
-	assert.NotEmpty(t, *after.LocalModifiedAt, "local_modified_at after")
+	require.NoError(err, "GetSessionFull after")
+	assert.Equal("repo", after.Project, "project")
+	require.NotNil(after.LocalModifiedAt, "local_modified_at after")
+	assert.NotEmpty(*after.LocalModifiedAt, "local_modified_at after")
 }
 
 func TestApplyWorktreeProjectMappings_EmptyCwdSiblingFallback(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	filePath := filepath.Join(root, "session.jsonl")
 	prefix := filepath.Join(root, "repo.worktrees")
@@ -595,8 +635,8 @@ func TestApplyWorktreeProjectMappings_EmptyCwdSiblingFallback(t *testing.T) {
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: prefix, Project: "repo", Enabled: true,
 	})
-	require.NoError(t, err, "create mapping")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(err, "create mapping")
+	require.NoError(d.UpsertSession(Session{
 		ID:       "empty-cwd",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -604,7 +644,7 @@ func TestApplyWorktreeProjectMappings_EmptyCwdSiblingFallback(t *testing.T) {
 		Cwd:      "",
 		FilePath: &filePath,
 	}), "insert empty cwd row")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "reference",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -614,21 +654,24 @@ func TestApplyWorktreeProjectMappings_EmptyCwdSiblingFallback(t *testing.T) {
 	}), "insert fallback reference row")
 
 	result, err := d.ApplyWorktreeProjectMappings(ctx, "laptop")
-	require.NoError(t, err, "apply mappings")
-	assert.Equal(t, 2, result.MatchedSessions, "matched sessions")
-	assert.Equal(t, 2, result.UpdatedSessions, "updated sessions")
+	require.NoError(err, "apply mappings")
+	assert.Equal(2, result.MatchedSessions, "matched sessions")
+	assert.Equal(2, result.UpdatedSessions, "updated sessions")
 	assertSessionProject(t, d, "empty-cwd", "repo")
 	assertSessionProject(t, d, "reference", "repo")
 
 	emptyRow, err := d.GetSession(ctx, "empty-cwd")
-	require.NoError(t, err, "GetSession empty-cwd")
-	require.NotNil(t, emptyRow, "empty-cwd session")
-	assert.Equal(t, "", emptyRow.Cwd, "stored cwd unchanged")
+	require.NoError(err, "GetSession empty-cwd")
+	require.NotNil(emptyRow, "empty-cwd session")
+	assert.Empty(emptyRow.Cwd, "stored cwd unchanged")
 }
 
 func TestApplyWorktreeProjectMappings_EmptyCwdConflictingSiblingsNoFallback(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	filePath := filepath.Join(root, "session.jsonl")
 	prefixA := filepath.Join(root, "repo-a.worktrees")
@@ -637,13 +680,13 @@ func TestApplyWorktreeProjectMappings_EmptyCwdConflictingSiblingsNoFallback(t *t
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: prefixA, Project: "repo-a", Enabled: true,
 	})
-	require.NoError(t, err, "create mapping A")
+	require.NoError(err, "create mapping A")
 	_, err = d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: prefixB, Project: "repo-b", Enabled: true,
 	})
-	require.NoError(t, err, "create mapping B")
+	require.NoError(err, "create mapping B")
 
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "empty-cwd",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -651,7 +694,7 @@ func TestApplyWorktreeProjectMappings_EmptyCwdConflictingSiblingsNoFallback(t *t
 		Cwd:      "",
 		FilePath: &filePath,
 	}), "insert empty cwd row")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "reference-a",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -659,7 +702,7 @@ func TestApplyWorktreeProjectMappings_EmptyCwdConflictingSiblingsNoFallback(t *t
 		Cwd:      filepath.Join(prefixA, "feat"),
 		FilePath: &filePath,
 	}), "insert reference row resolving to mapping A")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "reference-b",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -669,17 +712,20 @@ func TestApplyWorktreeProjectMappings_EmptyCwdConflictingSiblingsNoFallback(t *t
 	}), "insert reference row resolving to mapping B")
 
 	result, err := d.ApplyWorktreeProjectMappings(ctx, "laptop")
-	require.NoError(t, err, "apply mappings")
-	assert.Equal(t, 2, result.MatchedSessions, "matched sessions")
-	assert.Equal(t, 2, result.UpdatedSessions, "updated sessions")
+	require.NoError(err, "apply mappings")
+	assert.Equal(2, result.MatchedSessions, "matched sessions")
+	assert.Equal(2, result.UpdatedSessions, "updated sessions")
 	assertSessionProject(t, d, "empty-cwd", "stale")
 	assertSessionProject(t, d, "reference-a", "repo_a")
 	assertSessionProject(t, d, "reference-b", "repo_b")
 }
 
 func TestApplyWorktreeProjectMappings_EmptyCwdUnmappedSiblingNoFallback(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	filePath := filepath.Join(root, "session.jsonl")
 	prefixA := filepath.Join(root, "repo-a.worktrees")
@@ -688,9 +734,9 @@ func TestApplyWorktreeProjectMappings_EmptyCwdUnmappedSiblingNoFallback(t *testi
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: prefixA, Project: "repo-a", Enabled: true,
 	})
-	require.NoError(t, err, "create mapping A")
+	require.NoError(err, "create mapping A")
 
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "empty-cwd",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -698,7 +744,7 @@ func TestApplyWorktreeProjectMappings_EmptyCwdUnmappedSiblingNoFallback(t *testi
 		Cwd:      "",
 		FilePath: &filePath,
 	}), "insert empty cwd row")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "reference-mapped",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -706,7 +752,7 @@ func TestApplyWorktreeProjectMappings_EmptyCwdUnmappedSiblingNoFallback(t *testi
 		Cwd:      filepath.Join(prefixA, "feat"),
 		FilePath: &filePath,
 	}), "insert reference row resolving to mapping A")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "reference-unmapped",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -716,17 +762,20 @@ func TestApplyWorktreeProjectMappings_EmptyCwdUnmappedSiblingNoFallback(t *testi
 	}), "insert reference row with no matching mapping")
 
 	result, err := d.ApplyWorktreeProjectMappings(ctx, "laptop")
-	require.NoError(t, err, "apply mappings")
-	assert.Equal(t, 1, result.MatchedSessions, "matched sessions")
-	assert.Equal(t, 1, result.UpdatedSessions, "updated sessions")
+	require.NoError(err, "apply mappings")
+	assert.Equal(1, result.MatchedSessions, "matched sessions")
+	assert.Equal(1, result.UpdatedSessions, "updated sessions")
 	assertSessionProject(t, d, "empty-cwd", "stale")
 	assertSessionProject(t, d, "reference-mapped", "repo_a")
 	assertSessionProject(t, d, "reference-unmapped", "stale")
 }
 
 func TestApplyWorktreeProjectMappings_EmptyCwdNoSiblingNoUpdate(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	prefix := filepath.Join(root, "repo.worktrees")
 	filePath := filepath.Join(root, "session.jsonl")
@@ -735,8 +784,8 @@ func TestApplyWorktreeProjectMappings_EmptyCwdNoSiblingNoUpdate(t *testing.T) {
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: prefix, Project: "repo", Enabled: true,
 	})
-	require.NoError(t, err, "create mapping")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(err, "create mapping")
+	require.NoError(d.UpsertSession(Session{
 		ID:       "empty-cwd-no-sibling",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -744,7 +793,7 @@ func TestApplyWorktreeProjectMappings_EmptyCwdNoSiblingNoUpdate(t *testing.T) {
 		Cwd:      "",
 		FilePath: &filePath,
 	}), "insert empty cwd row")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "reference-unrelated",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -754,21 +803,24 @@ func TestApplyWorktreeProjectMappings_EmptyCwdNoSiblingNoUpdate(t *testing.T) {
 	}), "insert unrelated non-empty row")
 
 	result, err := d.ApplyWorktreeProjectMappings(ctx, "laptop")
-	require.NoError(t, err, "apply mappings")
-	assert.Equal(t, 1, result.MatchedSessions, "matched sessions")
-	assert.Equal(t, 1, result.UpdatedSessions, "updated sessions")
+	require.NoError(err, "apply mappings")
+	assert.Equal(1, result.MatchedSessions, "matched sessions")
+	assert.Equal(1, result.UpdatedSessions, "updated sessions")
 	assertSessionProject(t, d, "empty-cwd-no-sibling", "stale")
 	assertSessionProject(t, d, "reference-unrelated", "repo")
 
 	emptyRow, err := d.GetSession(ctx, "empty-cwd-no-sibling")
-	require.NoError(t, err, "GetSession empty-cwd-no-sibling")
-	require.NotNil(t, emptyRow, "empty-cwd-no-sibling session")
-	assert.Equal(t, "", emptyRow.Cwd, "stored cwd unchanged")
+	require.NoError(err, "GetSession empty-cwd-no-sibling")
+	require.NotNil(emptyRow, "empty-cwd-no-sibling session")
+	assert.Empty(emptyRow.Cwd, "stored cwd unchanged")
 }
 
 func TestApplyWorktreeProjectMappings_EmptyCwdSameProjectNoUpdate(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	filePath := filepath.Join(root, "session.jsonl")
 	prefix := filepath.Join(root, "repo.worktrees")
@@ -776,8 +828,8 @@ func TestApplyWorktreeProjectMappings_EmptyCwdSameProjectNoUpdate(t *testing.T) 
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: prefix, Project: "repo", Enabled: true,
 	})
-	require.NoError(t, err, "create mapping")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(err, "create mapping")
+	require.NoError(d.UpsertSession(Session{
 		ID:       "empty-cwd-already-matched",
 		Project:  "repo",
 		Machine:  "laptop",
@@ -785,7 +837,7 @@ func TestApplyWorktreeProjectMappings_EmptyCwdSameProjectNoUpdate(t *testing.T) 
 		Cwd:      "",
 		FilePath: &filePath,
 	}), "insert empty cwd same project row")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "reference",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -795,9 +847,9 @@ func TestApplyWorktreeProjectMappings_EmptyCwdSameProjectNoUpdate(t *testing.T) 
 	}), "insert reference row")
 
 	result, err := d.ApplyWorktreeProjectMappings(ctx, "laptop")
-	require.NoError(t, err, "apply mappings")
-	assert.Equal(t, 2, result.MatchedSessions, "matched sessions")
-	assert.Equal(t, 1, result.UpdatedSessions, "updated sessions")
+	require.NoError(err, "apply mappings")
+	assert.Equal(2, result.MatchedSessions, "matched sessions")
+	assert.Equal(1, result.UpdatedSessions, "updated sessions")
 	assertSessionProject(t, d, "empty-cwd-already-matched", "repo")
 	assertSessionProject(t, d, "reference", "repo")
 }
@@ -805,8 +857,11 @@ func TestApplyWorktreeProjectMappings_EmptyCwdSameProjectNoUpdate(t *testing.T) 
 func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdSiblingFallback(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	filePath := filepath.Join(root, "session.jsonl")
 	prefix := filepath.Join(root, "repo.worktrees")
@@ -814,8 +869,8 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdSiblingFallback(
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: prefix, Project: "repo", Enabled: true,
 	})
-	require.NoError(t, err, "create mapping")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(err, "create mapping")
+	require.NoError(d.UpsertSession(Session{
 		ID:       "empty-cwd",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -823,7 +878,7 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdSiblingFallback(
 		Cwd:      "",
 		FilePath: &filePath,
 	}), "insert empty cwd row")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "reference",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -833,9 +888,9 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdSiblingFallback(
 	}), "insert reference row")
 
 	result, err := d.ApplyWorktreeProjectMappingsToSessionsByPath(ctx, filePath)
-	require.NoError(t, err, "apply mappings by path")
-	assert.Equal(t, 2, result.MatchedSessions, "matched sessions")
-	assert.Equal(t, 2, result.UpdatedSessions, "updated sessions")
+	require.NoError(err, "apply mappings by path")
+	assert.Equal(2, result.MatchedSessions, "matched sessions")
+	assert.Equal(2, result.UpdatedSessions, "updated sessions")
 	assertSessionProject(t, d, "empty-cwd", "repo")
 	assertSessionProject(t, d, "reference", "repo")
 }
@@ -843,8 +898,11 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdSiblingFallback(
 func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdConflictingSiblingsNoFallback(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	filePath := filepath.Join(root, "session.jsonl")
 	prefixA := filepath.Join(root, "repo-a.worktrees")
@@ -853,13 +911,13 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdConflictingSibling
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: prefixA, Project: "repo-a", Enabled: true,
 	})
-	require.NoError(t, err, "create mapping A")
+	require.NoError(err, "create mapping A")
 	_, err = d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: prefixB, Project: "repo-b", Enabled: true,
 	})
-	require.NoError(t, err, "create mapping B")
+	require.NoError(err, "create mapping B")
 
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "empty-cwd",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -867,7 +925,7 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdConflictingSibling
 		Cwd:      "",
 		FilePath: &filePath,
 	}), "insert empty cwd row")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "reference-a",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -875,7 +933,7 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdConflictingSibling
 		Cwd:      filepath.Join(prefixA, "feat"),
 		FilePath: &filePath,
 	}), "insert reference row resolving to mapping A")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "reference-b",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -885,9 +943,9 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdConflictingSibling
 	}), "insert reference row resolving to mapping B")
 
 	result, err := d.ApplyWorktreeProjectMappingsToSessionsByPath(ctx, filePath)
-	require.NoError(t, err, "apply mappings by path")
-	assert.Equal(t, 2, result.MatchedSessions, "matched sessions")
-	assert.Equal(t, 2, result.UpdatedSessions, "updated sessions")
+	require.NoError(err, "apply mappings by path")
+	assert.Equal(2, result.MatchedSessions, "matched sessions")
+	assert.Equal(2, result.UpdatedSessions, "updated sessions")
 	assertSessionProject(t, d, "empty-cwd", "stale")
 	assertSessionProject(t, d, "reference-a", "repo_a")
 	assertSessionProject(t, d, "reference-b", "repo_b")
@@ -896,8 +954,11 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdConflictingSibling
 func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdUnmappedSiblingNoFallback(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	filePath := filepath.Join(root, "session.jsonl")
 	prefixA := filepath.Join(root, "repo-a.worktrees")
@@ -906,9 +967,9 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdUnmappedSiblingNoF
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: prefixA, Project: "repo-a", Enabled: true,
 	})
-	require.NoError(t, err, "create mapping A")
+	require.NoError(err, "create mapping A")
 
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "empty-cwd",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -916,7 +977,7 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdUnmappedSiblingNoF
 		Cwd:      "",
 		FilePath: &filePath,
 	}), "insert empty cwd row")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "reference-mapped",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -924,7 +985,7 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdUnmappedSiblingNoF
 		Cwd:      filepath.Join(prefixA, "feat"),
 		FilePath: &filePath,
 	}), "insert reference row resolving to mapping A")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "reference-unmapped",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -934,9 +995,9 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdUnmappedSiblingNoF
 	}), "insert reference row with no matching mapping")
 
 	result, err := d.ApplyWorktreeProjectMappingsToSessionsByPath(ctx, filePath)
-	require.NoError(t, err, "apply mappings by path")
-	assert.Equal(t, 1, result.MatchedSessions, "matched sessions")
-	assert.Equal(t, 1, result.UpdatedSessions, "updated sessions")
+	require.NoError(err, "apply mappings by path")
+	assert.Equal(1, result.MatchedSessions, "matched sessions")
+	assert.Equal(1, result.UpdatedSessions, "updated sessions")
 	assertSessionProject(t, d, "empty-cwd", "stale")
 	assertSessionProject(t, d, "reference-mapped", "repo_a")
 	assertSessionProject(t, d, "reference-unmapped", "stale")
@@ -945,8 +1006,11 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdUnmappedSiblingNoF
 func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdOnlyEmptySiblingsNoMatch(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	filePath := filepath.Join(root, "session.jsonl")
 	prefix := filepath.Join(root, "repo.worktrees")
@@ -954,8 +1018,8 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdOnlyEmptySiblingsN
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: prefix, Project: "repo", Enabled: true,
 	})
-	require.NoError(t, err, "create mapping")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(err, "create mapping")
+	require.NoError(d.UpsertSession(Session{
 		ID:       "empty-cwd-a",
 		Project:  "stale",
 		Machine:  "laptop",
@@ -963,7 +1027,7 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdOnlyEmptySiblingsN
 		Cwd:      "",
 		FilePath: &filePath,
 	}), "insert empty cwd sibling A")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "empty-cwd-b",
 		Project:  "other",
 		Machine:  "laptop",
@@ -973,9 +1037,9 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdOnlyEmptySiblingsN
 	}), "insert empty cwd sibling B")
 
 	result, err := d.ApplyWorktreeProjectMappingsToSessionsByPath(ctx, filePath)
-	require.NoError(t, err, "apply mappings by path")
-	assert.Equal(t, 0, result.MatchedSessions, "matched sessions")
-	assert.Equal(t, 0, result.UpdatedSessions, "updated sessions")
+	require.NoError(err, "apply mappings by path")
+	assert.Equal(0, result.MatchedSessions, "matched sessions")
+	assert.Equal(0, result.UpdatedSessions, "updated sessions")
 	assertSessionProject(t, d, "empty-cwd-a", "stale")
 	assertSessionProject(t, d, "empty-cwd-b", "other")
 }
@@ -983,8 +1047,10 @@ func TestApplyWorktreeProjectMappingsToSessionsByPath_EmptyCwdOnlyEmptySiblingsN
 func TestApplyWorktreeProjectMappingsToSessionUsesCurrentSessionState(
 	t *testing.T,
 ) {
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	stalePrefix := filepath.Join(root, "stale.worktrees")
 	currentPrefix := filepath.Join(root, "current.worktrees")
@@ -992,19 +1058,19 @@ func TestApplyWorktreeProjectMappingsToSessionUsesCurrentSessionState(
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: stalePrefix, Project: "stale-repo", Enabled: true,
 	})
-	require.NoError(t, err, "create stale mapping")
+	require.NoError(err, "create stale mapping")
 	_, err = d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: currentPrefix, Project: "current-repo", Enabled: true,
 	})
-	require.NoError(t, err, "create current mapping")
+	require.NoError(err, "create current mapping")
 
 	staleCwd := filepath.Join(stalePrefix, "feat")
 	currentCwd := filepath.Join(currentPrefix, "feat")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID: "match", Project: "leaf", Machine: "laptop", Agent: "claude",
 		Cwd: staleCwd,
 	}), "insert stale match")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID: "match", Project: "other_leaf", Machine: "laptop", Agent: "claude",
 		Cwd: currentCwd,
 	}), "move session before apply")
@@ -1012,50 +1078,55 @@ func TestApplyWorktreeProjectMappingsToSessionUsesCurrentSessionState(
 	updated, err := d.ApplyWorktreeProjectMappingToSession(
 		ctx, "laptop", "match", staleCwd, "leaf",
 	)
-	require.NoError(t, err, "ApplyWorktreeProjectMappingToSession")
-	require.True(t, updated, "updated")
+	require.NoError(err, "ApplyWorktreeProjectMappingToSession")
+	require.True(updated, "updated")
 	assertSessionProject(t, d, "match", "current_repo")
 }
 
 func TestApplyWorktreeProjectMappingToSessionFromSyncDoesNotBumpLocalModifiedAt(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
 
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	prefix := filepath.Join(t.TempDir(), "repo.worktrees")
 
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "laptop", PathPrefix: prefix, Project: "repo", Enabled: true,
 	})
-	require.NoError(t, err, "create mapping")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(err, "create mapping")
+	require.NoError(d.UpsertSession(Session{
 		ID: "match", Project: "leaf", Machine: "laptop", Agent: "claude",
 		Cwd: filepath.Join(prefix, "feat"),
 	}), "insert match")
 
 	before, err := d.GetSessionFull(ctx, "match")
-	require.NoError(t, err, "GetSessionFull before")
-	require.Nil(t, before.LocalModifiedAt, "local_modified_at before")
+	require.NoError(err, "GetSessionFull before")
+	require.Nil(before.LocalModifiedAt, "local_modified_at before")
 
 	updated, err := d.ApplyWorktreeProjectMappingToSessionFromSync(
 		ctx, "laptop", "match", before.Cwd, before.Project,
 	)
-	require.NoError(t, err, "ApplyWorktreeProjectMappingToSessionFromSync")
-	require.True(t, updated, "updated")
+	require.NoError(err, "ApplyWorktreeProjectMappingToSessionFromSync")
+	require.True(updated, "updated")
 
 	after, err := d.GetSessionFull(ctx, "match")
-	require.NoError(t, err, "GetSessionFull after")
-	assert.Equal(t, "repo", after.Project, "project")
-	assert.Nil(t, after.LocalModifiedAt, "local_modified_at after")
+	require.NoError(err, "GetSessionFull after")
+	assert.Equal("repo", after.Project, "project")
+	assert.Nil(after.LocalModifiedAt, "local_modified_at after")
 }
 
 func TestApplyWorktreeProjectMappingToSessionReconcilesOnlyMovedIdentityKey(
 	t *testing.T,
 ) {
 	t.Run("former key keeps another contributor", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		d := testDB(t)
-		ctx := context.Background()
+		ctx := t.Context()
 		prefix := filepath.Join(t.TempDir(), "service.worktrees")
 		rootPath := "/srv/repos/service"
 		gitRemote := "https://example.com/example/service.git"
@@ -1064,7 +1135,7 @@ func TestApplyWorktreeProjectMappingToSessionReconcilesOnlyMovedIdentityKey(
 			Machine: "test-host", PathPrefix: prefix,
 			Project: "target-project", Enabled: true,
 		})
-		require.NoError(t, err)
+		require.NoError(err)
 		seedMappingIdentitySession(t, d, Session{
 			ID: "retained", Machine: "test-host", Agent: "claude",
 			Project: "source_project", Cwd: "/srv/elsewhere/service",
@@ -1084,38 +1155,41 @@ func TestApplyWorktreeProjectMappingToSessionReconcilesOnlyMovedIdentityKey(
 			ctx, "test-host", "moved", filepath.Join(prefix, "feature"),
 			"source_project",
 		)
-		require.NoError(t, err)
-		require.True(t, updated)
+		require.NoError(err)
+		require.True(updated)
 
 		observations, err := d.ListProjectIdentityObservations(
 			ctx, []string{"source_project", "target_project"},
 		)
-		require.NoError(t, err)
-		require.Len(t, observations, 2)
-		assert.Equal(t, "retained",
+		require.NoError(err)
+		require.Len(observations, 2)
+		assert.Equal("retained",
 			findIdentityObservation(t, observations, "source_project").GitBranch)
-		assert.Equal(t, "moved",
+		assert.Equal("moved",
 			findIdentityObservation(t, observations, "target_project").GitBranch)
 
 		var sourceSnapshots int
-		require.NoError(t, d.getReader().QueryRowContext(ctx, `
+		require.NoError(d.getReader().QueryRowContext(ctx, `
 			SELECT COUNT(*) FROM session_project_identity_snapshots
 			WHERE project = ? AND session_id IN (?, ?)`,
 			"source_project", "retained", "moved",
 		).Scan(&sourceSnapshots))
-		assert.Equal(t, 2, sourceSnapshots,
+		assert.Equal(2, sourceSnapshots,
 			"immutable snapshots keep their parser-time project")
 	})
 
 	t.Run("unsupported former key publishes tombstone", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		d := testDB(t)
-		ctx := context.Background()
+		ctx := t.Context()
 		prefix := filepath.Join(t.TempDir(), "service.worktrees")
 		_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 			Machine: "test-host", PathPrefix: prefix,
 			Project: "target-project", Enabled: true,
 		})
-		require.NoError(t, err)
+		require.NoError(err)
 		seedMappingIdentitySession(t, d, Session{
 			ID: "moved", Machine: "test-host", Agent: "claude",
 			Project: "source_project", Cwd: filepath.Join(prefix, "feature"),
@@ -1125,30 +1199,30 @@ func TestApplyWorktreeProjectMappingToSessionReconcilesOnlyMovedIdentityKey(
 			ObservedAt: time.Date(2026, 7, 16, 11, 0, 0, 0, time.UTC),
 		})
 		before, err := d.ProjectIdentityPublicationRevision(ctx)
-		require.NoError(t, err)
+		require.NoError(err)
 
 		updated, err := d.ApplyWorktreeProjectMappingToSessionFromSync(
 			ctx, "test-host", "moved", filepath.Join(prefix, "feature"),
 			"source_project",
 		)
-		require.NoError(t, err)
-		require.True(t, updated)
+		require.NoError(err)
+		require.True(updated)
 		after, err := d.ProjectIdentityPublicationRevision(ctx)
-		require.NoError(t, err)
+		require.NoError(err)
 
 		observations, err := d.ListProjectIdentityObservations(
 			ctx, []string{"source_project", "target_project"},
 		)
-		require.NoError(t, err)
-		require.Len(t, observations, 1)
-		assert.Equal(t, "target_project", observations[0].Project)
+		require.NoError(err)
+		require.Len(observations, 1)
+		assert.Equal("target_project", observations[0].Project)
 
 		delta, err := d.LoadProjectIdentityPublicationDelta(
 			ctx, before, after, nil, nil,
 		)
-		require.NoError(t, err)
-		require.Len(t, delta.ObservationDeletes, 1)
-		assert.Equal(t, ProjectIdentityObservationKey{
+		require.NoError(err)
+		require.Len(delta.ObservationDeletes, 1)
+		assert.Equal(ProjectIdentityObservationKey{
 			Project: "source_project", Machine: "test-host",
 			RootPath:  "/srv/repos/service",
 			GitRemote: "https://example.com/example/service.git",
@@ -1162,7 +1236,7 @@ func TestApplyWorktreeProjectMappingToSessionIdentityWorkIsCardinalityBounded(
 	measure := func(t *testing.T, unrelatedKeys int) int64 {
 		t.Helper()
 		d := testDB(t)
-		ctx := context.Background()
+		ctx := t.Context()
 		prefix := filepath.Join(t.TempDir(), "service.worktrees")
 		_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 			Machine: "test-host", PathPrefix: prefix,
@@ -1219,7 +1293,7 @@ func seedMappingIdentitySession(
 	identity.Project = session.Project
 	identity.Machine = session.Machine
 	require.NoError(t, d.UpsertProjectIdentityObservation(
-		context.Background(), identity,
+		t.Context(), identity,
 	))
 }
 
@@ -1240,7 +1314,7 @@ func findIdentityObservation(
 
 func assertSessionProject(t *testing.T, d *DB, id, want string) {
 	t.Helper()
-	got, err := d.GetSession(context.Background(), id)
+	got, err := d.GetSession(t.Context(), id)
 	require.NoError(t, err, "GetSession %s", id)
 	assert.Equal(t, want, got.Project, "session %s project", id)
 }
@@ -1248,12 +1322,15 @@ func assertSessionProject(t *testing.T, d *DB, id, want string) {
 func TestWorktreeProjectMappingsFinalMetadataCopyRefreshesStalePrecopy(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	srcPath := filepath.Join(dir, "src.db")
 	srcDB, err := Open(srcPath)
-	require.NoError(t, err, "Open src")
+	require.NoError(err, "Open src")
 	defer srcDB.Close()
 
 	prefix := filepath.Join(dir, "app.worktrees")
@@ -1267,22 +1344,21 @@ func TestWorktreeProjectMappingsFinalMetadataCopyRefreshesStalePrecopy(
 			Enabled:         true,
 		},
 	)
-	require.NoError(t, err, "CreateWorktreeProjectMapping src")
+	require.NoError(err, "CreateWorktreeProjectMapping src")
 
 	dstPath := filepath.Join(dir, "dst.db")
 	dstDB, err := Open(dstPath)
-	require.NoError(t, err, "Open dst")
+	require.NoError(err, "Open dst")
 	defer dstDB.Close()
 
 	require.NoError(
-		t,
 		dstDB.CopyWorktreeProjectMappingsFrom(srcPath),
 		"CopyWorktreeProjectMappingsFrom",
 	)
 	preCopied, err := dstDB.ListWorktreeProjectMappings(ctx, "laptop")
-	require.NoError(t, err, "list pre-copied mappings")
-	require.Len(t, preCopied, 1)
-	assert.Equal(t, "activity-label", preCopied[0].OriginalProject,
+	require.NoError(err, "list pre-copied mappings")
+	require.Len(preCopied, 1)
+	assert.Equal("activity-label", preCopied[0].OriginalProject,
 		"pre-copy preserves original project")
 
 	_, err = srcDB.UpdateWorktreeProjectMapping(
@@ -1296,8 +1372,8 @@ func TestWorktreeProjectMappingsFinalMetadataCopyRefreshesStalePrecopy(
 			Enabled:         false,
 		},
 	)
-	require.NoError(t, err, "UpdateWorktreeProjectMapping src")
-	require.NoError(t, srcDB.CloseConnections(), "CloseConnections src")
+	require.NoError(err, "UpdateWorktreeProjectMapping src")
+	require.NoError(srcDB.CloseConnections(), "CloseConnections src")
 
 	_, err = dstDB.getWriter().ExecContext(ctx, `
 		UPDATE worktree_project_mappings
@@ -1306,26 +1382,25 @@ func TestWorktreeProjectMappingsFinalMetadataCopyRefreshesStalePrecopy(
 		"laptop",
 		prefix,
 	)
-	require.NoError(t, err, "force dst updated_at ahead")
+	require.NoError(err, "force dst updated_at ahead")
 
 	require.NoError(
-		t,
 		dstDB.CopySessionMetadataFrom(srcPath),
 		"CopySessionMetadataFrom",
 	)
 
 	got, err := dstDB.ListWorktreeProjectMappings(ctx, "laptop")
-	require.NoError(t, err, "ListWorktreeProjectMappings")
-	require.Len(t, got, 1, "mapping count")
-	assert.Equal(t, "new_project", got[0].Project, "project")
-	assert.Equal(t, "activity-label", got[0].OriginalProject, "original project")
-	assert.False(t, got[0].Enabled, "mapping should reflect disabled source row")
+	require.NoError(err, "ListWorktreeProjectMappings")
+	require.Len(got, 1, "mapping count")
+	assert.Equal("new_project", got[0].Project, "project")
+	assert.Equal("activity-label", got[0].OriginalProject, "original project")
+	assert.False(got[0].Enabled, "mapping should reflect disabled source row")
 }
 
 func TestCopySessionMetadataFromPreservesExistingMappingOriginalProject(
 	t *testing.T,
 ) {
-	ctx := context.Background()
+	ctx := t.Context()
 	tests := []struct {
 		name         string
 		createSource func(*testing.T, string, string)
@@ -1367,13 +1442,16 @@ func TestCopySessionMetadataFromPreservesExistingMappingOriginalProject(
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			dir := t.TempDir()
 			prefix := filepath.Join(dir, "service.worktrees")
 			srcPath := filepath.Join(dir, "src.db")
 			tt.createSource(t, srcPath, prefix)
 
 			dst, err := Open(filepath.Join(dir, "dst.db"))
-			require.NoError(t, err, "open destination")
+			require.NoError(err, "open destination")
 			defer dst.Close()
 			_, err = dst.CreateWorktreeProjectMapping(
 				ctx,
@@ -1385,10 +1463,9 @@ func TestCopySessionMetadataFromPreservesExistingMappingOriginalProject(
 					Enabled:         true,
 				},
 			)
-			require.NoError(t, err, "create destination mapping")
+			require.NoError(err, "create destination mapping")
 
 			require.NoError(
-				t,
 				dst.CopySessionMetadataFrom(srcPath),
 				"copy source metadata",
 			)
@@ -1396,12 +1473,12 @@ func TestCopySessionMetadataFromPreservesExistingMappingOriginalProject(
 			mappings, err := dst.ListWorktreeProjectMappings(
 				ctx, "host-a.example",
 			)
-			require.NoError(t, err, "list destination mappings")
-			require.Len(t, mappings, 1)
-			assert.Equal(t, "destination-label", mappings[0].OriginalProject)
-			assert.Equal(t, tt.wantProject, mappings[0].Project,
+			require.NoError(err, "list destination mappings")
+			require.Len(mappings, 1)
+			assert.Equal("destination-label", mappings[0].OriginalProject)
+			assert.Equal(tt.wantProject, mappings[0].Project,
 				"other source fields are still reconciled")
-			assert.Equal(t, tt.wantEnabled, mappings[0].Enabled,
+			assert.Equal(tt.wantEnabled, mappings[0].Enabled,
 				"other source fields are still reconciled")
 		})
 	}
@@ -1410,12 +1487,14 @@ func TestCopySessionMetadataFromPreservesExistingMappingOriginalProject(
 func TestWorktreeProjectMappingsFinalMetadataCopyRemovesDeletedPrecopy(
 	t *testing.T,
 ) {
+	require := require.New(t)
+
 	dir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	srcPath := filepath.Join(dir, "src.db")
 	srcDB, err := Open(srcPath)
-	require.NoError(t, err, "Open src")
+	require.NoError(err, "Open src")
 	defer srcDB.Close()
 
 	prefix := filepath.Join(dir, "app.worktrees")
@@ -1428,70 +1507,69 @@ func TestWorktreeProjectMappingsFinalMetadataCopyRemovesDeletedPrecopy(
 			Enabled:    true,
 		},
 	)
-	require.NoError(t, err, "CreateWorktreeProjectMapping src")
+	require.NoError(err, "CreateWorktreeProjectMapping src")
 
 	dstPath := filepath.Join(dir, "dst.db")
 	dstDB, err := Open(dstPath)
-	require.NoError(t, err, "Open dst")
+	require.NoError(err, "Open dst")
 	defer dstDB.Close()
 
 	require.NoError(
-		t,
 		dstDB.CopyWorktreeProjectMappingsFrom(srcPath),
 		"CopyWorktreeProjectMappingsFrom",
 	)
 
 	require.NoError(
-		t,
 		srcDB.DeleteWorktreeProjectMapping(
 			ctx, "laptop", sourceMapping.ID,
 		),
 		"DeleteWorktreeProjectMapping src",
 	)
-	require.NoError(t, srcDB.CloseConnections(), "CloseConnections src")
+	require.NoError(srcDB.CloseConnections(), "CloseConnections src")
 
 	require.NoError(
-		t,
 		dstDB.CopySessionMetadataFrom(srcPath),
 		"CopySessionMetadataFrom",
 	)
 
 	got, err := dstDB.ListWorktreeProjectMappings(ctx, "laptop")
-	require.NoError(t, err, "ListWorktreeProjectMappings")
+	require.NoError(err, "ListWorktreeProjectMappings")
 	assert.Empty(t, got, "mapping count")
 }
 
 func TestCopyWorktreeProjectMappingsFromOldSchemaDefaultsLayout(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 	srcPath := filepath.Join(dir, "old-src.db")
 	prefix := filepath.Join(dir, "app.worktrees")
 	createOldWorktreeMappingDB(t, srcPath, prefix)
 
 	dstPath := filepath.Join(dir, "dst.db")
 	dstDB, err := Open(dstPath)
-	require.NoError(t, err, "Open dst")
+	require.NoError(err, "Open dst")
 	defer dstDB.Close()
 
 	require.NoError(
-		t,
 		dstDB.CopyWorktreeProjectMappingsFrom(srcPath),
 		"CopyWorktreeProjectMappingsFrom",
 	)
 
 	got, err := dstDB.ListWorktreeProjectMappings(ctx, "laptop")
-	require.NoError(t, err, "ListWorktreeProjectMappings")
-	require.Len(t, got, 1, "mapping count")
-	assert.Equal(t, WorktreeMappingLayoutExplicit, got[0].Layout, "layout")
-	assert.Equal(t, "old_project", got[0].Project, "project")
-	assert.Empty(t, got[0].OriginalProject, "legacy original project")
-	assert.True(t, got[0].Enabled, "enabled")
+	require.NoError(err, "ListWorktreeProjectMappings")
+	require.Len(got, 1, "mapping count")
+	assert.Equal(WorktreeMappingLayoutExplicit, got[0].Layout, "layout")
+	assert.Equal("old_project", got[0].Project, "project")
+	assert.Empty(got[0].OriginalProject, "legacy original project")
+	assert.True(got[0].Enabled, "enabled")
 }
 
 func TestCopyWorktreeProjectMappingsFromFillsOnlyEmptyOriginalProject(
 	t *testing.T,
 ) {
-	ctx := context.Background()
+	ctx := t.Context()
 	tests := []struct {
 		name                string
 		destinationOriginal string
@@ -1510,11 +1588,14 @@ func TestCopyWorktreeProjectMappingsFromFillsOnlyEmptyOriginalProject(
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			dir := t.TempDir()
 			prefix := filepath.Join(dir, "service.worktrees")
 			sourcePath := filepath.Join(dir, "source.db")
 			source, err := Open(sourcePath)
-			require.NoError(t, err, "open source")
+			require.NoError(err, "open source")
 			_, err = source.CreateWorktreeProjectMapping(
 				ctx,
 				WorktreeProjectMapping{
@@ -1525,11 +1606,11 @@ func TestCopyWorktreeProjectMappingsFromFillsOnlyEmptyOriginalProject(
 					Enabled:         true,
 				},
 			)
-			require.NoError(t, err, "create source mapping")
-			require.NoError(t, source.Close(), "close source")
+			require.NoError(err, "create source mapping")
+			require.NoError(source.Close(), "close source")
 
 			destination, err := Open(filepath.Join(dir, "destination.db"))
-			require.NoError(t, err, "open destination")
+			require.NoError(err, "open destination")
 			defer destination.Close()
 			owned, err := destination.CreateWorktreeProjectMapping(
 				ctx,
@@ -1541,10 +1622,9 @@ func TestCopyWorktreeProjectMappingsFromFillsOnlyEmptyOriginalProject(
 					Enabled:         false,
 				},
 			)
-			require.NoError(t, err, "create destination mapping")
+			require.NoError(err, "create destination mapping")
 
 			require.NoError(
-				t,
 				destination.CopyWorktreeProjectMappingsFrom(sourcePath),
 				"copy source mappings",
 			)
@@ -1552,53 +1632,55 @@ func TestCopyWorktreeProjectMappingsFromFillsOnlyEmptyOriginalProject(
 			mappings, err := destination.ListWorktreeProjectMappings(
 				ctx, "host-a.example",
 			)
-			require.NoError(t, err, "list destination mappings")
-			require.Len(t, mappings, 1)
-			assert.Equal(t, tt.wantOriginal, mappings[0].OriginalProject)
-			assert.Equal(t, owned.ID, mappings[0].ID, "destination owns the row")
-			assert.Equal(t, "host-a.example", mappings[0].Machine)
-			assert.Equal(t, filepath.ToSlash(prefix), mappings[0].PathPrefix)
-			assert.Equal(t, WorktreeMappingLayoutExplicit, mappings[0].Layout)
-			assert.Equal(t, "destination_service", mappings[0].Project)
-			assert.False(t, mappings[0].Enabled)
-			assert.Equal(t, owned.CreatedAt, mappings[0].CreatedAt)
-			assert.Equal(t, owned.UpdatedAt, mappings[0].UpdatedAt)
+			require.NoError(err, "list destination mappings")
+			require.Len(mappings, 1)
+			assert.Equal(tt.wantOriginal, mappings[0].OriginalProject)
+			assert.Equal(owned.ID, mappings[0].ID, "destination owns the row")
+			assert.Equal("host-a.example", mappings[0].Machine)
+			assert.Equal(filepath.ToSlash(prefix), mappings[0].PathPrefix)
+			assert.Equal(WorktreeMappingLayoutExplicit, mappings[0].Layout)
+			assert.Equal("destination_service", mappings[0].Project)
+			assert.False(mappings[0].Enabled)
+			assert.Equal(owned.CreatedAt, mappings[0].CreatedAt)
+			assert.Equal(owned.UpdatedAt, mappings[0].UpdatedAt)
 		})
 	}
 }
 
 func TestCopySessionMetadataFromOldWorktreeMappingSchemaDefaultsLayout(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 	srcPath := filepath.Join(dir, "old-src.db")
 	prefix := filepath.Join(dir, "app.worktrees")
 	createOldWorktreeMappingDB(t, srcPath, prefix)
 
 	dstPath := filepath.Join(dir, "dst.db")
 	dstDB, err := Open(dstPath)
-	require.NoError(t, err, "Open dst")
+	require.NoError(err, "Open dst")
 	defer dstDB.Close()
 
 	require.NoError(
-		t,
 		dstDB.CopySessionMetadataFrom(srcPath),
 		"CopySessionMetadataFrom",
 	)
 
 	got, err := dstDB.ListWorktreeProjectMappings(ctx, "laptop")
-	require.NoError(t, err, "ListWorktreeProjectMappings")
-	require.Len(t, got, 1, "mapping count")
-	assert.Equal(t, WorktreeMappingLayoutExplicit, got[0].Layout, "layout")
-	assert.Equal(t, "old_project", got[0].Project, "project")
-	assert.Empty(t, got[0].OriginalProject, "legacy original project")
-	assert.True(t, got[0].Enabled, "enabled")
+	require.NoError(err, "ListWorktreeProjectMappings")
+	require.Len(got, 1, "mapping count")
+	assert.Equal(WorktreeMappingLayoutExplicit, got[0].Layout, "layout")
+	assert.Equal("old_project", got[0].Project, "project")
+	assert.Empty(got[0].OriginalProject, "legacy original project")
+	assert.True(got[0].Enabled, "enabled")
 }
 
 func TestCopyWorktreeMappingFromSchemaWithoutOriginalProjectDefaultsEmpty(
 	t *testing.T,
 ) {
 	dir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 	srcPath := filepath.Join(dir, "legacy-with-layout.db")
 	prefix := filepath.Join(dir, "service.worktrees")
 	createWorktreeMappingDBWithoutOriginalProject(t, srcPath, prefix)
@@ -1622,16 +1704,19 @@ func TestCopyWorktreeMappingFromSchemaWithoutOriginalProjectDefaultsEmpty(
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			dst, err := Open(filepath.Join(dir, tt.name+".db"))
-			require.NoError(t, err, "open destination")
+			require.NoError(err, "open destination")
 			defer dst.Close()
-			require.NoError(t, tt.copy(dst, srcPath), "copy legacy mapping")
+			require.NoError(tt.copy(dst, srcPath), "copy legacy mapping")
 
 			mappings, err := dst.ListWorktreeProjectMappings(ctx, "host-a.example")
-			require.NoError(t, err, "list copied mappings")
-			require.Len(t, mappings, 1)
-			assert.Equal(t, WorktreeMappingLayoutExplicit, mappings[0].Layout)
-			assert.Empty(t, mappings[0].OriginalProject)
+			require.NoError(err, "list copied mappings")
+			require.Len(mappings, 1)
+			assert.Equal(WorktreeMappingLayoutExplicit, mappings[0].Layout)
+			assert.Empty(mappings[0].OriginalProject)
 		})
 	}
 }
@@ -1645,7 +1730,7 @@ func createWorktreeMappingDBWithoutOriginalProject(
 	conn, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "open legacy sqlite")
 	defer conn.Close()
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		CREATE TABLE worktree_project_mappings (
 			id INTEGER PRIMARY KEY,
 			machine TEXT NOT NULL,
@@ -1670,7 +1755,7 @@ func createOldWorktreeMappingDB(t *testing.T, path string, prefix string) {
 	conn, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "open old sqlite")
 	defer conn.Close()
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		CREATE TABLE worktree_project_mappings (
 			id INTEGER PRIMARY KEY,
 			machine TEXT NOT NULL,
@@ -1693,7 +1778,7 @@ func createOldWorktreeMappingDB(t *testing.T, path string, prefix string) {
 
 func assertFullSessionProject(t *testing.T, d *DB, id, want string) {
 	t.Helper()
-	got, err := d.GetSessionFull(context.Background(), id)
+	got, err := d.GetSessionFull(t.Context(), id)
 	require.NoError(t, err, "GetSessionFull %s", id)
 	assert.Equal(t, want, got.Project, "session %s project", id)
 }

@@ -20,3 +20,5 @@ var errUnsupportedPlatform = errors.New(
 func openDuckDB(string) (*sql.DB, error) {
 	return nil, errUnsupportedPlatform
 }
+
+func isMirrorOpenInSameProcessError(error) bool { return false }

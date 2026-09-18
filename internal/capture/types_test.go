@@ -1,7 +1,6 @@
 package capture
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -13,6 +12,9 @@ import (
 )
 
 func TestResultDistinguishesZeroFromUnavailable(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	zero := 0
 	result := Result{
 		Schema:       Schema{Name: ResultSchemaName, Version: ResultSchemaVersion},
@@ -24,14 +26,14 @@ func TestResultDistinguishesZeroFromUnavailable(t *testing.T) {
 	}
 
 	encoded, err := json.Marshal(result)
-	require.NoError(t, err)
-	assert.Contains(t, string(encoded), `"input_tokens":0`)
-	assert.NotContains(t, string(encoded), "cache_creation_input_tokens")
+	require.NoError(err)
+	assert.Contains(string(encoded), `"input_tokens":0`)
+	assert.NotContains(string(encoded), "cache_creation_input_tokens")
 
 	result.Usage = nil
 	encoded, err = json.Marshal(result)
-	require.NoError(t, err)
-	assert.NotContains(t, string(encoded), `"usage"`)
+	require.NoError(err)
+	assert.NotContains(string(encoded), `"usage"`)
 }
 
 func TestDecodeResultRejectsUnknownContract(t *testing.T) {
@@ -55,13 +57,18 @@ func TestClaudeWorkDirEncodingMatchesObservedProducerLayout(t *testing.T) {
 }
 
 func TestResultMarksIncompleteTokenAndCostProvenance(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	termination := string(parser.TerminationClean)
-	result, err := resultFromIngest(context.Background(), manifest{
+	result, err := resultFromIngest(t.Context(), manifest{
 		OccurrenceID: "partial-provenance", Provider: string(ProviderClaude),
 		ProviderSessionID: "11111111-1111-4111-8111-111111111111",
 	}, &ingestedCapture{
-		Root: &db.Session{ID: "11111111-1111-4111-8111-111111111111",
-			TerminationStatus: &termination},
+		Root: &db.Session{
+			ID:                "11111111-1111-4111-8111-111111111111",
+			TerminationStatus: &termination,
+		},
 		Usage: &db.SessionUsage{
 			HasTokenData: true, TotalOutputTokens: 70, BreakdownCount: 1,
 			Models: []string{"claude-test"},
@@ -71,17 +78,17 @@ func TestResultMarksIncompleteTokenAndCostProvenance(t *testing.T) {
 			}},
 		},
 	}, "test")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.NotNil(t, result.Usage)
+	require.NotNil(result.Usage)
 	assertIntPointer(t, result.Usage.OutputTokens, 70)
-	assert.Nil(t, result.Usage.InputTokens)
-	assert.Nil(t, result.Usage.CacheCreationInputTokens)
-	assert.Nil(t, result.Usage.CacheReadInputTokens)
-	assert.Nil(t, result.Cost)
-	assert.Equal(t, AssurancePartial, result.Assurance.State)
-	assert.Contains(t, result.Assurance.Reasons, ReasonUsageUnavailable)
-	assert.Contains(t, result.Assurance.Reasons, ReasonCostUnavailable)
+	assert.Nil(result.Usage.InputTokens)
+	assert.Nil(result.Usage.CacheCreationInputTokens)
+	assert.Nil(result.Usage.CacheReadInputTokens)
+	assert.Nil(result.Cost)
+	assert.Equal(AssurancePartial, result.Assurance.State)
+	assert.Contains(result.Assurance.Reasons, ReasonUsageUnavailable)
+	assert.Contains(result.Assurance.Reasons, ReasonCostUnavailable)
 }
 
 func TestBoundedMetadataDoesNotSplitUTF8(t *testing.T) {

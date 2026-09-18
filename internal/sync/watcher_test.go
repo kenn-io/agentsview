@@ -48,6 +48,9 @@ func (g *recordingLifecycleGate) acknowledgeLifecycle(generation uint64) {
 }
 
 func TestWatcherAcknowledgesLifecycleOnlyAfterSuccessfulReconciliation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	backend := newFakeWatchBackend()
 	gate := &recordingLifecycleGate{acknowledged: make(chan uint64, 1)}
 	calls := make(chan WatchBatch, 2)
@@ -65,7 +68,7 @@ func TestWatcherAcknowledgesLifecycleOnlyAfterSuccessfulReconciliation(t *testin
 		},
 		backend, 16, 1_000,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	w.Start()
 	t.Cleanup(w.Stop)
 
@@ -74,16 +77,16 @@ func TestWatcherAcknowledgesLifecycleOnlyAfterSuccessfulReconciliation(t *testin
 		Lifecycle: backendLifecycleToken{gate: gate, generation: 7},
 	})
 	first := requireReceiveWithin(t, calls, time.Second)
-	assert.Equal(t, []string{"/sync"}, first.ReconcileRoots)
+	assert.Equal([]string{"/sync"}, first.ReconcileRoots)
 	select {
 	case generation := <-gate.acknowledged:
-		require.Fail(t, "failed reconciliation acknowledged lifecycle", generation)
+		require.Fail("failed reconciliation acknowledged lifecycle", generation)
 	case <-time.After(50 * time.Millisecond):
 	}
 	second := requireReceiveWithin(t, calls, time.Second)
-	assert.Equal(t, []string{"/sync"}, second.ReconcileRoots)
+	assert.Equal([]string{"/sync"}, second.ReconcileRoots)
 	close(releaseSuccess)
-	assert.Equal(t, uint64(7), requireReceiveWithin(t, gate.acknowledged, time.Second))
+	assert.Equal(uint64(7), requireReceiveWithin(t, gate.acknowledged, time.Second))
 }
 
 func TestWatcherLifecycleCollectsBeforeDispatchOpens(t *testing.T) {
@@ -125,6 +128,8 @@ func TestWatcherLifecycleCollectsBeforeDispatchOpens(t *testing.T) {
 // fires, carrying its reconcile roots into the normal callback (and thus
 // retry) machinery, and a full-sync batch queues the authoritative marker.
 func TestWatcherQueueRetryBatchDispatchesQueuedRoots(t *testing.T) {
+	assert := assert.New(t)
+
 	backend := newFakeWatchBackend()
 	calls := make(chan WatchBatch, 1)
 	w, err := newWatcherWithBackend(
@@ -140,7 +145,7 @@ func TestWatcherQueueRetryBatchDispatchesQueuedRoots(t *testing.T) {
 	t.Cleanup(w.Stop)
 
 	w.QueueRetryBatch(WatchBatch{ReconcileRoots: []string{"/gap-root"}})
-	assert.Never(t, func() bool {
+	assert.Never(func() bool {
 		select {
 		case <-calls:
 			return true
@@ -152,14 +157,14 @@ func TestWatcherQueueRetryBatchDispatchesQueuedRoots(t *testing.T) {
 
 	w.OpenDispatch()
 	batch := requireReceiveWithin(t, calls, time.Second)
-	assert.Equal(t, []string{"/gap-root"}, batch.ReconcileRoots)
-	assert.False(t, batch.FullSync)
-	assert.False(t, batch.LostEvents)
+	assert.Equal([]string{"/gap-root"}, batch.ReconcileRoots)
+	assert.False(batch.FullSync)
+	assert.False(batch.LostEvents)
 
 	w.QueueRetryBatch(WatchBatch{FullSync: true})
 	batch = requireReceiveWithin(t, calls, time.Second)
-	assert.True(t, batch.FullSync)
-	assert.False(t, batch.LostEvents,
+	assert.True(batch.FullSync)
+	assert.False(batch.LostEvents,
 		"a queued ordinary full sync must not clear freshness caches like a "+
 			"watcher-overflow full sync")
 }
@@ -267,12 +272,15 @@ func (b *fakeWatchBackend) shouldEnumerateCreatedSubtree(_, _ string) bool {
 }
 
 func TestWatcherRegisterRootsPreservesCompleteLogicalPlanBeforeStart(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	backend := newFakeWatchBackend()
 	w, err := newWatcherWithBackend(
 		0, 0, func(context.Context, WatchBatch) error { return nil },
 		backend, 8, 1_000,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(w.Stop)
 
 	results := w.RegisterRoots([]WatchRoot{
@@ -293,17 +301,17 @@ func TestWatcherRegisterRootsPreservesCompleteLogicalPlanBeforeStart(t *testing.
 		},
 	}, 7)
 
-	assert.Zero(t, backend.startCalls.Load(), "roots must register before backend start")
-	assert.Equal(t, []string{"/shared"}, backend.recursiveRoots)
-	assert.Equal(t, []int{7}, backend.recursiveBudgets)
-	assert.Equal(t, []string{"/shallow"}, backend.shallowRoots)
-	assert.Equal(t, []string{"claude", "codex"}, w.agentsForRoot("/shared"))
-	assert.Equal(t, []string{"devin"}, w.agentsForRoot("/missing"),
+	assert.Zero(backend.startCalls.Load(), "roots must register before backend start")
+	assert.Equal([]string{"/shared"}, backend.recursiveRoots)
+	assert.Equal([]int{7}, backend.recursiveBudgets)
+	assert.Equal([]string{"/shallow"}, backend.shallowRoots)
+	assert.Equal([]string{"claude", "codex"}, w.agentsForRoot("/shared"))
+	assert.Equal([]string{"devin"}, w.agentsForRoot("/missing"),
 		"missing logical roots must retain rename ownership")
-	require.Len(t, results, 3)
-	assert.Equal(t, 1, results[0].Watched)
-	assert.Zero(t, results[1].Watched, "missing root must not activate current backend")
-	assert.Equal(t, 1, results[2].Watched)
+	require.Len(results, 3)
+	assert.Equal(1, results[0].Watched)
+	assert.Zero(results[1].Watched, "missing root must not activate current backend")
+	assert.Equal(1, results[2].Watched)
 }
 
 func (b *fakeWatchBackend) sendEvent(t *testing.T, path string) {
@@ -551,6 +559,8 @@ func TestWatchBatchAccumulatorReportsEntryAndBytePromotion(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			var reasons []WatchBatchPromotionReason
 			accumulator := NewWatchBatchAccumulator(func(reason WatchBatchPromotionReason) {
 				reasons = append(reasons, reason)
@@ -564,15 +574,18 @@ func TestWatchBatchAccumulatorReportsEntryAndBytePromotion(t *testing.T) {
 
 			batch, ok := accumulator.Take()
 			require.True(t, ok)
-			assert.Equal(t, WatchBatch{FullSync: true, LostEvents: true}, batch)
-			assert.Equal(t, []WatchBatchPromotionReason{tt.wantReason}, reasons)
-			assert.True(t, accumulator.Empty(),
+			assert.Equal(WatchBatch{FullSync: true, LostEvents: true}, batch)
+			assert.Equal([]WatchBatchPromotionReason{tt.wantReason}, reasons)
+			assert.True(accumulator.Empty(),
 				"full sync must supersede later fine-grained work in the same accumulation window")
 		})
 	}
 }
 
 func TestWatchBatchJSONExcludesLifecycleTokens(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	gate := &recordingLifecycleGate{acknowledged: make(chan uint64, 1)}
 	want := WatchBatch{
 		Paths:          []string{"/sessions/a.jsonl"},
@@ -584,14 +597,14 @@ func TestWatchBatchJSONExcludesLifecycleTokens(t *testing.T) {
 	withLifecycle.lifecycleTokens = []backendLifecycleToken{{gate: gate, generation: 4}}
 
 	data, err := json.Marshal(withLifecycle)
-	require.NoError(t, err)
-	assert.Contains(t, string(data), `"paths"`)
-	assert.NotContains(t, string(data), "lifecycle")
-	assert.NotContains(t, string(data), `"Paths"`)
+	require.NoError(err)
+	assert.Contains(string(data), `"paths"`)
+	assert.NotContains(string(data), "lifecycle")
+	assert.NotContains(string(data), `"Paths"`)
 
 	var got WatchBatch
-	require.NoError(t, json.Unmarshal(data, &got))
-	assert.Equal(t, want, got)
+	require.NoError(json.Unmarshal(data, &got))
+	assert.Equal(want, got)
 }
 
 func TestPendingWatchBatchOverflowsByPathBytes(t *testing.T) {
@@ -620,20 +633,23 @@ func TestPendingWatchBatchCountsDuplicateOnce(t *testing.T) {
 }
 
 func TestPendingWatchBatchTakeResetsBounds(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	pending := newPendingWatchBatch(1, 1_000)
 	pending.Add("/sessions/a.jsonl")
 
 	first, ok := pending.Take()
-	require.True(t, ok)
-	assert.Equal(t, []string{"/sessions/a.jsonl"}, first.Paths)
+	require.True(ok)
+	assert.Equal([]string{"/sessions/a.jsonl"}, first.Paths)
 	_, ok = pending.Take()
-	assert.False(t, ok, "taking an empty accumulator must not dispatch")
+	assert.False(ok, "taking an empty accumulator must not dispatch")
 
 	pending.Add("/sessions/b.jsonl")
 	second, ok := pending.Take()
-	require.True(t, ok)
-	assert.False(t, second.FullSync)
-	assert.Equal(t, []string{"/sessions/b.jsonl"}, second.Paths)
+	require.True(ok)
+	assert.False(second.FullSync)
+	assert.Equal([]string{"/sessions/b.jsonl"}, second.Paths)
 }
 
 func TestPendingWatchBatchBoundsAllRetainedMetadata(t *testing.T) {
@@ -678,6 +694,8 @@ func TestPendingWatchBatchBoundsMixedMetadataBytesIndependently(t *testing.T) {
 }
 
 func TestPendingWatchBatchDeduplicatesRenameAndRootMetadata(t *testing.T) {
+	assert := assert.New(t)
+
 	rename := WatchRename{
 		Path:     "/sessions/a.jsonl",
 		Root:     "/sessions",
@@ -692,9 +710,9 @@ func TestPendingWatchBatchDeduplicatesRenameAndRootMetadata(t *testing.T) {
 
 	batch, ok := pending.Take()
 	require.True(t, ok)
-	assert.False(t, batch.FullSync)
-	assert.Equal(t, []WatchRename{rename}, batch.Renames)
-	assert.Equal(t, []string{rename.Root}, batch.ReconcileRoots)
+	assert.False(batch.FullSync)
+	assert.Equal([]WatchRename{rename}, batch.Renames)
+	assert.Equal([]string{rename.Root}, batch.ReconcileRoots)
 }
 
 func TestPendingWatchBatchMetadataByteOverflowClearsStrings(t *testing.T) {
@@ -787,6 +805,9 @@ func TestWatchEventSinkRetainsConcurrentAuthoritativeLifecycleMarkers(t *testing
 }
 
 func TestWatcherBatchesPathsAndEnforcesDispatchFloor(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const (
 		batchDelay  = 50 * time.Millisecond
 		minInterval = 200 * time.Millisecond
@@ -798,25 +819,28 @@ func TestWatcherBatchesPathsAndEnforcesDispatchFloor(t *testing.T) {
 
 	firstPath := filepath.Join(dir, "a.jsonl")
 	secondPath := filepath.Join(dir, "b.jsonl")
-	require.NoError(t, os.WriteFile(firstPath, []byte("a"), 0o644))
-	require.NoError(t, os.WriteFile(secondPath, []byte("b"), 0o644))
+	require.NoError(os.WriteFile(firstPath, []byte("a"), 0o644))
+	require.NoError(os.WriteFile(secondPath, []byte("b"), 0o644))
 
 	first := receiveWatcherCall(t, calls)
-	assert.Equal(t, []string{firstPath, secondPath}, first.paths,
+	assert.Equal([]string{firstPath, secondPath}, first.paths,
 		"one write burst should produce one unique path batch")
 
 	laterPath := filepath.Join(dir, "c.jsonl")
-	require.NoError(t, os.WriteFile(laterPath, []byte("c"), 0o644))
+	require.NoError(os.WriteFile(laterPath, []byte("c"), 0o644))
 	second := receiveWatcherCall(t, calls)
 	// These timestamps are inside the callback, after the scheduler's clock
 	// read. Allow the same dispatch jitter as the sustained-write test below.
 	const dispatchJitter = 25 * time.Millisecond
-	assert.GreaterOrEqual(t, second.at.Sub(first.at), minInterval-dispatchJitter,
+	assert.GreaterOrEqual(second.at.Sub(first.at), minInterval-dispatchJitter,
 		"callbacks started less than the configured minimum interval apart")
-	assert.Contains(t, second.paths, laterPath)
+	assert.Contains(second.paths, laterPath)
 }
 
 func TestWatcherSustainedWritesProgress(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const (
 		batchDelay        = 50 * time.Millisecond
 		minInterval       = 300 * time.Millisecond
@@ -831,7 +855,7 @@ func TestWatcherSustainedWritesProgress(t *testing.T) {
 	)
 	path := filepath.Join(dir, "active.jsonl")
 
-	require.NoError(t, os.WriteFile(path, []byte("initial"), 0o644))
+	require.NoError(os.WriteFile(path, []byte("initial"), 0o644))
 	stopWrites := make(chan struct{})
 	writesDone := make(chan struct{})
 	writeErr := make(chan error, 1)
@@ -866,7 +890,7 @@ func TestWatcherSustainedWritesProgress(t *testing.T) {
 		case call := <-calls:
 			return call
 		case err := <-writeErr:
-			require.NoError(t, err)
+			require.NoError(err)
 			return watcherCall{}
 		case <-time.After(minInterval + dispatchTolerance):
 			t.Fatal("continuous writes starved the watcher callback")
@@ -879,25 +903,27 @@ func TestWatcherSustainedWritesProgress(t *testing.T) {
 	stopWriter()
 	select {
 	case err := <-writeErr:
-		require.NoError(t, err)
+		require.NoError(err)
 	default:
 	}
 
-	assert.Contains(t, first.paths, path)
-	assert.Contains(t, second.paths, path)
+	assert.Contains(first.paths, path)
+	assert.Contains(second.paths, path)
 	// The watcher spaces callbacks from its own clock reads taken before each
 	// dispatch, while these stamps are taken inside the callback. Dispatch
 	// jitter and coarse Windows timers can therefore shave a few
 	// milliseconds off the observed spacing without the watcher firing early.
 	const dispatchJitter = 25 * time.Millisecond
 	spacing := second.at.Sub(first.at)
-	assert.GreaterOrEqual(t, spacing, minInterval-dispatchJitter,
+	assert.GreaterOrEqual(spacing, minInterval-dispatchJitter,
 		"sustained-write callbacks started too close together")
-	assert.LessOrEqual(t, spacing, minInterval+dispatchTolerance,
+	assert.LessOrEqual(spacing, minInterval+dispatchTolerance,
 		"sustained writes did not make bounded progress")
 }
 
 func TestWatcherSchedulerContinuesIntakeWithOnePendingAccumulator(t *testing.T) {
+	assert := assert.New(t)
+
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var releaseOnce sync.Once
@@ -932,7 +958,7 @@ func TestWatcherSchedulerContinuesIntakeWithOnePendingAccumulator(t *testing.T) 
 	}
 
 	backend.sendEvent(t, "/sessions/during-callback.jsonl")
-	assert.Never(t, func() bool {
+	assert.Never(func() bool {
 		return callCount.Load() > 1
 	}, 50*time.Millisecond, 5*time.Millisecond,
 		"a second callback started while the first callback was blocked")
@@ -940,13 +966,15 @@ func TestWatcherSchedulerContinuesIntakeWithOnePendingAccumulator(t *testing.T) 
 
 	firstBatch := receiveWatchBatch(t, calls)
 	secondBatch := receiveWatchBatch(t, calls)
-	assert.Equal(t, []string{"/sessions/first.jsonl"}, firstBatch.Paths)
-	assert.Equal(t, []string{"/sessions/during-callback.jsonl"}, secondBatch.Paths)
-	assert.Equal(t, int32(1), maxConcurrent.Load(),
+	assert.Equal([]string{"/sessions/first.jsonl"}, firstBatch.Paths)
+	assert.Equal([]string{"/sessions/during-callback.jsonl"}, secondBatch.Paths)
+	assert.Equal(int32(1), maxConcurrent.Load(),
 		"watcher callbacks must remain serialized")
 }
 
 func TestWatcherDeferredPathRetryPreservesCoalescedReconcileRoot(t *testing.T) {
+	assert := assert.New(t)
+
 	started := make(chan struct{})
 	release := make(chan struct{})
 	calls := make(chan WatchBatch, 2)
@@ -991,10 +1019,10 @@ func TestWatcherDeferredPathRetryPreservesCoalescedReconcileRoot(t *testing.T) {
 	close(release)
 	first := receiveWatchBatch(t, calls)
 	second := receiveWatchBatch(t, calls)
-	assert.Contains(t, first.Paths, "/sessions/deferred.jsonl")
-	assert.Contains(t, second.Paths, "/sessions/deferred.jsonl")
-	assert.Contains(t, second.ReconcileRoots, "/sessions")
-	assert.False(t, second.FullSync)
+	assert.Contains(first.Paths, "/sessions/deferred.jsonl")
+	assert.Contains(second.Paths, "/sessions/deferred.jsonl")
+	assert.Contains(second.ReconcileRoots, "/sessions")
+	assert.False(second.FullSync)
 }
 
 func TestWatcherOverflowCollapsesPathAndByteLimitsToOneFullSync(t *testing.T) {
@@ -1020,6 +1048,8 @@ func TestWatcherOverflowCollapsesPathAndByteLimitsToOneFullSync(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			firstRelease := make(chan struct{})
 			var releaseOnce sync.Once
 			release := func() { releaseOnce.Do(func() { close(firstRelease) }) }
@@ -1040,25 +1070,27 @@ func TestWatcherOverflowCollapsesPathAndByteLimitsToOneFullSync(t *testing.T) {
 
 			backend.sendEvent(t, "/r")
 			first := receiveWatchBatch(t, calls)
-			assert.Equal(t, []string{"/r"}, first.Paths)
+			assert.Equal([]string{"/r"}, first.Paths)
 
 			for _, path := range tt.paths {
 				backend.sendEvent(t, path)
 			}
-			assert.Equal(t, int32(1), callCount.Load(),
+			assert.Equal(int32(1), callCount.Load(),
 				"worker handoff must not queue another callback while one executes")
 
 			release()
 			overflow := receiveWatchBatch(t, calls)
-			assert.True(t, overflow.FullSync)
-			assert.Empty(t, overflow.Paths)
-			assert.Equal(t, int32(2), callCount.Load(),
+			assert.True(overflow.FullSync)
+			assert.Empty(overflow.Paths)
+			assert.Equal(int32(2), callCount.Load(),
 				"one overflow marker should replace all retained paths")
 		})
 	}
 }
 
 func TestWatcherCarriesRenameAndRootMetadata(t *testing.T) {
+	assert := assert.New(t)
+
 	backend := newFakeWatchBackend()
 	calls := make(chan WatchBatch, 2)
 	w, err := newWatcherWithBackend(
@@ -1081,7 +1113,7 @@ func TestWatcherCarriesRenameAndRootMetadata(t *testing.T) {
 		ItemType: backendItemDirectory,
 	})
 	renameBatch := receiveWatchBatch(t, calls)
-	assert.Equal(t, []WatchRename{
+	assert.Equal([]WatchRename{
 		{
 			Path:     "/sessions/renamed",
 			Root:     "/sessions",
@@ -1095,25 +1127,28 @@ func TestWatcherCarriesRenameAndRootMetadata(t *testing.T) {
 			ItemType: ItemIsDir,
 		},
 	}, renameBatch.Renames)
-	assert.Empty(t, renameBatch.Paths)
+	assert.Empty(renameBatch.Paths)
 
 	backend.sendBackendEvent(t, backendEvent{
 		Path: "/sessions", Root: "/sessions", Op: backendOpReconcileRootChange,
 	})
 	reconcileBatch := receiveWatchBatch(t, calls)
-	assert.Equal(t, []string{"/sessions"}, reconcileBatch.ReconcileRoots)
-	assert.Empty(t, reconcileBatch.Paths)
+	assert.Equal([]string{"/sessions"}, reconcileBatch.ReconcileRoots)
+	assert.Empty(reconcileBatch.Paths)
 }
 
 func TestWatcherDiscoversPrepopulatedCreatedDirectory(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	backend := newFakeWatchBackend()
 	calls := make(chan WatchBatch, 1)
 	root := t.TempDir()
 	created := filepath.Join(root, "imported")
 	nested := filepath.Join(created, "nested")
 	restored := filepath.Join(nested, "session.jsonl")
-	require.NoError(t, os.MkdirAll(nested, 0o755))
-	require.NoError(t, os.WriteFile(restored, []byte("restored"), 0o600))
+	require.NoError(os.MkdirAll(nested, 0o755))
+	require.NoError(os.WriteFile(restored, []byte("restored"), 0o600))
 	w, err := newWatcherWithBackend(
 		0, 0,
 		func(_ context.Context, batch WatchBatch) error {
@@ -1122,7 +1157,7 @@ func TestWatcherDiscoversPrepopulatedCreatedDirectory(t *testing.T) {
 		},
 		backend, 8, 1_000,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	w.Start()
 	t.Cleanup(w.Stop)
 
@@ -1134,11 +1169,14 @@ func TestWatcherDiscoversPrepopulatedCreatedDirectory(t *testing.T) {
 	})
 
 	batch := receiveWatchBatch(t, calls)
-	assert.Equal(t, []string{created, restored}, batch.Paths)
-	assert.Empty(t, batch.ReconcileRoots)
+	assert.Equal([]string{created, restored}, batch.Paths)
+	assert.Empty(batch.ReconcileRoots)
 }
 
 func TestWatcherCreatedDirectoryDiscoveryHonorsBackendExclusions(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	backend := newFakeWatchBackend()
 	backend.includeSubtree = func(root, path string) bool {
 		return !shouldExcludeForRoot([]string{"node_modules"}, path, root)
@@ -1148,9 +1186,9 @@ func TestWatcherCreatedDirectoryDiscoveryHonorsBackendExclusions(t *testing.T) {
 	created := filepath.Join(root, "imported")
 	included := filepath.Join(created, "session.jsonl")
 	excluded := filepath.Join(created, "node_modules", "cached.jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(excluded), 0o755))
-	require.NoError(t, os.WriteFile(included, []byte("included"), 0o600))
-	require.NoError(t, os.WriteFile(excluded, []byte("excluded"), 0o600))
+	require.NoError(os.MkdirAll(filepath.Dir(excluded), 0o755))
+	require.NoError(os.WriteFile(included, []byte("included"), 0o600))
+	require.NoError(os.WriteFile(excluded, []byte("excluded"), 0o600))
 	w, err := newWatcherWithBackend(
 		0, 0,
 		func(_ context.Context, batch WatchBatch) error {
@@ -1159,7 +1197,7 @@ func TestWatcherCreatedDirectoryDiscoveryHonorsBackendExclusions(t *testing.T) {
 		},
 		backend, 8, 1_000,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	w.Start()
 	t.Cleanup(w.Stop)
 
@@ -1170,8 +1208,8 @@ func TestWatcherCreatedDirectoryDiscoveryHonorsBackendExclusions(t *testing.T) {
 	})
 
 	batch := receiveWatchBatch(t, calls)
-	assert.Equal(t, []string{created, included}, batch.Paths)
-	assert.NotContains(t, batch.Paths, excluded)
+	assert.Equal([]string{created, included}, batch.Paths)
+	assert.NotContains(batch.Paths, excluded)
 }
 
 func TestWatchExcludePatternMatchesFactoryLockStagingFiles(t *testing.T) {
@@ -1194,14 +1232,17 @@ func TestWatchExcludePatternMatchesFactoryLockStagingFiles(t *testing.T) {
 }
 
 func TestWatcherCreatedDirectoryDiscoveryOverflowReconcilesOwningRoot(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	backend := newFakeWatchBackend()
 	calls := make(chan WatchBatch, 1)
 	root := t.TempDir()
 	created := filepath.Join(root, "imported")
-	require.NoError(t, os.MkdirAll(created, 0o755))
+	require.NoError(os.MkdirAll(created, 0o755))
 	for i := range 4 {
 		path := filepath.Join(created, fmt.Sprintf("session-%d.jsonl", i))
-		require.NoError(t, os.WriteFile(path, []byte("restored"), 0o600))
+		require.NoError(os.WriteFile(path, []byte("restored"), 0o600))
 	}
 	w, err := newWatcherWithBackend(
 		0, 0,
@@ -1211,7 +1252,7 @@ func TestWatcherCreatedDirectoryDiscoveryOverflowReconcilesOwningRoot(t *testing
 		},
 		backend, 3, 10_000,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	w.Start()
 	t.Cleanup(w.Stop)
 
@@ -1222,19 +1263,22 @@ func TestWatcherCreatedDirectoryDiscoveryOverflowReconcilesOwningRoot(t *testing
 	})
 
 	batch := receiveWatchBatch(t, calls)
-	assert.False(t, batch.FullSync)
-	assert.Equal(t, []string{root}, batch.ReconcileRoots)
-	assert.LessOrEqual(t, len(batch.Paths), 2)
+	assert.False(batch.FullSync)
+	assert.Equal([]string{root}, batch.ReconcileRoots)
+	assert.LessOrEqual(len(batch.Paths), 2)
 }
 
 func TestWatcherCreatedDirectoryVisitOverflowReconcilesOwningRoot(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	backend := newFakeWatchBackend()
 	calls := make(chan WatchBatch, 1)
 	root := t.TempDir()
 	created := filepath.Join(root, "imported")
-	require.NoError(t, os.MkdirAll(created, 0o755))
+	require.NoError(os.MkdirAll(created, 0o755))
 	for i := range 4 {
-		require.NoError(t, os.Mkdir(
+		require.NoError(os.Mkdir(
 			filepath.Join(created, fmt.Sprintf("directory-%d", i)), 0o755,
 		))
 	}
@@ -1246,7 +1290,7 @@ func TestWatcherCreatedDirectoryVisitOverflowReconcilesOwningRoot(t *testing.T) 
 		},
 		backend, 3, 10_000,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	w.Start()
 	t.Cleanup(w.Stop)
 
@@ -1257,18 +1301,20 @@ func TestWatcherCreatedDirectoryVisitOverflowReconcilesOwningRoot(t *testing.T) 
 	})
 
 	batch := receiveWatchBatch(t, calls)
-	assert.False(t, batch.FullSync)
-	assert.Equal(t, []string{created}, batch.Paths)
-	assert.Equal(t, []string{root}, batch.ReconcileRoots)
+	assert.False(batch.FullSync)
+	assert.Equal([]string{created}, batch.Paths)
+	assert.Equal([]string{root}, batch.ReconcileRoots)
 }
 
 func TestWatcherStopInterruptsCreatedDirectoryTraversal(t *testing.T) {
+	require := require.New(t)
+
 	backend := newFakeWatchBackend()
 	root := t.TempDir()
 	created := filepath.Join(root, "imported")
-	require.NoError(t, os.MkdirAll(created, 0o755))
+	require.NoError(os.MkdirAll(created, 0o755))
 	for i := range 200 {
-		require.NoError(t, os.Mkdir(
+		require.NoError(os.Mkdir(
 			filepath.Join(created, fmt.Sprintf("directory-%03d", i)), 0o755,
 		))
 	}
@@ -1292,7 +1338,7 @@ func TestWatcherStopInterruptsCreatedDirectoryTraversal(t *testing.T) {
 		0, 0, func(context.Context, WatchBatch) error { return nil },
 		backend, 512, 100_000,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	w.Start()
 
 	backend.sendBackendEvent(t, backendEvent{
@@ -1303,7 +1349,7 @@ func TestWatcherStopInterruptsCreatedDirectoryTraversal(t *testing.T) {
 	select {
 	case <-firstVisit:
 	case <-time.After(watcherTestTimeout):
-		require.FailNow(t, "created-directory traversal did not start")
+		require.FailNow("created-directory traversal did not start")
 	}
 
 	stopped := make(chan struct{})
@@ -1314,7 +1360,7 @@ func TestWatcherStopInterruptsCreatedDirectoryTraversal(t *testing.T) {
 	select {
 	case <-backend.stopped:
 	case <-time.After(watcherTestTimeout):
-		require.FailNow(t, "watcher backend did not receive Stop")
+		require.FailNow("watcher backend did not receive Stop")
 	}
 	close(releaseFirstVisit)
 
@@ -1327,7 +1373,7 @@ func TestWatcherStopInterruptsCreatedDirectoryTraversal(t *testing.T) {
 		<-stopped
 	case <-time.After(watcherTestTimeout):
 		close(releaseSecondVisit)
-		require.FailNow(t, "watcher Stop did not finish")
+		require.FailNow("watcher Stop did not finish")
 	}
 	assert.False(t, traversalContinued,
 		"created subtree traversal visited another entry after Stop")
@@ -1362,16 +1408,19 @@ func TestWatcherRetriesFailedReconciliationMarker(t *testing.T) {
 }
 
 func TestRetriedFullSyncPreservesChangesArrivingDuringCallback(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	pending := newPendingWatchBatch(8, 1_000)
 	pending.Add("/sessions/new.jsonl")
 
 	retainWatchRetry(pending, WatchBatch{FullSync: true})
 	full, ok := pending.Take()
-	require.True(t, ok)
-	assert.Equal(t, WatchBatch{FullSync: true}, full)
+	require.True(ok)
+	assert.Equal(WatchBatch{FullSync: true}, full)
 	changed, ok := pending.Take()
-	require.True(t, ok)
-	assert.Equal(t, []string{"/sessions/new.jsonl"}, changed.Paths)
+	require.True(ok)
+	assert.Equal([]string{"/sessions/new.jsonl"}, changed.Paths)
 }
 
 func TestRetriedLostEventReconciliationPreservesRecoveryMode(t *testing.T) {
@@ -1393,11 +1442,13 @@ func TestRetriedLostEventReconciliationPreservesRecoveryMode(t *testing.T) {
 }
 
 func TestWatcherRetryDelayUsesBoundedExponentialBackoff(t *testing.T) {
-	assert.Equal(t, 5*time.Second, watcherRetryDelay(5*time.Second, 1))
-	assert.Equal(t, 10*time.Second, watcherRetryDelay(5*time.Second, 2))
-	assert.Equal(t, watcherRetryMaxDelay, watcherRetryDelay(5*time.Second, 20))
-	assert.Equal(t, time.Millisecond, watcherRetryDelay(0, 1))
-	assert.Zero(t, watcherRetryDelay(time.Second, 0))
+	assert := assert.New(t)
+
+	assert.Equal(5*time.Second, watcherRetryDelay(5*time.Second, 1))
+	assert.Equal(10*time.Second, watcherRetryDelay(5*time.Second, 2))
+	assert.Equal(watcherRetryMaxDelay, watcherRetryDelay(5*time.Second, 20))
+	assert.Equal(time.Millisecond, watcherRetryDelay(0, 1))
+	assert.Zero(watcherRetryDelay(time.Second, 0))
 }
 
 func TestWatcherRetryFloorStartsWhenFailedCallbackCompletes(t *testing.T) {
@@ -1490,6 +1541,9 @@ func TestWatcherDoesNotReplayKnownFileRenameOnCallbackError(t *testing.T) {
 }
 
 func TestWatcherMixedFileRenameErrorRetriesOnlyRootMarker(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	backend := newFakeWatchBackend()
 	calls := make(chan WatchBatch, 2)
 	var attempts atomic.Int32
@@ -1504,7 +1558,7 @@ func TestWatcherMixedFileRenameErrorRetriesOnlyRootMarker(t *testing.T) {
 		},
 		backend, 8, 1_000,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	w.SetRootAgents("/sessions", []string{"codex"})
 	w.Start()
 	t.Cleanup(w.Stop)
@@ -1516,16 +1570,19 @@ func TestWatcherMixedFileRenameErrorRetriesOnlyRootMarker(t *testing.T) {
 	})
 	first := receiveWatchBatch(t, calls)
 	second := receiveWatchBatch(t, calls)
-	require.Len(t, first.Renames, 1)
-	assert.Equal(t, ItemIsFile, first.Renames[0].ItemType)
-	assert.Equal(t, []string{"/sessions"}, first.ReconcileRoots)
-	assert.False(t, second.FullSync)
-	assert.Empty(t, second.Paths)
-	assert.Empty(t, second.Renames)
-	assert.Equal(t, []string{"/sessions"}, second.ReconcileRoots)
+	require.Len(first.Renames, 1)
+	assert.Equal(ItemIsFile, first.Renames[0].ItemType)
+	assert.Equal([]string{"/sessions"}, first.ReconcileRoots)
+	assert.False(second.FullSync)
+	assert.Empty(second.Paths)
+	assert.Empty(second.Renames)
+	assert.Equal([]string{"/sessions"}, second.ReconcileRoots)
 }
 
 func TestWatcherDirectoryRenameErrorRetriesFullSync(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	backend := newFakeWatchBackend()
 	calls := make(chan WatchBatch, 2)
 	var attempts atomic.Int32
@@ -1540,7 +1597,7 @@ func TestWatcherDirectoryRenameErrorRetriesFullSync(t *testing.T) {
 		},
 		backend, 8, 1_000,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	w.SetRootAgents("/sessions", []string{"codex"})
 	w.Start()
 	t.Cleanup(w.Stop)
@@ -1551,9 +1608,9 @@ func TestWatcherDirectoryRenameErrorRetriesFullSync(t *testing.T) {
 	})
 	first := receiveWatchBatch(t, calls)
 	second := receiveWatchBatch(t, calls)
-	require.Len(t, first.Renames, 1)
-	assert.Equal(t, ItemIsDir, first.Renames[0].ItemType)
-	assert.Equal(t, WatchBatch{FullSync: true}, second)
+	require.Len(first.Renames, 1)
+	assert.Equal(ItemIsDir, first.Renames[0].ItemType)
+	assert.Equal(WatchBatch{FullSync: true}, second)
 }
 
 type retryScopedWatchError struct {
@@ -1565,6 +1622,8 @@ func (e retryScopedWatchError) Error() string { return "authoritative reconcilia
 func (e retryScopedWatchError) WatchRetryBatch() WatchBatch { return e.retry }
 
 func TestWatcherPreservesLostEventsWhenFullRetryNarrowsToRoots(t *testing.T) {
+	assert := assert.New(t)
+
 	backend := newFakeWatchBackend()
 	calls := make(chan WatchBatch, 2)
 	var attempts atomic.Int32
@@ -1590,14 +1649,17 @@ func TestWatcherPreservesLostEventsWhenFullRetryNarrowsToRoots(t *testing.T) {
 	first := receiveWatchBatch(t, calls)
 	second := receiveWatchBatch(t, calls)
 
-	assert.Equal(t, WatchBatch{FullSync: true, LostEvents: true}, first)
-	assert.Empty(t, second.Paths)
-	assert.Empty(t, second.Renames)
-	assert.Equal(t, []string{"/sessions"}, second.ReconcileRoots)
-	assert.True(t, second.LostEvents)
+	assert.Equal(WatchBatch{FullSync: true, LostEvents: true}, first)
+	assert.Empty(second.Paths)
+	assert.Empty(second.Renames)
+	assert.Equal([]string{"/sessions"}, second.ReconcileRoots)
+	assert.True(second.LostEvents)
 }
 
 func TestWatcherPreservesLostEventsWhenAmbiguousRenameRetryPromotesToFullSync(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	backend := newFakeWatchBackend()
 	calls := make(chan WatchBatch, 3)
 	releaseFirst := make(chan struct{})
@@ -1621,7 +1683,7 @@ func TestWatcherPreservesLostEventsWhenAmbiguousRenameRetryPromotesToFullSync(t 
 		},
 		backend, 8, 1_000,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	w.SetRootAgents("/sessions", []string{"codex"})
 	w.Start()
 	t.Cleanup(w.Stop)
@@ -1636,12 +1698,12 @@ func TestWatcherPreservesLostEventsWhenAmbiguousRenameRetryPromotesToFullSync(t 
 	second := receiveWatchBatch(t, calls)
 	third := receiveWatchBatch(t, calls)
 
-	assert.Equal(t, WatchBatch{FullSync: true, LostEvents: true}, first)
-	require.Len(t, second.Renames, 1)
-	assert.Equal(t, ItemIsUnknown, second.Renames[0].ItemType)
-	assert.Equal(t, []string{"/sessions"}, second.ReconcileRoots)
-	assert.True(t, second.LostEvents)
-	assert.Equal(t, WatchBatch{FullSync: true, LostEvents: true}, third)
+	assert.Equal(WatchBatch{FullSync: true, LostEvents: true}, first)
+	require.Len(second.Renames, 1)
+	assert.Equal(ItemIsUnknown, second.Renames[0].ItemType)
+	assert.Equal([]string{"/sessions"}, second.ReconcileRoots)
+	assert.True(second.LostEvents)
+	assert.Equal(WatchBatch{FullSync: true, LostEvents: true}, third)
 }
 
 func TestWatcherUsesCallbackReconciliationScopeForRetry(t *testing.T) {
@@ -1659,6 +1721,9 @@ func TestWatcherUsesCallbackReconciliationScopeForRetry(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			backend := newFakeWatchBackend()
 			calls := make(chan WatchBatch, 2)
 			var attempts atomic.Int32
@@ -1673,7 +1738,7 @@ func TestWatcherUsesCallbackReconciliationScopeForRetry(t *testing.T) {
 				},
 				backend, 8, 1_000,
 			)
-			require.NoError(t, err)
+			require.NoError(err)
 			w.SetRootAgents("/sessions", []string{"codex"})
 			w.Start()
 			t.Cleanup(w.Stop)
@@ -1685,21 +1750,23 @@ func TestWatcherUsesCallbackReconciliationScopeForRetry(t *testing.T) {
 			})
 			first := receiveWatchBatch(t, calls)
 			second := receiveWatchBatch(t, calls)
-			require.Len(t, first.Renames, 1)
-			assert.Equal(t, ItemIsUnknown, first.Renames[0].ItemType)
+			require.Len(first.Renames, 1)
+			assert.Equal(ItemIsUnknown, first.Renames[0].ItemType)
 			if tc.retry.FullSync {
-				assert.Equal(t, WatchBatch{FullSync: true}, second)
+				assert.Equal(WatchBatch{FullSync: true}, second)
 			} else {
-				assert.False(t, second.FullSync)
-				assert.Empty(t, second.Paths)
-				assert.Empty(t, second.Renames)
-				assert.Equal(t, []string{"/sessions"}, second.ReconcileRoots)
+				assert.False(second.FullSync)
+				assert.Empty(second.Paths)
+				assert.Empty(second.Renames)
+				assert.Equal([]string{"/sessions"}, second.ReconcileRoots)
 			}
 		})
 	}
 }
 
 func TestWatcherUsesCallbackChangedPathsForRetry(t *testing.T) {
+	assert := assert.New(t)
+
 	backend := newFakeWatchBackend()
 	calls := make(chan WatchBatch, 2)
 	var attempts atomic.Int32
@@ -1725,10 +1792,10 @@ func TestWatcherUsesCallbackChangedPathsForRetry(t *testing.T) {
 	first := receiveWatchBatch(t, calls)
 	second := receiveWatchBatch(t, calls)
 
-	assert.Equal(t, []string{"/sessions/changed.jsonl"}, first.Paths)
-	assert.Equal(t, []string{"/sessions/changed.jsonl"}, second.Paths,
+	assert.Equal([]string{"/sessions/changed.jsonl"}, first.Paths)
+	assert.Equal([]string{"/sessions/changed.jsonl"}, second.Paths,
 		"a failed changed-path sync must retry the exact bounded path")
-	assert.False(t, second.FullSync)
+	assert.False(second.FullSync)
 }
 
 func TestRetainWatchRetryPathOverflowPromotesFullSync(t *testing.T) {
@@ -1939,6 +2006,8 @@ func TestWatcherLifecycleStopBeforeStartReturns(t *testing.T) {
 }
 
 func TestWatcherLifecycleStartFailureReturnsErrorAndDegradesRegisteredScopes(t *testing.T) {
+	assert := assert.New(t)
+
 	backend := newFakeWatchBackend()
 	startErr := errors.New("start failed")
 	backend.startErr = startErr
@@ -1959,8 +2028,8 @@ func TestWatcherLifecycleStartFailureReturnsErrorAndDegradesRegisteredScopes(t *
 	}, 8)
 
 	err = w.Start()
-	assert.ErrorIs(t, err, startErr)
-	assert.Equal(t, []string{"/scope-a", "/scope-b"},
+	assert.ErrorIs(err, startErr)
+	assert.Equal([]string{"/scope-a", "/scope-b"},
 		requireReceiveWithin(t, degraded, time.Second))
 	select {
 	case <-backend.stopped:
@@ -1968,9 +2037,9 @@ func TestWatcherLifecycleStartFailureReturnsErrorAndDegradesRegisteredScopes(t *
 		t.Fatal("failed Start did not stop its backend")
 	}
 	w.Stop()
-	assert.Error(t, w.Start(), "a stopped watcher must keep surfacing startup failure")
-	assert.Equal(t, int32(1), backend.startCalls.Load())
-	assert.Equal(t, int32(1), backend.stopCalls.Load())
+	assert.Error(w.Start(), "a stopped watcher must keep surfacing startup failure")
+	assert.Equal(int32(1), backend.startCalls.Load())
+	assert.Equal(int32(1), backend.stopCalls.Load())
 }
 
 func TestWatcherLifecycleRepeatedStartStartsOnce(t *testing.T) {
@@ -2103,12 +2172,15 @@ func TestWatcherIgnoresNonWriteCreate(t *testing.T) {
 }
 
 func TestWatcherHandlesRemoveAndRename(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	removePath := filepath.Join(dir, "remove.jsonl")
 	renamePath := filepath.Join(dir, "rename.jsonl")
 	renamedPath := filepath.Join(dir, "renamed.jsonl")
-	require.NoError(t, os.WriteFile(removePath, []byte("remove"), 0o644))
-	require.NoError(t, os.WriteFile(renamePath, []byte("rename"), 0o644))
+	require.NoError(os.WriteFile(removePath, []byte("remove"), 0o644))
+	require.NoError(os.WriteFile(renamePath, []byte("rename"), 0o644))
 
 	pathsCh := make(chan []string, 4)
 	w, err := NewWatcherWithInterval(
@@ -2117,14 +2189,14 @@ func TestWatcherHandlesRemoveAndRename(t *testing.T) {
 		func(batch WatchBatch) { pathsCh <- batch.Paths },
 		nil,
 	)
-	require.NoError(t, err, "NewWatcherWithInterval")
+	require.NoError(err, "NewWatcherWithInterval")
 	_, _, err = w.WatchRecursive(dir)
-	require.NoError(t, err, "WatchRecursive")
+	require.NoError(err, "WatchRecursive")
 	w.Start()
 	t.Cleanup(w.Stop)
 
-	require.NoError(t, os.Remove(removePath))
-	require.NoError(t, os.Rename(renamePath, renamedPath))
+	require.NoError(os.Remove(removePath))
+	require.NoError(os.Rename(renamePath, renamedPath))
 
 	var got []string
 	deadline := time.NewTimer(watcherTestTimeout)
@@ -2137,11 +2209,14 @@ func TestWatcherHandlesRemoveAndRename(t *testing.T) {
 			t.Fatalf("remove and rename paths not delivered; got %v", got)
 		}
 	}
-	assert.Contains(t, got, removePath)
-	assert.Contains(t, got, renamePath)
+	assert.Contains(got, removePath)
+	assert.Contains(got, renamePath)
 }
 
 func TestWatchRecursive_ExcludesDirectoryNames(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	w := newFSNotifyTestWatcher(t, []string{".git", "node_modules"})
 
 	root := t.TempDir()
@@ -2149,13 +2224,13 @@ func TestWatchRecursive_ExcludesDirectoryNames(t *testing.T) {
 	excludedGit := filepath.Join(root, "project", ".git", "objects")
 	excludedModules := filepath.Join(root, "project", "node_modules", "pkg")
 	for _, p := range []string{included, excludedGit, excludedModules} {
-		require.NoError(t, os.MkdirAll(p, 0o755), "MkdirAll(%s)", p)
+		require.NoError(os.MkdirAll(p, 0o755), "MkdirAll(%s)", p)
 	}
 
 	watched, unwatched, err := w.WatchRecursive(root)
-	require.NoError(t, err, "WatchRecursive")
-	assert.Equal(t, 3, watched, "only root, project, and src should be watched")
-	assert.Zero(t, unwatched)
+	require.NoError(err, "WatchRecursive")
+	assert.Equal(3, watched, "only root, project, and src should be watched")
+	assert.Zero(unwatched)
 }
 
 func TestWatchRecursiveBudget_DegradesWhenBudgetExhausted(t *testing.T) {
@@ -2178,44 +2253,48 @@ func TestIsWatchResourceExhaustion(t *testing.T) {
 }
 
 func TestWatcherAutoWatchesNewDirs_RespectsExcludes(t *testing.T) {
+	require := require.New(t)
+
 	pathsCh := make(chan []string, 10)
 	w, err := NewWatcher(20*time.Millisecond, func(batch WatchBatch) {
 		pathsCh <- batch.Paths
 	}, []string{".git"})
-	require.NoError(t, err, "NewWatcher")
+	require.NoError(err, "NewWatcher")
 	t.Cleanup(func() { w.Stop() })
 
 	root := t.TempDir()
 	_, _, err = w.WatchRecursive(root)
-	require.NoError(t, err, "WatchRecursive")
+	require.NoError(err, "WatchRecursive")
 	w.Start()
 
 	gitDir := filepath.Join(root, ".git")
-	require.NoError(t, os.Mkdir(gitDir, 0o755), "Mkdir(.git)")
+	require.NoError(os.Mkdir(gitDir, 0o755), "Mkdir(.git)")
 	barrier := filepath.Join(root, "included-barrier")
-	require.NoError(t, os.Mkdir(barrier, 0o755), "Mkdir(barrier)")
+	require.NoError(os.Mkdir(barrier, 0o755), "Mkdir(barrier)")
 	waitForPath(t, pathsCh, barrier)
 
 	fileInGit := filepath.Join(gitDir, "config")
-	require.NoError(t, os.WriteFile(fileInGit, []byte("x"), 0o644))
+	require.NoError(os.WriteFile(fileInGit, []byte("x"), 0o644))
 
 	assertPathNotEmitted(t, pathsCh, fileInGit, 200*time.Millisecond)
 }
 
 func TestWatcherShallowRootDoesNotAutoWatchNewDirs(t *testing.T) {
+	require := require.New(t)
+
 	pathsCh := make(chan []string, 10)
 	w, err := NewWatcher(20*time.Millisecond, func(batch WatchBatch) {
 		pathsCh <- batch.Paths
 	}, nil)
-	require.NoError(t, err, "NewWatcher")
+	require.NoError(err, "NewWatcher")
 	t.Cleanup(func() { w.Stop() })
 
 	root := t.TempDir()
-	require.True(t, w.WatchShallow(root), "WatchShallow")
+	require.True(w.WatchShallow(root), "WatchShallow")
 	w.Start()
 
 	localDir := filepath.Join(root, "local_session")
-	require.NoError(t, os.Mkdir(localDir, 0o755), "Mkdir(local)")
+	require.NoError(os.Mkdir(localDir, 0o755), "Mkdir(local)")
 
 	select {
 	case paths := <-pathsCh:
@@ -2226,7 +2305,7 @@ func TestWatcherShallowRootDoesNotAutoWatchNewDirs(t *testing.T) {
 	}
 
 	nested := filepath.Join(localDir, "nested.jsonl")
-	require.NoError(t, os.WriteFile(nested, []byte("x"), 0o644))
+	require.NoError(os.WriteFile(nested, []byte("x"), 0o644))
 	assertPathNotEmitted(t, pathsCh, nested, 100*time.Millisecond)
 }
 
@@ -2235,35 +2314,37 @@ func TestWatcherShallowRootDoesNotAutoWatchNewDirs(t *testing.T) {
 // under the recursive child still need to be auto-watched so new sessions in
 // new date directories live-sync.
 func TestWatcherShallowParentDoesNotShadowRecursiveChild(t *testing.T) {
+	require := require.New(t)
+
 	pathsCh := make(chan []string, 10)
 	w, err := NewWatcher(20*time.Millisecond, func(batch WatchBatch) {
 		pathsCh <- batch.Paths
 	}, nil)
-	require.NoError(t, err, "NewWatcher")
+	require.NoError(err, "NewWatcher")
 	t.Cleanup(func() { w.Stop() })
 
 	parent := t.TempDir()
 	child := filepath.Join(parent, "sessions")
-	require.NoError(t, os.Mkdir(child, 0o755), "Mkdir(child)")
+	require.NoError(os.Mkdir(child, 0o755), "Mkdir(child)")
 
-	require.True(t, w.WatchShallow(parent), "WatchShallow(parent)")
+	require.True(w.WatchShallow(parent), "WatchShallow(parent)")
 	_, _, err = w.WatchRecursive(child)
-	require.NoError(t, err, "WatchRecursive(child)")
+	require.NoError(err, "WatchRecursive(child)")
 	w.Start()
 
 	// A sibling write directly under the shallow parent is still seen but its
 	// directory is not auto-watched.
 	logDir := filepath.Join(parent, "log")
-	require.NoError(t, os.Mkdir(logDir, 0o755), "Mkdir(log)")
+	require.NoError(os.Mkdir(logDir, 0o755), "Mkdir(log)")
 
 	// A new directory created under the recursive child must be auto-watched
 	// even though it also sits inside the shallow parent root.
 	dateDir := filepath.Join(child, "2026-06-16")
-	require.NoError(t, os.Mkdir(dateDir, 0o755), "Mkdir(dateDir)")
+	require.NoError(os.Mkdir(dateDir, 0o755), "Mkdir(dateDir)")
 	waitForPath(t, pathsCh, dateDir)
 
 	sessionFile := filepath.Join(dateDir, "rollout.jsonl")
-	require.NoError(t, os.WriteFile(sessionFile, []byte("x"), 0o644))
+	require.NoError(os.WriteFile(sessionFile, []byte("x"), 0o644))
 
 	deadline := time.Now().Add(5 * time.Second)
 	found := false
@@ -2276,41 +2357,50 @@ func TestWatcherShallowParentDoesNotShadowRecursiveChild(t *testing.T) {
 		case <-time.After(50 * time.Millisecond):
 		}
 	}
-	require.True(t, found,
+	require.True(found,
 		"file in a new date dir under the recursive child must trigger onChange")
 }
 
 func TestWatchRecursive_RootUnderExcludedAncestorStillWatchesDescendants(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	w := newFSNotifyTestWatcher(t, []string{"venv"})
 
 	base := t.TempDir()
 	root := filepath.Join(base, "venv", "project")
 	included := filepath.Join(root, "src")
-	require.NoError(t, os.MkdirAll(included, 0o755), "MkdirAll(%s)", included)
+	require.NoError(os.MkdirAll(included, 0o755), "MkdirAll(%s)", included)
 
 	watched, unwatched, err := w.WatchRecursive(root)
-	require.NoError(t, err, "WatchRecursive")
-	assert.Equal(t, 2, watched, "root and descendant should both be watched")
-	assert.Zero(t, unwatched)
+	require.NoError(err, "WatchRecursive")
+	assert.Equal(2, watched, "root and descendant should both be watched")
+	assert.Zero(unwatched)
 }
 
 func TestWatchRecursive_ExcludesSlashPatternRelativeToRoot(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	w := newFSNotifyTestWatcher(t, []string{"foo/bar"})
 
 	root := t.TempDir()
 	excluded := filepath.Join(root, "foo", "bar")
 	includedSibling := filepath.Join(root, "foo", "baz")
 	for _, p := range []string{excluded, includedSibling} {
-		require.NoError(t, os.MkdirAll(p, 0o755), "MkdirAll(%s)", p)
+		require.NoError(os.MkdirAll(p, 0o755), "MkdirAll(%s)", p)
 	}
 
 	watched, unwatched, err := w.WatchRecursive(root)
-	require.NoError(t, err, "WatchRecursive")
-	assert.Equal(t, 3, watched, "root, foo, and foo/baz should be watched")
-	assert.Zero(t, unwatched)
+	require.NoError(err, "WatchRecursive")
+	assert.Equal(3, watched, "root, foo, and foo/baz should be watched")
+	assert.Zero(unwatched)
 }
 
 func TestWatchRecursive_OverlappingRoots_UsesMostSpecificRoot(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	w := newFSNotifyTestWatcher(t, []string{"venv"})
 
 	base := t.TempDir()
@@ -2318,37 +2408,39 @@ func TestWatchRecursive_OverlappingRoots_UsesMostSpecificRoot(t *testing.T) {
 	nestedRoot := filepath.Join(parentRoot, "venv", "project")
 	included := filepath.Join(nestedRoot, "src")
 	for _, p := range []string{parentRoot, included} {
-		require.NoError(t, os.MkdirAll(p, 0o755), "MkdirAll(%s)", p)
+		require.NoError(os.MkdirAll(p, 0o755), "MkdirAll(%s)", p)
 	}
 
 	parentWatched, parentUnwatched, err := w.WatchRecursive(parentRoot)
-	require.NoError(t, err, "WatchRecursive(parent)")
-	assert.Equal(t, 1, parentWatched,
+	require.NoError(err, "WatchRecursive(parent)")
+	assert.Equal(1, parentWatched,
 		"the excluded venv subtree should be skipped from the parent root")
-	assert.Zero(t, parentUnwatched)
+	assert.Zero(parentUnwatched)
 
 	nestedWatched, nestedUnwatched, err := w.WatchRecursive(nestedRoot)
-	require.NoError(t, err, "WatchRecursive(nested)")
-	assert.Equal(t, 2, nestedWatched,
+	require.NoError(err, "WatchRecursive(nested)")
+	assert.Equal(2, nestedWatched,
 		"the nested root and descendant should use the nested exclusion scope")
-	assert.Zero(t, nestedUnwatched)
+	assert.Zero(nestedUnwatched)
 }
 
 func TestWatcherExcludedCreateDir_DoesNotTriggerOnChange(t *testing.T) {
+	require := require.New(t)
+
 	pathsCh := make(chan []string, 10)
 	w, err := NewWatcher(20*time.Millisecond, func(batch WatchBatch) {
 		pathsCh <- batch.Paths
 	}, []string{".git"})
-	require.NoError(t, err, "NewWatcher")
+	require.NoError(err, "NewWatcher")
 	t.Cleanup(func() { w.Stop() })
 
 	root := t.TempDir()
 	_, _, err = w.WatchRecursive(root)
-	require.NoError(t, err, "WatchRecursive")
+	require.NoError(err, "WatchRecursive")
 	w.Start()
 
 	gitDir := filepath.Join(root, ".git")
-	require.NoError(t, os.Mkdir(gitDir, 0o755), "Mkdir(.git)")
+	require.NoError(os.Mkdir(gitDir, 0o755), "Mkdir(.git)")
 
 	select {
 	case paths := <-pathsCh:

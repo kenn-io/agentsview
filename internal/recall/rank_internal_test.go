@@ -9,30 +9,37 @@ import (
 )
 
 func TestPathBaseHandlesBackslashSeparators(t *testing.T) {
-	assert.Equal(t, "recall_entries.go", pathBase("internal/db/recall_entries.go"))
-	assert.Equal(t, "myproj", pathBase(`C:\work\myproj`))
-	assert.Equal(t, "leaf", pathBase(`C:\work\leaf\`))
-	assert.Equal(t, "single", pathBase("single"))
-	assert.Equal(t, "", pathBase("   "))
+	assert := assert.New(t)
+
+	assert.Equal("recall_entries.go", pathBase("internal/db/recall_entries.go"))
+	assert.Equal("myproj", pathBase(`C:\work\myproj`))
+	assert.Equal("leaf", pathBase(`C:\work\leaf\`))
+	assert.Equal("single", pathBase("single"))
+	assert.Empty(pathBase("   "))
 }
 
 func TestQueryCalendarWindowsRequiresAdjacentMonthYear(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	feb := time.Date(2024, time.February, 1, 0, 0, 0, 0, time.UTC)
 	want := []timeWindow{{start: feb, end: feb.AddDate(0, 1, 0)}}
 
-	require.Equal(t, want, queryCalendarWindows([]string{"february", "2024"}))
-	require.Equal(t, want, queryCalendarWindows([]string{"2024", "february"}))
+	require.Equal(want, queryCalendarWindows([]string{"february", "2024"}))
+	require.Equal(want, queryCalendarWindows([]string{"2024", "february"}))
 
-	assert.Nil(t, queryCalendarWindows([]string{"february", "database", "2024"}))
-	assert.Nil(t, queryCalendarWindows([]string{"2024"}))
-	assert.Nil(t, queryCalendarWindows([]string{"may", "notes"}))
+	assert.Nil(queryCalendarWindows([]string{"february", "database", "2024"}))
+	assert.Nil(queryCalendarWindows([]string{"2024"}))
+	assert.Nil(queryCalendarWindows([]string{"may", "notes"}))
 }
 
 func TestOrderedTokensHaveAdjacentRequiresConsecutiveOrder(t *testing.T) {
-	assert.True(t, orderedTokensHaveAdjacent([]string{"last", "month", "notes"}, "last", "month"))
-	assert.False(t, orderedTokensHaveAdjacent([]string{"month", "last"}, "last", "month"))
-	assert.False(t, orderedTokensHaveAdjacent([]string{"last", "full", "month"}, "last", "month"))
-	assert.False(t, orderedTokensHaveAdjacent(nil, "last", "month"))
+	assert := assert.New(t)
+
+	assert.True(orderedTokensHaveAdjacent([]string{"last", "month", "notes"}, "last", "month"))
+	assert.False(orderedTokensHaveAdjacent([]string{"month", "last"}, "last", "month"))
+	assert.False(orderedTokensHaveAdjacent([]string{"last", "full", "month"}, "last", "month"))
+	assert.False(orderedTokensHaveAdjacent(nil, "last", "month"))
 }
 
 func TestStartOfISOWeekReturnsMondayMidnight(t *testing.T) {

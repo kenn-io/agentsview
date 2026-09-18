@@ -13,6 +13,8 @@ import (
 )
 
 func TestGzipMiddlewareCompressesAPIResponse(t *testing.T) {
+	require := require.New(t)
+
 	body := strings.Repeat(`{"sessions":[{"id":"s"}]}`, 80)
 	handler := gzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -20,26 +22,28 @@ func TestGzipMiddlewareCompressesAPIResponse(t *testing.T) {
 		_, _ = w.Write([]byte(body))
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/sidebar-index", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/sessions/sidebar-index", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusCreated, resp.StatusCode)
-	require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
+	require.Equal(http.StatusCreated, resp.StatusCode)
+	require.Equal("gzip", resp.Header.Get("Content-Encoding"))
 	assert.Contains(t, resp.Header.Values("Vary"), "Accept-Encoding")
 
 	gr, err := gzip.NewReader(resp.Body)
-	require.NoError(t, err)
+	require.NoError(err)
 	defer gr.Close()
 	got, err := io.ReadAll(gr)
-	require.NoError(t, err)
-	require.Equal(t, body, string(got))
+	require.NoError(err)
+	require.Equal(body, string(got))
 }
 
 func TestGzipMiddlewareCompressesMultiWriteAPIResponse(t *testing.T) {
+	require := require.New(t)
+
 	first := strings.Repeat(`{"sessions":[{"id":"s"}]}`, 80)
 	second := strings.Repeat(`{"sessions":[{"id":"t"}]}`, 80)
 	handler := gzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -48,21 +52,21 @@ func TestGzipMiddlewareCompressesMultiWriteAPIResponse(t *testing.T) {
 		_, _ = w.Write([]byte(second))
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/sessions/sidebar-index", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/sessions/sidebar-index", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
-	require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
+	require.Equal("gzip", resp.Header.Get("Content-Encoding"))
 
 	gr, err := gzip.NewReader(resp.Body)
-	require.NoError(t, err)
+	require.NoError(err)
 	defer gr.Close()
 	got, err := io.ReadAll(gr)
-	require.NoError(t, err)
-	require.Equal(t, first+second, string(got))
+	require.NoError(err)
+	require.Equal(first+second, string(got))
 }
 
 func TestGzipMiddlewareSkipsEventStreams(t *testing.T) {
@@ -72,7 +76,7 @@ func TestGzipMiddlewareSkipsEventStreams(t *testing.T) {
 		_, _ = w.Write([]byte(body))
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -93,7 +97,7 @@ func TestGzipMiddlewareKeepsFlushedEventStreamPlain(t *testing.T) {
 		_, _ = w.Write([]byte(body))
 	}))
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sync", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -107,21 +111,23 @@ func TestGzipMiddlewareKeepsFlushedEventStreamPlain(t *testing.T) {
 }
 
 func TestGzipMiddlewareLeavesSmallAPIResponsePlain(t *testing.T) {
+	require := require.New(t)
+
 	handler := gzipMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte("ok"))
 	}))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/health", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
 	resp := w.Result()
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusAccepted, resp.StatusCode)
-	require.Empty(t, resp.Header.Get("Content-Encoding"))
+	require.Equal(http.StatusAccepted, resp.StatusCode)
+	require.Empty(resp.Header.Get("Content-Encoding"))
 	got, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	require.Equal(t, "ok", string(got))
+	require.NoError(err)
+	require.Equal("ok", string(got))
 }

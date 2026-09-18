@@ -101,6 +101,9 @@ func TestVerifiedSourceGateSeparatesAgentsAtSharedPath(t *testing.T) {
 }
 
 func TestVerifiedSourceGateFullPassPruning(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	e := &Engine{}
 	keepSignature := verifiedSourceSignatureForTest(1)
 	dropSignature := verifiedSourceSignatureForTest(2)
@@ -112,29 +115,29 @@ func TestVerifiedSourceGateFullPassPruning(t *testing.T) {
 	dropCapture, dropFresh := e.captureVerifiedSource(
 		parser.AgentCodex, "archive/drop.jsonl", dropSignature,
 	)
-	require.False(t, keepFresh)
-	require.False(t, dropFresh)
+	require.False(keepFresh)
+	require.False(dropFresh)
 	e.promoteVerifiedSource(keepCapture)
 	e.promoteVerifiedSource(dropCapture)
 	e.finishVerifiedSourcePass(firstPass, true)
-	require.Len(t, e.verifiedSources, 2)
+	require.Len(e.verifiedSources, 2)
 
 	secondPass := e.beginVerifiedSourcePass()
 	_, keepFresh = e.captureVerifiedSource(
 		parser.AgentCodex, "archive/keep.jsonl", keepSignature,
 	)
-	require.True(t, keepFresh)
+	require.True(keepFresh)
 	e.finishVerifiedSourcePass(secondPass, true)
 
-	require.Len(t, e.verifiedSources, 1)
+	require.Len(e.verifiedSources, 1)
 	_, ok := e.verifiedSources[verifiedSourceKey{
 		agent: parser.AgentCodex, path: "archive/keep.jsonl",
 	}]
-	assert.True(t, ok)
+	assert.True(ok)
 
 	incompletePass := e.beginVerifiedSourcePass()
 	e.finishVerifiedSourcePass(incompletePass, false)
-	assert.Len(t, e.verifiedSources, 1,
+	assert.Len(e.verifiedSources, 1,
 		"an incomplete pass must not prune trusted sources")
 }
 

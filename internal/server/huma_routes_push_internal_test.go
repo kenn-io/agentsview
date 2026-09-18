@@ -31,23 +31,26 @@ import (
 type stubVectorPushSource struct{}
 
 func TestDaemonPushRequestWatchTransportJSON(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	payload := []byte(`{
 		"full":false,
 		"watch_batch":{"paths":["/sessions/changed.jsonl"],"lost_events":true},
 		"watch_recovery":{"available_roots":["/sessions"],"deferred_roots":["/offline"]}
 	}`)
 	var request daemonPushRequest
-	require.NoError(t, json.Unmarshal(payload, &request))
-	require.NotNil(t, request.WatchBatch)
-	assert.Equal(t, []string{"/sessions/changed.jsonl"}, request.WatchBatch.Paths)
-	assert.True(t, request.WatchBatch.LostEvents)
-	require.NotNil(t, request.WatchRecovery)
-	assert.Equal(t, []string{"/sessions"}, request.WatchRecovery.AvailableRoots)
-	assert.Equal(t, []string{"/offline"}, request.WatchRecovery.DeferredRoots)
+	require.NoError(json.Unmarshal(payload, &request))
+	require.NotNil(request.WatchBatch)
+	assert.Equal([]string{"/sessions/changed.jsonl"}, request.WatchBatch.Paths)
+	assert.True(request.WatchBatch.LostEvents)
+	require.NotNil(request.WatchRecovery)
+	assert.Equal([]string{"/sessions"}, request.WatchRecovery.AvailableRoots)
+	assert.Equal([]string{"/offline"}, request.WatchRecovery.DeferredRoots)
 
 	encoded, err := json.Marshal(request)
-	require.NoError(t, err)
-	assert.JSONEq(t, string(payload), string(encoded))
+	require.NoError(err)
+	assert.JSONEq(string(payload), string(encoded))
 }
 
 func (stubVectorPushSource) BeginExport(
@@ -60,6 +63,8 @@ func (stubVectorPushSource) BeginExport(
 // push heartbeat: reports inside the throttle window log nothing, and the
 // vector phase logs its own counters instead of the session line.
 func TestPGPushProgressLoggerThrottlesAndReportsPhases(t *testing.T) {
+	assert := assert.New(t)
+
 	origInterval := pushProgressLogInterval
 	pushProgressLogInterval = time.Hour
 	t.Cleanup(func() { pushProgressLogInterval = origInterval })
@@ -72,8 +77,8 @@ func TestPGPushProgressLoggerThrottlesAndReportsPhases(t *testing.T) {
 	logProgress := newPGPushProgressLogger()
 	logProgress(postgres.PushProgress{SessionsDone: 1, SessionsTotal: 10, MessagesDone: 5})
 	logProgress(postgres.PushProgress{SessionsDone: 2, SessionsTotal: 10, MessagesDone: 9})
-	assert.Contains(t, buf.String(), "pg push: 1/10 session(s), 5 messages")
-	assert.NotContains(t, buf.String(), "2/10",
+	assert.Contains(buf.String(), "pg push: 1/10 session(s), 5 messages")
+	assert.NotContains(buf.String(), "2/10",
 		"second report inside the throttle window must not log")
 
 	pushProgressLogInterval = 0
@@ -83,7 +88,7 @@ func TestPGPushProgressLoggerThrottlesAndReportsPhases(t *testing.T) {
 		VectorSessionsTotal: 7,
 		VectorChunksPushed:  42,
 	})
-	assert.Contains(t, buf.String(),
+	assert.Contains(buf.String(),
 		"pg push: vectors 3/7 session(s) scanned, 42 chunks")
 
 	logProgress(postgres.PushProgress{
@@ -91,10 +96,10 @@ func TestPGPushProgressLoggerThrottlesAndReportsPhases(t *testing.T) {
 		SessionsDone:  500,
 		SessionsTotal: 46000,
 	})
-	assert.Contains(t, buf.String(), "pg push: preparing 500/46000 session(s)")
+	assert.Contains(buf.String(), "pg push: preparing 500/46000 session(s)")
 
 	logProgress(postgres.PushProgress{Phase: "preparing"})
-	assert.Contains(t, buf.String(),
+	assert.Contains(buf.String(),
 		"pg push: preparing (sync state, metadata, fingerprints)",
 		"zero-total preparing report renders the setup-stage line")
 }
@@ -162,7 +167,7 @@ func testServerWithConfig(cfg config.Config) *Server {
 
 func readOpenAPISpec(t testing.TB, h http.Handler) openAPISpec {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/api/openapi.json", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/openapi.json", nil)
 	req.Host = "127.0.0.1:0"
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -195,6 +200,8 @@ func assertStreamingResponseContent(
 }
 
 func TestPGPushConfigRequestOverrideSkipsDaemonEnvResolution(t *testing.T) {
+	assert := assert.New(t)
+
 	const envName = "AGENTSVIEW_TEST_MISSING_PG_URL_25053"
 	s := testServerWithConfig(config.Config{
 		PG: config.PGConfig{URL: missingEnvRef(t, envName)},
@@ -209,9 +216,9 @@ func TestPGPushConfigRequestOverrideSkipsDaemonEnvResolution(t *testing.T) {
 
 	got, err := s.pgPushConfig(req)
 	require.NoError(t, err)
-	assert.Equal(t, "postgres://user:pass@host/db", got.URL)
-	assert.Equal(t, "mirror", got.Schema)
-	assert.Equal(t, "laptop", got.MachineName)
+	assert.Equal("postgres://user:pass@host/db", got.URL)
+	assert.Equal("mirror", got.Schema)
+	assert.Equal("laptop", got.MachineName)
 }
 
 func TestClickHousePushConfigRequestOverride(t *testing.T) {
@@ -247,29 +254,35 @@ func TestClickHousePushRejectsIncludeAndExcludeProjects(t *testing.T) {
 }
 
 func TestPGPushRejectsIncludeAndExcludeProjects(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	s := testServerWithConfig(config.Config{})
 
-	_, err := s.humaPGPush(context.Background(), &daemonPushInput{
+	_, err := s.humaPGPush(t.Context(), &daemonPushInput{
 		Body: daemonPushRequest{
 			Projects:        []string{"alpha"},
 			ExcludeProjects: []string{"beta"},
 		},
 	})
-	require.Error(t, err)
+	require.Error(err)
 
 	var statusErr interface{ GetStatus() int }
-	require.ErrorAs(t, err, &statusErr)
-	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
-	assert.Contains(t, err.Error(),
+	require.ErrorAs(err, &statusErr)
+	assert.Equal(http.StatusBadRequest, statusErr.GetStatus())
+	assert.Contains(err.Error(),
 		"projects and exclude_projects are mutually exclusive")
 }
 
 func TestPGPushEnsuresPricingAfterLocalSync(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	s := testServer(t, 30*time.Second)
 	database := s.db.(*db.DB)
 	s.ensurePricing = func(_ context.Context, got *db.DB) error {
-		require.Same(t, database, got)
-		require.NoError(t, got.UpsertModelPricing([]db.ModelPricing{{
+		require.Same(database, got)
+		require.NoError(got.UpsertModelPricing([]db.ModelPricing{{
 			ModelPattern:  "new-model",
 			InputPerMTok:  money.MustParseDollars("2"),
 			OutputPerMTok: money.MustParseDollars("8"),
@@ -277,7 +290,7 @@ func TestPGPushEnsuresPricingAfterLocalSync(t *testing.T) {
 		return nil
 	}
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost,
 		"/api/v1/push/pg",
 		strings.NewReader(`{"full":false,"pg":{"url":"postgres://nobody:nobody@127.0.0.1:1/test?sslmode=disable","schema":"agentsview","machine_name":"test","allow_insecure":false}}`),
@@ -289,29 +302,32 @@ func TestPGPushEnsuresPricingAfterLocalSync(t *testing.T) {
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusInternalServerError, w.Code,
+	assert.Equal(http.StatusInternalServerError, w.Code,
 		"body: %s", w.Body.String())
 	rate, err := database.GetModelPricing("new-model")
-	require.NoError(t, err)
-	require.NotNil(t, rate)
-	assert.Equal(t, money.MustParseDollars("8"), rate.OutputPerMTok)
+	require.NoError(err)
+	require.NotNil(rate)
+	assert.Equal(money.MustParseDollars("8"), rate.OutputPerMTok)
 }
 
 func TestDuckDBPushRejectsIncludeAndExcludeProjects(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	s := testServerWithConfig(config.Config{})
 
-	_, err := s.humaDuckDBPush(context.Background(), &daemonPushInput{
+	_, err := s.humaDuckDBPush(t.Context(), &daemonPushInput{
 		Body: daemonPushRequest{
 			Projects:        []string{"alpha"},
 			ExcludeProjects: []string{"beta"},
 		},
 	})
-	require.Error(t, err)
+	require.Error(err)
 
 	var statusErr interface{ GetStatus() int }
-	require.ErrorAs(t, err, &statusErr)
-	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
-	assert.Contains(t, err.Error(),
+	require.ErrorAs(err, &statusErr)
+	assert.Equal(http.StatusBadRequest, statusErr.GetStatus())
+	assert.Contains(err.Error(),
 		"projects and exclude_projects are mutually exclusive")
 }
 
@@ -319,9 +335,12 @@ func TestDuckDBPushRejectsIncludeAndExcludeProjects(t *testing.T) {
 // route rejects a remote Quack URL as bad request: push writes the local
 // mirror only, so a configured [duckdb].url is never a valid push target.
 func TestDuckDBPushRejectsRemoteURLAsBadRequest(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	s := testServer(t, 30)
 
-	_, err := s.humaDuckDBPush(context.Background(), &daemonPushInput{
+	_, err := s.humaDuckDBPush(t.Context(), &daemonPushInput{
 		Body: daemonPushRequest{
 			DuckDB: &config.DuckDBConfig{
 				URL:         "quack:https://duck.example.test",
@@ -329,12 +348,12 @@ func TestDuckDBPushRejectsRemoteURLAsBadRequest(t *testing.T) {
 			},
 		},
 	})
-	require.Error(t, err)
+	require.Error(err)
 
 	var statusErr interface{ GetStatus() int }
-	require.ErrorAs(t, err, &statusErr)
-	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
-	assert.Contains(t, err.Error(), "duckdb push writes the local mirror")
+	require.ErrorAs(err, &statusErr)
+	assert.Equal(http.StatusBadRequest, statusErr.GetStatus())
+	assert.Contains(err.Error(), "duckdb push writes the local mirror")
 }
 
 // TestDuckDBPushConfigPinsServerMirrorPath pins the daemon-side path
@@ -387,16 +406,19 @@ func TestDuckDBPushConfigPinsServerMirrorPath(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			got, err := s.duckDBPushConfig(daemonPushRequest{DuckDB: tt.req})
 			if tt.wantErrHas != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.wantErrHas)
+				require.Error(err)
+				assert.Contains(err.Error(), tt.wantErrHas)
 				return
 			}
-			require.NoError(t, err)
-			assert.Equal(t, serverPath, got.Path,
+			require.NoError(err)
+			assert.Equal(serverPath, got.Path,
 				"pushes must always write the server-resolved mirror path")
-			assert.Equal(t, tt.wantMachine, got.MachineName)
+			assert.Equal(tt.wantMachine, got.MachineName)
 		})
 	}
 }
@@ -405,13 +427,16 @@ func TestDuckDBPushConfigPinsServerMirrorPath(t *testing.T) {
 // twin of TestDuckDBPushConfigPinsServerMirrorPath: the route surfaces the
 // path mismatch as a 400 instead of writing anywhere.
 func TestDuckDBPushRejectsMismatchedMirrorPathAsBadRequest(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	s := testServer(t, 30)
 	s.cfg.DuckDB = config.DuckDBConfig{
 		Path:        filepath.Join(t.TempDir(), "server.duckdb"),
 		MachineName: "daemon",
 	}
 
-	_, err := s.humaDuckDBPush(context.Background(), &daemonPushInput{
+	_, err := s.humaDuckDBPush(t.Context(), &daemonPushInput{
 		Body: daemonPushRequest{
 			DuckDB: &config.DuckDBConfig{
 				Path:        filepath.Join(t.TempDir(), "sessions.db"),
@@ -419,12 +444,12 @@ func TestDuckDBPushRejectsMismatchedMirrorPathAsBadRequest(t *testing.T) {
 			},
 		},
 	})
-	require.Error(t, err)
+	require.Error(err)
 
 	var statusErr interface{ GetStatus() int }
-	require.ErrorAs(t, err, &statusErr)
-	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
-	assert.Contains(t, err.Error(), "server-configured mirror path")
+	require.ErrorAs(err, &statusErr)
+	assert.Equal(http.StatusBadRequest, statusErr.GetStatus())
+	assert.Contains(err.Error(), "server-configured mirror path")
 }
 
 func TestDuckDBPushSyncOptionsPassesThroughProjectFilters(t *testing.T) {
@@ -469,7 +494,7 @@ func TestPushRoutesReturn503WhileWriterClosedForSSE(t *testing.T) {
 	defer func() { assert.NoError(t, database.ReopenWriter()) }()
 
 	for _, path := range []string{"/api/v1/push/pg", "/api/v1/push/duckdb"} {
-		req := httptest.NewRequest(
+		req := httptest.NewRequestWithContext(t.Context(),
 			http.MethodPost, path, strings.NewReader(`{"full":false}`),
 		)
 		req.Host = "127.0.0.1:0"
@@ -557,7 +582,7 @@ func TestSyncThenRunForPushWorkerRunnerRouting(t *testing.T) {
 			t.Cleanup(engine.Close)
 
 			err := f.srv.syncThenRunForPush(
-				context.Background(), engine, f.db, tt.full, nil, nil,
+				t.Context(), engine, f.db, tt.full, nil, nil,
 				func(forceFull bool) error {
 					workCalls++
 					assert.Equal(t, tt.wantForceFull, forceFull)
@@ -586,7 +611,7 @@ func TestSyncThenRunForPushRunnerErrorSkipsPush(t *testing.T) {
 	t.Cleanup(engine.Close)
 
 	err := f.srv.syncThenRunForPush(
-		context.Background(), engine, f.db, true, nil, nil,
+		t.Context(), engine, f.db, true, nil, nil,
 		func(bool) error {
 			require.FailNow(t, "push work must not run after a failed worker pass")
 			return nil
@@ -614,19 +639,22 @@ func TestSyncThenRunForPushCopiesHealthyArchiveBesideCorruptSource(t *testing.T)
 	t.Cleanup(engine.Close)
 	for _, accept := range []string{"application/json", "text/event-stream"} {
 		t.Run(accept, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			var copied []string
 			recorder := httptest.NewRecorder()
-			request := httptest.NewRequest(http.MethodPost, "/api/v1/push/pg", nil)
+			request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/push/pg", nil)
 			request.Header.Set("Accept", accept)
 			hctx := humago.NewContext(&huma.Operation{}, request, recorder)
 			runPushStream(hctx, func(_ func(postgres.PushProgress)) (any, error) {
 				var result postgres.PushResult
 				err := f.srv.syncThenRunForPush(t.Context(), engine, f.db, false, nil, nil,
 					func(forceFull bool) error {
-						assert.False(t, forceFull)
+						assert.False(forceFull)
 						session, err := f.db.GetSession(t.Context(), "healthy")
-						require.NoError(t, err)
-						require.NotNil(t, session)
+						require.NoError(err)
+						require.NotNil(session)
 						copied = append(copied, session.ID)
 						result = postgres.PushResult{SessionsPushed: 1, Errors: 2,
 							Vectors: postgres.VectorPushResult{SessionsDeferred: 3}}
@@ -634,18 +662,18 @@ func TestSyncThenRunForPushCopiesHealthyArchiveBesideCorruptSource(t *testing.T)
 					})
 				return result, err
 			})
-			assert.Equal(t, []string{"healthy"}, copied)
-			require.Equal(t, http.StatusOK, recorder.Code)
+			assert.Equal([]string{"healthy"}, copied)
+			require.Equal(http.StatusOK, recorder.Code)
 			payload := recorder.Body.String()
 			if accept == "text/event-stream" {
-				require.Contains(t, payload, "event: done\n")
+				require.Contains(payload, "event: done\n")
 				_, payload, _ = strings.Cut(payload, "data: ")
 			}
 			var result postgres.PushResult
-			require.NoError(t, json.Unmarshal([]byte(strings.TrimSpace(payload)), &result))
-			assert.Equal(t, 1, result.SessionsPushed)
-			assert.Equal(t, 2, result.Errors, "row failures must reach the push client")
-			assert.Equal(t, 3, result.Vectors.SessionsDeferred)
+			require.NoError(json.Unmarshal([]byte(strings.TrimSpace(payload)), &result))
+			assert.Equal(1, result.SessionsPushed)
+			assert.Equal(2, result.Errors, "row failures must reach the push client")
+			assert.Equal(3, result.Vectors.SessionsDeferred)
 		})
 	}
 	pushFailure := errors.New("mirror write failed")

@@ -191,9 +191,9 @@ func writeDBTemplateFiles(
 // on the request before calling te.srv.Handler() directly.
 func wrapTestHandler(cfg config.Config, base http.Handler) http.Handler {
 	defaultHost := net.JoinHostPort(
-		cfg.Host, fmt.Sprintf("%d", cfg.Port),
+		cfg.Host, strconv.Itoa(cfg.Port),
 	)
-	defaultOrigin := fmt.Sprintf("http://%s", defaultHost)
+	defaultOrigin := "http://" + defaultHost
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Host == "example.com" || r.Host == "" {
 			r.Host = defaultHost
@@ -398,7 +398,7 @@ func hostLiteral(host string) string {
 // base URL. The server is shut down when the test finishes.
 func (te *testEnv) listenAndServe(t *testing.T) string {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	port := ln.Addr().(*net.TCPAddr).Port
 	te.srv.SetPort(port)
@@ -422,7 +422,7 @@ func (te *testEnv) listenAndServe(t *testing.T) string {
 
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(
-			context.Background(), 5*time.Second,
+			t.Context(), 5*time.Second,
 		)
 		defer cancel()
 		if err := te.srv.Shutdown(ctx); err != nil &&
@@ -447,10 +447,12 @@ func (te *testEnv) listenAndServe(t *testing.T) string {
 }
 
 func TestListenAndServeUsesAvailablePortOutsideFixedRange(t *testing.T) {
+	require := require.New(t)
+
 	listeners := make([]net.Listener, 0, 100)
 	for port := 40000; port < 40100; port++ {
 		addr := fmt.Sprintf("127.0.0.1:%d", port)
-		ln, err := net.Listen("tcp", addr)
+		ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", addr)
 		if err == nil {
 			listeners = append(listeners, ln)
 			continue
@@ -461,30 +463,30 @@ func TestListenAndServeUsesAvailablePortOutsideFixedRange(t *testing.T) {
 		)
 		if dialErr != nil {
 			for _, ln := range listeners {
-				require.NoError(t, ln.Close())
+				require.NoError(ln.Close())
 			}
 			t.Skipf("port %d is neither bindable nor reachable: %v", port, err)
 		}
-		require.NoError(t, conn.Close())
+		require.NoError(conn.Close())
 	}
 	t.Cleanup(func() {
 		for _, ln := range listeners {
-			require.NoError(t, ln.Close())
+			require.NoError(ln.Close())
 		}
 	})
 
 	te := setup(t)
 	baseURL := te.listenAndServe(t)
 	parsedBaseURL, err := url.Parse(baseURL)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, portText, err := net.SplitHostPort(parsedBaseURL.Host)
-	require.NoError(t, err)
+	require.NoError(err)
 	port, err := strconv.Atoi(portText)
-	require.NoError(t, err)
-	require.False(t, port >= 40000 && port < 40100)
+	require.NoError(err)
+	require.False(port >= 40000 && port < 40100)
 
 	resp, err := http.Get(baseURL + "/api/v1/version")
-	require.NoError(t, err)
+	require.NoError(err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
@@ -555,7 +557,7 @@ func (te *testEnv) getWithContext(
 	t *testing.T, ctx context.Context, path string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, path, nil).WithContext(ctx)
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, path, nil).WithContext(ctx)
 	w := httptest.NewRecorder()
 	te.handler.ServeHTTP(w, req)
 	return w
@@ -565,19 +567,21 @@ func (te *testEnv) get(
 	t *testing.T, path string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	return te.getWithContext(t, context.Background(), path)
+	return te.getWithContext(t, t.Context(), path)
 }
 
 func TestOpenAPIEndpointDocumentsExistingAPIRoutes(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
 
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
 	contentType := w.Header().Get("Content-Type")
-	assert.True(t,
-		strings.Contains(contentType, "application/json") ||
-			strings.Contains(contentType, "application/openapi+json"),
+	assert.True(strings.Contains(contentType, "application/json") ||
+		strings.Contains(contentType, "application/openapi+json"),
 		"Content-Type = %q", contentType)
 
 	var spec struct {
@@ -588,22 +592,22 @@ func TestOpenAPIEndpointDocumentsExistingAPIRoutes(t *testing.T) {
 		} `json:"info"`
 		Paths map[string]map[string]any `json:"paths"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
-	require.Equal(t, "3.1.0", spec.OpenAPI)
-	assert.Equal(t, "AgentsView API", spec.Info.Title)
-	assert.NotEmpty(t, spec.Info.Version)
+	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
+	require.Equal("3.1.0", spec.OpenAPI)
+	assert.Equal("AgentsView API", spec.Info.Title)
+	assert.NotEmpty(spec.Info.Version)
 
-	require.Contains(t, spec.Paths, "/api/v1/sessions")
-	assert.Contains(t, spec.Paths["/api/v1/sessions"], "get")
-	require.Contains(t, spec.Paths, "/api/v1/sessions/{id}")
-	assert.Contains(t, spec.Paths["/api/v1/sessions/{id}"], "get")
-	assert.Contains(t, spec.Paths["/api/v1/sessions/{id}"], "delete")
-	require.Contains(t, spec.Paths, "/api/v1/sessions/{id}/messages")
-	assert.Contains(t, spec.Paths["/api/v1/sessions/{id}/messages"], "get")
-	require.Contains(t, spec.Paths, "/api/v1/settings")
-	assert.Contains(t, spec.Paths["/api/v1/settings"], "put")
-	require.Contains(t, spec.Paths, "/api/v1/session-stats")
-	assert.Contains(t, spec.Paths["/api/v1/session-stats"], "get")
+	require.Contains(spec.Paths, "/api/v1/sessions")
+	assert.Contains(spec.Paths["/api/v1/sessions"], "get")
+	require.Contains(spec.Paths, "/api/v1/sessions/{id}")
+	assert.Contains(spec.Paths["/api/v1/sessions/{id}"], "get")
+	assert.Contains(spec.Paths["/api/v1/sessions/{id}"], "delete")
+	require.Contains(spec.Paths, "/api/v1/sessions/{id}/messages")
+	assert.Contains(spec.Paths["/api/v1/sessions/{id}/messages"], "get")
+	require.Contains(spec.Paths, "/api/v1/settings")
+	assert.Contains(spec.Paths["/api/v1/settings"], "put")
+	require.Contains(spec.Paths, "/api/v1/session-stats")
+	assert.Contains(spec.Paths["/api/v1/session-stats"], "get")
 }
 
 func TestTypedRoutesRejectDuplicateJSONMembers(t *testing.T) {
@@ -615,10 +619,12 @@ func TestTypedRoutesRejectDuplicateJSONMembers(t *testing.T) {
 }
 
 func TestOpenAPIEndpointDocumentsTokenUsageAsArbitraryJSON(t *testing.T) {
+	require := require.New(t)
+
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
 
 	var spec struct {
 		Components struct {
@@ -627,21 +633,24 @@ func TestOpenAPIEndpointDocumentsTokenUsageAsArbitraryJSON(t *testing.T) {
 			} `json:"schemas"`
 		} `json:"components"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
 
 	messageSchema, ok := spec.Components.Schemas["DbMessage"]
-	require.True(t, ok, "spec missing DbMessage schema")
+	require.True(ok, "spec missing DbMessage schema")
 	tokenUsage, ok := messageSchema.Properties["token_usage"]
-	require.True(t, ok, "DbMessage schema missing token_usage")
+	require.True(ok, "DbMessage schema missing token_usage")
 	assert.JSONEq(t, `{}`, string(tokenUsage))
 }
 
 func TestOpenAPIEndpointKeepsUsageSummaryContract(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
 
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
 	type openAPISchema struct {
 		Ref        string                   `json:"$ref"`
 		Items      *openAPISchema           `json:"items"`
@@ -661,46 +670,44 @@ func TestOpenAPIEndpointKeepsUsageSummaryContract(t *testing.T) {
 			Schemas map[string]openAPISchema `json:"schemas"`
 		} `json:"components"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
 
 	op := spec.Paths["/api/v1/usage/summary"]["get"]
 	response := op.Responses["200"]
 	jsonContent, ok := response.Content["application/json"]
-	require.True(t, ok, "usage summary 200 response missing application/json")
-	assert.Equal(t,
-		"#/components/schemas/UsageSummaryResponse",
+	require.True(ok, "usage summary 200 response missing application/json")
+	assert.Equal("#/components/schemas/UsageSummaryResponse",
 		jsonContent.Schema.Ref)
 
 	schema, ok := spec.Components.Schemas["UsageSummaryResponse"]
-	require.True(t, ok, "UsageSummaryResponse schema missing")
-	assert.Contains(t, schema.Properties, "comparison")
-	require.Contains(t, schema.Properties, "projectTotals")
-	require.NotNil(t, schema.Properties["projectTotals"].Items)
-	assert.Equal(t,
-		"#/components/schemas/ProjectTotal",
+	require.True(ok, "UsageSummaryResponse schema missing")
+	assert.Contains(schema.Properties, "comparison")
+	require.Contains(schema.Properties, "projectTotals")
+	require.NotNil(schema.Properties["projectTotals"].Items)
+	assert.Equal("#/components/schemas/ProjectTotal",
 		schema.Properties["projectTotals"].Items.Ref)
-	require.Contains(t, schema.Properties, "modelTotals")
-	require.NotNil(t, schema.Properties["modelTotals"].Items)
-	assert.Equal(t,
-		"#/components/schemas/ModelTotal",
+	require.Contains(schema.Properties, "modelTotals")
+	require.NotNil(schema.Properties["modelTotals"].Items)
+	assert.Equal("#/components/schemas/ModelTotal",
 		schema.Properties["modelTotals"].Items.Ref)
-	require.Contains(t, schema.Properties, "agentTotals")
-	require.NotNil(t, schema.Properties["agentTotals"].Items)
-	assert.Equal(t,
-		"#/components/schemas/AgentTotal",
+	require.Contains(schema.Properties, "agentTotals")
+	require.NotNil(schema.Properties["agentTotals"].Items)
+	assert.Equal("#/components/schemas/AgentTotal",
 		schema.Properties["agentTotals"].Items.Ref)
-	require.Contains(t, schema.Properties, "cacheStats")
-	assert.Equal(t,
-		"#/components/schemas/CacheStats",
+	require.Contains(schema.Properties, "cacheStats")
+	assert.Equal("#/components/schemas/CacheStats",
 		schema.Properties["cacheStats"].Ref)
 }
 
 func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
 
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
 	type openAPISchema struct {
 		Ref        string                   `json:"$ref"`
 		Enum       []any                    `json:"enum"`
@@ -726,18 +733,17 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 			Schemas map[string]openAPISchema `json:"schemas"`
 		} `json:"components"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
 	resolveSchema := func(schema openAPISchema) openAPISchema {
 		if schema.Ref == "" {
 			return schema
 		}
 		const prefix = "#/components/schemas/"
-		require.True(t,
-			strings.HasPrefix(schema.Ref, prefix),
+		require.True(strings.HasPrefix(schema.Ref, prefix),
 			"unsupported schema ref %q", schema.Ref)
 		name := strings.TrimPrefix(schema.Ref, prefix)
 		resolved, ok := spec.Components.Schemas[name]
-		require.True(t, ok, "schema ref %q missing target", schema.Ref)
+		require.True(ok, "schema ref %q missing target", schema.Ref)
 		return resolved
 	}
 
@@ -791,9 +797,9 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 		},
 	} {
 		pathItem, ok := spec.Paths[tt.path]
-		require.True(t, ok, "spec missing path %s", tt.path)
+		require.True(ok, "spec missing path %s", tt.path)
 		op, ok := pathItem[tt.method]
-		require.True(t, ok, "spec missing operation %s %s", tt.method, tt.path)
+		require.True(ok, "spec missing operation %s %s", tt.method, tt.path)
 
 		var got []any
 		for _, param := range op.Parameters {
@@ -802,9 +808,9 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 				break
 			}
 		}
-		require.NotNil(t, got,
+		require.NotNil(got,
 			"%s %s missing query parameter %q", tt.method, tt.path, tt.name)
-		assert.Equal(t, tt.want, got)
+		assert.Equal(tt.want, got)
 	}
 
 	for _, tt := range []struct {
@@ -829,32 +835,32 @@ func TestOpenAPIEndpointDocumentsEnumsAndRequestBodies(t *testing.T) {
 		},
 	} {
 		pathItem, ok := spec.Paths[tt.path]
-		require.True(t, ok, "spec missing path %s", tt.path)
+		require.True(ok, "spec missing path %s", tt.path)
 		op, ok := pathItem[tt.method]
-		require.True(t, ok, "spec missing operation %s %s", tt.method, tt.path)
-		require.NotNil(t, op.RequestBody,
+		require.True(ok, "spec missing operation %s %s", tt.method, tt.path)
+		require.NotNil(op.RequestBody,
 			"%s %s missing requestBody", tt.method, tt.path)
 		jsonContent, ok := op.RequestBody.Content["application/json"]
-		require.True(t, ok,
+		require.True(ok,
 			"%s %s missing application/json body", tt.method, tt.path)
 		schema := resolveSchema(jsonContent.Schema)
-		require.Contains(t, schema.Properties, tt.property)
+		require.Contains(schema.Properties, tt.property)
 	}
 
 	pathItem, ok := spec.Paths["/api/v1/config/terminal"]
-	require.True(t, ok, "spec missing path /api/v1/config/terminal")
+	require.True(ok, "spec missing path /api/v1/config/terminal")
 	op, ok := pathItem["post"]
-	require.True(t, ok, "spec missing operation post /api/v1/config/terminal")
-	require.NotNil(t, op.RequestBody,
+	require.True(ok, "spec missing operation post /api/v1/config/terminal")
+	require.NotNil(op.RequestBody,
 		"post /api/v1/config/terminal missing requestBody")
 	jsonContent, ok := op.RequestBody.Content["application/json"]
-	require.True(t, ok,
+	require.True(ok,
 		"post /api/v1/config/terminal missing application/json body")
 	schema := resolveSchema(jsonContent.Schema)
 	mode, ok := schema.Properties["mode"]
-	require.True(t, ok, "post /api/v1/config/terminal missing mode property")
+	require.True(ok, "post /api/v1/config/terminal missing mode property")
 	mode = resolveSchema(mode)
-	assert.Equal(t, []any{"auto", "custom", "clipboard"}, mode.Enum)
+	assert.Equal([]any{"auto", "custom", "clipboard"}, mode.Enum)
 }
 
 func TestSearchContentSemanticGETRequiresIntentHeader(t *testing.T) {
@@ -933,10 +939,13 @@ func TestSearchContentSemanticQueryEncodeFailureReturns503(t *testing.T) {
 // TypeScript client's session_ids typed as Array<string> rather than
 // loosening to any[] | null.
 func TestOpenAPIEndpointDocumentsBatchDeleteSessionIDsAsNonNullableArray(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
 
 	var spec struct {
 		Components struct {
@@ -948,23 +957,26 @@ func TestOpenAPIEndpointDocumentsBatchDeleteSessionIDsAsNonNullableArray(t *test
 			} `json:"schemas"`
 		} `json:"components"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
 
 	schema, ok := spec.Components.Schemas["BatchDeleteInputBody"]
-	require.True(t, ok, "spec missing BatchDeleteInputBody schema")
-	assert.Contains(t, schema.Required, "session_ids")
+	require.True(ok, "spec missing BatchDeleteInputBody schema")
+	assert.Contains(schema.Required, "session_ids")
 
 	prop, ok := schema.Properties["session_ids"]
-	require.True(t, ok, "session_ids property missing from BatchDeleteInputBody schema")
-	assert.JSONEq(t, `"array"`, string(prop.Type),
+	require.True(ok, "session_ids property missing from BatchDeleteInputBody schema")
+	assert.JSONEq(`"array"`, string(prop.Type),
 		`session_ids must be a non-nullable array, not the nullable ["array","null"] union`)
 }
 
 func TestOpenAPIEndpointDocumentsOptionalProjectIdentity(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
 
 	var spec struct {
 		Components struct {
@@ -976,22 +988,25 @@ func TestOpenAPIEndpointDocumentsOptionalProjectIdentity(t *testing.T) {
 			} `json:"schemas"`
 		} `json:"components"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
 
 	schema, ok := spec.Components.Schemas["ExportProjectMapEntry"]
-	require.True(t, ok, "spec missing ExportProjectMapEntry schema")
-	assert.NotContains(t, schema.Required, "identity")
+	require.True(ok, "spec missing ExportProjectMapEntry schema")
+	assert.NotContains(schema.Required, "identity")
 	identity, ok := schema.Properties["identity"]
-	require.True(t, ok, "identity property missing from ExportProjectMapEntry")
-	assert.Equal(t, "#/components/schemas/ExportProjectIdentity", identity.Ref)
+	require.True(ok, "identity property missing from ExportProjectMapEntry")
+	assert.Equal("#/components/schemas/ExportProjectIdentity", identity.Ref)
 }
 
 func TestOpenAPIEndpointDocumentsQualitySignalResponses(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
 
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
 	type openAPISchema struct {
 		Ref        string                   `json:"$ref"`
 		Type       any                      `json:"type"`
@@ -1003,28 +1018,26 @@ func TestOpenAPIEndpointDocumentsQualitySignalResponses(t *testing.T) {
 			Schemas map[string]openAPISchema `json:"schemas"`
 		} `json:"components"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
 
 	for _, schemaName := range []string{"DbSession", "ServiceSessionDetail"} {
 		schema, ok := spec.Components.Schemas[schemaName]
-		require.True(t, ok, "schema %s missing", schemaName)
-		require.Contains(t, schema.Properties, "quality_signals",
+		require.True(ok, "schema %s missing", schemaName)
+		require.Contains(schema.Properties, "quality_signals",
 			"schema %s should expose runtime quality_signals", schemaName)
-		assert.Equal(t,
-			"#/components/schemas/DbQualitySignals",
+		assert.Equal("#/components/schemas/DbQualitySignals",
 			schema.Properties["quality_signals"].Ref,
 			"schema %s quality_signals ref", schemaName)
 	}
 
 	response, ok := spec.Components.Schemas["DbSignalSessionsResponse"]
-	require.True(t, ok, "schema DbSignalSessionsResponse missing")
+	require.True(ok, "schema DbSignalSessionsResponse missing")
 	sessions, ok := response.Properties["sessions"]
-	require.True(t, ok, "DbSignalSessionsResponse.sessions missing")
-	assert.Equal(t, "array", sessions.Type,
+	require.True(ok, "DbSignalSessionsResponse.sessions missing")
+	assert.Equal("array", sessions.Type,
 		"sessions should be a non-null array so the generated client keeps item type")
-	require.NotNil(t, sessions.Items, "sessions.items missing")
-	assert.Equal(t,
-		"#/components/schemas/DbSignalSessionExample",
+	require.NotNil(sessions.Items, "sessions.items missing")
+	assert.Equal("#/components/schemas/DbSignalSessionExample",
 		sessions.Items.Ref,
 		"sessions item schema")
 }
@@ -1035,11 +1048,14 @@ func TestOpenAPIEndpointDocumentsQualitySignalResponses(t *testing.T) {
 // it. It is a detail-only derive-on-read field with no persisted column, so it
 // must appear on ServiceSessionDetail but not on the plain DbSession schema.
 func TestOpenAPIEndpointDocumentsDecodeConfidence(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
 
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
 	type openAPISchema struct {
 		Type       any                      `json:"type"`
 		Properties map[string]openAPISchema `json:"properties"`
@@ -1049,29 +1065,31 @@ func TestOpenAPIEndpointDocumentsDecodeConfidence(t *testing.T) {
 			Schemas map[string]openAPISchema `json:"schemas"`
 		} `json:"components"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
 
 	detail, ok := spec.Components.Schemas["ServiceSessionDetail"]
-	require.True(t, ok, "schema ServiceSessionDetail missing")
+	require.True(ok, "schema ServiceSessionDetail missing")
 	prop, ok := detail.Properties["decode_confidence"]
-	require.True(t, ok,
+	require.True(ok,
 		"ServiceSessionDetail should document the derived decode_confidence field")
-	assert.Equal(t, "string", prop.Type,
+	assert.Equal("string", prop.Type,
 		"decode_confidence should be typed as a string")
 
 	dbSession, ok := spec.Components.Schemas["DbSession"]
-	require.True(t, ok, "schema DbSession missing")
+	require.True(ok, "schema DbSession missing")
 	_, present := dbSession.Properties["decode_confidence"]
-	assert.False(t, present,
+	assert.False(present,
 		"decode_confidence is detail-only and must not leak into DbSession")
 }
 
 func TestOpenAPIEndpointDocumentsImportResponseContentTypes(t *testing.T) {
+	require := require.New(t)
+
 	te := setup(t)
 
 	w := te.get(t, "/api/openapi.json")
 
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
 	type openAPIResponse struct {
 		Content map[string]struct{} `json:"content"`
 	}
@@ -1081,20 +1099,20 @@ func TestOpenAPIEndpointDocumentsImportResponseContentTypes(t *testing.T) {
 	var spec struct {
 		Paths map[string]map[string]openAPIOperation `json:"paths"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
 
 	for _, path := range []string{
 		"/api/v1/import/claude-ai",
 		"/api/v1/import/chatgpt",
 	} {
 		pathItem, ok := spec.Paths[path]
-		require.True(t, ok, "spec missing path %s", path)
+		require.True(ok, "spec missing path %s", path)
 		op, ok := pathItem["post"]
-		require.True(t, ok, "spec missing operation post %s", path)
+		require.True(ok, "spec missing operation post %s", path)
 		response, ok := op.Responses["200"]
-		require.True(t, ok, "post %s missing 200 response", path)
-		require.Contains(t, response.Content, "text/event-stream")
-		require.Contains(t, response.Content, "application/json")
+		require.True(ok, "post %s missing 200 response", path)
+		require.Contains(response.Content, "text/event-stream")
+		require.Contains(response.Content, "application/json")
 	}
 }
 
@@ -1102,7 +1120,7 @@ func (te *testEnv) post(
 	t *testing.T, path string, body string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, path,
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path,
 		strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "http://127.0.0.1:0")
@@ -1115,7 +1133,7 @@ func (te *testEnv) del(
 	t *testing.T, path string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodDelete, path, nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, path, nil)
 	req.Header.Set("Origin", "http://127.0.0.1:0")
 	w := httptest.NewRecorder()
 	te.handler.ServeHTTP(w, req)
@@ -1194,7 +1212,7 @@ func (te *testEnv) upload(
 		t.Fatalf("closing multipart writer: %v", err)
 	}
 
-	req := httptest.NewRequest(http.MethodPost,
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
 		"/api/v1/sessions/upload?"+query, &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.Header.Set("Origin", "http://127.0.0.1:0")
@@ -1319,7 +1337,7 @@ func expiredContext(
 ) (context.Context, context.CancelFunc) {
 	t.Helper()
 	return context.WithDeadline(
-		context.Background(), time.Now().Add(-1*time.Hour),
+		t.Context(), time.Now().Add(-1*time.Hour),
 	)
 }
 
@@ -1533,6 +1551,9 @@ func TestListSessions_WithData(t *testing.T) {
 }
 
 func TestListSessions_IncludesSourcePathOnlyWhenRequested(t *testing.T) {
+	assert := assert.New(t)
+	parentRequire := require.New(t)
+
 	te := setup(t)
 	sourcePath := filepath.Join(t.TempDir(), "session.jsonl")
 	te.seedSession(t, "s1", "my-app", 5, func(s *db.Session) {
@@ -1552,13 +1573,13 @@ func TestListSessions_IncludesSourcePathOnlyWhenRequested(t *testing.T) {
 	}
 
 	withoutSource := decodeSession(t, "/api/v1/sessions")
-	assert.NotContains(t, withoutSource, "file_path")
+	assert.NotContains(withoutSource, "file_path")
 
 	withSource := decodeSession(t, "/api/v1/sessions?include_source=true")
-	require.Contains(t, withSource, "file_path")
+	parentRequire.Contains(withSource, "file_path")
 	var gotPath string
-	require.NoError(t, json.Unmarshal(withSource["file_path"], &gotPath))
-	assert.Equal(t, sourcePath, gotPath)
+	parentRequire.NoError(json.Unmarshal(withSource["file_path"], &gotPath))
+	assert.Equal(sourcePath, gotPath)
 }
 
 func TestListSessions_ProjectFilter(t *testing.T) {
@@ -1679,6 +1700,8 @@ func TestSidebarIndexReturnsSkinnyRows(t *testing.T) {
 }
 
 func TestSidebarIndexPaginatesRootCompleteTrees(t *testing.T) {
+	assert := assert.New(t)
+
 	te := setup(t)
 
 	rootNewEnd := "2024-01-04T00:00:00Z"
@@ -1712,11 +1735,11 @@ func TestSidebarIndexPaginatesRootCompleteTrees(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	first := decode[sidebarPage](t, w)
 	firstIDs := sidebarIndexRowIDs(first.Sessions)
-	assert.Equal(t, 2, first.Total)
-	assert.NotEmpty(t, first.NextCursor)
-	assert.ElementsMatch(t, []string{"root-new", "child-new"}, firstIDs)
-	assert.NotContains(t, firstIDs, "root-old")
-	assert.NotContains(t, firstIDs, "child-old")
+	assert.Equal(2, first.Total)
+	assert.NotEmpty(first.NextCursor)
+	assert.ElementsMatch([]string{"root-new", "child-new"}, firstIDs)
+	assert.NotContains(firstIDs, "root-old")
+	assert.NotContains(firstIDs, "child-old")
 
 	w = te.get(t,
 		"/api/v1/sessions/sidebar-index?limit=1&cursor="+
@@ -1725,12 +1748,14 @@ func TestSidebarIndexPaginatesRootCompleteTrees(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	second := decode[sidebarPage](t, w)
 	secondIDs := sidebarIndexRowIDs(second.Sessions)
-	assert.Equal(t, 2, second.Total)
-	assert.Empty(t, second.NextCursor)
-	assert.ElementsMatch(t, []string{"root-old", "child-old"}, secondIDs)
+	assert.Equal(2, second.Total)
+	assert.Empty(second.NextCursor)
+	assert.ElementsMatch([]string{"root-old", "child-old"}, secondIDs)
 }
 
 func TestSidebarIndexPaginationTreatsContinuationsAsDescendants(t *testing.T) {
+	assert := assert.New(t)
+
 	te := setup(t)
 
 	rootEnd := "2024-01-01T00:00:00Z"
@@ -1752,9 +1777,9 @@ func TestSidebarIndexPaginationTreatsContinuationsAsDescendants(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	first := decode[db.SidebarSessionIndex](t, w)
 	firstIDs := sidebarIndexRowIDs(first.Sessions)
-	assert.Equal(t, 2, first.Total)
-	assert.NotEmpty(t, first.NextCursor)
-	assert.ElementsMatch(t, []string{"root", "continuation"}, firstIDs)
+	assert.Equal(2, first.Total)
+	assert.NotEmpty(first.NextCursor)
+	assert.ElementsMatch([]string{"root", "continuation"}, firstIDs)
 
 	w = te.get(t,
 		"/api/v1/sessions/sidebar-index?limit=1&cursor="+
@@ -1763,13 +1788,15 @@ func TestSidebarIndexPaginationTreatsContinuationsAsDescendants(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	second := decode[db.SidebarSessionIndex](t, w)
 	secondIDs := sidebarIndexRowIDs(second.Sessions)
-	assert.Equal(t, 2, second.Total)
-	assert.Empty(t, second.NextCursor)
-	assert.Equal(t, []string{"other"}, secondIDs)
-	assert.NotContains(t, secondIDs, "continuation")
+	assert.Equal(2, second.Total)
+	assert.Empty(second.NextCursor)
+	assert.Equal([]string{"other"}, secondIDs)
+	assert.NotContains(secondIDs, "continuation")
 }
 
 func TestSidebarIndexPaginatesByDescendantFreshness(t *testing.T) {
+	assert := assert.New(t)
+
 	te := setup(t)
 
 	rootEnd := "2024-01-01T00:00:00Z"
@@ -1791,9 +1818,9 @@ func TestSidebarIndexPaginatesByDescendantFreshness(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	first := decode[db.SidebarSessionIndex](t, w)
 	firstIDs := sidebarIndexRowIDs(first.Sessions)
-	assert.Equal(t, 2, first.Total)
-	assert.NotEmpty(t, first.NextCursor)
-	assert.ElementsMatch(t, []string{"root", "child"}, firstIDs)
+	assert.Equal(2, first.Total)
+	assert.NotEmpty(first.NextCursor)
+	assert.ElementsMatch([]string{"root", "child"}, firstIDs)
 
 	w = te.get(t,
 		"/api/v1/sessions/sidebar-index?limit=1&cursor="+
@@ -1802,9 +1829,9 @@ func TestSidebarIndexPaginatesByDescendantFreshness(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	second := decode[db.SidebarSessionIndex](t, w)
 	secondIDs := sidebarIndexRowIDs(second.Sessions)
-	assert.Equal(t, 2, second.Total)
-	assert.Empty(t, second.NextCursor)
-	assert.Equal(t, []string{"other"}, secondIDs)
+	assert.Equal(2, second.Total)
+	assert.Empty(second.NextCursor)
+	assert.Equal([]string{"other"}, secondIDs)
 }
 
 func TestSidebarIndexValidatesParams(t *testing.T) {
@@ -1829,6 +1856,8 @@ func TestSidebarIndexValidatesParams(t *testing.T) {
 }
 
 func TestSessionDateFilterUsesRequestedTimezoneAndDefaultsToUTC(t *testing.T) {
+	assert := assert.New(t)
+
 	te := setup(t)
 	te.seedSession(t, "utc-only", "my-app", 2, func(s *db.Session) {
 		s.UserMessageCount = 2
@@ -1848,7 +1877,7 @@ func TestSessionDateFilterUsesRequestedTimezoneAndDefaultsToUTC(t *testing.T) {
 	for i, session := range list.Sessions {
 		listIDs[i] = session.ID
 	}
-	assert.ElementsMatch(t, []string{"utc-only", "new-york-day"},
+	assert.ElementsMatch([]string{"utc-only", "new-york-day"},
 		listIDs)
 
 	w = te.get(t,
@@ -1856,13 +1885,13 @@ func TestSessionDateFilterUsesRequestedTimezoneAndDefaultsToUTC(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	list = decode[sessionListResponse](t, w)
 	require.Len(t, list.Sessions, 1)
-	assert.Equal(t, "new-york-day", list.Sessions[0].ID)
+	assert.Equal("new-york-day", list.Sessions[0].ID)
 
 	w = te.get(t,
 		"/api/v1/sessions/sidebar-index?date=2024-06-16&timezone=America%2FNew_York")
 	assertStatus(t, w, http.StatusOK)
 	index := decode[db.SidebarSessionIndex](t, w)
-	assert.Equal(t, []string{"new-york-day"},
+	assert.Equal([]string{"new-york-day"},
 		sidebarIndexRowIDs(index.Sessions))
 
 	w = te.get(t, "/api/v1/sessions?timezone=Fake%2FZone")
@@ -2313,7 +2342,7 @@ func TestSearch_CanceledContext(t *testing.T) {
 		m.ContentLength = 18
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	w := te.getWithContext(t, ctx, "/api/v1/search?q=searchable")
@@ -2408,7 +2437,7 @@ func TestSearch_NotAvailable(t *testing.T) {
 	// Simulate missing FTS by dropping the virtual table.
 	// HasFTS() will return false because the query against messages_fts will fail.
 	err := te.db.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec("DROP TABLE IF EXISTS messages_fts")
+		_, err := tx.ExecContext(t.Context(), "DROP TABLE IF EXISTS messages_fts")
 		return err
 	})
 	if err != nil {
@@ -2478,6 +2507,8 @@ func TestGetStats_ExcludeOneShotDefault(t *testing.T) {
 }
 
 func TestSessionStats_DefaultVisibilityMatchesListDefaults(t *testing.T) {
+	assert := assert.New(t)
+
 	te := setup(t)
 	startedAt := time.Now().UTC().Add(-2 * time.Hour).Format(time.RFC3339)
 	endedAt := time.Now().UTC().Add(-90 * time.Minute).Format(time.RFC3339)
@@ -2505,26 +2536,26 @@ func TestSessionStats_DefaultVisibilityMatchesListDefaults(t *testing.T) {
 	w := te.get(t, "/api/v1/session-stats")
 	assertStatus(t, w, http.StatusOK)
 	resp := decode[db.SessionStats](t, w)
-	assert.Equal(t, 1, resp.Totals.SessionsAll, "default sessions_all")
-	assert.Equal(t, 10, resp.Totals.MessagesTotal, "default messages_total")
+	assert.Equal(1, resp.Totals.SessionsAll, "default sessions_all")
+	assert.Equal(10, resp.Totals.MessagesTotal, "default messages_total")
 
 	w = te.get(t, "/api/v1/session-stats?include_one_shot=true")
 	assertStatus(t, w, http.StatusOK)
 	resp = decode[db.SessionStats](t, w)
-	assert.Equal(t, 2, resp.Totals.SessionsAll, "include_one_shot sessions_all")
-	assert.Equal(t, 15, resp.Totals.MessagesTotal, "include_one_shot messages_total")
+	assert.Equal(2, resp.Totals.SessionsAll, "include_one_shot sessions_all")
+	assert.Equal(15, resp.Totals.MessagesTotal, "include_one_shot messages_total")
 
 	w = te.get(t, "/api/v1/session-stats?include_automated=true")
 	assertStatus(t, w, http.StatusOK)
 	resp = decode[db.SessionStats](t, w)
-	assert.Equal(t, 2, resp.Totals.SessionsAll, "include_automated sessions_all")
-	assert.Equal(t, 16, resp.Totals.MessagesTotal, "include_automated messages_total")
+	assert.Equal(2, resp.Totals.SessionsAll, "include_automated sessions_all")
+	assert.Equal(16, resp.Totals.MessagesTotal, "include_automated messages_total")
 
 	w = te.get(t, "/api/v1/session-stats?include_one_shot=true&include_automated=true")
 	assertStatus(t, w, http.StatusOK)
 	resp = decode[db.SessionStats](t, w)
-	assert.Equal(t, 3, resp.Totals.SessionsAll, "include_all sessions_all")
-	assert.Equal(t, 21, resp.Totals.MessagesTotal, "include_all messages_total")
+	assert.Equal(3, resp.Totals.SessionsAll, "include_all sessions_all")
+	assert.Equal(21, resp.Totals.MessagesTotal, "include_all messages_total")
 }
 
 func TestListMachines_ExcludeOneShotDefault(t *testing.T) {
@@ -2603,7 +2634,7 @@ func TestSyncStatusIncludesCurrentProgress(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		te.engine.SyncAll(context.Background(), func(p sync.Progress) {
+		te.engine.SyncAll(t.Context(), func(p sync.Progress) {
 			if p.SessionsTotal == 0 {
 				return
 			}
@@ -2734,6 +2765,8 @@ func TestDuckDBPushLocalNoSyncDaemonWritesConfiguredPath(t *testing.T) {
 // event stream ending in a done event carrying the push result, instead of a
 // single JSON body after a silent wait.
 func TestDuckDBPushStreamsSSEDoneEvent(t *testing.T) {
+	assert := assert.New(t)
+
 	if runtime.GOOS == "windows" && runtime.GOARCH == "arm64" {
 		t.Skip("duckdb-go-bindings does not ship a windows/arm64 library")
 	}
@@ -2753,7 +2786,7 @@ func TestDuckDBPushStreamsSSEDoneEvent(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/push/duckdb",
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/push/duckdb",
 		strings.NewReader(string(body)))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "http://127.0.0.1:0")
@@ -2762,9 +2795,9 @@ func TestDuckDBPushStreamsSSEDoneEvent(t *testing.T) {
 	te.handler.ServeHTTP(w, req)
 
 	assertStatus(t, w, http.StatusOK)
-	assert.Contains(t, w.Header().Get("Content-Type"), "text/event-stream")
-	assert.Contains(t, w.Body.String(), "event: done")
-	assert.FileExists(t, target)
+	assert.Contains(w.Header().Get("Content-Type"), "text/event-stream")
+	assert.Contains(w.Body.String(), "event: done")
+	assert.FileExists(target)
 }
 
 func TestCORSPreflightRejectsBadOrigin(t *testing.T) {
@@ -3297,6 +3330,9 @@ func TestAuthRequiredProtectsPing(t *testing.T) {
 }
 
 func TestPingReportsStalledSyncWithoutLosingDaemonIdentity(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := tempDirWithRetryCleanup(t)
 	cfg := config.Config{
 		Host: "127.0.0.1", Port: 0, DataDir: dir,
@@ -3324,9 +3360,9 @@ func TestPingReportsStalledSyncWithoutLosingDaemonIdentity(t *testing.T) {
 	}
 
 	healthy := decode[pingResponse](t, te.get(t, "/api/ping"))
-	assert.True(t, healthy.OK)
-	assert.True(t, healthy.Healthy)
-	assert.Nil(t, healthy.Sync)
+	assert.True(healthy.OK)
+	assert.True(healthy.Healthy)
+	assert.Nil(healthy.Sync)
 
 	progressSeen := make(chan struct{})
 	release := make(chan struct{})
@@ -3344,33 +3380,33 @@ func TestPingReportsStalledSyncWithoutLosingDaemonIdentity(t *testing.T) {
 	select {
 	case <-progressSeen:
 	case <-time.After(time.Second):
-		require.FailNow(t, "sync did not publish progress")
+		require.FailNow("sync did not publish progress")
 	}
-	require.Eventually(t, func() bool {
+	require.Eventually(func() bool {
 		progress, active := engine.CurrentProgress()
 		return active && progress.Stalled
 	}, time.Second, time.Millisecond,
 		"sync progress did not age into the stalled state")
 
 	stalled := decode[pingResponse](t, te.get(t, "/api/ping"))
-	assert.True(t, stalled.OK,
+	assert.True(stalled.OK,
 		"ping must keep proving the running daemon's identity")
-	assert.False(t, stalled.Healthy)
-	require.NotNil(t, stalled.Sync)
-	assert.Equal(t, sync.PhaseDiscovering, stalled.Sync.Phase)
-	assert.True(t, stalled.Sync.Stalled)
-	assert.NotEmpty(t, stalled.Sync.StartedAt)
-	assert.NotEmpty(t, stalled.Sync.UpdatedAt)
+	assert.False(stalled.Healthy)
+	require.NotNil(stalled.Sync)
+	assert.Equal(sync.PhaseDiscovering, stalled.Sync.Phase)
+	assert.True(stalled.Sync.Stalled)
+	assert.NotEmpty(stalled.Sync.StartedAt)
+	assert.NotEmpty(stalled.Sync.UpdatedAt)
 
 	releaseOnce.Do(func() { close(release) })
 	select {
 	case <-done:
 	case <-time.After(time.Second):
-		require.FailNow(t, "sync did not finish after progress callback returned")
+		require.FailNow("sync did not finish after progress callback returned")
 	}
 	finished := decode[pingResponse](t, te.get(t, "/api/ping"))
-	assert.True(t, finished.Healthy)
-	assert.Nil(t, finished.Sync)
+	assert.True(finished.Healthy)
+	assert.Nil(finished.Sync)
 }
 
 func TestGetGithubConfig(t *testing.T) {
@@ -3600,9 +3636,12 @@ func TestGetSettings_UsesGitHubCLIAuthTokenFallback(t *testing.T) {
 }
 
 func TestSettingsChartPaletteRoundTrip(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 	putSettings := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
 			strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Origin", "http://127.0.0.1:0")
@@ -3616,29 +3655,32 @@ func TestSettingsChartPaletteRoundTrip(t *testing.T) {
 	var initial struct {
 		ChartPalette config.ChartPalette `json:"chart_palette"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &initial))
-	assert.Equal(t, config.ChartPaletteAgentsview, initial.ChartPalette)
+	require.NoError(json.Unmarshal(w.Body.Bytes(), &initial))
+	assert.Equal(config.ChartPaletteAgentsview, initial.ChartPalette)
 
 	w = putSettings(`{"chart_palette":"matplotlib"}`)
 	assertStatus(t, w, http.StatusOK)
 	var updated struct {
 		ChartPalette config.ChartPalette `json:"chart_palette"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
-	assert.Equal(t, config.ChartPaletteMatplotlib, updated.ChartPalette)
+	require.NoError(json.Unmarshal(w.Body.Bytes(), &updated))
+	assert.Equal(config.ChartPaletteMatplotlib, updated.ChartPalette)
 
 	var persisted struct {
 		ChartPalette config.ChartPalette `toml:"chart_palette"`
 	}
 	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
-	require.NoError(t, err)
-	assert.Equal(t, config.ChartPaletteMatplotlib, persisted.ChartPalette)
+	require.NoError(err)
+	assert.Equal(config.ChartPaletteMatplotlib, persisted.ChartPalette)
 }
 
 func TestOpenAPISettingsZoomLevels(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 	w := te.get(t, "/api/openapi.json")
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(http.StatusOK, w.Code)
 
 	var spec struct {
 		Components struct {
@@ -3647,25 +3689,28 @@ func TestOpenAPISettingsZoomLevels(t *testing.T) {
 			} `json:"schemas"`
 		} `json:"components"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(json.Unmarshal(w.Body.Bytes(), &spec))
 	for _, name := range []string{"SettingsResponse", "SettingsUpdateRequest"} {
 		var zoom struct {
 			Type string `json:"type"`
 			Enum []int  `json:"enum"`
 		}
-		require.NoError(t, json.Unmarshal(spec.Components.Schemas[name].Properties["zoom_level"], &zoom), name)
-		assert.Equal(t, "integer", zoom.Type, name)
-		assert.Equal(t, []int{67, 75, 80, 90, 100, 110, 120, 125, 130, 150, 175, 200}, zoom.Enum, name)
+		require.NoError(json.Unmarshal(spec.Components.Schemas[name].Properties["zoom_level"], &zoom), name)
+		assert.Equal("integer", zoom.Type, name)
+		assert.Equal([]int{67, 75, 80, 90, 100, 110, 120, 125, 130, 150, 175, 200}, zoom.Enum, name)
 	}
 }
 
 func TestSettingsZoomLevelRoundTrip(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	configured := config.ZoomLevel120
 	te := setup(t, func(cfg *config.Config) { cfg.ZoomLevel = &configured })
-	require.NoError(t, os.WriteFile(filepath.Join(te.dataDir, "config.toml"), []byte(
+	require.NoError(os.WriteFile(filepath.Join(te.dataDir, "config.toml"), []byte(
 		"github_token = \"keep\"\n[proxy]\nmode = \"caddy\"\n"), 0o600))
 	putSettings := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings", strings.NewReader(body))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Origin", "http://127.0.0.1:0")
 		w := httptest.NewRecorder()
@@ -3675,16 +3720,16 @@ func TestSettingsZoomLevelRoundTrip(t *testing.T) {
 
 	w := te.get(t, "/api/v1/settings")
 	assertStatus(t, w, http.StatusOK)
-	assert.Contains(t, w.Body.String(), `"zoom_level":120`)
+	assert.Contains(w.Body.String(), `"zoom_level":120`)
 
 	w = putSettings(`{"zoom_level":120}`)
 	assertStatus(t, w, http.StatusOK)
 	var updated struct {
 		ZoomLevel *config.ZoomLevel `json:"zoom_level"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
-	require.NotNil(t, updated.ZoomLevel)
-	assert.Equal(t, config.ZoomLevel120, *updated.ZoomLevel)
+	require.NoError(json.Unmarshal(w.Body.Bytes(), &updated))
+	require.NotNil(updated.ZoomLevel)
+	assert.Equal(config.ZoomLevel120, *updated.ZoomLevel)
 
 	var persisted struct {
 		ZoomLevel   *config.ZoomLevel  `toml:"zoom_level"`
@@ -3692,26 +3737,26 @@ func TestSettingsZoomLevelRoundTrip(t *testing.T) {
 		Proxy       config.ProxyConfig `toml:"proxy"`
 	}
 	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
-	require.NoError(t, err)
-	require.NotNil(t, persisted.ZoomLevel)
-	assert.Equal(t, config.ZoomLevel120, *persisted.ZoomLevel)
-	assert.Equal(t, "keep", persisted.GithubToken)
-	assert.Equal(t, "caddy", persisted.Proxy.Mode)
+	require.NoError(err)
+	require.NotNil(persisted.ZoomLevel)
+	assert.Equal(config.ZoomLevel120, *persisted.ZoomLevel)
+	assert.Equal("keep", persisted.GithubToken)
+	assert.Equal("caddy", persisted.Proxy.Mode)
 
 	before, err := os.ReadFile(filepath.Join(te.dataDir, "config.toml"))
-	require.NoError(t, err)
+	require.NoError(err)
 	w = putSettings(`{"zoom_level":101}`)
 	assertStatus(t, w, http.StatusBadRequest)
 	assertBodyContains(t, w, "zoom_level")
 	after, err := os.ReadFile(filepath.Join(te.dataDir, "config.toml"))
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
+	require.NoError(err)
+	assert.Equal(before, after)
 }
 
 func TestSettingsRejectInvalidChartPaletteWithoutChangingSelection(t *testing.T) {
 	te := setup(t)
 	putSettings := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
 			strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Origin", "http://127.0.0.1:0")
@@ -3740,6 +3785,9 @@ func TestSettingsRejectInvalidChartPaletteWithoutChangingSelection(t *testing.T)
 }
 
 func TestSettingsToolResultImagesRoundTrip(t *testing.T) {
+	assert := assert.New(t)
+	parentRequire := require.New(t)
+
 	te := setup(t)
 	// Point the loader at the same data dir the handler writes, so the
 	// assertions below exercise config.LoadMinimal rather than re-parsing the
@@ -3752,7 +3800,7 @@ func TestSettingsToolResultImagesRoundTrip(t *testing.T) {
 		return cfg.ToolResultImages
 	}
 	putSettings := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
 			strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Origin", "http://127.0.0.1:0")
@@ -3766,46 +3814,46 @@ func TestSettingsToolResultImagesRoundTrip(t *testing.T) {
 	var initial struct {
 		ToolResultImages string `json:"tool_result_images"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &initial))
-	assert.Equal(t, "keep", initial.ToolResultImages)
+	parentRequire.NoError(json.Unmarshal(w.Body.Bytes(), &initial))
+	assert.Equal("keep", initial.ToolResultImages)
 
 	w = putSettings(`{"tool_result_images":"drop"}`)
 	assertStatus(t, w, http.StatusOK)
-	assert.Equal(t, config.ToolResultImagesDrop, loadedPolicy(t))
+	assert.Equal(config.ToolResultImagesDrop, loadedPolicy(t))
 	w = putSettings(`{"tool_result_images":"offload"}`)
 	assertStatus(t, w, http.StatusOK)
 	var updated struct {
 		ToolResultImages string `json:"tool_result_images"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &updated))
-	assert.Equal(t, "offload", updated.ToolResultImages)
+	parentRequire.NoError(json.Unmarshal(w.Body.Bytes(), &updated))
+	assert.Equal("offload", updated.ToolResultImages)
 
 	var persisted struct {
 		ToolResultImages string `toml:"tool_result_images"`
 	}
 	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
-	require.NoError(t, err)
-	assert.Equal(t, "offload", persisted.ToolResultImages)
-	assert.Equal(t, config.ToolResultImagesOffload, loadedPolicy(t))
+	parentRequire.NoError(err)
+	assert.Equal("offload", persisted.ToolResultImages)
+	assert.Equal(config.ToolResultImagesOffload, loadedPolicy(t))
 
 	w = putSettings(`{"tool_result_images":"keep"}`)
 	assertStatus(t, w, http.StatusOK)
 	var restored struct {
 		ToolResultImages string `json:"tool_result_images"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &restored))
-	assert.Equal(t, "keep", restored.ToolResultImages)
+	parentRequire.NoError(json.Unmarshal(w.Body.Bytes(), &restored))
+	assert.Equal("keep", restored.ToolResultImages)
 
 	_, err = toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
-	require.NoError(t, err)
-	assert.Equal(t, "keep", persisted.ToolResultImages)
-	assert.Equal(t, config.ToolResultImagesKeep, loadedPolicy(t))
+	parentRequire.NoError(err)
+	assert.Equal("keep", persisted.ToolResultImages)
+	assert.Equal(config.ToolResultImagesKeep, loadedPolicy(t))
 }
 
 func TestSettingsRejectsOutOfEnumToolResultImages(t *testing.T) {
 	te := setup(t)
 	putSettings := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
 			strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Origin", "http://127.0.0.1:0")
@@ -3836,7 +3884,7 @@ func TestSettingsRejectsOutOfEnumToolResultImages(t *testing.T) {
 func TestSettingsToolResultImagesRejectionPreservesSiblingKeys(t *testing.T) {
 	te := setup(t)
 	putSettings := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
 			strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Origin", "http://127.0.0.1:0")
@@ -3868,7 +3916,7 @@ func TestSettingsToolResultImagesRejectionPreservesSiblingKeys(t *testing.T) {
 
 func TestSettingsToolResultImagesReadOnlyBackend(t *testing.T) {
 	te := setupPGMode(t)
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
 		strings.NewReader(`{"tool_result_images":"drop"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "http://127.0.0.1:0")
@@ -3882,7 +3930,7 @@ func TestSettingsToolResultImagesReadOnlyBackend(t *testing.T) {
 
 func TestSettingsZoomLevelReadOnlyBackend(t *testing.T) {
 	te := setupPGMode(t)
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
 		strings.NewReader(`{"zoom_level":120}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "http://127.0.0.1:0")
@@ -3895,6 +3943,9 @@ func TestSettingsZoomLevelReadOnlyBackend(t *testing.T) {
 }
 
 func TestSettingsDisabledProvidersRoundTrip(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	geminiDir := filepath.Join(t.TempDir(), "gemini")
 	te := setup(t, func(cfg *config.Config) {
 		cfg.AgentDirs = map[parser.AgentType][]string{
@@ -3903,7 +3954,7 @@ func TestSettingsDisabledProvidersRoundTrip(t *testing.T) {
 		}
 	})
 	put := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
 			strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
@@ -3923,37 +3974,36 @@ func TestSettingsDisabledProvidersRoundTrip(t *testing.T) {
 		SessionProviders []sessionProvider  `json:"session_providers"`
 		DisabledAgents   []parser.AgentType `json:"disabled_agents"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Equal(t,
-		[]parser.AgentType{parser.AgentClaude, parser.AgentGemini},
+	require.NoError(json.Unmarshal(w.Body.Bytes(), &got))
+	assert.Equal([]parser.AgentType{parser.AgentClaude, parser.AgentGemini},
 		got.DisabledAgents,
 	)
-	require.NotEmpty(t, got.SessionProviders)
-	assert.Equal(t, parser.AgentClaude, got.SessionProviders[0].ID)
-	assert.Equal(t, "Claude Code", got.SessionProviders[0].DisplayName)
-	assert.Equal(t, []string{"/sessions/claude"}, got.SessionProviders[0].Dirs)
-	assert.False(t, got.SessionProviders[0].PostAnswerToolWork)
+	require.NotEmpty(got.SessionProviders)
+	assert.Equal(parser.AgentClaude, got.SessionProviders[0].ID)
+	assert.Equal("Claude Code", got.SessionProviders[0].DisplayName)
+	assert.Equal([]string{"/sessions/claude"}, got.SessionProviders[0].Dirs)
+	assert.False(got.SessionProviders[0].PostAnswerToolWork)
 	codexIndex := slices.IndexFunc(got.SessionProviders,
 		func(provider sessionProvider) bool {
 			return provider.ID == parser.AgentCodex
 		})
-	require.NotEqual(t, -1, codexIndex)
-	assert.True(t, got.SessionProviders[codexIndex].PostAnswerToolWork)
+	require.NotEqual(-1, codexIndex)
+	assert.True(got.SessionProviders[codexIndex].PostAnswerToolWork)
 	geminiIndex := slices.IndexFunc(got.SessionProviders,
 		func(provider sessionProvider) bool {
 			return provider.ID == parser.AgentGemini
 		})
-	require.NotEqual(t, -1, geminiIndex)
+	require.NotEqual(-1, geminiIndex)
 	gemini := got.SessionProviders[geminiIndex]
-	assert.Equal(t, "Gemini", gemini.DisplayName)
-	assert.Equal(t, []string{geminiDir}, gemini.Dirs)
+	assert.Equal("Gemini", gemini.DisplayName)
+	assert.Equal([]string{geminiDir}, gemini.Dirs)
 
 	var persisted struct {
 		DisabledAgents []parser.AgentType `toml:"disabled_agents"`
 	}
 	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
-	require.NoError(t, err)
-	assert.Equal(t, got.DisabledAgents, persisted.DisabledAgents)
+	require.NoError(err)
+	assert.Equal(got.DisabledAgents, persisted.DisabledAgents)
 }
 
 func TestSettingsDisabledProvidersDefaultToEmptyArray(t *testing.T) {
@@ -3971,7 +4021,7 @@ func TestSettingsDisabledProvidersDefaultToEmptyArray(t *testing.T) {
 func TestSettingsRejectInvalidDisabledProviderWithoutMutation(t *testing.T) {
 	te := setup(t)
 	put := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
 			strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
@@ -3995,7 +4045,7 @@ func TestSettingsRejectInvalidDisabledProviderWithoutMutation(t *testing.T) {
 
 func TestSettingsDisabledProvidersRemainLockedInPGMode(t *testing.T) {
 	te := setupPGMode(t)
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
 		strings.NewReader(`{"disabled_agents":["gemini"]}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -4017,7 +4067,7 @@ func TestSettingsRemainLockedInPGMode(t *testing.T) {
 	resp := decode[readOnlySettingsResponse](t, w)
 	assert.True(t, resp.ReadOnly)
 
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
 		strings.NewReader(`{"chart_palette":"matplotlib"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "http://127.0.0.1:0")
@@ -4039,7 +4089,7 @@ func TestSettingsRemainWritableInLocalNoSyncMode(t *testing.T) {
 	resp := decode[readOnlySettingsResponse](t, w)
 	assert.False(t, resp.ReadOnly)
 
-	req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
 		strings.NewReader(`{"require_auth":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "http://127.0.0.1:0")
@@ -4056,7 +4106,7 @@ func TestPublishSession_DoesNotUseGitHubCLIAuthTokenFallbackForForwardedRequest(
 	te := setup(t)
 	te.seedSession(t, "s1", "my-app", 3)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/s1/publish",
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/s1/publish",
 		strings.NewReader("{}"))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "http://127.0.0.1:0")
@@ -4196,7 +4246,7 @@ func TestUploadSessionVariants(t *testing.T) {
 			t.Errorf("messages = %v", resp.Messages)
 		}
 
-		sess, err := te.db.GetSession(context.Background(), "upload-test")
+		sess, err := te.db.GetSession(t.Context(), "upload-test")
 		if err != nil {
 			t.Fatalf("GetSession: %v", err)
 		}
@@ -4222,7 +4272,7 @@ func TestUploadSessionVariants(t *testing.T) {
 				sess.PeakContextTokens)
 		}
 
-		msgs, err := te.db.GetMessages(context.Background(), "upload-test", 0, 10, true)
+		msgs, err := te.db.GetMessages(t.Context(), "upload-test", 0, 10, true)
 		if err != nil {
 			t.Fatalf("GetMessages: %v", err)
 		}
@@ -4244,6 +4294,9 @@ func TestUploadSessionVariants(t *testing.T) {
 	})
 
 	t.Run("sanitizes parsed rows", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		rawInput := db.MaxPlausibleTokens + 200
 		rawOutput := db.MaxPlausibleTokens + 100
 		longModel := strings.Repeat("m", 160)
@@ -4261,7 +4314,7 @@ func TestUploadSessionVariants(t *testing.T) {
 				},
 			},
 		})
-		require.NoError(t, err)
+		require.NoError(err)
 
 		content := testjsonl.NewSessionBuilder().
 			AddClaudeUser(tsEarly, "Hello \x1b[31mupload\x07").
@@ -4273,21 +4326,21 @@ func TestUploadSessionVariants(t *testing.T) {
 		assertStatus(t, w, http.StatusOK)
 
 		msgs, err := te.db.GetMessages(
-			context.Background(), "upload-sanitize", 0, 10, true,
+			t.Context(), "upload-sanitize", 0, 10, true,
 		)
-		require.NoError(t, err)
-		require.Len(t, msgs, 2)
-		assert.Equal(t, "Hello [31mupload", msgs[0].Content)
-		assert.Equal(t, len("Hello [31mupload"), msgs[0].ContentLength)
-		assert.Len(t, msgs[1].Model, 128)
-		assert.Equal(t, db.MaxPlausibleTokens, msgs[1].ContextTokens)
-		assert.Equal(t, db.MaxPlausibleTokens, msgs[1].OutputTokens)
+		require.NoError(err)
+		require.Len(msgs, 2)
+		assert.Equal("Hello [31mupload", msgs[0].Content)
+		assert.Equal(len("Hello [31mupload"), msgs[0].ContentLength)
+		assert.Len(msgs[1].Model, 128)
+		assert.Equal(db.MaxPlausibleTokens, msgs[1].ContextTokens)
+		assert.Equal(db.MaxPlausibleTokens, msgs[1].OutputTokens)
 
-		sess, err := te.db.GetSession(context.Background(), "upload-sanitize")
-		require.NoError(t, err)
-		require.NotNil(t, sess)
-		assert.Equal(t, db.MaxPlausibleTokens, sess.TotalOutputTokens)
-		assert.Equal(t, db.MaxPlausibleTokens, sess.PeakContextTokens)
+		sess, err := te.db.GetSession(t.Context(), "upload-sanitize")
+		require.NoError(err)
+		require.NotNil(sess)
+		assert.Equal(db.MaxPlausibleTokens, sess.TotalOutputTokens)
+		assert.Equal(db.MaxPlausibleTokens, sess.PeakContextTokens)
 	})
 
 	t.Run("infers relationship type", func(t *testing.T) {
@@ -4306,7 +4359,7 @@ func TestUploadSessionVariants(t *testing.T) {
 		assertStatus(t, w, http.StatusOK)
 
 		sess, err := te.db.GetSession(
-			context.Background(), "agent-task42",
+			t.Context(), "agent-task42",
 		)
 		if err != nil {
 			t.Fatalf("GetSession: %v", err)
@@ -4495,7 +4548,7 @@ func TestUploadSession_MultiSessionConflictDoesNotPartiallyWrite(t *testing.T) {
 	assertStatus(t, w, http.StatusConflict)
 	assertErrorResponse(t, w, "session upload rejected: session is excluded or trashed")
 
-	main, err := te.db.GetSessionFull(context.Background(), mainID)
+	main, err := te.db.GetSessionFull(t.Context(), mainID)
 	require.NoError(t, err, "GetSessionFull main")
 	if main != nil {
 		t.Fatalf("main session was partially written: %+v", main)
@@ -4507,6 +4560,7 @@ func TestUploadSession_MultiSessionConflictDoesNotPartiallyWrite(t *testing.T) {
 }
 
 func TestUploadSession_ReuploadPreservesPins(t *testing.T) {
+	require := require.New(t)
 
 	te := setup(t)
 
@@ -4518,12 +4572,12 @@ func TestUploadSession_ReuploadPreservesPins(t *testing.T) {
 		"project=myproj&machine=remote")
 	assertStatus(t, w, http.StatusOK)
 
-	msgs, err := te.db.GetAllMessages(context.Background(), "upload-pinned")
-	require.NoError(t, err, "GetAllMessages")
-	require.Len(t, msgs, 2, "initial messages")
+	msgs, err := te.db.GetAllMessages(t.Context(), "upload-pinned")
+	require.NoError(err, "GetAllMessages")
+	require.Len(msgs, 2, "initial messages")
 	note := "keep this"
 	_, err = te.db.PinMessage("upload-pinned", msgs[0].ID, &note)
-	require.NoError(t, err, "PinMessage")
+	require.NoError(err, "PinMessage")
 
 	// The pinned message is unchanged; only the reply was edited, so
 	// the pin re-attaches to its message through the identity rules.
@@ -4536,10 +4590,10 @@ func TestUploadSession_ReuploadPreservesPins(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 
 	pins, err := te.db.ListPinnedMessages(
-		context.Background(), "upload-pinned", "",
+		t.Context(), "upload-pinned", "",
 	)
-	require.NoError(t, err, "ListPinnedMessages")
-	require.Len(t, pins, 1, "pins after re-upload")
+	require.NoError(err, "ListPinnedMessages")
+	require.Len(pins, 1, "pins after re-upload")
 	if pins[0].Ordinal != 0 {
 		t.Fatalf("pin ordinal = %d, want 0", pins[0].Ordinal)
 	}
@@ -4554,6 +4608,8 @@ func TestUploadSession_ReuploadPreservesPins(t *testing.T) {
 // dropped rather than guessed onto the edited row. Both stores apply
 // the same rule, keeping SQLite and PostgreSQL consistent.
 func TestUploadSession_ReuploadDropsPinOnEditedMessage(t *testing.T) {
+	require := require.New(t)
+
 	te := setup(t)
 
 	initial := testjsonl.NewSessionBuilder().
@@ -4565,12 +4621,12 @@ func TestUploadSession_ReuploadDropsPinOnEditedMessage(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 
 	msgs, err := te.db.GetAllMessages(
-		context.Background(), "upload-pin-edited",
+		t.Context(), "upload-pin-edited",
 	)
-	require.NoError(t, err, "GetAllMessages")
-	require.Len(t, msgs, 2, "initial messages")
+	require.NoError(err, "GetAllMessages")
+	require.Len(msgs, 2, "initial messages")
 	_, err = te.db.PinMessage("upload-pin-edited", msgs[0].ID, nil)
-	require.NoError(t, err, "PinMessage")
+	require.NoError(err, "PinMessage")
 
 	updated := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsEarly, "edited upload").
@@ -4581,30 +4637,33 @@ func TestUploadSession_ReuploadDropsPinOnEditedMessage(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 
 	pins, err := te.db.ListPinnedMessages(
-		context.Background(), "upload-pin-edited", "",
+		t.Context(), "upload-pin-edited", "",
 	)
-	require.NoError(t, err, "ListPinnedMessages")
+	require.NoError(err, "ListPinnedMessages")
 	assert.Empty(t, pins,
 		"editing the pinned message drops the pin")
 }
 
 func TestUploadSession_ReuploadDoesNotMoveLegacyPinToIDEEnvelope(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 	const sessionID = "upload-pinned-envelope"
 	const mixedPrompt = "<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file> Explain this file."
 
-	require.NoError(t, te.db.UpsertSession(db.Session{
+	require.NoError(te.db.UpsertSession(db.Session{
 		ID: sessionID, Project: "myproj", Machine: "remote", Agent: "claude",
 	}), "seed legacy uploaded session")
-	require.NoError(t, te.db.ReplaceSessionMessages(sessionID, []db.Message{{
+	require.NoError(te.db.ReplaceSessionMessages(sessionID, []db.Message{{
 		SessionID: sessionID, Ordinal: 0, Role: "user",
 		Content: mixedPrompt, ContentLength: len(mixedPrompt),
 	}}), "seed legacy mixed prompt")
-	msgs, err := te.db.GetAllMessages(context.Background(), sessionID)
-	require.NoError(t, err, "GetAllMessages before re-upload")
-	require.Len(t, msgs, 1, "legacy messages")
+	msgs, err := te.db.GetAllMessages(t.Context(), sessionID)
+	require.NoError(err, "GetAllMessages before re-upload")
+	require.Len(msgs, 1, "legacy messages")
 	_, err = te.db.PinMessage(sessionID, msgs[0].ID, nil)
-	require.NoError(t, err, "PinMessage")
+	require.NoError(err, "PinMessage")
 
 	updated := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsEarly, mixedPrompt).
@@ -4613,27 +4672,30 @@ func TestUploadSession_ReuploadDoesNotMoveLegacyPinToIDEEnvelope(t *testing.T) {
 		"project=myproj&machine=remote")
 	assertStatus(t, w, http.StatusOK)
 
-	pins, err := te.db.ListPinnedMessages(context.Background(), sessionID, "")
-	require.NoError(t, err, "ListPinnedMessages")
-	assert.Empty(t, pins,
+	pins, err := te.db.ListPinnedMessages(t.Context(), sessionID, "")
+	require.NoError(err, "ListPinnedMessages")
+	assert.Empty(pins,
 		"legacy pin must not move from the prompt to hidden IDE metadata")
 
-	msgs, err = te.db.GetAllMessages(context.Background(), sessionID)
-	require.NoError(t, err, "GetAllMessages after re-upload")
-	require.Len(t, msgs, 2, "split messages")
-	assert.True(t, msgs[0].IsSystem, "IDE envelope must remain hidden")
-	assert.Equal(t, "Explain this file.", msgs[1].Content)
+	msgs, err = te.db.GetAllMessages(t.Context(), sessionID)
+	require.NoError(err, "GetAllMessages after re-upload")
+	require.Len(msgs, 2, "split messages")
+	assert.True(msgs[0].IsSystem, "IDE envelope must remain hidden")
+	assert.Equal("Explain this file.", msgs[1].Content)
 }
 
 func TestUploadSession_ReuploadFollowsLegacyPinAcrossIDEEnvelopeSplit(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 	const sessionID = "upload-pinned-after-envelope"
 	const mixedPrompt = "<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file> Explain this file."
 
-	require.NoError(t, te.db.UpsertSession(db.Session{
+	require.NoError(te.db.UpsertSession(db.Session{
 		ID: sessionID, Project: "myproj", Machine: "remote", Agent: "claude",
 	}), "seed legacy uploaded session")
-	require.NoError(t, te.db.ReplaceSessionMessages(sessionID, []db.Message{
+	require.NoError(te.db.ReplaceSessionMessages(sessionID, []db.Message{
 		{
 			SessionID: sessionID, Ordinal: 0, Role: "user",
 			Content: mixedPrompt, ContentLength: len(mixedPrompt),
@@ -4643,11 +4705,11 @@ func TestUploadSession_ReuploadFollowsLegacyPinAcrossIDEEnvelopeSplit(t *testing
 			Content: "Legacy reply", ContentLength: len("Legacy reply"),
 		},
 	}), "seed legacy messages")
-	msgs, err := te.db.GetAllMessages(context.Background(), sessionID)
-	require.NoError(t, err, "GetAllMessages before re-upload")
-	require.Len(t, msgs, 2, "legacy messages")
+	msgs, err := te.db.GetAllMessages(t.Context(), sessionID)
+	require.NoError(err, "GetAllMessages before re-upload")
+	require.Len(msgs, 2, "legacy messages")
 	_, err = te.db.PinMessage(sessionID, msgs[1].ID, nil)
-	require.NoError(t, err, "PinMessage")
+	require.NoError(err, "PinMessage")
 
 	updated := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsEarly, mixedPrompt).
@@ -4661,18 +4723,18 @@ func TestUploadSession_ReuploadFollowsLegacyPinAcrossIDEEnvelopeSplit(t *testing
 	// role, content, and occurrence rank identify its message, so the
 	// pin follows "Legacy reply" to its shifted ordinal instead of
 	// re-attaching to the visible prompt at the saved ordinal.
-	pins, err := te.db.ListPinnedMessages(context.Background(), sessionID, "")
-	require.NoError(t, err, "ListPinnedMessages")
-	require.Len(t, pins, 1, "legacy pin must survive the envelope split")
-	assert.Equal(t, 2, pins[0].Ordinal,
+	pins, err := te.db.ListPinnedMessages(t.Context(), sessionID, "")
+	require.NoError(err, "ListPinnedMessages")
+	require.Len(pins, 1, "legacy pin must survive the envelope split")
+	assert.Equal(2, pins[0].Ordinal,
 		"pin follows its message, not the saved ordinal")
 
-	msgs, err = te.db.GetAllMessages(context.Background(), sessionID)
-	require.NoError(t, err, "GetAllMessages after re-upload")
-	require.Len(t, msgs, 3, "split messages")
-	assert.True(t, msgs[0].IsSystem, "IDE envelope must remain hidden")
-	assert.Equal(t, "Explain this file.", msgs[1].Content)
-	assert.Equal(t, "Legacy reply", msgs[2].Content)
+	msgs, err = te.db.GetAllMessages(t.Context(), sessionID)
+	require.NoError(err, "GetAllMessages after re-upload")
+	require.Len(msgs, 3, "split messages")
+	assert.True(msgs[0].IsSystem, "IDE envelope must remain hidden")
+	assert.Equal("Explain this file.", msgs[1].Content)
+	assert.Equal("Legacy reply", msgs[2].Content)
 }
 
 func TestUploadSession_EmptyFile(t *testing.T) {
@@ -4705,7 +4767,7 @@ func TestTriggerSync_NonStreaming(t *testing.T) {
 	rec := httptest.NewRecorder()
 	nf := &noFlushWriter{rec}
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sync", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sync", nil)
 	req.Header.Set("Content-Type", "application/json")
 	te.handler.ServeHTTP(nf, req)
 	assertStatus(t, rec, http.StatusOK)
@@ -4798,14 +4860,14 @@ func TestWatchSession_Events(t *testing.T) {
 		},
 		Machine: "test",
 	})
-	engine.SyncAll(context.Background(), nil)
+	engine.SyncAll(t.Context(), nil)
 
 	ctx, cancel := context.WithTimeout(
-		context.Background(), 5*time.Second,
+		t.Context(), 5*time.Second,
 	)
 	defer cancel()
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(ctx,
 		http.MethodGet, "/api/v1/sessions/watch-sess/watch", nil,
 	).WithContext(ctx)
 	w := newFlushRecorder()
@@ -4856,14 +4918,14 @@ func TestWatchSession_FileDisappearAndResolve(t *testing.T) {
 		},
 		Machine: "test",
 	})
-	engine.SyncAll(context.Background(), nil)
+	engine.SyncAll(t.Context(), nil)
 
 	ctx, cancel := context.WithTimeout(
-		context.Background(), 15*time.Second,
+		t.Context(), 15*time.Second,
 	)
 	defer cancel()
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(ctx,
 		http.MethodGet, "/api/v1/sessions/vanish-sess/watch", nil,
 	).WithContext(ctx)
 	w := newFlushRecorder()
@@ -4905,7 +4967,7 @@ func TestTriggerSync_SSEEvents(t *testing.T) {
 	for _, name := range []string{"a", "b"} {
 		te.writeSessionFile(t, "sse-proj", name+".jsonl",
 			testjsonl.NewSessionBuilder().
-				AddClaudeUser(tsZero, fmt.Sprintf("msg %s", name)),
+				AddClaudeUser(tsZero, "msg "+name),
 		)
 	}
 
@@ -4961,6 +5023,9 @@ func TestResyncEndpoint(t *testing.T) {
 }
 
 func TestResyncEndpointFallsBackToIncrementalWhenResyncAborts(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 
 	sessionPath := te.writeSessionFile(t, "resync-proj", "resync.jsonl",
@@ -4969,16 +5034,16 @@ func TestResyncEndpointFallsBackToIncrementalWhenResyncAborts(t *testing.T) {
 	)
 
 	syncStats := te.syncSSE(t)
-	require.Equal(t, 1, syncStats.Synced, "initial sync")
+	require.Equal(1, syncStats.Synced, "initial sync")
 
-	require.NoError(t, os.Remove(sessionPath), "remove session file")
+	require.NoError(os.Remove(sessionPath), "remove session file")
 	resyncStats := te.resyncSSE(t)
-	assert.False(t, resyncStats.Aborted,
+	assert.False(resyncStats.Aborted,
 		"route should return the incremental fallback result")
-	assert.Empty(t, resyncStats.Warnings,
+	assert.Empty(resyncStats.Warnings,
 		"aborted resync warnings should not be the final response")
-	assert.Equal(t, 0, resyncStats.Synced)
-	assert.Equal(t, 0, resyncStats.Failed)
+	assert.Equal(0, resyncStats.Synced)
+	assert.Equal(0, resyncStats.Failed)
 }
 
 // TestResyncPreservesDataThroughSwap verifies the full resync
@@ -5093,7 +5158,7 @@ func TestResyncConcurrentReads(t *testing.T) {
 
 	// Spin up concurrent readers with a barrier to ensure
 	// they are actively querying before resync starts.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	var wg stdlibsync.WaitGroup
@@ -5109,7 +5174,7 @@ func TestResyncConcurrentReads(t *testing.T) {
 					return
 				default:
 				}
-				req := httptest.NewRequest(
+				req := httptest.NewRequestWithContext(ctx,
 					http.MethodGet, "/api/v1/sessions",
 					nil,
 				)
@@ -5338,7 +5403,7 @@ func TestGetVersion_Default(t *testing.T) {
 
 func TestFindAvailablePortSkipsOccupied(t *testing.T) {
 	// Bind a port on 127.0.0.1 so FindAvailablePort must skip it.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -5359,7 +5424,7 @@ func TestFindAvailablePortWildcardSkipsIPv4OccupiedPort(t *testing.T) {
 	// A dual-stack wildcard listen can succeed on IPv6 while an unrelated
 	// process still owns the port on IPv4 (observed on macOS), so wildcard
 	// availability must check the IPv4 wildcard address on its own.
-	ln, err := net.Listen("tcp4", "0.0.0.0:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", "0.0.0.0:0")
 	require.NoError(t, err, "bind IPv4 wildcard")
 	defer ln.Close()
 
@@ -5372,7 +5437,7 @@ func TestFindAvailablePortWildcardSkipsIPv4OccupiedPort(t *testing.T) {
 }
 
 func TestFindAvailablePortWildcardSkipsIPv6OccupiedPort(t *testing.T) {
-	ln, err := net.Listen("tcp6", "[::]:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp6", "[::]:0")
 	if err != nil {
 		t.Skipf("IPv6 unavailable: %v", err)
 	}
@@ -5395,7 +5460,7 @@ func TestFindAvailablePortZeroReturnsAssignedPort(t *testing.T) {
 }
 
 func TestFindAvailablePortDoesNotReturnExhaustedCandidate(t *testing.T) {
-	ln, err := net.Listen("tcp4", "127.0.0.1:65535")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", "127.0.0.1:65535")
 	if err != nil {
 		t.Skipf("reserve final TCP port: %v", err)
 	}
@@ -5409,9 +5474,9 @@ func TestFindAvailablePortDoesNotReturnExhaustedCandidate(t *testing.T) {
 func TestEvents_StreamsDataChangedAfterSync(t *testing.T) {
 	te := setup(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil).WithContext(ctx)
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events", nil).WithContext(ctx)
 	w := newFlushRecorder()
 
 	done := make(chan struct{})
@@ -5430,9 +5495,9 @@ func TestEvents_StreamsDataChangedAfterSync(t *testing.T) {
 func TestEvents_StreamsInLocalNoSyncMode(t *testing.T) {
 	te := setupNoSyncMode(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil).WithContext(ctx)
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet, "/api/v1/events", nil).WithContext(ctx)
 	w := newFlushRecorder()
 
 	done := make(chan struct{})
@@ -5450,7 +5515,7 @@ func TestEvents_ReturnsServiceUnavailableInPGMode(t *testing.T) {
 	// A server with engine == nil (PG serve mode) must not stream.
 	te := setupPGMode(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events", nil)
 	w := httptest.NewRecorder()
 	te.handler.ServeHTTP(w, req)
 
@@ -5472,9 +5537,9 @@ func withAuth(token string) setupOption {
 func TestEvents_AuthViaQueryTokenSucceeds(t *testing.T) {
 	te := setup(t, withAuth("secret"))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	req := httptest.NewRequest(http.MethodGet,
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet,
 		"/api/v1/events?token=secret", nil).WithContext(ctx)
 	w := newFlushRecorder()
 
@@ -5493,9 +5558,9 @@ func TestEvents_AuthViaQueryTokenSucceeds(t *testing.T) {
 func TestEvents_AuthViaBearerHeaderSucceeds(t *testing.T) {
 	te := setup(t, withAuth("secret"))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	req := httptest.NewRequest(http.MethodGet,
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet,
 		"/api/v1/events", nil).WithContext(ctx)
 	req.Header.Set("Authorization", "Bearer secret")
 	w := newFlushRecorder()
@@ -5515,7 +5580,7 @@ func TestEvents_AuthViaBearerHeaderSucceeds(t *testing.T) {
 func TestEvents_AuthMissingTokenReturns401(t *testing.T) {
 	te := setup(t, withAuth("secret"))
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/events", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/events", nil)
 	w := httptest.NewRecorder()
 	te.handler.ServeHTTP(w, req)
 
@@ -5527,7 +5592,7 @@ func TestEvents_AuthMissingTokenReturns401(t *testing.T) {
 func TestEvents_AuthInvalidTokenReturns401(t *testing.T) {
 	te := setup(t, withAuth("secret"))
 
-	req := httptest.NewRequest(http.MethodGet,
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet,
 		"/api/v1/events?token=wrong", nil)
 	w := httptest.NewRecorder()
 	te.handler.ServeHTTP(w, req)
@@ -5545,9 +5610,9 @@ func TestEvents_AuthInvalidTokenReturns401(t *testing.T) {
 func TestSessionWatch_AuthViaQueryTokenSucceeds(t *testing.T) {
 	te := setup(t, withAuth("secret"))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
 	defer cancel()
-	req := httptest.NewRequest(http.MethodGet,
+	req := httptest.NewRequestWithContext(ctx, http.MethodGet,
 		"/api/v1/sessions/missing/watch?token=secret", nil).WithContext(ctx)
 	w := newFlushRecorder()
 
@@ -5570,6 +5635,9 @@ func TestSessionWatch_AuthViaQueryTokenSucceeds(t *testing.T) {
 }
 
 func TestHandleToolCalls_Basic(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 	te.seedSession(t, "tc-1", "my-app", 2)
 	te.seedMessages(t, "tc-1", 2, func(i int, m *db.Message) {
@@ -5600,21 +5668,21 @@ func TestHandleToolCalls_Basic(t *testing.T) {
 		ToolCalls []service.ToolCall `json:"tool_calls"`
 		Count     int                `json:"count"`
 	}
-	require.NoError(t, json.UnmarshalRead(w.Body, &body))
-	require.Equal(t, 2, body.Count)
-	require.Len(t, body.ToolCalls, 2)
-	assert.Equal(t, "Read", body.ToolCalls[0].ToolName)
-	assert.Equal(t, "toolu_1", body.ToolCalls[0].ToolUseID)
-	assert.Equal(t, `{"file_path":"/tmp/x"}`, body.ToolCalls[0].InputJSON)
-	assert.Equal(t, "Bash", body.ToolCalls[1].ToolName)
-	assert.NotEmpty(t, body.ToolCalls[0].Timestamp)
-	assert.Equal(t, 1, body.ToolCalls[0].Ordinal)
+	require.NoError(json.UnmarshalRead(w.Body, &body))
+	require.Equal(2, body.Count)
+	require.Len(body.ToolCalls, 2)
+	assert.Equal("Read", body.ToolCalls[0].ToolName)
+	assert.Equal("toolu_1", body.ToolCalls[0].ToolUseID)
+	assert.JSONEq(`{"file_path":"/tmp/x"}`, body.ToolCalls[0].InputJSON)
+	assert.Equal("Bash", body.ToolCalls[1].ToolName)
+	assert.NotEmpty(body.ToolCalls[0].Timestamp)
+	assert.Equal(1, body.ToolCalls[0].Ordinal)
 }
 
 func TestHandleSyncSession_MissingFields(t *testing.T) {
 	te := setup(t)
 	body := strings.NewReader(`{}`)
-	req := httptest.NewRequest(http.MethodPost,
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
 		"/api/v1/sessions/sync", body)
 	w := httptest.NewRecorder()
 	te.handler.ServeHTTP(w, req)
@@ -5625,7 +5693,7 @@ func TestHandleSyncSession_BothFields(t *testing.T) {
 	te := setup(t)
 	body := strings.NewReader(
 		`{"path":"/tmp/a","id":"s-1"}`)
-	req := httptest.NewRequest(http.MethodPost,
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
 		"/api/v1/sessions/sync", body)
 	w := httptest.NewRecorder()
 	te.handler.ServeHTTP(w, req)
@@ -5635,7 +5703,7 @@ func TestHandleSyncSession_BothFields(t *testing.T) {
 func TestHandleSyncSession_InvalidJSON(t *testing.T) {
 	te := setup(t)
 	body := strings.NewReader(`not json`)
-	req := httptest.NewRequest(http.MethodPost,
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
 		"/api/v1/sessions/sync", body)
 	w := httptest.NewRecorder()
 	te.handler.ServeHTTP(w, req)
@@ -5643,11 +5711,14 @@ func TestHandleSyncSession_InvalidJSON(t *testing.T) {
 }
 
 func TestSettingsAgentHomesPersistAndRoundTrip(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
-	require.NoError(t, os.WriteFile(filepath.Join(te.dataDir, "config.toml"),
+	require.NoError(os.WriteFile(filepath.Join(te.dataDir, "config.toml"),
 		[]byte("[agents.pi]\ndirs = [\"/sessions/pi\"]\n"), 0o600))
 	put := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPut, "/api/v1/settings",
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPut, "/api/v1/settings",
 			strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
@@ -5663,7 +5734,7 @@ func TestSettingsAgentHomesPersistAndRoundTrip(t *testing.T) {
 		var got struct {
 			SessionProviders []sessionProvider `json:"session_providers"`
 		}
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
+		require.NoError(json.Unmarshal(w.Body.Bytes(), &got))
 		byID := make(map[parser.AgentType]sessionProvider, len(got.SessionProviders))
 		for _, provider := range got.SessionProviders {
 			byID[provider.ID] = provider
@@ -5674,23 +5745,23 @@ func TestSettingsAgentHomesPersistAndRoundTrip(t *testing.T) {
 	w := put(`{"agent_homes":{"codex":["~/.codex-work","/srv/codex"],"pi":["~/.pi-work/agent","~/.pi-personal/agent"]}}`)
 	assertStatus(t, w, http.StatusOK)
 	providers := decode(w)
-	assert.True(t, providers[parser.AgentCodex].HomesSupported)
-	assert.Equal(t, []string{"~/.codex-work", "/srv/codex"},
+	assert.True(providers[parser.AgentCodex].HomesSupported)
+	assert.Equal([]string{"~/.codex-work", "/srv/codex"},
 		providers[parser.AgentCodex].Homes)
-	assert.True(t, providers[parser.AgentPi].HomesSupported)
-	assert.Equal(t, []string{"~/.pi-work/agent", "~/.pi-personal/agent"}, providers[parser.AgentPi].Homes)
-	assert.True(t, providers[parser.AgentClaude].HomesSupported)
-	assert.Equal(t, []string{}, providers[parser.AgentClaude].Homes)
-	assert.False(t, providers[parser.AgentGemini].HomesSupported)
+	assert.True(providers[parser.AgentPi].HomesSupported)
+	assert.Equal([]string{"~/.pi-work/agent", "~/.pi-personal/agent"}, providers[parser.AgentPi].Homes)
+	assert.True(providers[parser.AgentClaude].HomesSupported)
+	assert.Equal([]string{}, providers[parser.AgentClaude].Homes)
+	assert.False(providers[parser.AgentGemini].HomesSupported)
 
 	var persisted struct {
 		Agents map[string]config.AgentDirectoryConfig `toml:"agents"`
 	}
 	_, err := toml.DecodeFile(filepath.Join(te.dataDir, "config.toml"), &persisted)
-	require.NoError(t, err)
-	assert.Equal(t, []string{"~/.codex-work", "/srv/codex"}, persisted.Agents["codex"].Homes)
-	assert.Equal(t, []string{"~/.pi-work/agent", "~/.pi-personal/agent"}, persisted.Agents["pi"].Homes)
-	assert.Equal(t, []string{"/sessions/pi"}, persisted.Agents["pi"].Dirs)
+	require.NoError(err)
+	assert.Equal([]string{"~/.codex-work", "/srv/codex"}, persisted.Agents["codex"].Homes)
+	assert.Equal([]string{"~/.pi-work/agent", "~/.pi-personal/agent"}, persisted.Agents["pi"].Homes)
+	assert.Equal([]string{"/sessions/pi"}, persisted.Agents["pi"].Dirs)
 
 	w = put(`{"agent_homes":{"gemini":["/x"]}}`)
 	assertStatus(t, w, http.StatusBadRequest)
@@ -5698,27 +5769,30 @@ func TestSettingsAgentHomesPersistAndRoundTrip(t *testing.T) {
 
 	w = put(`{"agent_homes":{"codex":[],"pi":[]}}`)
 	assertStatus(t, w, http.StatusOK)
-	assert.Equal(t, []string{}, decode(w)[parser.AgentCodex].Homes)
+	assert.Equal([]string{}, decode(w)[parser.AgentCodex].Homes)
 	raw, err := os.ReadFile(filepath.Join(te.dataDir, "config.toml"))
-	require.NoError(t, err)
+	require.NoError(err)
 	persisted.Agents = nil
 	_, err = toml.Decode(string(raw), &persisted)
-	require.NoError(t, err)
-	assert.Empty(t, persisted.Agents["codex"].Homes)
-	assert.Empty(t, persisted.Agents["pi"].Homes)
-	assert.Equal(t, []string{"/sessions/pi"}, persisted.Agents["pi"].Dirs)
+	require.NoError(err)
+	assert.Empty(persisted.Agents["codex"].Homes)
+	assert.Empty(persisted.Agents["pi"].Homes)
+	assert.Equal([]string{"/sessions/pi"}, persisted.Agents["pi"].Dirs)
 }
 
 func TestMarkdownSessionExportPreservesOffloadedImages(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 	te.db.SetToolResultImages(config.ToolResultImagesOffload)
 	te.db.SetAssetsDir(t.TempDir())
 	te.seedSession(t, "image-export", "project", 1)
-	require.NoError(t, te.db.InsertMessages([]db.Message{{SessionID: "image-export", Role: "assistant", Content: "image result", ToolCalls: []db.ToolCall{{ToolUseID: "call", ToolName: "Read", Category: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`}}}}))
+	require.NoError(te.db.InsertMessages([]db.Message{{SessionID: "image-export", Role: "assistant", Content: "image result", ToolCalls: []db.ToolCall{{ToolUseID: "call", ToolName: "Read", Category: "Read", ResultContent: `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`}}}}))
 	w := te.get(t, "/api/v1/sessions/image-export/md")
-	require.Equal(t, http.StatusOK, w.Code)
-	assert.Contains(t, w.Body.String(), "image_ref")
-	assert.Contains(t, w.Body.String(), "asset://")
-	assert.Contains(t, w.Body.String(), "agentsview_image")
-	assert.NotContains(t, w.Body.String(), "base64,AAEC")
+	require.Equal(http.StatusOK, w.Code)
+	assert.Contains(w.Body.String(), "image_ref")
+	assert.Contains(w.Body.String(), "asset://")
+	assert.Contains(w.Body.String(), "agentsview_image")
+	assert.NotContains(w.Body.String(), "base64,AAEC")
 }

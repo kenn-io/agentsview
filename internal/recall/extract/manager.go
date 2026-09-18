@@ -137,10 +137,10 @@ type Status struct {
 // NewManager validates the configuration and computes its fingerprint.
 func NewManager(cfg ManagerConfig) (*Manager, error) {
 	if cfg.DB == nil {
-		return nil, fmt.Errorf("extraction manager requires a database")
+		return nil, errors.New("extraction manager requires a database")
 	}
 	if cfg.Client == nil {
-		return nil, fmt.Errorf("extraction manager requires a client")
+		return nil, errors.New("extraction manager requires a client")
 	}
 	if err := cfg.Client.ValidateRequestShape(); err != nil {
 		return nil, err
@@ -152,7 +152,7 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 		)
 	}
 	if strings.TrimSpace(cfg.Identity.Model) == "" {
-		return nil, fmt.Errorf("extraction manager requires a model identity")
+		return nil, errors.New("extraction manager requires a model identity")
 	}
 	for _, role := range cfg.Segmenter.PromptRoles() {
 		if strings.TrimSpace(cfg.Prompts[role]) == "" {

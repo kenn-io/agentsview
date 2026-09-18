@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"errors"
 	"os"
@@ -105,7 +104,7 @@ func classifierHashInSQLite(t *testing.T, dbPath string) string {
 	require.NoError(t, err, "open raw sqlite")
 	defer conn.Close()
 	var v string
-	err = conn.QueryRow(
+	err = conn.QueryRowContext(t.Context(),
 		`SELECT value FROM stats WHERE key = ?`,
 		db.ClassifierHashKey,
 	).Scan(&v)
@@ -123,7 +122,7 @@ func runClassifierRebuildTest(
 ) (string, error) {
 	t.Helper()
 	out := &bytes.Buffer{}
-	err := runClassifierRebuild(context.Background(), cfg, out, includePG)
+	err := runClassifierRebuild(t.Context(), cfg, out, includePG)
 	return out.String(), err
 }
 
@@ -205,14 +204,16 @@ func TestClassifierRebuildGuard(t *testing.T) {
 }
 
 func TestClassifierRebuildRefusesBackgroundLaunchLock(t *testing.T) {
+	require := require.New(t)
+
 	fx := newClassifierFixture(t, nil)
-	require.NoError(t, os.MkdirAll(fx.Dir, 0o700))
+	require.NoError(os.MkdirAll(fx.Dir, 0o700))
 	launchLock, ok := acquireBackgroundLaunchLock(fx.Dir)
-	require.True(t, ok)
-	t.Cleanup(func() { require.NoError(t, launchLock.Unlock()) })
+	require.True(ok)
+	t.Cleanup(func() { require.NoError(launchLock.Unlock()) })
 
 	_, err := runClassifierRebuildTest(t, fx.Cfg, false)
-	require.Error(t, err)
+	require.Error(err)
 	assert.Contains(t, err.Error(), "daemon launch is in progress")
 }
 

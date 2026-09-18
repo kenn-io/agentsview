@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -267,6 +266,8 @@ func TestPruner_PruneScenarios(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			d := dbtest.OpenTestDB(t)
 			dbtest.SeedSession(t, d, "s1", "test", func(s *db.Session) {
 				s.EndedAt = new("2024-01-01T00:00:00Z")
@@ -278,47 +279,50 @@ func TestPruner_PruneScenarios(t *testing.T) {
 
 			out := buf.String()
 			for _, want := range tt.wantOutput {
-				assert.Contains(t, out, want,
+				assert.Contains(out, want,
 					"expected output containing %q", want)
 			}
 			if tt.cfg.Yes {
-				assert.NotContains(t, out, "[y/N]",
+				assert.NotContains(out, "[y/N]",
 					"should not prompt when --yes is set")
 			}
 
-			s, _ := d.GetSession(context.Background(), "s1")
+			s, _ := d.GetSession(t.Context(), "s1")
 			if tt.wantKept {
-				assert.NotNil(t, s, "session was deleted unexpectedly")
+				assert.NotNil(s, "session was deleted unexpectedly")
 			} else {
-				assert.Nil(t, s, "session still exists")
+				assert.Nil(s, "session still exists")
 			}
 		})
 	}
 }
 
 func TestDeleteFilesRemovesFiles(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	subdir := filepath.Join(dir, "session1")
-	require.NoError(t, os.MkdirAll(subdir, 0o755))
+	require.NoError(os.MkdirAll(subdir, 0o755))
 
 	f := filepath.Join(subdir, "data.jsonl")
-	require.NoError(t, os.WriteFile(f, []byte("test data"), 0o644))
+	require.NoError(os.WriteFile(f, []byte("test data"), 0o644))
 
 	sessions := []db.Session{
 		{ID: "s1", FilePath: new(f)},
 	}
 
 	removed, reclaimed := deleteFiles(sessions)
-	assert.Equal(t, 1, removed)
-	assert.Equal(t, int64(9), reclaimed)
+	assert.Equal(1, removed)
+	assert.Equal(int64(9), reclaimed)
 
 	// File should be gone.
 	_, err := os.Stat(f)
-	assert.True(t, os.IsNotExist(err), "file still exists")
+	assert.True(os.IsNotExist(err), "file still exists")
 
 	// Empty parent dir should be removed.
 	_, err = os.Stat(subdir)
-	assert.True(t, os.IsNotExist(err), "empty parent dir still exists")
+	assert.True(os.IsNotExist(err), "empty parent dir still exists")
 }
 
 func TestDeleteFilesMissingFile(t *testing.T) {

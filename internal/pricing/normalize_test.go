@@ -21,6 +21,9 @@ func TestNormalizeModelName(t *testing.T) {
 }
 
 func TestResolve(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	rates := map[string]int{
 		"claude-opus-4-7":   5,
 		"claude-opus-4.6":   99,
@@ -31,96 +34,102 @@ func TestResolve(t *testing.T) {
 	}
 
 	got, ok := Resolve(rates, "claude-opus-4.7")
-	require.True(t, ok, "dotted model should resolve via normalized key")
-	assert.Equal(t, 5, got)
+	require.True(ok, "dotted model should resolve via normalized key")
+	assert.Equal(5, got)
 
 	got, ok = Resolve(rates, "claude-opus-4-7")
-	require.True(t, ok, "already-dashed model should resolve exactly")
-	assert.Equal(t, 5, got)
+	require.True(ok, "already-dashed model should resolve exactly")
+	assert.Equal(5, got)
 
 	got, ok = Resolve(rates, "claude-opus-4.6")
-	require.True(t, ok)
-	assert.Equal(t, 99, got, "exact match must win over normalized fallback")
+	require.True(ok)
+	assert.Equal(99, got, "exact match must win over normalized fallback")
 
 	// 1. Case-insensitivity
 	got, ok = Resolve(rates, "CLAUDE-OPUS-4-7")
-	require.True(t, ok)
-	assert.Equal(t, 5, got)
+	require.True(ok)
+	assert.Equal(5, got)
 
 	// 2. Substring match on canonicalized name
 	got, ok = Resolve(rates, "Gemini 3.5 Flash (Medium)")
-	require.True(t, ok)
-	assert.Equal(t, 20, got, "should match gemini-3.5-flash via substring canonical match")
+	require.True(ok)
+	assert.Equal(20, got, "should match gemini-3.5-flash via substring canonical match")
 
 	got, ok = Resolve(rates, "Gemini 3.5 Flash (Low)")
-	require.True(t, ok)
-	assert.Equal(t, 20, got, "should match gemini-3.5-flash via substring canonical match")
+	require.True(ok)
+	assert.Equal(20, got, "should match gemini-3.5-flash via substring canonical match")
 
 	// 3. Specificity matching (gemini-3.5-flash (len 13) vs gemini-3.5 (len 8))
 	got, ok = Resolve(rates, "Gemini 3.5 Flash")
-	require.True(t, ok)
-	assert.Equal(t, 20, got, "longer canonical match should win")
+	require.True(ok)
+	assert.Equal(20, got, "longer canonical match should win")
 
 	// 4. Provider-prefix handling
 	got, ok = Resolve(rates, "gpt-5.5")
-	require.True(t, ok, "should resolve without provider prefix if mapped key has it")
-	assert.Equal(t, 30, got)
+	require.True(ok, "should resolve without provider prefix if mapped key has it")
+	assert.Equal(30, got)
 
 	got, ok = Resolve(rates, "google/gemini-2.5")
-	require.True(t, ok)
-	assert.Equal(t, 40, got)
+	require.True(ok)
+	assert.Equal(40, got)
 
 	got, ok = Resolve(rates, "gemini-2.5")
-	require.True(t, ok, "should resolve without prefix if map has prefix")
-	assert.Equal(t, 40, got)
+	require.True(ok, "should resolve without prefix if map has prefix")
+	assert.Equal(40, got)
 
 	// 5. Bracketed long-context tag strips to the base model
 	got, ok = Resolve(rates, "claude-opus-4.6[1m]")
-	require.True(t, ok, "bracketed decoration should strip to base model")
-	assert.Equal(t, 99, got)
+	require.True(ok, "bracketed decoration should strip to base model")
+	assert.Equal(99, got)
 
 	// 6. Trailing release date strips to the base model
 	got, ok = Resolve(rates, "claude-opus-4-7-20260101")
-	require.True(t, ok, "release-date suffix should strip to base model")
-	assert.Equal(t, 5, got)
+	require.True(ok, "release-date suffix should strip to base model")
+	assert.Equal(5, got)
 
 	_, ok = Resolve(rates, "unknown-model")
-	assert.False(t, ok, "unknown model stays unresolved")
+	assert.False(ok, "unknown model stays unresolved")
 }
 
 func TestResolveProviderPrefixes(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	rates := map[string]int{
 		"openrouter/owl-alpha": 7,
 		"gpt-5.5":              30,
 	}
 
 	_, ok := Resolve(rates, "other/owl-alpha")
-	assert.False(t, ok,
+	assert.False(ok,
 		"provider-qualified model must not take another provider's pricing")
 
 	got, ok := Resolve(rates, "owl-alpha")
-	require.True(t, ok, "unqualified model may match a qualified key")
-	assert.Equal(t, 7, got)
+	require.True(ok, "unqualified model may match a qualified key")
+	assert.Equal(7, got)
 
 	got, ok = Resolve(rates, "openai/gpt-5.5")
-	require.True(t, ok, "qualified model may match an unqualified key")
-	assert.Equal(t, 30, got)
+	require.True(ok, "qualified model may match an unqualified key")
+	assert.Equal(30, got)
 }
 
 func TestResolveCanonicalDeterminism(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	// Two providers share one canonical name: ambiguous, unpriced.
 	rates := map[string]int{
 		"openai/foo": 1,
 		"other/foo":  2,
 	}
 	_, ok := Resolve(rates, "Foo")
-	assert.False(t, ok,
+	assert.False(ok,
 		"multiple provider keys for one canonical name are ambiguous")
 
 	// A provider-qualified model resolves its own provider's key.
 	got, ok := Resolve(rates, "openai/foo[1m]")
-	require.True(t, ok, "matching provider key should resolve")
-	assert.Equal(t, 1, got)
+	require.True(ok, "matching provider key should resolve")
+	assert.Equal(1, got)
 
 	// An unqualified key beats provider-qualified keys.
 	withBase := map[string]int{
@@ -129,8 +138,8 @@ func TestResolveCanonicalDeterminism(t *testing.T) {
 		"bar":        7,
 	}
 	got, ok = Resolve(withBase, "Bar[1m]")
-	require.True(t, ok, "unqualified key should disambiguate")
-	assert.Equal(t, 7, got)
+	require.True(ok, "unqualified key should disambiguate")
+	assert.Equal(7, got)
 
 	// Distinct keys tied within one rank stay ambiguous.
 	dupes := map[string]int{
@@ -138,7 +147,7 @@ func TestResolveCanonicalDeterminism(t *testing.T) {
 		"fo-o": 2,
 	}
 	_, ok = Resolve(dupes, "Foo")
-	assert.False(t, ok,
+	assert.False(ok,
 		"duplicate unqualified canonical keys are ambiguous")
 }
 
@@ -148,27 +157,33 @@ func TestResolveCanonicalDeterminism(t *testing.T) {
 // one model (LiteLLM's minimax/MiniMax-M3 against OpenRouter's
 // minimax/minimax-m3) tie and stay unresolved.
 func TestResolveOverlappingQualifiedRows(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	single := map[string]int{"minimax/MiniMax-M3": 2}
 	got, ok := Resolve(single, "MiniMax-M3")
-	require.True(t, ok, "bare name resolves against a lone qualified key")
-	assert.Equal(t, 2, got)
+	require.True(ok, "bare name resolves against a lone qualified key")
+	assert.Equal(2, got)
 
 	colliding := map[string]int{
 		"minimax/MiniMax-M3": 2,
 		"minimax/minimax-m3": 9,
 	}
 	_, ok = Resolve(colliding, "MiniMax-M3")
-	assert.False(t, ok,
+	assert.False(ok,
 		"same-provider spellings of one model tie and stay ambiguous")
 
 	// Each spelling still resolves when addressed exactly, so dropping
 	// the lower-priority row never orphans a real model id.
 	got, ok = Resolve(colliding, "minimax/minimax-m3")
-	require.True(t, ok, "exact key still resolves")
-	assert.Equal(t, 9, got)
+	require.True(ok, "exact key still resolves")
+	assert.Equal(9, got)
 }
 
 func TestResolveEffortTierSuffixFallback(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	rates := map[string]int{
 		"claude-opus-4-6":         1,
 		"claude-opus-4-8":         2,
@@ -192,32 +207,32 @@ func TestResolveEffortTierSuffixFallback(t *testing.T) {
 		"gpt-5-6-luna-medium":         4,
 	} {
 		got, ok := Resolve(rates, name)
-		require.True(t, ok, "effort-tier model %q should resolve to its base", name)
-		assert.Equal(t, want, got, "model %q", name)
+		require.True(ok, "effort-tier model %q should resolve to its base", name)
+		assert.Equal(want, got, "model %q", name)
 	}
 
 	// A catalogued name that genuinely ends in an effort/size word is matched
 	// exactly first and never reduced to a different base rate.
 	got, ok := Resolve(rates, "mistral-medium")
-	require.True(t, ok)
-	assert.Equal(t, 8, got, "mistral-medium must keep its own rate, not mistral's")
+	require.True(ok)
+	assert.Equal(8, got, "mistral-medium must keep its own rate, not mistral's")
 
 	got, ok = Resolve(rates, "grok-4-fast")
-	require.True(t, ok)
-	assert.Equal(t, 9, got, "grok-4-fast must keep its own rate, not grok-4's")
+	require.True(ok)
+	assert.Equal(9, got, "grok-4-fast must keep its own rate, not grok-4's")
 
 	got, ok = Resolve(rates, "o3-mini-high")
-	require.True(t, ok)
-	assert.Equal(t, 10, got, "catalogued -high model matches before stripping")
+	require.True(ok)
+	assert.Equal(10, got, "catalogued -high model matches before stripping")
 
 	// A bare "-fast" (no effort tier before it) is a distinct SKU and must not
 	// be reduced to its base even when the base is priced.
 	_, ok = Resolve(rates, "grok-9-fast")
-	assert.False(t, ok, "bare -fast must not strip to the base model")
+	assert.False(ok, "bare -fast must not strip to the base model")
 
 	// An effort tier on an unknown base stays unresolved.
 	_, ok = Resolve(rates, "unknown-model-high")
-	assert.False(t, ok, "effort tier cannot conjure a price for an unknown base")
+	assert.False(ok, "effort tier cannot conjure a price for an unknown base")
 }
 
 func TestEffortTierBaseModel(t *testing.T) {

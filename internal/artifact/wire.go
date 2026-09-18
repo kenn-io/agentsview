@@ -90,7 +90,7 @@ func normalizeCheckpointName(name string) (string, error) {
 func checkpointSequence(filename string) (int, error) {
 	sequence, err := db.ParseArtifactCheckpointSequence(filename)
 	if err != nil {
-		return 0, fmt.Errorf("%w: %v", ErrArtifactInvalid, err)
+		return 0, fmt.Errorf("%w: %w", ErrArtifactInvalid, err)
 	}
 	return sequence, nil
 }

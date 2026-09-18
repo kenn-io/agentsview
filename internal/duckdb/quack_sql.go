@@ -5,6 +5,7 @@ package duckdb
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"reflect"
 	"strconv"
@@ -21,7 +22,7 @@ func duckSQLWithArgs(stmt string, args ...any) (string, error) {
 			continue
 		}
 		if argIndex >= len(args) {
-			return "", fmt.Errorf("duckdb remote statement missing argument")
+			return "", errors.New("duckdb remote statement missing argument")
 		}
 		lit, err := duckValueLiteral(args[argIndex])
 		if err != nil {
@@ -31,7 +32,7 @@ func duckSQLWithArgs(stmt string, args ...any) (string, error) {
 		argIndex++
 	}
 	if argIndex != len(args) {
-		return "", fmt.Errorf("duckdb remote statement has unused argument")
+		return "", errors.New("duckdb remote statement has unused argument")
 	}
 	return b.String(), nil
 }
@@ -55,12 +56,12 @@ func duckValueLiteral(v any) (string, error) {
 		if value == nil {
 			return "NULL", nil
 		}
-		return fmt.Sprint(*value), nil
+		return strconv.Itoa(*value), nil
 	case *int64:
 		if value == nil {
 			return "NULL", nil
 		}
-		return fmt.Sprint(*value), nil
+		return strconv.FormatInt(*value, 10), nil
 	case *float64:
 		if value == nil {
 			return "NULL", nil

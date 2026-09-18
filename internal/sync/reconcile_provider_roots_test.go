@@ -74,6 +74,9 @@ func (r *lstatRecorder) countUnder(dir string) int {
 }
 
 func TestReconcileProviderRootsDoesNotExpandAcrossProviders(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -82,7 +85,7 @@ func TestReconcileProviderRootsDoesNotExpandAcrossProviders(t *testing.T) {
 	// claudeDir is a descendant of aiderRoot: the overlap an unscoped root
 	// expansion would otherwise widen across providers.
 	claudeDir := filepath.Join(aiderRoot, "claude")
-	require.NoError(t, os.MkdirAll(claudeDir, 0o755))
+	require.NoError(os.MkdirAll(claudeDir, 0o755))
 
 	const aiderCount = 5
 	aiderIDs := make([]string, 0, aiderCount)
@@ -106,22 +109,22 @@ func TestReconcileProviderRootsDoesNotExpandAcrossProviders(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	require.Equal(t, aiderCount+len(claudeIDs),
+	require.Equal(aiderCount+len(claudeIDs),
 		engine.SyncAll(t.Context(), nil).Synced, "cold pass ingests every source")
 
 	// Delete one Aider source under the opted-in root; the scoped pass must
 	// tombstone it exactly as a full pass would.
-	require.NoError(t, os.Remove(aiderPaths[2]))
+	require.NoError(os.Remove(aiderPaths[2]))
 
 	rec := &lstatRecorder{}
 	engine.lstat = rec.stat
 
-	require.NoError(t, engine.ReconcileProviderRoots(
+	require.NoError(engine.ReconcileProviderRoots(
 		t.Context(), parser.AgentAider, []string{aiderRoot}))
 
 	// Deletion within scope is preserved.
 	deleted, err := database.GetSessionFull(t.Context(), aiderIDs[2])
-	require.NoError(t, err)
+	require.NoError(err)
 	assertSourceMissingState(t, deleted)
 
 	// Surviving Aider sources stay active.
@@ -130,21 +133,21 @@ func TestReconcileProviderRootsDoesNotExpandAcrossProviders(t *testing.T) {
 			continue
 		}
 		active, err := database.GetSession(t.Context(), id)
-		require.NoError(t, err)
-		assert.NotNil(t, active, "surviving Aider session must remain active")
+		require.NoError(err)
+		assert.NotNil(active, "surviving Aider session must remain active")
 	}
 
 	// No Claude session may be tombstoned by an Aider-scoped pass.
 	for _, id := range claudeIDs {
 		active, err := database.GetSession(t.Context(), id)
-		require.NoError(t, err)
-		assert.NotNil(t, active, "agent-scoped pass must not tombstone another provider")
+		require.NoError(err)
+		assert.NotNil(active, "agent-scoped pass must not tombstone another provider")
 	}
 
 	// The scoped pass must not enumerate Claude sources: no stat under
 	// claudeDir, and rehydration bounded by the Aider corpus.
-	assert.Zero(t, rec.countUnder(claudeDir),
+	assert.Zero(rec.countUnder(claudeDir),
 		"agent-scoped reconciliation must not stat other providers' sources")
-	assert.LessOrEqual(t, engine.LastReconciliationResult().Metrics.MaxRehydratedSources,
+	assert.LessOrEqual(engine.LastReconciliationResult().Metrics.MaxRehydratedSources,
 		aiderCount, "rehydration must stay bounded by the scoped provider's corpus")
 }

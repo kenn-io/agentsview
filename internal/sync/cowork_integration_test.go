@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"encoding/json/v2"
 	"os"
 	"path/filepath"
@@ -69,6 +68,8 @@ func writeCoworkSyncFixture(
 }
 
 func TestSyncAllSinceCoworkMetaUpdateTriggersResync(t *testing.T) {
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -91,25 +92,25 @@ func TestSyncAllSinceCoworkMetaUpdateTriggersResync(t *testing.T) {
 
 	engine.SyncPaths([]string{transcriptPath})
 	assertSessionState(t, testDB, "cowork:"+sessionID, func(sess *db.Session) {
-		require.NotNil(t, sess.DisplayName)
+		require.NotNil(sess.DisplayName)
 		assert.Equal(t, "Before rename", *sess.DisplayName)
 	})
 
 	transcriptTime := time.Unix(1_781_475_210, 0)
 	metaTime := transcriptTime.Add(time.Second)
-	require.NoError(t, os.Chtimes(transcriptPath, transcriptTime, transcriptTime))
-	require.NoError(t, os.WriteFile(metaPath, []byte(
+	require.NoError(os.Chtimes(transcriptPath, transcriptTime, transcriptTime))
+	require.NoError(os.WriteFile(metaPath, []byte(
 		`{"sessionId":"local_0b4eea33-12a0-42ac-856b-98d61a4717c3",`+
 			`"cliSessionId":"`+sessionID+`","title":"After rename"}`,
 	), 0o644), "rewrite metadata")
-	require.NoError(t, os.Chtimes(metaPath, metaTime, metaTime))
+	require.NoError(os.Chtimes(metaPath, metaTime, metaTime))
 
 	cutoff := transcriptTime.Add(500 * time.Millisecond)
-	stats := engine.SyncAllSince(context.Background(), cutoff, nil)
-	require.Equal(t, 1, stats.Synced, "synced = %d, want 1", stats.Synced)
+	stats := engine.SyncAllSince(t.Context(), cutoff, nil)
+	require.Equal(1, stats.Synced, "synced = %d, want 1", stats.Synced)
 
 	assertSessionState(t, testDB, "cowork:"+sessionID, func(sess *db.Session) {
-		require.NotNil(t, sess.DisplayName)
+		require.NotNil(sess.DisplayName)
 		assert.Equal(t, "After rename", *sess.DisplayName)
 	})
 }
@@ -141,7 +142,7 @@ func TestSourceMtimeCoworkIncludesMetaMtime(t *testing.T) {
 	require.NoError(t, os.Chtimes(metaPath, metaTime, metaTime))
 
 	engine.SyncPaths([]string{transcriptPath})
-	assert.Equal(t, metaTime.UnixNano(), engine.SourceMtime("cowork:"+sessionID))
+	assert.Equal(t, metaTime.UnixNano(), engine.SourceMtime(t.Context(), "cowork:"+sessionID))
 }
 
 func TestSyncPathsCoworkReplacesUpdatedMessageOrdinal(t *testing.T) {
@@ -186,7 +187,7 @@ func assertCoworkAssistantContent(
 	t.Helper()
 
 	msgs, err := database.GetMessages(
-		context.Background(), "cowork:"+rawSessionID, 0, 100, true,
+		t.Context(), "cowork:"+rawSessionID, 0, 100, true,
 	)
 	require.NoError(t, err, "GetMessages")
 	require.Len(t, msgs, 2, "messages")

@@ -15,17 +15,20 @@ import (
 )
 
 func TestArtifactSyncTwoNodeFolderRoundTripAndReplay(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	databaseA := testDB(t)
 	databaseB := testDB(t)
 	repositoryA, err := OpenRepository(t.Context(), t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, repositoryA.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(repositoryA.Close()) })
 	repositoryB, err := OpenRepository(t.Context(), t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, repositoryB.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(repositoryB.Close()) })
 
 	originA := "laptop-a1b2c3"
 	originB := "desktop-d4e5f6"
@@ -37,11 +40,11 @@ func TestArtifactSyncTwoNodeFolderRoundTripAndReplay(t *testing.T) {
 		repositoryA,
 		SyncOptions{Target: target, Origin: originA},
 	)
-	require.NoError(t, err)
-	assert.Equal(t, originA, published.Origin)
-	assert.Equal(t, 1, published.ExportedSessions)
-	assert.Positive(t, published.PublishedArtifacts)
-	assert.False(t, published.More)
+	require.NoError(err)
+	assert.Equal(originA, published.Origin)
+	assert.Equal(1, published.ExportedSessions)
+	assert.Positive(published.PublishedArtifacts)
+	assert.False(published.More)
 
 	imported, err := SyncWithRepository(
 		t.Context(),
@@ -49,17 +52,17 @@ func TestArtifactSyncTwoNodeFolderRoundTripAndReplay(t *testing.T) {
 		repositoryB,
 		SyncOptions{Target: target, Origin: originB},
 	)
-	require.NoError(t, err)
-	assert.Equal(t, originB, imported.Origin)
-	assert.Equal(t, 1, imported.ImportedSessions)
-	assert.Equal(t, 2, imported.ImportedMessages)
-	assert.Positive(t, imported.ReceivedArtifacts)
-	assert.False(t, imported.More)
+	require.NoError(err)
+	assert.Equal(originB, imported.Origin)
+	assert.Equal(1, imported.ImportedSessions)
+	assert.Equal(2, imported.ImportedMessages)
+	assert.Positive(imported.ReceivedArtifacts)
+	assert.False(imported.More)
 
 	session, err := databaseB.GetSessionFull(t.Context(), originA+"~one")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, originA, session.Machine)
+	require.NoError(err)
+	require.NotNil(session)
+	assert.Equal(originA, session.Machine)
 	messages, err := databaseB.GetMessages(
 		t.Context(),
 		originA+"~one",
@@ -67,9 +70,9 @@ func TestArtifactSyncTwoNodeFolderRoundTripAndReplay(t *testing.T) {
 		10,
 		true,
 	)
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	assert.Equal(t, "world", messages[1].Content)
+	require.NoError(err)
+	require.Len(messages, 2)
+	assert.Equal("world", messages[1].Content)
 	journalSequenceBeforeReplay := readTestFolderJournalSequence(t, target)
 
 	replay, err := SyncWithRepository(
@@ -78,18 +81,17 @@ func TestArtifactSyncTwoNodeFolderRoundTripAndReplay(t *testing.T) {
 		repositoryB,
 		SyncOptions{Target: target, Origin: originB},
 	)
-	require.NoError(t, err)
-	assert.Zero(t, replay.ImportedSessions)
-	assert.Zero(t, replay.ImportedMessages)
-	assert.False(t, replay.More)
+	require.NoError(err)
+	assert.Zero(replay.ImportedSessions)
+	assert.Zero(replay.ImportedMessages)
+	assert.False(replay.More)
 	assert.Equal(
-		t,
 		journalSequenceBeforeReplay,
 		readTestFolderJournalSequence(t, target),
 		"an unchanged authoritative head must not replay its closure",
 	)
 
-	require.NoError(t, databaseA.ReplaceSessionMessages("one", []db.Message{
+	require.NoError(databaseA.ReplaceSessionMessages("one", []db.Message{
 		{
 			SessionID: "one", Ordinal: 0, Role: "user",
 			Content: "updated prompt", ContentLength: 14,
@@ -105,16 +107,16 @@ func TestArtifactSyncTwoNodeFolderRoundTripAndReplay(t *testing.T) {
 		repositoryA,
 		SyncOptions{Target: target, Origin: originA},
 	)
-	require.NoError(t, err)
-	assert.Equal(t, 1, updatedPublish.ExportedSessions)
+	require.NoError(err)
+	assert.Equal(1, updatedPublish.ExportedSessions)
 	updatedImport, err := SyncWithRepository(
 		t.Context(),
 		databaseB,
 		repositoryB,
 		SyncOptions{Target: target, Origin: originB},
 	)
-	require.NoError(t, err)
-	assert.Equal(t, 1, updatedImport.ImportedSessions)
+	require.NoError(err)
+	assert.Equal(1, updatedImport.ImportedSessions)
 	updatedMessages, err := databaseB.GetMessages(
 		t.Context(),
 		originA+"~one",
@@ -122,43 +124,46 @@ func TestArtifactSyncTwoNodeFolderRoundTripAndReplay(t *testing.T) {
 		10,
 		true,
 	)
-	require.NoError(t, err)
-	require.Len(t, updatedMessages, 2)
-	assert.Equal(t, "updated response", updatedMessages[1].Content)
+	require.NoError(err)
+	require.Len(updatedMessages, 2)
+	assert.Equal("updated response", updatedMessages[1].Content)
 }
 
 func TestArtifactSyncFullRepairRejournalsMissingObjectForAdvancedPeer(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	databaseA := testDB(t)
 	databaseB := testDB(t)
 	repositoryA, err := OpenRepository(t.Context(), t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, repositoryA.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(repositoryA.Close()) })
 	repositoryB, err := OpenRepository(t.Context(), t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, repositoryB.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(repositoryB.Close()) })
 	originA := "laptop-a1b2c3"
 	originB := "desktop-d4e5f6"
 	seedSession(t, databaseA, "one", "alpha")
 	opts := SyncOptions{Target: target, Origin: originA}
 
 	initial, err := SyncWithRepository(t.Context(), databaseA, repositoryA, opts)
-	require.NoError(t, err)
-	assert.Positive(t, initial.PublishedArtifacts)
+	require.NoError(err)
+	assert.Positive(initial.PublishedArtifacts)
 	segmentPaths, err := filepath.Glob(filepath.Join(
 		target,
 		originA,
 		string(KindSegments),
 		"*"+segmentExtension,
 	))
-	require.NoError(t, err)
-	require.Len(t, segmentPaths, 1)
+	require.NoError(err)
+	require.Len(segmentPaths, 1)
 	segmentPath := segmentPaths[0]
-	require.NoError(t, os.WriteFile(segmentPath, []byte("not zstd"), 0o600))
+	require.NoError(os.WriteFile(segmentPath, []byte("not zstd"), 0o600))
 
 	advanced, err := SyncWithRepository(
 		t.Context(),
@@ -166,22 +171,22 @@ func TestArtifactSyncFullRepairRejournalsMissingObjectForAdvancedPeer(
 		repositoryB,
 		SyncOptions{Target: target, Origin: originB},
 	)
-	require.NoError(t, err)
-	assert.Zero(t, advanced.ImportedSessions)
-	assert.NoFileExists(t, segmentPath)
+	require.NoError(err)
+	assert.Zero(advanced.ImportedSessions)
+	assert.NoFileExists(segmentPath)
 	journalSequence := readTestFolderJournalSequence(t, target)
 
 	noOp, err := SyncWithRepository(t.Context(), databaseA, repositoryA, opts)
-	require.NoError(t, err)
-	assert.Zero(t, noOp.PublishedArtifacts)
-	assert.NoFileExists(t, segmentPath)
+	require.NoError(err)
+	assert.Zero(noOp.PublishedArtifacts)
+	assert.NoFileExists(segmentPath)
 
 	opts.Full = true
 	repaired, err := SyncWithRepository(t.Context(), databaseA, repositoryA, opts)
-	require.NoError(t, err)
-	assert.Equal(t, 1, repaired.PublishedArtifacts)
-	assert.FileExists(t, segmentPath)
-	assert.Equal(t, journalSequence+1, readTestFolderJournalSequence(t, target))
+	require.NoError(err)
+	assert.Equal(1, repaired.PublishedArtifacts)
+	assert.FileExists(segmentPath)
+	assert.Equal(journalSequence+1, readTestFolderJournalSequence(t, target))
 
 	imported, err := SyncWithRepository(
 		t.Context(),
@@ -189,9 +194,9 @@ func TestArtifactSyncFullRepairRejournalsMissingObjectForAdvancedPeer(
 		repositoryB,
 		SyncOptions{Target: target, Origin: originB},
 	)
-	require.NoError(t, err)
-	assert.Equal(t, 1, imported.ImportedSessions)
-	assert.Equal(t, 2, imported.ImportedMessages)
+	require.NoError(err)
+	assert.Equal(1, imported.ImportedSessions)
+	assert.Equal(2, imported.ImportedMessages)
 }
 
 func readTestFolderJournalSequence(t *testing.T, target string) int64 {
@@ -207,12 +212,15 @@ func readTestFolderJournalSequence(t *testing.T, target string) int64 {
 func TestArtifactSyncDoesNotIngestOrRepublishSpoofedLocalOrigin(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	targetA := t.TempDir()
 	transportA, err := OpenFolderTransport(targetA, FolderTransportOptions{})
-	require.NoError(t, err)
-	require.NoError(t, transportA.Close())
+	require.NoError(err)
+	require.NoError(transportA.Close())
 
 	localOrigin := "local-d4e5f6"
 	spoofedBody := []byte("{\"content\":\"spoofed local session\"}\n")
@@ -227,24 +235,24 @@ func TestArtifactSyncDoesNotIngestOrRepublishSpoofedLocalOrigin(
 
 	database := testDB(t)
 	repository, err := OpenRepository(t.Context(), t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, repository.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(repository.Close()) })
 	opts := SyncOptions{Origin: localOrigin}
 
 	opts.Target = targetA
 	_, err = SyncWithRepository(t.Context(), database, repository, opts)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = repository.Content().Stat(t.Context(), spoofedRef)
-	assert.ErrorIs(t, err, ErrArtifactNotFound)
+	assert.ErrorIs(err, ErrArtifactNotFound)
 
 	targetB := t.TempDir()
 	opts.Target = targetB
 	_, err = SyncWithRepository(t.Context(), database, repository, opts)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	spoofedWire, err := ToWireRef(spoofedRef)
-	require.NoError(t, err)
-	assert.NoFileExists(t, filepath.Join(
+	require.NoError(err)
+	assert.NoFileExists(filepath.Join(
 		targetB,
 		spoofedWire.Origin,
 		string(spoofedWire.Kind),
@@ -253,14 +261,17 @@ func TestArtifactSyncDoesNotIngestOrRepublishSpoofedLocalOrigin(
 }
 
 func TestArtifactSyncDoesNotPublishUnrecordedLocalOriginObjects(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	origin := "local-a1b2c3"
 	database := testDB(t)
 	seedSession(t, database, "owned", "alpha")
 	repository, err := OpenRepository(t.Context(), t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, repository.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(repository.Close()) })
 
 	unrecordedBody := []byte("{\"content\":\"unrecorded local object\"}\n")
 	unrecordedRef := testContentRef(
@@ -285,12 +296,12 @@ func TestArtifactSyncDoesNotPublishUnrecordedLocalOriginObjects(t *testing.T) {
 		SyncOptions{Target: target, Origin: origin},
 	)
 
-	require.NoError(t, err)
-	assert.Equal(t, 1, result.ExportedSessions)
-	assert.Positive(t, result.PublishedArtifacts)
+	require.NoError(err)
+	assert.Equal(1, result.ExportedSessions)
+	assert.Positive(result.PublishedArtifacts)
 	unrecordedWire, err := ToWireRef(unrecordedRef)
-	require.NoError(t, err)
-	assert.NoFileExists(t, filepath.Join(
+	require.NoError(err)
+	assert.NoFileExists(filepath.Join(
 		target,
 		unrecordedWire.Origin,
 		string(unrecordedWire.Kind),
@@ -313,10 +324,13 @@ func TestArtifactSyncValidatesBeforeCreatingOwnedStorage(t *testing.T) {
 	})
 
 	t.Run("invalid origin", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		target := filepath.Join(t.TempDir(), "target")
 		repository, err := OpenRepository(t.Context(), t.TempDir())
-		require.NoError(t, err)
-		t.Cleanup(func() { require.NoError(t, repository.Close()) })
+		require.NoError(err)
+		t.Cleanup(func() { require.NoError(repository.Close()) })
 
 		_, err = SyncWithRepository(
 			t.Context(),
@@ -324,66 +338,71 @@ func TestArtifactSyncValidatesBeforeCreatingOwnedStorage(t *testing.T) {
 			repository,
 			SyncOptions{Target: target, Origin: "BAD"},
 		)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "invalid artifact origin")
-		assert.NoDirExists(t, target)
+		require.Error(err)
+		assert.Contains(err.Error(), "invalid artifact origin")
+		assert.NoDirExists(target)
 	})
 }
 
 func TestArtifactSyncQuarantinesInvalidCheckpointInFolderAndDocbank(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	require.NoError(t, transport.Close())
+	require.NoError(err)
+	require.NoError(transport.Close())
 
 	origin := "peer-a1b2c3"
 	ref, err := NewRef(origin, KindCheckpoints, "cp-0000000001.json")
-	require.NoError(t, err)
+	require.NoError(err)
 	writeFolderWire(t, target, ref, []byte(`{"v":1}`))
 	wire, err := ToWireRef(ref)
-	require.NoError(t, err)
+	require.NoError(err)
 	wirePath := filepath.Join(target, origin, string(KindCheckpoints), wire.Name)
 
 	database := testDB(t)
 	repository, err := OpenRepository(t.Context(), t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, repository.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(repository.Close()) })
 	result, err := SyncWithRepository(
 		t.Context(),
 		database,
 		repository,
 		SyncOptions{Target: target, Origin: "local-d4e5f6"},
 	)
-	require.NoError(t, err)
-	assert.Equal(t, 1, result.Quarantined)
-	assert.NoFileExists(t, wirePath)
+	require.NoError(err)
+	assert.Equal(1, result.Quarantined)
+	assert.NoFileExists(wirePath)
 	quarantined, err := filepath.Glob(wirePath + folderCorruptSeparator + "*")
-	require.NoError(t, err)
-	require.Len(t, quarantined, 1)
+	require.NoError(err)
+	require.Len(quarantined, 1)
 	_, err = repository.Content().Stat(t.Context(), ref)
-	assert.ErrorIs(t, err, ErrArtifactNotFound)
+	assert.ErrorIs(err, ErrArtifactNotFound)
 }
 
 func TestArtifactSyncCountsTransportQuarantine(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	require.NoError(t, transport.Close())
+	require.NoError(err)
+	require.NoError(transport.Close())
 
 	origin := "peer-a1b2c3"
 	body := []byte(`{"v":2}`)
 	ref := testContentRef(t, origin, KindManifests, body, ".json")
 	wire, err := ToWireRef(ref)
-	require.NoError(t, err)
+	require.NoError(err)
 	wireDirectory := filepath.Join(target, origin, string(KindManifests))
-	require.NoError(t, os.MkdirAll(wireDirectory, 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(wireDirectory, 0o755))
+	require.NoError(os.WriteFile(
 		filepath.Join(wireDirectory, wire.Name),
 		[]byte("not zstd"),
 		0o600,
@@ -393,32 +412,34 @@ func TestArtifactSyncCountsTransportQuarantine(t *testing.T) {
 	})
 
 	repository, err := OpenRepository(t.Context(), t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, repository.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(repository.Close()) })
 	result, err := SyncWithRepository(
 		t.Context(),
 		testDB(t),
 		repository,
 		SyncOptions{Target: target, Origin: "local-d4e5f6"},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Equal(t, 1, result.Quarantined)
 }
 
 func TestCoordinatedQuarantineDropsStaleLocalAfterRemoteReplacement(
 	t *testing.T,
 ) {
+	require := require.New(t)
+
 	t.Parallel()
 
 	repository, err := OpenRepository(t.Context(), t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, repository.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(repository.Close()) })
 	ref, err := NewRef(
 		"peer-a1b2c3",
 		KindCheckpoints,
 		"cp-0000000001.json",
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	body := []byte(`{"v":1}`)
 	_, err = repository.Content().Create(
 		t.Context(),
@@ -427,7 +448,7 @@ func TestCoordinatedQuarantineDropsStaleLocalAfterRemoteReplacement(
 		canonicalArtifactMediaType(ref.Kind),
 		bytes.NewReader(body),
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	store := &coordinatedTransportStore{
 		ArtifactStore: repository.Content(),
 		quarantine:    replacementQuarantineTransport{},
@@ -435,7 +456,7 @@ func TestCoordinatedQuarantineDropsStaleLocalAfterRemoteReplacement(
 
 	err = store.Quarantine(t.Context(), ref, "invalid checkpoint")
 
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = repository.Content().Stat(t.Context(), ref)
 	assert.ErrorIs(t, err, ErrArtifactNotFound)
 }
@@ -470,11 +491,14 @@ func (replacementQuarantineTransport) QuarantineTransportArtifact(
 }
 
 func TestDrainArtifactSyncExportsReturnsMoreAtRoundBudget(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	database := testDB(t)
 	origin := "local-a1b2c3"
-	require.NoError(t, AdoptOrigin(database, origin))
+	require.NoError(AdoptOrigin(database, origin))
 	for index := range artifactExportBatchSize + 1 {
 		seedSession(t, database, fmt.Sprintf("session-%03d", index), "alpha")
 	}
@@ -488,17 +512,19 @@ func TestDrainArtifactSyncExportsReturnsMoreAtRoundBudget(t *testing.T) {
 		false,
 		1,
 	)
-	require.NoError(t, err)
-	assert.True(t, more)
-	assert.Equal(t, artifactExportBatchSize, result.ExportedSessions)
+	require.NoError(err)
+	assert.True(more)
+	assert.Equal(artifactExportBatchSize, result.ExportedSessions)
 	pending, err := database.CountPendingArtifactExports(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, 1, pending)
+	require.NoError(err)
+	assert.Equal(1, pending)
 }
 
 func TestDrainArtifactSyncFullExportReturnsMoreWhenQueueDoesNotSettle(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+
 	// Serial: this exercises the full drain cap through real SQLite and
 	// Docbank writes under a fixed deadline. The race job runs other packages
 	// concurrently, so leave enough headroom for cross-package I/O contention
@@ -520,9 +546,9 @@ func TestDrainArtifactSyncFullExportReturnsMoreWhenQueueDoesNotSettle(
 		1,
 	)
 	require.NoError(t, err)
-	assert.True(t, more)
-	assert.Positive(t, result.ExportedSessions)
-	assert.Positive(t, concurrent.round)
+	assert.True(more)
+	assert.Positive(result.ExportedSessions)
+	assert.Positive(concurrent.round)
 }
 
 type repeatingImportFinalizer struct {
@@ -535,6 +561,8 @@ func (f *repeatingImportFinalizer) Finalize(context.Context) (ImportResult, erro
 }
 
 func TestDrainArtifactSyncImportsReturnsMoreAtRoundBudget(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Parallel()
 
 	finalizer := &repeatingImportFinalizer{}
@@ -547,8 +575,8 @@ func TestDrainArtifactSyncImportsReturnsMoreAtRoundBudget(t *testing.T) {
 		3,
 	)
 	require.NoError(t, err)
-	assert.True(t, more)
-	assert.Equal(t, 3, finalizer.calls)
-	assert.Equal(t, 3, result.ImportedSessions)
-	assert.Equal(t, 6, result.ImportedMessages)
+	assert.True(more)
+	assert.Equal(3, finalizer.calls)
+	assert.Equal(3, result.ImportedSessions)
+	assert.Equal(6, result.ImportedMessages)
 }

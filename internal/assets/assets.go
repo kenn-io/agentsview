@@ -2,6 +2,7 @@ package assets
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -44,7 +45,7 @@ func Reference(mediaType string, body []byte) (string, error) {
 	}
 
 	sum := sha256.Sum256(body)
-	hash := fmt.Sprintf("%x", sum[:])
+	hash := hex.EncodeToString(sum[:])
 	return "asset://" + hash + ext, nil
 }
 
@@ -93,7 +94,7 @@ func isCompleteObject(destPath string, size int64, expectedHash string) bool {
 	if copyErr != nil || closeErr != nil || actualSize != size {
 		return false
 	}
-	return fmt.Sprintf("%x", h.Sum(nil)) == expectedHash
+	return hex.EncodeToString(h.Sum(nil)) == expectedHash
 }
 
 // writeObject fills a temp file in assetsDir and renames it onto destPath, so
@@ -160,7 +161,7 @@ func CopyAsset(srcPath, assetsDir string) (string, error) {
 		return "", fmt.Errorf("hashing asset: %w", err)
 	}
 
-	hash := fmt.Sprintf("%x", h.Sum(nil))
+	hash := hex.EncodeToString(h.Sum(nil))
 	filename := hash + ext // ext is already normalized to .jpg for .jpeg sources
 	destPath := filepath.Join(assetsDir, filename)
 

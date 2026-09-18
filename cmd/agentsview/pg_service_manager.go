@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -61,21 +62,19 @@ type serviceSpec struct {
 
 func rejectEnvDependentServicePGURL(rawURL string) error {
 	if os.Getenv("AGENTSVIEW_PG_URL") != "" {
-		return fmt.Errorf(
-			"AGENTSVIEW_PG_URL is set; pg service install requires a " +
-				"literal PostgreSQL URL in config.toml, either " +
-				"legacy [pg].url or the default_pg-selected [pg.NAME].url, because background " +
-				"services do not inherit your shell environment",
+		return errors.New("AGENTSVIEW_PG_URL is set; pg service install requires a " +
+			"literal PostgreSQL URL in config.toml, either " +
+			"legacy [pg].url or the default_pg-selected [pg.NAME].url, because background " +
+			"services do not inherit your shell environment",
 		)
 	}
 	// Reuse config's expansion check so the rejection rule cannot drift
 	// from how config.ResolvePG actually expands the URL at runtime.
 	if config.IsEnvDependentURL(rawURL) {
-		return fmt.Errorf(
-			"pg.url uses environment variable expansion; pg service " +
-				"install requires a literal PostgreSQL URL in config.toml, either " +
-				"legacy [pg].url or the default_pg-selected [pg.NAME].url, because " +
-				"background services do not inherit your shell environment",
+		return errors.New("pg.url uses environment variable expansion; pg service " +
+			"install requires a literal PostgreSQL URL in config.toml, either " +
+			"legacy [pg].url or the default_pg-selected [pg.NAME].url, because " +
+			"background services do not inherit your shell environment",
 		)
 	}
 	return nil

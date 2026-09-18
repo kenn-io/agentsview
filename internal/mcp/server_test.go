@@ -28,7 +28,7 @@ func newInMemoryPair(
 	t *testing.T, srv *mcp.Server,
 ) (*mcp.ServerSession, *mcp.ClientSession) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	st, ct := mcp.NewInMemoryTransports()
 	ss, err := srv.Connect(ctx, st, nil)
 	require.NoError(t, err)
@@ -44,27 +44,31 @@ func callParams(name string, args map[string]any) *mcp.CallToolParams {
 }
 
 func TestNewServer_RegistersSevenReadOnlyTools(t *testing.T) {
+	require := require.New(t)
+
 	d := dbtest.OpenTestDB(t)
 	srv := newServer(ServeOptions{
 		Service: service.NewDirectBackend(d, nil),
 		Now:     func() time.Time { return fixedNow },
 	})
-	require.NotNil(t, srv)
+	require.NotNil(srv)
 
 	st, ct := newInMemoryPair(t, srv)
-	tools, err := ct.ListTools(context.Background(), nil)
-	require.NoError(t, err)
-	require.Len(t, tools.Tools, 7)
+	tools, err := ct.ListTools(t.Context(), nil)
+	require.NoError(err)
+	require.Len(tools.Tools, 7)
 	for _, tl := range tools.Tools {
-		require.NotNil(t, tl.Annotations, "tool %s missing annotations", tl.Name)
-		require.True(t, tl.Annotations.ReadOnlyHint,
+		require.NotNil(tl.Annotations, "tool %s missing annotations", tl.Name)
+		require.True(tl.Annotations.ReadOnlyHint,
 			"tool %s should be annotated read-only", tl.Name)
 	}
-	require.NoError(t, ct.Close())
-	require.NoError(t, st.Wait())
+	require.NoError(ct.Close())
+	require.NoError(st.Wait())
 }
 
 func TestNewServer_OmitsRecallToolForUnsupportedBackend(t *testing.T) {
+	require := require.New(t)
+
 	d := dbtest.OpenTestDB(t)
 	srv := newServer(ServeOptions{
 		Service: service.NewReadOnlyBackend(d),
@@ -72,17 +76,20 @@ func TestNewServer_OmitsRecallToolForUnsupportedBackend(t *testing.T) {
 	})
 
 	st, ct := newInMemoryPair(t, srv)
-	tools, err := ct.ListTools(context.Background(), nil)
-	require.NoError(t, err)
-	require.Len(t, tools.Tools, 6)
+	tools, err := ct.ListTools(t.Context(), nil)
+	require.NoError(err)
+	require.Len(tools.Tools, 6)
 	for _, tool := range tools.Tools {
 		assert.NotEqual(t, ToolQueryRecall, tool.Name)
 	}
-	require.NoError(t, ct.Close())
-	require.NoError(t, st.Wait())
+	require.NoError(ct.Close())
+	require.NoError(st.Wait())
 }
 
 func TestServer_SearchSessionsBySessionID(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := dbtest.OpenTestDB(t)
 	rootID := "remote~U"
 	dbtest.SeedSession(t, d, rootID, "root-project", func(s *db.Session) {
@@ -101,11 +108,11 @@ func TestServer_SearchSessionsBySessionID(t *testing.T) {
 	})
 	st, ct := newInMemoryPair(t, srv)
 	defer func() {
-		require.NoError(t, ct.Close())
-		require.NoError(t, st.Wait())
+		require.NoError(ct.Close())
+		require.NoError(st.Wait())
 	}()
 
-	res, err := ct.CallTool(context.Background(), callParams(ToolSearchSessions, map[string]any{
+	res, err := ct.CallTool(t.Context(), callParams(ToolSearchSessions, map[string]any{
 		"session_id": "U",
 		"query":      "does-not-exist",
 		"project":    "does-not-exist",
@@ -113,33 +120,35 @@ func TestServer_SearchSessionsBySessionID(t *testing.T) {
 		"cursor":     99,
 		"limit":      1,
 	}))
-	require.NoError(t, err)
-	require.False(t, res.IsError, "%+v", res.Content)
+	require.NoError(err)
+	require.False(res.IsError, "%+v", res.Content)
 
 	var out searchSessionsOut
 	raw, err := json.Marshal(res.StructuredContent)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Logf("head: fixture_sessions=%d response=%s", 1001, raw)
-	require.NoError(t, json.Unmarshal(raw, &out))
-	require.Len(t, out.Results, 1)
-	assert.Equal(t, rootID, out.Results[0].SessionID)
-	assert.Equal(t, "root-project", out.Results[0].Project)
-	assert.Equal(t, "Root session", out.Results[0].Name)
-	assert.Empty(t, out.Results[0].Snippet)
-	assert.Zero(t, out.Results[0].MatchOrdinal)
-	assert.Nil(t, out.NextCursor)
+	require.NoError(json.Unmarshal(raw, &out))
+	require.Len(out.Results, 1)
+	assert.Equal(rootID, out.Results[0].SessionID)
+	assert.Equal("root-project", out.Results[0].Project)
+	assert.Equal("Root session", out.Results[0].Name)
+	assert.Empty(out.Results[0].Snippet)
+	assert.Zero(out.Results[0].MatchOrdinal)
+	assert.Nil(out.NextCursor)
 }
 
 func TestIsCleanStdioShutdown(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Parallel()
-	assert.True(t, isCleanStdioShutdown(nil))
-	assert.True(t, isCleanStdioShutdown(context.Canceled))
-	assert.True(t, isCleanStdioShutdown(io.EOF))
-	assert.True(t, isCleanStdioShutdown(fmt.Errorf("wrap: %w", io.EOF)))
-	assert.True(t, isCleanStdioShutdown(errors.New("server is closing: EOF")))
-	assert.True(t, isCleanStdioShutdown(errors.New("connection closed")))
-	assert.False(t, isCleanStdioShutdown(errors.New("boom")))
-	assert.False(t, isCleanStdioShutdown(errors.New("open db: permission denied")))
+	assert.True(isCleanStdioShutdown(nil))
+	assert.True(isCleanStdioShutdown(context.Canceled))
+	assert.True(isCleanStdioShutdown(io.EOF))
+	assert.True(isCleanStdioShutdown(fmt.Errorf("wrap: %w", io.EOF)))
+	assert.True(isCleanStdioShutdown(errors.New("server is closing: EOF")))
+	assert.True(isCleanStdioShutdown(errors.New("connection closed")))
+	assert.False(isCleanStdioShutdown(errors.New("boom")))
+	assert.False(isCleanStdioShutdown(errors.New("open db: permission denied")))
 }
 
 type nopWriteCloser struct{ io.Writer }
@@ -168,7 +177,7 @@ func TestServeStdio_ClientDisconnectIsClean(t *testing.T) {
 		pr, pw := io.Pipe()
 		tr := &mcp.IOTransport{Reader: pr, Writer: nopWriteCloser{io.Discard}}
 		done := make(chan error, 1)
-		go func() { done <- srv.Run(context.Background(), tr) }()
+		go func() { done <- srv.Run(t.Context(), tr) }()
 		_, _ = io.WriteString(pw, msgs)
 		require.NoError(t, pw.Close())
 		select {
@@ -182,12 +191,14 @@ func TestServeStdio_ClientDisconnectIsClean(t *testing.T) {
 }
 
 func TestWithBearerAuth(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Parallel()
 	ok := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
 	req := func(auth string) *http.Request {
-		r := httptest.NewRequest(http.MethodPost, "/", nil)
+		r := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/", nil)
 		if auth != "" {
 			r.Header.Set("Authorization", auth)
 		}
@@ -200,13 +211,13 @@ func TestWithBearerAuth(t *testing.T) {
 	}
 
 	// Empty token -> no auth wrapper, request passes through.
-	assert.Equal(t, http.StatusOK, serve(withBearerAuth(ok, ""), ""))
+	assert.Equal(http.StatusOK, serve(withBearerAuth(ok, ""), ""))
 
 	h := withBearerAuth(ok, "s3cret")
-	assert.Equal(t, http.StatusUnauthorized, serve(h, ""), "missing header")
-	assert.Equal(t, http.StatusUnauthorized, serve(h, "Bearer wrong"), "wrong token")
-	assert.Equal(t, http.StatusUnauthorized, serve(h, "s3cret"), "missing Bearer prefix")
-	assert.Equal(t, http.StatusOK, serve(h, "Bearer s3cret"), "correct token")
+	assert.Equal(http.StatusUnauthorized, serve(h, ""), "missing header")
+	assert.Equal(http.StatusUnauthorized, serve(h, "Bearer wrong"), "wrong token")
+	assert.Equal(http.StatusUnauthorized, serve(h, "s3cret"), "missing Bearer prefix")
+	assert.Equal(http.StatusOK, serve(h, "Bearer s3cret"), "correct token")
 }
 
 // TestHTTPHandler_DNSRebindingProtection guards the SDK's built-in
@@ -224,7 +235,7 @@ func TestHTTPHandler_DNSRebindingProtection(t *testing.T) {
 
 	body := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"x","version":"0"}}}`
 	do := func(host string) int {
-		req, err := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(body))
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, ts.URL, strings.NewReader(body))
 		require.NoError(t, err)
 		if host != "" {
 			req.Host = host
@@ -248,7 +259,7 @@ func TestHTTPHandler_DNSRebindingProtection(t *testing.T) {
 // returning context.Canceled (which the command treats as a clean exit).
 func TestServeHTTP_ShutsDownOnContextCancel(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
 		done <- ServeHTTP(ctx, ServeOptions{
@@ -258,7 +269,7 @@ func TestServeHTTP_ShutsDownOnContextCancel(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 	case <-time.After(10 * time.Second):
 		t.Fatal("ServeHTTP did not return after context cancel")
 	}

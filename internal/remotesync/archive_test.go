@@ -3,7 +3,6 @@ package remotesync
 import (
 	"archive/tar"
 	"bytes"
-	"context"
 	"database/sql"
 	"errors"
 	"io"
@@ -20,19 +19,22 @@ import (
 )
 
 func TestWriteArchivePreservesRootRelativePathAndMTime(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	dir := filepath.Join(root, "home", "wes", ".claude")
-	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(os.MkdirAll(dir, 0o755))
 	path := filepath.Join(dir, "session.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte("body"), 0o644))
+	require.NoError(os.WriteFile(path, []byte("body"), 0o644))
 	wantMTime := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
-	require.NoError(t, os.Chtimes(path, wantMTime, wantMTime))
+	require.NoError(os.Chtimes(path, wantMTime, wantMTime))
 
 	var buf bytes.Buffer
-	err := WriteArchive(&buf, TargetSet{
+	err := WriteArchive(t.Context(), &buf, TargetSet{
 		Dirs: map[parser.AgentType][]string{parser.AgentClaude: {dir}},
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	tr := tar.NewReader(&buf)
 	var found *tar.Header
@@ -41,26 +43,28 @@ func TestWriteArchivePreservesRootRelativePathAndMTime(t *testing.T) {
 		if err == io.EOF {
 			break
 		}
-		require.NoError(t, err)
+		require.NoError(err)
 		if hdr.Name == archiveNameForTest(t, path) {
 			found = hdr
 			break
 		}
 	}
-	require.NotNil(t, found)
-	assert.Equal(t, byte(tar.TypeReg), found.Typeflag)
-	assert.Equal(t, wantMTime.Unix(), found.ModTime.Unix())
+	require.NotNil(found)
+	assert.Equal(byte(tar.TypeReg), found.Typeflag)
+	assert.Equal(wantMTime.Unix(), found.ModTime.Unix())
 }
 
 func TestWriteArchiveDoesNotFollowSymlink(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target.jsonl")
-	require.NoError(t, os.WriteFile(target, []byte("secret"), 0o644))
+	require.NoError(os.WriteFile(target, []byte("secret"), 0o644))
 	link := filepath.Join(dir, "link.jsonl")
-	require.NoError(t, os.Symlink(target, link))
+	require.NoError(os.Symlink(target, link))
 
 	var buf bytes.Buffer
-	require.NoError(t, WriteArchive(&buf, TargetSet{
+	require.NoError(WriteArchive(t.Context(), &buf, TargetSet{
 		Dirs: map[parser.AgentType][]string{parser.AgentClaude: {dir}},
 	}))
 
@@ -70,20 +74,23 @@ func TestWriteArchiveDoesNotFollowSymlink(t *testing.T) {
 		if err == io.EOF {
 			break
 		}
-		require.NoError(t, err)
+		require.NoError(err)
 		assert.NotEqual(t, archiveNameForTest(t, link), hdr.Name)
 	}
 }
 
 func TestWriteArchiveIgnoresBytesAppendedAfterHeader(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte("old"), 0o644))
+	require.NoError(os.WriteFile(path, []byte("old"), 0o644))
 
 	writer := newBlockAfterFirstTarHeaderWriter()
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- WriteArchive(writer, TargetSet{
+		errCh <- WriteArchive(t.Context(), writer, TargetSet{
 			ExtraFiles: []string{path},
 		})
 	}()
@@ -91,54 +98,59 @@ func TestWriteArchiveIgnoresBytesAppendedAfterHeader(t *testing.T) {
 	select {
 	case <-writer.headerWritten:
 	case <-time.After(backgroundWaitTimeout):
-		require.FailNow(t, "tar header was not written")
+		require.FailNow("tar header was not written")
 	}
-	require.NoError(t, appendFile(path, "new"))
+	require.NoError(appendFile(path, "new"))
 	close(writer.proceed)
 
-	require.NoError(t, <-errCh)
+	require.NoError(<-errCh)
 	tr := tar.NewReader(bytes.NewReader(writer.Bytes()))
 	hdr, err := tr.Next()
-	require.NoError(t, err)
-	assert.Equal(t, archiveNameForTest(t, path), hdr.Name)
+	require.NoError(err)
+	assert.Equal(archiveNameForTest(t, path), hdr.Name)
 	body, err := io.ReadAll(tr)
-	require.NoError(t, err)
-	assert.Equal(t, "old", string(body))
+	require.NoError(err)
+	assert.Equal("old", string(body))
 }
 
 func TestWriteArchiveToleratesMissingExtraFile(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
 	missing := filepath.Join(dir, "missing.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte("body"), 0o644))
+	require.NoError(os.WriteFile(path, []byte("body"), 0o644))
 
 	var buf bytes.Buffer
-	require.NoError(t, WriteArchive(&buf, TargetSet{
+	require.NoError(WriteArchive(t.Context(), &buf, TargetSet{
 		ExtraFiles: []string{path, missing},
 	}))
 	archiveBytes := slices.Clone(buf.Bytes())
 
 	tr := tar.NewReader(&buf)
 	hdr, err := tr.Next()
-	require.NoError(t, err)
-	assert.Equal(t, archiveNameForTest(t, path), hdr.Name)
+	require.NoError(err)
+	assert.Equal(archiveNameForTest(t, path), hdr.Name)
 	_, err = io.ReadAll(tr)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = tr.Next()
-	assert.ErrorIs(t, err, io.EOF)
-	assert.True(t, hasTarEndMarker(archiveBytes))
+	require.ErrorIs(err, io.EOF)
+	assert.True(hasTarEndMarker(archiveBytes))
 }
 
 func TestWriteArchiveSkipsDirectoryValuedExtraFile(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	extraDir := filepath.Join(root, "state.db-wal")
-	require.NoError(t, os.Mkdir(extraDir, 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.Mkdir(extraDir, 0o755))
+	require.NoError(os.WriteFile(
 		filepath.Join(extraDir, "credential.txt"), []byte("secret"), 0o600,
 	))
 
 	var buf bytes.Buffer
-	require.NoError(t, WriteArchive(&buf, TargetSet{
+	require.NoError(WriteArchive(t.Context(), &buf, TargetSet{
 		ExtraFiles: []string{extraDir},
 	}))
 
@@ -154,7 +166,7 @@ func TestHermesArchivesSnapshotWALCommitBeforeCheckpoint(t *testing.T) {
 		{
 			name: "full archive",
 			write: func(w io.Writer, stateDB string) error {
-				return WriteArchive(w, TargetSet{
+				return WriteArchive(t.Context(), w, TargetSet{
 					Dirs: map[parser.AgentType][]string{
 						parser.AgentHermes: {stateDB},
 					},
@@ -178,29 +190,31 @@ func TestHermesArchivesSnapshotWALCommitBeforeCheckpoint(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			stateDB := filepath.Join(t.TempDir(), "profile", "state.db")
-			require.NoError(t, os.MkdirAll(filepath.Dir(stateDB), 0o755))
+			require.NoError(os.MkdirAll(filepath.Dir(stateDB), 0o755))
 			writeHermesImportStateDB(t, stateDB)
 			writer, err := sql.Open("sqlite3", stateDB)
-			require.NoError(t, err)
+			require.NoError(err)
 			t.Cleanup(func() { _ = writer.Close() })
 			var journalMode string
-			require.NoError(t,
-				writer.QueryRow(`PRAGMA journal_mode = WAL`).Scan(&journalMode))
-			assert.Equal(t, "wal", journalMode)
-			_, err = writer.Exec(`PRAGMA wal_autocheckpoint = 0`)
-			require.NoError(t, err)
-			_, err = writer.Exec(`
+			require.NoError(writer.QueryRowContext(t.Context(), `PRAGMA journal_mode = WAL`).Scan(&journalMode))
+			assert.Equal("wal", journalMode)
+			_, err = writer.ExecContext(t.Context(), `PRAGMA wal_autocheckpoint = 0`)
+			require.NoError(err)
+			_, err = writer.ExecContext(t.Context(), `
 				UPDATE sessions
 				SET title = 'Committed in WAL'
 				WHERE id = 'database-only'
 			`)
-			require.NoError(t, err)
+			require.NoError(err)
 			wal := stateDB + "-wal"
-			require.FileExists(t, wal)
+			require.FileExists(wal)
 
 			stateInfo, err := os.Stat(stateDB)
-			require.NoError(t, err)
+			require.NoError(err)
 			archiveWriter := newBlockAfterBytesWriter(512 + stateInfo.Size())
 			errCh := make(chan error, 1)
 			go func() { errCh <- tt.write(archiveWriter, stateDB) }()
@@ -208,34 +222,34 @@ func TestHermesArchivesSnapshotWALCommitBeforeCheckpoint(t *testing.T) {
 			select {
 			case <-archiveWriter.blocked:
 			case <-time.After(backgroundWaitTimeout):
-				require.FailNow(t, "archive did not finish its first database entry")
+				require.FailNow("archive did not finish its first database entry")
 			}
-			_, checkpointErr := writer.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
-			require.NoError(t, checkpointErr)
-			require.NoError(t, writer.Close())
+			_, checkpointErr := writer.ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
+			require.NoError(checkpointErr)
+			require.NoError(writer.Close())
 			if removeErr := os.Remove(wal); !os.IsNotExist(removeErr) {
-				require.NoError(t, removeErr)
+				require.NoError(removeErr)
 			}
 			close(archiveWriter.proceed)
-			require.NoError(t, <-errCh)
+			require.NoError(<-errCh)
 
 			extracted := t.TempDir()
 			_, err = ExtractTarStream(
-				context.Background(), bytes.NewReader(archiveWriter.Bytes()), extracted,
+				t.Context(), bytes.NewReader(archiveWriter.Bytes()), extracted,
 			)
-			require.NoError(t, err)
+			require.NoError(err)
 			extractedDB, err := safeRemappedRemotePath(extracted, stateDB)
-			require.NoError(t, err)
+			require.NoError(err)
 			snapshot, err := sql.Open("sqlite3", extractedDB)
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, snapshot.Close()) })
+			require.NoError(err)
+			t.Cleanup(func() { require.NoError(snapshot.Close()) })
 			var title string
-			require.NoError(t, snapshot.QueryRow(`
+			require.NoError(snapshot.QueryRowContext(t.Context(), `
 				SELECT title FROM sessions WHERE id = 'database-only'
 			`).Scan(&title))
-			assert.Equal(t, "Committed in WAL", title)
-			assert.NoFileExists(t, extractedDB+"-wal")
-			assert.NoFileExists(t, extractedDB+"-shm")
+			assert.Equal("Committed in WAL", title)
+			assert.NoFileExists(extractedDB + "-wal")
+			assert.NoFileExists(extractedDB + "-shm")
 		})
 	}
 }
@@ -263,7 +277,7 @@ func TestWriteArchiveExcludesRemoteSyncExcludedAgentState(t *testing.T) {
 		{
 			name: "full",
 			write: func(w io.Writer) error {
-				return WriteArchive(w, targets)
+				return WriteArchive(t.Context(), w, targets)
 			},
 		},
 		{
@@ -304,7 +318,7 @@ func TestWriteArchivePrunesForbiddenRootNestedInAllowedRoot(t *testing.T) {
 		{
 			name: "full archive",
 			write: func(w io.Writer) error {
-				return WriteArchive(w, targets)
+				return WriteArchive(t.Context(), w, targets)
 			},
 		},
 		{
@@ -315,8 +329,11 @@ func TestWriteArchivePrunesForbiddenRootNestedInAllowedRoot(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			var archive bytes.Buffer
-			require.NoError(t, tt.write(&archive))
+			require.NoError(tt.write(&archive))
 
 			var names []string
 			tr := tar.NewReader(&archive)
@@ -325,37 +342,40 @@ func TestWriteArchivePrunesForbiddenRootNestedInAllowedRoot(t *testing.T) {
 				if errors.Is(err, io.EOF) {
 					break
 				}
-				require.NoError(t, err)
+				require.NoError(err)
 				names = append(names, hdr.Name)
 			}
-			assert.Contains(t, names, archiveNameForTest(t, keep))
-			assert.NotContains(t, names, archiveNameForTest(t, secret),
+			assert.Contains(names, archiveNameForTest(t, keep))
+			assert.NotContains(names, archiveNameForTest(t, secret),
 				"a forbidden nested root must not enter the transfer artifact")
 		})
 	}
 }
 
 func TestWriteArchivePropagatesAdvertisedHermesSnapshotFailure(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	stateDB := filepath.Join(t.TempDir(), "profile", "state.db")
-	require.NoError(t, os.MkdirAll(filepath.Dir(stateDB), 0o755))
+	require.NoError(os.MkdirAll(filepath.Dir(stateDB), 0o755))
 	writeHermesImportStateDB(t, stateDB)
 
 	wantErr := errors.New("forced sqlite backup failure")
 	originalSnapshot := writeSQLiteSnapshotFile
 	writeSQLiteSnapshotFile = func(dstPath, srcPath string) error {
-		assert.NotEmpty(t, dstPath)
-		assert.Equal(t, stateDB, srcPath)
+		assert.NotEmpty(dstPath)
+		assert.Equal(stateDB, srcPath)
 		return wantErr
 	}
 	t.Cleanup(func() { writeSQLiteSnapshotFile = originalSnapshot })
 
 	var archive bytes.Buffer
-	err := WriteArchive(&archive, TargetSet{
+	err := WriteArchive(t.Context(), &archive, TargetSet{
 		Dirs: map[parser.AgentType][]string{parser.AgentHermes: {stateDB}},
 	})
-	require.Error(t, err)
-	assert.ErrorIs(t, err, wantErr)
-	assert.Contains(t, err.Error(), "snapshot sqlite database")
+	require.Error(err)
+	require.ErrorIs(err, wantErr)
+	assert.Contains(err.Error(), "snapshot sqlite database")
 }
 
 // A database that passes the identity probe but vanishes before the
@@ -376,7 +396,7 @@ func TestWriteArchiveOmitsSnapshotWhenSourceVanishesMidBackup(t *testing.T) {
 	t.Cleanup(func() { writeSQLiteSnapshotFile = originalSnapshot })
 
 	var archive bytes.Buffer
-	require.NoError(t, WriteArchive(&archive, TargetSet{
+	require.NoError(t, WriteArchive(t.Context(), &archive, TargetSet{
 		Dirs: map[parser.AgentType][]string{parser.AgentHermes: {stateDB}},
 	}))
 	assert.Empty(t, archiveEntries(t, archive.Bytes()))
@@ -398,24 +418,28 @@ func archiveNameForTest(t *testing.T, p string) string {
 }
 
 func TestExtractTarStreamRejectsArchiveWithoutEndMarker(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
 	invalid := filepath.Join(dir, "invalid\x00path")
-	require.NoError(t, os.WriteFile(path, []byte("body"), 0o644))
+	require.NoError(os.WriteFile(path, []byte("body"), 0o644))
 
 	var buf bytes.Buffer
-	err := WriteArchive(&buf, TargetSet{
+	err := WriteArchive(t.Context(), &buf, TargetSet{
 		ExtraFiles: []string{path, invalid},
 	})
-	require.Error(t, err)
-	require.False(t, hasTarEndMarker(buf.Bytes()))
+	require.Error(err)
+	require.False(hasTarEndMarker(buf.Bytes()))
 
-	_, err = ExtractTarStream(context.Background(), &buf, t.TempDir())
-	require.Error(t, err)
+	_, err = ExtractTarStream(t.Context(), &buf, t.TempDir())
+	require.Error(err)
 	assert.Contains(t, err.Error(), "missing tar end marker")
 }
 
 func TestExtractTarStreamRejectsArchiveEndingWithZeroFilePayload(t *testing.T) {
+	require := require.New(t)
+
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	hdr := &tar.Header{
@@ -423,27 +447,29 @@ func TestExtractTarStreamRejectsArchiveEndingWithZeroFilePayload(t *testing.T) {
 		Mode: 0o644,
 		Size: 1024,
 	}
-	require.NoError(t, tw.WriteHeader(hdr))
+	require.NoError(tw.WriteHeader(hdr))
 	_, err := tw.Write(make([]byte, 1024))
-	require.NoError(t, err)
+	require.NoError(err)
 
-	_, err = ExtractTarStream(context.Background(), &buf, t.TempDir())
-	require.Error(t, err)
+	_, err = ExtractTarStream(t.Context(), &buf, t.TempDir())
+	require.Error(err)
 	assert.Contains(t, err.Error(), "missing tar end marker")
 }
 
 func TestWriteArchiveFileSkipsDisappearedFile(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte("body"), 0o644))
+	require.NoError(os.WriteFile(path, []byte("body"), 0o644))
 	info, err := os.Lstat(path)
-	require.NoError(t, err)
-	require.NoError(t, os.Remove(path))
+	require.NoError(err)
+	require.NoError(os.Remove(path))
 
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	require.NoError(t, writeArchiveFile(tw, path, info))
-	require.NoError(t, tw.Close())
+	require.NoError(writeArchiveFile(tw, path, info))
+	require.NoError(tw.Close())
 	assert.True(t, hasTarEndMarker(buf.Bytes()))
 }
 
@@ -553,42 +579,46 @@ func appendFile(path string, value string) error {
 }
 
 func TestWriteArchivePreservesNanosecondMtime(t *testing.T) {
+	require := require.New(t)
+
 	srcDir := t.TempDir()
 	path := filepath.Join(srcDir, "session.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o644))
+	require.NoError(os.WriteFile(path, []byte("{}\n"), 0o644))
 	mtime := time.Date(2026, 7, 8, 10, 30, 0, 123456789, time.UTC)
-	require.NoError(t, os.Chtimes(path, mtime, mtime))
+	require.NoError(os.Chtimes(path, mtime, mtime))
 	info, err := os.Stat(path)
-	require.NoError(t, err)
+	require.NoError(err)
 	if info.ModTime().Nanosecond() == 0 {
 		t.Skip("filesystem does not store nanosecond mtimes")
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, WriteArchive(&buf, TargetSet{
+	require.NoError(WriteArchive(t.Context(), &buf, TargetSet{
 		Dirs: map[parser.AgentType][]string{parser.AgentClaude: {srcDir}},
 	}))
 
 	dstDir := t.TempDir()
-	_, err = ExtractTarStream(context.Background(), &buf, dstDir)
-	require.NoError(t, err)
+	_, err = ExtractTarStream(t.Context(), &buf, dstDir)
+	require.NoError(err)
 	extracted, err := safeRemappedRemotePath(dstDir, path)
-	require.NoError(t, err)
+	require.NoError(err)
 	extractedInfo, err := os.Stat(extracted)
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Equal(t, info.ModTime().UnixNano(), extractedInfo.ModTime().UnixNano())
 }
 
 func TestWriteArchiveFilesSkipsVanishedAndSymlinks(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	keep := filepath.Join(dir, "keep.jsonl")
-	require.NoError(t, os.WriteFile(keep, []byte("k"), 0o644))
+	require.NoError(os.WriteFile(keep, []byte("k"), 0o644))
 	link := filepath.Join(dir, "link.jsonl")
-	require.NoError(t, os.Symlink(keep, link))
+	require.NoError(os.Symlink(keep, link))
 	gone := filepath.Join(dir, "gone.jsonl")
 
 	var buf bytes.Buffer
-	require.NoError(t, WriteArchiveFiles(&buf, TargetSet{
+	require.NoError(WriteArchiveFiles(&buf, TargetSet{
 		Dirs: map[parser.AgentType][]string{parser.AgentClaude: {dir}},
 	}, []string{gone, link, keep}))
 
@@ -599,22 +629,24 @@ func TestWriteArchiveFilesSkipsVanishedAndSymlinks(t *testing.T) {
 		if errors.Is(err, io.EOF) {
 			break
 		}
-		require.NoError(t, err)
+		require.NoError(err)
 		names = append(names, hdr.Name)
 	}
-	require.Len(t, names, 1)
+	require.Len(names, 1)
 	assert.Contains(t, names[0], "keep.jsonl")
 }
 
 func TestWriteArchiveFilesSkipsFilesOutsideAllowedRoots(t *testing.T) {
+	require := require.New(t)
+
 	allowed := t.TempDir()
 	inside := filepath.Join(allowed, "s.jsonl")
-	require.NoError(t, os.WriteFile(inside, []byte("in"), 0o644))
+	require.NoError(os.WriteFile(inside, []byte("in"), 0o644))
 	outside := filepath.Join(t.TempDir(), "secret.jsonl")
-	require.NoError(t, os.WriteFile(outside, []byte("secret"), 0o644))
+	require.NoError(os.WriteFile(outside, []byte("secret"), 0o644))
 
 	var buf bytes.Buffer
-	require.NoError(t, WriteArchiveFiles(&buf, TargetSet{
+	require.NoError(WriteArchiveFiles(&buf, TargetSet{
 		Dirs: map[parser.AgentType][]string{parser.AgentClaude: {allowed}},
 	}, []string{inside, outside}))
 
@@ -625,32 +657,35 @@ func TestWriteArchiveFilesSkipsFilesOutsideAllowedRoots(t *testing.T) {
 		if errors.Is(err, io.EOF) {
 			break
 		}
-		require.NoError(t, err)
+		require.NoError(err)
 		names = append(names, hdr.Name)
 	}
-	require.Len(t, names, 1, "only the file inside the allowed root is streamed")
+	require.Len(names, 1, "only the file inside the allowed root is streamed")
 	assert.Contains(t, names[0], "s.jsonl")
 }
 
 func TestWriteArchiveFilesPreservesNonHermesStateDB(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	stateDB := filepath.Join(root, "nested", "state.db")
-	require.NoError(t, os.MkdirAll(filepath.Dir(stateDB), 0o755))
-	require.NoError(t, os.WriteFile(stateDB, []byte("raw non-Hermes state"), 0o644))
+	require.NoError(os.MkdirAll(filepath.Dir(stateDB), 0o755))
+	require.NoError(os.WriteFile(stateDB, []byte("raw non-Hermes state"), 0o644))
 
 	var buf bytes.Buffer
-	require.NoError(t, WriteArchiveFiles(&buf, TargetSet{
+	require.NoError(WriteArchiveFiles(&buf, TargetSet{
 		Dirs:       map[parser.AgentType][]string{parser.AgentClaude: {root}},
 		ExtraFiles: []string{stateDB},
 	}, []string{stateDB}))
 
 	tr := tar.NewReader(&buf)
 	hdr, err := tr.Next()
-	require.NoError(t, err)
-	assert.Equal(t, archiveNameForTest(t, stateDB), hdr.Name)
+	require.NoError(err)
+	assert.Equal(archiveNameForTest(t, stateDB), hdr.Name)
 	body, err := io.ReadAll(tr)
-	require.NoError(t, err)
-	assert.Equal(t, "raw non-Hermes state", string(body))
+	require.NoError(err)
+	assert.Equal("raw non-Hermes state", string(body))
 }
 
 func TestResolveDeltaFilePath(t *testing.T) {
@@ -661,15 +696,30 @@ func TestResolveDeltaFilePath(t *testing.T) {
 		want  string
 		ok    bool
 	}{
-		{"exact root", []string{"/srv/extra.jsonl"}, "/srv/extra.jsonl",
-			"/srv/extra.jsonl", true},
-		{"nested under root", []string{"/srv/claude"}, "/srv/claude/p/s.jsonl",
-			"/srv/claude/p/s.jsonl", true},
+		{
+			"exact root",
+			[]string{"/srv/extra.jsonl"},
+			"/srv/extra.jsonl",
+			"/srv/extra.jsonl", true,
+		},
+		{
+			"nested under root",
+			[]string{"/srv/claude"},
+			"/srv/claude/p/s.jsonl",
+			"/srv/claude/p/s.jsonl", true,
+		},
 		{"outside all roots", []string{"/srv/claude"}, "/etc/passwd", "", false},
-		{"traversal escapes root", []string{"/srv/claude"},
-			"/srv/claude/../secret", "", false},
-		{"prefix sibling", []string{"/srv/claude"}, "/srv/claude-evil/x",
-			"", false},
+		{
+			"traversal escapes root",
+			[]string{"/srv/claude"},
+			"/srv/claude/../secret", "", false,
+		},
+		{
+			"prefix sibling",
+			[]string{"/srv/claude"},
+			"/srv/claude-evil/x",
+			"", false,
+		},
 		{"no roots", nil, "/srv/claude/p/s.jsonl", "", false},
 	}
 	fromSlashAll := func(paths []string) []string {

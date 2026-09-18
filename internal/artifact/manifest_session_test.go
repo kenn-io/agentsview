@@ -24,6 +24,9 @@ import (
 // contract; otherwise leave the DTO alone and update populateWireFixture's
 // expectations here.
 func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	var sess db.Session
@@ -54,42 +57,45 @@ func TestManifestSessionMatchesDBSessionWireFormat(t *testing.T) {
 	}
 
 	want, err := artifactReference(reference)
-	require.NoError(t, err)
+	require.NoError(err)
 	got, err := canonicalJSON(manifestSessionFromDB(sess))
-	require.NoError(t, err)
-	assert.Equal(t, string(want), string(got),
+	require.NoError(err)
+	assert.Equal(string(want), string(got),
 		"manifestSession must serialize byte-identically to db.Session minus database-only and transient fields")
 
 	withoutPointer, err := canonicalJSON(manifestSessionFromDB(reference))
-	require.NoError(t, err)
-	assert.Equal(t, string(got), string(withoutPointer),
+	require.NoError(err)
+	assert.Equal(string(got), string(withoutPointer),
 		"manifest bytes must not depend on the transient quality_signals or web_url")
 
 	roundTrip, err := artifactReference(manifestSessionFromDB(sess).dbSession())
-	require.NoError(t, err)
-	assert.Equal(t, string(want), string(roundTrip),
+	require.NoError(err)
+	assert.Equal(string(want), string(roundTrip),
 		"converting to the wire DTO and back must preserve every artifact-visible field")
 }
 
 func TestManifestQualitySignalsMatchesDBWireFormat(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	var qs db.QualitySignals
 	populateWireFixture(t, reflect.ValueOf(&qs).Elem(), 100)
 
 	want, err := canonicalJSON(qs)
-	require.NoError(t, err)
+	require.NoError(err)
 	dto := manifestQualitySignalsFromDB(&qs)
-	require.NotNil(t, dto)
+	require.NotNil(dto)
 	got, err := canonicalJSON(*dto)
-	require.NoError(t, err)
-	assert.Equal(t, string(want), string(got))
+	require.NoError(err)
+	assert.Equal(string(want), string(got))
 
 	roundTrip, err := canonicalJSON(*dto.dbQualitySignals())
-	require.NoError(t, err)
-	assert.Equal(t, string(want), string(roundTrip))
+	require.NoError(err)
+	assert.Equal(string(want), string(roundTrip))
 
-	assert.Nil(t, manifestQualitySignalsFromDB(nil))
+	assert.Nil(manifestQualitySignalsFromDB(nil))
 }
 
 // populateWireFixture fills every exported field of a struct with a distinct

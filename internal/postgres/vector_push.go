@@ -254,7 +254,7 @@ func (s *Sync) pushVectors(
 		return res, nil
 	}
 	if export == nil {
-		return res, fmt.Errorf("resolving local vector generation: BeginExport returned a nil export")
+		return res, errors.New("resolving local vector generation: BeginExport returned a nil export")
 	}
 	defer func() {
 		if export != nil {
@@ -357,9 +357,7 @@ func (s *Sync) pushVectors(
 			return res, nil
 		}
 		if export == nil {
-			return res, fmt.Errorf(
-				"rechecking local vector generation after scoped promotion: BeginExport returned a nil export",
-			)
+			return res, errors.New("rechecking local vector generation after scoped promotion: BeginExport returned a nil export")
 		}
 		gen = export.Generation()
 	}
@@ -1416,9 +1414,7 @@ func deleteOrphanVectorDocs(
 			" AND NOT EXISTS (SELECT 1 FROM %s c WHERE c.doc_key = d.doc_key)",
 			vectorChunkTable(id))
 	}
-	stmt := fmt.Sprintf(
-		`DELETE FROM vector_documents d WHERE d.session_id = $1%s`,
-		conds.String())
+	stmt := "DELETE FROM vector_documents d WHERE d.session_id = $1" + conds.String()
 	result, err := tx.ExecContext(ctx, stmt, sessionID)
 	if err != nil {
 		return 0, fmt.Errorf("pruning orphan docs for session %s: %w", sessionID, err)

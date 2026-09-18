@@ -1,5 +1,7 @@
 package parser
 
+import "context"
+
 import (
 	"crypto/sha256"
 	"database/sql"
@@ -52,9 +54,9 @@ const antigravitySchemaUnknownPrefix = "agy-schema:"
 // recorder byte-for-byte: every non-null sqlite_master sql value ordered by
 // (type, name), each followed by a newline, then the decimal user_version
 // followed by a newline. Returns ("", err) when the schema cannot be read.
-func antigravitySchemaFingerprint(db *sql.DB) (string, error) {
-	rows, err := db.Query(
-		`SELECT sql FROM sqlite_master ` +
+func antigravitySchemaFingerprint(ctx context.Context, db *sql.DB) (string, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT sql FROM sqlite_master `+
 			`WHERE sql IS NOT NULL ORDER BY type, name`,
 	)
 	if err != nil {
@@ -76,7 +78,7 @@ func antigravitySchemaFingerprint(db *sql.DB) (string, error) {
 	}
 
 	var userVersion int64
-	if err := db.QueryRow(`PRAGMA user_version`).Scan(&userVersion); err != nil {
+	if err := db.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&userVersion); err != nil {
 		return "", err
 	}
 	h.Write([]byte(strconv.FormatInt(userVersion, 10)))
@@ -108,8 +110,8 @@ func antigravitySchemaLabel(fingerprint string) string {
 // both classify identically. Returns "" when the schema cannot be read, so a
 // sidecar-only or undecodable session leaves SourceVersion empty rather than
 // fabricating a label.
-func antigravitySourceVersion(db *sql.DB) string {
-	fp, err := antigravitySchemaFingerprint(db)
+func antigravitySourceVersion(ctx context.Context, db *sql.DB) string {
+	fp, err := antigravitySchemaFingerprint(ctx, db)
 	if err != nil {
 		return ""
 	}

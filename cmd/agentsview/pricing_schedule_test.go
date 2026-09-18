@@ -79,11 +79,13 @@ func withPricingCatalogTransport(t *testing.T, transport http.RoundTripper) {
 
 func TestPricingRefreshStartsDespiteRecentAttemptAndRecovers(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		require := require.New(t)
+
 		database := dbtest.OpenTestDB(t)
 		previousAttempt := time.Now().Add(-10 * time.Minute).UTC().Format(
 			time.RFC3339,
 		)
-		require.NoError(t, database.SetPricingMeta(
+		require.NoError(database.SetPricingMeta(
 			"_litellm_last_attempt", previousAttempt,
 		))
 
@@ -100,14 +102,14 @@ func TestPricingRefreshStartsDespiteRecentAttemptAndRecovers(t *testing.T) {
 			sched.Wait()
 		})
 		synctest.Wait()
-		require.Contains(t, sched.Status()[0].LastError, "simulated pricing catalog transport failure")
+		require.Contains(sched.Status()[0].LastError, "simulated pricing catalog transport failure")
 
 		failing = false
-		require.NoError(t, sched.TriggerNow(pricingRefreshJobName))
+		require.NoError(sched.TriggerNow(pricingRefreshJobName))
 
 		price, err := database.GetModelPricing("scheduled-model")
-		require.NoError(t, err)
-		require.NotNil(t, price)
+		require.NoError(err)
+		require.NotNil(price)
 		assert.Equal(t, int64(2_000_000), price.InputPerMTok.Microdollars)
 	})
 }

@@ -30,7 +30,8 @@ func (f hintRecordingFactory) Capabilities() parser.Capabilities { return f.caps
 
 func (f hintRecordingFactory) NewProvider(cfg parser.ProviderConfig) parser.Provider {
 	return &hintRecordingProvider{
-		Def: f.Definition(), Caps: f.caps, Config: cfg.Clone(), seen: f.seen}
+		Def: f.Definition(), Caps: f.caps, Config: cfg.Clone(), seen: f.seen,
+	}
 }
 
 type hintRecordingProvider struct {
@@ -79,12 +80,15 @@ func TestClassifyProviderChangedPathSchedulesStoredSourceHintsByCapability(t *te
 		{name: "unsupported", caps: parser.CapabilityUnsupported, want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			root := t.TempDir()
 			changedPath := filepath.Join(root, "container.db")
-			require.NoError(t, os.WriteFile(changedPath, []byte("fixture"), 0o600))
+			require.NoError(os.WriteFile(changedPath, []byte("fixture"), 0o600))
 			persistedPath := changedPath + "#stored"
 			database := dbtest.OpenTestDB(t)
-			require.NoError(t, database.UpsertSession(db.Session{
+			require.NoError(database.UpsertSession(db.Session{
 				ID: "hint-agent:stored", Agent: "hint-agent", Project: "fixture",
 				Machine: "local", FilePath: strPtr(persistedPath),
 			}))
@@ -106,12 +110,12 @@ func TestClassifyProviderChangedPathSchedulesStoredSourceHintsByCapability(t *te
 
 			files := requireClassifyProviderChangedPath(t, engine, changedPath)
 
-			require.Len(t, files, 1)
-			require.Len(t, seen, 1)
+			require.Len(files, 1)
+			require.Len(seen, 1)
 			if tc.want {
-				assert.Equal(t, []string{persistedPath}, seen[0])
+				assert.Equal([]string{persistedPath}, seen[0])
 			} else {
-				assert.Empty(t, seen[0])
+				assert.Empty(seen[0])
 			}
 		})
 	}
@@ -176,7 +180,7 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 				path := writeProcessProviderForgeDB(t, root)
 				conn, err := sql.Open("sqlite3", path)
 				require.NoError(t, err)
-				_, err = conn.Exec(`DELETE FROM conversations WHERE conversation_id = 'conv-001'`)
+				_, err = conn.ExecContext(t.Context(), `DELETE FROM conversations WHERE conversation_id = 'conv-001'`)
 				require.NoError(t, err)
 				require.NoError(t, conn.Close())
 				return root, path + "-wal", path + "#conv-001"
@@ -185,17 +189,19 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 		{
 			name: "Zed multiSessionContainerSourceSet", agent: parser.AgentZed,
 			setup: func(t *testing.T) (string, string, string) {
+				require := require.New(t)
+
 				root := t.TempDir()
 				path := filepath.Join(root, "threads", "threads.db")
-				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+				require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
 				store, err := sql.Open("sqlite3", path)
-				require.NoError(t, err)
-				_, err = store.Exec(`CREATE TABLE threads (
+				require.NoError(err)
+				_, err = store.ExecContext(t.Context(), `CREATE TABLE threads (
 					id TEXT PRIMARY KEY, summary TEXT NOT NULL, updated_at TEXT NOT NULL,
 					data_type TEXT NOT NULL, data BLOB NOT NULL, parent_id TEXT,
 					folder_paths TEXT, folder_paths_order TEXT, created_at TEXT)`)
-				require.NoError(t, err)
-				require.NoError(t, store.Close())
+				require.NoError(err)
+				require.NoError(store.Close())
 				return root, path + "-wal", parser.ZedSQLiteVirtualPath(path, "deleted")
 			},
 		},
@@ -208,7 +214,7 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 				)
 				conn, err := sql.Open("sqlite3", path)
 				require.NoError(t, err)
-				_, err = conn.Exec(`DELETE FROM sessions WHERE id = 'deleted'`)
+				_, err = conn.ExecContext(t.Context(), `DELETE FROM sessions WHERE id = 'deleted'`)
 				require.NoError(t, err)
 				require.NoError(t, conn.Close())
 				return root, path + "-wal", path + "#deleted"
@@ -217,27 +223,29 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 		{
 			name: "Kiro SQLite helper", agent: parser.AgentKiro,
 			setup: func(t *testing.T) (string, string, string) {
+				require := require.New(t)
+
 				root := t.TempDir()
 				path := filepath.Join(root, "data.sqlite3")
 				store, err := sql.Open("sqlite3", path)
-				require.NoError(t, err)
-				_, err = store.Exec(`CREATE TABLE conversations_v2 (
+				require.NoError(err)
+				_, err = store.ExecContext(t.Context(), `CREATE TABLE conversations_v2 (
 					key TEXT NOT NULL, conversation_id TEXT NOT NULL, value TEXT NOT NULL,
 					created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
 					PRIMARY KEY (key, conversation_id))`)
-				require.NoError(t, err)
+				require.NoError(err)
 				payload, err := os.ReadFile(filepath.Join(
 					"..", "parser", "testdata", "kiro_sqlite", "standard_payload.json",
 				))
-				require.NoError(t, err)
-				_, err = store.Exec(`INSERT INTO conversations_v2
+				require.NoError(err)
+				_, err = store.ExecContext(t.Context(), `INSERT INTO conversations_v2
 					(key, conversation_id, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`,
 					"/workspace/agentsview", "deleted", string(payload),
 					1710000000000, 1710000005000)
-				require.NoError(t, err)
-				_, err = store.Exec(`DELETE FROM conversations_v2 WHERE conversation_id = 'deleted'`)
-				require.NoError(t, err)
-				require.NoError(t, store.Close())
+				require.NoError(err)
+				_, err = store.ExecContext(t.Context(), `DELETE FROM conversations_v2 WHERE conversation_id = 'deleted'`)
+				require.NoError(err)
+				require.NoError(store.Close())
 				return root, path + "-wal", parser.KiroSQLiteVirtualPath(path, "deleted")
 			},
 		},
@@ -262,7 +270,7 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 				writeTraeSyncDB(t, path, "reply")
 				store, err := sql.Open("sqlite3", path)
 				require.NoError(t, err)
-				_, err = store.Exec(`UPDATE ItemTable SET value = ? WHERE key = ?`, `{"list":[]}`, "memento/icube-ai-agent-storage")
+				_, err = store.ExecContext(t.Context(), `UPDATE ItemTable SET value = ? WHERE key = ?`, `{"list":[]}`, "memento/icube-ai-agent-storage")
 				require.NoError(t, err)
 				require.NoError(t, store.Close())
 				return root, path, path + "#rewrite"
@@ -272,9 +280,12 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			root, changedPath, deletedPath := tc.setup(t)
 			database := dbtest.OpenTestDB(t)
-			require.NoError(t, database.UpsertSession(db.Session{
+			require.NoError(database.UpsertSession(db.Session{
 				ID: string(tc.agent) + ":deleted", Agent: string(tc.agent),
 				Project: "fixture", Machine: "local", FilePath: strPtr(deletedPath),
 			}))
@@ -294,13 +305,13 @@ func TestClassifyProviderChangedPathPreservesHintDependentTombstones(t *testing.
 					tombstone = file
 				}
 			}
-			require.Equal(t, deletedPath, tombstone.Path)
-			assert.Equal(t, tc.agent, tombstone.Agent)
+			require.Equal(deletedPath, tombstone.Path)
+			assert.Equal(tc.agent, tombstone.Agent)
 
-			result := engine.processFile(context.Background(), tombstone)
-			require.NoError(t, result.err)
-			assert.True(t, result.forceReplace)
-			assert.Empty(t, result.results)
+			result := engine.processFile(t.Context(), tombstone)
+			require.NoError(result.err)
+			assert.True(result.forceReplace)
+			assert.Empty(result.results)
 		})
 	}
 }

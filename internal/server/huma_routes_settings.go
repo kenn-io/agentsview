@@ -431,7 +431,7 @@ func (s *Server) humaAssignSessionProject(
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			return nil, apiError(http.StatusNotFound, "session not found")
-		case strings.Contains(err.Error(), "required"):
+		case errors.Is(err, db.ErrSessionProjectAssignmentInvalid):
 			return nil, apiError(http.StatusBadRequest, err.Error())
 		default:
 			return nil, internalError("assign session project", err)
@@ -455,7 +455,7 @@ func (s *Server) humaClearSessionProjectAssignment(
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			return nil, apiError(http.StatusNotFound, "session assignment not found")
-		case strings.Contains(err.Error(), "required"):
+		case errors.Is(err, db.ErrSessionProjectAssignmentInvalid):
 			return nil, apiError(http.StatusBadRequest, err.Error())
 		default:
 			return nil, internalError("clear session project assignment", err)
@@ -470,8 +470,6 @@ func humaWorktreeReclassificationError(err error) error {
 		return apiError(http.StatusConflict, err.Error())
 	case errors.Is(err, db.ErrWorktreeMappingInvalid):
 		return apiError(http.StatusBadRequest, err.Error())
-	case strings.Contains(err.Error(), "required"):
-		return apiError(http.StatusBadRequest, err.Error())
 	default:
 		return internalError("worktree reclassification", err)
 	}
@@ -480,8 +478,6 @@ func humaWorktreeReclassificationError(err error) error {
 func humaWorktreeMappingError(err error) error {
 	switch {
 	case errors.Is(err, db.ErrWorktreeMappingInvalid):
-		return apiError(http.StatusBadRequest, err.Error())
-	case strings.Contains(err.Error(), "required"):
 		return apiError(http.StatusBadRequest, err.Error())
 	case errors.Is(err, db.ErrWorktreeMappingDuplicate):
 		return apiError(http.StatusConflict, "worktree mapping already exists")

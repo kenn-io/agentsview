@@ -13,68 +13,74 @@ import (
 )
 
 func TestReportingJointCellsPreserveTimeAndDimensions(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	seedJointReporting(t, d)
 	opts := ReportingExportOptions{Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4}
 	day, err := d.ExportReportingDay(t.Context(), opts)
-	require.NoError(t, err)
+	require.NoError(err)
 	hour := day.Hours[12]
-	require.NotNil(t, hour.Joint)
-	require.Len(t, hour.Joint.Cells, 4)
-	assert.Equal(t, 2, hour.Activity.Buckets[0].MaxAgents)
-	assert.Equal(t, int64(600), hour.Usage.Totals.OutputTokens)
-	assert.Equal(t, int64(6_000_000), hour.Usage.Totals.Cost.Microdollars)
+	require.NotNil(hour.Joint)
+	require.Len(hour.Joint.Cells, 4)
+	assert.Equal(2, hour.Activity.Buckets[0].MaxAgents)
+	assert.Equal(int64(600), hour.Usage.Totals.OutputTokens)
+	assert.Equal(int64(6_000_000), hour.Usage.Totals.Cost.Microdollars)
 
 	var projectAKey string
 	for _, cell := range hour.Joint.Cells {
-		require.NotEmpty(t, cell.ProjectKey)
+		require.NotEmpty(cell.ProjectKey)
 		if cell.Project == "project-a" {
 			projectAKey = cell.ProjectKey
 		}
 		switch {
 		case cell.Project == "project-b":
-			assert.Equal(t, "agent-b", cell.Agent)
-			assert.Equal(t, "automated", cell.Automation)
-			assert.Equal(t, 3.0, cell.AgentMinutes)
-			assert.Equal(t, int64(300), cell.Usage.OutputTokens)
+			assert.Equal("agent-b", cell.Agent)
+			assert.Equal("automated", cell.Automation)
+			assert.Equal(3.0, cell.AgentMinutes)
+			assert.Equal(int64(300), cell.Usage.OutputTokens)
 		case cell.Model == "model-a":
-			assert.Equal(t, "2026-07-28T12:00:00Z", cell.BucketStart)
-			assert.Equal(t, 2.0, cell.AgentMinutes)
-			assert.Equal(t, int64(100), cell.Usage.OutputTokens)
+			assert.Equal("2026-07-28T12:00:00Z", cell.BucketStart)
+			assert.Equal(2.0, cell.AgentMinutes)
+			assert.Equal(int64(100), cell.Usage.OutputTokens)
 		case cell.BucketStart == "2026-07-28T12:00:00Z":
-			assert.Equal(t, 3.0, cell.AgentMinutes)
-			assert.Zero(t, cell.Usage.OutputTokens)
+			assert.Equal(3.0, cell.AgentMinutes)
+			assert.Zero(cell.Usage.OutputTokens)
 		default:
-			assert.Equal(t, "2026-07-28T12:05:00Z", cell.BucketStart)
-			assert.Zero(t, cell.AgentMinutes)
-			assert.Equal(t, int64(200), cell.Usage.OutputTokens)
+			assert.Equal("2026-07-28T12:05:00Z", cell.BucketStart)
+			assert.Zero(cell.AgentMinutes)
+			assert.Equal(int64(200), cell.Usage.OutputTokens)
 		}
-		assert.Equal(t, cell.Usage.Cost, cell.Pricing.ComputedCost)
+		assert.Equal(cell.Usage.Cost, cell.Pricing.ComputedCost)
 	}
 
 	opts.ProjectKeys = []string{projectAKey, projectAKey}
 	scoped, err := d.ExportReportingDay(t.Context(), opts)
-	require.NoError(t, err)
-	assert.Equal(t, []string{projectAKey}, scoped.Hours[12].Joint.ProjectKeys)
-	assert.Equal(t, 1, scoped.Hours[12].Activity.Buckets[0].MaxAgents)
-	assert.Equal(t, int64(300), scoped.Hours[12].Usage.Totals.OutputTokens)
-	assert.NotEqual(t, hour.Digest, scoped.Hours[12].Digest)
-	assert.NotEqual(t, day.Hours[0].Digest, scoped.Hours[0].Digest, "quiet hours still bind their scope")
+	require.NoError(err)
+	assert.Equal([]string{projectAKey}, scoped.Hours[12].Joint.ProjectKeys)
+	assert.Equal(1, scoped.Hours[12].Activity.Buckets[0].MaxAgents)
+	assert.Equal(int64(300), scoped.Hours[12].Usage.Totals.OutputTokens)
+	assert.NotEqual(hour.Digest, scoped.Hours[12].Digest)
+	assert.NotEqual(day.Hours[0].Digest, scoped.Hours[0].Digest, "quiet hours still bind their scope")
 	for _, cell := range scoped.Hours[12].Joint.Cells {
-		assert.Equal(t, "project-a", cell.Project)
+		assert.Equal("project-a", cell.Project)
 	}
 
 	oracle, err := d.GetActivityReport(t.Context(), AnalyticsFilter{Timezone: "UTC"}, dayQuery(t, "2026-07-28", "UTC"))
-	require.NoError(t, err)
-	assert.Equal(t, 8.0, oracle.Totals.AgentMinutes)
-	assert.Equal(t, oracle.Totals.AgentMinutes, hour.Activity.Totals.AgentMinutes)
-	assert.Equal(t, oracle.Peak.Agents, hour.Activity.Peak.Agents)
+	require.NoError(err)
+	assert.Equal(8.0, oracle.Totals.AgentMinutes)
+	assert.Equal(oracle.Totals.AgentMinutes, hour.Activity.Totals.AgentMinutes)
+	assert.Equal(oracle.Peak.Agents, hour.Activity.Peak.Agents)
 }
 
 func TestReportingJointSubagentsTakePrecedenceOverAutomation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+	require.NoError(d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern: "model-a", OutputPerMTok: money.MustParseDollars("1"),
 	}}))
 	for _, session := range []struct {
@@ -105,10 +111,10 @@ func TestReportingJointSubagentsTakePrecedenceOverAutomation(t *testing.T) {
 		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now:  time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4,
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	hour := day.Hours[12]
-	require.NotNil(t, hour.Joint)
-	require.Len(t, hour.Joint.Cells, 3)
+	require.NotNil(hour.Joint)
+	require.Len(hour.Joint.Cells, 3)
 	for i, want := range []struct {
 		category string
 		minutes  float64
@@ -120,18 +126,18 @@ func TestReportingJointSubagentsTakePrecedenceOverAutomation(t *testing.T) {
 		{"subagent", 2, 2, 20},
 	} {
 		cell := hour.Joint.Cells[i]
-		assert.Equal(t, want.category, cell.Automation)
-		assert.Equal(t, want.minutes, cell.AgentMinutes)
-		assert.Equal(t, want.peak, cell.MaxAgents)
-		assert.Equal(t, want.tokens, cell.Usage.OutputTokens)
-		assert.Equal(t, money.Money{Microdollars: want.tokens}, cell.Usage.Cost)
-		assert.Equal(t, cell.Usage.Cost, cell.Pricing.ComputedCost)
+		assert.Equal(want.category, cell.Automation)
+		assert.Equal(want.minutes, cell.AgentMinutes)
+		assert.Equal(want.peak, cell.MaxAgents)
+		assert.Equal(want.tokens, cell.Usage.OutputTokens)
+		assert.Equal(money.Money{Microdollars: want.tokens}, cell.Usage.Cost)
+		assert.Equal(cell.Usage.Cost, cell.Pricing.ComputedCost)
 	}
-	assert.Equal(t, 1.0, hour.Activity.Totals.InteractiveAgentMinutes)
-	assert.Equal(t, 2.0, hour.Activity.Totals.SubagentAgentMinutes)
-	assert.Equal(t, 1.0, hour.Activity.Totals.AutomatedAgentMinutes)
-	assert.Equal(t, 2, hour.Activity.Buckets[0].MaxSubagentAgents)
-	assert.Equal(t, money.Money{Microdollars: 20}, hour.Activity.Totals.SubagentCost)
+	assert.Equal(1.0, hour.Activity.Totals.InteractiveAgentMinutes)
+	assert.Equal(2.0, hour.Activity.Totals.SubagentAgentMinutes)
+	assert.Equal(1.0, hour.Activity.Totals.AutomatedAgentMinutes)
+	assert.Equal(2, hour.Activity.Buckets[0].MaxSubagentAgents)
+	assert.Equal(money.Money{Microdollars: 20}, hour.Activity.Totals.SubagentCost)
 }
 
 func TestReportingJointUsageOnlySubagentRetainsClassification(t *testing.T) {
@@ -143,6 +149,9 @@ func TestReportingJointUsageOnlySubagentRetainsClassification(t *testing.T) {
 		{"automated subagent", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			d := testDB(t)
 			insertSession(t, d, "child", "project-a", func(s *Session) {
 				s.Agent = "agent-a"
@@ -151,7 +160,7 @@ func TestReportingJointUsageOnlySubagentRetainsClassification(t *testing.T) {
 				s.IsAutomated = tc.automated
 			})
 			cost := money.MustParseDollars("0.003")
-			require.NoError(t, d.ReplaceSessionUsageEvents("child", []UsageEvent{{
+			require.NoError(d.ReplaceSessionUsageEvents("child", []UsageEvent{{
 				Source: "fixture", Model: "model-a", OutputTokens: 17,
 				Cost: &cost, CostStatus: "exact", CostSource: "reported",
 				OccurredAt: "2026-07-28T09:10:00Z", DedupKey: "child-usage",
@@ -160,53 +169,56 @@ func TestReportingJointUsageOnlySubagentRetainsClassification(t *testing.T) {
 				Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 				Now:  time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4,
 			})
-			require.NoError(t, err)
+			require.NoError(err)
 			hour := day.Hours[9]
-			require.NotNil(t, hour.Joint)
-			require.Len(t, hour.Joint.Cells, 1)
+			require.NotNil(hour.Joint)
+			require.Len(hour.Joint.Cells, 1)
 			cell := hour.Joint.Cells[0]
-			assert.Equal(t, "subagent", cell.Automation)
-			assert.Zero(t, cell.AgentMinutes)
-			assert.Zero(t, cell.MaxAgents)
-			assert.Equal(t, int64(17), cell.Usage.OutputTokens)
-			assert.Equal(t, money.Money{Microdollars: 3_000}, cell.Usage.Cost)
-			assert.Equal(t, money.Money{Microdollars: 3_000}, cell.Pricing.ReportedCost)
+			assert.Equal("subagent", cell.Automation)
+			assert.Zero(cell.AgentMinutes)
+			assert.Zero(cell.MaxAgents)
+			assert.Equal(int64(17), cell.Usage.OutputTokens)
+			assert.Equal(money.Money{Microdollars: 3_000}, cell.Usage.Cost)
+			assert.Equal(money.Money{Microdollars: 3_000}, cell.Pricing.ReportedCost)
 		})
 	}
 }
 
 func TestReportingJointCorrectionsReplaceCellsWithinSnapshot(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	seedJointReporting(t, d)
 	opts := ReportingExportOptions{Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4}
 	before, err := d.ExportReportingDay(t.Context(), opts)
-	require.NoError(t, err)
+	require.NoError(err)
 	opts.afterSnapshot = func() {
 		_, writeErr := d.getWriter().Exec(`UPDATE messages SET model = 'model-c' WHERE session_id = 'joint-a' AND model = 'model-a'`)
-		require.NoError(t, writeErr)
+		require.NoError(writeErr)
 	}
 	during, err := d.ExportReportingDay(t.Context(), opts)
-	require.NoError(t, err)
-	assert.Equal(t, before.Digest, during.Digest)
+	require.NoError(err)
+	assert.Equal(before.Digest, during.Digest)
 	opts.afterSnapshot = nil
 	after, err := d.ExportReportingDay(t.Context(), opts)
-	require.NoError(t, err)
-	assert.NotEqual(t, before.Hours[12].Digest, after.Hours[12].Digest)
+	require.NoError(err)
+	assert.NotEqual(before.Hours[12].Digest, after.Hours[12].Digest)
 	for _, cell := range after.Hours[12].Joint.Cells {
-		assert.NotEqual(t, "model-a", cell.Model)
+		assert.NotEqual("model-a", cell.Model)
 		if cell.Model == "model-c" {
-			assert.Equal(t, int64(1), cell.Pricing.UnpricedRows)
+			assert.Equal(int64(1), cell.Pricing.UnpricedRows)
 		}
 	}
 	_, err = d.getWriter().Exec(`DELETE FROM sessions WHERE id IN ('joint-a', 'joint-b')`)
-	require.NoError(t, err)
+	require.NoError(err)
 	empty, err := d.ExportReportingDay(t.Context(), opts)
-	require.NoError(t, err)
-	assert.False(t, empty.Hours[12].HasData)
-	assert.Empty(t, empty.Hours[12].Joint.Cells)
-	assert.Zero(t, empty.Hours[12].Activity.Buckets[0].MaxAgents)
-	assert.NotEqual(t, after.Hours[12].Digest, empty.Hours[12].Digest)
+	require.NoError(err)
+	assert.False(empty.Hours[12].HasData)
+	assert.Empty(empty.Hours[12].Joint.Cells)
+	assert.Zero(empty.Hours[12].Activity.Buckets[0].MaxAgents)
+	assert.NotEqual(after.Hours[12].Digest, empty.Hours[12].Digest)
 }
 
 func seedJointReporting(t *testing.T, d *DB) {
@@ -242,16 +254,19 @@ func TestReportingJointProjectScopeRequiresNewVersion(t *testing.T) {
 }
 
 func TestReportingJointScopeDoesNotRechargeDuplicateUsage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "shared", "project-a", func(s *Session) {
 		s.StartedAt, s.EndedAt = Ptr("2026-07-28T09:00:00Z"), Ptr("2026-07-28T09:01:00Z")
 	})
 	reported := money.MustParseDollars("0.002")
-	require.NoError(t, d.ReplaceSessionUsageEvents("shared", []UsageEvent{{
+	require.NoError(d.ReplaceSessionUsageEvents("shared", []UsageEvent{{
 		Source: "fixture", Model: "model-a", InputTokens: 41, Cost: &reported,
 		CostStatus: "exact", CostSource: "reported", OccurredAt: "2026-07-28T09:05:00Z", DedupKey: "same",
 	}}))
-	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
+	require.NoError(d.InsertCursorUsageEvents([]CursorUsageEvent{{
 		OccurredAt: "2026-07-28T09:05:00Z", Model: "standalone", Kind: "usage",
 		InputTokens: 17, Charged: money.MustParseDollars("0.007"), DedupKey: "shared:fixture:same",
 	}}))
@@ -263,31 +278,34 @@ func TestReportingJointScopeDoesNotRechargeDuplicateUsage(t *testing.T) {
 	opts := ReportingExportOptions{Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4}
 	all, err := d.ExportReportingDay(t.Context(), opts)
-	require.NoError(t, err)
-	assert.Equal(t, int64(17), all.Hours[9].Usage.Totals.InputTokens)
+	require.NoError(err)
+	assert.Equal(int64(17), all.Hours[9].Usage.Totals.InputTokens)
 	var key string
 	for _, cell := range all.Hours[9].Joint.Cells {
 		if cell.Project == "project-a" {
 			key = cell.ProjectKey
 		}
 	}
-	require.NotEmpty(t, key)
+	require.NotEmpty(key)
 	opts.ProjectKeys = []string{key}
 	scoped, err := d.ExportReportingDay(t.Context(), opts)
-	require.NoError(t, err)
-	assert.Equal(t, 1.0, scoped.Hours[9].Activity.Totals.AgentMinutes)
-	assert.Zero(t, scoped.Hours[9].Usage.Totals.InputTokens)
-	assert.Zero(t, scoped.Hours[9].Usage.Totals.Cost.Microdollars)
+	require.NoError(err)
+	assert.Equal(1.0, scoped.Hours[9].Activity.Totals.AgentMinutes)
+	assert.Zero(scoped.Hours[9].Usage.Totals.InputTokens)
+	assert.Zero(scoped.Hours[9].Usage.Totals.Cost.Microdollars)
 
 	opts.ProjectKeys = []string{"absent-project-key"}
 	empty, err := d.ExportReportingDay(t.Context(), opts)
-	require.NoError(t, err)
-	assert.False(t, empty.HasData)
-	assert.Empty(t, empty.Hours[9].Joint.Cells)
-	assert.Equal(t, opts.ProjectKeys, empty.Hours[9].Joint.ProjectKeys)
+	require.NoError(err)
+	assert.False(empty.HasData)
+	assert.Empty(empty.Hours[9].Joint.Cells)
+	assert.Equal(opts.ProjectKeys, empty.Hours[9].Joint.ProjectKeys)
 }
 
 func TestReportingJointUnpricedTokensRetainKnownSearchFees(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "partial-price", "project-a", func(s *Session) {
 		s.Agent = "claude"
@@ -301,15 +319,18 @@ func TestReportingJointUnpricedTokensRetainKnownSearchFees(t *testing.T) {
 		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now:  time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4,
 	})
-	require.NoError(t, err)
-	require.Len(t, day.Hours[12].Joint.Cells, 1)
+	require.NoError(err)
+	require.Len(day.Hours[12].Joint.Cells, 1)
 	cell := day.Hours[12].Joint.Cells[0]
-	assert.Equal(t, int64(20_000), cell.Usage.Cost.Microdollars)
-	assert.Equal(t, int64(20_000), cell.Pricing.ComputedCost.Microdollars)
-	assert.Equal(t, int64(1), cell.Pricing.UnpricedRows)
+	assert.Equal(int64(20_000), cell.Usage.Cost.Microdollars)
+	assert.Equal(int64(20_000), cell.Pricing.ComputedCost.Microdollars)
+	assert.Equal(int64(1), cell.Pricing.UnpricedRows)
 }
 
 func TestReportingJointStandaloneUsageDoesNotInheritEmptyLabelProject(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "empty-label", "", func(s *Session) {
 		s.StartedAt, s.EndedAt = Ptr("2026-07-28T09:00:00Z"), Ptr("2026-07-28T09:01:00Z")
@@ -318,33 +339,33 @@ func TestReportingJointStandaloneUsageDoesNotInheritEmptyLabelProject(t *testing
 		Message{SessionID: "empty-label", Ordinal: 0, Role: "user", Timestamp: "2026-07-28T09:00:00Z"},
 		Message{SessionID: "empty-label", Ordinal: 1, Role: "assistant", Timestamp: "2026-07-28T09:01:00Z"},
 	)
-	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
+	require.NoError(d.InsertCursorUsageEvents([]CursorUsageEvent{{
 		OccurredAt: "2026-07-28T09:01:00Z", Model: "standalone", Kind: "usage",
 		InputTokens: 17, Charged: money.MustParseDollars("0.007"), DedupKey: "standalone",
 	}}))
 	opts := ReportingExportOptions{Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 		Now: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4}
 	all, err := d.ExportReportingDay(t.Context(), opts)
-	require.NoError(t, err)
-	require.Len(t, all.Hours[9].Joint.Cells, 2)
+	require.NoError(err)
+	require.Len(all.Hours[9].Joint.Cells, 2)
 	var sessionProjectKey string
 	for _, cell := range all.Hours[9].Joint.Cells {
 		if cell.Model == "standalone" {
-			assert.Empty(t, cell.ProjectKey, "standalone cost has no session project")
-			assert.Equal(t, int64(17), cell.Usage.InputTokens)
-			assert.Equal(t, int64(7_000), cell.Usage.Cost.Microdollars)
+			assert.Empty(cell.ProjectKey, "standalone cost has no session project")
+			assert.Equal(int64(17), cell.Usage.InputTokens)
+			assert.Equal(int64(7_000), cell.Usage.Cost.Microdollars)
 		} else {
 			sessionProjectKey = cell.ProjectKey
-			assert.Equal(t, 1.0, cell.AgentMinutes)
+			assert.Equal(1.0, cell.AgentMinutes)
 		}
 	}
-	require.NotEmpty(t, sessionProjectKey, "an empty label still has a real session project identity")
+	require.NotEmpty(sessionProjectKey, "an empty label still has a real session project identity")
 	opts.ProjectKeys = []string{sessionProjectKey}
 	scoped, err := d.ExportReportingDay(t.Context(), opts)
-	require.NoError(t, err)
-	assert.Equal(t, 1.0, scoped.Hours[9].Activity.Totals.AgentMinutes)
-	assert.Zero(t, scoped.Hours[9].Usage.Totals.InputTokens)
-	assert.Zero(t, scoped.Hours[9].Usage.Totals.Cost.Microdollars)
-	require.Len(t, scoped.Hours[9].Joint.Cells, 1)
-	assert.Equal(t, sessionProjectKey, scoped.Hours[9].Joint.Cells[0].ProjectKey)
+	require.NoError(err)
+	assert.Equal(1.0, scoped.Hours[9].Activity.Totals.AgentMinutes)
+	assert.Zero(scoped.Hours[9].Usage.Totals.InputTokens)
+	assert.Zero(scoped.Hours[9].Usage.Totals.Cost.Microdollars)
+	require.Len(scoped.Hours[9].Joint.Cells, 1)
+	assert.Equal(sessionProjectKey, scoped.Hours[9].Joint.Cells[0].ProjectKey)
 }

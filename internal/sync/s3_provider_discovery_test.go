@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"io"
 	"strings"
 	"testing"
@@ -21,6 +20,9 @@ import (
 // parse path (providers read local files), and the threaded Machine/size/mtime
 // must drive the same namespaced result as direct S3 discovery.
 func TestProcessFileS3ProviderDiscoveredRoutesToS3Path(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := openTestDB(t)
 	path := "s3://bucket/laptop/raw/claude/test-proj/shared-id.jsonl"
 	content := testjsonl.NewSessionBuilder().
@@ -59,7 +61,7 @@ func TestProcessFileS3ProviderDiscoveredRoutesToS3Path(t *testing.T) {
 			MtimeNS: mtime,
 		},
 	}
-	res := e.processFile(context.Background(), parser.DiscoveredFile{
+	res := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:           parser.AgentClaude,
 		Path:            path,
 		Project:         "test-proj",
@@ -69,24 +71,27 @@ func TestProcessFileS3ProviderDiscoveredRoutesToS3Path(t *testing.T) {
 		ProviderSource:  &source,
 		ProviderProcess: true,
 	})
-	require.NoError(t, res.err)
-	require.Len(t, res.results, 1)
+	require.NoError(res.err)
+	require.Len(res.results, 1)
 
 	written, _, failed, _ := e.writeBatch([]pendingWrite{{
 		sess: res.results[0].Session,
 		msgs: res.results[0].Messages,
 	}}, syncWriteDefault, false)
-	require.Equal(t, 1, written)
-	require.Equal(t, 0, failed)
+	require.Equal(1, written)
+	require.Equal(0, failed)
 
-	sess, err := database.GetSessionFull(context.Background(), "laptop~shared-id")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, "laptop", sess.Machine)
-	assert.Equal(t, path, derefString(sess.FilePath))
+	sess, err := database.GetSessionFull(t.Context(), "laptop~shared-id")
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal("laptop", sess.Machine)
+	assert.Equal(path, derefString(sess.FilePath))
 }
 
 func TestDiscoverProviderSourcesThreadsS3TranscriptMetadata(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const root = "s3://bucket/remote-box/raw/claude"
 	const uri = root + "/proj/session.jsonl"
 	e := NewEngine(openTestDB(t), EngineConfig{
@@ -104,9 +109,8 @@ func TestDiscoverProviderSourcesThreadsS3TranscriptMetadata(t *testing.T) {
 	t.Cleanup(e.Close)
 
 	files, failures := e.discoverProviderSources(t.Context(), nil, nil)
-	require.Zero(t, failures)
-	require.Len(t, files, 1)
-	assert.Equal(t, int64(2048), files[0].TranscriptSize)
-	assert.Equal(t,
-		int64(1779012020000)*1_000_000, files[0].TranscriptMtime)
+	require.Zero(failures)
+	require.Len(files, 1)
+	assert.Equal(int64(2048), files[0].TranscriptSize)
+	assert.Equal(int64(1779012020000)*1_000_000, files[0].TranscriptMtime)
 }

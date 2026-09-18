@@ -86,7 +86,7 @@ func (p *antigravityCLIProvider) Parse(
 	}
 	src, ok := p.sources.sourceFromRef(req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("antigravity cli source path unavailable")
+		return ParseOutcome{}, errors.New("antigravity cli source path unavailable")
 	}
 	if _, err := os.Stat(src.Path); err != nil {
 		if os.IsNotExist(err) {
@@ -452,7 +452,7 @@ func (s antigravityCLISourceSet) Fingerprint(
 	}
 	src, ok := s.sourceFromRef(source)
 	if !ok {
-		return SourceFingerprint{}, fmt.Errorf("antigravity cli source path unavailable")
+		return SourceFingerprint{}, errors.New("antigravity cli source path unavailable")
 	}
 	key := firstNonEmptyJSONLString(source.FingerprintKey, source.Key, src.Path)
 	info, err := AntigravityCLIFileInfo(src.Path)

@@ -14,6 +14,9 @@ import (
 // a Kiro IDE execution log produce ParsedToolCalls with FilePath set
 // natively from a.Input.File.
 func TestKiroIDEFilePathNativeSet(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	execID := "exec-test-001"
 	editFile := "src/server.go"
 	writeFile := "src/new.go"
@@ -47,17 +50,17 @@ func TestKiroIDEFilePathNativeSet(t *testing.T) {
 	}
 
 	data, err := json.Marshal(execLog)
-	require.NoError(t, err, "marshal exec log")
+	require.NoError(err, "marshal exec log")
 
 	logPath := filepath.Join(t.TempDir(), execID+".json")
-	require.NoError(t, os.WriteFile(logPath, data, 0o600), "write exec log")
+	require.NoError(os.WriteFile(logPath, data, 0o600), "write exec log")
 
 	execIndex := map[string]string{execID: logPath}
 	h := kiroIDEHistoryEntry{ExecutionID: execID}
 
 	_, calls := kiroIDEResolveAssistant(h, execIndex)
-	require.NotEmpty(t, calls, "expected tool calls from execution log")
-	require.Len(t, calls, 2, "expected replace and create tool calls")
+	require.NotEmpty(calls, "expected tool calls from execution log")
+	require.Len(calls, 2, "expected replace and create tool calls")
 
 	var editCall, writeCall ParsedToolCall
 	for _, c := range calls {
@@ -69,9 +72,9 @@ func TestKiroIDEFilePathNativeSet(t *testing.T) {
 		}
 	}
 
-	assert.Equal(t, "Edit", editCall.ToolName, "edit ToolName")
-	assert.Equal(t, editFile, editCall.FilePath, "edit FilePath")
+	assert.Equal("Edit", editCall.ToolName, "edit ToolName")
+	assert.Equal(editFile, editCall.FilePath, "edit FilePath")
 
-	assert.Equal(t, "Write", writeCall.ToolName, "write ToolName")
-	assert.Equal(t, writeFile, writeCall.FilePath, "write FilePath")
+	assert.Equal("Write", writeCall.ToolName, "write ToolName")
+	assert.Equal(writeFile, writeCall.FilePath, "write FilePath")
 }

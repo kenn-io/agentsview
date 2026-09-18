@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -182,7 +183,7 @@ func validateCrushSchema(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	if !hasSessions || !hasMessages {
-		return fmt.Errorf("unsupported crush schema: missing sessions or messages table")
+		return errors.New("unsupported crush schema: missing sessions or messages table")
 	}
 	sessionColumns, err := crushTableColumns(ctx, db, "sessions")
 	if err != nil {

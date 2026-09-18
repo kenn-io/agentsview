@@ -16,7 +16,7 @@ func TestHumaScanSecretsReadOnly(t *testing.T) {
 	srv.mux = http.NewServeMux()
 	srv.routes()
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/secrets/scan", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/secrets/scan", nil)
 	req.RemoteAddr = "127.0.0.1:1234"
 	w := httptest.NewRecorder()
 	srv.mux.ServeHTTP(w, req)
@@ -54,7 +54,7 @@ func TestHandleListSecretsRevealGate(t *testing.T) {
 				mux: http.NewServeMux(),
 			}
 			srv.routes()
-			req := httptest.NewRequest(http.MethodGet,
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet,
 				"/api/v1/secrets?"+tt.query, nil)
 			req.RemoteAddr = tt.remoteAddr
 			if tt.xff != "" {

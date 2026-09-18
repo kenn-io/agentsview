@@ -43,7 +43,7 @@ func corruptStoredTokenUsage(
 	require.NoError(t, err)
 	defer conn.Close()
 
-	res, err := conn.Exec(
+	res, err := conn.ExecContext(t.Context(),
 		`UPDATE messages SET token_usage = ? WHERE session_id = ? AND ordinal = ?`,
 		raw, sessionID, ordinal,
 	)

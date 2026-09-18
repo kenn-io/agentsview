@@ -24,6 +24,9 @@ func TestIcodemateCLIDefaultDirs(t *testing.T) {
 }
 
 func TestIcodemateCLITitlePriority(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	content := strings.Join([]string{
 		buildMetadataLine(map[string]any{"type": "user", "uuid": "u1", "message": map[string]any{"content": "CLI question"}}),
@@ -35,14 +38,14 @@ func TestIcodemateCLITitlePriority(t *testing.T) {
 	}, "\n") + "\n"
 	writeSourceFile(t, path, content)
 	results, excluded, err := parseIcodemateCLISession(t.Context(), path, "project", "devbox", nil)
-	require.NoError(t, err)
-	assert.Empty(t, excluded)
-	require.Len(t, results, 1)
-	assert.Equal(t, "icodemate:session", results[0].Session.ID)
-	assert.Equal(t, "Custom CLI title", results[0].Session.SessionName)
-	require.Len(t, results[0].Messages, 2)
-	assert.Equal(t, "CLI question", results[0].Messages[0].Content)
-	assert.Equal(t, "CLI answer", results[0].Messages[1].Content)
+	require.NoError(err)
+	assert.Empty(excluded)
+	require.Len(results, 1)
+	assert.Equal("icodemate:session", results[0].Session.ID)
+	assert.Equal("Custom CLI title", results[0].Session.SessionName)
+	require.Len(results[0].Messages, 2)
+	assert.Equal("CLI question", results[0].Messages[0].Content)
+	assert.Equal("CLI answer", results[0].Messages[1].Content)
 }
 
 // TestIcodemateCLIDiscoverParseAndFindSource builds a Claude-format projects
@@ -50,13 +53,16 @@ func TestIcodemateCLITitlePriority(t *testing.T) {
 // discovers it, parses it onto the icodemate agent with the icodemate: ID
 // prefix, and resolves it back through FindSource.
 func TestIcodemateCLIDiscoverParseAndFindSource(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "my-project")
-	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	require.NoError(os.MkdirAll(projectDir, 0o755))
 	repo := filepath.Join(t.TempDir(), "canonical-project")
 	cwd := filepath.Join(repo, "internal", "parser")
-	require.NoError(t, os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
-	require.NoError(t, os.MkdirAll(cwd, 0o755))
+	require.NoError(os.MkdirAll(filepath.Join(repo, ".git"), 0o755))
+	require.NoError(os.MkdirAll(cwd, 0o755))
 
 	path := filepath.Join(projectDir, "session-cli.jsonl")
 	content := strings.Join([]string{
@@ -79,54 +85,57 @@ func TestIcodemateCLIDiscoverParseAndFindSource(t *testing.T) {
 			},
 		}),
 	}, "\n") + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(os.WriteFile(path, []byte(content), 0o644))
 
 	provider, ok := NewProvider(AgentIcodemate, ProviderConfig{
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
+	require.True(ok)
 
-	discovered, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, discovered, 1)
-	assert.Equal(t, path, discovered[0].Key)
-	assert.Equal(t, "my-project", discovered[0].ProjectHint)
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(discovered, 1)
+	assert.Equal(path, discovered[0].Key)
+	assert.Equal("my-project", discovered[0].ProjectHint)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "icodemate:session-cli",
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, path, found.Key)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(path, found.Key)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      discovered[0],
 		Fingerprint: SourceFingerprint{Hash: "hash-cli"},
 	})
-	require.NoError(t, err)
-	require.True(t, outcome.ResultSetComplete)
-	require.True(t, outcome.ForceReplace)
-	require.Len(t, outcome.Results, 1)
+	require.NoError(err)
+	require.True(outcome.ResultSetComplete)
+	require.True(outcome.ForceReplace)
+	require.Len(outcome.Results, 1)
 
 	sess := outcome.Results[0].Result.Session
 	msgs := outcome.Results[0].Result.Messages
-	assert.Equal(t, AgentIcodemate, sess.Agent)
-	assert.Equal(t, "icodemate:session-cli", sess.ID)
-	assert.Equal(t, "devbox", sess.Machine)
-	assert.Equal(t, "canonical_project", sess.Project)
-	assert.Equal(t, cwd, sess.Cwd)
-	assert.Equal(t, "main", sess.GitBranch)
-	assert.Equal(t, "hello cli", sess.FirstMessage)
-	assert.Equal(t, "hash-cli", sess.File.Hash)
-	require.Len(t, msgs, 2)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.Equal(t, 7, msgs[1].OutputTokens)
-	assert.Equal(t, 17, msgs[1].ContextTokens)
+	assert.Equal(AgentIcodemate, sess.Agent)
+	assert.Equal("icodemate:session-cli", sess.ID)
+	assert.Equal("devbox", sess.Machine)
+	assert.Equal("canonical_project", sess.Project)
+	assert.Equal(cwd, sess.Cwd)
+	assert.Equal("main", sess.GitBranch)
+	assert.Equal("hello cli", sess.FirstMessage)
+	assert.Equal("hash-cli", sess.File.Hash)
+	require.Len(msgs, 2)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal(RoleAssistant, msgs[1].Role)
+	assert.Equal(7, msgs[1].OutputTokens)
+	assert.Equal(17, msgs[1].ContextTokens)
 }
 
 func TestParseIcodemateCLIStreamingSnapshots(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "streaming.jsonl")
 	content := strings.Join([]string{
 		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"u1","message":{"content":"hello"}}`,
@@ -134,21 +143,24 @@ func TestParseIcodemateCLIStreamingSnapshots(t *testing.T) {
 		`{"type":"assistant","timestamp":"2024-01-01T10:00:02Z","uuid":"a2","parentUuid":"a1","message":{"id":"msg_stream","content":[{"type":"text","text":"Working"}],"usage":{"input_tokens":1,"output_tokens":2}}}`,
 		`{"type":"assistant","timestamp":"2024-01-01T10:00:03Z","uuid":"a3","parentUuid":"a2","message":{"id":"msg_stream","content":[{"type":"text","text":"Working"}],"usage":{"input_tokens":1,"output_tokens":3}}}`,
 	}, "\n") + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(os.WriteFile(path, []byte(content), 0o644))
 
 	results, excluded, err := parseIcodemateCLISession(
 		t.Context(), path, "project", "devbox", nil,
 	)
-	require.NoError(t, err)
-	assert.Empty(t, excluded)
-	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 2)
-	assert.Equal(t, "Working", results[0].Messages[1].Content)
-	assert.Equal(t, 3, results[0].Messages[1].OutputTokens)
-	assert.Equal(t, 3, results[0].Session.TotalOutputTokens)
+	require.NoError(err)
+	assert.Empty(excluded)
+	require.Len(results, 1)
+	require.Len(results[0].Messages, 2)
+	assert.Equal("Working", results[0].Messages[1].Content)
+	assert.Equal(3, results[0].Messages[1].OutputTokens)
+	assert.Equal(3, results[0].Session.TotalOutputTokens)
 }
 
 func TestParseIcodemateCLISplitsDivergentBranches(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "fork-session.jsonl")
 	content := strings.Join([]string{
 		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"root","message":{"content":"start"}}`,
@@ -159,61 +171,63 @@ func TestParseIcodemateCLISplitsDivergentBranches(t *testing.T) {
 		`{"type":"user","timestamp":"2024-01-01T10:00:05Z","uuid":"u5","parentUuid":"u4","message":{"content":"main prompt 5"}}`,
 		`{"type":"assistant","timestamp":"2024-01-01T10:00:06Z","uuid":"fork","parentUuid":"root","message":{"content":[{"type":"text","text":"fork reply"}]}}`,
 	}, "\n") + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(os.WriteFile(path, []byte(content), 0o644))
 
 	results, excluded, err := parseIcodemateCLISession(
 		t.Context(), path, "project", "devbox", nil,
 	)
-	require.NoError(t, err)
-	assert.Empty(t, excluded)
-	require.Len(t, results, 2)
+	require.NoError(err)
+	assert.Empty(excluded)
+	require.Len(results, 2)
 
-	assert.Equal(t, "icodemate:fork-session", results[0].Session.ID)
-	assert.Equal(t, AgentIcodemate, results[0].Session.Agent)
+	assert.Equal("icodemate:fork-session", results[0].Session.ID)
+	assert.Equal(AgentIcodemate, results[0].Session.Agent)
 	for _, message := range results[0].Messages {
-		assert.NotEqual(t, "fork reply", message.Content)
+		assert.NotEqual("fork reply", message.Content)
 	}
 
-	assert.Equal(t, "icodemate:fork-session-fork", results[1].Session.ID)
-	assert.Equal(t, "icodemate:fork-session", results[1].Session.ParentSessionID)
-	assert.Equal(t, RelFork, results[1].Session.RelationshipType)
-	require.Len(t, results[1].Messages, 1)
-	assert.Equal(t, "fork reply", results[1].Messages[0].Content)
+	assert.Equal("icodemate:fork-session-fork", results[1].Session.ID)
+	assert.Equal("icodemate:fork-session", results[1].Session.ParentSessionID)
+	assert.Equal(RelFork, results[1].Session.RelationshipType)
+	require.Len(results[1].Messages, 1)
+	assert.Equal("fork reply", results[1].Messages[0].Content)
 }
 
 func TestParseIcodemateCLIResolvesPersistedToolResult(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	sessionDir := filepath.Join(dir, "project", "parent-session")
 	resultPath := filepath.Join(sessionDir, "tool-results", "output.txt")
-	require.NoError(t, os.MkdirAll(filepath.Dir(resultPath), 0o755))
+	require.NoError(os.MkdirAll(filepath.Dir(resultPath), 0o755))
 	fullOutput := "full output line 1\nfull output line 2\n"
-	require.NoError(t, os.WriteFile(resultPath, []byte(fullOutput), 0o644))
+	require.NoError(os.WriteFile(resultPath, []byte(fullOutput), 0o644))
 
 	resultPathJSON, err := json.Marshal(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	persistedContent, err := json.Marshal(
 		"<persisted-output>\nOutput too large. Full output saved to: " +
 			resultPath + "\n\nPreview:\npreview only\n</persisted-output>",
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	content := strings.Join([]string{
 		`{"type":"user","timestamp":"2024-01-01T00:00:00Z","uuid":"u1","message":{"content":"run it"}}`,
 		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make logs"}}]}}`,
 		`{"type":"user","timestamp":"2024-01-01T00:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` + string(persistedContent) + `}]},"toolUseResult":{"persistedOutputPath":` + string(resultPathJSON) + `}}`,
 	}, "\n") + "\n"
 	sessionPath := filepath.Join(dir, "project", "parent-session.jsonl")
-	require.NoError(t, os.WriteFile(sessionPath, []byte(content), 0o644))
+	require.NoError(os.WriteFile(sessionPath, []byte(content), 0o644))
 
 	results, excluded, err := parseIcodemateCLISession(
 		t.Context(), sessionPath, "project", "devbox", nil,
 	)
-	require.NoError(t, err)
-	assert.Empty(t, excluded)
-	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 3)
-	require.Len(t, results[0].Messages[2].ToolResults, 1)
+	require.NoError(err)
+	assert.Empty(excluded)
+	require.Len(results, 1)
+	require.Len(results[0].Messages, 3)
+	require.Len(results[0].Messages[2].ToolResults, 1)
 	assert.Equal(
-		t,
 		fullOutput,
 		DecodeContent(results[0].Messages[2].ToolResults[0].ContentRaw),
 	)
@@ -225,6 +239,9 @@ func TestParseIcodemateCLIResolvesPersistedToolResult(t *testing.T) {
 // session must be discovered and parsed through its own layout without
 // cross-contamination, both relabeled onto the icodemate agent.
 func TestIcodemateProviderMergesOpenCodeAndCLIRoots(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	opencodeRoot := t.TempDir()
 	sessionPath := filepath.Join(
 		opencodeRoot, "storage", "session_diff", "global", "ses_vscode.json",
@@ -252,7 +269,7 @@ func TestIcodemateProviderMergesOpenCodeAndCLIRoots(t *testing.T) {
 
 	cliRoot := t.TempDir()
 	projectDir := filepath.Join(cliRoot, "my-project")
-	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	require.NoError(os.MkdirAll(projectDir, 0o755))
 	cliPath := filepath.Join(projectDir, "session-cli.jsonl")
 	cliContent := strings.Join([]string{
 		buildMetadataLine(map[string]any{
@@ -267,40 +284,40 @@ func TestIcodemateProviderMergesOpenCodeAndCLIRoots(t *testing.T) {
 			},
 		}),
 	}, "\n") + "\n"
-	require.NoError(t, os.WriteFile(cliPath, []byte(cliContent), 0o644))
+	require.NoError(os.WriteFile(cliPath, []byte(cliContent), 0o644))
 
 	provider, ok := NewProvider(AgentIcodemate, ProviderConfig{
 		Roots:   []string{opencodeRoot, cliRoot},
 		Machine: "testmachine",
 	})
-	require.True(t, ok)
+	require.True(ok)
 
-	discovered, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, discovered, 2)
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(discovered, 2)
 
 	sourcesByKey := make(map[string]SourceRef, len(discovered))
 	for _, src := range discovered {
 		sourcesByKey[src.Key] = src
 	}
-	require.Contains(t, sourcesByKey, sessionPath)
-	require.Contains(t, sourcesByKey, cliPath)
+	require.Contains(sourcesByKey, sessionPath)
+	require.Contains(sourcesByKey, cliPath)
 
 	for key, src := range sourcesByKey {
-		outcome, err := provider.Parse(context.Background(), ParseRequest{
+		outcome, err := provider.Parse(t.Context(), ParseRequest{
 			Source: src, Machine: "testmachine",
 		})
-		require.NoError(t, err)
-		require.Len(t, outcome.Results, 1)
+		require.NoError(err)
+		require.Len(outcome.Results, 1)
 		parsed := outcome.Results[0].Result.Session
-		assert.Equal(t, AgentIcodemate, parsed.Agent)
+		assert.Equal(AgentIcodemate, parsed.Agent)
 		switch key {
 		case sessionPath:
-			assert.Equal(t, "icodemate:ses_vscode", parsed.ID)
-			assert.Equal(t, "Hello from vscode", outcome.Results[0].Result.Messages[0].Content)
+			assert.Equal("icodemate:ses_vscode", parsed.ID)
+			assert.Equal("Hello from vscode", outcome.Results[0].Result.Messages[0].Content)
 		case cliPath:
-			assert.Equal(t, "icodemate:session-cli", parsed.ID)
-			assert.Equal(t, "hello cli", parsed.FirstMessage)
+			assert.Equal("icodemate:session-cli", parsed.ID)
+			assert.Equal("hello cli", parsed.FirstMessage)
 		}
 	}
 }
@@ -312,6 +329,9 @@ func TestIcodemateProviderMergesOpenCodeAndCLIRoots(t *testing.T) {
 // tool-result sidecar freshness identity -- never Claude's session or machine
 // namespace.
 func TestIcodemateCLIProviderDiscoversS3Sessions(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	oldList := listS3Objects
 	t.Cleanup(func() { listS3Objects = oldList })
 
@@ -320,7 +340,7 @@ func TestIcodemateCLIProviderDiscoversS3Sessions(t *testing.T) {
 	sessionMtime := time.Unix(100, 0)
 	sidecarMtime := time.Unix(200, 0)
 	listS3Objects = func(got string) ([]S3Object, error) {
-		require.Equal(t, root, got)
+		require.Equal(root, got)
 		return []S3Object{
 			{
 				URI:          sessionURI,
@@ -341,29 +361,29 @@ func TestIcodemateCLIProviderDiscoversS3Sessions(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
+	require.True(ok)
 
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(sources, 1)
 
 	src := sources[0]
-	assert.Equal(t, AgentIcodemate, src.Provider)
-	assert.Equal(t, sessionURI, src.DisplayPath)
-	assert.Equal(t, sessionURI, src.FingerprintKey)
-	assert.Equal(t, "proj", src.ProjectHint)
+	assert.Equal(AgentIcodemate, src.Provider)
+	assert.Equal(sessionURI, src.DisplayPath)
+	assert.Equal(sessionURI, src.FingerprintKey)
+	assert.Equal("proj", src.ProjectHint)
 
 	s3, ok := src.Opaque.(S3DiscoveredSource)
-	require.True(t, ok, "s3 source carries S3DiscoveredSource opaque")
-	assert.Equal(t, sessionURI, s3.URI)
-	assert.Equal(t, "laptop", s3.Machine)
-	assert.Equal(t, "proj", s3.Project)
-	assert.Equal(t, int64(33), s3.Size)
-	assert.Equal(t, sidecarMtime.UnixNano(), s3.MtimeNS)
-	assert.Equal(t, int64(11), s3.TranscriptSize)
-	assert.Equal(t, sessionMtime.UnixNano(), s3.TranscriptMtimeNS)
-	assert.Contains(t, s3.Fingerprint, "session")
-	assert.Contains(t, s3.Fingerprint, "sidecar")
+	require.True(ok, "s3 source carries S3DiscoveredSource opaque")
+	assert.Equal(sessionURI, s3.URI)
+	assert.Equal("laptop", s3.Machine)
+	assert.Equal("proj", s3.Project)
+	assert.Equal(int64(33), s3.Size)
+	assert.Equal(sidecarMtime.UnixNano(), s3.MtimeNS)
+	assert.Equal(int64(11), s3.TranscriptSize)
+	assert.Equal(sessionMtime.UnixNano(), s3.TranscriptMtimeNS)
+	assert.Contains(s3.Fingerprint, "session")
+	assert.Contains(s3.Fingerprint, "sidecar")
 }
 
 // TestIcodemateCLIProviderParsesMaterializedSource covers the engine's S3
@@ -372,9 +392,12 @@ func TestIcodemateCLIProviderDiscoversS3Sessions(t *testing.T) {
 // The CLI source set must accept it so a materialized transcript parses onto
 // the icodemate agent and fingerprints through the same path.
 func TestIcodemateCLIProviderParsesMaterializedSource(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "my-project")
-	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	require.NoError(os.MkdirAll(projectDir, 0o755))
 	path := filepath.Join(projectDir, "session-mat.jsonl")
 	writeSourceFile(t, path, claudeProviderFixture("hello materialized"))
 
@@ -382,7 +405,7 @@ func TestIcodemateCLIProviderParsesMaterializedSource(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
+	require.True(ok)
 
 	materialized := SourceRef{
 		Provider:       AgentIcodemate,
@@ -393,22 +416,22 @@ func TestIcodemateCLIProviderParsesMaterializedSource(t *testing.T) {
 		Opaque:         MaterializedFileSource{Path: path},
 	}
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: materialized, Machine: "devbox",
 	})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
+	require.NoError(err)
+	require.Len(outcome.Results, 1)
 	sess := outcome.Results[0].Result.Session
-	assert.Equal(t, AgentIcodemate, sess.Agent)
-	assert.Equal(t, "icodemate:session-mat", sess.ID)
-	assert.Equal(t, "hello materialized", sess.FirstMessage)
+	assert.Equal(AgentIcodemate, sess.Agent)
+	assert.Equal("icodemate:session-mat", sess.ID)
+	assert.Equal("hello materialized", sess.FirstMessage)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), materialized)
-	require.NoError(t, err)
+	fingerprint, err := provider.Fingerprint(t.Context(), materialized)
+	require.NoError(err)
 	// Key is the canonical metadata identity, not the materialized read path.
-	assert.Equal(t, materialized.Key, fingerprint.Key)
-	assert.Positive(t, fingerprint.Size)
-	assert.NotEmpty(t, fingerprint.Hash)
+	assert.Equal(materialized.Key, fingerprint.Key)
+	assert.Positive(fingerprint.Size)
+	assert.NotEmpty(fingerprint.Hash)
 }
 
 // TestIcodemateCLISourceMethods exercises the watch, fingerprint, and
@@ -418,6 +441,9 @@ func TestIcodemateCLIProviderParsesMaterializedSource(t *testing.T) {
 // back through FindSource, fingerprint it, and map a watched path change back
 // to exactly the owning source — while ignoring files outside the root.
 func TestIcodemateCLISourceMethods(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	projectDir := "-Users-dev-code-demo"
 	sessionID := "cli-main"
@@ -431,60 +457,60 @@ func TestIcodemateCLISourceMethods(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
+	require.True(ok)
 
-	plan, err := provider.WatchPlan(context.Background())
-	require.NoError(t, err)
-	require.Len(t, plan.Roots, 1)
-	assert.Equal(t, root, plan.Roots[0].Path)
-	assert.True(t, plan.Roots[0].Recursive)
-	assert.Empty(t, plan.Roots[0].IncludeGlobs,
+	plan, err := provider.WatchPlan(t.Context())
+	require.NoError(err)
+	require.Len(plan.Roots, 1)
+	assert.Equal(root, plan.Roots[0].Path)
+	assert.True(plan.Roots[0].Recursive)
+	assert.Empty(plan.Roots[0].IncludeGlobs,
 		"the recursive watcher must admit persisted tool-result sidecars")
-	assert.Equal(t, "icodemate:cli-projects:"+root, plan.Roots[0].DebounceKey)
+	assert.Equal("icodemate:cli-projects:"+root, plan.Roots[0].DebounceKey)
 
-	discovered, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, discovered, 1)
-	assert.Equal(t, sourcePath, discovered[0].Key)
-	assert.Equal(t, projectDir, discovered[0].ProjectHint)
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(discovered, 1)
+	assert.Equal(sourcePath, discovered[0].Key)
+	assert.Equal(projectDir, discovered[0].ProjectHint)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: sessionID,
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, sourcePath, found.DisplayPath)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(sourcePath, found.DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
-	require.NoError(t, err)
-	assert.Equal(t, sourcePath, fingerprint.Key)
-	assert.Positive(t, fingerprint.Size)
-	assert.Positive(t, fingerprint.MTimeNS)
-	assert.NotEmpty(t, fingerprint.Hash)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
+	require.NoError(err)
+	assert.Equal(sourcePath, fingerprint.Key)
+	assert.Positive(fingerprint.Size)
+	assert.Positive(fingerprint.MTimeNS)
+	assert.NotEmpty(fingerprint.Hash)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "write", WatchRoot: root},
 	)
-	require.NoError(t, err)
-	require.Len(t, changed, 1)
-	assert.Equal(t, sourcePath, changed[0].DisplayPath)
+	require.NoError(err)
+	require.Len(changed, 1)
+	assert.Equal(sourcePath, changed[0].DisplayPath)
 
-	require.NoError(t, os.Remove(sourcePath))
+	require.NoError(os.Remove(sourcePath))
 	changed, err = provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: root},
 	)
-	require.NoError(t, err)
-	require.Len(t, changed, 1)
-	assert.Equal(t, sourcePath, changed[0].DisplayPath)
+	require.NoError(err)
+	require.Len(changed, 1)
+	assert.Equal(sourcePath, changed[0].DisplayPath)
 
 	ignored, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: outsidePath, EventKind: "write", WatchRoot: wrongRoot},
 	)
-	require.NoError(t, err)
-	assert.Empty(t, ignored)
+	require.NoError(err)
+	assert.Empty(ignored)
 }
 
 func TestIcodemateCLIProviderHonorsContextDuringWork(t *testing.T) {
@@ -524,6 +550,9 @@ func TestIcodemateCLIProviderHonorsContextDuringWork(t *testing.T) {
 }
 
 func TestIcodemateCLISidecarChangeInvalidatesAndMapsOwningSource(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "project")
 	sessionPath := filepath.Join(projectDir, "sidecar-session.jsonl")
@@ -533,12 +562,12 @@ func TestIcodemateCLISidecarChangeInvalidatesAndMapsOwningSource(t *testing.T) {
 	writeSourceFile(t, resultPath, "first persisted output\n")
 
 	resultPathJSON, err := json.Marshal(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	persistedContent, err := json.Marshal(
 		"<persisted-output>\nOutput too large. Full output saved to: " +
 			resultPath + "\n</persisted-output>",
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	writeSourceFile(t, sessionPath, strings.Join([]string{
 		`{"type":"user","timestamp":"2024-01-01T00:00:00Z","uuid":"u1","message":{"content":"run it"}}`,
 		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make logs"}}]}}`,
@@ -546,41 +575,43 @@ func TestIcodemateCLISidecarChangeInvalidatesAndMapsOwningSource(t *testing.T) {
 	}, "\n")+"\n")
 
 	provider, ok := NewProvider(AgentIcodemate, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
+	require.True(ok)
 	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "sidecar-session",
 	})
-	require.NoError(t, err)
-	require.True(t, found)
+	require.NoError(err)
+	require.True(found)
 	before, err := provider.Fingerprint(t.Context(), source)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	writeSourceFile(t, resultPath, "later persisted output\n")
 	after, err := provider.Fingerprint(t.Context(), source)
-	require.NoError(t, err)
-	assert.NotEqual(t, before.Hash, after.Hash,
+	require.NoError(err)
+	assert.NotEqual(before.Hash, after.Hash,
 		"a sidecar-only write must invalidate the owning transcript")
 
 	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: resultPath, EventKind: "write", WatchRoot: root,
 	})
-	require.NoError(t, err)
-	require.Len(t, changed, 1)
-	assert.Equal(t, sessionPath, changed[0].DisplayPath)
+	require.NoError(err)
+	require.Len(changed, 1)
+	assert.Equal(sessionPath, changed[0].DisplayPath)
 
 	parsed, err := provider.Parse(t.Context(), ParseRequest{
 		Source: changed[0], Fingerprint: after,
 	})
-	require.NoError(t, err)
-	require.Len(t, parsed.Results, 1)
+	require.NoError(err)
+	require.Len(parsed.Results, 1)
 	messages := parsed.Results[0].Result.Messages
-	require.Len(t, messages, 3)
-	require.Len(t, messages[2].ToolResults, 1)
-	assert.Equal(t, "later persisted output\n",
+	require.Len(messages, 3)
+	require.Len(messages[2].ToolResults, 1)
+	assert.Equal("later persisted output\n",
 		DecodeContent(messages[2].ToolResults[0].ContentRaw))
 }
 
 func TestIcodemateCLICompositeFingerprintStableAcrossRoots(t *testing.T) {
+	require := require.New(t)
+
 	transcript := claudeProviderFixture("same transcript")
 	fingerprints := make([]SourceFingerprint, 0, 2)
 	for range 2 {
@@ -596,23 +627,25 @@ func TestIcodemateCLICompositeFingerprintStableAcrossRoots(t *testing.T) {
 		provider, ok := NewProvider(
 			AgentIcodemate, ProviderConfig{Roots: []string{root}},
 		)
-		require.True(t, ok)
+		require.True(ok)
 		source, found, err := provider.FindSource(
 			t.Context(), FindSourceRequest{RawSessionID: "session"},
 		)
-		require.NoError(t, err)
-		require.True(t, found)
+		require.NoError(err)
+		require.True(found)
 		fingerprint, err := provider.Fingerprint(t.Context(), source)
-		require.NoError(t, err)
+		require.NoError(err)
 		fingerprints = append(fingerprints, fingerprint)
 	}
 
-	require.Len(t, fingerprints, 2)
+	require.Len(fingerprints, 2)
 	assert.Equal(t, fingerprints[0].Hash, fingerprints[1].Hash,
 		"materialization roots must not affect source identity")
 }
 
 func TestIcodemateCLIParentToolResultDirectoryChangeMapsSubagentSources(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "project")
 	parentPath := filepath.Join(projectDir, "parent.jsonl")
@@ -627,12 +660,12 @@ func TestIcodemateCLIParentToolResultDirectoryChangeMapsSubagentSources(t *testi
 	writeSourceFile(t, resultPath, "persisted output\n")
 
 	provider, ok := NewProvider(AgentIcodemate, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
+	require.True(ok)
 	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: filepath.Dir(resultPath), EventKind: "remove", WatchRoot: root,
 	})
-	require.NoError(t, err)
-	require.Len(t, changed, 2)
+	require.NoError(err)
+	require.Len(changed, 2)
 	assert.ElementsMatch(t, []string{parentPath, childPath}, []string{
 		changed[0].DisplayPath, changed[1].DisplayPath,
 	})

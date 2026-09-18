@@ -19,6 +19,8 @@ import (
 func TestListActiveSessionSourceOwnershipScopesPagePagesChildrenOfASeparatorRoot(
 	t *testing.T,
 ) {
+	require := require.New(t)
+
 	if runtime.GOOS != "windows" {
 		t.Skip("only a Windows drive root survives filepath.Clean with a trailing separator")
 	}
@@ -32,7 +34,7 @@ func TestListActiveSessionSourceOwnershipScopesPagePagesChildrenOfASeparatorRoot
 		{id: "child", agent: "claude", path: child},
 	}
 	insertSessionsWithSourcePaths(t, d, seeds)
-	require.NoError(t, d.BaselineActiveSessionSourcePaths(
+	require.NoError(d.BaselineActiveSessionSourcePaths(
 		t.Context(), defaultMachine, sourcePathsFromSeeds(seeds),
 	))
 
@@ -40,8 +42,8 @@ func TestListActiveSessionSourceOwnershipScopesPagePagesChildrenOfASeparatorRoot
 		t.Context(), defaultMachine, "claude",
 		[]StoredSourcePathHintScope{{Path: root}}, SessionSourceCursor{},
 	)
-	require.NoError(t, err)
-	require.Len(t, page, 1,
+	require.NoError(err)
+	require.Len(page, 1,
 		"a child of a separator-terminated root must page")
 	assert.Equal(t, "child", page[0].ID)
 }
@@ -56,6 +58,9 @@ func TestListActiveSessionSourceOwnershipScopesPagePagesChildrenOfASeparatorRoot
 func TestListActiveSessionSourceOwnershipScopesPageExcludesOutOfScopeRows(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	root := t.TempDir()
 	inScope := filepath.Join(root, "in")
@@ -80,7 +85,7 @@ func TestListActiveSessionSourceOwnershipScopesPageExcludesOutOfScopeRows(
 		})
 	}
 	insertSessionsWithSourcePaths(t, d, seeds)
-	require.NoError(t, d.BaselineActiveSessionSourcePaths(
+	require.NoError(d.BaselineActiveSessionSourcePaths(
 		t.Context(), defaultMachine, sourcePathsFromSeeds(seeds),
 	))
 
@@ -91,7 +96,7 @@ func TestListActiveSessionSourceOwnershipScopesPageExcludesOutOfScopeRows(
 		page, err := d.ListActiveSessionSourceOwnershipScopesPage(
 			t.Context(), defaultMachine, "claude", scopes, cursor,
 		)
-		require.NoError(t, err)
+		require.NoError(err)
 		if len(page) == 0 {
 			break
 		}
@@ -101,45 +106,48 @@ func TestListActiveSessionSourceOwnershipScopesPageExcludesOutOfScopeRows(
 
 	gotIDs := make([]string, 0, len(paged))
 	for _, ownership := range paged {
-		assert.True(t,
-			StoredSourcePathHintScopesContain(ownership.FilePath, scopes),
+		assert.True(StoredSourcePathHintScopesContain(ownership.FilePath, scopes),
 			"paged row %s at %s is outside the requested scope",
 			ownership.ID, ownership.FilePath)
 		gotIDs = append(gotIDs, ownership.ID)
 	}
-	assert.Equal(t, wantIDs, gotIDs,
+	assert.Equal(wantIDs, gotIDs,
 		"every in-scope row pages exactly once and no sibling row joins it")
 }
 
 func TestStoredSourcePathHintScopesContainDirectoryAndMemberBranches(t *testing.T) {
+	assert := assert.New(t)
+
 	root := filepath.Join(t.TempDir(), "archive")
 	memberScope := []StoredSourcePathHintScope{{
 		Path: filepath.Join(root, "state.db"), IncludeVirtualMembers: true,
 	}}
 	directoryScope := []StoredSourcePathHintScope{{Path: root}}
 
-	assert.True(t, StoredSourcePathHintScopesContain(root, directoryScope))
-	assert.True(t, StoredSourcePathHintScopesContain(
+	assert.True(StoredSourcePathHintScopesContain(root, directoryScope))
+	assert.True(StoredSourcePathHintScopesContain(
 		filepath.Join(root, "sessions", "a.jsonl"), directoryScope,
 	))
-	assert.False(t, StoredSourcePathHintScopesContain(
+	assert.False(StoredSourcePathHintScopesContain(
 		filepath.Join(filepath.Dir(root), "sibling", "a.jsonl"), directoryScope,
 	))
-	assert.False(t, StoredSourcePathHintScopesContain(root+"suffix", directoryScope),
+	assert.False(StoredSourcePathHintScopesContain(root+"suffix", directoryScope),
 		"a sibling sharing the root as a string prefix is outside the scope")
 
 	member := filepath.Join(root, "state.db") + "#session-1"
-	assert.True(t, StoredSourcePathHintScopesContain(member, memberScope))
-	assert.False(t, StoredSourcePathHintScopesContain(
+	assert.True(StoredSourcePathHintScopesContain(member, memberScope))
+	assert.False(StoredSourcePathHintScopesContain(
 		member,
 		[]StoredSourcePathHintScope{{Path: filepath.Join(root, "state.db")}},
 	), "virtual members of the scope path itself require the provider's declaration")
-	assert.False(t, StoredSourcePathHintScopesContain(
+	assert.False(StoredSourcePathHintScopesContain(
 		filepath.Join(root, "state.db")+"#nested/session.json", memberScope,
 	), "nested member segments belong to other sources")
 }
 
 func TestStoredSourcePathHintScopesContainMatchesPlatformCase(t *testing.T) {
+	assert := assert.New(t)
+
 	root := filepath.Join(t.TempDir(), "Archive")
 	variant := strings.ToUpper(root)
 	if variant == root {
@@ -154,13 +162,13 @@ func TestStoredSourcePathHintScopesContainMatchesPlatformCase(t *testing.T) {
 	member := filepath.Join(root, "state.db") + "#session-1"
 
 	if runtime.GOOS == "windows" {
-		assert.True(t, StoredSourcePathHintScopesContain(inRoot, scope),
+		assert.True(StoredSourcePathHintScopesContain(inRoot, scope),
 			"Windows containment folds case like the filesystem")
-		assert.True(t, StoredSourcePathHintScopesContain(member, memberScope),
+		assert.True(StoredSourcePathHintScopesContain(member, memberScope),
 			"the member container prefix folds like the directory branch")
 	} else {
-		assert.False(t, StoredSourcePathHintScopesContain(inRoot, scope),
+		assert.False(StoredSourcePathHintScopesContain(inRoot, scope),
 			"case-sensitive filesystems keep byte-exact containment")
-		assert.False(t, StoredSourcePathHintScopesContain(member, memberScope))
+		assert.False(StoredSourcePathHintScopesContain(member, memberScope))
 	}
 }

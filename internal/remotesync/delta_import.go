@@ -2,6 +2,7 @@ package remotesync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -247,7 +248,7 @@ func (pending *PreparedDeltaImport) Execute(
 	ctx context.Context,
 ) (SyncStats, error) {
 	if pending == nil {
-		return SyncStats{}, fmt.Errorf("execute nil pending delta import")
+		return SyncStats{}, errors.New("execute nil pending delta import")
 	}
 	stats := pending.Stats
 	engine := syncpkg.NewEngine(pending.database, pending.config)

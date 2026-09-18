@@ -1,7 +1,6 @@
 package service_test
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -20,6 +19,9 @@ import (
 )
 
 func TestHTTPBackendScanSecretsStream(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	ts := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, _ *http.Request) {
@@ -39,17 +41,17 @@ func TestHTTPBackendScanSecretsStream(t *testing.T) {
 	defer ts.Close()
 	svc := servicehttp.NewHTTPBackend(ts.URL, "", false, "")
 	var ticks []service.SecretScanProgress
-	sum, err := svc.ScanSecrets(context.Background(),
+	sum, err := svc.ScanSecrets(t.Context(),
 		service.SecretScanInput{Backfill: true},
 		func(p service.SecretScanProgress) { ticks = append(ticks, p) })
-	require.NoError(t, err)
-	require.NotNil(t, sum)
-	assert.Equal(t, 2, sum.Scanned)
-	assert.Equal(t, 1, sum.WithSecrets)
-	assert.Equal(t, 3, sum.TotalFindings)
-	assert.Equal(t, 2, sum.DefiniteFindings)
-	assert.Equal(t, 1, sum.CandidateFindings)
-	assert.NotEmpty(t, ticks)
+	require.NoError(err)
+	require.NotNil(sum)
+	assert.Equal(2, sum.Scanned)
+	assert.Equal(1, sum.WithSecrets)
+	assert.Equal(3, sum.TotalFindings)
+	assert.Equal(2, sum.DefiniteFindings)
+	assert.Equal(1, sum.CandidateFindings)
+	assert.NotEmpty(ticks)
 }
 
 // TestDirectListSecretsConfidenceDefault verifies the list defaults to
@@ -90,7 +92,7 @@ func TestDirectListSecretsConfidenceDefault(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			page, err := be.ListSecrets(context.Background(),
+			page, err := be.ListSecrets(t.Context(),
 				service.SecretListFilter{Confidence: tc.confidence, Limit: 50})
 			require.NoError(t, err)
 			require.Len(t, page.Findings, tc.want)
@@ -107,6 +109,8 @@ func TestDirectListSecretsConfidenceDefault(t *testing.T) {
 // them; backfill will rewrite the stored rows, but listing should fail closed
 // before that happens.
 func TestDirectListSecretsHidesStaleRulesVersions(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	token := strings.Join([]string{
@@ -119,10 +123,10 @@ func TestDirectListSecretsHidesStaleRulesVersions(t *testing.T) {
 		s.MessageCount = 1
 		s.UserMessageCount = 1
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("x1", 0, content),
 	}))
-	require.NoError(t, d.ReplaceSessionSecretFindings("x1", []db.SecretFinding{{
+	require.NoError(d.ReplaceSessionSecretFindings("x1", []db.SecretFinding{{
 		SessionID: "x1", RuleName: "github-pat", Confidence: "definite",
 		LocationKind: "message", MessageOrdinal: 0,
 		MatchStart: start, MatchEnd: start + len(token),
@@ -130,17 +134,17 @@ func TestDirectListSecretsHidesStaleRulesVersions(t *testing.T) {
 	}}, 1, "old-rules"))
 	be := service.NewDirectBackend(d, nil)
 
-	page, err := be.ListSecrets(context.Background(),
+	page, err := be.ListSecrets(t.Context(),
 		service.SecretListFilter{Limit: 50})
-	require.NoError(t, err)
-	require.Empty(t, page.Findings)
+	require.NoError(err)
+	require.Empty(page.Findings)
 }
 
 func TestDirectScanSecretsReadOnly(t *testing.T) {
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	be := service.NewDirectBackend(d, nil) // nil engine => read-only
-	_, err := be.ScanSecrets(context.Background(),
+	_, err := be.ScanSecrets(t.Context(),
 		service.SecretScanInput{Backfill: true}, nil)
 	if !errors.Is(err, db.ErrReadOnly) {
 		t.Fatalf("ScanSecrets with nil engine = %v, want db.ErrReadOnly", err)
@@ -152,6 +156,9 @@ func TestDirectScanSecretsReadOnly(t *testing.T) {
 // a stale finding (coordinates no longer matching the rule) returns the
 // "source changed" marker instead of a value. Redaction is the default.
 func TestDirectListSecretsReveal(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	const secret = "AKIA7QHWN2DKR4FYPLJM"
@@ -161,10 +168,10 @@ func TestDirectListSecretsReveal(t *testing.T) {
 		s.MessageCount = 2
 		s.UserMessageCount = 2
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("x1", 0, content),
 	}))
-	require.NoError(t, d.ReplaceSessionSecretFindings("x1", []db.SecretFinding{
+	require.NoError(d.ReplaceSessionSecretFindings("x1", []db.SecretFinding{
 		{SessionID: "x1", RuleName: "aws-access-key", Confidence: "definite",
 			LocationKind: "message", MessageOrdinal: 0,
 			MatchStart: start, MatchEnd: start + len(secret),
@@ -178,20 +185,20 @@ func TestDirectListSecretsReveal(t *testing.T) {
 	be := service.NewDirectBackend(d, nil)
 
 	// Default: never the full secret.
-	def, err := be.ListSecrets(context.Background(),
+	def, err := be.ListSecrets(t.Context(),
 		service.SecretListFilter{Limit: 50})
-	require.NoError(t, err)
-	require.Len(t, def.Findings, 2)
+	require.NoError(err)
+	require.Len(def.Findings, 2)
 	for _, f := range def.Findings {
-		assert.NotContains(t, f.RedactedMatch, secret,
+		assert.NotContains(f.RedactedMatch, secret,
 			"default list leaked secret: %q", f.RedactedMatch)
 	}
 
 	// Reveal: the valid finding shows the full secret; the stale one is marked.
-	rev, err := be.ListSecrets(context.Background(),
+	rev, err := be.ListSecrets(t.Context(),
 		service.SecretListFilter{Reveal: true, Limit: 50})
-	require.NoError(t, err)
-	require.Len(t, rev.Findings, 2)
+	require.NoError(err)
+	require.Len(rev.Findings, 2)
 	var revealed, marked int
 	for _, f := range rev.Findings {
 		switch {
@@ -201,6 +208,6 @@ func TestDirectListSecretsReveal(t *testing.T) {
 			marked++
 		}
 	}
-	assert.Equal(t, 1, revealed, "exactly one finding should reveal the full secret")
-	assert.Equal(t, 1, marked, "the stale finding should return the marker")
+	assert.Equal(1, revealed, "exactly one finding should reveal the full secret")
+	assert.Equal(1, marked, "the stale finding should return the marker")
 }

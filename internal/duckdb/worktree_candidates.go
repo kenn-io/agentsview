@@ -2,6 +2,7 @@ package duckdb
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -20,7 +21,7 @@ func (s *Store) ListArchiveWorktreeCandidates(
 	request db.ArchiveWorktreeCandidateRequest,
 ) ([]db.WorktreeReclassificationCandidate, error) {
 	if strings.TrimSpace(request.ProjectKey) == "" {
-		return nil, fmt.Errorf("project_key is required")
+		return nil, errors.New("project_key is required")
 	}
 	sessions, err := s.archiveWorktreeCandidateSessions(ctx, request.ProjectDateFilter)
 	if err != nil {

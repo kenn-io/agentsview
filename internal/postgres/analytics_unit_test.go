@@ -265,78 +265,87 @@ func (r *analyticsProbeRows) Next(dest []driver.Value) error {
 }
 
 func TestGetAnalyticsToolsAggregatesToolCallsInSQL(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store := &Store{
 		pg: newAnalyticsProbeDB(t, &analyticsProbeState{}),
 	}
 
 	resp, err := store.GetAnalyticsTools(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{
 			From: "2024-06-01",
 			To:   "2024-06-30",
 		},
 	)
-	require.NoError(t, err, "GetAnalyticsTools")
+	require.NoError(err, "GetAnalyticsTools")
 
-	assert.Equal(t, 4, resp.TotalCalls)
-	require.NotEmpty(t, resp.ByCategory)
-	assert.Equal(t, "Read", resp.ByCategory[0].Category)
-	assert.Equal(t, 3, resp.ByCategory[0].Count)
-	require.NotEmpty(t, resp.ByTool)
-	assert.Equal(t, "Read", resp.ByTool[0].ToolName)
-	assert.Equal(t, 3, resp.ByTool[0].CallCount)
-	assert.Equal(t, 2, resp.ByTool[0].SessionCount)
+	assert.Equal(4, resp.TotalCalls)
+	require.NotEmpty(resp.ByCategory)
+	assert.Equal("Read", resp.ByCategory[0].Category)
+	assert.Equal(3, resp.ByCategory[0].Count)
+	require.NotEmpty(resp.ByTool)
+	assert.Equal("Read", resp.ByTool[0].ToolName)
+	assert.Equal(3, resp.ByTool[0].CallCount)
+	assert.Equal(2, resp.ByTool[0].SessionCount)
 }
 
 func TestGetAnalyticsSkillsAggregatesToolCallsInSQL(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store := &Store{
 		pg: newAnalyticsProbeDB(t, &analyticsProbeState{}),
 	}
 
 	resp, err := store.GetAnalyticsSkills(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{
 			From: "2024-06-01",
 			To:   "2024-06-30",
 		},
 		"week",
 	)
-	require.NoError(t, err, "GetAnalyticsSkills")
+	require.NoError(err, "GetAnalyticsSkills")
 
-	assert.Equal(t, 3, resp.TotalSkillCalls)
-	assert.Equal(t, 1, resp.DistinctSkills)
-	require.NotEmpty(t, resp.BySkill)
-	assert.Equal(t, "review-code", resp.BySkill[0].SkillName)
-	assert.Equal(t, 3, resp.BySkill[0].CallCount)
-	assert.Equal(t, 2, resp.BySkill[0].SessionCount)
-	assert.Equal(t, []db.SkillAgentBreakdown{
+	assert.Equal(3, resp.TotalSkillCalls)
+	assert.Equal(1, resp.DistinctSkills)
+	require.NotEmpty(resp.BySkill)
+	assert.Equal("review-code", resp.BySkill[0].SkillName)
+	assert.Equal(3, resp.BySkill[0].CallCount)
+	assert.Equal(2, resp.BySkill[0].SessionCount)
+	assert.Equal([]db.SkillAgentBreakdown{
 		{Agent: "claude", Count: 2},
 		{Agent: "codex", Count: 1},
 	}, resp.BySkill[0].AgentBreakdown)
-	assert.Equal(t, []db.SkillProjectBreakdown{
+	assert.Equal([]db.SkillProjectBreakdown{
 		{Project: "alpha", Count: 2},
 		{Project: "beta", Count: 1},
 	}, resp.BySkill[0].ProjectBreakdown)
-	assert.Equal(t, "2024-06-04T09:00:00Z", resp.BySkill[0].LastUsedAt,
+	assert.Equal("2024-06-04T09:00:00Z", resp.BySkill[0].LastUsedAt,
 		"LastUsedAt is the latest message timestamp, "+
 			"with session fallback for null timestamps")
 }
 
 func TestGetAnalyticsToolsModelFilterJoinsMessages(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	state := &analyticsProbeState{}
 	store := &Store{
 		pg: newAnalyticsProbeDB(t, state),
 	}
 
 	_, err := store.GetAnalyticsTools(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{
 			From:  "2024-06-01",
 			To:    "2024-06-30",
 			Model: "gpt-4o",
 		},
 	)
-	require.NoError(t, err, "GetAnalyticsTools")
+	require.NoError(err, "GetAnalyticsTools")
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -348,21 +357,24 @@ func TestGetAnalyticsToolsModelFilterJoinsMessages(t *testing.T) {
 			break
 		}
 	}
-	require.NotEmpty(t, toolQuery, "tool query not captured")
+	require.NotEmpty(toolQuery, "tool query not captured")
 	normalized := strings.Join(strings.Fields(strings.ToLower(toolQuery)), " ")
-	assert.Contains(t, normalized,
+	assert.Contains(normalized,
 		"join messages m on m.session_id = tc.session_id and m.ordinal = tc.message_ordinal")
-	assert.Contains(t, normalized, "m.model = $")
+	assert.Contains(normalized, "m.model = $")
 }
 
 func TestGetAnalyticsSkillsModelFilterUsesMatchingMessages(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	state := &analyticsProbeState{}
 	store := &Store{
 		pg: newAnalyticsProbeDB(t, state),
 	}
 
 	_, err := store.GetAnalyticsSkills(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{
 			From:  "2024-06-01",
 			To:    "2024-06-30",
@@ -370,7 +382,7 @@ func TestGetAnalyticsSkillsModelFilterUsesMatchingMessages(t *testing.T) {
 		},
 		"week",
 	)
-	require.NoError(t, err, "GetAnalyticsSkills")
+	require.NoError(err, "GetAnalyticsSkills")
 
 	state.mu.Lock()
 	defer state.mu.Unlock()
@@ -384,31 +396,34 @@ func TestGetAnalyticsSkillsModelFilterUsesMatchingMessages(t *testing.T) {
 			break
 		}
 	}
-	require.NotEmpty(t, skillQuery, "skill query not captured")
+	require.NotEmpty(skillQuery, "skill query not captured")
 	normalized := strings.Join(strings.Fields(strings.ToLower(skillQuery)), " ")
-	assert.Contains(t, normalized,
+	assert.Contains(normalized,
 		"left join messages m on m.session_id = tc.session_id and m.ordinal = tc.message_ordinal")
-	assert.Contains(t, normalized, "m.model = $")
+	assert.Contains(normalized, "m.model = $")
 }
 
 func TestQueryVelocityMsgsScansNativeTimestamps(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store := &Store{
 		pg: newAnalyticsProbeDB(t, &analyticsProbeState{}),
 	}
 	sessionMsgs := map[string][]velocityMsg{}
 
 	err := store.queryVelocityMsgs(
-		context.Background(),
+		t.Context(),
 		[]string{"s1"},
 		time.UTC,
 		sessionMsgs,
 	)
-	require.NoError(t, err, "queryVelocityMsgs")
+	require.NoError(err, "queryVelocityMsgs")
 
-	require.Len(t, sessionMsgs["s1"], 2)
-	assert.Equal(t, "assistant", sessionMsgs["s1"][1].role)
-	assert.True(t, sessionMsgs["s1"][1].valid)
-	assert.Equal(t, 10.0,
+	require.Len(sessionMsgs["s1"], 2)
+	assert.Equal("assistant", sessionMsgs["s1"][1].role)
+	assert.True(sessionMsgs["s1"][1].valid)
+	assert.Equal(10.0,
 		sessionMsgs["s1"][1].ts.Sub(sessionMsgs["s1"][0].ts).Seconds())
 }
 
@@ -418,7 +433,7 @@ func TestGetAnalyticsSummaryModelsFollowFilteredSessions(t *testing.T) {
 	}
 
 	resp, err := store.GetAnalyticsSummary(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{
 			From:     "2024-06-03",
 			To:       "2024-06-03",
@@ -442,11 +457,11 @@ func assertAnalyticsMessageWindowQuery(t *testing.T, skills bool) {
 	store := &Store{pg: newAnalyticsProbeDB(t, state)}
 	f := db.AnalyticsFilter{From: "2024-06-01", To: "2024-06-30", Model: "model-a"}
 	if skills {
-		resp, err := store.GetAnalyticsSkills(context.Background(), f, "week")
+		resp, err := store.GetAnalyticsSkills(t.Context(), f, "week")
 		require.NoError(t, err)
 		assert.Equal(t, 3, resp.TotalSkillCalls)
 	} else {
-		resp, err := store.GetAnalyticsTools(context.Background(), f)
+		resp, err := store.GetAnalyticsTools(t.Context(), f)
 		require.NoError(t, err)
 		assert.Equal(t, 4, resp.TotalCalls)
 	}

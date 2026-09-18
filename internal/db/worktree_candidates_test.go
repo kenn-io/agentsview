@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -14,8 +13,11 @@ import (
 )
 
 func TestListArchiveWorktreeCandidatesFallsBackAndBoundsExamples(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const raw = "branch-label"
 	for i := range 12 {
 		id := "aggregate-" + string(rune('a'+i))
@@ -28,36 +30,36 @@ func TestListArchiveWorktreeCandidatesFallsBackAndBoundsExamples(t *testing.T) {
 	seedCandidateSession(t, d, "unavailable", raw, "host.example", "",
 		"2025-06-02T10:00:00Z")
 	deleteCandidateSnapshot(t, d, "unavailable")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID: "zero-message", Project: raw, Machine: "host.example",
 		Agent: "codex",
 	}), "seed zero-message candidate session")
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project: raw, Machine: "host.example", RootPath: "/srv/repository",
 		}), "seed aggregate evidence")
 	projects, err := d.BuildProjectIdentityMap(ctx, []string{raw})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	request := ArchiveWorktreeCandidateRequest{
 		ProjectLabel: raw, ProjectKey: projects[raw].ProjectKey,
 	}
 	candidates, err := d.ListArchiveWorktreeCandidates(ctx, request)
-	require.NoError(t, err)
-	require.Len(t, candidates, 3)
-	assert.Equal(t, "aggregate", candidates[0].EvidenceKind)
-	assert.Equal(t, 12, candidates[0].ContributingSessions)
-	assert.Len(t, candidates[0].Examples, 10)
-	assert.Equal(t, "fallback", candidates[1].EvidenceKind)
-	assert.Equal(t, "/opt/exact", candidates[1].SuggestedPrefix)
-	assert.False(t, candidates[2].Available)
-	assert.Empty(t, candidates[2].SuggestedPrefix)
-	assert.Equal(t, "unavailable", candidates[2].EvidenceKind)
-	assert.Equal(t, 2, candidates[2].ContributingSessions,
+	require.NoError(err)
+	require.Len(candidates, 3)
+	assert.Equal("aggregate", candidates[0].EvidenceKind)
+	assert.Equal(12, candidates[0].ContributingSessions)
+	assert.Len(candidates[0].Examples, 10)
+	assert.Equal("fallback", candidates[1].EvidenceKind)
+	assert.Equal("/opt/exact", candidates[1].SuggestedPrefix)
+	assert.False(candidates[2].Available)
+	assert.Empty(candidates[2].SuggestedPrefix)
+	assert.Equal("unavailable", candidates[2].EvidenceKind)
+	assert.Equal(2, candidates[2].ContributingSessions,
 		"folder counts include the same zero-message sessions as inventory")
 	again, err := d.ListArchiveWorktreeCandidates(ctx, request)
-	require.NoError(t, err)
-	assert.Equal(t, candidates, again, "candidate order and IDs should be deterministic")
+	require.NoError(err)
+	assert.Equal(candidates, again, "candidate order and IDs should be deterministic")
 }
 
 func TestBuildWorktreeCandidatesDoesNotSuggestFilesystemRoots(t *testing.T) {
@@ -92,6 +94,8 @@ func TestBuildWorktreeCandidatesDoesNotSuggestFilesystemRoots(t *testing.T) {
 }
 
 func TestBuildWorktreeCandidatesCollapsesObservedPaths(t *testing.T) {
+	assert := assert.New(t)
+
 	fixtures := []struct{ id, cwd string }{
 		{"claude-a", "/srv/repo/.claude/worktrees/run-a/src"},
 		{"claude-b", "/srv/repo/.claude/worktrees/run-b"},
@@ -114,27 +118,30 @@ func TestBuildWorktreeCandidatesCollapsesObservedPaths(t *testing.T) {
 		Project: "selected", Machine: "host.example", RootPath: "/invented/sibling",
 	}})
 	require.Len(t, got, 5)
-	assert.Equal(t, "D:/Repos", got[0].SuggestedPrefix,
+	assert.Equal("D:/Repos", got[0].SuggestedPrefix,
 		"the largest observed session group is first, not drive C")
-	assert.Equal(t, 3, got[0].ContributingSessions)
-	assert.Equal(t, 2, got[0].DistinctCwds)
+	assert.Equal(3, got[0].ContributingSessions)
+	assert.Equal(2, got[0].DistinctCwds)
 	byPrefix := make(map[string]WorktreeReclassificationCandidate)
 	for _, candidate := range got {
 		byPrefix[candidate.SuggestedPrefix] = candidate
 		for _, example := range candidate.Examples {
-			assert.True(t, worktreePathMatches(candidate.SuggestedPrefix, example.Cwd),
+			assert.True(worktreePathMatches(candidate.SuggestedPrefix, example.Cwd),
 				"a suggested prefix must contain its actual recorded paths")
 		}
 	}
-	assert.Equal(t, "worktree", byPrefix["/srv/repo/.claude/worktrees"].EvidenceKind)
-	assert.Equal(t, 2, byPrefix["/srv/.t3/worktrees/repo"].ContributingSessions)
-	assert.Equal(t, 1, byPrefix["C:/Apps/repo"].ContributingSessions)
-	assert.Equal(t, 1, byPrefix["/opt/single-checkout"].ContributingSessions)
+	assert.Equal("worktree", byPrefix["/srv/repo/.claude/worktrees"].EvidenceKind)
+	assert.Equal(2, byPrefix["/srv/.t3/worktrees/repo"].ContributingSessions)
+	assert.Equal(1, byPrefix["C:/Apps/repo"].ContributingSessions)
+	assert.Equal(1, byPrefix["/opt/single-checkout"].ContributingSessions)
 }
 
 func TestListArchiveWorktreeCandidatesSelectsByProjectIdentity(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const (
 		clickedRaw = "/private/example/repository"
 		otherRaw   = "/another/private/repository"
@@ -150,9 +157,9 @@ func TestListArchiveWorktreeCandidatesSelectsByProjectIdentity(t *testing.T) {
 		"/srv/worktrees/other", "/srv/worktrees/other/main")
 
 	projects, err := d.BuildProjectIdentityMap(ctx, []string{clickedRaw, otherRaw})
-	require.NoError(t, err)
-	require.NotEqual(t, projects[clickedRaw].ProjectKey, projects[otherRaw].ProjectKey)
-	require.Equal(t, export.SafeProjectDisplayLabel(clickedRaw),
+	require.NoError(err)
+	require.NotEqual(projects[clickedRaw].ProjectKey, projects[otherRaw].ProjectKey)
+	require.Equal(export.SafeProjectDisplayLabel(clickedRaw),
 		export.SafeProjectDisplayLabel(otherRaw),
 		"fixture must collide on display label so only the key disambiguates")
 
@@ -160,23 +167,26 @@ func TestListArchiveWorktreeCandidatesSelectsByProjectIdentity(t *testing.T) {
 		ProjectLabel: export.SafeProjectDisplayLabel(clickedRaw),
 		ProjectKey:   projects[clickedRaw].ProjectKey,
 	})
-	require.NoError(t, err)
-	require.Len(t, candidates, 1)
+	require.NoError(err)
+	require.Len(candidates, 1)
 	// A single-session snapshot group has no sibling cwd to intersect
 	// against, so the longest-common-directory-prefix logic in
 	// candidateFromGroup returns the session's own cwd unchanged rather than
 	// the snapshot's resolved worktree root.
-	assert.Equal(t, "/srv/worktrees/repository/feature/cmd", candidates[0].SuggestedPrefix)
-	assert.Equal(t, 1, candidates[0].ContributingSessions)
-	require.Len(t, candidates[0].Examples, 1)
-	assert.Equal(t, "clicked", candidates[0].Examples[0].SessionID)
+	assert.Equal("/srv/worktrees/repository/feature/cmd", candidates[0].SuggestedPrefix)
+	assert.Equal(1, candidates[0].ContributingSessions)
+	require.Len(candidates[0].Examples, 1)
+	assert.Equal("clicked", candidates[0].Examples[0].SessionID)
 }
 
 func TestListArchiveWorktreeCandidatesExcludesDifferentProjectKeys(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const (
 		primary = "current-project-name"
 		alias   = "historical-project-name"
@@ -193,7 +203,7 @@ func TestListArchiveWorktreeCandidatesExcludesDifferentProjectKeys(
 			t, d, fixture.id, fixture.project, machine, fixture.cwd,
 			"2025-06-02T10:00:00Z",
 		)
-		require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		require.NoError(d.UpsertProjectIdentityObservation(ctx,
 			export.ProjectIdentityObservation{
 				SessionID: fixture.id, Project: fixture.project, Machine: machine,
 				RootPath:         "/srv/worktrees/repo",
@@ -208,12 +218,12 @@ func TestListArchiveWorktreeCandidatesExcludesDifferentProjectKeys(
 	projects, err := d.BuildProjectIdentityMap(
 		ctx, []string{primary, alias},
 	)
-	require.NoError(t, err)
-	require.NotNil(t, projects[primary].Identity)
-	require.NotNil(t, projects[alias].Identity)
-	require.Equal(t, projects[primary].Identity.Key, projects[alias].Identity.Key)
-	require.NotEqual(t, projects[primary].ProjectKey, projects[alias].ProjectKey)
-	require.NotEqual(t, export.SafeProjectDisplayLabel(primary),
+	require.NoError(err)
+	require.NotNil(projects[primary].Identity)
+	require.NotNil(projects[alias].Identity)
+	require.Equal(projects[primary].Identity.Key, projects[alias].Identity.Key)
+	require.NotEqual(projects[primary].ProjectKey, projects[alias].ProjectKey)
+	require.NotEqual(export.SafeProjectDisplayLabel(primary),
 		export.SafeProjectDisplayLabel(alias))
 
 	candidates, err := d.ListArchiveWorktreeCandidates(
@@ -222,18 +232,21 @@ func TestListArchiveWorktreeCandidatesExcludesDifferentProjectKeys(
 			ProjectKey:   projects[primary].ProjectKey,
 		},
 	)
-	require.NoError(t, err)
-	require.Len(t, candidates, 1)
-	assert.Equal(t, 1, candidates[0].ContributingSessions)
-	require.Len(t, candidates[0].Examples, 1)
-	assert.Equal(t, "primary-session", candidates[0].Examples[0].SessionID)
-	assert.Equal(t, "/srv/worktrees/repo/feature/cmd",
+	require.NoError(err)
+	require.Len(candidates, 1)
+	assert.Equal(1, candidates[0].ContributingSessions)
+	require.Len(candidates[0].Examples, 1)
+	assert.Equal("primary-session", candidates[0].Examples[0].SessionID)
+	assert.Equal("/srv/worktrees/repo/feature/cmd",
 		candidates[0].SuggestedPrefix)
 }
 
 func TestListArchiveWorktreeCandidatesIgnoresDateRange(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const raw = "date-spread-project"
 
 	seedCandidateSession(t, d, "old-session", raw, "host-a.example",
@@ -246,25 +259,25 @@ func TestListArchiveWorktreeCandidatesIgnoresDateRange(t *testing.T) {
 		"/srv/worktrees/repository", "/srv/worktrees/repository/feature")
 
 	projects, err := d.BuildProjectIdentityMap(ctx, []string{raw})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	candidates, err := d.ListArchiveWorktreeCandidates(ctx, ArchiveWorktreeCandidateRequest{
 		ProjectLabel: export.SafeProjectDisplayLabel(raw),
 		ProjectKey:   projects[raw].ProjectKey,
 	})
-	require.NoError(t, err)
-	require.Len(t, candidates, 1)
-	assert.Equal(t, "snapshot", candidates[0].EvidenceKind)
-	assert.Equal(t, "/srv/worktrees/repository/feature", candidates[0].SuggestedPrefix)
-	assert.Equal(t, 2, candidates[0].ContributingSessions,
+	require.NoError(err)
+	require.Len(candidates, 1)
+	assert.Equal("snapshot", candidates[0].EvidenceKind)
+	assert.Equal("/srv/worktrees/repository/feature", candidates[0].SuggestedPrefix)
+	assert.Equal(2, candidates[0].ContributingSessions,
 		"archive-wide selection must cover both the old and new session")
-	assert.Equal(t, 2, candidates[0].DistinctCwds)
-	assert.True(t, candidates[0].Available)
+	assert.Equal(2, candidates[0].DistinctCwds)
+	assert.True(candidates[0].Available)
 }
 
 func TestListArchiveWorktreeCandidatesKeyMismatch(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const raw = "mismatch-project"
 
 	seedCandidateSession(t, d, "session-a", raw, "host-a.example",
@@ -287,8 +300,10 @@ func TestListArchiveWorktreeCandidatesKeyMismatch(t *testing.T) {
 }
 
 func TestListArchiveWorktreeCandidatesBoundsIdentityLookupToClickedLabel(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const raw = "clicked-project"
 
 	seedCandidateSession(t, d, "clicked-a", raw, "host-a.example",
@@ -306,21 +321,24 @@ func TestListArchiveWorktreeCandidatesBoundsIdentityLookupToClickedLabel(t *test
 	seedDistinctProjectSessions(t, d, 33000)
 
 	projects, err := d.BuildProjectIdentityMap(ctx, []string{raw})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	candidates, err := d.ListArchiveWorktreeCandidates(ctx, ArchiveWorktreeCandidateRequest{
 		ProjectLabel: export.SafeProjectDisplayLabel(raw),
 		ProjectKey:   projects[raw].ProjectKey,
 	})
-	require.NoError(t, err,
+	require.NoError(err,
 		"archive-wide candidates must not expand one bind variable per distinct project")
-	require.Len(t, candidates, 1)
+	require.Len(candidates, 1)
 	assert.Equal(t, 2, candidates[0].ContributingSessions)
 }
 
 func TestListArchiveWorktreeCandidatesManyCollidingRawLabels(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const clickedRaw = "/bulk/clicked-project"
 
 	seedCandidateSession(t, d, "clicked", clickedRaw, "host-a.example",
@@ -332,22 +350,22 @@ func TestListArchiveWorktreeCandidatesManyCollidingRawLabels(t *testing.T) {
 	// paths display as ""), so the clicked-label prefilter cannot bound the
 	// identity-map lookup and the observation queries must chunk instead.
 	seedBulkProjectSessions(t, d, 33000, "/bulk/project-%05d")
-	require.Empty(t, export.SafeProjectDisplayLabel(clickedRaw),
+	require.Empty(export.SafeProjectDisplayLabel(clickedRaw),
 		"fixture labels must collide on the empty display label")
 
 	projects, err := d.BuildProjectIdentityMap(ctx, []string{clickedRaw})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	candidates, err := d.ListArchiveWorktreeCandidates(ctx, ArchiveWorktreeCandidateRequest{
 		ProjectLabel: "", ProjectKey: projects[clickedRaw].ProjectKey,
 	})
-	require.NoError(t, err,
+	require.NoError(err,
 		"colliding raw labels must not exhaust SQLite bind variables")
-	require.Len(t, candidates, 1)
-	assert.Equal(t, 1, candidates[0].ContributingSessions)
-	require.Len(t, candidates[0].Examples, 1)
-	assert.Equal(t, "clicked", candidates[0].Examples[0].SessionID)
-	assert.Equal(t, "/srv/worktrees/repository/feature/cmd",
+	require.Len(candidates, 1)
+	assert.Equal(1, candidates[0].ContributingSessions)
+	require.Len(candidates[0].Examples, 1)
+	assert.Equal("clicked", candidates[0].Examples[0].SessionID)
+	assert.Equal("/srv/worktrees/repository/feature/cmd",
 		candidates[0].SuggestedPrefix)
 }
 

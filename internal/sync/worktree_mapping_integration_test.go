@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -14,18 +13,21 @@ import (
 func TestApplyWorktreeMappingToSingleSessionUsesSameFileSiblingForEmptyCwd(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	ctx := context.Background()
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(database.Close()) })
+	ctx := t.Context()
 	filePath := filepath.Join(t.TempDir(), "shared-session.jsonl")
 	worktreePrefix := "/srv/worktrees/service"
 
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: "target", Machine: "archive.example", Agent: "claude",
 		Project: "branch", Cwd: "", FilePath: &filePath,
 	}))
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: "sibling", Machine: "archive.example", Agent: "claude",
 		Project: "branch", Cwd: worktreePrefix + "/feature", FilePath: &filePath,
 	}))
@@ -33,20 +35,20 @@ func TestApplyWorktreeMappingToSingleSessionUsesSameFileSiblingForEmptyCwd(
 		Machine: "archive.example", PathPrefix: worktreePrefix,
 		Project: "service", Enabled: true,
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	engine := NewEngine(database, EngineConfig{Machine: "archive.example"})
 	finalProject, err := engine.applyWorktreeMappingToSingleSession("target")
-	require.NoError(t, err)
-	assert.Equal(t, "service", finalProject)
+	require.NoError(err)
+	assert.Equal("service", finalProject)
 
 	target, err := database.GetSession(ctx, "target")
-	require.NoError(t, err)
-	require.NotNil(t, target)
-	assert.Equal(t, "service", target.Project)
+	require.NoError(err)
+	require.NotNil(target)
+	assert.Equal("service", target.Project)
 	sibling, err := database.GetSession(ctx, "sibling")
-	require.NoError(t, err)
-	require.NotNil(t, sibling)
-	assert.Equal(t, "branch", sibling.Project,
+	require.NoError(err)
+	require.NotNil(sibling)
+	assert.Equal("branch", sibling.Project,
 		"same-file sibling supplies evidence but remains outside session scope")
 }

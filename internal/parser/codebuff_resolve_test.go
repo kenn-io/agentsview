@@ -33,6 +33,8 @@ func codebuffMakeSessionDir(
 // disk, the helper returns one match whose CanonicalID matches
 // the agent type and project directory name.
 func TestFindCodebuffFreebuffMatchesSingle(t *testing.T) {
+	assert := assert.New(t)
+
 	root := t.TempDir()
 	codebuffMakeSessionDir(
 		t, root, "my-project", "2026-07-16T00-09-00.236Z",
@@ -46,10 +48,9 @@ func TestFindCodebuffFreebuffMatchesSingle(t *testing.T) {
 		"2026-07-16T00-09-00.236Z",
 	)
 	require.Len(t, matches, 1)
-	assert.Equal(t, AgentCodebuff, matches[0].Agent)
-	assert.Equal(t, "my-project", matches[0].ProjectHint)
-	assert.Equal(t,
-		"codebuff:my-project:2026-07-16T00-09-00.236Z",
+	assert.Equal(AgentCodebuff, matches[0].Agent)
+	assert.Equal("my-project", matches[0].ProjectHint)
+	assert.Equal("codebuff:my-project:2026-07-16T00-09-00.236Z",
 		matches[0].CanonicalID(),
 	)
 }

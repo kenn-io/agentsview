@@ -13,6 +13,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -492,11 +493,11 @@ func (s *Store) DecodeCursor(raw string) (db.SessionCursor, error) {
 	if len(parts) == 1 {
 		data, err := base64.RawURLEncoding.DecodeString(parts[0])
 		if err != nil {
-			return db.SessionCursor{}, fmt.Errorf("%w: %v", db.ErrInvalidCursor, err)
+			return db.SessionCursor{}, fmt.Errorf("%w: %w", db.ErrInvalidCursor, err)
 		}
 		var c db.SessionCursor
 		if err := json.Unmarshal(data, &c); err != nil {
-			return db.SessionCursor{}, fmt.Errorf("%w: %v", db.ErrInvalidCursor, err)
+			return db.SessionCursor{}, fmt.Errorf("%w: %w", db.ErrInvalidCursor, err)
 		}
 		c.Total = 0
 		return c, nil
@@ -506,11 +507,11 @@ func (s *Store) DecodeCursor(raw string) (db.SessionCursor, error) {
 	}
 	data, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return db.SessionCursor{}, fmt.Errorf("%w: invalid payload: %v", db.ErrInvalidCursor, err)
+		return db.SessionCursor{}, fmt.Errorf("%w: invalid payload: %w", db.ErrInvalidCursor, err)
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return db.SessionCursor{}, fmt.Errorf("%w: invalid signature: %v", db.ErrInvalidCursor, err)
+		return db.SessionCursor{}, fmt.Errorf("%w: invalid signature: %w", db.ErrInvalidCursor, err)
 	}
 	s.cursorMu.RLock()
 	secret := append([]byte(nil), s.cursorSecret...)
@@ -522,7 +523,7 @@ func (s *Store) DecodeCursor(raw string) (db.SessionCursor, error) {
 	}
 	var c db.SessionCursor
 	if err := json.Unmarshal(data, &c); err != nil {
-		return db.SessionCursor{}, fmt.Errorf("%w: invalid json: %v", db.ErrInvalidCursor, err)
+		return db.SessionCursor{}, fmt.Errorf("%w: invalid json: %w", db.ErrInvalidCursor, err)
 	}
 	return c, nil
 }
@@ -771,7 +772,7 @@ func (s *Store) GetSessionVersion(id string) (int, int64, bool) {
 	}
 	fileMtimePart := ""
 	if fileMtime.Valid {
-		fileMtimePart = fmt.Sprintf("%d", fileMtime.Int64)
+		fileMtimePart = strconv.FormatInt(fileMtime.Int64, 10)
 	}
 	fileHashPart := ""
 	if fileHash.Valid {
@@ -786,16 +787,7 @@ func (s *Store) GetSessionVersion(id string) (int, int64, bool) {
 
 func (s *Store) GetStats(ctx context.Context, excludeOneShot, excludeAutomated bool) (db.Stats, error) {
 	filter := rootSessionWhere(excludeOneShot, excludeAutomated)
-	query := fmt.Sprintf(`
-		SELECT
-			COUNT(*),
-			COALESCE(SUM(message_count), 0),
-			COUNT(DISTINCT project),
-			COUNT(DISTINCT machine),
-			MIN(COALESCE(started_at, created_at))
-		FROM sessions
-		WHERE %s`,
-		filter)
+	query := "\n\t\tSELECT\n\t\t\tCOUNT(*),\n\t\t\tCOALESCE(SUM(message_count), 0),\n\t\t\tCOUNT(DISTINCT project),\n\t\t\tCOUNT(DISTINCT machine),\n\t\t\tMIN(COALESCE(started_at, created_at))\n\t\tFROM sessions\n\t\tWHERE " + filter
 	var stats db.Stats
 	var earliest any
 	if err := s.queryRowContext(ctx, query).Scan(
@@ -985,10 +977,14 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 		nameProject = "AND s.project = ?"
 	}
 	dateBuilder := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
+	var nameProjectSb988 strings.Builder
+	var projectSb988 strings.Builder
 	for _, pred := range dateBuilder.SessionDateRangePredicates(f.DateFrom, f.DateTo, "", func(col string) string { return "s." + col }) {
-		project += " AND " + pred
-		nameProject += " AND " + pred
+		projectSb988.WriteString(" AND " + pred)
+		nameProjectSb988.WriteString(" AND " + pred)
 	}
+	nameProject += nameProjectSb988.String()
+	project += projectSb988.String()
 	args = append(args, dateBuilder.Args()...)
 	args = append(args, namePattern, namePattern, namePattern, namePattern)
 	if f.Project != "" {

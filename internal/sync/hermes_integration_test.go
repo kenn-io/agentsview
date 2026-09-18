@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -17,9 +16,12 @@ import (
 )
 
 func TestSyncAllAttributesHermesSiblingStateDBFromSessionsRoot(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	sessionsRoot := filepath.Join(root, "sessions")
-	require.NoError(t, os.MkdirAll(sessionsRoot, 0o755))
+	require.NoError(os.MkdirAll(sessionsRoot, 0o755))
 	writeHermesSyncStateDB(t, root)
 	database := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(database, sync.EngineConfig{
@@ -32,21 +34,23 @@ func TestSyncAllAttributesHermesSiblingStateDBFromSessionsRoot(t *testing.T) {
 		Machine: "localbox",
 	})
 
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 
-	require.Equal(t, 1, stats.Synced)
-	sess, err := database.GetSessionFull(context.Background(), "hermes:child")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, "archivebox", sess.Machine)
-	require.NotNil(t, sess.FilePath)
-	assert.Equal(t, filepath.Join(root, "state.db"), *sess.FilePath)
+	require.Equal(1, stats.Synced)
+	sess, err := database.GetSessionFull(t.Context(), "hermes:child")
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal("archivebox", sess.Machine)
+	require.NotNil(sess.FilePath)
+	assert.Equal(filepath.Join(root, "state.db"), *sess.FilePath)
 }
 
 func TestSyncPathsAttributesHermesSiblingStateDBFromSessionsRoot(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	sessionsRoot := filepath.Join(root, "sessions")
-	require.NoError(t, os.MkdirAll(sessionsRoot, 0o755))
+	require.NoError(os.MkdirAll(sessionsRoot, 0o755))
 	stateDB := writeHermesSyncStateDB(t, root)
 	database := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(database, sync.EngineConfig{
@@ -59,20 +63,22 @@ func TestSyncPathsAttributesHermesSiblingStateDBFromSessionsRoot(t *testing.T) {
 		Machine: "localbox",
 	})
 
-	engine.SyncPathsContext(context.Background(), []string{stateDB})
+	engine.SyncPathsContext(t.Context(), []string{stateDB})
 
-	sess, err := database.GetSessionFull(context.Background(), "hermes:child")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
+	sess, err := database.GetSessionFull(t.Context(), "hermes:child")
+	require.NoError(err)
+	require.NotNil(sess)
 	assert.Equal(t, "archivebox", sess.Machine)
 }
 
 func TestSyncSingleSessionAttributesHermesSiblingStateDBFromSessionsRoot(
 	t *testing.T,
 ) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	sessionsRoot := filepath.Join(root, "sessions")
-	require.NoError(t, os.MkdirAll(sessionsRoot, 0o755))
+	require.NoError(os.MkdirAll(sessionsRoot, 0o755))
 	writeHermesSyncStateDB(t, root)
 	database := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(database, sync.EngineConfig{
@@ -85,14 +91,14 @@ func TestSyncSingleSessionAttributesHermesSiblingStateDBFromSessionsRoot(
 		Machine: "localbox",
 	})
 
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	require.NoError(t, engine.SyncSingleSessionContext(
+	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(engine.SyncSingleSessionContext(
 		t.Context(), "hermes:child",
 	))
 
 	sess, err := database.GetSessionFull(t.Context(), "hermes:child")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
+	require.NoError(err)
+	require.NotNil(sess)
 	assert.Equal(t, "archivebox", sess.Machine)
 }
 
@@ -165,7 +171,7 @@ func writeHermesSyncStateDB(t *testing.T, root string) string {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
 			source TEXT NOT NULL,

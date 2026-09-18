@@ -5,7 +5,6 @@ package main
 import (
 	"archive/zip"
 	"bytes"
-	"context"
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -28,56 +27,59 @@ import (
 const geminiAppsCLIHTML = `<html><head><title>My Activity History</title></head><body><div class="outer-cell"><div class="header-cell"><h3>Gemini Apps</h3><p>Prompted</p><p>Jan 2, 2025, 3:04:05 PM EDT</p></div><div class="content-cell"><p>cli prompt</p><p>cli answer</p></div></div></body></html>`
 
 func TestGeminiAppsImportDispatchesDirectAndZipSources(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := dbtest.OpenTestDB(t)
 	direct := filepath.Join(t.TempDir(), "activity.html")
-	require.NoError(t, os.WriteFile(direct, []byte(geminiAppsCLIHTML), 0o644))
+	require.NoError(os.WriteFile(direct, []byte(geminiAppsCLIHTML), 0o644))
 
 	stats, err := runImportDispatch(
-		context.Background(), database, "gemini-apps", direct, t.TempDir(), "test-machine",
+		t.Context(), database, "gemini-apps", direct, t.TempDir(), "test-machine",
 	)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Imported)
+	require.NoError(err)
+	assert.Equal(1, stats.Imported)
 
 	archivePath := filepath.Join(t.TempDir(), "takeout.zip")
 	archiveFile, err := os.Create(archivePath)
-	require.NoError(t, err)
+	require.NoError(err)
 	zipWriter := zip.NewWriter(archiveFile)
 	entry, err := zipWriter.Create("Takeout/My Activity/Gemini Apps/activity.html")
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = entry.Write([]byte(geminiAppsCLIHTML))
-	require.NoError(t, err)
-	require.NoError(t, zipWriter.Close())
-	require.NoError(t, archiveFile.Close())
+	require.NoError(err)
+	require.NoError(zipWriter.Close())
+	require.NoError(archiveFile.Close())
 
 	source, cleanup, err := resolveImportSource(archivePath)
-	require.NoError(t, err)
-	require.NotNil(t, cleanup)
+	require.NoError(err)
+	require.NotNil(cleanup)
 	defer cleanup()
 	stats, err = runImportDispatch(
-		context.Background(), database, "gemini-apps", source, t.TempDir(), "test-machine",
+		t.Context(), database, "gemini-apps", source, t.TempDir(), "test-machine",
 	)
-	require.NoError(t, err)
-	assert.Equal(t, 1, stats.Skipped)
+	require.NoError(err)
+	assert.Equal(1, stats.Skipped)
 
 	_, err = runImportDispatch(
-		context.Background(), database, "gemini-apps",
+		t.Context(), database, "gemini-apps",
 		filepath.Join(t.TempDir(), "missing.html"), t.TempDir(), "test-machine",
 	)
-	assert.ErrorContains(t, err, "stat import source")
+	require.ErrorContains(err, "stat import source")
 
 	nonPrompt := filepath.Join(t.TempDir(), "non-prompt.html")
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		nonPrompt,
 		[]byte(strings.Replace(geminiAppsCLIHTML, "<p>Prompted</p>", "<p>Canvas</p>", 1)),
 		0o644,
 	))
 	stats, err = runImportDispatch(
-		context.Background(), database, "gemini-apps", nonPrompt, t.TempDir(), "test-machine",
+		t.Context(), database, "gemini-apps", nonPrompt, t.TempDir(), "test-machine",
 	)
-	assert.ErrorContains(t, err, "no admissible Prompted records")
-	assert.Equal(t, 1, stats.Skipped)
-	assert.Equal(t, "\rDone: 1 processed (1 skipped)\n", formatImportFailureSummary(stats))
-	assert.Empty(t, formatImportFailureSummary(importer.ImportStats{}))
+	require.ErrorContains(err, "no admissible Prompted records")
+	assert.Equal(1, stats.Skipped)
+	assert.Equal("\rDone: 1 processed (1 skipped)\n", formatImportFailureSummary(stats))
+	assert.Empty(formatImportFailureSummary(importer.ImportStats{}))
 }
 
 // isolateParseDiffEnv points the data dir, HOME, and every per-agent
@@ -104,26 +106,28 @@ func TestParseDiff_RegisteredInRootHelp(t *testing.T) {
 }
 
 func TestParseDiff_UnknownAgentListsSupported(t *testing.T) {
+	assert := assert.New(t)
+
 	testDataDir(t)
 
 	_, err := executeCommand(newRootCommand(),
 		"parse-diff", "--agent", "definitely-not-an-agent")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(),
+	assert.Contains(err.Error(),
 		`unknown agent "definitely-not-an-agent"`)
 	for _, want := range []string{"claude", "codex", "gemini"} {
-		assert.Contains(t, err.Error(), want,
+		assert.Contains(err.Error(), want,
 			"error should list supported agent %q", want)
 	}
 	// The DB-backed provider-authoritative agents are re-parseable through
 	// their providers, so they appear in the supported list too.
 	for _, want := range []string{"forge", "devin", "piebald", "warp"} {
-		assert.Contains(t, err.Error(), want,
+		assert.Contains(err.Error(), want,
 			"error should list supported DB-backed agent %q", want)
 	}
 	// Import-only agents remain unsupported and must not be listed.
 	for _, unwanted := range []string{"claude-ai", "chatgpt"} {
-		assert.NotContains(t, err.Error(), unwanted,
+		assert.NotContains(err.Error(), unwanted,
 			"error should not list import-only agent %q", unwanted)
 	}
 }
@@ -217,27 +221,33 @@ func TestParseDiffAgentTypes(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			got, err := parseDiffAgentTypes(tc.in)
 			if tc.wantErr != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tc.wantErr)
+				require.Error(err)
+				assert.Contains(err.Error(), tc.wantErr)
 				return
 			}
-			require.NoError(t, err)
+			require.NoError(err)
 			strs := make([]string, 0, len(got))
 			for _, a := range got {
 				strs = append(strs, string(a))
 			}
 			if tc.want == nil {
-				assert.Empty(t, strs)
+				assert.Empty(strs)
 				return
 			}
-			assert.Equal(t, tc.want, strs)
+			assert.Equal(tc.want, strs)
 		})
 	}
 }
 
 func TestParseDiffSupportedAgentsIncludesProviderAuthoritativeAgents(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	supported := parseDiffSupportedAgents()
 	modes := parser.ProviderMigrationModes()
 	// Build the expected set from the registry so the contract covers every
@@ -251,19 +261,19 @@ func TestParseDiffSupportedAgentsIncludesProviderAuthoritativeAgents(t *testing.
 			continue
 		}
 		if _, ok := parser.ProviderFactoryByType(def.Type); !ok {
-			assert.False(t, parseDiffAgentSupported(def),
+			assert.False(parseDiffAgentSupported(def),
 				"parse-diff must exclude %s without a provider factory", def.Type)
-			assert.NotContains(t, supported, string(def.Type),
+			assert.NotContains(supported, string(def.Type),
 				"parse-diff supported list must exclude %s without a provider factory", def.Type)
 			continue
 		}
 		checked++
-		assert.True(t, parseDiffAgentSupported(def),
+		assert.True(parseDiffAgentSupported(def),
 			"parse-diff support must include %s", def.Type)
-		assert.Contains(t, supported, string(def.Type),
+		assert.Contains(supported, string(def.Type),
 			"parse-diff supported list must include %s", def.Type)
 	}
-	require.Positive(t, checked,
+	require.Positive(checked,
 		"expected at least one provider-authoritative agent")
 
 	// Explicitly pin the DB-backed provider-authoritative agents so a
@@ -274,47 +284,52 @@ func TestParseDiffSupportedAgentsIncludesProviderAuthoritativeAgents(t *testing.
 		parser.AgentPiebald, parser.AgentWarp,
 	} {
 		def, ok := parser.AgentByType(agent)
-		require.True(t, ok, "agent %s", agent)
-		assert.False(t, def.FileBased,
+		require.True(ok, "agent %s", agent)
+		assert.False(def.FileBased,
 			"%s is expected to be DB-backed (FileBased=false)", agent)
-		assert.True(t, parseDiffAgentSupported(def),
+		assert.True(parseDiffAgentSupported(def),
 			"DB-backed %s must be supported by parse-diff", agent)
-		assert.Contains(t, supported, string(agent),
+		assert.Contains(supported, string(agent),
 			"parse-diff supported list must include DB-backed %s", agent)
 	}
 }
 
 func TestParseDiff_EmptyArchiveRunsClean(t *testing.T) {
+	assert := assert.New(t)
+
 	isolateParseDiffEnv(t)
 
 	out, err := executeCommand(newRootCommand(), "parse-diff")
 	require.NoError(t, err)
-	assert.Contains(t, out, "Parse diff: 0 files re-parsed (all agents)")
-	assert.Contains(t, out, "Summary")
-	assert.Contains(t, out, "Examined")
-	assert.Contains(t, out, "0 sessions changed, 0 identical.")
-	assert.NotContains(t, out, "Changed fields")
-	assert.NotContains(t, out, "Changed sessions")
+	assert.Contains(out, "Parse diff: 0 files re-parsed (all agents)")
+	assert.Contains(out, "Summary")
+	assert.Contains(out, "Examined")
+	assert.Contains(out, "0 sessions changed, 0 identical.")
+	assert.NotContains(out, "Changed fields")
+	assert.NotContains(out, "Changed sessions")
 }
 
 func TestParseDiff_JSONShape(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	isolateParseDiffEnv(t)
 
 	out, err := executeCommand(newRootCommand(), "parse-diff", "--json")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	var got map[string]any
-	require.NoError(t, json.Unmarshal([]byte(out), &got),
+	require.NoError(json.Unmarshal([]byte(out), &got),
 		"stdout should be valid JSON: %q", out)
 	for _, key := range []string{
 		"generated_at", "data_version", "agents",
 		"files_examined", "files_limited",
 		"totals", "field_counts", "sessions",
 	} {
-		assert.Contains(t, got, key,
+		assert.Contains(got, key,
 			"JSON report missing top-level key %q", key)
 	}
-	assert.NotEmpty(t, got["generated_at"])
+	assert.NotEmpty(got["generated_at"])
 }
 
 func TestDoParseDiff_FailOnChangeFalseOnEmptyArchive(t *testing.T) {
@@ -444,6 +459,8 @@ func skewSession(
 }
 
 func TestRenderParseDiffReport_ChangedSessions(t *testing.T) {
+	assert := assert.New(t)
+
 	r := &sync.ParseDiffReport{
 		GeneratedAt:   "2026-06-12T00:00:00Z",
 		DataVersion:   42,
@@ -491,22 +508,25 @@ func TestRenderParseDiffReport_ChangedSessions(t *testing.T) {
 	renderParseDiffReport(&buf, r, "/tmp/sessions.db", "claude, codex", false)
 	out := buf.String()
 
-	assert.Contains(t, out,
+	assert.Contains(out,
 		"Parse diff: 7 files re-parsed (claude, codex) "+
 			"against /tmp/sessions.db (data version 42)")
-	assert.Contains(t, out, "Changed fields (sessions affected)")
-	assert.Contains(t, out, "Changed sessions")
-	assert.Contains(t, out, "abcdef12",
+	assert.Contains(out, "Changed fields (sessions affected)")
+	assert.Contains(out, "Changed sessions")
+	assert.Contains(out, "abcdef12",
 		"changed session should be listed by short id")
-	assert.Contains(t, out, "message_count, models")
-	assert.Contains(t, out, "2 sessions changed, 3 identical.")
-	assert.NotContains(t, out, "skip-me",
+	assert.Contains(out, "message_count, models")
+	assert.Contains(out, "2 sessions changed, 3 identical.")
+	assert.NotContains(out, "skip-me",
 		"skipped sessions must not appear in the changed list")
-	assert.NotContains(t, out, "more; use --verbose",
+	assert.NotContains(out, "more; use --verbose",
 		"no cap notice when under the cap")
 }
 
 func TestRenderParseDiffReport_FieldCountOrdering(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	r := &sync.ParseDiffReport{
 		FieldCounts: map[string]int{
 			"alpha_field": 2,
@@ -523,12 +543,12 @@ func TestRenderParseDiffReport_FieldCountOrdering(t *testing.T) {
 	big := strings.Index(out, "big_field")
 	alpha := strings.Index(out, "alpha_field")
 	beta := strings.Index(out, "beta_field")
-	require.NotEqual(t, -1, big)
-	require.NotEqual(t, -1, alpha)
-	require.NotEqual(t, -1, beta)
-	assert.Less(t, big, alpha,
+	require.NotEqual(-1, big)
+	require.NotEqual(-1, alpha)
+	require.NotEqual(-1, beta)
+	assert.Less(big, alpha,
 		"highest count must sort first")
-	assert.Less(t, alpha, beta,
+	assert.Less(alpha, beta,
 		"ties must break alphabetically")
 }
 
@@ -563,35 +583,39 @@ func TestRenderParseDiffReport_CapAndVerbose(t *testing.T) {
 	}
 
 	t.Run("capped", func(t *testing.T) {
+		assert := assert.New(t)
+
 		var buf bytes.Buffer
 		renderParseDiffReport(&buf, r, "db", "all agents", false)
 		out := buf.String()
 
-		assert.Contains(t, out,
+		assert.Contains(out,
 			"... (5 more; use --verbose or --json)")
-		assert.Contains(t, out, "sess-00")
-		assert.Contains(t, out,
+		assert.Contains(out, "sess-00")
+		assert.Contains(out,
 			fmt.Sprintf("sess-%02d", parseDiffChangedCap-1))
-		assert.NotContains(t, out,
+		assert.NotContains(out,
 			fmt.Sprintf("sess-%02d", parseDiffChangedCap),
 			"sessions past the cap must be elided")
-		assert.NotContains(t, out, "[informational]",
+		assert.NotContains(out, "[informational]",
 			"compact lines summarize non-informational fields only")
 	})
 
 	t.Run("verbose", func(t *testing.T) {
+		assert := assert.New(t)
+
 		var buf bytes.Buffer
 		renderParseDiffReport(&buf, r, "db", "all agents", true)
 		out := buf.String()
 
-		assert.NotContains(t, out, "more; use --verbose",
+		assert.NotContains(out, "more; use --verbose",
 			"verbose output is never capped")
-		assert.Contains(t, out,
+		assert.Contains(out,
 			fmt.Sprintf("sess-%02d", parseDiffChangedCap+4),
 			"verbose lists every changed session")
-		assert.Contains(t, out,
+		assert.Contains(out,
 			"first_message: old -> new (lengths 3 vs 3)")
-		assert.Contains(t, out,
+		assert.Contains(out,
 			"termination_status: completed -> (null) [informational]")
 	})
 }
@@ -618,21 +642,23 @@ func TestRenderParseDiffReport_IncrementalSkewCapAndVerbose(t *testing.T) {
 	}
 
 	t.Run("capped", func(t *testing.T) {
+		assert := assert.New(t)
+
 		var buf bytes.Buffer
 		renderParseDiffReport(&buf, r, "db", "all agents", false)
 		out := buf.String()
 
-		assert.Contains(t, out, "Incremental-skew sessions",
+		assert.Contains(out, "Incremental-skew sessions",
 			"the skew drill-down section must be present")
-		assert.Contains(t, out,
+		assert.Contains(out,
 			"... (5 more; use --verbose or --json)")
-		assert.Contains(t, out, "skew-00")
-		assert.Contains(t, out,
+		assert.Contains(out, "skew-00")
+		assert.Contains(out,
 			fmt.Sprintf("skew-%02d", parseDiffChangedCap-1))
-		assert.NotContains(t, out,
+		assert.NotContains(out,
 			fmt.Sprintf("skew-%02d", parseDiffChangedCap),
 			"sessions past the cap must be elided")
-		assert.Contains(t, out, "Incremental skew",
+		assert.Contains(out, "Incremental skew",
 			"the summary must include the incremental-skew line")
 	})
 
@@ -703,6 +729,8 @@ func TestRenderParseDiffReport_ResyncNote(t *testing.T) {
 }
 
 func TestRenderParseDiffReport_EmptyReport(t *testing.T) {
+	assert := assert.New(t)
+
 	r := &sync.ParseDiffReport{
 		DataVersion: 7,
 		FieldCounts: map[string]int{},
@@ -714,13 +742,13 @@ func TestRenderParseDiffReport_EmptyReport(t *testing.T) {
 	})
 	out := buf.String()
 
-	assert.Contains(t, out,
+	assert.Contains(out,
 		"Parse diff: 0 files re-parsed (all agents) "+
 			"against /data/sessions.db (data version 7)")
-	assert.Contains(t, out, "Examined")
-	assert.NotContains(t, out, "Changed fields")
-	assert.NotContains(t, out, "Changed sessions")
-	assert.Contains(t, out, "0 sessions changed, 0 identical.")
+	assert.Contains(out, "Examined")
+	assert.NotContains(out, "Changed fields")
+	assert.NotContains(out, "Changed sessions")
+	assert.Contains(out, "0 sessions changed, 0 identical.")
 }
 
 func TestRenderParseDiffReport_NonZeroTotalsOnly(t *testing.T) {
@@ -755,6 +783,8 @@ func TestRenderParseDiffReport_NonZeroTotalsOnly(t *testing.T) {
 }
 
 func TestRenderParseDiffReport_ParseErrorsListed(t *testing.T) {
+	assert := assert.New(t)
+
 	r := &sync.ParseDiffReport{
 		DataVersion: 39,
 		Totals:      sync.ParseDiffTotals{ParseErrors: 2},
@@ -779,13 +809,13 @@ func TestRenderParseDiffReport_ParseErrorsListed(t *testing.T) {
 	renderParseDiffReport(&buf, r, "db", "all agents", false)
 	out := buf.String()
 
-	assert.Contains(t, out, "Parse errors")
-	assert.Contains(t, out, "/data/proj/broken-1.jsonl",
+	assert.Contains(out, "Parse errors")
+	assert.Contains(out, "/data/proj/broken-1.jsonl",
 		"parse-error file path must be shown, not just the count")
-	assert.Contains(t, out, "unexpected end of JSON input",
+	assert.Contains(out, "unexpected end of JSON input",
 		"parse-error reason must be shown")
-	assert.Contains(t, out, "/data/proj/headless.json")
-	assert.Contains(t, out, "invalid character")
+	assert.Contains(out, "/data/proj/headless.json")
+	assert.Contains(out, "invalid character")
 }
 
 // TestRenderParseDiffReport_SanitizesControlSequences proves the
@@ -796,6 +826,8 @@ func TestRenderParseDiffReport_ParseErrorsListed(t *testing.T) {
 // writes, OSC 8 phishing hyperlinks, or cursor movement on a plain
 // `parse-diff --verbose` run.
 func TestRenderParseDiffReport_SanitizesControlSequences(t *testing.T) {
+	assert := assert.New(t)
+
 	r := &sync.ParseDiffReport{
 		DataVersion: 42,
 		Totals: sync.ParseDiffTotals{
@@ -830,23 +862,23 @@ func TestRenderParseDiffReport_SanitizesControlSequences(t *testing.T) {
 			"/tmp/db\x1b[5m", "all agents", verbose)
 		out := buf.String()
 
-		assert.NotContains(t, out, "\x1b",
+		assert.NotContains(out, "\x1b",
 			"verbose=%v output must contain no ESC bytes", verbose)
-		assert.NotContains(t, out, "\x07",
+		assert.NotContains(out, "\x07",
 			"verbose=%v output must contain no BEL bytes", verbose)
-		assert.NotContains(t, out, "\r",
+		assert.NotContains(out, "\r",
 			"verbose=%v output must contain no carriage returns", verbose)
 		// The text around the stripped sequences must survive.
-		assert.Contains(t, out, "link", "reason text retained")
-		assert.Contains(t, out, "hidden.jsonl", "path text retained")
+		assert.Contains(out, "link", "reason text retained")
+		assert.Contains(out, "hidden.jsonl", "path text retained")
 	}
 
 	var verbose bytes.Buffer
 	renderParseDiffReport(&verbose, r, "db", "all agents", true)
 	out := verbose.String()
-	assert.Contains(t, out, "clip", "stored value text retained")
-	assert.Contains(t, out, "value", "parsed value text retained")
-	assert.Contains(t, out, "red", "detail text retained")
+	assert.Contains(out, "clip", "stored value text retained")
+	assert.Contains(out, "value", "parsed value text retained")
+	assert.Contains(out, "red", "detail text retained")
 }
 
 func TestRenderParseDiffReport_VacuousResyncWarning(t *testing.T) {
@@ -874,6 +906,8 @@ func TestRenderParseDiffReport_VacuousResyncWarning(t *testing.T) {
 }
 
 func TestRenderParseDiffReport_PendingResyncVerbose(t *testing.T) {
+	assert := assert.New(t)
+
 	r := &sync.ParseDiffReport{
 		DataVersion: 40,
 		Totals:      sync.ParseDiffTotals{Examined: 1, PendingResync: 1},
@@ -891,37 +925,40 @@ func TestRenderParseDiffReport_PendingResyncVerbose(t *testing.T) {
 
 	var plain bytes.Buffer
 	renderParseDiffReport(&plain, r, "db", "all agents", false)
-	assert.NotContains(t, plain.String(), "stale-1",
+	assert.NotContains(plain.String(), "stale-1",
 		"pending-resync drill-down is verbose-only")
 
 	var verbose bytes.Buffer
 	renderParseDiffReport(&verbose, r, "db", "all agents", true)
 	out := verbose.String()
-	assert.Contains(t, out, "Pending-resync sessions")
-	assert.Contains(t, out, "stale-1")
-	assert.Contains(t, out, "first_message: old -> new")
+	assert.Contains(out, "Pending-resync sessions")
+	assert.Contains(out, "stale-1")
+	assert.Contains(out, "first_message: old -> new")
 }
 
 func TestParseDiff_JSONSessionsAndDBPath(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	isolateParseDiffEnv(t)
 
 	out, err := executeCommand(newRootCommand(), "parse-diff", "--json")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	var got map[string]jsontext.Value
-	require.NoError(t, json.Unmarshal([]byte(out), &got))
+	require.NoError(json.Unmarshal([]byte(out), &got))
 
 	// A clean run must serialize an empty array, never null, so jq
 	// pipelines and typed consumers do not break.
-	require.Contains(t, got, "sessions")
-	assert.Equal(t, "[]", strings.TrimSpace(string(got["sessions"])),
+	require.Contains(got, "sessions")
+	assert.Equal("[]", strings.TrimSpace(string(got["sessions"])),
 		"clean run must emit sessions: [] not null")
 	// The archive identity must be present so the report is
 	// self-describing when attached to a PR.
-	require.Contains(t, got, "db_path")
+	require.Contains(got, "db_path")
 	var dbPath string
-	require.NoError(t, json.Unmarshal(got["db_path"], &dbPath))
-	assert.NotEmpty(t, dbPath, "db_path must identify the vetted archive")
+	require.NoError(json.Unmarshal(got["db_path"], &dbPath))
+	assert.NotEmpty(dbPath, "db_path must identify the vetted archive")
 }
 
 // TestDoParseDiff_FailOnChangeDirections exercises both directions of
@@ -929,26 +966,29 @@ func TestParseDiff_JSONSessionsAndDBPath(t *testing.T) {
 // A stored session whose first message differs from a fresh parse makes
 // HasFailures() true; the flag then decides the exit.
 func TestDoParseDiff_FailOnChangeDirections(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	// Isolate every other agent's directory env var to a temp path so an
 	// inherited dir from the developer or CI environment cannot be scanned and
 	// trip --fail-on-change with an unrelated parse error. The data dir and
 	// Claude dir is then overridden to the path this test controls.
 	isolateParseDiffEnv(t)
 	dataDir := os.Getenv("AGENTSVIEW_DATA_DIR")
-	require.NotEmpty(t, dataDir)
+	require.NotEmpty(dataDir)
 	claudeDir := t.TempDir()
 	t.Setenv("CLAUDE_PROJECTS_DIR", claudeDir)
 
 	// Sync a valid Claude source so the stored file fingerprint exactly matches
 	// the source that parse-diff will inspect.
 	projDir := filepath.Join(claudeDir, "-home-proj")
-	require.NoError(t, os.MkdirAll(projDir, 0o755))
+	require.NoError(os.MkdirAll(projDir, 0o755))
 	srcPath := filepath.Join(projDir, "real-session.jsonl")
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUser("2026-01-01T00:00:00Z", "hello").
 		AddClaudeAssistant("2026-01-01T00:00:01Z", "hi").
 		String()
-	require.NoError(t, os.WriteFile(srcPath, []byte(content), 0o644))
+	require.NoError(os.WriteFile(srcPath, []byte(content), 0o644))
 
 	d := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	engine := sync.NewEngine(d, sync.EngineConfig{
@@ -957,31 +997,31 @@ func TestDoParseDiff_FailOnChangeDirections(t *testing.T) {
 		},
 		Machine: "local",
 	})
-	stats := engine.SyncAll(context.Background(), nil)
-	require.Equal(t, 1, stats.Synced, "one session synced")
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	stats := engine.SyncAll(t.Context(), nil)
+	require.Equal(1, stats.Synced, "one session synced")
+	require.NoError(d.Update(func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET first_message = ? WHERE id = ?",
 			"drifted first message", "real-session",
 		)
 		return err
 	}))
 	engine.Close()
-	require.NoError(t, d.Close())
+	require.NoError(d.Close())
 
 	var failBuf bytes.Buffer
 	failed := doParseDiff(ParseDiffConfig{
 		FailOnChange: true, Stdout: &failBuf, Stderr: &failBuf,
 	})
-	assert.True(t, failed,
+	assert.True(failed,
 		"a changed session with --fail-on-change must fail")
-	assert.Contains(t, failBuf.String(), "sessions changed")
+	assert.Contains(failBuf.String(), "sessions changed")
 
 	var cleanBuf bytes.Buffer
 	notFailed := doParseDiff(ParseDiffConfig{
 		FailOnChange: false, Stdout: &cleanBuf, Stderr: &cleanBuf,
 	})
-	assert.False(t, notFailed,
+	assert.False(notFailed,
 		"without --fail-on-change the same drift must not fail")
 }
 
@@ -993,6 +1033,9 @@ func TestDoParseDiff_FailOnChangeDirections(t *testing.T) {
 // are exactly what the parser derives, then drifted and the source mtime
 // pushed forward to simulate a daemon write after the snapshot.
 func TestDoParseDiff_RacedSessionDoesNotFail(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	// Isolate every other agent's directory env var to a temp path so an
 	// inherited dir from the developer or CI environment cannot be scanned and
 	// trip --fail-on-change with an unrelated parse error. The data dir and
@@ -1004,13 +1047,13 @@ func TestDoParseDiff_RacedSessionDoesNotFail(t *testing.T) {
 	t.Setenv("CLAUDE_PROJECTS_DIR", claudeDir)
 
 	projDir := filepath.Join(claudeDir, "-home-proj")
-	require.NoError(t, os.MkdirAll(projDir, 0o755))
+	require.NoError(os.MkdirAll(projDir, 0o755))
 	srcPath := filepath.Join(projDir, "raced-session.jsonl")
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUser("2026-01-01T00:00:00Z", "hello").
 		AddClaudeAssistant("2026-01-01T00:00:01Z", "hi").
 		String()
-	require.NoError(t, os.WriteFile(srcPath, []byte(content), 0o644))
+	require.NoError(os.WriteFile(srcPath, []byte(content), 0o644))
 
 	dbPath := filepath.Join(dataDir, "sessions.db")
 	d := dbtest.OpenTestDBAt(t, dbPath)
@@ -1020,39 +1063,39 @@ func TestDoParseDiff_RacedSessionDoesNotFail(t *testing.T) {
 		},
 		Machine: "local",
 	})
-	stats := engine.SyncAll(context.Background(), nil)
-	require.Equal(t, 1, stats.Synced, "one session synced")
+	stats := engine.SyncAll(t.Context(), nil)
+	require.Equal(1, stats.Synced, "one session synced")
 
 	// Find the synced session id so the drift targets the real row.
 	rows, err := d.ListSessionsModifiedBetween(
-		context.Background(), "", "", nil, nil,
+		t.Context(), "", "", nil, nil,
 	)
-	require.NoError(t, err)
-	require.Len(t, rows, 1, "exactly one stored session")
+	require.NoError(err)
+	require.Len(rows, 1, "exactly one stored session")
 	sessionID := rows[0].ID
 
 	// Drift the stored row so a fresh parse reports a real change, then
 	// push the source mtime past the recorded snapshot file_mtime.
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		_, uerr := tx.Exec(
+	require.NoError(d.Update(func(tx *sql.Tx) error {
+		_, uerr := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET first_message = ? WHERE id = ?",
 			"drifted first message", sessionID,
 		)
 		return uerr
 	}))
-	require.NoError(t, d.Close())
+	require.NoError(d.Close())
 
 	future := time.Now().Add(48 * time.Hour)
-	require.NoError(t, os.Chtimes(srcPath, future, future),
+	require.NoError(os.Chtimes(srcPath, future, future),
 		"advance source mtime past the snapshot")
 
 	var racedBuf bytes.Buffer
 	racedFailed := doParseDiff(ParseDiffConfig{
 		FailOnChange: true, Stdout: &racedBuf, Stderr: &racedBuf,
 	})
-	assert.False(t, racedFailed,
+	assert.False(racedFailed,
 		"a raced session must not trip --fail-on-change")
-	assert.Contains(t, racedBuf.String(), "Raced",
+	assert.Contains(racedBuf.String(), "Raced",
 		"the summary must surface the raced session")
 }
 
@@ -1061,6 +1104,9 @@ func TestDoParseDiff_RacedSessionDoesNotFail(t *testing.T) {
 // mtime stays a genuine change and trips --fail-on-change, proving the
 // guard never masks a real regression on an untouched file.
 func TestDoParseDiff_UntouchedDriftStillFails(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	// Isolate every other agent's directory env var to a temp path so an
 	// inherited dir from the developer or CI environment cannot be scanned and
 	// trip --fail-on-change with an unrelated parse error. The data dir and
@@ -1072,13 +1118,13 @@ func TestDoParseDiff_UntouchedDriftStillFails(t *testing.T) {
 	t.Setenv("CLAUDE_PROJECTS_DIR", claudeDir)
 
 	projDir := filepath.Join(claudeDir, "-home-proj")
-	require.NoError(t, os.MkdirAll(projDir, 0o755))
+	require.NoError(os.MkdirAll(projDir, 0o755))
 	srcPath := filepath.Join(projDir, "drift-session.jsonl")
 	content := testjsonl.NewSessionBuilder().
 		AddClaudeUser("2026-01-01T00:00:00Z", "hello").
 		AddClaudeAssistant("2026-01-01T00:00:01Z", "hi").
 		String()
-	require.NoError(t, os.WriteFile(srcPath, []byte(content), 0o644))
+	require.NoError(os.WriteFile(srcPath, []byte(content), 0o644))
 
 	dbPath := filepath.Join(dataDir, "sessions.db")
 	d := dbtest.OpenTestDBAt(t, dbPath)
@@ -1088,31 +1134,31 @@ func TestDoParseDiff_UntouchedDriftStillFails(t *testing.T) {
 		},
 		Machine: "local",
 	})
-	stats := engine.SyncAll(context.Background(), nil)
-	require.Equal(t, 1, stats.Synced, "one session synced")
+	stats := engine.SyncAll(t.Context(), nil)
+	require.Equal(1, stats.Synced, "one session synced")
 
 	rows, err := d.ListSessionsModifiedBetween(
-		context.Background(), "", "", nil, nil,
+		t.Context(), "", "", nil, nil,
 	)
-	require.NoError(t, err)
-	require.Len(t, rows, 1)
+	require.NoError(err)
+	require.Len(rows, 1)
 	sessionID := rows[0].ID
 
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		_, uerr := tx.Exec(
+	require.NoError(d.Update(func(tx *sql.Tx) error {
+		_, uerr := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET first_message = ? WHERE id = ?",
 			"drifted first message", sessionID,
 		)
 		return uerr
 	}))
-	require.NoError(t, d.Close())
+	require.NoError(d.Close())
 
 	// Source mtime is left untouched: the change is genuine drift.
 	var buf bytes.Buffer
 	failed := doParseDiff(ParseDiffConfig{
 		FailOnChange: true, Stdout: &buf, Stderr: &buf,
 	})
-	assert.True(t, failed,
+	assert.True(failed,
 		"untouched-source drift must still trip --fail-on-change")
-	assert.Contains(t, buf.String(), "sessions changed")
+	assert.Contains(buf.String(), "sessions changed")
 }

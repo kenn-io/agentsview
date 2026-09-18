@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	_ "embed"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -1348,7 +1349,7 @@ CREATE TABLE IF NOT EXISTS project_identity_observation_changes (
     root_path   TEXT NOT NULL DEFAULT '',
     git_remote  TEXT NOT NULL DEFAULT '',
     revision    INTEGER NOT NULL,
-    deleted     INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+    deleted     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (project, machine, root_path, git_remote)
 );
 CREATE INDEX IF NOT EXISTS idx_project_identity_observation_changes_revision
@@ -1357,7 +1358,7 @@ CREATE TABLE IF NOT EXISTS session_project_identity_snapshot_changes (
     session_id  TEXT NOT NULL,
     project     TEXT NOT NULL,
     revision    INTEGER NOT NULL,
-    deleted     INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+    deleted     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (session_id, project)
 );
 CREATE INDEX IF NOT EXISTS idx_session_project_identity_snapshot_changes_revision
@@ -1697,7 +1698,7 @@ func initializeSchemaUpgradeMetadata(tx *sql.Tx) error {
 	}{
 		{archiveMetadataDatabaseIDKey, databaseID},
 		{archiveMetadataArchiveIDKey, archiveID},
-		{archiveMetadataArchiveSaltKey, fmt.Sprintf("%x", random)},
+		{archiveMetadataArchiveSaltKey, hex.EncodeToString(random)},
 	} {
 		if _, err := tx.Exec(`
 			INSERT INTO archive_metadata (key, value)
@@ -1758,9 +1759,7 @@ func OpenReadOnly(path string) (*DB, error) {
 	}
 	if schemaStale {
 		reader.Close()
-		return nil, fmt.Errorf(
-			"opening read-only database: schema is stale or incomplete",
-		)
+		return nil, errors.New("opening read-only database: schema is stale or incomplete")
 	}
 	if err := checkReadOnlySchemaCompatibility(reader); err != nil {
 		reader.Close()
@@ -3184,7 +3183,7 @@ const modelPricingBandsSchemaSQL = `
 CREATE TABLE IF NOT EXISTS model_pricing_bands (
     model_pattern TEXT NOT NULL
         REFERENCES model_pricing(model_pattern) ON DELETE CASCADE,
-    above_input_tokens INTEGER NOT NULL CHECK (above_input_tokens > 0),
+    above_input_tokens INTEGER NOT NULL,
     input_microdollars_per_mtok INTEGER NOT NULL,
     output_microdollars_per_mtok INTEGER NOT NULL,
     cache_creation_microdollars_per_mtok INTEGER NOT NULL,
@@ -3197,10 +3196,10 @@ CREATE TABLE IF NOT EXISTS model_pricing_bands (
 
 const genAIPricingSchemaSQL = `
 CREATE TABLE IF NOT EXISTS genai_pricing (
-    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    singleton INTEGER PRIMARY KEY,
     version TEXT NOT NULL,
     source_ref TEXT NOT NULL DEFAULT '',
-    source TEXT NOT NULL CHECK (source IN ('embedded', 'fetched')),
+    source TEXT NOT NULL,
     data_json BLOB NOT NULL,
     updated_at TEXT NOT NULL
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -4743,6 +4742,14 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
 	}
 
 	progress.report("Initializing full-text search")
+	var fts5Available, fts4Available bool
+	if err := w.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM pragma_module_list WHERE name = 'fts5'),
+		 EXISTS(SELECT 1 FROM pragma_module_list WHERE name = 'fts4')`,
+	).Scan(&fts5Available, &fts4Available); err != nil {
+		return fmt.Errorf("checking full-text search modules: %w", err)
+	}
+
 	// Check if FTS table exists before trying to create it
 	var ftsCount int
 	if err := w.QueryRowContext(ctx,
@@ -4756,9 +4763,7 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
 	// Attempt to initialize FTS. Failure is non-fatal
 	// (might be missing module).
 	if _, err := w.ExecContext(ctx, schemaFTS); err != nil {
-		if !strings.Contains(
-			err.Error(), "no such module",
-		) {
+		if fts5Available {
 			return fmt.Errorf("initializing FTS: %w", err)
 		}
 	} else if !hadFTS {
@@ -4785,15 +4790,11 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
 	}
 	hadRecallFTS := recallFTSCount > 0
 	if _, err := w.ExecContext(ctx, recallEntriesFTS); err != nil {
-		if !strings.Contains(
-			err.Error(), "no such module",
-		) {
+		if fts5Available {
 			return fmt.Errorf("initializing recall entries FTS: %w", err)
 		}
 		if _, err := w.ExecContext(ctx, recallEntriesFTS4); err != nil {
-			if !strings.Contains(
-				err.Error(), "no such module",
-			) {
+			if fts4Available {
 				return fmt.Errorf("initializing recall entries FTS4: %w", err)
 			}
 		} else if !hadRecallFTS {
@@ -4822,15 +4823,11 @@ func (db *DB) init(ctx context.Context, progress OpenProgressFunc) error {
 	}
 	hadRecallEvidenceFTS := recallEvidenceFTSCount > 0
 	if _, err := w.ExecContext(ctx, recallEvidenceFTS); err != nil {
-		if !strings.Contains(
-			err.Error(), "no such module",
-		) {
+		if fts5Available {
 			return fmt.Errorf("initializing recall evidence FTS: %w", err)
 		}
 		if _, err := w.ExecContext(ctx, recallEvidenceFTS4); err != nil {
-			if !strings.Contains(
-				err.Error(), "no such module",
-			) {
+			if fts4Available {
 				return fmt.Errorf(
 					"initializing recall evidence FTS4: %w", err,
 				)

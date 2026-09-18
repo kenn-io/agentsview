@@ -14,6 +14,8 @@ import (
 )
 
 func TestProductionLauncherOpensAuthenticatedRuntimeURL(t *testing.T) {
+	assert := assert.New(t)
+
 	projectDir, recordDir, env := launcherFixture(t, "start-agentsview.command")
 	writeExecutable(t, filepath.Join(projectDir, "agentsview"), `#!/bin/sh
 printf '%s\n' "$*" >> "$RECORD_DIR/agentsview-args"
@@ -30,11 +32,11 @@ esac
 
 	output, err := runLauncher(t, projectDir, "start-agentsview.command", env, "")
 	require.NoError(t, err, output)
-	assert.Equal(t, "http://127.0.0.1:43123\n",
+	assert.Equal("http://127.0.0.1:43123\n",
 		readRecorded(t, recordDir, "open"))
-	assert.Contains(t, readRecorded(t, recordDir, "agentsview-args"),
+	assert.Contains(readRecorded(t, recordDir, "agentsview-args"),
 		"serve --background --host 127.0.0.1 --port 0 --no-browser")
-	assert.Contains(t, readRecorded(t, recordDir, "curl"),
+	assert.Contains(readRecorded(t, recordDir, "curl"),
 		"--fail --silent http://127.0.0.1:43123/api/ping")
 }
 
@@ -51,8 +53,11 @@ printf '%s\n' "agentsview running at http://attacker.example:43123 (pid 42)"
 }
 
 func TestDevelopmentLauncherUsesPrivateLogsAndActualChildURLs(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	projectDir, recordDir, env := launcherFixture(t, "start-agentsview-dev.command")
-	require.NoError(t, os.MkdirAll(
+	require.NoError(os.MkdirAll(
 		filepath.Join(projectDir, "frontend", "node_modules"), 0o755))
 	writeExecutable(t, filepath.Join(projectDir, "agentsview"), `#!/bin/sh
 printf '%s\n' "$*" >> "$RECORD_DIR/agentsview-args"
@@ -75,19 +80,19 @@ done
 
 	output, err := runLauncher(
 		t, projectDir, "start-agentsview-dev.command", env, "\n")
-	require.NoError(t, err, output)
-	assert.Equal(t, "http://127.0.0.1:49222\n",
+	require.NoError(err, output)
+	assert.Equal("http://127.0.0.1:49222\n",
 		readRecorded(t, recordDir, "open"))
-	assert.Contains(t, readRecorded(t, recordDir, "npm"),
+	assert.Contains(readRecorded(t, recordDir, "npm"),
 		"http://127.0.0.1:44123|run dev -- --host 127.0.0.1 --port 0 --strictPort")
 	curlCalls := readRecorded(t, recordDir, "curl")
-	assert.Contains(t, curlCalls,
+	assert.Contains(curlCalls,
 		"--fail --silent http://127.0.0.1:44123/api/ping")
-	assert.Contains(t, curlCalls,
+	assert.Contains(curlCalls,
 		"--fail --silent http://127.0.0.1:49222/")
-	assert.Equal(t, "700\n", readRecorded(t, recordDir, "launch-mode"))
+	assert.Equal("700\n", readRecorded(t, recordDir, "launch-mode"))
 	launchDir := strings.TrimSpace(readRecorded(t, recordDir, "launch-dir"))
-	assert.True(t, strings.HasPrefix(launchDir, filepath.Join(
+	assert.True(strings.HasPrefix(launchDir, filepath.Join(
 		filepath.Dir(projectDir), "tmp", "agentsview-launch.")))
 }
 
@@ -143,7 +148,7 @@ func runLauncher(
 	t *testing.T, projectDir, launcher string, env []string, input string,
 ) (string, error) {
 	t.Helper()
-	cmd := exec.Command("bash", filepath.Join(projectDir, launcher))
+	cmd := exec.CommandContext(t.Context(), "bash", filepath.Join(projectDir, launcher))
 	cmd.Dir = projectDir
 	cmd.Env = env
 	cmd.Stdin = strings.NewReader(input)

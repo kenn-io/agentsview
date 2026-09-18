@@ -13,6 +13,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -26,14 +28,8 @@ func WriteTestFile(
 	t *testing.T, path string, content []byte,
 ) {
 	t.Helper()
-	if err := os.MkdirAll(
-		filepath.Dir(path), 0o755,
-	); err != nil {
-		t.Fatalf("MkdirAll %s: %v", filepath.Dir(path), err)
-	}
-	if err := os.WriteFile(path, content, 0o644); err != nil {
-		t.Fatalf("WriteFile %s: %v", path, err)
-	}
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755), "MkdirAll %s", filepath.Dir(path))
+	require.NoError(t, os.WriteFile(path, content, 0o644), "WriteFile %s", path)
 }
 
 // MkdirTempWithCleanup creates a temporary directory and registers
@@ -45,25 +41,12 @@ func WriteTestFile(
 func MkdirTempWithCleanup(t *testing.T, pattern string) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", pattern)
-	if err != nil {
-		t.Fatalf("creating temp dir: %v", err)
-	}
+	require.NoError(t, err, "creating temp dir")
 	t.Cleanup(func() {
 		runtime.GC()
-		var removeErr error
-		sleep := 25 * time.Millisecond
-		deadline := time.Now().Add(10 * time.Second)
-		for time.Now().Before(deadline) {
-			removeErr = os.RemoveAll(dir)
-			if removeErr == nil {
-				return
-			}
-			time.Sleep(sleep)
-			if sleep < 500*time.Millisecond {
-				sleep *= 2
-			}
-		}
-		t.Errorf("removing temp dir %s: %v", dir, removeErr)
+		assert.EventuallyWithT(t, func(collect *assert.CollectT) {
+			assert.NoError(collect, os.RemoveAll(dir))
+		}, 10*time.Second, 25*time.Millisecond, "removing temp dir %s", dir)
 	})
 	return dir
 }

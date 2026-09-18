@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,69 +10,78 @@ import (
 )
 
 func TestDeepSeekTUIProviderDiscoversSessions(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	root := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(root, "session_b.json"), []byte(`{}`), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "session_a.json"), []byte(`{}`), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "latest.json"), []byte(`{}`), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "offline_queue.json"), []byte(`{}`), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "notes.txt"), []byte(`ignore`), 0o644))
+	require.NoError(os.WriteFile(filepath.Join(root, "session_b.json"), []byte(`{}`), 0o644))
+	require.NoError(os.WriteFile(filepath.Join(root, "session_a.json"), []byte(`{}`), 0o644))
+	require.NoError(os.WriteFile(filepath.Join(root, "latest.json"), []byte(`{}`), 0o644))
+	require.NoError(os.WriteFile(filepath.Join(root, "offline_queue.json"), []byte(`{}`), 0o644))
+	require.NoError(os.WriteFile(filepath.Join(root, "notes.txt"), []byte(`ignore`), 0o644))
 	checkpointDir := filepath.Join(root, "checkpoints")
-	require.NoError(t, os.MkdirAll(checkpointDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(checkpointDir, "nested.json"), []byte(`{}`), 0o644))
+	require.NoError(os.MkdirAll(checkpointDir, 0o755))
+	require.NoError(os.WriteFile(filepath.Join(checkpointDir, "nested.json"), []byte(`{}`), 0o644))
 
 	provider, ok := NewProvider(AgentDeepSeekTUI, ProviderConfig{
 		Roots:   []string{root},
 		Machine: "local",
 	})
-	require.True(t, ok)
-	files, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, files, 2)
-	assert.Equal(t, filepath.Join(root, "session_a.json"), files[0].DisplayPath)
-	assert.Equal(t, AgentDeepSeekTUI, files[0].Provider)
-	assert.Equal(t, filepath.Join(root, "session_b.json"), files[1].DisplayPath)
-	assert.Equal(t, AgentDeepSeekTUI, files[1].Provider)
+	require.True(ok)
+	files, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(files, 2)
+	assert.Equal(filepath.Join(root, "session_a.json"), files[0].DisplayPath)
+	assert.Equal(AgentDeepSeekTUI, files[0].Provider)
+	assert.Equal(filepath.Join(root, "session_b.json"), files[1].DisplayPath)
+	assert.Equal(AgentDeepSeekTUI, files[1].Provider)
 }
 
 func TestDeepSeekTUIProviderFindsSourceFile(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	root := t.TempDir()
 	path := filepath.Join(root, "session_123.json")
-	require.NoError(t, os.WriteFile(path, []byte(`{}`), 0o644))
+	require.NoError(os.WriteFile(path, []byte(`{}`), 0o644))
 
 	provider, ok := NewProvider(AgentDeepSeekTUI, ProviderConfig{
 		Roots:   []string{root},
 		Machine: "local",
 	})
-	require.True(t, ok)
+	require.True(ok)
 
 	found, ok, err := provider.FindSource(
-		context.Background(),
+		t.Context(),
 		FindSourceRequest{RawSessionID: "session_123"},
 	)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, path, found.DisplayPath)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(path, found.DisplayPath)
 
 	_, ok, err = provider.FindSource(
-		context.Background(),
+		t.Context(),
 		FindSourceRequest{RawSessionID: "missing"},
 	)
-	require.NoError(t, err)
-	assert.False(t, ok)
+	require.NoError(err)
+	assert.False(ok)
 
 	_, ok, err = provider.FindSource(
-		context.Background(),
+		t.Context(),
 		FindSourceRequest{RawSessionID: "../session_123"},
 	)
-	require.NoError(t, err)
-	assert.False(t, ok)
+	require.NoError(err)
+	assert.False(ok)
 }
 
 func TestDeepSeekTUIProviderParsesBasicSession(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	content := `{
@@ -95,32 +103,35 @@ func TestDeepSeekTUIProviderParsesBasicSession(t *testing.T) {
 	path := createTestFile(t, "session_123.json", content)
 
 	sess, msgs, err := parseDeepSeekTUITestSession(t, path, "local")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	require.Len(t, msgs, 2)
+	require.NoError(err)
+	require.NotNil(sess)
+	require.Len(msgs, 2)
 
-	assert.Equal(t, "deepseek-tui:session_123", sess.ID)
-	assert.Equal(t, AgentDeepSeekTUI, sess.Agent)
-	assert.Equal(t, "local", sess.Machine)
-	assert.Equal(t, "sample_project", sess.Project)
-	assert.Equal(t, "/Users/alice/code/sample-project", sess.Cwd)
-	assert.Equal(t, "Investigate DeepSeek TUI", sess.SessionName)
-	assert.Equal(t, "Inspect server logs", sess.FirstMessage)
-	assert.Equal(t, 2, sess.MessageCount)
-	assert.Equal(t, 1, sess.UserMessageCount)
-	assert.False(t, sess.HasTotalOutputTokens)
-	assert.False(t, sess.HasPeakContextTokens)
-	assert.Equal(t, "2026-06-01T10:00:00Z", sess.StartedAt.Format("2006-01-02T15:04:05Z"))
-	assert.Equal(t, "2026-06-01T10:02:00Z", sess.EndedAt.Format("2006-01-02T15:04:05Z"))
+	assert.Equal("deepseek-tui:session_123", sess.ID)
+	assert.Equal(AgentDeepSeekTUI, sess.Agent)
+	assert.Equal("local", sess.Machine)
+	assert.Equal("sample_project", sess.Project)
+	assert.Equal("/Users/alice/code/sample-project", sess.Cwd)
+	assert.Equal("Investigate DeepSeek TUI", sess.SessionName)
+	assert.Equal("Inspect server logs", sess.FirstMessage)
+	assert.Equal(2, sess.MessageCount)
+	assert.Equal(1, sess.UserMessageCount)
+	assert.False(sess.HasTotalOutputTokens)
+	assert.False(sess.HasPeakContextTokens)
+	assert.Equal("2026-06-01T10:00:00Z", sess.StartedAt.Format("2006-01-02T15:04:05Z"))
+	assert.Equal("2026-06-01T10:02:00Z", sess.EndedAt.Format("2006-01-02T15:04:05Z"))
 
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, "Inspect server logs", msgs[0].Content)
-	assert.Equal(t, "deepseek-chat", msgs[0].Model)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.Equal(t, "The server failed during startup.", msgs[1].Content)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal("Inspect server logs", msgs[0].Content)
+	assert.Equal("deepseek-chat", msgs[0].Model)
+	assert.Equal(RoleAssistant, msgs[1].Role)
+	assert.Equal("The server failed during startup.", msgs[1].Content)
 }
 
 func TestDeepSeekTUIProviderParsesToolUseAndThinking(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	content := `{
@@ -140,27 +151,30 @@ func TestDeepSeekTUIProviderParsesToolUseAndThinking(t *testing.T) {
 	path := createTestFile(t, "session_tools.json", content)
 
 	sess, msgs, err := parseDeepSeekTUITestSession(t, path, "local")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	require.Len(t, msgs, 4)
+	require.NoError(err)
+	require.NotNil(sess)
+	require.Len(msgs, 4)
 
-	assert.True(t, msgs[1].HasThinking)
-	assert.Equal(t, "Need to inspect the target.", msgs[1].ThinkingText)
-	assert.Contains(t, msgs[1].Content, "[Thinking]")
-	assert.True(t, msgs[1].HasToolUse)
-	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, "toolu_1", msgs[1].ToolCalls[0].ToolUseID)
-	assert.Equal(t, "Read", msgs[1].ToolCalls[0].ToolName)
-	assert.Equal(t, "Read", msgs[1].ToolCalls[0].Category)
-	assert.JSONEq(t, `{"file_path":"main.go"}`, msgs[1].ToolCalls[0].InputJSON)
+	assert.True(msgs[1].HasThinking)
+	assert.Equal("Need to inspect the target.", msgs[1].ThinkingText)
+	assert.Contains(msgs[1].Content, "[Thinking]")
+	assert.True(msgs[1].HasToolUse)
+	require.Len(msgs[1].ToolCalls, 1)
+	assert.Equal("toolu_1", msgs[1].ToolCalls[0].ToolUseID)
+	assert.Equal("Read", msgs[1].ToolCalls[0].ToolName)
+	assert.Equal("Read", msgs[1].ToolCalls[0].Category)
+	assert.JSONEq(`{"file_path":"main.go"}`, msgs[1].ToolCalls[0].InputJSON)
 
-	require.Len(t, msgs[2].ToolResults, 1)
-	assert.Equal(t, "toolu_1", msgs[2].ToolResults[0].ToolUseID)
-	assert.Equal(t, len("package main"), msgs[2].ToolResults[0].ContentLength)
-	assert.Equal(t, "package main", DecodeContent(msgs[2].ToolResults[0].ContentRaw))
+	require.Len(msgs[2].ToolResults, 1)
+	assert.Equal("toolu_1", msgs[2].ToolResults[0].ToolUseID)
+	assert.Equal(len("package main"), msgs[2].ToolResults[0].ContentLength)
+	assert.Equal("package main", DecodeContent(msgs[2].ToolResults[0].ContentRaw))
 }
 
 func TestDeepSeekTUIProviderParsesObjectToolResult(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	content := `{
@@ -178,16 +192,19 @@ func TestDeepSeekTUIProviderParsesObjectToolResult(t *testing.T) {
 	path := createTestFile(t, "session_obj.json", content)
 
 	_, msgs, err := parseDeepSeekTUITestSession(t, path, "local")
-	require.NoError(t, err)
-	require.Len(t, msgs, 3)
+	require.NoError(err)
+	require.Len(msgs, 3)
 
-	require.Len(t, msgs[2].ToolResults, 1)
+	require.Len(msgs[2].ToolResults, 1)
 	result := msgs[2].ToolResults[0]
-	assert.Equal(t, len("file1.go\nfile2.go"), result.ContentLength)
-	assert.Equal(t, "file1.go\nfile2.go", DecodeContent(result.ContentRaw))
+	assert.Equal(len("file1.go\nfile2.go"), result.ContentLength)
+	assert.Equal("file1.go\nfile2.go", DecodeContent(result.ContentRaw))
 }
 
 func TestDeepSeekTUIProviderParsesEmptyObjectToolResult(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	content := `{
@@ -205,13 +222,13 @@ func TestDeepSeekTUIProviderParsesEmptyObjectToolResult(t *testing.T) {
 	path := createTestFile(t, "session_empty_obj.json", content)
 
 	_, msgs, err := parseDeepSeekTUITestSession(t, path, "local")
-	require.NoError(t, err)
-	require.Len(t, msgs, 3)
+	require.NoError(err)
+	require.Len(msgs, 3)
 
-	require.Len(t, msgs[2].ToolResults, 1)
+	require.Len(msgs[2].ToolResults, 1)
 	result := msgs[2].ToolResults[0]
-	assert.Equal(t, 0, result.ContentLength)
-	assert.Empty(t, DecodeContent(result.ContentRaw))
+	assert.Equal(0, result.ContentLength)
+	assert.Empty(DecodeContent(result.ContentRaw))
 }
 
 func TestDeepSeekTUIProviderSkipsEmptySession(t *testing.T) {
@@ -241,7 +258,7 @@ func parseDeepSeekTUITestSession(
 	})
 	require.True(t, ok)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: SourceRef{
 			Provider:       AgentDeepSeekTUI,
 			Key:            path,

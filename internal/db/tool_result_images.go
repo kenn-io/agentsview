@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -372,7 +373,7 @@ func migrateToolResultImageArray(content string, put imagePutFunc) (string, erro
 		// Hash the payload we handed to put rather than reading the digest back
 		// out of the reference: put is caller-supplied and may name files freely.
 		sum := sha256.Sum256(decoded)
-		sha256hex := fmt.Sprintf("%x", sum[:])
+		sha256hex := hex.EncodeToString(sum[:])
 		decodedBytes := int64(len(decoded))
 
 		placeholderFields := make(map[string]jsontext.Value, len(fields)+7)

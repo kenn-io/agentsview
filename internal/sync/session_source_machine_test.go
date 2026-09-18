@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -17,6 +16,9 @@ import (
 )
 
 func TestSyncAllAttributesFilesystemSessionsPerRoot(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	localRoot := t.TempDir()
 	archiveRoot := t.TempDir()
 	writeSessionSourceClaudeFile(t, localRoot, "local-session.jsonl")
@@ -35,20 +37,20 @@ func TestSyncAllAttributesFilesystemSessionsPerRoot(t *testing.T) {
 		Machine: "localbox",
 	})
 
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 
-	assert.False(t, stats.Aborted)
-	page, err := database.ListSessions(context.Background(), db.SessionFilter{
+	assert.False(stats.Aborted)
+	page, err := database.ListSessions(t.Context(), db.SessionFilter{
 		Limit: 10,
 	})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 2)
+	require.NoError(err)
+	require.Len(page.Sessions, 2)
 	machines := map[string]string{}
 	for _, sess := range page.Sessions {
 		machines[sess.ID] = sess.Machine
 	}
-	assert.Equal(t, "localbox", machines["local-session"])
-	assert.Equal(t, "archivebox", machines["archive-session"])
+	assert.Equal("localbox", machines["local-session"])
+	assert.Equal("archivebox", machines["archive-session"])
 }
 
 func TestSyncPathsAttributesFilesystemSessionFromChangedRoot(t *testing.T) {
@@ -65,9 +67,9 @@ func TestSyncPathsAttributesFilesystemSessionFromChangedRoot(t *testing.T) {
 		Machine: "localbox",
 	})
 
-	engine.SyncPathsContext(context.Background(), []string{path})
+	engine.SyncPathsContext(t.Context(), []string{path})
 
-	sess, err := database.GetSessionFull(context.Background(), "watched-session")
+	sess, err := database.GetSessionFull(t.Context(), "watched-session")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "archivebox", sess.Machine)
@@ -120,6 +122,9 @@ func TestMachineForPathMatchesAbsolutePathToRelativeRoot(t *testing.T) {
 func TestReconcileWatchRootsTombstonesMissingLabeledFilesystemSession(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	path := writeSessionSourceClaudeFile(t, root, "missing-session.jsonl")
 	database := openTestDB(t)
@@ -133,22 +138,25 @@ func TestReconcileWatchRootsTombstonesMissingLabeledFilesystemSession(
 		Machine: "localbox",
 	})
 
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	require.NoError(t, os.Remove(path))
-	require.NoError(t, engine.ReconcileWatchRoots(
+	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(os.Remove(path))
+	require.NoError(engine.ReconcileWatchRoots(
 		t.Context(), []string{root}, false,
 	))
 
 	active, err := database.GetSession(t.Context(), "missing-session")
-	require.NoError(t, err)
-	assert.NotNil(t, active)
+	require.NoError(err)
+	assert.NotNil(active)
 	archived, err := database.GetSessionFull(t.Context(), "missing-session")
-	require.NoError(t, err)
+	require.NoError(err)
 	assertSourceMissingState(t, archived)
-	assert.Equal(t, "archivebox", archived.Machine)
+	assert.Equal("archivebox", archived.Machine)
 }
 
 func TestSyncAllSincePreservesIngestedFilesystemMachine(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	writeSessionSourceClaudeFile(t, root, "ingested-machine.jsonl")
 	database := openTestDB(t)
@@ -164,36 +172,39 @@ func TestSyncAllSincePreservesIngestedFilesystemMachine(t *testing.T) {
 		})
 	}
 
-	first := newEngine("oldbox").SyncAll(context.Background(), nil)
-	require.Equal(t, 1, first.Synced)
+	first := newEngine("oldbox").SyncAll(t.Context(), nil)
+	require.Equal(1, first.Synced)
 	second := newEngine("newbox").SyncAllSince(
-		context.Background(), time.Now().Add(time.Hour), nil,
+		t.Context(), time.Now().Add(time.Hour), nil,
 	)
-	require.Zero(t, second.Synced)
+	require.Zero(second.Synced)
 
 	sess, err := database.GetSessionFull(
-		context.Background(), "ingested-machine",
+		t.Context(), "ingested-machine",
 	)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, "oldbox", sess.Machine)
-	assert.Equal(t, 2, sess.MessageCount)
-	assert.False(t, sess.LastWriteIncremental)
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal("oldbox", sess.Machine)
+	assert.Equal(2, sess.MessageCount)
+	assert.False(sess.LastWriteIncremental)
 	snapshots, err := database.ListSessionProjectIdentitySnapshots(
 		t.Context(),
 	)
-	require.NoError(t, err)
-	require.Len(t, snapshots, 1)
-	assert.Equal(t, "oldbox", snapshots[0].Machine)
+	require.NoError(err)
+	require.Len(snapshots, 1)
+	assert.Equal("oldbox", snapshots[0].Machine)
 	observations, err := database.ListProjectIdentityObservations(
 		t.Context(), []string{sess.Project},
 	)
-	require.NoError(t, err)
-	require.Len(t, observations, 1)
-	assert.Equal(t, "oldbox", observations[0].Machine)
+	require.NoError(err)
+	require.Len(observations, 1)
+	assert.Equal("oldbox", observations[0].Machine)
 }
 
 func TestSyncAllSincePreservesTrashedSessionMachine(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	writeSessionSourceClaudeFile(t, root, "trashed-machine.jsonl")
 	database := openTestDB(t)
@@ -209,27 +220,30 @@ func TestSyncAllSincePreservesTrashedSessionMachine(t *testing.T) {
 		})
 	}
 
-	require.Equal(t, 1, newEngine("oldbox").SyncAll(t.Context(), nil).Synced)
-	require.NoError(t, database.SoftDeleteSession("trashed-machine"))
+	require.Equal(1, newEngine("oldbox").SyncAll(t.Context(), nil).Synced)
+	require.NoError(database.SoftDeleteSession("trashed-machine"))
 
 	stats := newEngine("newbox").SyncAllSince(
 		t.Context(), time.Now().Add(time.Hour), nil,
 	)
-	require.Zero(t, stats.Synced)
+	require.Zero(stats.Synced)
 	active, err := database.GetSession(t.Context(), "trashed-machine")
-	require.NoError(t, err)
-	assert.Nil(t, active)
+	require.NoError(err)
+	assert.Nil(active)
 	trashed, err := database.GetSessionFull(
 		t.Context(), "trashed-machine",
 	)
-	require.NoError(t, err)
-	require.NotNil(t, trashed)
-	assert.Equal(t, "oldbox", trashed.Machine)
-	assert.NotNil(t, trashed.DeletedAt)
-	assert.Nil(t, trashed.DeletionCause)
+	require.NoError(err)
+	require.NotNil(trashed)
+	assert.Equal("oldbox", trashed.Machine)
+	assert.NotNil(trashed.DeletedAt)
+	assert.Nil(trashed.DeletionCause)
 }
 
 func TestResyncAllPreservesSourceMachineIdentityAttribution(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	writeSessionSourceClaudeFile(t, root, "resynced-identity.jsonl")
 	database := openTestDB(t)
@@ -245,27 +259,30 @@ func TestResyncAllPreservesSourceMachineIdentityAttribution(t *testing.T) {
 		})
 	}
 
-	require.Equal(t, 1, newEngine("oldbox").SyncAll(t.Context(), nil).Synced)
+	require.Equal(1, newEngine("oldbox").SyncAll(t.Context(), nil).Synced)
 	stats := newEngine("newbox").ResyncAll(t.Context(), nil)
-	require.False(t, stats.Aborted)
+	require.False(stats.Aborted)
 
 	session, err := database.GetSessionFull(t.Context(), "resynced-identity")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, "oldbox", session.Machine)
+	require.NoError(err)
+	require.NotNil(session)
+	assert.Equal("oldbox", session.Machine)
 	snapshots, err := database.ListSessionProjectIdentitySnapshots(t.Context())
-	require.NoError(t, err)
-	require.Len(t, snapshots, 1)
-	assert.Equal(t, "oldbox", snapshots[0].Machine)
+	require.NoError(err)
+	require.Len(snapshots, 1)
+	assert.Equal("oldbox", snapshots[0].Machine)
 	observations, err := database.ListProjectIdentityObservations(
 		t.Context(), []string{session.Project},
 	)
-	require.NoError(t, err)
-	require.Len(t, observations, 1)
-	assert.Equal(t, "oldbox", observations[0].Machine)
+	require.NoError(err)
+	require.Len(observations, 1)
+	assert.Equal("oldbox", observations[0].Machine)
 }
 
 func TestResyncAllPreservesTrashedSessionMachine(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	writeSessionSourceClaudeFile(t, root, "resynced-trash.jsonl")
 	database := openTestDB(t)
@@ -281,22 +298,25 @@ func TestResyncAllPreservesTrashedSessionMachine(t *testing.T) {
 		})
 	}
 
-	require.Equal(t, 1, newEngine("oldbox").SyncAll(t.Context(), nil).Synced)
-	require.NoError(t, database.SoftDeleteSession("resynced-trash"))
+	require.Equal(1, newEngine("oldbox").SyncAll(t.Context(), nil).Synced)
+	require.NoError(database.SoftDeleteSession("resynced-trash"))
 	stats := newEngine("newbox").ResyncAll(t.Context(), nil)
-	require.False(t, stats.Aborted)
+	require.False(stats.Aborted)
 
 	active, err := database.GetSession(t.Context(), "resynced-trash")
-	require.NoError(t, err)
-	assert.Nil(t, active)
+	require.NoError(err)
+	assert.Nil(active)
 	trashed, err := database.GetSessionFull(t.Context(), "resynced-trash")
-	require.NoError(t, err)
-	require.NotNil(t, trashed)
-	assert.Equal(t, "oldbox", trashed.Machine)
-	assert.NotNil(t, trashed.DeletedAt)
+	require.NoError(err)
+	require.NotNil(trashed)
+	assert.Equal("oldbox", trashed.Machine)
+	assert.NotNil(trashed.DeletedAt)
 }
 
 func TestIncrementalAppendPreservesIngestedSourceMachine(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	path := writeSessionSourceClaudeFile(t, root, "incremental-machine.jsonl")
 	database := openTestDB(t)
@@ -312,32 +332,35 @@ func TestIncrementalAppendPreservesIngestedSourceMachine(t *testing.T) {
 		})
 	}
 
-	first := newEngine("oldbox").SyncAll(context.Background(), nil)
-	require.Equal(t, 1, first.Synced)
+	first := newEngine("oldbox").SyncAll(t.Context(), nil)
+	require.Equal(1, first.Synced)
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = f.WriteString(testjsonl.JoinJSONL(
 		testjsonl.ClaudeUserJSON(
 			"appended message", "2026-07-01T10:00:02Z",
 		),
 	))
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+	require.NoError(err)
+	require.NoError(f.Close())
 
-	second := newEngine("newbox").SyncAll(context.Background(), nil)
-	require.Equal(t, 1, second.Synced)
+	second := newEngine("newbox").SyncAll(t.Context(), nil)
+	require.Equal(1, second.Synced)
 
 	sess, err := database.GetSessionFull(
-		context.Background(), "incremental-machine",
+		t.Context(), "incremental-machine",
 	)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, "oldbox", sess.Machine)
-	assert.Equal(t, 3, sess.MessageCount)
-	assert.True(t, sess.LastWriteIncremental)
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal("oldbox", sess.Machine)
+	assert.Equal(3, sess.MessageCount)
+	assert.True(sess.LastWriteIncremental)
 }
 
 func TestFullReparsePreservesIngestedSourceMachine(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	path := writeSessionSourceClaudeFile(t, root, "reparsed-machine.jsonl")
 	database := openTestDB(t)
@@ -353,24 +376,27 @@ func TestFullReparsePreservesIngestedSourceMachine(t *testing.T) {
 		})
 	}
 
-	require.Equal(t, 1, newEngine("oldbox").SyncAll(t.Context(), nil).Synced)
+	require.Equal(1, newEngine("oldbox").SyncAll(t.Context(), nil).Synced)
 	builder := testjsonl.NewSessionBuilder()
 	builder.AddClaudeUser("2026-07-01T10:01:00Z", "replacement")
-	require.NoError(t, os.WriteFile(path, []byte(builder.String()), 0o600))
+	require.NoError(os.WriteFile(path, []byte(builder.String()), 0o600))
 
-	require.Equal(t, 1, newEngine("newbox").SyncAll(t.Context(), nil).Synced)
+	require.Equal(1, newEngine("newbox").SyncAll(t.Context(), nil).Synced)
 	session, err := database.GetSessionFull(t.Context(), "reparsed-machine")
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, "oldbox", session.Machine)
-	assert.Equal(t, 1, session.MessageCount)
+	require.NoError(err)
+	require.NotNil(session)
+	assert.Equal("oldbox", session.Machine)
+	assert.Equal(1, session.MessageCount)
 	snapshots, err := database.ListSessionProjectIdentitySnapshots(t.Context())
-	require.NoError(t, err)
-	require.Len(t, snapshots, 1)
-	assert.Equal(t, "oldbox", snapshots[0].Machine)
+	require.NoError(err)
+	require.Len(snapshots, 1)
+	assert.Equal("oldbox", snapshots[0].Machine)
 }
 
 func TestIncompleteIncrementalAppendPreservesIngestedSourceMachine(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	path := writeSessionSourceClaudeFile(t, root, "partial-machine.jsonl")
 	database := openTestDB(t)
@@ -386,59 +412,61 @@ func TestIncompleteIncrementalAppendPreservesIngestedSourceMachine(t *testing.T)
 		})
 	}
 
-	require.Equal(t, 1, newEngine("oldbox").SyncAll(t.Context(), nil).Synced)
+	require.Equal(1, newEngine("oldbox").SyncAll(t.Context(), nil).Synced)
 	before, err := database.GetSessionFull(t.Context(), "partial-machine")
-	require.NoError(t, err)
-	require.NotNil(t, before)
+	require.NoError(err)
+	require.NotNil(before)
 
 	completeLine := testjsonl.ClaudeUserJSON(
 		"completed later", "2026-07-01T10:00:02Z",
 	)
 	partialAt := len(completeLine) / 2
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = f.WriteString(completeLine[:partialAt])
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+	require.NoError(err)
+	require.NoError(f.Close())
 
 	second := newEngine("newbox").SyncAll(t.Context(), nil)
-	require.Zero(t, second.Synced)
+	require.Zero(second.Synced)
 	after, err := database.GetSessionFull(t.Context(), "partial-machine")
-	require.NoError(t, err)
-	require.NotNil(t, after)
-	assert.Equal(t, "oldbox", after.Machine)
-	assert.Equal(t, before.FileSize, after.FileSize)
-	assert.Equal(t, before.FileMtime, after.FileMtime)
-	assert.Equal(t, before.FileHash, after.FileHash)
-	assert.Equal(t, before.NextOrdinal, after.NextOrdinal)
-	assert.Equal(t, before.LastEntryUUID, after.LastEntryUUID)
-	assert.Equal(t, before.MessageCount, after.MessageCount)
-	assert.Equal(t, before.LastWriteIncremental, after.LastWriteIncremental)
+	require.NoError(err)
+	require.NotNil(after)
+	assert.Equal("oldbox", after.Machine)
+	assert.Equal(before.FileSize, after.FileSize)
+	assert.Equal(before.FileMtime, after.FileMtime)
+	assert.Equal(before.FileHash, after.FileHash)
+	assert.Equal(before.NextOrdinal, after.NextOrdinal)
+	assert.Equal(before.LastEntryUUID, after.LastEntryUUID)
+	assert.Equal(before.MessageCount, after.MessageCount)
+	assert.Equal(before.LastWriteIncremental, after.LastWriteIncremental)
 
 	f, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = f.WriteString(completeLine[partialAt:] + "\n")
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
-	require.Equal(t, 1, newEngine("newbox").SyncAll(t.Context(), nil).Synced)
+	require.NoError(err)
+	require.NoError(f.Close())
+	require.Equal(1, newEngine("newbox").SyncAll(t.Context(), nil).Synced)
 
 	completed, err := database.GetSessionFull(t.Context(), "partial-machine")
-	require.NoError(t, err)
-	require.NotNil(t, completed)
-	assert.Equal(t, "oldbox", completed.Machine)
-	assert.Equal(t, before.MessageCount+1, completed.MessageCount)
-	assert.True(t, completed.LastWriteIncremental)
+	require.NoError(err)
+	require.NotNil(completed)
+	assert.Equal("oldbox", completed.Machine)
+	assert.Equal(before.MessageCount+1, completed.MessageCount)
+	assert.True(completed.LastWriteIncremental)
 }
 
 func TestCopiedFilesystemSessionKeepsNativeIDDeduplication(t *testing.T) {
+	require := require.New(t)
+
 	firstRoot := t.TempDir()
 	secondRoot := t.TempDir()
 	firstPath := writeSessionSourceClaudeFile(t, firstRoot, "copied-session.jsonl")
 	secondProject := filepath.Join(secondRoot, "project")
-	require.NoError(t, os.MkdirAll(secondProject, 0o755))
+	require.NoError(os.MkdirAll(secondProject, 0o755))
 	data, err := os.ReadFile(firstPath)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(secondProject, "copied-session.jsonl"), data, 0o600,
 	))
 	database := openTestDB(t)
@@ -455,13 +483,13 @@ func TestCopiedFilesystemSessionKeepsNativeIDDeduplication(t *testing.T) {
 		Machine: "localbox",
 	})
 
-	engine.SyncAll(context.Background(), nil)
+	engine.SyncAll(t.Context(), nil)
 
-	page, err := database.ListSessions(context.Background(), db.SessionFilter{
+	page, err := database.ListSessions(t.Context(), db.SessionFilter{
 		Limit: 10,
 	})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1)
+	require.NoError(err)
+	require.Len(page.Sessions, 1)
 	assert.Equal(t, "copied-session", page.Sessions[0].ID)
 }
 
@@ -482,6 +510,9 @@ func writeSessionSourceClaudeFile(t *testing.T, root, name string) string {
 // old label keeps it; reconciliation must therefore query stored attribution
 // rather than the currently configured label, or the delete is never noticed.
 func TestReconcileTombstonesAfterSourceLabelChange(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	archiveRoot := t.TempDir()
 	archivePath := writeSessionSourceClaudeFile(t, archiveRoot, "archive-session.jsonl")
 	database := openTestDB(t)
@@ -500,14 +531,14 @@ func TestReconcileTombstonesAfterSourceLabelChange(t *testing.T) {
 
 	first := newEngine("archivebox")
 	t.Cleanup(first.Close)
-	require.False(t, first.SyncAll(context.Background(), nil).Aborted)
+	require.False(first.SyncAll(t.Context(), nil).Aborted)
 
-	require.Equal(t, "archivebox", activeSessionMachines(t, database)["archive-session"])
+	require.Equal("archivebox", activeSessionMachines(t, database)["archive-session"])
 	// Model an archive admitted before deletion-proof baselines existed. The
 	// relabeled reconciliation must recreate proof under the stored machine,
 	// not only visit the configured candidate machine.
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	require.NoError(database.Update(func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			"DELETE FROM local_session_source_baselines WHERE session_id = ?",
 			"archive-session",
 		)
@@ -518,33 +549,36 @@ func TestReconcileTombstonesAfterSourceLabelChange(t *testing.T) {
 	// The user edits the label. Existing rows keep "archivebox" by design.
 	relabeled := newEngine("renamedbox")
 	t.Cleanup(relabeled.Close)
-	require.NoError(t, relabeled.ReconcileWatchRootsAfterLostEvents(
-		context.Background(), []string{archiveRoot}, false,
+	require.NoError(relabeled.ReconcileWatchRootsAfterLostEvents(
+		t.Context(), []string{archiveRoot}, false,
 	))
-	assert.Equal(t, "archivebox", activeSessionMachines(t, database)["archive-session"],
+	assert.Equal("archivebox", activeSessionMachines(t, database)["archive-session"],
 		"an edited label must not rewrite an already-ingested session")
 	ownership, err := database.ListActiveSessionSourceOwnershipScopesPage(
-		context.Background(), "archivebox", string(parser.AgentClaude),
+		t.Context(), "archivebox", string(parser.AgentClaude),
 		[]db.StoredSourcePathHintScope{{Path: archiveRoot}},
 		db.SessionSourceCursor{},
 	)
-	require.NoError(t, err)
-	require.Len(t, ownership, 1,
+	require.NoError(err)
+	require.Len(ownership, 1,
 		"reconciliation must restore deletion proof under stored attribution")
 
 	// Now delete the source and reconcile under the new label.
-	require.NoError(t, os.Remove(archivePath))
-	require.NoError(t, relabeled.ReconcileWatchRootsAfterLostEvents(
-		context.Background(), []string{archiveRoot}, false,
+	require.NoError(os.Remove(archivePath))
+	require.NoError(relabeled.ReconcileWatchRootsAfterLostEvents(
+		t.Context(), []string{archiveRoot}, false,
 	))
 
 	archived, err := database.GetSessionFull(t.Context(), "archive-session")
-	require.NoError(t, err)
+	require.NoError(err)
 	assertSourceMissingState(t, archived)
-	assert.Equal(t, "archivebox", archived.Machine)
+	assert.Equal("archivebox", archived.Machine)
 }
 
 func TestReconcileTombstonesLegacyEmptyMachineSession(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	path := writeSessionSourceClaudeFile(t, root, "legacy-empty-machine.jsonl")
 	database := openTestDB(t)
@@ -558,59 +592,59 @@ func TestReconcileTombstonesLegacyEmptyMachineSession(t *testing.T) {
 		Machine: "localbox",
 	})
 	t.Cleanup(engine.Close)
-	require.False(t, engine.SyncAll(t.Context(), nil).Aborted)
+	require.False(engine.SyncAll(t.Context(), nil).Aborted)
 
 	// Model a session admitted before machine attribution and deletion-proof
 	// baselines existed. Refreshing it must retain the empty attribution while
 	// recreating deletion proof for that exact stored ownership key.
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
-		if _, err := tx.Exec(
+	require.NoError(database.Update(func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET machine = '' WHERE id = ?",
 			"legacy-empty-machine",
 		); err != nil {
 			return err
 		}
-		_, err := tx.Exec(
+		_, err := tx.ExecContext(t.Context(),
 			"DELETE FROM local_session_source_baselines WHERE session_id = ?",
 			"legacy-empty-machine",
 		)
 		return err
 	}))
 	appendSessionSourceClaudeMessage(t, path)
-	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
+	require.NoError(engine.ReconcileWatchRootsAfterLostEvents(
 		t.Context(), []string{root}, false,
 	))
 	machine, exists := activeSessionMachines(t, database)["legacy-empty-machine"]
-	require.True(t, exists)
-	assert.Empty(t, machine)
+	require.True(exists)
+	assert.Empty(machine)
 	ownership, err := database.ListActiveSessionSourceOwnershipScopesPage(
 		t.Context(), "", string(parser.AgentClaude),
 		[]db.StoredSourcePathHintScope{{Path: root}},
 		db.SessionSourceCursor{},
 	)
-	require.NoError(t, err)
-	require.Len(t, ownership, 1,
+	require.NoError(err)
+	require.Len(ownership, 1,
 		"refresh must restore deletion proof for the empty stored machine key")
 
-	require.NoError(t, os.Remove(path))
-	require.NoError(t, engine.ReconcileWatchRootsAfterLostEvents(
+	require.NoError(os.Remove(path))
+	require.NoError(engine.ReconcileWatchRootsAfterLostEvents(
 		t.Context(), []string{root}, false,
 	))
 
 	active, err := database.GetSession(t.Context(), "legacy-empty-machine")
-	require.NoError(t, err)
-	assert.NotNil(t, active)
+	require.NoError(err)
+	assert.NotNil(active)
 	archived, err := database.GetSessionFull(t.Context(), "legacy-empty-machine")
-	require.NoError(t, err)
+	require.NoError(err)
 	assertSourceMissingState(t, archived)
-	assert.Empty(t, archived.Machine)
+	assert.Empty(archived.Machine)
 }
 
 // activeSessionMachines returns the stored machine of every active session,
 // keyed by session ID.
 func activeSessionMachines(t *testing.T, database *db.DB) map[string]string {
 	t.Helper()
-	page, err := database.ListSessions(context.Background(), db.SessionFilter{
+	page, err := database.ListSessions(t.Context(), db.SessionFilter{
 		Limit: 100,
 	})
 	require.NoError(t, err)
@@ -627,6 +661,9 @@ func activeSessionMachines(t *testing.T, database *db.DB) map[string]string {
 // (configured) machine strands it under a machine no session row holds, and the
 // source can never be tombstoned once it disappears.
 func TestBaselineFollowsPersistedMachineAfterRelabel(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	archiveRoot := t.TempDir()
 	archivePath := writeSessionSourceClaudeFile(t, archiveRoot, "archive-session.jsonl")
 	database := openTestDB(t)
@@ -645,7 +682,7 @@ func TestBaselineFollowsPersistedMachineAfterRelabel(t *testing.T) {
 
 	first := newEngine("archivebox")
 	t.Cleanup(first.Close)
-	require.False(t, first.SyncAll(context.Background(), nil).Aborted)
+	require.False(first.SyncAll(t.Context(), nil).Aborted)
 
 	// Append to the source so the relabeled pass actually reparses and rewrites
 	// it. An unchanged file is skipped, which never exercises the write path.
@@ -655,29 +692,29 @@ func TestBaselineFollowsPersistedMachineAfterRelabel(t *testing.T) {
 	// must land there too, not under the newly configured "renamedbox".
 	relabeled := newEngine("renamedbox")
 	t.Cleanup(relabeled.Close)
-	require.False(t, relabeled.SyncAll(context.Background(), nil).Aborted)
+	require.False(relabeled.SyncAll(t.Context(), nil).Aborted)
 
-	require.Equal(t, "archivebox",
+	require.Equal("archivebox",
 		activeSessionMachines(t, database)["archive-session"])
 
 	ownershipFor := func(machine string) []db.SessionSourceOwnership {
 		rows, err := database.ListActiveSessionSourceOwnershipScopesPage(
-			context.Background(), machine, string(parser.AgentClaude),
+			t.Context(), machine, string(parser.AgentClaude),
 			[]db.StoredSourcePathHintScope{{Path: archiveRoot}},
 			db.SessionSourceCursor{},
 		)
-		require.NoError(t, err)
+		require.NoError(err)
 		return rows
 	}
 
 	stranded := ownershipFor("renamedbox")
-	assert.Empty(t, stranded,
+	assert.Empty(stranded,
 		"the baseline must not be keyed under a label no session row holds")
 
 	owned := ownershipFor("archivebox")
-	require.Len(t, owned, 1,
+	require.Len(owned, 1,
 		"the baseline must follow the persisted machine")
-	assert.Equal(t, archivePath, owned[0].FilePath)
+	assert.Equal(archivePath, owned[0].FilePath)
 }
 
 // appendSessionSourceClaudeMessage grows an existing Claude transcript so the

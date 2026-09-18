@@ -8,26 +8,28 @@ import (
 )
 
 func TestFindAvailablePortWildcardZeroRetriesCrossFamilyCollision(t *testing.T) {
-	occupiedListener, err := net.Listen("tcp4", "0.0.0.0:0")
-	require.NoError(t, err, "bind IPv4 wildcard")
+	require := require.New(t)
+
+	occupiedListener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", "0.0.0.0:0")
+	require.NoError(err, "bind IPv4 wildcard")
 	defer occupiedListener.Close()
 	occupied := occupiedListener.Addr().(*net.TCPAddr).Port
 
 	second := 0
 	for range 100 {
-		candidate4, listenErr := net.Listen("tcp4", "0.0.0.0:0")
-		require.NoError(t, listenErr, "select second IPv4 port")
+		candidate4, listenErr := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", "0.0.0.0:0")
+		require.NoError(listenErr, "select second IPv4 port")
 		candidate := candidate4.Addr().(*net.TCPAddr).Port
 		candidate6, listenErr := net.ListenTCP("tcp6", &net.TCPAddr{
 			IP:   net.IPv6unspecified,
 			Port: candidate,
 		})
 		if listenErr != nil {
-			require.NoError(t, candidate4.Close())
+			require.NoError(candidate4.Close())
 			continue
 		}
-		require.NoError(t, candidate6.Close())
-		require.NoError(t, candidate4.Close())
+		require.NoError(candidate6.Close())
+		require.NoError(candidate4.Close())
 		second = candidate
 		break
 	}
@@ -47,8 +49,8 @@ func TestFindAvailablePortWildcardZeroRetriesCrossFamilyCollision(t *testing.T) 
 			return second, nil
 		},
 	)
-	require.NoError(t, err)
-	require.Equal(t, second, got,
+	require.NoError(err)
+	require.Equal(second, got,
 		"wildcard ephemeral selection must retry a cross-family collision")
-	require.Equal(t, 2, selections)
+	require.Equal(2, selections)
 }

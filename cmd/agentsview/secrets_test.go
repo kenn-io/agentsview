@@ -80,40 +80,46 @@ func TestSecretsScanFixture(t *testing.T) {
 	)
 
 	t.Run("direct mode scans", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		out, err := executeCommand(newRootCommand(),
 			"secrets", "scan", "--backfill",
 			"--project", "scan-positive", "--format", "json")
-		require.NoError(t, err, "secrets scan failed (engine not plumbed?)")
+		require.NoError(err, "secrets scan failed (engine not plumbed?)")
 		var got struct {
 			Scanned       int `json:"scanned"`
 			WithSecrets   int `json:"with_secrets"`
 			TotalFindings int `json:"total_findings"`
 		}
-		require.NoError(t, json.Unmarshal([]byte(out), &got),
+		require.NoError(json.Unmarshal([]byte(out), &got),
 			"scan output not JSON: %q", out)
-		assert.GreaterOrEqual(t, got.Scanned, 1,
+		assert.GreaterOrEqual(got.Scanned, 1,
 			"expected the seeded secret to be found, got %+v", got)
-		assert.GreaterOrEqual(t, got.WithSecrets, 1,
+		assert.GreaterOrEqual(got.WithSecrets, 1,
 			"expected the seeded secret to be found, got %+v", got)
-		assert.GreaterOrEqual(t, got.TotalFindings, 1,
+		assert.GreaterOrEqual(got.TotalFindings, 1,
 			"expected the seeded secret to be found, got %+v", got)
 	})
 
 	t.Run("denies agentsview fixtures", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		out, err := executeCommand(newRootCommand(),
 			"secrets", "scan", "--backfill",
 			"--project", "fixture-deny", "--format", "json")
-		require.NoError(t, err, "secrets scan failed")
+		require.NoError(err, "secrets scan failed")
 		var got struct {
 			Scanned       int `json:"scanned"`
 			WithSecrets   int `json:"with_secrets"`
 			TotalFindings int `json:"total_findings"`
 		}
-		require.NoError(t, json.Unmarshal([]byte(out), &got),
+		require.NoError(json.Unmarshal([]byte(out), &got),
 			"scan output not JSON: %q", out)
-		assert.Equal(t, 1, got.Scanned, "fixture should be suppressed, got %+v", got)
-		assert.Equal(t, 0, got.WithSecrets, "fixture should be suppressed, got %+v", got)
-		assert.Equal(t, 0, got.TotalFindings, "fixture should be suppressed, got %+v", got)
+		assert.Equal(1, got.Scanned, "fixture should be suppressed, got %+v", got)
+		assert.Equal(0, got.WithSecrets, "fixture should be suppressed, got %+v", got)
+		assert.Equal(0, got.TotalFindings, "fixture should be suppressed, got %+v", got)
 	})
 
 	t.Run("hint shown on candidate", func(t *testing.T) {
@@ -134,17 +140,20 @@ func TestSecretsScanFixture(t *testing.T) {
 	})
 
 	t.Run("hint suppressed in json", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		out, err := executeCommand(newRootCommand(),
 			"secrets", "scan", "--backfill",
 			"--project", "hint-candidate-json", "--format", "json")
-		require.NoError(t, err, "secrets scan")
-		assert.NotContains(t, out, "Candidate findings are hidden")
+		require.NoError(err, "secrets scan")
+		assert.NotContains(out, "Candidate findings are hidden")
 		var sum struct {
 			CandidateFindings int `json:"candidate_findings"`
 		}
-		require.NoError(t, json.Unmarshal([]byte(out), &sum),
+		require.NoError(json.Unmarshal([]byte(out), &sum),
 			"expected JSON output, got: %s", out)
-		assert.NotZero(t, sum.CandidateFindings)
+		assert.NotZero(sum.CandidateFindings)
 	})
 }
 

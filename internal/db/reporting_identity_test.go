@@ -22,6 +22,9 @@ func TestReportingJointProjectIdentityRequiresEverySession(t *testing.T) {
 		{"usage only missing identity", "", export.ProjectResolutionUnknown, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			d := testDB(t)
 			for i, remote := range []string{"https://example.com/team/api.git", tc.secondRemote} {
 				id := []string{"session-a", "session-b"}[i]
@@ -34,7 +37,7 @@ func TestReportingJointProjectIdentityRequiresEverySession(t *testing.T) {
 				}
 				insertMessages(t, d, Message{SessionID: id, Ordinal: 1, Role: "assistant", Timestamp: "2026-07-28T12:01:00Z", Model: "model-a", TokenUsage: jsontext.Value(`{"output_tokens":10}`)})
 				if remote != "" {
-					require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(), export.ProjectIdentityObservation{
+					require.NoError(d.UpsertProjectIdentityObservation(t.Context(), export.ProjectIdentityObservation{
 						SessionID: id, Project: "api", Machine: "synthetic", GitRemote: remote,
 						ObservedAt: time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC),
 					}))
@@ -43,37 +46,37 @@ func TestReportingJointProjectIdentityRequiresEverySession(t *testing.T) {
 			opts := ReportingExportOptions{Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
 				Now: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4}
 			day, err := d.ExportReportingDay(t.Context(), opts)
-			require.NoError(t, err)
+			require.NoError(err)
 			hour := day.Hours[12]
-			assert.Equal(t, int64(20), hour.Usage.Totals.OutputTokens)
-			require.NotEmpty(t, hour.Joint.Cells)
-			require.Contains(t, hour.Joint.Projects, hour.Joint.Cells[0].ProjectKey)
+			assert.Equal(int64(20), hour.Usage.Totals.OutputTokens)
+			require.NotEmpty(hour.Joint.Cells)
+			require.Contains(hour.Joint.Projects, hour.Joint.Cells[0].ProjectKey)
 			identity := hour.Joint.Projects[hour.Joint.Cells[0].ProjectKey]
-			assert.Equal(t, tc.resolution, identity.Resolution)
+			assert.Equal(tc.resolution, identity.Resolution)
 			if tc.resolution == export.ProjectResolutionResolved {
-				require.NotNil(t, identity.Identity)
-				assert.Equal(t, "example.com/team/api", identity.Identity.NormalizedRemote)
+				require.NotNil(identity.Identity)
+				assert.Equal("example.com/team/api", identity.Identity.NormalizedRemote)
 				opts.afterSnapshot = func() {
 					_, err := d.getWriter().Exec(`DELETE FROM session_project_identity_snapshots WHERE session_id = 'session-b'`)
-					require.NoError(t, err)
+					require.NoError(err)
 				}
 				during, err := d.ExportReportingDay(t.Context(), opts)
-				require.NoError(t, err)
-				assert.Equal(t, day.Digest, during.Digest, "identity and usage share the read snapshot")
+				require.NoError(err)
+				assert.Equal(day.Digest, during.Digest, "identity and usage share the read snapshot")
 				opts.afterSnapshot = nil
 				after, err := d.ExportReportingDay(t.Context(), opts)
-				require.NoError(t, err)
-				assert.NotEqual(t, hour.Digest, after.Hours[12].Digest, "identity-only correction changes the hour digest")
-				assert.NotEqual(t, day.Digest, after.Digest)
-				assert.Equal(t, hour.Joint.Cells, after.Hours[12].Joint.Cells)
-				assert.Equal(t, export.ProjectResolutionUnknown, after.Hours[12].Joint.Projects[hour.Joint.Cells[0].ProjectKey].Resolution)
+				require.NoError(err)
+				assert.NotEqual(hour.Digest, after.Hours[12].Digest, "identity-only correction changes the hour digest")
+				assert.NotEqual(day.Digest, after.Digest)
+				assert.Equal(hour.Joint.Cells, after.Hours[12].Joint.Cells)
+				assert.Equal(export.ProjectResolutionUnknown, after.Hours[12].Joint.Projects[hour.Joint.Cells[0].ProjectKey].Resolution)
 			} else {
-				assert.Nil(t, identity.Identity)
+				assert.Nil(identity.Identity)
 			}
 			if tc.usageOnly {
-				assert.Equal(t, 1.0, hour.Activity.Totals.AgentMinutes)
+				assert.Equal(1.0, hour.Activity.Totals.AgentMinutes)
 			} else {
-				assert.Equal(t, 2.0, hour.Activity.Totals.AgentMinutes)
+				assert.Equal(2.0, hour.Activity.Totals.AgentMinutes)
 			}
 		})
 	}

@@ -22,6 +22,9 @@ func buildMetadataLine(m map[string]any) string {
 }
 
 func TestClaudeSessionIdentity(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "identity.jsonl")
 	content := strings.Join([]string{
@@ -29,47 +32,56 @@ func TestClaudeSessionIdentity(t *testing.T) {
 		`{"type":"agent-setting","agentSetting":"triage","entrypoint":"sdk-cli"}`,
 		`{"type":"user","sessionId":"identity-shaped-noise","uuid":"u1","message":{"content":"hello"}}`,
 	}, "\n") + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	require.NoError(os.WriteFile(path, []byte(content), 0o600))
 	results, _, err := claudeParseWithExclusions(path, "project", "local")
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Equal(t, "triage", results[0].Session.AgentLabel)
-	assert.Equal(t, "sdk-cli", results[0].Session.Entrypoint)
-	assert.Equal(t, AgentClaude, results[0].Session.Agent)
+	require.NoError(err)
+	require.Len(results, 1)
+	assert.Equal("triage", results[0].Session.AgentLabel)
+	assert.Equal("sdk-cli", results[0].Session.Entrypoint)
+	assert.Equal(AgentClaude, results[0].Session.Agent)
 }
 
 func TestClaudeSessionIdentityPreservesRawValues(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "identity-raw.jsonl")
 	content := strings.Join([]string{
 		`{"type":"agent-setting","agentSetting":"  Claude Code  ","entrypoint":"\tsdk-cli "}`,
 		`{"type":"user","sessionId":"identity-shaped-noise","uuid":"u1","message":{"content":"hello"}}`,
 	}, "\n") + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	require.NoError(os.WriteFile(path, []byte(content), 0o600))
 	results, _, err := claudeParseWithExclusions(path, "project", "local")
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Equal(t, "  Claude Code  ", results[0].Session.AgentLabel)
-	assert.Equal(t, "\tsdk-cli ", results[0].Session.Entrypoint)
+	require.NoError(err)
+	require.Len(results, 1)
+	assert.Equal("  Claude Code  ", results[0].Session.AgentLabel)
+	assert.Equal("\tsdk-cli ", results[0].Session.Entrypoint)
 }
 
 func TestClaudeSessionIdentityAbsent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "identity-absent.jsonl")
 	content := strings.Join([]string{
 		`{"type":"user","sessionId":"identity-shaped-noise","uuid":"u1","message":{"content":"hello"}}`,
 		`{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"text","text":"hi"}]}}`,
 	}, "\n") + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	require.NoError(os.WriteFile(path, []byte(content), 0o600))
 	results, _, err := claudeParseWithExclusions(path, "project", "local")
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Equal(t, "", results[0].Session.AgentLabel)
-	assert.Equal(t, "", results[0].Session.Entrypoint)
-	assert.Equal(t, AgentClaude, results[0].Session.Agent)
+	require.NoError(err)
+	require.Len(results, 1)
+	assert.Equal("", results[0].Session.AgentLabel)
+	assert.Equal("", results[0].Session.Entrypoint)
+	assert.Equal(AgentClaude, results[0].Session.Agent)
 }
 
 func TestClaudeSessionKindAndPromptSource(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "kind-prompt-source.jsonl")
 	content := strings.Join([]string{
@@ -77,15 +89,15 @@ func TestClaudeSessionKindAndPromptSource(t *testing.T) {
 		`{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"text","text":"reply"}]}}`,
 		`{"type":"user","uuid":"u2","parentUuid":"a1","promptSource":"queued","message":{"content":"second"}}`,
 	}, "\n") + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	require.NoError(os.WriteFile(path, []byte(content), 0o600))
 	results, _, err := claudeParseWithExclusions(path, "project", "local")
-	require.NoError(t, err)
-	require.Len(t, results, 1)
+	require.NoError(err)
+	require.Len(results, 1)
 
 	// sessionKind is a session-level field, first-non-empty-wins like
 	// entrypoint.
-	assert.Equal(t, "bg", results[0].Session.SessionKind)
-	assert.Equal(t, "cli", results[0].Session.Entrypoint)
+	assert.Equal("bg", results[0].Session.SessionKind)
+	assert.Equal("cli", results[0].Session.Entrypoint)
 
 	// promptSource is captured per user turn.
 	bySource := map[string]string{}
@@ -94,11 +106,14 @@ func TestClaudeSessionKindAndPromptSource(t *testing.T) {
 			bySource[m.Content] = m.PromptSource
 		}
 	}
-	assert.Equal(t, "typed", bySource["first"])
-	assert.Equal(t, "queued", bySource["second"])
+	assert.Equal("typed", bySource["first"])
+	assert.Equal("queued", bySource["second"])
 }
 
 func TestClaudeSessionKindAndPromptSourceAbsent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "kind-prompt-source-absent.jsonl")
 	// Older transcripts predate sessionKind/promptSource; both must
@@ -107,17 +122,20 @@ func TestClaudeSessionKindAndPromptSourceAbsent(t *testing.T) {
 		`{"type":"user","sessionId":"kind-absent","uuid":"u1","message":{"content":"hello"}}`,
 		`{"type":"assistant","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"text","text":"hi"}]}}`,
 	}, "\n") + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	require.NoError(os.WriteFile(path, []byte(content), 0o600))
 	results, _, err := claudeParseWithExclusions(path, "project", "local")
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Equal(t, "", results[0].Session.SessionKind)
+	require.NoError(err)
+	require.Len(results, 1)
+	assert.Equal("", results[0].Session.SessionKind)
 	for _, m := range results[0].Messages {
-		assert.Equal(t, "", m.PromptSource, "ordinal %d", m.Ordinal)
+		assert.Equal("", m.PromptSource, "ordinal %d", m.Ordinal)
 	}
 }
 
 func TestClaudeSessionIdentityLineage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "lineage.jsonl")
 	content := strings.Join([]string{
@@ -135,20 +153,20 @@ func TestClaudeSessionIdentityLineage(t *testing.T) {
 		`{"type":"user","uuid":"fork-u1","parentUuid":"a1","message":{"content":"fork-question"}}`,
 		`{"type":"assistant","uuid":"fork-a1","parentUuid":"fork-u1","message":{"content":[{"type":"text","text":"fork-reply"}]}}`,
 	}, "\n") + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+	require.NoError(os.WriteFile(path, []byte(content), 0o600))
 	results, err := parseClaudeSession(path, "project", "local")
-	require.NoError(t, err)
-	require.Len(t, results, 2)
+	require.NoError(err)
+	require.Len(results, 2)
 	forks := 0
 	for _, result := range results {
-		assert.Equal(t, "triage", result.Session.AgentLabel)
-		assert.Equal(t, "sdk-cli", result.Session.Entrypoint)
-		assert.Equal(t, "agent-setting-lineage", result.Session.SourceSessionID)
+		assert.Equal("triage", result.Session.AgentLabel)
+		assert.Equal("sdk-cli", result.Session.Entrypoint)
+		assert.Equal("agent-setting-lineage", result.Session.SourceSessionID)
 		if result.Session.RelationshipType == RelFork {
 			forks++
 		}
 	}
-	assert.Equal(t, 1, forks)
+	assert.Equal(1, forks)
 }
 
 func TestParseClaudeSession_Metadata(t *testing.T) {
@@ -389,6 +407,9 @@ func TestParseClaudeSession_Metadata(t *testing.T) {
 func TestParseClaudeSession_MetadataOnForkSessions(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	// Build a DAG with a large-gap fork to verify metadata
@@ -437,27 +458,30 @@ func TestParseClaudeSession_MetadataOnForkSessions(
 	}
 
 	err := os.WriteFile(path, []byte(content.String()), 0o644)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	results, err := parseClaudeSession(path, "proj", "local")
-	require.NoError(t, err)
-	require.Len(t, results, 2, "expected main + fork result")
+	require.NoError(err)
+	require.Len(results, 2, "expected main + fork result")
 
 	// Both sessions should carry the same source metadata.
 	for i, r := range results {
 		s := r.Session
-		assert.Equal(t, "/workspace", s.Cwd,
+		assert.Equal("/workspace", s.Cwd,
 			"result[%d] Cwd", i)
-		assert.Equal(t, "feat/forks", s.GitBranch,
+		assert.Equal("feat/forks", s.GitBranch,
 			"result[%d] GitBranch", i)
-		assert.Equal(t, "sess-orig", s.SourceSessionID,
+		assert.Equal("sess-orig", s.SourceSessionID,
 			"result[%d] SourceSessionID", i)
-		assert.Equal(t, "3.5.0", s.SourceVersion,
+		assert.Equal("3.5.0", s.SourceVersion,
 			"result[%d] SourceVersion", i)
 	}
 }
 
 func TestParseClaudeSession_LinearMetadata(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	// Linear session (no uuids) should still carry metadata.
@@ -485,22 +509,22 @@ func TestParseClaudeSession_LinearMetadata(t *testing.T) {
 	}) + "\n"
 
 	err := os.WriteFile(path, []byte(content), 0o644)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	results, err := parseClaudeSession(path, "proj", "local")
-	require.NoError(t, err)
-	require.Len(t, results, 1)
+	require.NoError(err)
+	require.Len(results, 1)
 
 	sess := results[0].Session
-	assert.Equal(t, "/tmp/linear", sess.Cwd)
-	assert.Equal(t, "main", sess.GitBranch)
-	assert.Equal(t, "lin-001", sess.SourceSessionID)
-	assert.Equal(t, "1.2.3", sess.SourceVersion)
+	assert.Equal("/tmp/linear", sess.Cwd)
+	assert.Equal("main", sess.GitBranch)
+	assert.Equal("lin-001", sess.SourceSessionID)
+	assert.Equal("1.2.3", sess.SourceVersion)
 
 	msgs := results[0].Messages
-	require.Len(t, msgs, 2)
-	assert.Equal(t, "user", msgs[0].SourceType)
-	assert.Equal(t, "assistant", msgs[1].SourceType)
+	require.Len(msgs, 2)
+	assert.Equal("user", msgs[0].SourceType)
+	assert.Equal("assistant", msgs[1].SourceType)
 }
 
 func TestClaudeIncrementalRenameTriggersFullParse(t *testing.T) {
@@ -519,6 +543,8 @@ func TestClaudeIncrementalRenameTriggersFullParse(t *testing.T) {
 }
 
 func TestClaudeIncrementalSessionIdentityTriggersFullParse(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 
 	initial := buildMetadataLine(map[string]any{
@@ -532,7 +558,7 @@ func TestClaudeIncrementalSessionIdentityTriggersFullParse(t *testing.T) {
 	path := createTestFile(t, "identity-incremental.jsonl", initial)
 
 	info, err := os.Stat(path)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	appended := buildMetadataLine(map[string]any{
 		"type":         "user",
@@ -546,17 +572,19 @@ func TestClaudeIncrementalSessionIdentityTriggersFullParse(t *testing.T) {
 		},
 	}) + "\n"
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = f.WriteString(appended)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+	require.NoError(err)
+	require.NoError(f.Close())
 
 	_, _, _, parseErr := callParseClaudeSessionFrom(path, info.Size(), 1, "u1")
-	require.Error(t, parseErr)
+	require.Error(parseErr)
 	assert.True(t, IsIncrementalFullParseFallback(parseErr))
 }
 
 func TestClaudeIncrementalStoredIdentityAppendStaysIncremental(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 
 	// Real Claude CLI transcripts carry a top-level entrypoint ("cli") on
@@ -575,7 +603,7 @@ func TestClaudeIncrementalStoredIdentityAppendStaysIncremental(t *testing.T) {
 	path := createTestFile(t, "identity-stored-incremental.jsonl", initial)
 
 	info, err := os.Stat(path)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	appended := buildMetadataLine(map[string]any{
 		"type":       "user",
@@ -588,10 +616,10 @@ func TestClaudeIncrementalStoredIdentityAppendStaysIncremental(t *testing.T) {
 		},
 	}) + "\n"
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = f.WriteString(appended)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+	require.NoError(err)
+	require.NoError(f.Close())
 
 	msgs, _, _, _, parseErr := claudeParseSessionFrom(
 		path, info.Size(), claudeIncrementalScan{
@@ -600,12 +628,14 @@ func TestClaudeIncrementalStoredIdentityAppendStaysIncremental(t *testing.T) {
 			stored:        claudeStoredIdentity{entrypoint: "cli"},
 		},
 	)
-	require.NoError(t, parseErr)
-	require.Len(t, msgs, 1)
+	require.NoError(parseErr)
+	require.Len(msgs, 1)
 	assert.Equal(t, RoleUser, msgs[0].Role)
 }
 
 func TestClaudeIncrementalNewIdentityFieldStillEscalates(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 
 	// The stored entrypoint is known, but agentSetting appears for the
@@ -624,7 +654,7 @@ func TestClaudeIncrementalNewIdentityFieldStillEscalates(t *testing.T) {
 	path := createTestFile(t, "identity-new-field.jsonl", initial)
 
 	info, err := os.Stat(path)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	appended := buildMetadataLine(map[string]any{
 		"type":         "user",
@@ -638,10 +668,10 @@ func TestClaudeIncrementalNewIdentityFieldStillEscalates(t *testing.T) {
 		},
 	}) + "\n"
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = f.WriteString(appended)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+	require.NoError(err)
+	require.NoError(f.Close())
 
 	_, _, _, _, parseErr := claudeParseSessionFrom(
 		path, info.Size(), claudeIncrementalScan{
@@ -650,7 +680,7 @@ func TestClaudeIncrementalNewIdentityFieldStillEscalates(t *testing.T) {
 			stored:        claudeStoredIdentity{entrypoint: "cli"},
 		},
 	)
-	require.Error(t, parseErr)
+	require.Error(parseErr)
 	assert.True(t, IsIncrementalFullParseFallback(parseErr))
 }
 
@@ -725,6 +755,8 @@ func TestClaudeRenameSetsDisplayName(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			require := require.New(t)
+
 			t.Parallel()
 			dir := t.TempDir()
 			path := filepath.Join(dir, "rename-session.jsonl")
@@ -734,11 +766,11 @@ func TestClaudeRenameSetsDisplayName(t *testing.T) {
 				sb.WriteString(buildMetadataLine(m) + "\n")
 			}
 			err := os.WriteFile(path, []byte(sb.String()), 0o644)
-			require.NoError(t, err)
+			require.NoError(err)
 
 			results, err := parseClaudeSession(path, "proj", "local")
-			require.NoError(t, err)
-			require.Len(t, results, 1)
+			require.NoError(err)
+			require.Len(results, 1)
 			assert.Equal(t, tc.wantDisplay, results[0].Session.SessionName)
 		})
 	}

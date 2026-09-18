@@ -2,11 +2,10 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,6 +33,9 @@ func TestDBMigrateJSONRequiresYes(t *testing.T) {
 }
 
 func TestDBMigratePreviewClassifies(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := testDataDir(t)
 	seedMigrateCommandArchive(t)
 
@@ -41,20 +43,20 @@ func TestDBMigratePreviewClassifies(t *testing.T) {
 	cmd.SetArgs([]string{"--images", "--dry-run", "--format", "json"})
 	var preview bytes.Buffer
 	cmd.SetOut(&preview)
-	require.NoError(t, cmd.Execute())
+	require.NoError(cmd.Execute())
 
 	var report db.StripImagesReport
-	require.NoError(t, json.Unmarshal(preview.Bytes(), &report))
-	assert.Equal(t, 1, report.Sessions)
-	assert.Equal(t, 1, report.Changed)
-	assert.Equal(t, int64(1), report.Payloads)
-	assert.Positive(t, report.StoredBytes)
-	assert.Positive(t, report.DecodedBytes)
+	require.NoError(json.Unmarshal(preview.Bytes(), &report))
+	assert.Equal(1, report.Sessions)
+	assert.Equal(1, report.Changed)
+	assert.Equal(int64(1), report.Payloads)
+	assert.Positive(report.StoredBytes)
+	assert.Positive(report.DecodedBytes)
 
 	// Archive must be unchanged after a dry-run.
 	assertMigrateCommandArchiveStillContainsImage(t)
 	// Assets directory must not be created by a dry-run.
-	assert.NoDirExists(t, filepath.Join(dataDir, "assets"))
+	assert.NoDirExists(filepath.Join(dataDir, "assets"))
 	t.Logf("0 files created during preview: assets dir exists=%v", false)
 }
 
@@ -62,6 +64,9 @@ func TestDBMigratePreviewClassifies(t *testing.T) {
 // report decodes with the expected session and payload counts, and the archive
 // really carries an asset:// reference afterward.
 func TestDBMigrateJSONApply(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := testDataDir(t)
 	seedMigrateCommandArchive(t)
 
@@ -69,26 +74,29 @@ func TestDBMigrateJSONApply(t *testing.T) {
 	cmd.SetArgs([]string{"--images", "--yes", "--format", "json"})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	require.NoError(t, cmd.Execute())
+	require.NoError(cmd.Execute())
 
 	var report db.StripImagesReport
-	require.NoError(t, json.Unmarshal(output.Bytes(), &report))
-	assert.Equal(t, 1, report.Sessions)
-	assert.Equal(t, 1, report.Changed)
-	assert.Equal(t, int64(1), report.Payloads)
-	assert.Equal(t, int64(len(`data:image/png;base64,AAEC`)), report.StoredBytes)
-	assert.Equal(t, int64(3), report.DecodedBytes)
-	require.Len(t, report.Projects, 1)
-	assert.Equal(t, 1, report.Projects[0].Changed)
+	require.NoError(json.Unmarshal(output.Bytes(), &report))
+	assert.Equal(1, report.Sessions)
+	assert.Equal(1, report.Changed)
+	assert.Equal(int64(1), report.Payloads)
+	assert.Equal(int64(len(`data:image/png;base64,AAEC`)), report.StoredBytes)
+	assert.Equal(int64(3), report.DecodedBytes)
+	require.Len(report.Projects, 1)
+	assert.Equal(1, report.Projects[0].Changed)
 
 	assertMigrateCommandArchiveHasAssetRef(t)
-	assert.DirExists(t, filepath.Join(dataDir, "assets"))
+	assert.DirExists(filepath.Join(dataDir, "assets"))
 }
 
 // TestDBMigrateInteractiveConfirmation covers the interactive branch both ways.
 // Declining leaves the archive and the assets directory untouched, which is what
 // docs/commands.md promises, and both runs state the backup obligation.
 func TestDBMigrateInteractiveConfirmation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := testDataDir(t)
 	seedMigrateCommandArchive(t)
 	assetsDir := filepath.Join(dataDir, "assets")
@@ -99,14 +107,14 @@ func TestDBMigrateInteractiveConfirmation(t *testing.T) {
 	cmd.SetIn(strings.NewReader("n\n"))
 	var declined bytes.Buffer
 	cmd.SetErr(&declined)
-	require.NoError(t, cmd.Execute())
+	require.NoError(cmd.Execute())
 
-	assert.Contains(t, declined.String(), "Image migration preview.")
-	assert.Contains(t, declined.String(), backupLine)
-	assert.Contains(t, declined.String(), "Aborted.")
-	assert.NotContains(t, declined.String(), "Image migration completed.")
+	assert.Contains(declined.String(), "Image migration preview.")
+	assert.Contains(declined.String(), backupLine)
+	assert.Contains(declined.String(), "Aborted.")
+	assert.NotContains(declined.String(), "Image migration completed.")
 	assertMigrateCommandArchiveStillContainsImage(t)
-	assert.NoDirExists(t, assetsDir)
+	assert.NoDirExists(assetsDir)
 
 	cmd = newDBMigrateCommand()
 	cmd.SetArgs([]string{"--images"})
@@ -114,13 +122,13 @@ func TestDBMigrateInteractiveConfirmation(t *testing.T) {
 	var accepted, acceptedErr bytes.Buffer
 	cmd.SetOut(&accepted)
 	cmd.SetErr(&acceptedErr)
-	require.NoError(t, cmd.Execute())
+	require.NoError(cmd.Execute())
 
-	assert.Contains(t, acceptedErr.String(), backupLine)
-	assert.Contains(t, accepted.String(), "Image migration completed.")
-	assert.Contains(t, accepted.String(), "Changed: 1")
+	assert.Contains(acceptedErr.String(), backupLine)
+	assert.Contains(accepted.String(), "Image migration completed.")
+	assert.Contains(accepted.String(), "Changed: 1")
 	assertMigrateCommandArchiveHasAssetRef(t)
-	assert.DirExists(t, assetsDir)
+	assert.DirExists(assetsDir)
 }
 
 func TestDBStripAndMigratePartialFailureReportsCommittedWork(t *testing.T) {
@@ -133,19 +141,22 @@ func TestDBStripAndMigratePartialFailureReportsCommittedWork(t *testing.T) {
 		{"migrate", newDBMigrateCommand, "Image migration"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			testDataDir(t)
 			cfg, err := config.LoadReadOnly()
-			require.NoError(t, err)
+			require.NoError(err)
 			database, err := db.Open(cfg.DBPath)
-			require.NoError(t, err)
+			require.NoError(err)
 			for _, id := range []string{"mig-pf-a", "mig-pf-b"} {
 				insertSessionForStripTest(t, database, id)
-				require.NoError(t, database.InsertMessages([]db.Message{commandImageMessage(id)}))
+				require.NoError(database.InsertMessages([]db.Message{commandImageMessage(id)}))
 			}
 			// Sessions run in id order, one transaction each. Aborting the second
 			// session's revision bump commits the first and stops the run mid-selection.
-			require.NoError(t, database.Update(func(tx *sql.Tx) error {
-				_, err := tx.Exec(`
+			require.NoError(database.Update(func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(t.Context(), `
 					CREATE TRIGGER fail_mig_pf_b
 					AFTER UPDATE OF transcript_revision ON sessions
 					WHEN NEW.id = 'mig-pf-b'
@@ -154,91 +165,97 @@ func TestDBStripAndMigratePartialFailureReportsCommittedWork(t *testing.T) {
 					END`)
 				return err
 			}))
-			require.NoError(t, database.Close())
+			require.NoError(database.Close())
 
 			cmd := tt.command()
 			cmd.SetArgs([]string{"--images", "--yes"})
 			var output, errOutput bytes.Buffer
 			cmd.SetOut(&output)
 			cmd.SetErr(&errOutput)
-			require.Error(t, cmd.Execute())
+			require.Error(cmd.Execute())
 
-			assert.Contains(t, errOutput.String(), tt.title+" stopped early.")
-			assert.Contains(t, errOutput.String(), "Sessions: 1")
-			assert.Contains(t, errOutput.String(), "Changed: 1")
-			assert.NotContains(t, errOutput.String(), tt.title+" completed.")
-			assert.NotContains(t, errOutput.String(), "Run db compact separately")
-			assert.NotContains(t, output.String(), tt.title+" completed.")
+			assert.Contains(errOutput.String(), tt.title+" stopped early.")
+			assert.Contains(errOutput.String(), "Sessions: 1")
+			assert.Contains(errOutput.String(), "Changed: 1")
+			assert.NotContains(errOutput.String(), tt.title+" completed.")
+			assert.NotContains(errOutput.String(), "Run db compact separately")
+			assert.NotContains(output.String(), tt.title+" completed.")
 			t.Logf("partial report:\n%s", errOutput.String())
 			database, err = db.Open(cfg.DBPath)
-			require.NoError(t, err)
-			defer func() { require.NoError(t, database.Close()) }()
+			require.NoError(err)
+			defer func() { require.NoError(database.Close()) }()
 			committed, err := database.GetAllMessages(t.Context(), "mig-pf-a")
-			require.NoError(t, err)
-			require.Len(t, committed, 1)
-			assert.NotContains(t, committed[0].ToolCalls[0].ResultContent, "input_image")
+			require.NoError(err)
+			require.Len(committed, 1)
+			assert.NotContains(committed[0].ToolCalls[0].ResultContent, "input_image")
 			failed, err := database.GetAllMessages(t.Context(), "mig-pf-b")
-			require.NoError(t, err)
-			require.Len(t, failed, 1)
-			assert.Contains(t, failed[0].ToolCalls[0].ResultContent, "input_image")
+			require.NoError(err)
+			require.Len(failed, 1)
+			assert.Contains(failed[0].ToolCalls[0].ResultContent, "input_image")
 		})
 	}
 }
 
 // The archive reference and digest must identify the bytes in the asset store.
 func TestDBMigrateReferenceMatchesAssetsPut(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := testDataDir(t)
 	seedMigrateCommandArchive(t)
 
 	cmd := newDBMigrateCommand()
 	cmd.SetArgs([]string{"--images", "--yes"})
 	cmd.SetOut(&bytes.Buffer{})
-	require.NoError(t, cmd.Execute())
+	require.NoError(cmd.Execute())
 
 	block := migrateCommandImageBlock(t)
 	var ref, sha256Hex string
-	require.NoError(t, json.Unmarshal(block["image_ref"], &ref))
-	require.NoError(t, json.Unmarshal(block["sha256"], &sha256Hex))
+	require.NoError(json.Unmarshal(block["image_ref"], &ref))
+	require.NoError(json.Unmarshal(block["sha256"], &sha256Hex))
 
 	assetsDir := filepath.Join(dataDir, "assets")
 	entries, err := os.ReadDir(assetsDir)
-	require.NoError(t, err)
-	require.Len(t, entries, 1)
+	require.NoError(err)
+	require.Len(entries, 1)
 
 	stored, err := os.ReadFile(filepath.Join(assetsDir, entries[0].Name()))
-	require.NoError(t, err)
+	require.NoError(err)
 	sum := sha256.Sum256(stored)
-	assert.Equal(t, fmt.Sprintf("%x", sum[:]), sha256Hex,
+	assert.Equal(hex.EncodeToString(sum[:]), sha256Hex,
 		"sha256 must be the digest of the bytes assets.Put stored")
-	assert.Equal(t, "asset://"+entries[0].Name(), ref)
-	assert.Equal(t, sha256Hex+".png", entries[0].Name())
+	assert.Equal("asset://"+entries[0].Name(), ref)
+	assert.Equal(sha256Hex+".png", entries[0].Name())
 }
 
 // TestDBMigrateReachesTrashedAndOrphanRows verifies that the command migrates
 // sessions regardless of deletion state, and that a true orphan tool_result_events
 // row (no matching tool_calls row) is also migrated and counted.
 func TestDBMigrateReachesTrashedAndOrphanRows(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := testDataDir(t)
 	cfg, err := config.LoadReadOnly()
-	require.NoError(t, err)
+	require.NoError(err)
 	database, err := db.Open(cfg.DBPath)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// Session A: active.
 	insertSessionForStripTest(t, database, "mig-active")
-	require.NoError(t, database.InsertMessages([]db.Message{commandImageMessage("mig-active")}))
+	require.NoError(database.InsertMessages([]db.Message{commandImageMessage("mig-active")}))
 
 	// Session B: trashed (soft-deleted).
 	insertSessionForStripTest(t, database, "mig-trashed")
-	require.NoError(t, database.InsertMessages([]db.Message{commandImageMessage("mig-trashed")}))
-	require.NoError(t, database.SoftDeleteSession("mig-trashed"))
+	require.NoError(database.InsertMessages([]db.Message{commandImageMessage("mig-trashed")}))
+	require.NoError(database.SoftDeleteSession("mig-trashed"))
 
 	// Session C: a true orphan tool_result_events row with no matching tool_calls row.
 	// This exercises the UNION ALL branch that reads tool_result_events directly.
 	insertSessionForStripTest(t, database, "mig-orphan")
 	orphanContent := `[{"type":"input_image","image_url":"data:image/gif;base64,AAEC"}]`
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
+	require.NoError(database.Update(func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO tool_result_events
 				(session_id, tool_call_message_ordinal, call_index,
 				 tool_use_id, agent_id, subagent_session_id,
@@ -251,51 +268,51 @@ func TestDBMigrateReachesTrashedAndOrphanRows(t *testing.T) {
 		return err
 	}))
 
-	require.NoError(t, database.Close())
+	require.NoError(database.Close())
 
 	cmd := newDBMigrateCommand()
 	cmd.SetArgs([]string{"--images", "--yes"})
 	var output bytes.Buffer
 	cmd.SetOut(&output)
-	require.NoError(t, cmd.Execute())
+	require.NoError(cmd.Execute())
 
-	assert.Contains(t, output.String(), "Image migration completed.")
+	assert.Contains(output.String(), "Image migration completed.")
 	// 3 sessions changed (active, trashed, orphan).
-	assert.Contains(t, output.String(), "Changed: 3")
-	assert.Contains(t, output.String(), "Image payloads: 3")
-	assert.DirExists(t, filepath.Join(dataDir, "assets"))
+	assert.Contains(output.String(), "Changed: 3")
+	assert.Contains(output.String(), "Image payloads: 3")
+	assert.DirExists(filepath.Join(dataDir, "assets"))
 	// active and trashed share bytes (PNG); orphan is a GIF — two files.
 	entries, err := os.ReadDir(filepath.Join(dataDir, "assets"))
-	require.NoError(t, err)
-	assert.Len(t, entries, 2)
+	require.NoError(err)
+	assert.Len(entries, 2)
 
 	database2, err := db.Open(cfg.DBPath)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, database2.Close()) }()
+	require.NoError(err)
+	defer func() { require.NoError(database2.Close()) }()
 	for _, id := range []string{"mig-active", "mig-trashed"} {
-		messages, err := database2.GetAllMessages(context.Background(), id)
-		require.NoError(t, err)
-		require.Len(t, messages, 1)
-		assert.NotContains(t, messages[0].ToolCalls[0].ResultContent, "input_image")
-		assert.Contains(t, messages[0].ToolCalls[0].ResultContent, "image_ref")
+		messages, err := database2.GetAllMessages(t.Context(), id)
+		require.NoError(err)
+		require.Len(messages, 1)
+		assert.NotContains(messages[0].ToolCalls[0].ResultContent, "input_image")
+		assert.Contains(messages[0].ToolCalls[0].ResultContent, "image_ref")
 	}
 
 	// True orphan event row is migrated.
 	var orphanStored string
-	require.NoError(t, database2.Reader().QueryRow(
+	require.NoError(database2.Reader().QueryRow(
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "mig-orphan",
 	).Scan(&orphanStored))
-	assert.Contains(t, orphanStored, "image_ref")
-	assert.Contains(t, orphanStored, "asset://")
-	assert.NotContains(t, orphanStored, "input_image")
+	assert.Contains(orphanStored, "image_ref")
+	assert.Contains(orphanStored, "asset://")
+	assert.NotContains(orphanStored, "input_image")
 
 	// Count trashed-session event rows that were migrated.
 	var trashedMigrated int
-	require.NoError(t, database2.Reader().QueryRow(`
+	require.NoError(database2.Reader().QueryRow(`
 		SELECT COUNT(*) FROM tool_result_events e
 		JOIN sessions s ON s.id = e.session_id
 		WHERE s.deleted_at IS NOT NULL AND e.content LIKE '%image_ref%'`).Scan(&trashedMigrated))
-	assert.Equal(t, 1, trashedMigrated)
+	assert.Equal(1, trashedMigrated)
 }
 
 func seedMigrateCommandArchive(t *testing.T) {
@@ -316,7 +333,7 @@ func assertMigrateCommandArchiveStillContainsImage(t *testing.T) {
 	database, err := db.Open(cfg.DBPath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, database.Close()) }()
-	messages, err := database.GetAllMessages(context.Background(), "mig-cmd")
+	messages, err := database.GetAllMessages(t.Context(), "mig-cmd")
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Contains(t, messages[0].ToolCalls[0].ResultContent, "input_image")
@@ -331,7 +348,7 @@ func assertMigrateCommandArchiveHasAssetRef(t *testing.T) {
 	database, err := db.Open(cfg.DBPath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, database.Close()) }()
-	messages, err := database.GetAllMessages(context.Background(), "mig-cmd")
+	messages, err := database.GetAllMessages(t.Context(), "mig-cmd")
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	content := messages[0].ToolCalls[0].ResultContent
@@ -349,7 +366,7 @@ func migrateCommandImageBlock(t *testing.T) map[string]json.RawMessage {
 	database, err := db.Open(cfg.DBPath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, database.Close()) }()
-	messages, err := database.GetAllMessages(context.Background(), "mig-cmd")
+	messages, err := database.GetAllMessages(t.Context(), "mig-cmd")
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 

@@ -3553,7 +3553,7 @@ func duckUsageLocalDateSQL(f db.UsageFilter) (string, any) {
 			ref = t
 		}
 	}
-	_, offset := ref.In(time.Local).Zone()
+	_, offset := ref.In(time.Local).Zone() //nolint:forbidigo // Usage report dates follow the local timezone when no timezone is selected.
 	return "COALESCE(strftime(ts + (? * INTERVAL 1 SECOND), '%Y-%m-%d'), '')", offset
 }
 

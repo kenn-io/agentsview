@@ -18,7 +18,7 @@ const testDirectoryACL = "everyone allow list,search,add_file,add_subdirectory,d
 func TestCreateStateRejectsUntrustedParentACL(t *testing.T) {
 	parent := filepath.Join(t.TempDir(), "private")
 	require.NoError(t, os.Mkdir(parent, 0o700))
-	require.NoError(t, exec.Command("chmod", "+a", testDirectoryACL, parent).Run())
+	require.NoError(t, exec.CommandContext(t.Context(), "chmod", "+a", testDirectoryACL, parent).Run())
 
 	_, err := createState(filepath.Join(parent, "capture"), permissionTestManifest(t))
 
@@ -26,12 +26,14 @@ func TestCreateStateRejectsUntrustedParentACL(t *testing.T) {
 }
 
 func TestSecureCaptureDirectoryClearsExtendedACL(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
-	require.NoError(t, exec.Command("chmod", "+a", testDirectoryACL, dir).Run())
+	require.NoError(exec.CommandContext(t.Context(), "chmod", "+a", testDirectoryACL, dir).Run())
 
-	require.NoError(t, secureCaptureDirectory(dir))
+	require.NoError(secureCaptureDirectory(dir))
 
-	listing, err := exec.Command("ls", "-lde", dir).Output()
-	require.NoError(t, err)
+	listing, err := exec.CommandContext(t.Context(), "ls", "-lde", dir).Output()
+	require.NoError(err)
 	assert.NotContains(t, strings.TrimSpace(string(listing)), "\n 0:")
 }

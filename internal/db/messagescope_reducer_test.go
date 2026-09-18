@@ -33,11 +33,14 @@ func TestScopeReducerPairing(t *testing.T) {
 	f := ScopeFilter{Models: map[string]struct{}{"sonnet": {}}}
 
 	t.Run("selected assistant flushes preceding user", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		out, err := collectScopeRows(t, f, []MessageInput{scopeUser("s1", 0), scopeAssistant("s1", 1, "sonnet")})
-		require.NoError(t, err)
-		require.Len(t, out, 2)
-		assert.Equal(t, "user", out[0].Role)
-		assert.Equal(t, "assistant", out[1].Role)
+		require.NoError(err)
+		require.Len(out, 2)
+		assert.Equal("user", out[0].Role)
+		assert.Equal("assistant", out[1].Role)
 	})
 
 	t.Run("non-selected assistant drops preceding user", func(t *testing.T) {
@@ -126,14 +129,17 @@ func TestScopeReducerOrdering(t *testing.T) {
 	// order Go string comparison calls "backwards"; that is valid input and
 	// must not error, or model-filtered analytics would fail on those rows.
 	t.Run("non-byte-ordered session groups are accepted", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		out, err := collectScopeRows(t, f, []MessageInput{
 			scopeUser("s2", 0), scopeAssistant("s2", 1, "sonnet"),
 			scopeUser("s1", 0), scopeAssistant("s1", 1, "sonnet"),
 		})
-		require.NoError(t, err)
-		require.Len(t, out, 4)
-		assert.Equal(t, "s2", out[0].SessionID)
-		assert.Equal(t, "s1", out[2].SessionID)
+		require.NoError(err)
+		require.Len(out, 4)
+		assert.Equal("s2", out[0].SessionID)
+		assert.Equal("s1", out[2].SessionID)
 	})
 
 	t.Run("session reappearing after its group ends errors", func(t *testing.T) {

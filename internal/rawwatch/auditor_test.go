@@ -193,16 +193,19 @@ func (p *auditProvider) PlanRawCapture(
 func TestAuditorContinuesAfterSourceChangesDuringCapture(t *testing.T) {
 	for _, full := range []bool{false, true} {
 		t.Run(fmt.Sprintf("full=%t", full), func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			root := t.TempDir()
 			for _, name := range []string{"a.jsonl", "b.jsonl"} {
-				require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
+				require.NoError(os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
 			}
 			base := t.TempDir()
 			store, err := rawcheckpoint.OpenWithOptions(t.Context(), filepath.Join(base, "checkpoint.db"), rawcheckpoint.Options{
 				SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 			})
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, store.Close()) })
+			require.NoError(err)
+			t.Cleanup(func() { require.NoError(store.Close()) })
 			provider := newAuditProvider(root)
 			// Fail at Capture's plan call, after source identity was established.
 			provider.planErrorAt = 2
@@ -217,15 +220,15 @@ func TestAuditorContinuesAfterSourceChangesDuringCapture(t *testing.T) {
 			}
 
 			result, err := run(t.Context(), provider)
-			require.NoError(t, err)
-			assert.Equal(t, 2, result.Visited)
-			assert.Equal(t, 1, result.Captured)
-			assert.True(t, result.Complete)
+			require.NoError(err)
+			assert.Equal(2, result.Visited)
+			assert.Equal(1, result.Captured)
+			assert.True(result.Complete)
 			// The skipped source remains discoverable on the next pass.
 			retry, err := run(t.Context(), provider)
-			require.NoError(t, err)
-			assert.Equal(t, 1, retry.Captured)
-			assert.Equal(t, 1, retry.Unchanged)
+			require.NoError(err)
+			assert.Equal(1, retry.Captured)
+			assert.Equal(1, retry.Unchanged)
 		})
 	}
 }
@@ -363,25 +366,29 @@ func newRootCoverageFailure(
 }
 
 func TestAuditorFullReconciliationClearsRootCoverageFailure(t *testing.T) {
+	require := require.New(t)
+
 	const maxOutboxBytes int64 = 1 << 20
 	root, store, rootID := newRootCoverageFailure(t, maxOutboxBytes)
 
 	provider := newAuditProvider(root)
 	result, err := NewAuditor(store, rawcapture.New(store), 1).
 		AuditProviderFull(t.Context(), provider)
-	require.NoError(t, err)
-	require.True(t, result.Complete)
-	require.Zero(t, result.Degraded)
+	require.NoError(err)
+	require.True(result.Complete)
+	require.Zero(result.Degraded)
 
 	coverage, ok, err := store.Coverage(
 		t.Context(), parser.AgentClaude, rootID,
 	)
-	require.NoError(t, err)
-	require.True(t, ok)
+	require.NoError(err)
+	require.True(ok)
 	assert.Equal(t, rawcheckpoint.CoverageComplete, coverage.State)
 }
 
 func TestAuditorFullReconciliationPreservesIncompleteRootCoverageFailure(t *testing.T) {
+	require := require.New(t)
+
 	const maxOutboxBytes int64 = 1 << 20
 	root, store, rootID := newRootCoverageFailure(t, maxOutboxBytes)
 	provider := newPartialAuditProvider(root)
@@ -389,46 +396,51 @@ func TestAuditorFullReconciliationPreservesIncompleteRootCoverageFailure(t *test
 
 	result, err := NewAuditor(store, rawcapture.New(store), 1).
 		AuditProviderFull(t.Context(), provider)
-	require.NoError(t, err)
-	require.False(t, result.Complete)
+	require.NoError(err)
+	require.False(result.Complete)
 
 	coverage, ok, err := store.Coverage(
 		t.Context(), parser.AgentClaude, rootID,
 	)
-	require.NoError(t, err)
-	require.True(t, ok)
+	require.NoError(err)
+	require.True(ok)
 	assert.Equal(t, rawcheckpoint.CoverageDegraded, coverage.State)
 }
 
 func TestAuditorFullReconciliationPreservesDegradedRootCoverageFailure(t *testing.T) {
+	require := require.New(t)
+
 	const maxOutboxBytes int64 = 1 << 20
 	root, store, rootID := newRootCoverageFailure(t, maxOutboxBytes)
 	blocker, err := store.ReserveCapture(t.Context(), rootID, maxOutboxBytes)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(func() {
-		require.NoError(t, store.ReleaseReservation(context.Background(), blocker.ID))
+		require.NoError(store.ReleaseReservation(t.Context(), blocker.ID))
 	})
 
 	result, err := NewAuditor(store, rawcapture.New(store), 1).
 		AuditProviderFull(t.Context(), newAuditProvider(root))
-	require.NoError(t, err)
-	require.True(t, result.Complete)
-	require.Equal(t, 1, result.Degraded)
+	require.NoError(err)
+	require.True(result.Complete)
+	require.Equal(1, result.Degraded)
 
 	coverage, ok, err := store.Coverage(
 		t.Context(), parser.AgentClaude, rootID,
 	)
-	require.NoError(t, err)
-	require.True(t, ok)
+	require.NoError(err)
+	require.True(ok)
 	assert.Equal(t, rawcheckpoint.CoverageDegraded, coverage.State)
 }
 
 func TestAuditorFullReconciliationIsolatesTombstoneBackpressureByRoot(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const maxOutboxBytes int64 = 1 << 20
 	completeRoot := t.TempDir()
 	degradedRoot := t.TempDir()
 	stalePath := filepath.Join(degradedRoot, "stale.jsonl")
-	require.NoError(t, os.WriteFile(stalePath, []byte("stale"), 0o600))
+	require.NoError(os.WriteFile(stalePath, []byte("stale"), 0o600))
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
 		t.Context(), filepath.Join(base, "checkpoint.db"),
@@ -436,8 +448,8 @@ func TestAuditorFullReconciliationIsolatesTombstoneBackpressureByRoot(t *testing
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: maxOutboxBytes,
 		},
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 	provider := newPartialAuditProvider(completeRoot, degradedRoot)
 	capturer := rawcapture.New(store)
 	captured, err := capturer.Capture(t.Context(), provider, parser.SourceRef{
@@ -445,73 +457,76 @@ func TestAuditorFullReconciliationIsolatesTombstoneBackpressureByRoot(t *testing
 		Key:         "stale.jsonl",
 		DisplayPath: stalePath,
 	})
-	require.NoError(t, err)
-	require.Equal(t, rawcapture.StatusCaptured, captured.Status)
-	require.NoError(t, os.Remove(stalePath))
+	require.NoError(err)
+	require.Equal(rawcapture.StatusCaptured, captured.Status)
+	require.NoError(os.Remove(stalePath))
 
 	completeConfigured, err := store.ResolveConfiguredRoot(
 		t.Context(), parser.AgentClaude, completeRoot,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	degradedConfigured, err := store.ResolveConfiguredRoot(
 		t.Context(), parser.AgentClaude, degradedRoot,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	for _, rootID := range []string{completeConfigured.ID, degradedConfigured.ID} {
 		_, err = store.ReserveCapture(t.Context(), rootID, maxOutboxBytes+1)
-		require.ErrorIs(t, err, rawcheckpoint.ErrOutboxFull)
+		require.ErrorIs(err, rawcheckpoint.ErrOutboxFull)
 	}
 	usage, err := store.OutboxUsage(t.Context())
-	require.NoError(t, err)
+	require.NoError(err)
 	remaining := maxOutboxBytes - usage.UsedBytes - usage.ReservedBytes
-	require.Positive(t, remaining)
+	require.Positive(remaining)
 	blocker, err := store.ReserveCapture(
 		t.Context(), degradedConfigured.ID, remaining,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	result, err := NewAuditor(store, capturer, 1).
 		AuditProviderFull(t.Context(), provider)
-	require.NoError(t, err)
-	require.True(t, result.Complete)
-	require.Equal(t, 1, result.Degraded)
-	require.Zero(t, result.Tombstoned)
+	require.NoError(err)
+	require.True(result.Complete)
+	require.Equal(1, result.Degraded)
+	require.Zero(result.Tombstoned)
 
 	coverage, ok, err := store.Coverage(
 		t.Context(), parser.AgentClaude, completeConfigured.ID,
 	)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, rawcheckpoint.CoverageComplete, coverage.State)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(rawcheckpoint.CoverageComplete, coverage.State)
 	coverage, ok, err = store.Coverage(
 		t.Context(), parser.AgentClaude, degradedConfigured.ID,
 	)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, rawcheckpoint.CoverageDegraded, coverage.State)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(rawcheckpoint.CoverageDegraded, coverage.State)
 
-	require.NoError(t, store.ReleaseReservation(t.Context(), blocker.ID))
-	require.NoError(t, os.WriteFile(stalePath, []byte("stale"), 0o600))
+	require.NoError(store.ReleaseReservation(t.Context(), blocker.ID))
+	require.NoError(os.WriteFile(stalePath, []byte("stale"), 0o600))
 	recaptured, err := capturer.Capture(t.Context(), provider, parser.SourceRef{
 		Provider:    parser.AgentClaude,
 		Key:         "stale.jsonl",
 		DisplayPath: stalePath,
 	})
-	require.NoError(t, err)
-	require.NotEqual(t, rawcapture.StatusDegraded, recaptured.Status)
+	require.NoError(err)
+	require.NotEqual(rawcapture.StatusDegraded, recaptured.Status)
 	coverage, ok, err = store.Coverage(
 		t.Context(), parser.AgentClaude, degradedConfigured.ID,
 	)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, rawcheckpoint.CoverageDegraded, coverage.State,
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(rawcheckpoint.CoverageDegraded, coverage.State,
 		"clearing the source failure must expose the preserved root failure")
 }
 
 func TestAuditorRotatesBoundedCapturesAndRepairsDeletion(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	for _, name := range []string{"a.jsonl", "b.jsonl", "c.jsonl"} {
-		require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
+		require.NoError(os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
 	}
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
@@ -520,8 +535,8 @@ func TestAuditorRotatesBoundedCapturesAndRepairsDeletion(t *testing.T) {
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 	provider := newAuditProvider(root)
 	auditor := NewAuditor(store, rawcapture.New(store), 2)
 
@@ -529,35 +544,35 @@ func TestAuditorRotatesBoundedCapturesAndRepairsDeletion(t *testing.T) {
 	initialComplete := false
 	for range 8 {
 		result, err := auditor.AuditProvider(t.Context(), provider)
-		require.NoError(t, err)
-		assert.LessOrEqual(t, result.Visited+result.Tombstoned, 2)
+		require.NoError(err)
+		assert.LessOrEqual(result.Visited+result.Tombstoned, 2)
 		initialCaptured += result.Captured
 		if result.Complete {
 			initialComplete = true
 			break
 		}
 	}
-	require.True(t, initialComplete)
-	require.Equal(t, 3, initialCaptured)
+	require.True(initialComplete)
+	require.Equal(3, initialCaptured)
 	configured, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentClaude, root)
-	require.NoError(t, err)
+	require.NoError(err)
 	for _, key := range []string{"a.jsonl", "b.jsonl", "c.jsonl"} {
 		base, ok, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 			Provider: parser.AgentClaude, ConfiguredRootID: configured.ID, SourceKey: key,
 		})
-		require.NoError(t, err)
-		require.True(t, ok, key)
-		assert.Equal(t, rawsync.ManifestSnapshot, base.Kind)
+		require.NoError(err)
+		require.True(ok, key)
+		assert.Equal(rawsync.ManifestSnapshot, base.Kind)
 	}
 
-	require.NoError(t, os.Remove(filepath.Join(root, "b.jsonl")))
+	require.NoError(os.Remove(filepath.Join(root, "b.jsonl")))
 	tombstoned := 0
 	for range 8 {
 		result, err := auditor.AuditProvider(t.Context(), provider)
-		require.NoError(t, err)
-		assert.LessOrEqual(t, result.Visited+result.Tombstoned, 2)
+		require.NoError(err)
+		assert.LessOrEqual(result.Visited+result.Tombstoned, 2)
 		if !result.Complete {
-			assert.Zero(t, result.Tombstoned,
+			assert.Zero(result.Tombstoned,
 				"absence is unproven before discovery EOF")
 		}
 		tombstoned += result.Tombstoned
@@ -565,19 +580,22 @@ func TestAuditorRotatesBoundedCapturesAndRepairsDeletion(t *testing.T) {
 			break
 		}
 	}
-	assert.Equal(t, 1, tombstoned)
+	assert.Equal(1, tombstoned)
 	baseState, ok, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 		Provider: parser.AgentClaude, ConfiguredRootID: configured.ID, SourceKey: "b.jsonl",
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, rawsync.ManifestTombstone, baseState.Kind)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(rawsync.ManifestTombstone, baseState.Kind)
 }
 
 func TestAuditorDoesNotTombstoneSourceRecapturedDuringResumedScan(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	targetPath := filepath.Join(root, "target.jsonl")
-	require.NoError(t, os.WriteFile(targetPath, []byte("first"), 0o600))
+	require.NoError(os.WriteFile(targetPath, []byte("first"), 0o600))
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
 		t.Context(), filepath.Join(base, "checkpoint.db"),
@@ -585,8 +603,8 @@ func TestAuditorDoesNotTombstoneSourceRecapturedDuringResumedScan(t *testing.T) 
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 	provider := newAuditProvider(root)
 	capturer := rawcapture.New(store)
 	target := parser.SourceRef{
@@ -594,48 +612,51 @@ func TestAuditorDoesNotTombstoneSourceRecapturedDuringResumedScan(t *testing.T) 
 		Key:      "target.jsonl", DisplayPath: targetPath,
 	}
 	_, err = capturer.Capture(t.Context(), provider, target)
-	require.NoError(t, err)
-	require.NoError(t, os.Remove(targetPath))
-	require.NoError(t, os.WriteFile(filepath.Join(root, "ignored.txt"), nil, 0o600))
+	require.NoError(err)
+	require.NoError(os.Remove(targetPath))
+	require.NoError(os.WriteFile(filepath.Join(root, "ignored.txt"), nil, 0o600))
 	auditor := NewAuditor(store, capturer, 1)
 
 	paused, err := auditor.AuditProvider(t.Context(), provider)
-	require.NoError(t, err)
-	require.False(t, paused.Complete)
-	require.Zero(t, paused.Tombstoned)
-	require.NoError(t, os.WriteFile(targetPath, []byte("second"), 0o600))
+	require.NoError(err)
+	require.False(paused.Complete)
+	require.Zero(paused.Tombstoned)
+	require.NoError(os.WriteFile(targetPath, []byte("second"), 0o600))
 	_, err = capturer.Capture(t.Context(), provider, target)
-	require.NoError(t, err)
-	require.NoError(t, os.Remove(targetPath))
+	require.NoError(err)
+	require.NoError(os.Remove(targetPath))
 
 	tombstoned := 0
 	for range 4 {
 		result, err := auditor.AuditProvider(t.Context(), provider)
-		require.NoError(t, err)
+		require.NoError(err)
 		tombstoned += result.Tombstoned
 		if result.Complete {
 			break
 		}
 	}
-	assert.Zero(t, tombstoned)
+	assert.Zero(tombstoned)
 	configured, err := store.ResolveConfiguredRoot(
 		t.Context(), parser.AgentClaude, root,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	latest, found, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 		Provider:         parser.AgentClaude,
 		ConfiguredRootID: configured.ID,
 		SourceKey:        target.Key,
 	})
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, rawsync.ManifestSnapshot, latest.Kind)
+	require.NoError(err)
+	require.True(found)
+	assert.Equal(rawsync.ManifestSnapshot, latest.Kind)
 }
 
 func TestAuditorDoesNotTombstoneSourceObservedUnchangedDuringResumedScan(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	targetPath := filepath.Join(root, "target.jsonl")
-	require.NoError(t, os.WriteFile(targetPath, []byte("first"), 0o600))
+	require.NoError(os.WriteFile(targetPath, []byte("first"), 0o600))
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
 		t.Context(), filepath.Join(base, "checkpoint.db"),
@@ -643,8 +664,8 @@ func TestAuditorDoesNotTombstoneSourceObservedUnchangedDuringResumedScan(t *test
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 	provider := &staleAuditProvider{auditProvider: newAuditProvider(root)}
 	capturer := rawcapture.New(store)
 	target := parser.SourceRef{
@@ -652,53 +673,56 @@ func TestAuditorDoesNotTombstoneSourceObservedUnchangedDuringResumedScan(t *test
 		Key:      "target.jsonl", DisplayPath: targetPath,
 	}
 	_, err = capturer.Capture(t.Context(), provider, target)
-	require.NoError(t, err)
+	require.NoError(err)
 	parkedPath := targetPath + ".parked"
-	require.NoError(t, os.Rename(targetPath, parkedPath))
+	require.NoError(os.Rename(targetPath, parkedPath))
 	auditor := NewAuditor(store, capturer, 1)
 
 	selected, err := auditor.AuditProvider(t.Context(), provider)
-	require.NoError(t, err)
-	require.False(t, selected.Complete)
+	require.NoError(err)
+	require.False(selected.Complete)
 	paused, err := auditor.AuditProvider(t.Context(), provider)
-	require.NoError(t, err)
-	require.False(t, paused.Complete)
-	require.NoError(t, os.Rename(parkedPath, targetPath))
+	require.NoError(err)
+	require.False(paused.Complete)
+	require.NoError(os.Rename(parkedPath, targetPath))
 	observed, err := capturer.Capture(t.Context(), provider, target)
-	require.NoError(t, err)
-	require.Equal(t, rawcapture.StatusUnchanged, observed.Status)
+	require.NoError(err)
+	require.Equal(rawcapture.StatusUnchanged, observed.Status)
 
 	tombstoned := 0
 	complete := false
 	for range 3 {
 		result, err := auditor.AuditProvider(t.Context(), provider)
-		require.NoError(t, err)
+		require.NoError(err)
 		tombstoned += result.Tombstoned
 		complete = result.Complete
 		if complete {
 			break
 		}
 	}
-	assert.True(t, complete)
-	assert.Zero(t, tombstoned)
+	assert.True(complete)
+	assert.Zero(tombstoned)
 	configured, err := store.ResolveConfiguredRoot(
 		t.Context(), parser.AgentClaude, root,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	latest, found, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 		Provider:         parser.AgentClaude,
 		ConfiguredRootID: configured.ID,
 		SourceKey:        target.Key,
 	})
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, rawsync.ManifestSnapshot, latest.Kind)
+	require.NoError(err)
+	require.True(found)
+	assert.Equal(rawsync.ManifestSnapshot, latest.Kind)
 }
 
 func TestAuditorDoesNotTombstoneSourceObservedDegradedDuringResumedScan(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	targetPath := filepath.Join(root, "target.jsonl")
-	require.NoError(t, os.WriteFile(targetPath, []byte("first"), 0o600))
+	require.NoError(os.WriteFile(targetPath, []byte("first"), 0o600))
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
 		t.Context(), filepath.Join(base, "checkpoint.db"),
@@ -706,8 +730,8 @@ func TestAuditorDoesNotTombstoneSourceObservedDegradedDuringResumedScan(t *testi
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 	provider := &staleAuditProvider{auditProvider: newAuditProvider(root)}
 	capturer := rawcapture.New(store)
 	target := parser.SourceRef{
@@ -715,59 +739,62 @@ func TestAuditorDoesNotTombstoneSourceObservedDegradedDuringResumedScan(t *testi
 		Key:      "target.jsonl", DisplayPath: targetPath,
 	}
 	_, err = capturer.Capture(t.Context(), provider, target)
-	require.NoError(t, err)
+	require.NoError(err)
 	configured, err := store.ResolveConfiguredRoot(
 		t.Context(), parser.AgentClaude, root,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	usage, err := store.OutboxUsage(t.Context())
-	require.NoError(t, err)
+	require.NoError(err)
 	const tombstoneOnlyCapacity int64 = 1200
 	blocker, err := store.ReserveCapture(
 		t.Context(), configured.ID,
 		usage.LimitBytes-usage.UsedBytes-usage.ReservedBytes-tombstoneOnlyCapacity,
 	)
-	require.NoError(t, err)
-	require.NotEmpty(t, blocker.ID)
+	require.NoError(err)
+	require.NotEmpty(blocker.ID)
 	auditor := NewAuditor(store, capturer, 1)
 
 	selected, err := auditor.AuditProvider(t.Context(), provider)
-	require.NoError(t, err)
-	require.False(t, selected.Complete)
+	require.NoError(err)
+	require.False(selected.Complete)
 	paused, err := auditor.AuditProvider(t.Context(), provider)
-	require.NoError(t, err)
-	require.False(t, paused.Complete)
+	require.NoError(err)
+	require.False(paused.Complete)
 	observed, err := capturer.Capture(t.Context(), provider, target)
-	require.NoError(t, err)
-	require.Equal(t, rawcapture.StatusDegraded, observed.Status)
+	require.NoError(err)
+	require.Equal(rawcapture.StatusDegraded, observed.Status)
 
 	tombstoned := 0
 	complete := false
 	for range 3 {
 		result, err := auditor.AuditProvider(t.Context(), provider)
-		require.NoError(t, err)
+		require.NoError(err)
 		tombstoned += result.Tombstoned
 		complete = result.Complete
 		if complete {
 			break
 		}
 	}
-	assert.True(t, complete)
-	assert.Zero(t, tombstoned)
+	assert.True(complete)
+	assert.Zero(tombstoned)
 	latest, found, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 		Provider:         parser.AgentClaude,
 		ConfiguredRootID: configured.ID,
 		SourceKey:        target.Key,
 	})
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, rawsync.ManifestSnapshot, latest.Kind)
+	require.NoError(err)
+	require.True(found)
+	assert.Equal(rawsync.ManifestSnapshot, latest.Kind)
 }
 
 func TestAuditorDoesNotTombstoneSourceObservedBeforeCaptureFailure(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	targetPath := filepath.Join(root, "target.jsonl")
-	require.NoError(t, os.WriteFile(targetPath, []byte("first"), 0o600))
+	require.NoError(os.WriteFile(targetPath, []byte("first"), 0o600))
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
 		t.Context(), filepath.Join(base, "checkpoint.db"),
@@ -775,8 +802,8 @@ func TestAuditorDoesNotTombstoneSourceObservedBeforeCaptureFailure(t *testing.T)
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 	provider := &staleAuditProvider{auditProvider: newAuditProvider(root)}
 	capturer := rawcapture.New(store)
 	target := parser.SourceRef{
@@ -784,50 +811,53 @@ func TestAuditorDoesNotTombstoneSourceObservedBeforeCaptureFailure(t *testing.T)
 		Key:      "target.jsonl", DisplayPath: targetPath,
 	}
 	_, err = capturer.Capture(t.Context(), provider, target)
-	require.NoError(t, err)
+	require.NoError(err)
 	auditor := NewAuditor(store, capturer, 1)
 
 	selected, err := auditor.AuditProvider(t.Context(), provider)
-	require.NoError(t, err)
-	require.False(t, selected.Complete)
+	require.NoError(err)
+	require.False(selected.Complete)
 	paused, err := auditor.AuditProvider(t.Context(), provider)
-	require.NoError(t, err)
-	require.False(t, paused.Complete)
+	require.NoError(err)
+	require.False(paused.Complete)
 	provider.planErrorAt = provider.planCalls + 2
 	_, err = capturer.Capture(t.Context(), provider, target)
-	require.ErrorContains(t, err, "injected plan failure")
+	require.ErrorContains(err, "injected plan failure")
 
 	tombstoned := 0
 	complete := false
 	for range 3 {
 		result, err := auditor.AuditProvider(t.Context(), provider)
-		require.NoError(t, err)
+		require.NoError(err)
 		tombstoned += result.Tombstoned
 		complete = result.Complete
 		if complete {
 			break
 		}
 	}
-	assert.True(t, complete)
-	assert.Zero(t, tombstoned)
+	assert.True(complete)
+	assert.Zero(tombstoned)
 	configured, err := store.ResolveConfiguredRoot(
 		t.Context(), parser.AgentClaude, root,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	latest, found, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 		Provider:         parser.AgentClaude,
 		ConfiguredRootID: configured.ID,
 		SourceKey:        target.Key,
 	})
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, rawsync.ManifestSnapshot, latest.Kind)
+	require.NoError(err)
+	require.True(found)
+	assert.Equal(rawsync.ManifestSnapshot, latest.Kind)
 }
 
 func TestAuditorChargesResumedRootWorkToCurrentTraversalBudget(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	targetPath := filepath.Join(root, "target.jsonl")
-	require.NoError(t, os.WriteFile(targetPath, []byte("first"), 0o600))
+	require.NoError(os.WriteFile(targetPath, []byte("first"), 0o600))
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
 		t.Context(), filepath.Join(base, "checkpoint.db"),
@@ -835,8 +865,8 @@ func TestAuditorChargesResumedRootWorkToCurrentTraversalBudget(t *testing.T) {
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 	provider := newPartialAuditProvider(root)
 	capturer := rawcapture.New(store)
 	target := parser.SourceRef{
@@ -844,29 +874,32 @@ func TestAuditorChargesResumedRootWorkToCurrentTraversalBudget(t *testing.T) {
 		Key:      "target.jsonl", DisplayPath: targetPath,
 	}
 	_, err = capturer.Capture(t.Context(), provider, target)
-	require.NoError(t, err)
-	require.NoError(t, os.Remove(targetPath))
+	require.NoError(err)
+	require.NoError(os.Remove(targetPath))
 	auditor := NewAuditor(store, capturer, 1)
 
 	first, err := auditor.AuditProvider(t.Context(), provider)
-	require.NoError(t, err)
-	require.False(t, first.Complete)
+	require.NoError(err)
+	require.False(first.Complete)
 	second, err := auditor.AuditProvider(t.Context(), provider)
-	require.NoError(t, err)
-	require.False(t, second.Complete)
+	require.NoError(err)
+	require.False(second.Complete)
 	resumed, err := auditor.AuditProvider(t.Context(), provider)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.False(t, resumed.Complete,
+	assert.False(resumed.Complete,
 		"resumed root work must leave terminal validation for a later call")
-	assert.Zero(t, resumed.Tombstoned)
+	assert.Zero(resumed.Tombstoned)
 }
 
 func TestAuditorPeriodicPassStreamsLargeDiscoveryWithBoundedCaptureWork(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	for index := range 257 {
 		name := fmt.Sprintf("session-%03d.jsonl", index)
-		require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
+		require.NoError(os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
 	}
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
@@ -875,26 +908,29 @@ func TestAuditorPeriodicPassStreamsLargeDiscoveryWithBoundedCaptureWork(t *testi
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 	provider := newAuditProvider(root)
 	auditor := NewAuditor(store, rawcapture.New(store), 3)
 
 	result, err := auditor.AuditProvider(t.Context(), provider)
 
-	require.NoError(t, err)
-	assert.Equal(t, 1, result.Visited)
-	assert.False(t, result.Complete)
-	assert.Equal(t, 1, provider.streamCalls)
-	assert.Equal(t, 1, provider.streamedSources)
-	assert.Equal(t, 2, provider.examinedEntries)
+	require.NoError(err)
+	assert.Equal(1, result.Visited)
+	assert.False(result.Complete)
+	assert.Equal(1, provider.streamCalls)
+	assert.Equal(1, provider.streamedSources)
+	assert.Equal(2, provider.examinedEntries)
 }
 
 func TestAuditorPeriodicPassBoundsSparseDirectoryTraversal(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	for index := range 257 {
 		name := fmt.Sprintf("ignored-%03d.txt", index)
-		require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
+		require.NoError(os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
 	}
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
@@ -903,22 +939,25 @@ func TestAuditorPeriodicPassBoundsSparseDirectoryTraversal(t *testing.T) {
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 	provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(t, ok)
+	require.True(ok)
 	auditor := NewAuditor(store, rawcapture.New(store), 3)
 
 	result, err := auditor.AuditProvider(t.Context(), provider)
 
-	require.NoError(t, err)
-	assert.Zero(t, result.Visited)
-	assert.False(t, result.Complete)
+	require.NoError(err)
+	assert.Zero(result.Visited)
+	assert.False(result.Complete)
 }
 
 func TestAuditorPeriodicPassBoundsManyEmptyRoots(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	roots := make([]string, 0, 257)
 	for range 257 {
 		roots = append(roots, t.TempDir())
@@ -930,27 +969,30 @@ func TestAuditorPeriodicPassBoundsManyEmptyRoots(t *testing.T) {
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 	provider := newPartialAuditProvider(roots...)
 
 	result, err := NewAuditor(store, rawcapture.New(store), 3).
 		AuditProvider(t.Context(), provider)
 
-	require.NoError(t, err)
-	assert.Zero(t, result.Visited)
-	assert.False(t, result.Complete)
-	assert.Zero(t, provider.openedRoots,
+	require.NoError(err)
+	assert.Zero(result.Visited)
+	assert.False(result.Complete)
+	assert.Zero(provider.openedRoots,
 		"known-root probes must consume the same traversal budget")
 }
 
 func TestAuditorDoesNotTombstoneWhenDiscoverySkipsUnavailableRoot(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	unavailableRoot := t.TempDir()
 	healthyRoot := t.TempDir()
 	unavailableSource := filepath.Join(unavailableRoot, "unavailable.jsonl")
 	healthySource := filepath.Join(healthyRoot, "healthy.jsonl")
-	require.NoError(t, os.WriteFile(unavailableSource, []byte("first"), 0o600))
-	require.NoError(t, os.WriteFile(healthySource, []byte("first"), 0o600))
+	require.NoError(os.WriteFile(unavailableSource, []byte("first"), 0o600))
+	require.NoError(os.WriteFile(healthySource, []byte("first"), 0o600))
 
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
@@ -959,8 +1001,8 @@ func TestAuditorDoesNotTombstoneWhenDiscoverySkipsUnavailableRoot(t *testing.T) 
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 	provider := newPartialAuditProvider(unavailableRoot, healthyRoot)
 	auditor := NewAuditor(store, rawcapture.New(store), 4)
 
@@ -968,70 +1010,73 @@ func TestAuditorDoesNotTombstoneWhenDiscoverySkipsUnavailableRoot(t *testing.T) 
 	initialComplete := false
 	for range 4 {
 		first, err := auditor.AuditProvider(t.Context(), provider)
-		require.NoError(t, err)
+		require.NoError(err)
 		initialCaptured += first.Captured
 		if first.Complete {
 			initialComplete = true
 			break
 		}
 	}
-	require.True(t, initialComplete)
-	require.Equal(t, 2, initialCaptured)
+	require.True(initialComplete)
+	require.Equal(2, initialCaptured)
 	unavailableConfigured, err := store.ResolveConfiguredRoot(
 		t.Context(), parser.AgentClaude, unavailableRoot,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	provider.unavailableRoot = unavailableRoot
-	require.NoError(t, os.WriteFile(healthySource, []byte("second"), 0o600))
+	require.NoError(os.WriteFile(healthySource, []byte("second"), 0o600))
 	secondCaptured := 0
 	for range 4 {
 		second, err := auditor.AuditProvider(t.Context(), provider)
-		require.NoError(t, err)
-		assert.Zero(t, second.Tombstoned)
+		require.NoError(err)
+		assert.Zero(second.Tombstoned)
 		secondCaptured += second.Captured
 		if second.Complete || secondCaptured != 0 {
 			break
 		}
 	}
-	assert.Equal(t, 1, secondCaptured)
+	assert.Equal(1, secondCaptured)
 
 	provider.unavailableRoot = ""
-	require.NoError(t, os.RemoveAll(unavailableRoot))
-	require.NoError(t, os.WriteFile(healthySource, []byte("third"), 0o600))
+	require.NoError(os.RemoveAll(unavailableRoot))
+	require.NoError(os.WriteFile(healthySource, []byte("third"), 0o600))
 	thirdCaptured := 0
 	for range 4 {
 		third, err := auditor.AuditProvider(t.Context(), provider)
-		require.NoError(t, err)
-		assert.Zero(t, third.Tombstoned)
+		require.NoError(err)
+		assert.Zero(third.Tombstoned)
 		thirdCaptured += third.Captured
 		if thirdCaptured != 0 {
 			break
 		}
 	}
-	assert.Equal(t, 1, thirdCaptured)
+	assert.Equal(1, thirdCaptured)
 
 	baseState, ok, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 		Provider:         parser.AgentClaude,
 		ConfiguredRootID: unavailableConfigured.ID,
 		SourceKey:        filepath.Base(unavailableSource),
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, rawsync.ManifestSnapshot, baseState.Kind)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(rawsync.ManifestSnapshot, baseState.Kind)
 }
 
 func TestAuditorClaudePartialDiscoveryDoesNotTombstone(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	healthyRoot := t.TempDir()
 	unavailableProject := filepath.Join(root, "unavailable-project")
 	healthyProject := filepath.Join(healthyRoot, "healthy-project")
 	unavailableSource := filepath.Join(unavailableProject, "unavailable.jsonl")
 	healthySource := filepath.Join(healthyProject, "healthy.jsonl")
-	require.NoError(t, os.MkdirAll(unavailableProject, 0o755))
-	require.NoError(t, os.MkdirAll(healthyProject, 0o755))
-	require.NoError(t, os.WriteFile(unavailableSource, []byte("{}\n"), 0o600))
-	require.NoError(t, os.WriteFile(healthySource, []byte("{}\n"), 0o600))
+	require.NoError(os.MkdirAll(unavailableProject, 0o755))
+	require.NoError(os.MkdirAll(healthyProject, 0o755))
+	require.NoError(os.WriteFile(unavailableSource, []byte("{}\n"), 0o600))
+	require.NoError(os.WriteFile(healthySource, []byte("{}\n"), 0o600))
 
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
@@ -1040,83 +1085,85 @@ func TestAuditorClaudePartialDiscoveryDoesNotTombstone(t *testing.T) {
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 	provider, ok := parser.NewProvider(parser.AgentClaude, parser.ProviderConfig{
 		Roots: []string{root, healthyRoot},
 	})
-	require.True(t, ok)
+	require.True(ok)
 	discovery, err := parser.DiscoverRawCaptureSources(t.Context(), provider)
-	require.NoError(t, err)
+	require.NoError(err)
 	var unavailableKey string
 	for _, source := range discovery.Sources {
 		if source.DisplayPath == unavailableSource {
 			unavailableKey = source.Key
 		}
 	}
-	require.NotEmpty(t, unavailableKey)
+	require.NotEmpty(unavailableKey)
 	auditor := NewAuditor(store, rawcapture.New(store), 4)
 
 	initialCaptured := 0
 	initialComplete := false
 	for range 4 {
 		first, err := auditor.AuditProvider(t.Context(), provider)
-		require.NoError(t, err)
+		require.NoError(err)
 		initialCaptured += first.Captured
 		if first.Complete {
 			initialComplete = true
 			break
 		}
 	}
-	require.True(t, initialComplete)
-	require.Equal(t, 2, initialCaptured)
+	require.True(initialComplete)
+	require.Equal(2, initialCaptured)
 	configured, err := store.ResolveConfiguredRoot(
 		t.Context(), parser.AgentClaude, root,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	parkedProject := filepath.Join(t.TempDir(), "unavailable-project")
-	require.NoError(t, os.Rename(unavailableProject, parkedProject))
+	require.NoError(os.Rename(unavailableProject, parkedProject))
 	danglingTarget := filepath.Join(t.TempDir(), "missing-project")
 	if err := os.Symlink(danglingTarget, unavailableProject); err != nil {
 		t.Skipf("symlink not supported: %v", err)
 	}
-	require.NoError(t, os.WriteFile(healthySource, []byte("{\"changed\":true}\n"), 0o600))
+	require.NoError(os.WriteFile(healthySource, []byte("{\"changed\":true}\n"), 0o600))
 	partialCaptured := 0
 	for range 2 {
 		partial, err := auditor.AuditProvider(t.Context(), provider)
-		require.NoError(t, err)
-		assert.Zero(t, partial.Tombstoned)
+		require.NoError(err)
+		assert.Zero(partial.Tombstoned)
 		partialCaptured += partial.Captured
 	}
-	assert.Equal(t, 1, partialCaptured)
+	assert.Equal(1, partialCaptured)
 
 	baseState, ok, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 		Provider:         parser.AgentClaude,
 		ConfiguredRootID: configured.ID,
 		SourceKey:        unavailableKey,
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, rawsync.ManifestSnapshot, baseState.Kind)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(rawsync.ManifestSnapshot, baseState.Kind)
 
-	require.NoError(t, os.Remove(unavailableProject))
+	require.NoError(os.Remove(unavailableProject))
 	tombstoned := 0
 	for range 8 {
 		deleted, err := auditor.AuditProvider(t.Context(), provider)
-		require.NoError(t, err)
+		require.NoError(err)
 		tombstoned += deleted.Tombstoned
 		if tombstoned != 0 {
 			break
 		}
 	}
-	assert.Equal(t, 1, tombstoned)
+	assert.Equal(1, tombstoned)
 }
 
 func TestAuditorDoesNotLetOldTombstonesStarveNewSources(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	for _, name := range []string{"a.jsonl", "b.jsonl", "c.jsonl"} {
-		require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
+		require.NoError(os.WriteFile(filepath.Join(root, name), []byte(name), 0o600))
 	}
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
@@ -1125,45 +1172,47 @@ func TestAuditorDoesNotLetOldTombstonesStarveNewSources(t *testing.T) {
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 	provider := newAuditProvider(root)
 	auditor := NewAuditor(store, rawcapture.New(store), 2)
 	for range 8 {
 		result, err := auditor.AuditProvider(t.Context(), provider)
-		require.NoError(t, err)
+		require.NoError(err)
 		if result.Complete {
 			break
 		}
 	}
 	for _, name := range []string{"a.jsonl", "b.jsonl", "c.jsonl"} {
-		require.NoError(t, os.Remove(filepath.Join(root, name)))
+		require.NoError(os.Remove(filepath.Join(root, name)))
 	}
 	for range 8 {
 		_, err := auditor.AuditProvider(t.Context(), provider)
-		require.NoError(t, err)
+		require.NoError(err)
 	}
-	require.NoError(t, os.WriteFile(filepath.Join(root, "d.jsonl"), []byte("new"), 0o600))
+	require.NoError(os.WriteFile(filepath.Join(root, "d.jsonl"), []byte("new"), 0o600))
 	for range 8 {
 		_, err := auditor.AuditProvider(t.Context(), provider)
-		require.NoError(t, err)
+		require.NoError(err)
 	}
 	configured, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentClaude, root)
-	require.NoError(t, err)
+	require.NoError(err)
 	captured, ok, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 		Provider: parser.AgentClaude, ConfiguredRootID: configured.ID, SourceKey: "d.jsonl",
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
+	require.NoError(err)
+	require.True(ok)
 	assert.Equal(t, rawsync.ManifestSnapshot, captured.Kind)
 }
 
 func TestAuditorBoundedCapturesPhysicalDuplicates(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	stalePath := filepath.Join(root, "stale.jsonl")
 	preferredPath := filepath.Join(root, "preferred.jsonl")
-	require.NoError(t, os.WriteFile(stalePath, []byte("stale"), 0o600))
-	require.NoError(t, os.WriteFile(preferredPath, []byte("preferred"), 0o600))
+	require.NoError(os.WriteFile(stalePath, []byte("stale"), 0o600))
+	require.NoError(os.WriteFile(preferredPath, []byte("preferred"), 0o600))
 	stale := parser.SourceRef{
 		Provider: parser.AgentClaude, Key: "duplicate", DisplayPath: stalePath,
 	}
@@ -1181,31 +1230,33 @@ func TestAuditorBoundedCapturesPhysicalDuplicates(t *testing.T) {
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 
 	result, err := NewAuditor(store, rawcapture.New(store), 8).
 		AuditProvider(t.Context(), provider)
-	require.NoError(t, err)
-	require.True(t, result.Complete)
-	require.Equal(t, 2, result.Visited)
-	require.Equal(t, 2, result.Captured)
+	require.NoError(err)
+	require.True(result.Complete)
+	require.Equal(2, result.Visited)
+	require.Equal(2, result.Captured)
 	configured, err := store.ResolveConfiguredRoot(
 		t.Context(), parser.AgentClaude, root,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	latest, found, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 		Provider:         parser.AgentClaude,
 		ConfiguredRootID: configured.ID,
 		SourceKey:        "duplicate",
 	})
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Len(t, latest.Entries, 1)
+	require.NoError(err)
+	require.True(found)
+	require.Len(latest.Entries, 1)
 	assert.Equal(t, filepath.Base(preferredPath), latest.Entries[0].Path)
 }
 
 func TestAuditorFullCapturesPhysicalCodexDuplicatesWithinRoot(t *testing.T) {
+	require := require.New(t)
+
 	base := t.TempDir()
 	root := filepath.Join(base, "sessions")
 	uuid := "019eb791-cf7d-75c1-8439-9ed74c1229e5"
@@ -1218,17 +1269,17 @@ func TestAuditorFullCapturesPhysicalCodexDuplicatesWithinRoot(t *testing.T) {
 		root, "2026", "06", "11",
 		"rollout-2026-06-11T12-44-06-"+uuid+".jsonl",
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(livePath), 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(filepath.Dir(livePath), 0o755))
+	require.NoError(os.WriteFile(
 		archivedPath, []byte(metadata+`{"copy":"archived"}`+"\n"), 0o600,
 	))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		livePath, []byte(metadata+`{"copy":"live"}`+"\n"), 0o600,
 	))
 	provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(t, ok)
+	require.True(ok)
 	checkpointDir := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
 		t.Context(), filepath.Join(checkpointDir, "checkpoint.db"),
@@ -1236,26 +1287,26 @@ func TestAuditorFullCapturesPhysicalCodexDuplicatesWithinRoot(t *testing.T) {
 			SpoolDir: filepath.Join(checkpointDir, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 
 	result, err := NewAuditor(store, rawcapture.New(store), 8).
 		AuditProviderFull(t.Context(), provider)
-	require.NoError(t, err)
-	require.True(t, result.Complete)
-	require.Equal(t, 2, result.Visited)
-	require.Equal(t, 2, result.Captured)
+	require.NoError(err)
+	require.True(result.Complete)
+	require.Equal(2, result.Visited)
+	require.Equal(2, result.Captured)
 	configured, err := store.ResolveConfiguredRoot(
 		t.Context(), parser.AgentCodex, root,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	latest, found, err := store.CaptureBase(t.Context(), rawcheckpoint.SourceIdentity{
 		Provider:         parser.AgentCodex,
 		ConfiguredRootID: configured.ID,
 		SourceKey:        parser.CodexSourceKey(parser.AgentCodex, uuid),
 	})
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Len(t, latest.Entries, 1)
+	require.NoError(err)
+	require.True(found)
+	require.Len(latest.Entries, 1)
 	assert.NotEmpty(t, latest.Entries[0].Path)
 }

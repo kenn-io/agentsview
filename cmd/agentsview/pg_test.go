@@ -59,6 +59,9 @@ func isolateDefaultAgentDirs(t *testing.T, root string) {
 }
 
 func TestLoadPGServeConfigDoesNotInheritServeProxySettings(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := testDataDir(t)
 
 	err := os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(`
@@ -76,19 +79,22 @@ allowed_subnets = ["10.0.0.0/16"]
 [pg]
 url = "postgres://user:pass@db.example.test:5432/agentsview?sslmode=require"
 `), 0o600)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	cfg, _, err := loadPGServeConfigForTest(t)
-	require.NoError(t, err, "loadPGServeConfigForTest")
-	require.NotEmpty(t, cfg.PG.URL, "expected PG URL")
-	assert.Empty(t, cfg.PublicURL, "PublicURL should be empty")
-	assert.Empty(t, cfg.PublicOrigins, "PublicOrigins should be empty")
-	assert.Empty(t, cfg.Proxy.Mode, "Proxy.Mode should be empty")
-	assert.Equal(t, "127.0.0.1", cfg.Host)
-	assert.Equal(t, 8080, cfg.Port)
+	require.NoError(err, "loadPGServeConfigForTest")
+	require.NotEmpty(cfg.PG.URL, "expected PG URL")
+	assert.Empty(cfg.PublicURL, "PublicURL should be empty")
+	assert.Empty(cfg.PublicOrigins, "PublicOrigins should be empty")
+	assert.Empty(cfg.Proxy.Mode, "Proxy.Mode should be empty")
+	assert.Equal("127.0.0.1", cfg.Host)
+	assert.Equal(8080, cfg.Port)
 }
 
 func TestLoadPGServeConfigIgnoresInvalidPersistedServeSettings(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := testDataDir(t)
 
 	err := os.WriteFile(filepath.Join(dataDir, "config.toml"), []byte(`
@@ -100,16 +106,18 @@ mode = "bogus"
 [pg]
 url = "postgres://user:pass@db.example.test:5432/agentsview?sslmode=require"
 `), 0o600)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	cfg, _, err := loadPGServeConfigForTest(t)
-	require.NoError(t, err, "loadPGServeConfigForTest")
-	require.NotEmpty(t, cfg.PG.URL, "expected PG URL")
-	assert.Empty(t, cfg.PublicURL, "PublicURL should be empty")
-	assert.Empty(t, cfg.Proxy.Mode, "Proxy.Mode should be empty")
+	require.NoError(err, "loadPGServeConfigForTest")
+	require.NotEmpty(cfg.PG.URL, "expected PG URL")
+	assert.Empty(cfg.PublicURL, "PublicURL should be empty")
+	assert.Empty(cfg.Proxy.Mode, "Proxy.Mode should be empty")
 }
 
 func TestPGServeConfigAcceptsManagedCaddyFlags(t *testing.T) {
+	assert := assert.New(t)
+
 	testDataDir(t)
 
 	cfg, basePath, err := loadPGServeConfigForTest(t,
@@ -126,22 +134,23 @@ func TestPGServeConfigAcceptsManagedCaddyFlags(t *testing.T) {
 		"--allowed-subnet", "10.0.0.0/16",
 	)
 	require.NoError(t, err, "loadPGServeConfigForTest")
-	assert.Equal(t, "caddy", cfg.Proxy.Mode)
-	assert.Equal(t, "https://viewer.example.test:8443", cfg.PublicURL)
-	assert.Equal(t,
-		"https://app.example.test,https://viewer.example.test:8443",
+	assert.Equal("caddy", cfg.Proxy.Mode)
+	assert.Equal("https://viewer.example.test:8443", cfg.PublicURL)
+	assert.Equal("https://app.example.test,https://viewer.example.test:8443",
 		strings.Join(cfg.PublicOrigins, ","))
-	assert.Equal(t, "/usr/local/bin/caddy", cfg.Proxy.Bin)
-	assert.Equal(t, "0.0.0.0", cfg.Proxy.BindHost)
-	assert.Equal(t, 8443, cfg.Proxy.PublicPort)
-	assert.Equal(t, "/tmp/viewer.crt", cfg.Proxy.TLSCert)
-	assert.Equal(t, "/tmp/viewer.key", cfg.Proxy.TLSKey)
-	assert.Equal(t, "10.0.0.0/16",
+	assert.Equal("/usr/local/bin/caddy", cfg.Proxy.Bin)
+	assert.Equal("0.0.0.0", cfg.Proxy.BindHost)
+	assert.Equal(8443, cfg.Proxy.PublicPort)
+	assert.Equal("/tmp/viewer.crt", cfg.Proxy.TLSCert)
+	assert.Equal("/tmp/viewer.key", cfg.Proxy.TLSKey)
+	assert.Equal("10.0.0.0/16",
 		strings.Join(cfg.Proxy.AllowedSubnets, ","))
-	assert.Empty(t, basePath, "basePath should be empty")
+	assert.Empty(basePath, "basePath should be empty")
 }
 
 func TestRunPGPush_IgnoresBrokenUnselectedTarget(t *testing.T) {
+	assert := assert.New(t)
+
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
@@ -165,13 +174,15 @@ url = "postgres://archive"
 		err = runPGPush(PGPushConfig{}, "archive")
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "pg connection to archive permits plaintext")
-	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
-	assert.NotContains(t, err.Error(), "BROKEN_WORK_TARGET")
-	assert.Contains(t, out, "Target: archive")
+	assert.Contains(err.Error(), "pg connection to archive permits plaintext")
+	assert.Contains(err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
+	assert.NotContains(err.Error(), "BROKEN_WORK_TARGET")
+	assert.Contains(out, "Target: archive")
 }
 
 func TestRunPGStatus_IgnoresBrokenUnselectedTarget(t *testing.T) {
+	assert := assert.New(t)
+
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	clearConfiguredAgentEnvVars(t)
@@ -191,13 +202,16 @@ url = "postgres://archive"
 
 	err := runPGStatus("archive", PGStatusConfig{})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "pg connection to archive permits plaintext")
-	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
-	assert.NotContains(t, err.Error(), "BROKEN_WORK_TARGET")
-	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
+	assert.Contains(err.Error(), "pg connection to archive permits plaintext")
+	assert.Contains(err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
+	assert.NotContains(err.Error(), "BROKEN_WORK_TARGET")
+	assert.NoFileExists(filepath.Join(dataDir, "sessions.db"))
 }
 
 func TestRunPGStatus_IgnoresUnreadableLocalWatermark(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	clearConfiguredAgentEnvVars(t)
@@ -209,21 +223,23 @@ default_pg = "archive"
 [pg.archive]
 url = "postgres://archive"
 `)
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(dataDir, "sessions.db"),
 		nil,
 		0o600,
 	))
 
 	err := runPGStatus("archive", PGStatusConfig{})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "pg connection to archive permits plaintext")
-	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
-	assert.NotContains(t, err.Error(), "opening database")
-	assert.NotContains(t, err.Error(), "sessions.db is empty")
+	require.Error(err)
+	assert.Contains(err.Error(), "pg connection to archive permits plaintext")
+	assert.Contains(err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
+	assert.NotContains(err.Error(), "opening database")
+	assert.NotContains(err.Error(), "sessions.db is empty")
 }
 
 func TestRunPGPushAll_AggregatesTargetFailures(t *testing.T) {
+	assert := assert.New(t)
+
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
@@ -244,13 +260,15 @@ url = "postgres://archive"
 
 	err := runPGPush(PGPushConfig{AllTargets: true}, "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "2 pg target(s) failed")
-	assert.Contains(t, err.Error(), "work (default): expanding url: environment variable(s) not set: BROKEN_WORK_TARGET")
-	assert.Contains(t, err.Error(), "archive: pg connection to archive permits plaintext")
-	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
+	assert.Contains(err.Error(), "2 pg target(s) failed")
+	assert.Contains(err.Error(), "work (default): expanding url: environment variable(s) not set: BROKEN_WORK_TARGET")
+	assert.Contains(err.Error(), "archive: pg connection to archive permits plaintext")
+	assert.Contains(err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
 }
 
 func TestRunPGStatusAll_AggregatesTargetFailures(t *testing.T) {
+	assert := assert.New(t)
+
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	clearConfiguredAgentEnvVars(t)
@@ -270,10 +288,10 @@ url = "postgres://archive"
 
 	err := runPGStatus("", PGStatusConfig{AllTargets: true})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "2 pg target(s) failed")
-	assert.Contains(t, err.Error(), "work (default): expanding url: environment variable(s) not set: BROKEN_WORK_TARGET")
-	assert.Contains(t, err.Error(), "archive: pg connection to archive permits plaintext")
-	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
+	assert.Contains(err.Error(), "2 pg target(s) failed")
+	assert.Contains(err.Error(), "work (default): expanding url: environment variable(s) not set: BROKEN_WORK_TARGET")
+	assert.Contains(err.Error(), "archive: pg connection to archive permits plaintext")
+	assert.Contains(err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
 }
 
 func TestPGPushCommandPrefixesErrors(t *testing.T) {
@@ -322,7 +340,7 @@ url = "postgres://archive"
 func TestRunPGServeRejectsInvalidManagedCaddyConfigBeforePGSetup(t *testing.T) {
 	dataDir := t.TempDir()
 
-	cmd := exec.Command(os.Args[0], "-test.run=TestRunPGServeHelperProcess", "--",
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=TestRunPGServeHelperProcess", "--",
 		"--host", "0.0.0.0",
 		"--public-url", "https://viewer.example.test",
 		"--proxy", "caddy",
@@ -341,7 +359,7 @@ func TestRunPGServeRejectsInvalidManagedCaddyConfigBeforePGSetup(t *testing.T) {
 func TestRunPGServeNonLoopbackWithoutProxyFallsThroughToPGConfig(t *testing.T) {
 	dataDir := t.TempDir()
 
-	cmd := exec.Command(os.Args[0], "-test.run=TestRunPGServeHelperProcess", "--",
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=TestRunPGServeHelperProcess", "--",
 		"--host", "0.0.0.0",
 		"--port", "8081",
 	)

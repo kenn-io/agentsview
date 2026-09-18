@@ -49,10 +49,13 @@ func TestLoadCaptureUsesExplicitDataDirWithoutHome(t *testing.T) {
 }
 
 func TestLoadCaptureReadsLegacyJSONWithoutMigratingIt(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dir)
 	path := filepath.Join(dir, "config.json")
-	require.NoError(t, os.WriteFile(path, []byte(`{
+	require.NoError(os.WriteFile(path, []byte(`{
   "auth_token": "must-not-be-returned",
   "custom_model_pricing": {
     "model-test": {
@@ -65,9 +68,9 @@ func TestLoadCaptureReadsLegacyJSONWithoutMigratingIt(t *testing.T) {
 }`), 0o600))
 
 	cfg, err := LoadCapture()
-	require.NoError(t, err)
-	assert.Equal(t, int64(123),
+	require.NoError(err)
+	assert.Equal(int64(123),
 		cfg.CustomModelPricing["model-test"].InputMicrodollarsPerMTok)
-	assert.FileExists(t, path)
-	assert.NoFileExists(t, filepath.Join(dir, "config.toml"))
+	assert.FileExists(path)
+	assert.NoFileExists(filepath.Join(dir, "config.toml"))
 }

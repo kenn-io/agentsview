@@ -12,19 +12,22 @@ import (
 )
 
 func TestGetSessionActivity(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 	te.seedSession(t, "s1", "my-app", 10)
 	te.seedMessages(t, "s1", 10)
 
 	w := te.get(t, "/api/v1/sessions/s1/activity")
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(http.StatusOK, w.Code)
 
 	var body db.SessionActivityResponse
-	require.NoError(t, json.UnmarshalRead(w.Body, &body))
+	require.NoError(json.UnmarshalRead(w.Body, &body))
 
-	assert.NotZero(t, body.TotalMessages, "expected non-zero total_messages")
-	assert.NotEmpty(t, body.Buckets, "expected non-empty buckets")
-	assert.Positive(t, body.IntervalSeconds, "expected positive interval_seconds")
+	assert.NotZero(body.TotalMessages, "expected non-zero total_messages")
+	assert.NotEmpty(body.Buckets, "expected non-empty buckets")
+	assert.Positive(body.IntervalSeconds, "expected positive interval_seconds")
 }
 
 func TestGetSessionActivity_NotFound(t *testing.T) {

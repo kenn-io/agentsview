@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
-
 	"errors"
 	"fmt"
 	"io"
@@ -253,8 +252,7 @@ func (b *codexSessionBuilder) suppresses(
 ) bool {
 	if b.forkGate.active && b.parentTurnIDs == nil &&
 		b.resolveParentTurns != nil {
-		b.parentTurnIDs, _ =
-			b.resolveParentTurns(b.forkGate.parentSessionID)
+		b.parentTurnIDs, _ = b.resolveParentTurns(b.forkGate.parentSessionID)
 	}
 	return b.forkGate.suppresses(lineType, payload, b.parentTurnIDs)
 }
@@ -336,7 +334,7 @@ func (b *codexSessionBuilder) refreshPendingCallPositions() {
 	}
 
 	pendingByID := make(map[string][]int)
-	for i := 0; i < int(b.pendingCallCount); i++ {
+	for i := range int(b.pendingCallCount) {
 		b.pendingCalls[i].positionKnown = false
 		pendingByID[b.pendingCalls[i].id] = append(
 			pendingByID[b.pendingCalls[i].id], i,
@@ -350,8 +348,7 @@ func (b *codexSessionBuilder) refreshPendingCallPositions() {
 		}
 		positions = positions[len(positions)-len(pendingIndexes):]
 		for i, pendingIndex := range pendingIndexes {
-			b.pendingCalls[pendingIndex].messageOrdinal =
-				positions[i].MessageOrdinal
+			b.pendingCalls[pendingIndex].messageOrdinal = positions[i].MessageOrdinal
 			b.pendingCalls[pendingIndex].callIndex = positions[i].CallIndex
 			b.pendingCalls[pendingIndex].positionKnown = true
 		}

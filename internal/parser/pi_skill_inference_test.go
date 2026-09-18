@@ -190,13 +190,16 @@ func TestInferPiSkillNameShellCommand(t *testing.T) {
 }
 
 func TestPiProviderAttributesSkillNames(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	_, msgs := parsePiLikeTestSession(t, AgentPi, strings.Join([]string{
 		`{"type":"session","version":3,"id":"skill-test","timestamp":"2026-09-03T10:00:00Z","cwd":"/worktrees/demo"}`,
 		`{"type":"message","id":"entry-1","parentId":null,"timestamp":"2026-09-03T10:00:01Z","message":{"role":"user","content":[{"type":"text","text":"Review this change"}]}}`,
 		`{"type":"message","id":"entry-2","parentId":"entry-1","timestamp":"2026-09-03T10:00:02Z","message":{"role":"assistant","content":[{"type":"toolCall","id":"tool-1","name":"read","arguments":{"path":"skills/code-review/SKILL.md"}},{"type":"toolCall","id":"tool-2","name":"read","arguments":{"path":"auth.go"}}]}}`,
 	}, "\n"))
-	require.Len(t, msgs, 2)
-	require.Len(t, msgs[1].ToolCalls, 2)
-	assert.Equal(t, "code-review", msgs[1].ToolCalls[0].SkillName)
-	assert.Empty(t, msgs[1].ToolCalls[1].SkillName)
+	require.Len(msgs, 2)
+	require.Len(msgs[1].ToolCalls, 2)
+	assert.Equal("code-review", msgs[1].ToolCalls[0].SkillName)
+	assert.Empty(msgs[1].ToolCalls[1].SkillName)
 }

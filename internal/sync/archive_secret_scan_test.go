@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -21,15 +20,18 @@ func TestStoredSecretScansRespectArchiveContent(t *testing.T) {
 			{config.ArchiveContentUsage, 0},
 		} {
 			t.Run(operation+"/"+string(tc.policy), func(t *testing.T) {
+				assert := assert.New(t)
+				require := require.New(t)
+
 				fx := newEngineFixture(t)
-				ctx := context.Background()
+				ctx := t.Context()
 				const id = "archive-policy"
 				const accessKey = "AKIA" + "7QHWN2DKR4FYPLJM"
-				require.NoError(t, fx.db.UpsertSession(db.Session{
+				require.NoError(fx.db.UpsertSession(db.Session{
 					ID: id, Project: "proj", Machine: "local", Agent: "claude",
 					MessageCount: 2, UserMessageCount: 1,
 				}))
-				require.NoError(t, fx.db.ReplaceSessionMessages(id, []db.Message{
+				require.NoError(fx.db.ReplaceSessionMessages(id, []db.Message{
 					{SessionID: id, Ordinal: 0, Role: "user", Content: "aws " + accessKey},
 					{SessionID: id, Ordinal: 1, Role: "assistant", Content: "Checking credentials.",
 						ToolCalls: []db.ToolCall{{
@@ -40,29 +42,29 @@ func TestStoredSecretScansRespectArchiveContent(t *testing.T) {
 				}))
 				// Model a full archive opened under a stricter policy before
 				// its old message payloads have been resynchronized.
-				require.NoError(t, fx.engine.RecomputeSignals(ctx, id))
+				require.NoError(fx.engine.RecomputeSignals(ctx, id))
 				fx.db.SetArchiveContent(tc.policy)
 				if operation == "recompute" {
-					require.NoError(t, fx.engine.RecomputeSignals(ctx, id))
+					require.NoError(fx.engine.RecomputeSignals(ctx, id))
 				} else {
 					summary, err := fx.engine.ScanSecrets(ctx, SecretScanInput{}, nil)
-					require.NoError(t, err)
-					assert.Equal(t, 1, summary.Scanned)
-					assert.Equal(t, tc.wantFindings, summary.TotalFindings)
+					require.NoError(err)
+					assert.Equal(1, summary.Scanned)
+					assert.Equal(tc.wantFindings, summary.TotalFindings)
 				}
 				findings, err := fx.db.SessionSecretFindings(ctx, id)
-				require.NoError(t, err)
-				assert.Len(t, findings, tc.wantFindings)
+				require.NoError(err)
+				assert.Len(findings, tc.wantFindings)
 				if tc.policy == config.ArchiveContentTranscripts {
 					for _, finding := range findings {
-						assert.Equal(t, "message", finding.LocationKind)
-						assert.Equal(t, 0, finding.MessageOrdinal)
+						assert.Equal("message", finding.LocationKind)
+						assert.Equal(0, finding.MessageOrdinal)
 					}
 				}
 				session, err := fx.db.GetSession(ctx, id)
-				require.NoError(t, err)
-				require.NotNil(t, session)
-				assert.Equal(t, tc.wantFindings, session.SecretLeakCount)
+				require.NoError(err)
+				require.NotNil(session)
+				assert.Equal(tc.wantFindings, session.SecretLeakCount)
 			})
 		}
 	}

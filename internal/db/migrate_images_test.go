@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,7 +37,7 @@ func errorPut(_ string, _ []byte) (string, bool, error) {
 // hexSHA256 computes the lowercase hex SHA-256 of b.
 func hexSHA256(b []byte) string {
 	sum := sha256.Sum256(b)
-	return fmt.Sprintf("%x", sum[:])
+	return hex.EncodeToString(sum[:])
 }
 
 // realPut returns a put closure backed by the production asset writer.
@@ -54,6 +55,9 @@ func realPut(assetsDir string) imagePutFunc {
 //
 // Boundary: 2 blocks preserved byte-identical.
 func TestToolImageMigrationContract(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	audioBlock := `{"type":"input_audio","data":"dGVzdA==","format":"wav"}`
 	placeholderV7 := `{"type":"agentsview_image","version":7,"text":"[Image]","media_type":"image/png","byte_size":3}`
 	inlineBlock := `{"type":"input_image","image_url":"data:image/png;base64,AAEC"}`
@@ -61,58 +65,61 @@ func TestToolImageMigrationContract(t *testing.T) {
 	content := "[" + audioBlock + "," + inlineBlock + "," + placeholderV7 + "]"
 
 	projected, err := migrateToolResultImages(content, fakePut)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	var blocks []json.RawMessage
-	require.NoError(t, json.Unmarshal([]byte(projected), &blocks))
-	require.Len(t, blocks, 3)
+	require.NoError(json.Unmarshal([]byte(projected), &blocks))
+	require.Len(blocks, 3)
 
 	// migrateToolResultImageArray re-emits skipped blocks through a bytes.Buffer
 	// unchanged, so exact byte identity (not just JSON equality) is required.
-	assert.Equal(t, audioBlock, string(blocks[0]))
-	assert.Equal(t, placeholderV7, string(blocks[2]))
+	assert.Equal(audioBlock, string(blocks[0]))
+	assert.Equal(placeholderV7, string(blocks[2]))
 	t.Logf("2 blocks preserved byte-identical: preserved=2, migrated=1")
 
 	// Migrated block has image_ref and markdown text.
 	var migrated map[string]json.RawMessage
-	require.NoError(t, json.Unmarshal(blocks[1], &migrated))
-	assert.Contains(t, string(migrated["image_ref"]), "asset://")
-	assert.Contains(t, string(migrated["text"]), "![Image:")
-	assert.Contains(t, string(migrated["text"]), "asset://")
-	assert.Equal(t, `"agentsview_image"`, string(migrated["type"]))
-	assert.Equal(t, `1`, string(migrated["version"]))
+	require.NoError(json.Unmarshal(blocks[1], &migrated))
+	assert.Contains(string(migrated["image_ref"]), "asset://")
+	assert.Contains(string(migrated["text"]), "![Image:")
+	assert.Contains(string(migrated["text"]), "asset://")
+	assert.Equal(`"agentsview_image"`, string(migrated["type"]))
+	assert.Equal(`1`, string(migrated["version"]))
 
 	// A failing put returns original content and the error.
 	result, err2 := migrateToolResultImages(content, errorPut)
-	require.Error(t, err2)
-	assert.Equal(t, content, result)
+	require.Error(err2)
+	assert.Equal(content, result)
 }
 
 // TestMigrateLeavesBlockInlineWhenPutFails verifies the fault guard:
 // a put failure leaves the row byte-identical and rolls back.
 // Boundary: 0 rows carrying image_ref after failure.
 func TestMigrateLeavesBlockInlineWhenPutFails(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	seedArtifactOrigin(t, d)
 	insertSession(t, d, "fail-put", "project")
 	insertMessages(t, d, testImageMessage("fail-put"))
 
 	var beforeContent string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "fail-put",
 	).Scan(&beforeContent))
-	assert.Contains(t, beforeContent, "input_image")
+	assert.Contains(beforeContent, "input_image")
 
 	_, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, errorPut)
-	require.Error(t, err)
+	require.Error(err)
 
 	var afterContent string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "fail-put",
 	).Scan(&afterContent))
 	// Boundary: 0 rows carrying image_ref after failure.
-	assert.Equal(t, beforeContent, afterContent)
-	assert.NotContains(t, afterContent, "image_ref")
+	assert.Equal(beforeContent, afterContent)
+	assert.NotContains(afterContent, "image_ref")
 
 }
 
@@ -121,6 +128,9 @@ func TestMigrateLeavesBlockInlineWhenPutFails(t *testing.T) {
 // session's committed payloads, the error names the failed session, and the
 // first session's rows are committed while the second's are unchanged.
 func TestMigratePartialFailurePreservesReport(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	assetsDir := t.TempDir()
 
@@ -131,7 +141,7 @@ func TestMigratePartialFailurePreservesReport(t *testing.T) {
 
 	// Snapshot second session content before migration.
 	var secondBefore string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "pf-second",
 	).Scan(&secondBefore))
 
@@ -147,36 +157,39 @@ func TestMigratePartialFailurePreservesReport(t *testing.T) {
 	}
 
 	report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, countingPut)
-	require.Error(t, err)
+	require.Error(err)
 
 	// Error names the failed session.
-	assert.Contains(t, err.Error(), "pf-second")
+	assert.Contains(err.Error(), "pf-second")
 
 	// Report reflects only the committed first session.
-	assert.Equal(t, 1, report.Sessions)
-	assert.Equal(t, 1, report.Changed)
-	assert.Equal(t, int64(1), report.Payloads)
+	assert.Equal(1, report.Sessions)
+	assert.Equal(1, report.Changed)
+	assert.Equal(int64(1), report.Payloads)
 
 	// First session's row is migrated.
 	var firstAfter string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "pf-first",
 	).Scan(&firstAfter))
-	assert.Contains(t, firstAfter, "image_ref")
-	assert.Contains(t, firstAfter, "asset://")
+	assert.Contains(firstAfter, "image_ref")
+	assert.Contains(firstAfter, "asset://")
 
 	// Second session's row is unchanged.
 	var secondAfter string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "pf-second",
 	).Scan(&secondAfter))
-	assert.Equal(t, secondBefore, secondAfter)
-	assert.NotContains(t, secondAfter, "image_ref")
+	assert.Equal(secondBefore, secondAfter)
+	assert.NotContains(secondAfter, "image_ref")
 }
 
 // TestMigrateCancellationPreservesReport verifies that cancellation after a
 // committed session still reports the work that preceded it.
 func TestMigrateCancellationPreservesReport(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	assetsDir := t.TempDir()
 	insertSession(t, d, "cancel-first", "project")
@@ -199,28 +212,31 @@ func TestMigrateCancellationPreservesReport(t *testing.T) {
 	}
 
 	report, err := d.scanToolImages(ctx, StripImagesFilter{}, countMigratable, apply)
-	require.ErrorIs(t, err, context.Canceled)
-	assert.Equal(t, 1, report.Sessions)
-	assert.Equal(t, 1, report.Changed)
-	assert.Equal(t, int64(1), report.Payloads)
+	require.ErrorIs(err, context.Canceled)
+	assert.Equal(1, report.Sessions)
+	assert.Equal(1, report.Changed)
+	assert.Equal(int64(1), report.Payloads)
 	t.Logf("cancellation report: sessions=%d changed=%d payloads=%d", report.Sessions, report.Changed, report.Payloads)
 
 	var firstContent string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "cancel-first",
 	).Scan(&firstContent))
-	assert.Contains(t, firstContent, "image_ref")
+	assert.Contains(firstContent, "image_ref")
 
 	var secondContent string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "cancel-second",
 	).Scan(&secondContent))
-	assert.Contains(t, secondContent, "input_image")
+	assert.Contains(secondContent, "input_image")
 }
 
 // TestMigrateStatsFailurePreservesReport verifies that a statistics error
 // after a committed session still reports the work that preceded it.
 func TestMigrateStatsFailurePreservesReport(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	assetsDir := t.TempDir()
 	insertSession(t, d, "stats-first", "project")
@@ -239,20 +255,20 @@ func TestMigrateStatsFailurePreservesReport(t *testing.T) {
 		applies++
 		if applies == 1 {
 			_, err = d.getWriter().Exec("DROP TABLE tool_result_events")
-			require.NoError(t, err)
+			require.NoError(err)
 		}
 		return changed, nil
 	}
 
 	report, err := d.scanToolImages(t.Context(), StripImagesFilter{}, countMigratable, apply)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "tool result bytes")
-	assert.Equal(t, 1, report.Sessions)
-	assert.Equal(t, 1, report.Changed)
-	assert.Equal(t, int64(1), report.Payloads)
+	require.Error(err)
+	assert.ErrorContains(err, "tool result bytes")
+	assert.Equal(1, report.Sessions)
+	assert.Equal(1, report.Changed)
+	assert.Equal(int64(1), report.Payloads)
 	entries, readErr := os.ReadDir(assetsDir)
-	require.NoError(t, readErr)
-	assert.Len(t, entries, 1)
+	require.NoError(readErr)
+	assert.Len(entries, 1)
 	t.Logf("stats failure report: sessions=%d changed=%d payloads=%d", report.Sessions, report.Changed, report.Payloads)
 }
 
@@ -271,6 +287,9 @@ func TestMigratedReferenceMatchesStoredFile(t *testing.T) {
 		{name: "same-size-corrupt-object", seedCorrupt: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			d := testDB(t)
 			assetsDir := t.TempDir()
 			insertSession(t, d, "ref-match", "project")
@@ -279,24 +298,24 @@ func TestMigratedReferenceMatchesStoredFile(t *testing.T) {
 			if tt.seedCorrupt {
 				corrupt := append([]byte(nil), decoded...)
 				corrupt[0] ^= 0xff
-				require.NoError(t, os.WriteFile(filepath.Join(assetsDir, filename), corrupt, 0o644))
-				assert.Len(t, corrupt, len(decoded))
+				require.NoError(os.WriteFile(filepath.Join(assetsDir, filename), corrupt, 0o644))
+				assert.Len(corrupt, len(decoded))
 			}
 
 			report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, realPut(assetsDir))
-			require.NoError(t, err)
-			assert.Equal(t, 1, report.Changed)
+			require.NoError(err)
+			assert.Equal(1, report.Changed)
 
 			var storedContent string
-			require.NoError(t, d.getReader().QueryRow(
+			require.NoError(d.getReader().QueryRow(
 				"SELECT content FROM tool_result_events WHERE session_id = ?", "ref-match",
 			).Scan(&storedContent))
-			assert.NotContains(t, storedContent, "input_image")
-			assert.Contains(t, storedContent, `"text":"before"`)
-			assert.Contains(t, storedContent, `"text":"after"`)
+			assert.NotContains(storedContent, "input_image")
+			assert.Contains(storedContent, `"text":"before"`)
+			assert.Contains(storedContent, `"text":"after"`)
 
 			var blocks []json.RawMessage
-			require.NoError(t, json.Unmarshal([]byte(storedContent), &blocks))
+			require.NoError(json.Unmarshal([]byte(storedContent), &blocks))
 
 			var imageRef, sha256Hex string
 			for _, raw := range blocks {
@@ -305,29 +324,29 @@ func TestMigratedReferenceMatchesStoredFile(t *testing.T) {
 					continue
 				}
 				if refRaw, ok := m["image_ref"]; ok {
-					require.NoError(t, json.Unmarshal(refRaw, &imageRef))
-					require.NoError(t, json.Unmarshal(m["sha256"], &sha256Hex))
+					require.NoError(json.Unmarshal(refRaw, &imageRef))
+					require.NoError(json.Unmarshal(m["sha256"], &sha256Hex))
 					break
 				}
 			}
-			require.Equal(t, "asset://"+filename, imageRef)
+			require.Equal("asset://"+filename, imageRef)
 
 			stored, err := os.ReadFile(filepath.Join(assetsDir, filename))
-			require.NoError(t, err)
-			assert.Equal(t, decoded, stored)
-			assert.Equal(t, sum, sha256.Sum256(stored))
-			assert.Equal(t, hexSHA256(decoded), sha256Hex)
+			require.NoError(err)
+			assert.Equal(decoded, stored)
+			assert.Equal(sum, sha256.Sum256(stored))
+			assert.Equal(hexSHA256(decoded), sha256Hex)
 
 			messages, err := d.GetAllMessages(t.Context(), "ref-match")
-			require.NoError(t, err)
-			require.Len(t, messages, 1)
-			require.Len(t, messages[0].ToolCalls, 1)
+			require.NoError(err)
+			require.Len(messages, 1)
+			require.Len(messages[0].ToolCalls, 1)
 			call := messages[0].ToolCalls[0]
-			assert.Equal(t, storedContent, call.ResultContent)
-			assert.NotContains(t, call.ResultContent, "input_image")
+			assert.Equal(storedContent, call.ResultContent)
+			assert.NotContains(call.ResultContent, "input_image")
 
 			var summaryLength, eventLength int
-			require.NoError(t, d.getReader().QueryRow(`
+			require.NoError(d.getReader().QueryRow(`
 				SELECT tc.result_content_length, ev.content_length
 				FROM tool_calls tc
 				JOIN messages m ON m.id = tc.message_id
@@ -338,9 +357,9 @@ func TestMigratedReferenceMatchesStoredFile(t *testing.T) {
 				WHERE tc.session_id = ? AND tc.tool_use_id = ?`,
 				"ref-match", "call-1",
 			).Scan(&summaryLength, &eventLength))
-			assert.Equal(t, len(storedContent), eventLength)
-			assert.Equal(t, eventLength, summaryLength)
-			assert.Equal(t, eventLength, call.ResultContentLength)
+			assert.Equal(len(storedContent), eventLength)
+			assert.Equal(eventLength, summaryLength)
+			assert.Equal(eventLength, call.ResultContentLength)
 		})
 	}
 }
@@ -350,6 +369,9 @@ func TestMigratedReferenceMatchesStoredFile(t *testing.T) {
 // archive row is unchanged, and a retry converges.
 // Boundary: 1 file after 2 attempts.
 func TestMigrateWritesBeforeCommit(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	seedArtifactOrigin(t, d)
 	assetsDir := t.TempDir()
@@ -366,14 +388,14 @@ func TestMigrateWritesBeforeCommit(t *testing.T) {
 		"tool", "completed", content, len(content),
 		"2026-01-01T00:00:00Z", 0,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	clearArtifactExportQueue(t, d)
 
 	// Trigger that fires after bumpTranscriptRevisionTx updates transcript_revision,
 	// aborting the transaction. At that point content UPDATEs have run but the
 	// file has already been written to disk (projection runs before UPDATEs).
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
+	require.NoError(d.Update(func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
 			CREATE TRIGGER fail_after_revision_bump
 			AFTER UPDATE OF transcript_revision ON sessions
 			BEGIN
@@ -386,35 +408,35 @@ func TestMigrateWritesBeforeCommit(t *testing.T) {
 
 	// First attempt: file written but transaction rolls back.
 	_, err = d.MigrateToolImages(t.Context(), StripImagesFilter{}, put)
-	require.Error(t, err)
+	require.Error(err)
 
 	// Boundary: 1 file on disk despite the rollback.
 	entries, err := os.ReadDir(assetsDir)
-	require.NoError(t, err)
-	assert.Len(t, entries, 1)
+	require.NoError(err)
+	assert.Len(entries, 1)
 
 	// Archive row still carries inline content.
 	var storedAfterFail string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT content FROM tool_result_events WHERE session_id = ?",
 		"write-before-commit",
 	).Scan(&storedAfterFail))
-	assert.Contains(t, storedAfterFail, "input_image")
-	assert.NotContains(t, storedAfterFail, "image_ref")
+	assert.Contains(storedAfterFail, "input_image")
+	assert.NotContains(storedAfterFail, "image_ref")
 
 	// Drop the trigger so the retry can succeed.
 	_, err = d.getWriter().Exec(`DROP TRIGGER fail_after_revision_bump`)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// Retry converges: same file (created=false), row now has image_ref.
 	report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, put)
-	require.NoError(t, err)
-	assert.Equal(t, 1, report.Changed)
+	require.NoError(err)
+	assert.Equal(1, report.Changed)
 
 	// Boundary: still 1 file after 2 attempts.
 	entries2, err := os.ReadDir(assetsDir)
-	require.NoError(t, err)
-	assert.Len(t, entries2, 1)
+	require.NoError(err)
+	assert.Len(entries2, 1)
 	t.Logf("1 file after 2 attempts: %d on disk", len(entries2))
 }
 
@@ -423,6 +445,9 @@ func TestMigrateWritesBeforeCommit(t *testing.T) {
 // and an inline image/svg+xml payload stays inline.
 // Boundary: 0 files written.
 func TestMigrateSkipsStrippedAndUnservable(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	assetsDir := t.TempDir()
 	insertSession(t, d, "skip-ineligible", "project")
@@ -443,39 +468,39 @@ func TestMigrateSkipsStrippedAndUnservable(t *testing.T) {
 		"skip-ineligible", placeholderContent, len(placeholderContent),
 		"skip-ineligible", svgContent, len(svgContent),
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	var beforeRevision string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT transcript_revision FROM sessions WHERE id = ?", "skip-ineligible",
 	).Scan(&beforeRevision))
 
 	put := realPut(assetsDir)
 	report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, put)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// Boundary: 0 files written.
 	entries, err := os.ReadDir(assetsDir)
-	require.NoError(t, err)
-	assert.Empty(t, entries)
+	require.NoError(err)
+	assert.Empty(entries)
 	t.Logf("0 files written: %d in assets dir", len(entries))
-	assert.Zero(t, report.Sessions)
-	assert.Zero(t, report.Changed)
+	assert.Zero(report.Sessions)
+	assert.Zero(report.Changed)
 
 	// SVG payload stays inline.
 	var svgAfter string
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(d.getReader().QueryRow(`
 		SELECT content FROM tool_result_events
 		WHERE session_id = ? AND event_index = 1`, "skip-ineligible",
 	).Scan(&svgAfter))
-	assert.Equal(t, svgContent, svgAfter)
+	assert.Equal(svgContent, svgAfter)
 
 	// Revision unchanged.
 	var afterRevision string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT transcript_revision FROM sessions WHERE id = ?", "skip-ineligible",
 	).Scan(&afterRevision))
-	assert.Equal(t, beforeRevision, afterRevision)
+	assert.Equal(beforeRevision, afterRevision)
 }
 
 // TestMigrateRejectsUnsupportedImageMediaTypes verifies that acceptance is the
@@ -485,6 +510,9 @@ func TestMigrateSkipsStrippedAndUnservable(t *testing.T) {
 func TestMigrateRejectsUnsupportedImageMediaTypes(t *testing.T) {
 	for _, mediaType := range []string{"image/bmp", "image/jpg"} {
 		t.Run(mediaType, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			d := testDB(t)
 			assetsDir := t.TempDir()
 			insertSession(t, d, "reject-media", "project")
@@ -500,29 +528,29 @@ func TestMigrateRejectsUnsupportedImageMediaTypes(t *testing.T) {
 					'2026-01-01T00:00:00Z', 0)`,
 				"reject-media", content, len(content),
 			)
-			require.NoError(t, err)
+			require.NoError(err)
 
 			report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, realPut(assetsDir))
-			require.NoError(t, err)
-			assert.Zero(t, report.Sessions)
-			assert.Zero(t, report.Payloads)
+			require.NoError(err)
+			assert.Zero(report.Sessions)
+			assert.Zero(report.Payloads)
 
 			var after string
-			require.NoError(t, d.getReader().QueryRow(
+			require.NoError(d.getReader().QueryRow(
 				"SELECT content FROM tool_result_events WHERE session_id = ?", "reject-media",
 			).Scan(&after))
-			assert.Equal(t, content, after)
+			assert.Equal(content, after)
 
 			entries, err := os.ReadDir(assetsDir)
-			require.NoError(t, err)
-			assert.Empty(t, entries)
+			require.NoError(err)
+			assert.Empty(entries)
 			t.Logf("%s: 0 files written, block unchanged: %d in assets dir", mediaType, len(entries))
 
 			// db strip --images still removes these payloads: strip accepts any
 			// image/* data URI, so the two commands disagree by design.
 			stripped, stats := StripToolResultImages(content)
-			assert.Equal(t, int64(1), stats.Payloads)
-			assert.Contains(t, stripped, `"type":"agentsview_image"`)
+			assert.Equal(int64(1), stats.Payloads)
+			assert.Contains(stripped, `"type":"agentsview_image"`)
 		})
 	}
 }
@@ -533,6 +561,9 @@ func TestMigrateRejectsUnsupportedImageMediaTypes(t *testing.T) {
 // and put must never see the unsupported block: assets.Put would reject it and
 // the projection error would abort the whole session transaction.
 func TestMigratePreviewAndApplyAgreeOnUnsupportedType(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	assetsDir := t.TempDir()
 	insertSession(t, d, "mixed-media", "project")
@@ -548,10 +579,10 @@ func TestMigratePreviewAndApplyAgreeOnUnsupportedType(t *testing.T) {
 			'2026-01-01T00:00:00Z', 0)`,
 		"mixed-media", content, len(content),
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	preview, err := d.PreviewMigrateToolImages(t.Context(), StripImagesFilter{})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	write := realPut(assetsDir)
 	var putTypes []string
@@ -560,19 +591,19 @@ func TestMigratePreviewAndApplyAgreeOnUnsupportedType(t *testing.T) {
 		return write(mediaType, body)
 	}
 	applied, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, put)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.Equal(t, preview.Payloads, applied.Payloads)
-	assert.Equal(t, int64(1), applied.Payloads)
-	assert.Equal(t, preview.Sessions, applied.Sessions)
-	assert.Equal(t, []string{"image/png"}, putTypes)
+	assert.Equal(preview.Payloads, applied.Payloads)
+	assert.Equal(int64(1), applied.Payloads)
+	assert.Equal(preview.Sessions, applied.Sessions)
+	assert.Equal([]string{"image/png"}, putTypes)
 
 	var after string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "mixed-media",
 	).Scan(&after))
-	assert.Contains(t, after, "image_ref")
-	assert.Contains(t, after, "data:image/bmp;base64,AAEC")
+	assert.Contains(after, "image_ref")
+	assert.Contains(after, "data:image/bmp;base64,AAEC")
 	t.Logf("preview payloads=%d, applied payloads=%d, put calls=%d",
 		preview.Payloads, applied.Payloads, len(putTypes))
 }
@@ -602,6 +633,9 @@ func TestMigrateSummaryPutFailurePreservesContent(t *testing.T) {
 // migratable payloads produces no publications, no revision bump, no queue row.
 // Boundary: 0 publications.
 func TestMigrateNoOpPreservesRevisionAndQueue(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	seedArtifactOrigin(t, d)
 	assetsDir := t.TempDir()
@@ -619,7 +653,7 @@ func TestMigrateNoOpPreservesRevisionAndQueue(t *testing.T) {
 	})
 
 	var beforeRevision string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT transcript_revision FROM sessions WHERE id = ?", "noop-session",
 	).Scan(&beforeRevision))
 
@@ -631,45 +665,45 @@ func TestMigrateNoOpPreservesRevisionAndQueue(t *testing.T) {
 		"UPDATE sessions SET quality_signal_version = 7, last_write_incremental = 1 WHERE id = ?",
 		"noop-session",
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	// Clear after seeding: the sessions UPDATE may trigger an artifact-export enqueue.
 	clearArtifactExportQueue(t, d)
 
 	put := realPut(assetsDir)
 	report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, put)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// Boundary: 0 publications.
-	assert.Zero(t, report.Sessions)
-	assert.Zero(t, report.Changed)
+	assert.Zero(report.Sessions)
+	assert.Zero(report.Changed)
 
 	var afterRevision string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT transcript_revision FROM sessions WHERE id = ?", "noop-session",
 	).Scan(&afterRevision))
-	assert.Equal(t, beforeRevision, afterRevision)
+	assert.Equal(beforeRevision, afterRevision)
 
 	// No new publication queued: pending stays 0 (clearArtifactExportQueue zeros
 	// rows but does not delete them).
 	var pending int
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT pending FROM artifact_export_queue WHERE session_id = ?", "noop-session",
 	).Scan(&pending))
-	assert.Zero(t, pending)
+	assert.Zero(pending)
 
 	// Signal invalidation and incremental-marker reset must not fire.
 	var qualitySignalVersion, lastWriteIncremental int
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT quality_signal_version, last_write_incremental FROM sessions WHERE id = ?",
 		"noop-session",
 	).Scan(&qualitySignalVersion, &lastWriteIncremental))
-	assert.Equal(t, 7, qualitySignalVersion, "quality_signal_version must not be zeroed by invalidateSessionSignalsTx")
-	assert.Equal(t, 1, lastWriteIncremental, "last_write_incremental must not be zeroed by resetIncrementalMarkerTx")
+	assert.Equal(7, qualitySignalVersion, "quality_signal_version must not be zeroed by invalidateSessionSignalsTx")
+	assert.Equal(1, lastWriteIncremental, "last_write_incremental must not be zeroed by resetIncrementalMarkerTx")
 
 	// Nothing written to the assets directory.
 	entries, err := os.ReadDir(assetsDir)
-	require.NoError(t, err)
-	assert.Empty(t, entries)
+	require.NoError(err)
+	assert.Empty(entries)
 	t.Logf("0 publications: sessions=%d, changed=%d, assets=%d", report.Sessions, report.Changed, len(entries))
 }
 
@@ -677,6 +711,9 @@ func TestMigrateNoOpPreservesRevisionAndQueue(t *testing.T) {
 // in two sessions produces one file and two identical asset:// references.
 // Boundary: 1 file for 2 references.
 func TestMigrateDeduplicatesAcrossSessions(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	assetsDir := t.TempDir()
 	for _, id := range []string{"dedup-a", "dedup-b"} {
@@ -686,23 +723,23 @@ func TestMigrateDeduplicatesAcrossSessions(t *testing.T) {
 
 	put := realPut(assetsDir)
 	report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, put)
-	require.NoError(t, err)
-	assert.Equal(t, 2, report.Changed)
+	require.NoError(err)
+	assert.Equal(2, report.Changed)
 
 	// Boundary: 1 file for 2 references.
 	entries, err := os.ReadDir(assetsDir)
-	require.NoError(t, err)
-	assert.Len(t, entries, 1)
+	require.NoError(err)
+	assert.Len(entries, 1)
 	t.Logf("1 file for 2 references: files=%d", len(entries))
 
 	refs := make([]string, 0, 2)
 	for _, id := range []string{"dedup-a", "dedup-b"} {
 		var content string
-		require.NoError(t, d.getReader().QueryRow(
+		require.NoError(d.getReader().QueryRow(
 			"SELECT content FROM tool_result_events WHERE session_id = ?", id,
 		).Scan(&content))
 		var blocks []json.RawMessage
-		require.NoError(t, json.Unmarshal([]byte(content), &blocks))
+		require.NoError(json.Unmarshal([]byte(content), &blocks))
 		for _, raw := range blocks {
 			var m map[string]json.RawMessage
 			if json.Unmarshal(raw, &m) != nil {
@@ -710,13 +747,13 @@ func TestMigrateDeduplicatesAcrossSessions(t *testing.T) {
 			}
 			if refRaw, ok := m["image_ref"]; ok {
 				var ref string
-				require.NoError(t, json.Unmarshal(refRaw, &ref))
+				require.NoError(json.Unmarshal(refRaw, &ref))
 				refs = append(refs, ref)
 			}
 		}
 	}
-	require.Len(t, refs, 2)
-	assert.Equal(t, refs[0], refs[1])
+	require.Len(refs, 2)
+	assert.Equal(refs[0], refs[1])
 }
 
 // TestMigrateStateMatrix covers keep, drop, tombstoned-session, and orphan
@@ -746,29 +783,34 @@ func TestMigrateStateMatrix(t *testing.T) {
 
 	// tombstoned: session deleted from table; not selected.
 	t.Run("tombstoned", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		d := testDB(t)
 		assetsDir := t.TempDir()
 		insertSession(t, d, "tombstoned", "project")
 		insertMessages(t, d, testImageMessage("tombstoned"))
 		_, err := d.getWriter().Exec("DELETE FROM sessions WHERE id = ?", "tombstoned")
-		require.NoError(t, err)
+		require.NoError(err)
 		report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, realPut(assetsDir))
-		require.NoError(t, err)
-		assert.Zero(t, report.Sessions)
+		require.NoError(err)
+		assert.Zero(report.Sessions)
 		entries, err := os.ReadDir(assetsDir)
-		require.NoError(t, err)
-		assert.Empty(t, entries)
+		require.NoError(err)
+		assert.Empty(entries)
 	})
 
 	// trashed and source-missing sessions are reachable.
 	t.Run("trashed-and-source-missing", func(t *testing.T) {
+		require := require.New(t)
+
 		d := testDB(t)
 		assetsDir := t.TempDir()
 		insertSession(t, d, "trashed-mig", "project")
 		insertSession(t, d, "srcmissing-mig", "project")
 		insertMessages(t, d, testImageMessage("trashed-mig"))
 		insertMessages(t, d, testImageMessage("srcmissing-mig"))
-		require.NoError(t, d.SoftDeleteSession("trashed-mig"))
+		require.NoError(d.SoftDeleteSession("trashed-mig"))
 		sourcePath := filepath.Join(t.TempDir(), "missing.jsonl")
 		insertSession(t, d, "srcmissing-mig", "project", func(s *Session) {
 			s.FilePath = &sourcePath
@@ -777,9 +819,9 @@ func TestMigrateStateMatrix(t *testing.T) {
 			"UPDATE sessions SET source_missing_at = ? WHERE id = ?",
 			"2026-01-01T00:00:00Z", "srcmissing-mig",
 		)
-		require.NoError(t, err)
+		require.NoError(err)
 		report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, realPut(assetsDir))
-		require.NoError(t, err)
+		require.NoError(err)
 		assert.Equal(t, 2, report.Changed)
 	})
 
@@ -787,6 +829,9 @@ func TestMigrateStateMatrix(t *testing.T) {
 	// exercises migrateToolResultSummaryImages. Only the inline image block
 	// within the labeled section is migrated; the plain-text section is unchanged.
 	t.Run("labeled-summary", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		d := testDB(t)
 		assetsDir := t.TempDir()
 		insertSession(t, d, "labeled-sum", "project")
@@ -803,27 +848,30 @@ func TestMigrateStateMatrix(t *testing.T) {
 			"tool", "completed", labeledContent, len(labeledContent),
 			"2026-01-01T00:00:00Z", 0,
 		)
-		require.NoError(t, err)
+		require.NoError(err)
 
 		report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, realPut(assetsDir))
-		require.NoError(t, err)
-		assert.Equal(t, 1, report.Changed)
+		require.NoError(err)
+		assert.Equal(1, report.Changed)
 
 		var stored string
-		require.NoError(t, d.getReader().QueryRow(
+		require.NoError(d.getReader().QueryRow(
 			"SELECT content FROM tool_result_events WHERE session_id = ?", "labeled-sum",
 		).Scan(&stored))
-		assert.Contains(t, stored, "image_ref")
-		assert.Contains(t, stored, "asset://")
-		assert.Contains(t, stored, "agent-b:")
-		assert.Contains(t, stored, `"text":"plain"`)
-		assert.NotContains(t, stored, "input_image")
+		assert.Contains(stored, "image_ref")
+		assert.Contains(stored, "asset://")
+		assert.Contains(stored, "agent-b:")
+		assert.Contains(stored, `"text":"plain"`)
+		assert.NotContains(stored, "input_image")
 	})
 
 	// keep-to-drop-historical: session with a mix of historical inline content
 	// (stored under keep policy) and an already-stripped placeholder (stored
 	// under drop policy). Migration migrates only the inline block.
 	t.Run("keep-to-drop-historical", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		d := testDB(t)
 		assetsDir := t.TempDir()
 		insertSession(t, d, "ktd-session", "project")
@@ -843,33 +891,36 @@ func TestMigrateStateMatrix(t *testing.T) {
 			"ktd-session", inlineContent, len(inlineContent),
 			"ktd-session", strippedContent, len(strippedContent),
 		)
-		require.NoError(t, err)
+		require.NoError(err)
 
 		report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, realPut(assetsDir))
-		require.NoError(t, err)
-		assert.Equal(t, 1, report.Changed)
-		assert.Equal(t, int64(1), report.Payloads, "only the historical inline event should be migrated")
+		require.NoError(err)
+		assert.Equal(1, report.Changed)
+		assert.Equal(int64(1), report.Payloads, "only the historical inline event should be migrated")
 
 		// Inline event is migrated.
 		var inlineAfter string
-		require.NoError(t, d.getReader().QueryRow(`
+		require.NoError(d.getReader().QueryRow(`
 			SELECT content FROM tool_result_events
 			WHERE session_id = ? AND event_index = 0`, "ktd-session",
 		).Scan(&inlineAfter))
-		assert.Contains(t, inlineAfter, "image_ref")
+		assert.Contains(inlineAfter, "image_ref")
 
 		// Already-stripped event is unchanged.
 		var strippedAfter string
-		require.NoError(t, d.getReader().QueryRow(`
+		require.NoError(d.getReader().QueryRow(`
 			SELECT content FROM tool_result_events
 			WHERE session_id = ? AND event_index = 1`, "ktd-session",
 		).Scan(&strippedAfter))
-		assert.Equal(t, strippedContent, strippedAfter)
+		assert.Equal(strippedContent, strippedAfter)
 	})
 
 	// late-result: a tool result event that arrived via an incremental write
 	// (event_index > 0) carries an inline image. Migration reaches it.
 	t.Run("late-result", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		d := testDB(t)
 		assetsDir := t.TempDir()
 		insertSession(t, d, "late-mig", "project")
@@ -886,25 +937,28 @@ func TestMigrateStateMatrix(t *testing.T) {
 			"function_call_output", "completed", lateContent, len(lateContent),
 			"2026-01-01T00:00:01Z", 1,
 		)
-		require.NoError(t, err)
+		require.NoError(err)
 
 		report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, realPut(assetsDir))
-		require.NoError(t, err)
-		assert.Equal(t, 1, report.Changed)
+		require.NoError(err)
+		assert.Equal(1, report.Changed)
 
 		var stored string
-		require.NoError(t, d.getReader().QueryRow(
+		require.NoError(d.getReader().QueryRow(
 			"SELECT content FROM tool_result_events WHERE session_id = ?", "late-mig",
 		).Scan(&stored))
-		assert.Contains(t, stored, "image_ref")
-		assert.Contains(t, stored, "asset://")
-		assert.NotContains(t, stored, "input_image")
+		assert.Contains(stored, "image_ref")
+		assert.Contains(stored, "asset://")
+		assert.NotContains(stored, "input_image")
 	})
 
 	// blocked-result-neighbor: a withheld (blocked) tool result beside a migratable
 	// inline image. Migration must not alter the blocked result's accounting length.
 	// Boundary: 913, the neighboring withheld empty result's retained accounting length.
 	t.Run("blocked-result-neighbor", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		d := testDB(t)
 		assetsDir := t.TempDir()
 		insertSession(t, d, "blocked-nbr", "project")
@@ -946,16 +1000,16 @@ func TestMigrateStateMatrix(t *testing.T) {
 		})
 
 		report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, realPut(assetsDir))
-		require.NoError(t, err)
-		assert.Equal(t, 1, report.Changed)
+		require.NoError(err)
+		assert.Equal(1, report.Changed)
 
 		var storedLen int
-		require.NoError(t, d.getReader().QueryRow(`
+		require.NoError(d.getReader().QueryRow(`
 			SELECT COALESCE(result_content_length, 0)
 			FROM tool_calls WHERE session_id = ? AND tool_use_id = ?`,
 			"blocked-nbr", "call-blocked",
 		).Scan(&storedLen))
-		assert.Equal(t, blockedLen, storedLen)
+		assert.Equal(blockedLen, storedLen)
 		t.Logf("neighboring withheld empty result retained accounting length: %d — boundary 913", storedLen)
 	})
 }
@@ -967,6 +1021,9 @@ func TestMigrateStateMatrix(t *testing.T) {
 // testImageMessage already produces a dedup scenario: result_content is NULL in
 // tool_calls (the db deduplicates it against the event content on insert).
 func TestMigrateDeduplicatedSummaryKeepsCollapse(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	assetsDir := t.TempDir()
 	put := realPut(assetsDir)
@@ -979,44 +1036,47 @@ func TestMigrateDeduplicatedSummaryKeepsCollapse(t *testing.T) {
 	// is positive (set to the event length at insert time).
 	var beforeCallContent string
 	var beforeLength int
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(d.getReader().QueryRow(`
 		SELECT COALESCE(result_content, ''), result_content_length
 		FROM tool_calls WHERE session_id = ?`, "dedup-collapse",
 	).Scan(&beforeCallContent, &beforeLength))
-	assert.Empty(t, beforeCallContent)
-	assert.Positive(t, beforeLength)
+	assert.Empty(beforeCallContent)
+	assert.Positive(beforeLength)
 
 	report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, put)
-	require.NoError(t, err)
-	assert.Equal(t, 1, report.Changed)
+	require.NoError(err)
+	assert.Equal(1, report.Changed)
 
 	var callContent string
 	var callLength int
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(d.getReader().QueryRow(`
 		SELECT COALESCE(result_content, ''), result_content_length
 		FROM tool_calls WHERE session_id = ?`, "dedup-collapse",
 	).Scan(&callContent, &callLength))
 
 	var eventContent string
 	var eventLength int
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(d.getReader().QueryRow(`
 		SELECT content, content_length
 		FROM tool_result_events WHERE session_id = ?`, "dedup-collapse",
 	).Scan(&eventContent, &eventLength))
 
 	// Call stays collapsed (result_content still empty) but length follows the
 	// migrated event content.
-	assert.Empty(t, callContent)
-	assert.Equal(t, eventLength, callLength)
-	assert.Equal(t, len(eventContent), eventLength)
+	assert.Empty(callContent)
+	assert.Equal(eventLength, callLength)
+	assert.Equal(len(eventContent), eventLength)
 	// Event carries image_ref and asset:// reference.
-	assert.Contains(t, eventContent, "image_ref")
-	assert.Contains(t, eventContent, "asset://")
+	assert.Contains(eventContent, "image_ref")
+	assert.Contains(eventContent, "asset://")
 }
 
 // TestMigrateReachesOrphanEventRows verifies that orphaned tool_result_events
 // rows (with no matching tool_call) are migrated.
 func TestMigrateReachesOrphanEventRows(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	seedArtifactOrigin(t, d)
 	assetsDir := t.TempDir()
@@ -1033,18 +1093,18 @@ func TestMigrateReachesOrphanEventRows(t *testing.T) {
 		"subagent_notification", "completed", content, len(content),
 		"2026-01-01T00:00:00Z", 0,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	clearArtifactExportQueue(t, d)
 
 	put := realPut(assetsDir)
 	report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, put)
-	require.NoError(t, err)
-	assert.Equal(t, 1, report.Changed)
+	require.NoError(err)
+	assert.Equal(1, report.Changed)
 
 	var stored string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "orphan-event",
 	).Scan(&stored))
-	assert.Contains(t, stored, "image_ref")
-	assert.Contains(t, stored, "asset://")
+	assert.Contains(stored, "image_ref")
+	assert.Contains(stored, "asset://")
 }

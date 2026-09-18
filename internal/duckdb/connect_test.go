@@ -90,58 +90,68 @@ func TestValidateQuackClientURL(t *testing.T) {
 }
 
 func TestValidatePushTargetRejectsRemoteURL(t *testing.T) {
+	assert := assert.New(t)
+
 	err := ValidatePushTarget(config.DuckDBConfig{URL: "quack:127.0.0.1:9494", Token: "t"})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "duckdb push writes the local mirror")
-	assert.Contains(t, err.Error(), "quack serve")
-	assert.NoError(t, ValidatePushTarget(config.DuckDBConfig{Path: "/tmp/x.duckdb"}))
+	assert.Contains(err.Error(), "duckdb push writes the local mirror")
+	assert.Contains(err.Error(), "quack serve")
+	assert.NoError(ValidatePushTarget(config.DuckDBConfig{Path: "/tmp/x.duckdb"}))
 }
 
 func TestIsStaleQuackConnectionError(t *testing.T) {
-	assert.True(t, isStaleQuackConnectionError(
+	assert := assert.New(t)
+
+	assert.True(isStaleQuackConnectionError(
 		errors.New("Invalid Input Error: Invalid connection id"),
 	))
-	assert.True(t, isStaleQuackConnectionError(
+	assert.True(isStaleQuackConnectionError(
 		errors.New("IO Error: Failed to send message: Bad Gateway"),
 	))
-	assert.True(t, isStaleQuackConnectionError(
+	assert.True(isStaleQuackConnectionError(
 		errors.New("Catalog Error: Table Function with name query does not exist!"),
 	))
-	assert.False(t, isStaleQuackConnectionError(
+	assert.False(isStaleQuackConnectionError(
 		errors.New("Catalog Error: Table with name sessions does not exist"),
 	))
 }
 
 func TestRedactQuackURL(t *testing.T) {
+	assert := assert.New(t)
+
 	got := RedactQuackURL(
 		"quack:https://account:credential0@duck.example.com/db?token=credential1&password=credential2&api_key=credential3&x=1",
 	)
-	assert.NotContains(t, got, "account")
-	assert.NotContains(t, got, "credential0")
-	assert.NotContains(t, got, "credential1")
-	assert.NotContains(t, got, "credential2")
-	assert.NotContains(t, got, "credential3")
-	assert.Contains(t, got, "token=%3Credacted%3E")
-	assert.Contains(t, got, "password=%3Credacted%3E")
-	assert.Contains(t, got, "api_key=%3Credacted%3E")
-	assert.Contains(t, got, "x=1")
+	assert.NotContains(got, "account")
+	assert.NotContains(got, "credential0")
+	assert.NotContains(got, "credential1")
+	assert.NotContains(got, "credential2")
+	assert.NotContains(got, "credential3")
+	assert.Contains(got, "token=%3Credacted%3E")
+	assert.Contains(got, "password=%3Credacted%3E")
+	assert.Contains(got, "api_key=%3Credacted%3E")
+	assert.Contains(got, "x=1")
 }
 
 func TestRedactQuackURLNativeTransport(t *testing.T) {
+	assert := assert.New(t)
+
 	got := RedactQuackURL(
 		"quack:account:credential0@duck.example.com:9494/db?token=credential1&x=1#credential2",
 	)
 
-	assert.NotContains(t, got, "account")
-	assert.NotContains(t, got, "credential0")
-	assert.NotContains(t, got, "credential1")
-	assert.NotContains(t, got, "credential2")
-	assert.Contains(t, got, "token=%3Credacted%3E")
-	assert.Contains(t, got, "x=1")
-	assert.NotContains(t, got, "#")
+	assert.NotContains(got, "account")
+	assert.NotContains(got, "credential0")
+	assert.NotContains(got, "credential1")
+	assert.NotContains(got, "credential2")
+	assert.Contains(got, "token=%3Credacted%3E")
+	assert.Contains(got, "x=1")
+	assert.NotContains(got, "#")
 }
 
 func TestRedactQuackClientErrorScrubsAttachSecrets(t *testing.T) {
+	assert := assert.New(t)
+
 	rawURL := "quack:https://account:credential0@duck.example.com/db?token=credential1&x=1"
 	token := "credential2'quoted"
 	err := redactQuackClientError(
@@ -154,16 +164,18 @@ func TestRedactQuackClientErrorScrubsAttachSecrets(t *testing.T) {
 	)
 	msg := err.Error()
 
-	assert.NotContains(t, msg, "account")
-	assert.NotContains(t, msg, "credential0")
-	assert.NotContains(t, msg, "credential1")
-	assert.NotContains(t, msg, "credential2")
-	assert.NotContains(t, msg, "credential2''quoted")
-	assert.Contains(t, msg, "<redacted>")
-	assert.Contains(t, msg, "duck.example.com")
+	assert.NotContains(msg, "account")
+	assert.NotContains(msg, "credential0")
+	assert.NotContains(msg, "credential1")
+	assert.NotContains(msg, "credential2")
+	assert.NotContains(msg, "credential2''quoted")
+	assert.Contains(msg, "<redacted>")
+	assert.Contains(msg, "duck.example.com")
 }
 
 func TestRedactQuackClientErrorScrubsNativeDoubleSlashUserinfo(t *testing.T) {
+	assert := assert.New(t)
+
 	rawURL := "quack://account:credential0@duck.example.com:9494/db?token=credential1&x=1"
 	err := redactQuackClientError(
 		errors.New(
@@ -174,13 +186,15 @@ func TestRedactQuackClientErrorScrubsNativeDoubleSlashUserinfo(t *testing.T) {
 	)
 	msg := err.Error()
 
-	assert.NotContains(t, msg, "account")
-	assert.NotContains(t, msg, "credential0")
-	assert.NotContains(t, msg, "credential1")
-	assert.Contains(t, msg, "duck.example.com")
+	assert.NotContains(msg, "account")
+	assert.NotContains(msg, "credential0")
+	assert.NotContains(msg, "credential1")
+	assert.Contains(msg, "duck.example.com")
 }
 
 func TestRedactQuackClientErrorScrubsNativeRawAtPassword(t *testing.T) {
+	assert := assert.New(t)
+
 	rawURL := "quack://account:pa@ss@duck.example.com:9494/db?token=credential1&x=1"
 	err := redactQuackClientError(
 		errors.New(
@@ -191,14 +205,16 @@ func TestRedactQuackClientErrorScrubsNativeRawAtPassword(t *testing.T) {
 	)
 	msg := err.Error()
 
-	assert.NotContains(t, msg, "account")
-	assert.NotContains(t, msg, "pa@ss")
-	assert.NotContains(t, msg, "ss@duck")
-	assert.NotContains(t, msg, "credential1")
-	assert.Contains(t, msg, "duck.example.com")
+	assert.NotContains(msg, "account")
+	assert.NotContains(msg, "pa@ss")
+	assert.NotContains(msg, "ss@duck")
+	assert.NotContains(msg, "credential1")
+	assert.Contains(msg, "duck.example.com")
 }
 
 func TestRedactQuackClientErrorScrubsNativeRawSlashPassword(t *testing.T) {
+	assert := assert.New(t)
+
 	rawURL := "quack://account:pa/ss@duck.example.com:9494/db?token=credential1&x=1"
 	err := redactQuackClientError(
 		errors.New(
@@ -209,13 +225,15 @@ func TestRedactQuackClientErrorScrubsNativeRawSlashPassword(t *testing.T) {
 	)
 	msg := err.Error()
 
-	assert.NotContains(t, msg, "account")
-	assert.NotContains(t, msg, "pa/ss")
-	assert.NotContains(t, msg, "credential1")
-	assert.Contains(t, msg, "duck.example.com")
+	assert.NotContains(msg, "account")
+	assert.NotContains(msg, "pa/ss")
+	assert.NotContains(msg, "credential1")
+	assert.Contains(msg, "duck.example.com")
 }
 
 func TestRedactQuackClientErrorScrubsNativeRawSlashPasswordDotlessHost(t *testing.T) {
+	assert := assert.New(t)
+
 	rawURL := "quack://account:pa/ss@myhost/db?token=credential1&x=1"
 	err := redactQuackClientError(
 		errors.New(
@@ -226,13 +244,15 @@ func TestRedactQuackClientErrorScrubsNativeRawSlashPasswordDotlessHost(t *testin
 	)
 	msg := err.Error()
 
-	assert.NotContains(t, msg, "account")
-	assert.NotContains(t, msg, "pa/ss")
-	assert.NotContains(t, msg, "credential1")
-	assert.Contains(t, msg, "myhost")
+	assert.NotContains(msg, "account")
+	assert.NotContains(msg, "pa/ss")
+	assert.NotContains(msg, "credential1")
+	assert.Contains(msg, "myhost")
 }
 
 func TestRedactQuackClientErrorScrubsNativeSchemeUserinfo(t *testing.T) {
+	assert := assert.New(t)
+
 	rawURL := "quack:tcp://account:credential0@duck.example.com:9494/db?token=credential1&x=1"
 	err := redactQuackClientError(
 		errors.New(
@@ -243,13 +263,15 @@ func TestRedactQuackClientErrorScrubsNativeSchemeUserinfo(t *testing.T) {
 	)
 	msg := err.Error()
 
-	assert.NotContains(t, msg, "account")
-	assert.NotContains(t, msg, "credential0")
-	assert.NotContains(t, msg, "credential1")
-	assert.Contains(t, msg, "duck.example.com")
+	assert.NotContains(msg, "account")
+	assert.NotContains(msg, "credential0")
+	assert.NotContains(msg, "credential1")
+	assert.Contains(msg, "duck.example.com")
 }
 
 func TestRedactQuackClientErrorPreservesNativeHostWithAtInPath(t *testing.T) {
+	assert := assert.New(t)
+
 	rawURL := "quack://account:credential0@duck.example.com:9494/db@v2?token=credential1&x=1"
 	err := redactQuackClientError(
 		errors.New(
@@ -260,14 +282,16 @@ func TestRedactQuackClientErrorPreservesNativeHostWithAtInPath(t *testing.T) {
 	)
 	msg := err.Error()
 
-	assert.NotContains(t, msg, "account")
-	assert.NotContains(t, msg, "credential0")
-	assert.NotContains(t, msg, "credential1")
-	assert.Contains(t, msg, "duck.example.com")
-	assert.Contains(t, msg, "db@v2")
+	assert.NotContains(msg, "account")
+	assert.NotContains(msg, "credential0")
+	assert.NotContains(msg, "credential1")
+	assert.Contains(msg, "duck.example.com")
+	assert.Contains(msg, "db@v2")
 }
 
 func TestRedactQuackClientErrorPreservesNativeHostPortWithAtInPath(t *testing.T) {
+	assert := assert.New(t)
+
 	rawURL := "quack://duck.example.com:9494/db@v2?token=credential1&x=1"
 	err := redactQuackClientError(
 		errors.New(
@@ -278,13 +302,15 @@ func TestRedactQuackClientErrorPreservesNativeHostPortWithAtInPath(t *testing.T)
 	)
 	msg := err.Error()
 
-	assert.NotContains(t, msg, "credential1")
-	assert.Contains(t, msg, "duck.example.com")
-	assert.Contains(t, msg, "9494")
-	assert.Contains(t, msg, "db@v2")
+	assert.NotContains(msg, "credential1")
+	assert.Contains(msg, "duck.example.com")
+	assert.Contains(msg, "9494")
+	assert.Contains(msg, "db@v2")
 }
 
 func TestRedactQuackClientErrorScrubsEncodedCredentialValues(t *testing.T) {
+	assert := assert.New(t)
+
 	rawURL := "quack:https://account:p%40ss@duck.example.com/db?token=s%2Bcret&x=1"
 	err := redactQuackClientError(
 		errors.New(
@@ -295,12 +321,12 @@ func TestRedactQuackClientErrorScrubsEncodedCredentialValues(t *testing.T) {
 	)
 	msg := err.Error()
 
-	assert.NotContains(t, msg, "account")
-	assert.NotContains(t, msg, "p%40ss")
-	assert.NotContains(t, msg, "p@ss")
-	assert.NotContains(t, msg, "s%2Bcret")
-	assert.NotContains(t, msg, "s+cret")
-	assert.Contains(t, msg, "duck.example.com")
+	assert.NotContains(msg, "account")
+	assert.NotContains(msg, "p%40ss")
+	assert.NotContains(msg, "p@ss")
+	assert.NotContains(msg, "s%2Bcret")
+	assert.NotContains(msg, "s+cret")
+	assert.Contains(msg, "duck.example.com")
 }
 
 func TestValidateQuackServeURI(t *testing.T) {

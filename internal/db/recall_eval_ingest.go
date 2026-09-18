@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -79,7 +80,7 @@ func (db *DB) IngestEvalTrajectory(
 		TrajectoryID: in.TrajectoryID,
 	}
 	if in.RunID == "" || in.TrajectoryID == "" {
-		return result, fmt.Errorf("run_id and trajectory_id are required")
+		return result, errors.New("run_id and trajectory_id are required")
 	}
 	if err := validateEvalRequiredField("extractor_method", in.ExtractorMethod); err != nil {
 		return result, err
@@ -88,7 +89,7 @@ func (db *DB) IngestEvalTrajectory(
 		return result, err
 	}
 	if len(in.Trajectory) == 0 {
-		return result, fmt.Errorf("trajectory is required")
+		return result, errors.New("trajectory is required")
 	}
 	text, err := flattenTrajectoryText(in.Trajectory)
 	if err != nil {

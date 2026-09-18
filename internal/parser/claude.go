@@ -723,16 +723,12 @@ func lastAssistantStopReason(messages []ParsedMessage) string {
 // provider-owned incremental body; it carries no legacy entrypoint
 // naming so the provider can call it without shimming a Parse* free
 // function.
-var ErrDAGDetected = fmt.Errorf(
-	"incremental parse: DAG uuid detected",
-)
+var ErrDAGDetected = errors.New("incremental parse: DAG uuid detected")
 
 // ErrClaudeIncrementalNeedsFullParse signals that appended Claude
 // lines contain content the incremental path cannot stitch into
 // already-stored rows (renames and late identity fields).
-var ErrClaudeIncrementalNeedsFullParse = fmt.Errorf(
-	"incremental parse: appended Claude lines require full parse",
-)
+var ErrClaudeIncrementalNeedsFullParse = errors.New("incremental parse: appended Claude lines require full parse")
 
 type ClaudeSubagentLink struct {
 	ToolUseID         string

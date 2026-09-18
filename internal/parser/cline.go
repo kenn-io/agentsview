@@ -6,6 +6,7 @@ package parser
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -1227,6 +1228,6 @@ func clineFingerprintSource(path string) (SourceFingerprint, error) {
 		}
 	}
 
-	fp.Hash = fmt.Sprintf("%x", h.Sum(nil))
+	fp.Hash = hex.EncodeToString(h.Sum(nil))
 	return fp, nil
 }

@@ -2,6 +2,7 @@ package sync
 
 import (
 	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,7 +11,10 @@ import (
 
 func TestUnchangedSkipPersistenceIsCardinalityIndependent(t *testing.T) {
 	for _, size := range []int{8, 8000} {
-		t.Run(fmt.Sprint(size), func(t *testing.T) {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			database := openTestDB(t)
 			engine := NewEngine(database, EngineConfig{})
 			t.Cleanup(engine.Close)
@@ -19,12 +23,12 @@ func TestUnchangedSkipPersistenceIsCardinalityIndependent(t *testing.T) {
 				entries[fmt.Sprintf("/archive/session-%d.jsonl", i)] = 42
 			}
 			engine.InjectSkipCache(entries)
-			require.Equal(t, size, engine.persistSkipCache())
+			require.Equal(size, engine.persistSkipCache())
 			allocations := testing.AllocsPerRun(5, func() { engine.persistSkipCache() })
-			assert.Less(t, allocations, float64(10), "unchanged background persistence must not copy or rewrite the archive-sized cache")
+			assert.Less(allocations, float64(10), "unchanged background persistence must not copy or rewrite the archive-sized cache")
 			got, err := database.LoadSkippedFiles()
-			require.NoError(t, err)
-			assert.Equal(t, entries, got)
+			require.NoError(err)
+			assert.Equal(entries, got)
 			// A removed source must not return on the next flush or engine restart.
 			engine.clearSkip("/archive/session-0.jsonl")
 			delete(entries, "/archive/session-0.jsonl")
@@ -33,7 +37,7 @@ func TestUnchangedSkipPersistenceIsCardinalityIndependent(t *testing.T) {
 			engine.persistSkipCache()
 			restarted := NewEngine(database, EngineConfig{})
 			t.Cleanup(restarted.Close)
-			assert.Equal(t, entries, restarted.SnapshotSkipCache())
+			assert.Equal(entries, restarted.SnapshotSkipCache())
 		})
 	}
 }

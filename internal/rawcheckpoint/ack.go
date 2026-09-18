@@ -734,7 +734,7 @@ func releaseGenerationObjectsConn(ctx context.Context, conn *sql.Conn, captureID
 		}
 		changed, err := result.RowsAffected()
 		if err != nil || changed != 1 {
-			return fmt.Errorf("rawcheckpoint: release generation object reference mismatch")
+			return errors.New("rawcheckpoint: release generation object reference mismatch")
 		}
 	}
 	return nil

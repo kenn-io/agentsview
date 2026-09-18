@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -20,7 +19,7 @@ func TestOpenConfiguresThreadCount(t *testing.T) {
 	})
 
 	var got string
-	require.NoError(t, duck.QueryRowContext(context.Background(), `
+	require.NoError(t, duck.QueryRowContext(t.Context(), `
 		SELECT value FROM duckdb_settings() WHERE name = 'threads'`,
 	).Scan(&got))
 	assert.Equal(t, strconv.Itoa(duckDBThreadCount()), got)

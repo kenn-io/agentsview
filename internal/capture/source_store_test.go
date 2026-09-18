@@ -10,7 +10,7 @@ import (
 )
 
 func TestCopyWithContextStopsBetweenChunks(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	destination := &cancelOnFirstWrite{cancel: cancel}
 	source := bytes.NewReader(bytes.Repeat([]byte("x"), 128<<10))
 

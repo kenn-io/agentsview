@@ -38,6 +38,8 @@ func (store *progressArtifactStore) BuildActivityReportArtifacts(
 
 func TestActivityReportBuildGroupSharesBuildAfterOneWaiterCancels(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		require := require.New(t)
+
 		group := newActivityReportBuildGroup()
 		started := make(chan struct{})
 		release := make(chan struct{})
@@ -56,7 +58,7 @@ func TestActivityReportBuildGroupSharesBuildAfterOneWaiterCancels(t *testing.T) 
 				return activity.CandidateArtifacts{}, ctx.Err()
 			}
 		}
-		firstCtx, cancelFirst := context.WithCancel(context.Background())
+		firstCtx, cancelFirst := context.WithCancel(t.Context())
 		firstDone := make(chan error, 1)
 		go func() {
 			_, err := group.do(firstCtx, "same", build)
@@ -69,7 +71,7 @@ func TestActivityReportBuildGroupSharesBuildAfterOneWaiterCancels(t *testing.T) 
 		}
 		secondDone := make(chan result, 1)
 		go func() {
-			artifacts, err := group.do(context.Background(), "same", build)
+			artifacts, err := group.do(t.Context(), "same", build)
 			secondDone <- result{artifacts: artifacts, err: err}
 		}()
 		synctest.Wait()
@@ -80,15 +82,15 @@ func TestActivityReportBuildGroupSharesBuildAfterOneWaiterCancels(t *testing.T) 
 			sameWaiters = sameFlight.waiters
 		}
 		group.mu.Unlock()
-		require.NotNil(t, sameFlight)
-		require.Equal(t, 2, sameWaiters)
+		require.NotNil(sameFlight)
+		require.Equal(2, sameWaiters)
 		cancelFirst()
-		require.ErrorIs(t, <-firstDone, context.Canceled)
+		require.ErrorIs(<-firstDone, context.Canceled)
 		releaseBuild()
 		second := <-secondDone
-		require.NoError(t, second.err)
-		require.Equal(t, "ok", second.artifacts.Sessions[0].SessionID)
-		require.Equal(t, int32(1), builds.Load())
+		require.NoError(second.err)
+		require.Equal("ok", second.artifacts.Sessions[0].SessionID)
+		require.Equal(int32(1), builds.Load())
 	})
 }
 
@@ -96,7 +98,7 @@ func TestActivityReportBuildGroupCancelsAbandonedBuild(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		group := newActivityReportBuildGroup()
 		buildCanceled := make(chan struct{})
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
 		go func() {
 			_, err := group.do(ctx, "abandoned", func(ctx context.Context) (
@@ -121,6 +123,8 @@ func TestActivityReportBuildGroupCancelsAbandonedBuild(t *testing.T) {
 
 func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		require := require.New(t)
+
 		group := newActivityReportBuildGroup()
 		firstStarted := make(chan struct{})
 		firstCanceled := make(chan struct{})
@@ -154,7 +158,7 @@ func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T)
 			}
 		}
 
-		firstCtx, cancelFirst := context.WithCancel(context.Background())
+		firstCtx, cancelFirst := context.WithCancel(t.Context())
 		firstDone := make(chan error, 1)
 		go func() {
 			_, err := group.do(firstCtx, "same", build)
@@ -164,20 +168,20 @@ func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T)
 		select {
 		case <-firstStarted:
 		default:
-			require.FailNow(t, "first build did not start")
+			require.FailNow("first build did not start")
 		}
 		group.mu.Lock()
 		firstFlight := group.flights["same"]
 		group.mu.Unlock()
-		require.NotNil(t, firstFlight)
+		require.NotNil(firstFlight)
 
 		cancelFirst()
-		require.ErrorIs(t, <-firstDone, context.Canceled)
+		require.ErrorIs(<-firstDone, context.Canceled)
 		synctest.Wait()
 		select {
 		case <-firstCanceled:
 		default:
-			require.FailNow(t, "abandoned build was not canceled")
+			require.FailNow("abandoned build was not canceled")
 		}
 
 		type result struct {
@@ -186,37 +190,37 @@ func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T)
 		}
 		secondDone := make(chan result, 1)
 		go func() {
-			artifacts, err := group.do(context.Background(), "same", build)
+			artifacts, err := group.do(t.Context(), "same", build)
 			secondDone <- result{artifacts: artifacts, err: err}
 		}()
 		synctest.Wait()
 		select {
 		case <-secondStarted:
 		default:
-			require.FailNow(t, "replacement request joined the canceled flight")
+			require.FailNow("replacement request joined the canceled flight")
 		}
 		group.mu.Lock()
 		secondFlight := group.flights["same"]
 		group.mu.Unlock()
-		require.NotNil(t, secondFlight)
-		require.NotSame(t, firstFlight, secondFlight)
+		require.NotNil(secondFlight)
+		require.NotSame(firstFlight, secondFlight)
 
 		releaseFirstOnce.Do(func() { close(releaseFirst) })
 		synctest.Wait()
 		select {
 		case <-firstFlight.done:
 		default:
-			require.FailNow(t, "canceled flight did not exit")
+			require.FailNow("canceled flight did not exit")
 		}
 		group.mu.Lock()
 		currentFlight := group.flights["same"]
 		group.mu.Unlock()
-		require.Same(t, secondFlight, currentFlight,
+		require.Same(secondFlight, currentFlight,
 			"old build completion must not delete its replacement")
 
 		thirdDone := make(chan result, 1)
 		go func() {
-			artifacts, err := group.do(context.Background(), "same", build)
+			artifacts, err := group.do(t.Context(), "same", build)
 			thirdDone <- result{artifacts: artifacts, err: err}
 		}()
 		synctest.Wait()
@@ -224,21 +228,23 @@ func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T)
 		currentFlight = group.flights["same"]
 		currentWaiters := secondFlight.waiters
 		group.mu.Unlock()
-		require.Same(t, secondFlight, currentFlight)
-		require.Equal(t, 2, currentWaiters)
+		require.Same(secondFlight, currentFlight)
+		require.Equal(2, currentWaiters)
 		releaseSecondOnce.Do(func() { close(releaseSecond) })
 
 		for _, completed := range []result{<-secondDone, <-thirdDone} {
-			require.NoError(t, completed.err)
-			require.Len(t, completed.artifacts.Sessions, 1)
-			require.Equal(t, "fresh", completed.artifacts.Sessions[0].SessionID)
+			require.NoError(completed.err)
+			require.Len(completed.artifacts.Sessions, 1)
+			require.Equal("fresh", completed.artifacts.Sessions[0].SessionID)
 		}
-		require.Equal(t, int32(2), builds.Load())
+		require.Equal(int32(2), builds.Load())
 	})
 }
 
 func TestActivityReportProgressBuildsKeepCallbacksRequestLocal(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		require := require.New(t)
+
 		store := &progressArtifactStore{
 			started: make(chan struct{}, 2),
 			release: make(chan struct{}),
@@ -253,7 +259,7 @@ func TestActivityReportProgressBuildsKeepCallbacksRequestLocal(t *testing.T) {
 			done := make(chan error, 1)
 			go func() {
 				_, err := srv.buildActivityArtifacts(
-					context.Background(), store, resolvedActivitySelection{},
+					t.Context(), store, resolvedActivitySelection{},
 					activity.SourceProbe{}, func(progress activity.Progress) {
 						mu.Lock()
 						seen[name] = append(seen[name], progress.RowsProcessed)
@@ -270,23 +276,23 @@ func TestActivityReportProgressBuildsKeepCallbacksRequestLocal(t *testing.T) {
 		select {
 		case <-store.started:
 		default:
-			require.FailNow(t, "first report build did not start")
+			require.FailNow("first report build did not start")
 		}
 		second := start("second")
 		synctest.Wait()
 		select {
 		case <-store.started:
 		default:
-			require.FailNow(t, "second progress request reused the first callback")
+			require.FailNow("second progress request reused the first callback")
 		}
 		release()
-		require.NoError(t, <-first)
-		require.NoError(t, <-second)
-		require.Equal(t, int32(2), store.builds.Load())
+		require.NoError(<-first)
+		require.NoError(<-second)
+		require.Equal(int32(2), store.builds.Load())
 		mu.Lock()
 		defer mu.Unlock()
-		require.Len(t, seen["first"], 1)
-		require.Len(t, seen["second"], 1)
-		require.NotEqual(t, seen["first"][0], seen["second"][0])
+		require.Len(seen["first"], 1)
+		require.Len(seen["second"], 1)
+		require.NotEqual(seen["first"][0], seen["second"][0])
 	})
 }

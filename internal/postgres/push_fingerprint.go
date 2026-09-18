@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json/v2"
 	"fmt"
 	"strings"
@@ -101,7 +102,7 @@ func hashLocalDependencyPayload(
 		return "", fmt.Errorf("encoding local dependency fingerprint: %w", err)
 	}
 	sum := sha256.Sum256(data)
-	return fmt.Sprintf("%x", sum), nil
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // localPushDependencyState holds one chunk's worth of prefetched local

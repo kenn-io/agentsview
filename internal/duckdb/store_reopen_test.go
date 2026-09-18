@@ -54,7 +54,7 @@ func buildMirrorFixture(t *testing.T, path, sessionID string) {
 	require.NoError(t, err)
 
 	_, err = rebuildMirror(
-		context.Background(), path, local, "test-machine", SyncOptions{}, nil,
+		t.Context(), path, local, "test-machine", SyncOptions{}, nil,
 	)
 	require.NoError(t, err)
 }
@@ -73,7 +73,7 @@ func buildIncompatibleMirrorFixture(t *testing.T, path string) {
 	conn, err := Open(path)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(
-		context.Background(),
+		t.Context(),
 		`CREATE TABLE not_a_mirror_table (id TEXT)`,
 	)
 	require.NoError(t, err)
@@ -83,7 +83,7 @@ func buildIncompatibleMirrorFixture(t *testing.T, path string) {
 func listMirrorSessionIDs(t *testing.T, store *Store) []string {
 	t.Helper()
 	rows, err := store.queryContext(
-		context.Background(), "SELECT id FROM sessions ORDER BY id",
+		t.Context(), "SELECT id FROM sessions ORDER BY id",
 	)
 	require.NoError(t, err)
 	defer rows.Close()
@@ -105,13 +105,15 @@ func skipReopenTestOnWindows(t *testing.T) {
 }
 
 func TestStoreReopensAfterMirrorReplacement(t *testing.T) {
+	require := require.New(t)
+
 	skipReopenTestOnWindows(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "m.duckdb")
 	buildMirrorFixture(t, path, "old-session")
 
 	store, err := NewStore(path)
-	require.NoError(t, err)
+	require.NoError(err)
 	defer store.Close()
 
 	ctx := t.Context()
@@ -121,22 +123,25 @@ func TestStoreReopensAfterMirrorReplacement(t *testing.T) {
 
 	nextPath := filepath.Join(dir, "next.duckdb")
 	buildMirrorFixtureAt(t, nextPath, "new-session")
-	require.NoError(t, os.Rename(nextPath, path))
+	require.NoError(os.Rename(nextPath, path))
 
-	require.Eventually(t, func() bool {
+	require.Eventually(func() bool {
 		ids := listMirrorSessionIDs(t, store)
 		return len(ids) == 1 && ids[0] == "new-session"
 	}, 5*time.Second, 100*time.Millisecond)
 }
 
 func TestStoreKeepsOldHandleWhenReplacementIncompatible(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	skipReopenTestOnWindows(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "m.duckdb")
 	buildMirrorFixture(t, path, "old-session")
 
 	store, err := NewStore(path)
-	require.NoError(t, err)
+	require.NoError(err)
 	defer store.Close()
 
 	var mu sync.Mutex
@@ -152,9 +157,9 @@ func TestStoreKeepsOldHandleWhenReplacementIncompatible(t *testing.T) {
 
 	badPath := filepath.Join(dir, "bad.duckdb")
 	buildIncompatibleMirrorFixture(t, badPath)
-	require.NoError(t, os.Rename(badPath, path))
+	require.NoError(os.Rename(badPath, path))
 
-	require.Eventually(t, func() bool {
+	require.Eventually(func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return len(events) > 0
@@ -162,11 +167,11 @@ func TestStoreKeepsOldHandleWhenReplacementIncompatible(t *testing.T) {
 
 	mu.Lock()
 	for _, err := range events {
-		assert.Error(t, err)
+		assert.Error(err)
 	}
 	mu.Unlock()
 
-	assert.Equal(t, []string{"old-session"}, listMirrorSessionIDs(t, store),
+	assert.Equal([]string{"old-session"}, listMirrorSessionIDs(t, store),
 		"store must keep serving the old handle when the replacement is incompatible")
 }
 
@@ -176,31 +181,34 @@ func TestStoreKeepsOldHandleWhenReplacementIncompatible(t *testing.T) {
 // after the alias it swapped onto is itself replaced, and it must not leak
 // the openMirrorAlias hardlink files that changeover uses (see mirror_watch.go).
 func TestStoreServesLatestAfterTwoConsecutiveMirrorReplacements(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	skipReopenTestOnWindows(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "m.duckdb")
 	buildMirrorFixture(t, path, "gen-1")
 
 	store, err := NewStore(path)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	watchCtx, cancelWatch := context.WithCancel(context.Background())
+	watchCtx, cancelWatch := context.WithCancel(t.Context())
 	store.WatchMirrorReplacement(watchCtx, 20*time.Millisecond, nil)
 
-	assert.Equal(t, []string{"gen-1"}, listMirrorSessionIDs(t, store))
+	assert.Equal([]string{"gen-1"}, listMirrorSessionIDs(t, store))
 
 	gen2Path := filepath.Join(dir, "gen2.duckdb")
 	buildMirrorFixtureAt(t, gen2Path, "gen-2")
-	require.NoError(t, os.Rename(gen2Path, path))
-	require.Eventually(t, func() bool {
+	require.NoError(os.Rename(gen2Path, path))
+	require.Eventually(func() bool {
 		ids := listMirrorSessionIDs(t, store)
 		return len(ids) == 1 && ids[0] == "gen-2"
 	}, 5*time.Second, 50*time.Millisecond, "store must adopt the first replacement")
 
 	gen3Path := filepath.Join(dir, "gen3.duckdb")
 	buildMirrorFixtureAt(t, gen3Path, "gen-3")
-	require.NoError(t, os.Rename(gen3Path, path))
-	require.Eventually(t, func() bool {
+	require.NoError(os.Rename(gen3Path, path))
+	require.Eventually(func() bool {
 		ids := listMirrorSessionIDs(t, store)
 		return len(ids) == 1 && ids[0] == "gen-3"
 	}, 5*time.Second, 50*time.Millisecond, "store must adopt the second, consecutive replacement")
@@ -209,8 +217,8 @@ func TestStoreServesLatestAfterTwoConsecutiveMirrorReplacements(t *testing.T) {
 	// the currently active alias (the one backing gen-3's handle), and the
 	// gen-2 alias was already removed by the second swap itself.
 	cancelWatch()
-	require.NoError(t, store.Close())
-	assert.Equal(t, 0, countReopenAliasFiles(t, dir),
+	require.NoError(store.Close())
+	assert.Equal(0, countReopenAliasFiles(t, dir),
 		"no *.reopen-* hardlink files may remain once the store has settled and closed")
 }
 
@@ -224,18 +232,20 @@ func TestStoreServesLatestAfterTwoConsecutiveMirrorReplacements(t *testing.T) {
 // readers through a loop of rename-replacements (each adopted by the
 // watcher's swapHandle) and requires zero read errors.
 func TestStoreConcurrentReadsNeverFailAcrossMirrorReplacements(t *testing.T) {
+	require := require.New(t)
+
 	skipReopenTestOnWindows(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "m.duckdb")
 	buildMirrorFixture(t, path, "gen-0")
 
 	store, err := NewStore(path)
-	require.NoError(t, err)
+	require.NoError(err)
 	defer store.Close()
 
 	store.WatchMirrorReplacement(t.Context(), time.Millisecond, nil)
 
-	readerCtx, cancelReaders := context.WithCancel(context.Background())
+	readerCtx, cancelReaders := context.WithCancel(t.Context())
 	var readErrs atomic.Int32
 	var firstErr atomic.Pointer[string]
 	var wg sync.WaitGroup
@@ -243,7 +253,7 @@ func TestStoreConcurrentReadsNeverFailAcrossMirrorReplacements(t *testing.T) {
 		wg.Go(func() {
 			for readerCtx.Err() == nil {
 				if _, err := store.GetStats(
-					context.Background(), false, false,
+					t.Context(), false, false,
 				); err != nil {
 					readErrs.Add(1)
 					msg := err.Error()
@@ -257,8 +267,8 @@ func TestStoreConcurrentReadsNeverFailAcrossMirrorReplacements(t *testing.T) {
 		sessionID := fmt.Sprintf("gen-%d", gen)
 		next := filepath.Join(dir, fmt.Sprintf("next-%d.duckdb", gen))
 		buildMirrorFixtureAt(t, next, sessionID)
-		require.NoError(t, os.Rename(next, path))
-		require.Eventually(t, func() bool {
+		require.NoError(os.Rename(next, path))
+		require.Eventually(func() bool {
 			ids := listMirrorSessionIDs(t, store)
 			return len(ids) == 1 && ids[0] == sessionID
 		}, 5*time.Second, 2*time.Millisecond,
@@ -286,6 +296,9 @@ func TestStoreConcurrentReadsNeverFailAcrossMirrorReplacements(t *testing.T) {
 // the "fully closed" contract. There is no delay-injection seam, so a tight
 // loop of real check/Close races provides the interleavings.
 func TestStoreCloseWaitsForInFlightReplacementCheck(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	skipReopenTestOnWindows(t)
 	dir := t.TempDir()
 	srcA := filepath.Join(dir, "src-a.duckdb")
@@ -293,31 +306,31 @@ func TestStoreCloseWaitsForInFlightReplacementCheck(t *testing.T) {
 	buildMirrorFixture(t, srcA, "gen-a")
 	buildMirrorFixtureAt(t, srcB, "gen-b")
 	path := filepath.Join(dir, "m.duckdb")
-	require.NoError(t, os.Link(srcA, path))
+	require.NoError(os.Link(srcA, path))
 
 	// Each iteration replaces path with the source it is not currently
-	// hardlinked to, so the check always sees a changed file identity.
+	// hardline to, so the check always sees a changed file identity.
 	sources := [2]string{srcB, srcA}
 	for i := range 25 {
 		store, err := NewStore(path)
-		require.NoError(t, err)
+		require.NoError(err)
 
 		tmp := filepath.Join(dir, fmt.Sprintf("swap-%d.duckdb", i))
-		require.NoError(t, os.Link(sources[i%2], tmp))
-		require.NoError(t, os.Rename(tmp, path))
+		require.NoError(os.Link(sources[i%2], tmp))
+		require.NoError(os.Rename(tmp, path))
 
 		checkDone := make(chan struct{})
 		go func() {
 			defer close(checkDone)
-			store.checkMirrorReplacement(context.Background(), nil)
+			store.checkMirrorReplacement(t.Context(), nil)
 		}()
 		runtime.Gosched()
-		require.NoError(t, store.Close())
-		assert.Zero(t, countReopenAliasFiles(t, dir),
+		require.NoError(store.Close())
+		assert.Zero(countReopenAliasFiles(t, dir),
 			"Close must not return while a replacement check still holds a reopen alias (iteration %d)", i)
 		<-checkDone
 	}
-	assert.Zero(t, countReopenAliasFiles(t, dir),
+	assert.Zero(countReopenAliasFiles(t, dir),
 		"no reopen alias may survive once every check has finished")
 }
 
@@ -327,13 +340,15 @@ func TestStoreCloseWaitsForInFlightReplacementCheck(t *testing.T) {
 // keep polling and pick up a subsequent good replacement rather than getting
 // stuck refusing every future swap.
 func TestStoreAdoptsGoodMirrorAfterIncompatibleReplacement(t *testing.T) {
+	require := require.New(t)
+
 	skipReopenTestOnWindows(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "m.duckdb")
 	buildMirrorFixture(t, path, "old-session")
 
 	store, err := NewStore(path)
-	require.NoError(t, err)
+	require.NoError(err)
 	defer store.Close()
 
 	var mu sync.Mutex
@@ -349,9 +364,9 @@ func TestStoreAdoptsGoodMirrorAfterIncompatibleReplacement(t *testing.T) {
 
 	badPath := filepath.Join(dir, "bad.duckdb")
 	buildIncompatibleMirrorFixture(t, badPath)
-	require.NoError(t, os.Rename(badPath, path))
+	require.NoError(os.Rename(badPath, path))
 
-	require.Eventually(t, func() bool {
+	require.Eventually(func() bool {
 		mu.Lock()
 		defer mu.Unlock()
 		return len(events) > 0
@@ -361,9 +376,9 @@ func TestStoreAdoptsGoodMirrorAfterIncompatibleReplacement(t *testing.T) {
 
 	goodPath := filepath.Join(dir, "good.duckdb")
 	buildMirrorFixtureAt(t, goodPath, "recovered-session")
-	require.NoError(t, os.Rename(goodPath, path))
+	require.NoError(os.Rename(goodPath, path))
 
-	require.Eventually(t, func() bool {
+	require.Eventually(func() bool {
 		ids := listMirrorSessionIDs(t, store)
 		return len(ids) == 1 && ids[0] == "recovered-session"
 	}, 5*time.Second, 100*time.Millisecond,
@@ -382,51 +397,54 @@ func TestStoreAdoptsGoodMirrorAfterIncompatibleReplacement(t *testing.T) {
 // no matter how exactly it matches the generated alias shape (ownership is
 // the work-directory location, not the file name).
 func TestSweepStaleMirrorReopenAliasesRemovesLeftoverAliases(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	skipReopenTestOnWindows(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "m.duckdb")
 	buildMirrorFixture(t, path, "session-1")
 	workDir := mirrorWorkDirPath(path)
-	require.NoError(t, os.MkdirAll(workDir, 0o755))
+	require.NoError(os.MkdirAll(workDir, 0o755))
 
-	require.NoError(t, os.Link(path, filepath.Join(workDir, "m.duckdb.reopen-1")))
-	require.NoError(t, os.Link(path, filepath.Join(workDir, "m.duckdb.reopen-2")))
+	require.NoError(os.Link(path, filepath.Join(workDir, "m.duckdb.reopen-1")))
+	require.NoError(os.Link(path, filepath.Join(workDir, "m.duckdb.reopen-2")))
 	otherPath := filepath.Join(dir, "other.duckdb")
 	buildMirrorFixture(t, otherPath, "session-2")
 	otherWorkDir := mirrorWorkDirPath(otherPath)
-	require.NoError(t, os.MkdirAll(otherWorkDir, 0o755))
+	require.NoError(os.MkdirAll(otherWorkDir, 0o755))
 	otherAlias := filepath.Join(otherWorkDir, "other.duckdb.reopen-1")
-	require.NoError(t, os.Link(otherPath, otherAlias))
+	require.NoError(os.Link(otherPath, otherAlias))
 	// Sibling user files exactly matching the generated shapes must survive:
 	// they live next to the mirror, not inside its work directory.
 	siblingAlias := path + ".reopen-3"
-	require.NoError(t, os.WriteFile(siblingAlias, []byte("keep me"), 0o644))
+	require.NoError(os.WriteFile(siblingAlias, []byte("keep me"), 0o644))
 	siblingTmp := path + ".tmp-4"
-	require.NoError(t, os.WriteFile(siblingTmp, []byte("keep me"), 0o644))
+	require.NoError(os.WriteFile(siblingTmp, []byte("keep me"), 0o644))
 	// Work-dir files that merely share the literal ".reopen-" prefix are not
 	// generated aliases (openMirrorAlias appends UnixNano digits only) and
 	// must survive, as must a bare empty-suffix name.
 	userBackup := filepath.Join(workDir, "m.duckdb.reopen-backup")
-	require.NoError(t, os.WriteFile(userBackup, []byte("keep me"), 0o644))
+	require.NoError(os.WriteFile(userBackup, []byte("keep me"), 0o644))
 	emptySuffix := filepath.Join(workDir, "m.duckdb.reopen-")
-	require.NoError(t, os.WriteFile(emptySuffix, []byte("keep me"), 0o644))
+	require.NoError(os.WriteFile(emptySuffix, []byte("keep me"), 0o644))
 
-	require.NoError(t, SweepStaleMirrorReopenAliases(path))
+	require.NoError(SweepStaleMirrorReopenAliases(path))
 
-	assert.NoFileExists(t, filepath.Join(workDir, "m.duckdb.reopen-1"))
-	assert.NoFileExists(t, filepath.Join(workDir, "m.duckdb.reopen-2"))
-	assert.FileExists(t, otherAlias,
+	assert.NoFileExists(filepath.Join(workDir, "m.duckdb.reopen-1"))
+	assert.NoFileExists(filepath.Join(workDir, "m.duckdb.reopen-2"))
+	assert.FileExists(otherAlias,
 		"sweeping path's aliases must leave other.duckdb's alias untouched")
-	assert.FileExists(t, siblingAlias,
+	assert.FileExists(siblingAlias,
 		"a user's sibling file matching the reopen shape must never be swept")
-	assert.FileExists(t, siblingTmp,
+	assert.FileExists(siblingTmp,
 		"a user's sibling file matching the temp shape must never be swept")
-	assert.FileExists(t, userBackup,
+	assert.FileExists(userBackup,
 		"a work-dir file with a non-digit suffix must survive")
-	assert.FileExists(t, emptySuffix,
+	assert.FileExists(emptySuffix,
 		"a bare .reopen- name (empty suffix) is not a generated alias and must survive")
-	assert.DirExists(t, workDir, "sweep must never remove the work directory itself")
-	assert.FileExists(t, path, "sweep must not remove the mirror file itself")
+	assert.DirExists(workDir, "sweep must never remove the work directory itself")
+	assert.FileExists(path, "sweep must not remove the mirror file itself")
 }
 
 // TestSweepStaleMirrorReopenAliasesMissingWorkDirIsNoOp: no work directory
@@ -455,19 +473,22 @@ func TestSweepStaleMirrorReopenAliasesEmptyPathIsNoOp(t *testing.T) {
 // sweep. A literal os.ReadDir + prefix-match sweep must work the same way
 // regardless of what characters appear in the directory name.
 func TestSweepStaleMirrorReopenAliasesHandlesGlobMetacharactersInDirectory(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	skipReopenTestOnWindows(t)
 	dir := filepath.Join(t.TempDir(), "proj[1]")
-	require.NoError(t, os.Mkdir(dir, 0o755))
+	require.NoError(os.Mkdir(dir, 0o755))
 	path := filepath.Join(dir, "m.duckdb")
 	buildMirrorFixture(t, path, "session-1")
 	workDir := mirrorWorkDirPath(path)
-	require.NoError(t, os.MkdirAll(workDir, 0o755))
+	require.NoError(os.MkdirAll(workDir, 0o755))
 	alias := filepath.Join(workDir, "m.duckdb.reopen-1")
-	require.NoError(t, os.Link(path, alias))
+	require.NoError(os.Link(path, alias))
 
-	require.NoError(t, SweepStaleMirrorReopenAliases(path))
+	require.NoError(SweepStaleMirrorReopenAliases(path))
 
-	assert.NoFileExists(t, alias,
+	assert.NoFileExists(alias,
 		"a reopen alias in a glob-metacharacter directory must still be swept")
-	assert.FileExists(t, path, "sweep must not remove the mirror file itself")
+	assert.FileExists(path, "sweep must not remove the mirror file itself")
 }

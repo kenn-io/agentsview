@@ -37,7 +37,7 @@ var (
 // full-source fingerprint plus prefix re-hash pipeline.
 func BenchmarkCodexCheckpointAppendResume(b *testing.B) {
 	routeBenchLogs(b)
-	ctx := context.Background()
+	ctx := b.Context()
 	root, path, prefix, tail, startOrdinal := writeCodexSyncBenchmarkTranscript(b)
 
 	database, err := db.Open(filepath.Join(b.TempDir(), "bench.db"))
@@ -282,7 +282,7 @@ const (
 // always runs with a fixed -benchtime=Nx).
 func BenchmarkCodexLateToolOutputDebouncedBurst(b *testing.B) {
 	routeBenchLogs(b)
-	ctx := context.Background()
+	ctx := b.Context()
 	root, path, _ := writeCodexLateToolBenchmarkTranscript(b)
 
 	database, err := db.Open(filepath.Join(b.TempDir(), "bench.db"))

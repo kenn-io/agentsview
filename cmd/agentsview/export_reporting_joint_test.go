@@ -15,14 +15,17 @@ import (
 )
 
 func TestExportJointProjectScopeAgreesAcrossHourDayAndDigest(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	seedExportReportingGoldenArchive(t)
 	now := time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC)
 	out, stderr, err := executeExportSessionsCommand(newExportReportingTestRoot(now),
 		"export", "day", "--schema-version", "4", "2026-07-28")
-	require.NoError(t, err)
-	assert.Empty(t, stderr)
+	require.NoError(err)
+	assert.Empty(stderr)
 	var all export.ReportingDay
-	require.NoError(t, json.Unmarshal([]byte(out), &all))
+	require.NoError(json.Unmarshal([]byte(out), &all))
 	var key string
 	foundStandalone := false
 	for _, cell := range all.Hours[11].Joint.Cells {
@@ -31,43 +34,43 @@ func TestExportJointProjectScopeAgreesAcrossHourDayAndDigest(t *testing.T) {
 		}
 		if cell.Agent == "cursor" {
 			foundStandalone = true
-			assert.Empty(t, cell.ProjectKey)
-			assert.Equal(t, "unknown", cell.Automation)
-			assert.Equal(t, int64(4_000), cell.Pricing.ReportedCost.Microdollars)
-			assert.Zero(t, cell.AgentMinutes)
+			assert.Empty(cell.ProjectKey)
+			assert.Equal("unknown", cell.Automation)
+			assert.Equal(int64(4_000), cell.Pricing.ReportedCost.Microdollars)
+			assert.Zero(cell.AgentMinutes)
 		}
 	}
-	require.True(t, foundStandalone, "standalone cost must remain visible without invented attribution")
-	require.NotEmpty(t, key)
+	require.True(foundStandalone, "standalone cost must remain visible without invented attribution")
+	require.NotEmpty(key)
 	out, stderr, err = executeExportSessionsCommand(newExportReportingTestRoot(now),
 		"export", "day", "--schema-version", "4", "--project-key", key, "2026-07-28")
-	require.NoError(t, err)
-	assert.Empty(t, stderr)
+	require.NoError(err)
+	assert.Empty(stderr)
 	var day export.ReportingDay
-	require.NoError(t, json.Unmarshal([]byte(out), &day))
-	assert.Equal(t, int64(200), day.Hours[11].Usage.Totals.OutputTokens)
-	assert.Equal(t, 3.0, day.Hours[11].Activity.Totals.AgentMinutes)
-	assert.NotContains(t, out, "fixture-cross")
-	assert.NotContains(t, out, `"content"`)
+	require.NoError(json.Unmarshal([]byte(out), &day))
+	assert.Equal(int64(200), day.Hours[11].Usage.Totals.OutputTokens)
+	assert.Equal(3.0, day.Hours[11].Activity.Totals.AgentMinutes)
+	assert.NotContains(out, "fixture-cross")
+	assert.NotContains(out, `"content"`)
 	for _, cell := range day.Hours[11].Joint.Cells {
-		assert.Equal(t, key, cell.ProjectKey)
+		assert.Equal(key, cell.ProjectKey)
 	}
 
 	hourOut, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now),
 		"export", "hour", "--schema-version", "4", "--project-key", key, "2026-07-28-11")
-	require.NoError(t, err)
+	require.NoError(err)
 	var hour export.ReportingHour
-	require.NoError(t, json.Unmarshal([]byte(hourOut), &hour))
-	assert.Equal(t, day.Hours[11], hour)
+	require.NoError(json.Unmarshal([]byte(hourOut), &hour))
+	assert.Equal(day.Hours[11], hour)
 	digestOut, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now),
 		"export", "digest", "--schema-version", "4", "--project-key", key,
 		"--from", "2026-07-28", "--to", "2026-07-28")
-	require.NoError(t, err)
+	require.NoError(err)
 	var digest export.ReportingDigest
-	require.NoError(t, json.Unmarshal([]byte(digestOut), &digest))
-	require.Len(t, digest.Days, 1)
-	assert.Equal(t, day.Digest, digest.Days[0].DayDigest)
-	assert.Equal(t, hour.Digest, digest.Days[0].HourDigests[11])
+	require.NoError(json.Unmarshal([]byte(digestOut), &digest))
+	require.Len(digest.Days, 1)
+	assert.Equal(day.Digest, digest.Days[0].DayDigest)
+	assert.Equal(hour.Digest, digest.Days[0].HourDigests[11])
 }
 
 func TestExportJointRejectsScopeOnOldVersionBeforeOpening(t *testing.T) {
@@ -109,48 +112,51 @@ func TestExportJointBucketResolutionAcrossCommands(t *testing.T) {
 		{"1h", 3600, 1, "2026-07-28T11:00:00Z", 3},
 	} {
 		t.Run(tc.bucket, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			flags := []string{"--schema-version", "4", "--bucket", tc.bucket}
 			out, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now),
 				append([]string{"export", "day", "2026-07-28"}, flags...)...)
-			require.NoError(t, err)
+			require.NoError(err)
 			var day export.ReportingDay
-			require.NoError(t, json.Unmarshal([]byte(out), &day))
-			require.Len(t, day.Hours, 24)
+			require.NoError(json.Unmarshal([]byte(out), &day))
+			require.Len(day.Hours, 24)
 			for _, hour := range day.Hours {
-				assert.Len(t, hour.Activity.Buckets, tc.count, "quiet hours use the same resolution")
+				assert.Len(hour.Activity.Buckets, tc.count, "quiet hours use the same resolution")
 			}
-			assert.Equal(t, 3.0, day.Hours[11].Activity.Totals.AgentMinutes, "bucket size must not change the inactivity gap cap")
-			assert.Equal(t, tc.firstBucketMinutes, day.Hours[11].Activity.Buckets[0].AgentMinutes)
-			assert.Equal(t, int64(256), day.Hours[11].Usage.Totals.OutputTokens)
-			assert.Equal(t, int64(71_000), day.Hours[11].Usage.Totals.Cost.Microdollars)
+			assert.Equal(3.0, day.Hours[11].Activity.Totals.AgentMinutes, "bucket size must not change the inactivity gap cap")
+			assert.Equal(tc.firstBucketMinutes, day.Hours[11].Activity.Buckets[0].AgentMinutes)
+			assert.Equal(int64(256), day.Hours[11].Usage.Totals.OutputTokens)
+			assert.Equal(int64(71_000), day.Hours[11].Usage.Totals.Cost.Microdollars)
 			found := false
 			for _, cell := range day.Hours[11].Joint.Cells {
 				if cell.Model == reportingGoldenLatestModel && cell.Usage.OutputTokens > 0 {
 					found = true
-					assert.Equal(t, tc.usageBucket, cell.BucketStart)
-					assert.Equal(t, int64(200), cell.Usage.OutputTokens)
+					assert.Equal(tc.usageBucket, cell.BucketStart)
+					assert.Equal(int64(200), cell.Usage.OutputTokens)
 				}
 			}
-			require.True(t, found)
+			require.True(found)
 			quietDigests[tc.bucket] = day.Hours[0].Digest
 			hourOut, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now),
 				append([]string{"export", "hour", "2026-07-28-11"}, flags...)...)
-			require.NoError(t, err)
+			require.NoError(err)
 			var hour export.ReportingHour
-			require.NoError(t, json.Unmarshal([]byte(hourOut), &hour))
-			assert.Equal(t, day.Hours[11], hour)
+			require.NoError(json.Unmarshal([]byte(hourOut), &hour))
+			assert.Equal(day.Hours[11], hour)
 			digestOut, _, err := executeExportSessionsCommand(newExportReportingTestRoot(now),
 				append([]string{"export", "digest", "--from", "2026-07-28", "--to", "2026-07-28"}, flags...)...)
-			require.NoError(t, err)
+			require.NoError(err)
 			var digest export.ReportingDigest
-			require.NoError(t, json.Unmarshal([]byte(digestOut), &digest))
-			require.Len(t, digest.Days, 1)
-			assert.Equal(t, day.Digest, digest.Days[0].DayDigest)
-			assert.Equal(t, hour.Digest, digest.Days[0].HourDigests[11])
+			require.NoError(json.Unmarshal([]byte(digestOut), &digest))
+			require.Len(digest.Days, 1)
+			assert.Equal(day.Digest, digest.Days[0].DayDigest)
+			assert.Equal(hour.Digest, digest.Days[0].HourDigests[11])
 			for _, document := range []string{out, hourOut, digestOut} {
 				var wire map[string]any
-				require.NoError(t, json.Unmarshal([]byte(document), &wire))
-				assert.Equal(t, float64(tc.seconds), wire["bucket_seconds"])
+				require.NoError(json.Unmarshal([]byte(document), &wire))
+				assert.Equal(float64(tc.seconds), wire["bucket_seconds"])
 			}
 		})
 	}

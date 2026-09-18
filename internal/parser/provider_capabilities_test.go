@@ -27,7 +27,9 @@ func TestProviderCapabilitiesS3DiscoveryDefaultUnsupported(t *testing.T) {
 }
 
 func TestProviderCapabilitiesS3DiscoveryMatchConsumers(t *testing.T) {
-	assert.Equal(t, CapabilityUnsupported, (SourceCapabilities{}).S3Discovery,
+	assert := assert.New(t)
+
+	assert.Equal(CapabilityUnsupported, (SourceCapabilities{}).S3Discovery,
 		"new providers must opt in explicitly")
 
 	supported := map[AgentType]bool{
@@ -40,20 +42,22 @@ func TestProviderCapabilitiesS3DiscoveryMatchConsumers(t *testing.T) {
 		agent := factory.Definition().Type
 		got := factory.Capabilities().Source.S3Discovery
 		if supported[agent] {
-			assert.Equal(t, CapabilitySupported, got)
+			assert.Equal(CapabilitySupported, got)
 			provider := factory.NewProvider(ProviderConfig{
 				Roots: []string{t.TempDir()},
 			})
-			assert.Implements(t, (*S3Provider)(nil), provider)
+			assert.Implements((*S3Provider)(nil), provider)
 			continue
 		}
-		assert.Equalf(t, CapabilityUnsupported, got,
+		assert.Equalf(CapabilityUnsupported, got,
 			"%s must not opt into S3 discovery", agent)
 	}
 }
 
 func TestProviderCapabilitiesActivityHintsMatchConsumers(t *testing.T) {
-	assert.Equal(t, CapabilityUnsupported, (SourceCapabilities{}).ActivityHints,
+	assert := assert.New(t)
+
+	assert.Equal(CapabilityUnsupported, (SourceCapabilities{}).ActivityHints,
 		"new providers must opt in explicitly")
 
 	for _, factory := range ProviderFactories() {
@@ -64,20 +68,22 @@ func TestProviderCapabilitiesActivityHintsMatchConsumers(t *testing.T) {
 		// observed for Augure) simply yields no hints; the capability claim
 		// itself must stay consistent with the shared factory.
 		if agent == AgentCodex || agent == AgentTraeX || agent == AgentAugureCode {
-			assert.Equal(t, CapabilitySupported, got)
+			assert.Equal(CapabilitySupported, got)
 			provider := factory.NewProvider(ProviderConfig{
 				Roots: []string{t.TempDir()},
 			})
-			assert.Implements(t, (*ActivityHintProvider)(nil), provider)
+			assert.Implements((*ActivityHintProvider)(nil), provider)
 			continue
 		}
-		assert.Equalf(t, CapabilityUnsupported, got,
+		assert.Equalf(CapabilityUnsupported, got,
 			"%s must not schedule activity hints", agent)
 	}
 }
 
 func TestProviderCapabilitiesChangedPathRelevanceMatchConsumers(t *testing.T) {
-	assert.Equal(t, CapabilityUnsupported, (SourceCapabilities{}).ChangedPathRelevance,
+	assert := assert.New(t)
+
+	assert.Equal(CapabilityUnsupported, (SourceCapabilities{}).ChangedPathRelevance,
 		"new providers must opt in explicitly")
 
 	for _, factory := range ProviderFactories() {
@@ -85,14 +91,14 @@ func TestProviderCapabilitiesChangedPathRelevanceMatchConsumers(t *testing.T) {
 		got := factory.Capabilities().Source.ChangedPathRelevance
 		if agent == AgentOpenCode || agent == AgentKilo ||
 			agent == AgentMiMoCode || agent == AgentIcodemate {
-			assert.Equal(t, CapabilitySupported, got)
+			assert.Equal(CapabilitySupported, got)
 			provider := factory.NewProvider(ProviderConfig{
 				Roots: []string{t.TempDir()},
 			})
-			assert.Implements(t, (*ChangedPathRelevanceProvider)(nil), provider)
+			assert.Implements((*ChangedPathRelevanceProvider)(nil), provider)
 			continue
 		}
-		assert.Equalf(t, CapabilityUnsupported, got,
+		assert.Equalf(CapabilityUnsupported, got,
 			"%s must not classify watch path relevance", agent)
 	}
 }
@@ -100,20 +106,22 @@ func TestProviderCapabilitiesChangedPathRelevanceMatchConsumers(t *testing.T) {
 func TestWatchSourceProvidersDiscoverEachDirectly(t *testing.T) {
 	for _, factory := range ProviderFactories() {
 		t.Run(string(factory.Definition().Type), func(t *testing.T) {
+			assert := assert.New(t)
+
 			caps := factory.Capabilities().Source
 			if caps.WatchSources != CapabilitySupported ||
 				caps.DiscoverSources != CapabilitySupported {
 				t.Skip("provider does not participate in watched discovery")
 			}
-			assert.Equal(t, CapabilitySupported, caps.StreamingDiscovery)
-			assert.Equal(t, CapabilitySupported, caps.WatchSources)
-			assert.Equal(t, CapabilitySupported, caps.DiscoverSources)
+			assert.Equal(CapabilitySupported, caps.StreamingDiscovery)
+			assert.Equal(CapabilitySupported, caps.WatchSources)
+			assert.Equal(CapabilitySupported, caps.DiscoverSources)
 			provider := factory.NewProvider(ProviderConfig{Roots: []string{t.TempDir()}})
 			_, ok := provider.(StreamingDiscoverer)
-			assert.True(t, ok)
+			assert.True(ok)
 			if caps.SharedContainerSource == CapabilitySupported {
 				_, exact := provider.(ReconciliationSourceResolver)
-				assert.True(t, exact,
+				assert.True(exact,
 					"every shared-container streaming provider must advertise exact rehydration")
 			}
 			if ok {
@@ -241,6 +249,8 @@ func TestProviderMigrationRejectsSharedContainerWithoutExactRehydration(t *testi
 }
 
 func TestSourceSetFactoryDowngradesAndRejectsMissingExactRehydration(t *testing.T) {
+	assert := assert.New(t)
+
 	factory := NewSourceSetFactory(
 		AgentDef{Type: "invalid-shared-source-set"},
 		Capabilities{Source: SourceCapabilities{
@@ -252,7 +262,7 @@ func TestSourceSetFactoryDowngradesAndRejectsMissingExactRehydration(t *testing.
 	)
 	provider := factory.NewProvider(ProviderConfig{})
 
-	assert.Equal(t, CapabilityUnsupported,
+	assert.Equal(CapabilityUnsupported,
 		provider.Capabilities().Source.SharedContainerSource)
 	err := ValidateProviderMigrationModes(
 		[]ProviderFactory{factory},
@@ -261,8 +271,8 @@ func TestSourceSetFactoryDowngradesAndRejectsMissingExactRehydration(t *testing.
 		},
 	)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "underlying source set")
-	assert.Contains(t, err.Error(), "exact reconciliation rehydration")
+	assert.Contains(err.Error(), "underlying source set")
+	assert.Contains(err.Error(), "exact reconciliation rehydration")
 }
 
 func TestProviderCapabilitiesRequireWatchRootPlanner(t *testing.T) {
@@ -274,7 +284,7 @@ func TestProviderCapabilitiesRequireWatchRootPlanner(t *testing.T) {
 		plan: WatchPlan{Roots: []WatchRoot{{Path: "/fallback"}}},
 	}
 
-	_, err := ResolveWatchRoots(context.Background(), provider)
+	_, err := ResolveWatchRoots(t.Context(), provider)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrUnsupportedProviderFeature)
 	assert.Zero(t, provider.watchPlanCalls,
@@ -293,7 +303,7 @@ func TestProviderCapabilitiesFallbackWatchPlanRetainsOnlyRootMetadata(t *testing
 		}}},
 	}
 
-	roots, err := ResolveWatchRoots(context.Background(), provider)
+	roots, err := ResolveWatchRoots(t.Context(), provider)
 	require.NoError(t, err)
 	assert.Equal(t, []WatchRoot{{
 		Path:        "/sessions",
@@ -304,6 +314,9 @@ func TestProviderCapabilitiesFallbackWatchPlanRetainsOnlyRootMetadata(t *testing
 }
 
 func TestProviderCapabilitiesSourceSetAdapterImplementsWatchRootPlanner(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := filepath.Clean("/sessions")
 	factory := NewSourceSetFactory(
 		AgentDef{Type: "source-set-watch-root-test"},
@@ -314,12 +327,12 @@ func TestProviderCapabilitiesSourceSetAdapterImplementsWatchRootPlanner(t *testi
 	)
 	provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
 
-	assert.Equal(t, CapabilitySupported, provider.Capabilities().Source.WatchRoots)
+	assert.Equal(CapabilitySupported, provider.Capabilities().Source.WatchRoots)
 	planner, ok := provider.(WatchRootPlanner)
-	require.True(t, ok)
-	roots, err := planner.WatchRoots(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, []WatchRoot{{
+	require.True(ok)
+	roots, err := planner.WatchRoots(t.Context())
+	require.NoError(err)
+	assert.Equal([]WatchRoot{{
 		Path:        root,
 		DebounceKey: "source-set-watch-root-test:jsonl:" + root,
 	}}, roots)

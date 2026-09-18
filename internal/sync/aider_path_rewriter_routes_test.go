@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -34,6 +33,9 @@ func (f recordingProviderFactory) NewProvider(
 }
 
 func TestAiderPathRewriterSurvivesChangedAndParseDiffRoutes(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := writeAiderHistory(t)
 	root := filepath.Dir(filepath.Dir(path))
 	rewriter := func(candidate string) string {
@@ -47,7 +49,7 @@ func TestAiderPathRewriterSurvivesChangedAndParseDiffRoutes(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(t, aiderFactory)
+	require.NotNil(aiderFactory)
 	var configs []parser.ProviderConfig
 
 	database := dbtest.OpenTestDB(t)
@@ -65,21 +67,21 @@ func TestAiderPathRewriterSurvivesChangedAndParseDiffRoutes(t *testing.T) {
 
 	configs = nil
 	changed, err := engine.classifyProviderChangedPath(
-		context.Background(), path,
+		t.Context(), path,
 	)
-	require.NoError(t, err)
-	require.NotEmpty(t, changed)
-	require.NotEmpty(t, configs)
-	assert.NotNil(t, configs[0].PathRewriter,
+	require.NoError(err)
+	require.NotEmpty(changed)
+	require.NotEmpty(configs)
+	assert.NotNil(configs[0].PathRewriter,
 		"changed-path provider must receive remote identity")
 
 	configs = nil
 	diffFiles, err := engine.parseDiffProviderSources(
-		context.Background(), parser.AgentAider,
+		t.Context(), parser.AgentAider,
 	)
-	require.NoError(t, err)
-	require.NotEmpty(t, diffFiles)
-	require.NotEmpty(t, configs)
-	assert.NotNil(t, configs[0].PathRewriter,
+	require.NoError(err)
+	require.NotEmpty(diffFiles)
+	require.NotEmpty(configs)
+	assert.NotNil(configs[0].PathRewriter,
 		"parse-diff provider must receive remote identity")
 }

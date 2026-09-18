@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -309,7 +310,7 @@ func codexResumeHash(
 	h := sha256.New()
 	unmarshaler, ok := h.(encoding.BinaryUnmarshaler)
 	if !ok {
-		return nil, "", fmt.Errorf("sha256 does not support state restore")
+		return nil, "", errors.New("sha256 does not support state restore")
 	}
 	if err := unmarshaler.UnmarshalBinary(state); err != nil {
 		return nil, "", fmt.Errorf("restoring hash state: %w", err)
@@ -340,7 +341,7 @@ func codexHashStateDigest(state []byte) (string, error) {
 	h := sha256.New()
 	unmarshaler, ok := h.(encoding.BinaryUnmarshaler)
 	if !ok {
-		return "", fmt.Errorf("sha256 does not support state restore")
+		return "", errors.New("sha256 does not support state restore")
 	}
 	if err := unmarshaler.UnmarshalBinary(state); err != nil {
 		return "", fmt.Errorf("restoring hash state: %w", err)

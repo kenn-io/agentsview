@@ -1,7 +1,6 @@
 package extract
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json/v2"
 	"errors"
@@ -120,7 +119,7 @@ func TestClientDistillParsesEntriesAndSendsShape(t *testing.T) {
 	defer server.Close()
 
 	entries, usage, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "system prompt", "unit text", 3,
+		t.Context(), "system prompt", "unit text", 3,
 	)
 	if err != nil {
 		t.Fatalf("DistillWithRecovery: %v", err)
@@ -163,14 +162,13 @@ func TestClientDistillSendsBearerToken(t *testing.T) {
 				"completion_tokens": 3,
 			},
 		})
-
 	}))
 	defer server.Close()
 
 	client := testClient(server.URL)
 	client.APIKey = "secret-key"
 	_, _, err := client.DistillWithRecovery(
-		context.Background(), "system prompt", "unit text", 1,
+		t.Context(), "system prompt", "unit text", 1,
 	)
 	require.NoError(t, err)
 
@@ -186,7 +184,7 @@ func TestClientTrailingSlashBaseURL(t *testing.T) {
 
 	client := testClient(server.URL + "/")
 	entries, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("entries=%v err=%v", entries, err)
@@ -204,7 +202,7 @@ func TestClientTruncationIsTypedSplitSignal(t *testing.T) {
 	defer server.Close()
 
 	_, usage, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "unit text", 3,
+		t.Context(), "p", "unit text", 3,
 	)
 	if !errors.Is(err, ErrPersistentTruncation) {
 		t.Fatalf("err = %v, want ErrPersistentTruncation", err)
@@ -233,7 +231,7 @@ func TestClientBadRequestMentioningContextIsNotOverflow(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err == nil || errors.Is(err, ErrContextOverflow) {
 		t.Fatalf("err = %v, must be a permanent non-overflow error", err)
@@ -252,7 +250,7 @@ func TestClientContextOverflowIsTyped(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if !errors.Is(err, ErrContextOverflow) {
 		t.Fatalf("err = %v, want ErrContextOverflow", err)
@@ -273,7 +271,7 @@ func TestClientBadRequestOtherThanOverflowIsPermanent(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err == nil {
 		t.Fatal("bad request must be an error")
@@ -301,7 +299,7 @@ func TestClientTruncationAfterTransientRetryAccountsUsage(t *testing.T) {
 	defer server.Close()
 
 	_, usage, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if !errors.Is(err, ErrPersistentTruncation) {
 		t.Fatalf("err = %v, want ErrPersistentTruncation", err)
@@ -325,7 +323,7 @@ func TestClientRetriesTransientErrors(t *testing.T) {
 	defer server.Close()
 
 	entries, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("entries=%v err=%v", entries, err)
@@ -346,7 +344,7 @@ func TestClientPermanentHTTPStatusFailsFast(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err == nil {
 		t.Fatal("unauthorized must be an error")
@@ -368,7 +366,7 @@ func TestClientRejectsReservedExtraBodyKeys(t *testing.T) {
 	client := testClient(server.URL)
 	client.Request.ExtraBody = map[string]any{"max_tokens": 5}
 	_, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err == nil || !strings.Contains(err.Error(), "max_tokens") {
 		t.Fatalf("err = %v, want reserved-key rejection naming the key", err)
@@ -447,7 +445,7 @@ func TestClientChoicelessResponseAccountsUsageAcrossRetry(t *testing.T) {
 	defer server.Close()
 
 	entries, usage, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("entries=%v err=%v", entries, err)
@@ -472,7 +470,7 @@ func TestClientNonStopFinishReasonIsError(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err == nil || !strings.Contains(err.Error(), "content_filter") {
 		t.Fatalf("err = %v, want an error naming the finish reason", err)
@@ -495,7 +493,7 @@ func TestClientEmptyContentIsError(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err == nil {
 		t.Fatal("empty content must be an error")
@@ -537,7 +535,7 @@ func TestClientRejectsSchemaViolatingContent(t *testing.T) {
 			defer server.Close()
 
 			entries, _, err := testClient(server.URL).DistillWithRecovery(
-				context.Background(), "p", "text", 3,
+				t.Context(), "p", "text", 3,
 			)
 			if err == nil {
 				t.Fatalf("content %q must be rejected, got entries %+v",
@@ -561,7 +559,7 @@ func TestClientAcceptsEmptyEntriesArray(t *testing.T) {
 	defer server.Close()
 
 	entries, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err != nil {
 		t.Fatalf("DistillWithRecovery: %v", err)
@@ -605,7 +603,7 @@ func TestClientErrorDetailRedactsReflectedCredentials(t *testing.T) {
 			client := testClient(endpoint.String())
 
 			_, _, derr := client.DistillWithRecovery(
-				context.Background(), "p", "text", 1,
+				t.Context(), "p", "text", 1,
 			)
 			if derr == nil {
 				t.Fatal("scripted failure must surface an error")
@@ -653,7 +651,7 @@ func TestClientErrorDetailRedactsRawQueryForms(t *testing.T) {
 
 			client := testClient(server.URL + "?" + tc.rawQuery)
 			_, _, err := client.DistillWithRecovery(
-				context.Background(), "p", "text", 1,
+				t.Context(), "p", "text", 1,
 			)
 			if err == nil {
 				t.Fatal("scripted failure must surface an error")
@@ -710,7 +708,7 @@ func TestClientErrorDetailWithholdsBodyForCredentialedEndpoints(t *testing.T) {
 			client := testClient(endpoint.String())
 
 			_, _, derr := client.DistillWithRecovery(
-				context.Background(), "p", "text", 1,
+				t.Context(), "p", "text", 1,
 			)
 			if derr == nil {
 				t.Fatal("scripted failure must surface an error")
@@ -743,7 +741,7 @@ func TestClientErrorDetailStripsControlCharacters(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 1,
+		t.Context(), "p", "text", 1,
 	)
 	if err == nil {
 		t.Fatal("scripted failure must surface an error")
@@ -769,7 +767,7 @@ func TestClientBoundsUnknownFinishReasonDetail(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 1,
+		t.Context(), "p", "text", 1,
 	)
 	if err == nil {
 		t.Fatal("an unknown finish reason must surface an error")
@@ -800,7 +798,7 @@ func TestClientDeterministicStatusesAreEndpointScoped(t *testing.T) {
 			defer server.Close()
 
 			_, _, err := testClient(server.URL).DistillWithRecovery(
-				context.Background(), "p", "text", 3,
+				t.Context(), "p", "text", 3,
 			)
 			if err == nil {
 				t.Fatal("scripted failure must surface an error")
@@ -847,7 +845,7 @@ func TestClientWithholdsSuccessDiagnosticsForCredentialedEndpoints(t *testing.T)
 
 			client := testClient(server.URL + "?api_key=" + secret)
 			_, _, err := client.DistillWithRecovery(
-				context.Background(), "p", "text", 1,
+				t.Context(), "p", "text", 1,
 			)
 			if err == nil {
 				t.Fatal("scripted violation must surface an error")
@@ -882,7 +880,7 @@ func TestClientWithholdsBodyForPathTokenEndpoints(t *testing.T) {
 
 			client := testClient(server.URL + "/" + token + "/v1")
 			_, _, err := client.DistillWithRecovery(
-				context.Background(), "p", "text", 1,
+				t.Context(), "p", "text", 1,
 			)
 			if err == nil {
 				t.Fatal("scripted failure must surface an error")
@@ -914,7 +912,7 @@ func TestClientWithholdsMalformedRedirectDetail(t *testing.T) {
 
 	client := testClient(server.URL + "/cap-4bcdefgh1jklmn0pqrst/v1")
 	_, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 1,
+		t.Context(), "p", "text", 1,
 	)
 	if err == nil {
 		t.Fatal("malformed redirect must surface an error")
@@ -942,7 +940,7 @@ func TestClientBoundsTransportErrorDetail(t *testing.T) {
 
 	client := testClient(server.URL + "/v1")
 	_, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 1,
+		t.Context(), "p", "text", 1,
 	)
 	if err == nil {
 		t.Fatal("malformed redirect must surface an error")
@@ -973,7 +971,7 @@ func TestClientOmitsRedirectTargetForCredentialedEndpoints(t *testing.T) {
 
 	client := testClient(server.URL + "/" + token + "/v1")
 	_, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 1,
+		t.Context(), "p", "text", 1,
 	)
 	if err == nil {
 		t.Fatal("refused redirect must surface an error")
@@ -1000,7 +998,7 @@ func TestClientBoundsRedirectTargetDetail(t *testing.T) {
 
 	client := testClient(server.URL + "/v1")
 	_, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 1,
+		t.Context(), "p", "text", 1,
 	)
 	if err == nil {
 		t.Fatal("refused redirect must surface an error")
@@ -1044,7 +1042,7 @@ func TestClientSanitizesBodyReadErrorDetail(t *testing.T) {
 		defer server.Close()
 		client := testClient(server.URL + "/cap-4bcdefgh1jklmn0pqrst/v1")
 		_, _, err := client.DistillWithRecovery(
-			context.Background(), "p", "text", 1,
+			t.Context(), "p", "text", 1,
 		)
 		if err == nil {
 			t.Fatal("malformed trailer must surface an error")
@@ -1063,7 +1061,7 @@ func TestClientSanitizesBodyReadErrorDetail(t *testing.T) {
 		defer server.Close()
 		client := testClient(server.URL + "/v1")
 		_, _, err := client.DistillWithRecovery(
-			context.Background(), "p", "text", 1,
+			t.Context(), "p", "text", 1,
 		)
 		if err == nil {
 			t.Fatal("malformed trailer must surface an error")
@@ -1090,7 +1088,7 @@ func TestClientKeepsDiagnosticsForKnownAPIPaths(t *testing.T) {
 
 			client := testClient(server.URL + path)
 			_, _, err := client.DistillWithRecovery(
-				context.Background(), "p", "text", 1,
+				t.Context(), "p", "text", 1,
 			)
 			if err == nil {
 				t.Fatal("scripted failure must surface an error")
@@ -1116,7 +1114,7 @@ func TestClientBoundsUnknownKeyDetail(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 1,
+		t.Context(), "p", "text", 1,
 	)
 	if err == nil {
 		t.Fatal("an unknown key must surface an error")
@@ -1145,7 +1143,7 @@ func TestClientRedirectRefusalIsEndpointScoped(t *testing.T) {
 	client := testClient(server.URL)
 	client.HTTPClient = &http.Client{CheckRedirect: RefuseRedirects}
 	_, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if err == nil {
 		t.Fatal("a refused redirect must surface an error")
@@ -1172,7 +1170,7 @@ func TestClientRequestEntityTooLargeSplits(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	if !errors.Is(err, ErrContextOverflow) {
 		t.Fatalf("err = %v, want ErrContextOverflow", err)
@@ -1229,7 +1227,7 @@ func TestClientRejectsOversizedContent(t *testing.T) {
 			defer server.Close()
 
 			entries, _, err := testClient(server.URL).DistillWithRecovery(
-				context.Background(), "p", "text", 3,
+				t.Context(), "p", "text", 3,
 			)
 			if err == nil {
 				t.Fatalf("oversized content must be rejected, got %d entries",
@@ -1248,6 +1246,8 @@ func TestClientRejectsOversizedContent(t *testing.T) {
 // The extra sentinel byte must turn an oversized 200 into a client-only limit
 // error instead of a transient JSON parse failure and retry ladder.
 func TestClientClassifiesTransportOverflowWithoutRetry(t *testing.T) {
+	assert := assert.New(t)
+
 	var requests []map[string]any
 	server := newScriptedServer(t, []scriptedResponse{{
 		finishReason: "stop",
@@ -1256,12 +1256,12 @@ func TestClientClassifiesTransportOverflowWithoutRetry(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, errClientOnlyResponseLimit)
-	assert.False(t, endpointScopedRejection(err))
-	assert.Len(t, requests, 1, "a deterministic overflow must not retry")
+	assert.ErrorIs(err, errClientOnlyResponseLimit)
+	assert.False(endpointScopedRejection(err))
+	assert.Len(requests, 1, "a deterministic overflow must not retry")
 }
 
 // TestClientRequestSchemaKeepsLargeBodyLimitLocal pins the server boundary:
@@ -1269,6 +1269,9 @@ func TestClientClassifiesTransportOverflowWithoutRetry(t *testing.T) {
 // reject the entire request, while the client still rejects oversized bodies
 // in TestClientRejectsOversizedContent.
 func TestClientRequestSchemaKeepsLargeBodyLimitLocal(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	var requests []map[string]any
 	server := newScriptedServer(t, []scriptedResponse{
 		{finishReason: "stop", content: entriesJSON(t, "one")},
@@ -1276,38 +1279,38 @@ func TestClientRequestSchemaKeepsLargeBodyLimitLocal(t *testing.T) {
 	defer server.Close()
 
 	_, _, err := testClient(server.URL).DistillWithRecovery(
-		context.Background(), "p", "text", 3,
+		t.Context(), "p", "text", 3,
 	)
-	require.NoError(t, err)
-	require.Len(t, requests, 1)
+	require.NoError(err)
+	require.Len(requests, 1)
 
 	responseFormat, ok := requests[0]["response_format"].(map[string]any)
-	require.True(t, ok, "request has no response_format object")
+	require.True(ok, "request has no response_format object")
 	jsonSchema, ok := responseFormat["json_schema"].(map[string]any)
-	require.True(t, ok, "response_format has no json_schema object")
+	require.True(ok, "response_format has no json_schema object")
 	schema, ok := jsonSchema["schema"].(map[string]any)
-	require.True(t, ok, "json_schema has no schema object")
+	require.True(ok, "json_schema has no schema object")
 	properties, ok := schema["properties"].(map[string]any)
-	require.True(t, ok, "entry schema has no properties object")
+	require.True(ok, "entry schema has no properties object")
 	entriesSchema, ok := properties["entries"].(map[string]any)
-	require.True(t, ok, "entry schema has no entries property")
-	assert.Equal(t, float64(maxResponseEntries), entriesSchema["maxItems"])
+	require.True(ok, "entry schema has no entries property")
+	assert.Equal(float64(maxResponseEntries), entriesSchema["maxItems"])
 	items, ok := entriesSchema["items"].(map[string]any)
-	require.True(t, ok, "entries schema has no items object")
+	require.True(ok, "entries schema has no items object")
 	fields, ok := items["properties"].(map[string]any)
-	require.True(t, ok, "entry schema has no item properties")
+	require.True(ok, "entry schema has no item properties")
 	title, ok := fields["title"].(map[string]any)
-	require.True(t, ok, "entry schema has no title property")
-	assert.Equal(t, float64(maxEntryTitleChars), title["maxLength"])
+	require.True(ok, "entry schema has no title property")
+	assert.Equal(float64(maxEntryTitleChars), title["maxLength"])
 	body, ok := fields["body"].(map[string]any)
-	require.True(t, ok, "entry schema has no body property")
-	assert.NotContains(t, body, "maxLength")
+	require.True(ok, "entry schema has no body property")
+	assert.NotContains(body, "maxLength")
 	entities, ok := fields["entities"].(map[string]any)
-	require.True(t, ok, "entry schema has no entities property")
-	assert.Equal(t, float64(maxEntryEntities), entities["maxItems"])
+	require.True(ok, "entry schema has no entities property")
+	assert.Equal(float64(maxEntryEntities), entities["maxItems"])
 	entityItems, ok := entities["items"].(map[string]any)
-	require.True(t, ok, "entities schema has no items object")
-	assert.Equal(t, float64(maxEntityChars), entityItems["maxLength"])
+	require.True(ok, "entities schema has no items object")
+	assert.Equal(float64(maxEntityChars), entityItems["maxLength"])
 }
 
 func TestSplitFloorChars(t *testing.T) {
@@ -1336,7 +1339,7 @@ func TestClientEndpointWithQueryRoutesCorrectly(t *testing.T) {
 
 	client := testClient(server.URL + "/v1?api-version=2024-06-01")
 	entries, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 1,
+		t.Context(), "p", "text", 1,
 	)
 	if err != nil || len(entries) != 1 {
 		t.Fatalf("entries=%v err=%v", entries, err)
@@ -1359,7 +1362,7 @@ func TestClientTransportErrorRedactsEndpoint(t *testing.T) {
 	client := testClient(
 		"http://tester:hunter2@127.0.0.1:1/v1?api_key=sekret")
 	_, _, err := client.DistillWithRecovery(
-		context.Background(), "p", "text", 1,
+		t.Context(), "p", "text", 1,
 	)
 	if err == nil {
 		t.Fatal("expected a connection error against a closed port")

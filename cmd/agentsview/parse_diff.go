@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -73,7 +74,7 @@ func newParseDiffCommand() *cobra.Command {
 		Args:         cobra.NoArgs,
 		PreRunE: func(cmd *cobra.Command, _ []string) error {
 			if cfg.Limit < 0 {
-				return fmt.Errorf("--limit must be >= 0")
+				return errors.New("--limit must be >= 0")
 			}
 			_, err := parseDiffAgentTypes(cfg.Agents)
 			return err

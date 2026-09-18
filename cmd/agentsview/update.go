@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -152,7 +153,7 @@ func performUpdateWithDaemonLifecycle(
 		if stopResult.Stopped {
 			if restartErr := restartDaemon(daemonCfg, stopResult); restartErr != nil {
 				return fmt.Errorf(
-					"update failed: %w (also failed to restart daemon: %v)",
+					"update failed: %w (also failed to restart daemon: %w)",
 					err, restartErr,
 				)
 			}
@@ -206,9 +207,9 @@ func restartDaemonAfterUpdateArgs(
 		args = append(args, "--host", "127.0.0.1")
 	}
 	if stopResult.ExplicitPort != nil {
-		args = append(args, "--port", fmt.Sprint(*stopResult.ExplicitPort))
+		args = append(args, "--port", strconv.Itoa(*stopResult.ExplicitPort))
 	} else if stopResult.Port > 0 {
-		args = append(args, "--restart-port", fmt.Sprint(stopResult.Port))
+		args = append(args, "--restart-port", strconv.Itoa(stopResult.Port))
 	}
 	if stopResult.RequireAuth ||
 		(!stopResult.RequireAuthKnown && cfg.RequireAuth) {

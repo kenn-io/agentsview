@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/v2"
 	"fmt"
 	"io"
@@ -55,7 +56,7 @@ func newAiderProviderFactory(def AgentDef) ProviderFactory {
 				WithWatchRoots(aiderWatchRoots),
 				WithChangedPathClassifier(aiderClassifyPath),
 				WithMemberLookup(
-					func(root, rawID string) (multiSessionMatch, bool) {
+					func(_ context.Context, root, rawID string) (multiSessionMatch, bool) {
 						return aiderFindMember(root, rawID, identity)
 					},
 				),
@@ -313,7 +314,7 @@ func streamAndCacheAiderRuns(
 	}
 	encoded, err := json.Marshal(SourceFingerprint{
 		Size: info.Size(), MTimeNS: info.ModTime().UnixNano(),
-		Hash: fmt.Sprintf("%x", hasher.Sum(nil)),
+		Hash: hex.EncodeToString(hasher.Sum(nil)),
 	})
 	if err != nil {
 		return err

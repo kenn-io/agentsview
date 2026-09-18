@@ -39,16 +39,18 @@ func TestParseVirtualSourcePathRejectsMalformedPaths(t *testing.T) {
 }
 
 func TestParseVirtualSourcePathForBase(t *testing.T) {
+	assert := assert.New(t)
+
 	path := VirtualSourcePath(filepath.Join("/tmp", "sessions.db"), "session-1")
 
 	container, sourceID, ok := ParseVirtualSourcePathForBase(path, "sessions.db")
 
 	require.True(t, ok, "expected base name to match")
-	assert.Equal(t, filepath.Join("/tmp", "sessions.db"), container)
-	assert.Equal(t, "session-1", sourceID)
+	assert.Equal(filepath.Join("/tmp", "sessions.db"), container)
+	assert.Equal("session-1", sourceID)
 
 	container, sourceID, ok = ParseVirtualSourcePathForBase(path, "other.db")
-	assert.False(t, ok)
-	assert.Empty(t, container)
-	assert.Empty(t, sourceID)
+	assert.False(ok)
+	assert.Empty(container)
+	assert.Empty(sourceID)
 }

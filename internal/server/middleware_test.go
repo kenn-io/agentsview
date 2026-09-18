@@ -64,6 +64,8 @@ func TestContentTypeWrapper(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			w := httptest.NewRecorder()
 			wrapper := &contentTypeWrapper{
 				ResponseWriter: w,
@@ -71,7 +73,7 @@ func TestContentTypeWrapper(t *testing.T) {
 				triggerStatus:  tt.triggerStatus,
 			}
 
-			req := httptest.NewRequest(http.MethodGet, "/", nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 			tt.handler(wrapper, req)
 
 			assertRecorderStatus(t, w, tt.wantStatus)
@@ -81,15 +83,15 @@ func TestContentTypeWrapper(t *testing.T) {
 
 			gotCT := resp.Header.Get("Content-Type")
 			if tt.wantContentType != "" {
-				assert.Equal(t, tt.wantContentType, gotCT)
+				assert.Equal(tt.wantContentType, gotCT)
 			} else {
-				assert.NotEqual(t, "application/json", gotCT,
+				assert.NotEqual("application/json", gotCT,
 					"Content-Type unexpectedly forced by wrapper")
 			}
 
 			body, err := io.ReadAll(resp.Body)
 			require.NoError(t, err)
-			assert.Equal(t, tt.wantBody, string(body))
+			assert.Equal(tt.wantBody, string(body))
 		})
 	}
 }
@@ -107,7 +109,7 @@ func TestMiddlewareTimeout(t *testing.T) {
 	// Use a real listener to discover the bound port, then
 	// rebuild Handler() with the correct port in the Host
 	// allowlist.
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	port := ln.Addr().(*net.TCPAddr).Port
 	srv.SetPort(port)
@@ -238,27 +240,29 @@ func TestCSPMiddlewareSetsHeaderOnNonAPIRoutes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			t.Parallel()
 			inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			})
 			handler := cspMiddleware(tt.host, tt.port, tt.basePath, "", nil, inner)
 
-			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, tt.path, nil)
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, req)
 
 			csp := w.Header().Get("Content-Security-Policy")
 			if !tt.wantCSP {
-				assert.Empty(t, csp, "expected no CSP header on API route")
+				assert.Empty(csp, "expected no CSP header on API route")
 				return
 			}
 			require.NotEmpty(t, csp, "expected CSP header")
 			got := parseCSP(csp)
 			for name, want := range tt.wantDirectives {
-				assert.Equal(t, want, got[name], "directive %s", name)
+				assert.Equal(want, got[name], "directive %s", name)
 			}
-			assert.Equal(t, "DENY", w.Header().Get("X-Frame-Options"))
+			assert.Equal("DENY", w.Header().Get("X-Frame-Options"))
 		})
 	}
 }
@@ -294,6 +298,8 @@ func TestBuildCSPPolicyWidensConnectSrcOnly(t *testing.T) {
 }
 
 func TestBuildCSPPolicyPinsPublicURLOrigin(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Parallel()
 
 	directives := parseCSP(buildCSPPolicy(
@@ -302,19 +308,16 @@ func TestBuildCSPPolicyPinsPublicURLOrigin(t *testing.T) {
 		nil,
 	))
 
-	assert.Equal(t,
-		"'self' https://agentsview.example.com",
+	assert.Equal("'self' https://agentsview.example.com",
 		directives["default-src"],
 	)
-	assert.Equal(t,
-		"'self' https://agentsview.example.com",
+	assert.Equal("'self' https://agentsview.example.com",
 		directives["script-src"],
 	)
-	assert.Equal(t,
-		"'self' https://agentsview.example.com data: blob:",
+	assert.Equal("'self' https://agentsview.example.com data: blob:",
 		directives["img-src"],
 	)
-	assert.NotContains(t, directives["default-src"], "0.0.0.0")
+	assert.NotContains(directives["default-src"], "0.0.0.0")
 }
 
 func TestBuildCSPPolicyKeepsLocalOriginWithPublicURL(t *testing.T) {
@@ -369,7 +372,7 @@ func TestCORSMiddlewareMergesVaryHeader(t *testing.T) {
 		cors.ServeHTTP(w, r)
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/stats", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/stats", nil)
 	req.Header.Set("Origin", "http://127.0.0.1:8080")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)

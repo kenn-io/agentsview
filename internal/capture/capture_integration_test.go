@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -57,13 +58,16 @@ func TestMain(m *testing.M) {
 func TestRunClaudeProducesExactResultAndPreservesChildOutcome(t *testing.T) {
 	for _, childExit := range []int{0, 7} {
 		t.Run(fmt.Sprintf("exit_%d", childExit), func(t *testing.T) {
+			parentAssert := assert.New(t)
+			require := require.New(t)
+
 			root := t.TempDir()
 			captureDir := filepath.Join(t.TempDir(), "capture")
 			resultPath := filepath.Join(t.TempDir(), "usage.json")
 			producer := copyCaptureHelper(t, "claude")
 			var stdout, stderr bytes.Buffer
 			limits := testLimits()
-			outcome, err := Run(context.Background(), RunOptions{
+			outcome, err := Run(t.Context(), RunOptions{
 				Provider:          ProviderClaude,
 				OccurrenceID:      "job-42-attempt-1",
 				CaptureDir:        captureDir,
@@ -77,13 +81,13 @@ func TestRunClaudeProducesExactResultAndPreservesChildOutcome(t *testing.T) {
 				CustomPricing:     testPricing(),
 				AgentsViewVersion: "test-version",
 			})
-			require.NoError(t, err)
-			assert.Equal(t, childExit, outcome.ExitCode)
-			assert.Equal(t, "child stdout\n", stdout.String())
-			assert.Equal(t, "child stderr\n", stderr.String())
+			require.NoError(err)
+			parentAssert.Equal(childExit, outcome.ExitCode)
+			parentAssert.Equal("child stdout\n", stdout.String())
+			parentAssert.Equal("child stderr\n", stderr.String())
 
 			data, err := os.ReadFile(resultPath)
-			require.NoError(t, err)
+			require.NoError(err)
 			assertPrivateMode(t, captureDir, 0o700)
 			for _, path := range []string{
 				filepath.Join(captureDir, manifestFileName),
@@ -94,32 +98,32 @@ func TestRunClaudeProducesExactResultAndPreservesChildOutcome(t *testing.T) {
 				assertPrivateMode(t, path, 0o600)
 			}
 			result, err := DecodeResult(bytes.NewReader(data))
-			require.NoError(t, err)
-			assert.Equal(t, "job-42-attempt-1", result.OccurrenceID)
-			assert.Equal(t, ReportingComplete, result.Reporting.Outcome)
-			require.NotNil(t, result.Execution.ExitCode)
-			assert.Equal(t, childExit, *result.Execution.ExitCode)
-			require.NotNil(t, result.Usage)
+			require.NoError(err)
+			parentAssert.Equal("job-42-attempt-1", result.OccurrenceID)
+			parentAssert.Equal(ReportingComplete, result.Reporting.Outcome)
+			require.NotNil(result.Execution.ExitCode)
+			parentAssert.Equal(childExit, *result.Execution.ExitCode)
+			require.NotNil(result.Usage)
 			assertIntPointer(t, result.Usage.InputTokens, 100)
 			assertIntPointer(t, result.Usage.OutputTokens, 50)
 			assertIntPointer(t, result.Usage.CacheCreationInputTokens, 200)
 			assertIntPointer(t, result.Usage.CacheReadInputTokens, 300)
-			require.NotNil(t, result.Cost)
-			assert.Equal(t, int64(650), result.Cost.Amount.Microdollars)
-			assert.Equal(t, "USD", result.Cost.Currency)
-			assert.Equal(t, []string{"claude-test"}, result.Models)
+			require.NotNil(result.Cost)
+			parentAssert.Equal(int64(650), result.Cost.Amount.Microdollars)
+			parentAssert.Equal("USD", result.Cost.Currency)
+			parentAssert.Equal([]string{"claude-test"}, result.Models)
 
 			text := string(data)
 			for _, forbidden := range []string{
 				"PROMPT_SENTINEL", "RESPONSE_SENTINEL", "ENV_SECRET_SENTINEL",
 				"AUTHORIZATION_SENTINEL", root,
 			} {
-				assert.NotContains(t, text, forbidden)
+				parentAssert.NotContains(text, forbidden)
 			}
 
 			var replay bytes.Buffer
 			pricingLoaded := false
-			reporting, err := Report(context.Background(), ReportOptions{
+			reporting, err := Report(t.Context(), ReportOptions{
 				CaptureDir: captureDir, ResultPath: "-", Stdout: &replay,
 				LoadCustomPricing: func() (map[string]config.CustomModelRate, error) {
 					pricingLoaded = true
@@ -127,24 +131,26 @@ func TestRunClaudeProducesExactResultAndPreservesChildOutcome(t *testing.T) {
 				},
 				AgentsViewVersion: "changed-version",
 			})
-			require.NoError(t, err)
-			assert.False(t, pricingLoaded, "sealed replay must not reload pricing")
-			assert.Equal(t, ReportingComplete, reporting.Outcome)
-			assert.Equal(t, data, replay.Bytes(), "sealed replay must be byte-identical")
+			require.NoError(err)
+			parentAssert.False(pricingLoaded, "sealed replay must not reload pricing")
+			parentAssert.Equal(ReportingComplete, reporting.Outcome)
+			parentAssert.Equal(data, replay.Bytes(), "sealed replay must be byte-identical")
 		})
 	}
 }
 
 func TestRunInvalidatesExistingResultBeforeStartingProducer(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	resultPath := filepath.Join(t.TempDir(), "usage.json")
-	require.NoError(t, os.WriteFile(resultPath, []byte("stale result"), 0o600))
+	require.NoError(os.WriteFile(resultPath, []byte("stale result"), 0o600))
 	env := append(
 		helperEnvironment(root, "claude-final", 0),
 		"AGENTSVIEW_CAPTURE_TEST_RESULT_MUST_BE_ABSENT="+resultPath,
 	)
 
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "current-occurrence",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -152,11 +158,11 @@ func TestRunInvalidatesExistingResultBeforeStartingProducer(t *testing.T) {
 		Environment: env, Streams: Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits: testLimits(), CustomPricing: testPricing(),
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	data, err := os.ReadFile(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	result, err := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Equal(t, "current-occurrence", result.OccurrenceID)
 }
 
@@ -174,6 +180,9 @@ func TestReportPricingFailureWritesOrReplaysFailureResult(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			parentAssert := assert.New(t)
+			require := require.New(t)
+
 			started := time.Now().UTC()
 			captureDir := filepath.Join(t.TempDir(), "capture")
 			resultPath := filepath.Join(t.TempDir(), "usage.json")
@@ -188,15 +197,15 @@ func TestReportPricingFailureWritesOrReplaysFailureResult(t *testing.T) {
 				Invocation:        invocationName(ProviderClaude),
 				Limits:            testLimits(),
 			})
-			require.NoError(t, err)
+			require.NoError(err)
 			var priorData []byte
 			if test.priorReason != "" {
 				prior := failureResult(state.manifest, test.priorReason, "test")
 				priorData, err = encodeResult(
 					prior, state.manifest.Limits.MaxResultBytes,
 				)
-				require.NoError(t, err)
-				require.NoError(t, state.storeAttempt(priorData, false))
+				require.NoError(err)
+				require.NoError(state.storeAttempt(priorData, false))
 			}
 			state.close()
 
@@ -208,26 +217,29 @@ func TestReportPricingFailureWritesOrReplaysFailureResult(t *testing.T) {
 				AgentsViewVersion: "test",
 			})
 
-			require.ErrorContains(t, err, assert.AnError.Error())
-			assert.Equal(t, ReportingFailed, reporting.Outcome)
-			assert.Equal(t, test.wantReason, reporting.Reason)
+			require.ErrorContains(err, assert.AnError.Error())
+			parentAssert.Equal(ReportingFailed, reporting.Outcome)
+			parentAssert.Equal(test.wantReason, reporting.Reason)
 			data, readErr := os.ReadFile(resultPath)
-			require.NoError(t, readErr)
+			require.NoError(readErr)
 			result, decodeErr := DecodeResult(bytes.NewReader(data))
-			require.NoError(t, decodeErr)
-			assert.Equal(t, test.wantReason, result.Reporting.Reason)
+			require.NoError(decodeErr)
+			parentAssert.Equal(test.wantReason, result.Reporting.Reason)
 			if priorData != nil {
-				assert.Equal(t, priorData, data)
+				parentAssert.Equal(priorData, data)
 			}
 		})
 	}
 }
 
 func TestRunFinalizesUsageAfterPostStartStreamError(t *testing.T) {
+	parentAssert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	resultPath := filepath.Join(t.TempDir(), "usage.json")
 	producer := copyCaptureHelper(t, "claude")
-	outcome, err := Run(context.Background(), RunOptions{
+	outcome, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "post-start-stream-error",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -239,17 +251,17 @@ func TestRunFinalizesUsageAfterPostStartStreamError(t *testing.T) {
 		Limits: testLimits(), CustomPricing: testPricing(),
 	})
 
-	require.ErrorContains(t, err, assert.AnError.Error())
-	assert.Equal(t, ReportFailureExitCode, outcome.ExitCode)
-	assert.Equal(t, ReportingComplete, outcome.Reporting.Outcome)
-	require.NotNil(t, outcome.Execution.ExitCode)
-	assert.Zero(t, *outcome.Execution.ExitCode)
+	require.ErrorContains(err, assert.AnError.Error())
+	parentAssert.Equal(ReportFailureExitCode, outcome.ExitCode)
+	parentAssert.Equal(ReportingComplete, outcome.Reporting.Outcome)
+	require.NotNil(outcome.Execution.ExitCode)
+	parentAssert.Zero(*outcome.Execution.ExitCode)
 	data, readErr := os.ReadFile(resultPath)
-	require.NoError(t, readErr)
+	require.NoError(readErr)
 	result, decodeErr := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, decodeErr)
-	assert.Equal(t, ReportingComplete, result.Reporting.Outcome)
-	require.NotNil(t, result.Usage)
+	require.NoError(decodeErr)
+	parentAssert.Equal(ReportingComplete, result.Reporting.Outcome)
+	require.NotNil(result.Usage)
 	assertIntPointer(t, result.Usage.InputTokens, 100)
 }
 
@@ -263,6 +275,9 @@ func TestRunPersistsProducerLaunchFailure(t *testing.T) {
 		{provider: ProviderCodex, name: "codex", args: []string{"exec", "--json", "prompt"}},
 	} {
 		t.Run(string(test.provider), func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			captureDir := filepath.Join(t.TempDir(), "capture")
 			resultPath := filepath.Join(t.TempDir(), "usage.json")
 			missingProducer := filepath.Join(t.TempDir(), test.name)
@@ -276,23 +291,26 @@ func TestRunPersistsProducerLaunchFailure(t *testing.T) {
 				Limits:  testLimits(),
 			})
 
-			require.ErrorContains(t, err, "starting producer")
-			assert.Equal(t, ReportFailureExitCode, outcome.ExitCode)
-			assert.Equal(t, ReportingFailed, outcome.Reporting.Outcome)
-			assert.DirExists(t, captureDir)
+			require.ErrorContains(err, "starting producer")
+			assert.Equal(ReportFailureExitCode, outcome.ExitCode)
+			assert.Equal(ReportingFailed, outcome.Reporting.Outcome)
+			assert.DirExists(captureDir)
 			data, readErr := os.ReadFile(resultPath)
-			require.NoError(t, readErr)
+			require.NoError(readErr)
 			result, decodeErr := DecodeResult(bytes.NewReader(data))
-			require.NoError(t, decodeErr)
-			assert.Equal(t, ReasonChildStartFailed, result.Reporting.Reason)
-			assert.Nil(t, result.Usage)
-			assert.Nil(t, result.Execution.ExitCode)
-			require.NotNil(t, result.Execution.CompletedAt)
+			require.NoError(decodeErr)
+			assert.Equal(ReasonChildStartFailed, result.Reporting.Reason)
+			assert.Nil(result.Usage)
+			assert.Nil(result.Execution.ExitCode)
+			require.NotNil(result.Execution.CompletedAt)
 		})
 	}
 }
 
 func TestReportReplaysProducerLaunchFailureWithoutSourceDiscovery(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	workDir := t.TempDir()
 	captureDir := filepath.Join(t.TempDir(), "capture")
@@ -307,21 +325,21 @@ func TestReportReplaysProducerLaunchFailureWithoutSourceDiscovery(t *testing.T) 
 		Streams: Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:  testLimits(),
 	})
-	require.ErrorContains(t, err, "starting producer")
+	require.ErrorContains(err, "starting producer")
 	initialData, err := os.ReadFile(initialResultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	manifestData, err := os.ReadFile(filepath.Join(captureDir, manifestFileName))
-	require.NoError(t, err)
+	require.NoError(err)
 	var captured manifest
-	require.NoError(t, json.Unmarshal(manifestData, &captured))
+	require.NoError(json.Unmarshal(manifestData, &captured))
 	physicalWorkDir, err := filepath.EvalSymlinks(workDir)
-	require.NoError(t, err)
+	require.NoError(err)
 	transcriptPath := filepath.Join(
 		root, encodeClaudeWorkDir(physicalWorkDir), captured.ProviderSessionID+".jsonl",
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(transcriptPath), 0o700))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(filepath.Dir(transcriptPath), 0o700))
+	require.NoError(os.WriteFile(
 		transcriptPath,
 		[]byte(strings.Join(
 			claudeHelperLines(captured.ProviderSessionID, physicalWorkDir, false), "\n",
@@ -339,22 +357,25 @@ func TestReportReplaysProducerLaunchFailureWithoutSourceDiscovery(t *testing.T) 
 		},
 	})
 
-	require.Error(t, reportErr)
-	assert.False(t, pricingLoaded)
-	assert.Equal(t, ReportingFailed, reporting.Outcome)
-	assert.Equal(t, ReasonChildStartFailed, reporting.Reason)
+	require.Error(reportErr)
+	assert.False(pricingLoaded)
+	assert.Equal(ReportingFailed, reporting.Outcome)
+	assert.Equal(ReasonChildStartFailed, reporting.Reason)
 	retryData, err := os.ReadFile(retryResultPath)
-	require.NoError(t, err)
-	assert.Equal(t, initialData, retryData)
+	require.NoError(err)
+	assert.Equal(initialData, retryData)
 }
 
 func TestClaudeCapturePersistsARecoverableProviderShapedBundle(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	workDir := t.TempDir()
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	resultPath := filepath.Join(t.TempDir(), "usage.json")
 	producer := copyCaptureHelper(t, "claude")
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "persisted-bundle",
 		CaptureDir: captureDir, ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: workDir,
@@ -363,26 +384,26 @@ func TestClaudeCapturePersistsARecoverableProviderShapedBundle(t *testing.T) {
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      testLimits(), CustomPricing: testPricing(),
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	resultData, err := os.ReadFile(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	result, err := DecodeResult(bytes.NewReader(resultData))
-	require.NoError(t, err)
-	require.Len(t, result.Sources, 2)
+	require.NoError(err)
+	require.Len(result.Sources, 2)
 
 	bundlePath := filepath.Join(captureDir, sourcesDirName, bundleFileName)
 	bundleFile, err := os.Open(bundlePath)
-	require.NoError(t, err)
+	require.NoError(err)
 	bundle, err := DecodeTranscriptBundle(bundleFile)
-	require.NoError(t, bundleFile.Close())
-	require.NoError(t, err)
-	assert.Equal(t, "persisted-bundle", bundle.OccurrenceID)
-	assert.Equal(t, ProviderClaude, bundle.Provider)
-	require.Len(t, bundle.Sources, 2)
+	require.NoError(bundleFile.Close())
+	require.NoError(err)
+	assert.Equal("persisted-bundle", bundle.OccurrenceID)
+	assert.Equal(ProviderClaude, bundle.Provider)
+	require.Len(bundle.Sources, 2)
 
 	physicalWorkDir, err := filepath.EvalSymlinks(workDir)
-	require.NoError(t, err)
+	require.NoError(err)
 	wantRoot := filepath.ToSlash(filepath.Join(
 		string(ProviderClaude), "projects", encodeClaudeWorkDir(physicalWorkDir),
 		result.Provider.SessionID+".jsonl",
@@ -391,7 +412,7 @@ func TestClaudeCapturePersistsARecoverableProviderShapedBundle(t *testing.T) {
 		string(ProviderClaude), "projects", encodeClaudeWorkDir(physicalWorkDir),
 		result.Provider.SessionID, "subagents", "agent-abc123.jsonl",
 	))
-	assert.ElementsMatch(t, []string{wantRoot, wantChild}, []string{
+	assert.ElementsMatch([]string{wantRoot, wantChild}, []string{
 		bundle.Sources[0].RawSource.Path, bundle.Sources[1].RawSource.Path,
 	})
 	assertPrivateMode(t, filepath.Join(captureDir, sourcesDirName), 0o700)
@@ -405,12 +426,12 @@ func TestClaudeCapturePersistsARecoverableProviderShapedBundle(t *testing.T) {
 		path := filepath.Join(
 			captureDir, sourcesDirName, filepath.FromSlash(source.RawSource.Path))
 		data, readErr := os.ReadFile(path)
-		require.NoError(t, readErr)
+		require.NoError(readErr)
 		assertPrivateMode(t, path, 0o600)
 		digest := sha256.Sum256(data)
-		assert.Equal(t, fmt.Sprintf("%x", digest), source.RawSource.Hash)
-		assert.Equal(t, int64(len(data)), source.RawSource.Size)
-		assert.Equal(t, SourceProvenance{
+		assert.Equal(hex.EncodeToString(digest[:]), source.RawSource.Hash)
+		assert.Equal(int64(len(data)), source.RawSource.Size)
+		assert.Equal(SourceProvenance{
 			SessionID: source.SessionID,
 			SHA256:    source.RawSource.Hash,
 			Bytes:     source.RawSource.Size,
@@ -418,8 +439,8 @@ func TestClaudeCapturePersistsARecoverableProviderShapedBundle(t *testing.T) {
 	}
 
 	text := string(resultData)
-	assert.NotContains(t, text, "projects/")
-	assert.NotContains(t, text, physicalWorkDir)
+	assert.NotContains(text, "projects/")
+	assert.NotContains(text, physicalWorkDir)
 	assertBundleImportsUsage(
 		t,
 		filepath.Join(captureDir, "sources", "claude", "projects"),
@@ -430,11 +451,14 @@ func TestClaudeCapturePersistsARecoverableProviderShapedBundle(t *testing.T) {
 }
 
 func TestReportRebuildsFromPersistedSourcesAfterLiveArchiveIsGone(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	resultPath := filepath.Join(t.TempDir(), "usage.json")
 	producer := copyCaptureHelper(t, "claude")
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "ephemeral-runner-recovery",
 		CaptureDir: captureDir, ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -443,36 +467,36 @@ func TestReportRebuildsFromPersistedSourcesAfterLiveArchiveIsGone(t *testing.T) 
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      testLimits(), CustomPricing: testPricing(),
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	originalData, err := os.ReadFile(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	original, err := DecodeResult(bytes.NewReader(originalData))
-	require.NoError(t, err)
+	require.NoError(err)
 
 	state, err := openState(captureDir)
-	require.NoError(t, err)
+	require.NoError(err)
 	state.manifest.SealedDigest = ""
-	require.NoError(t, state.saveManifest())
+	require.NoError(state.saveManifest())
 	state.close()
-	require.NoError(t, os.Rename(root, root+"-provider-archive-gone"))
-	require.NoError(t, os.Rename(
+	require.NoError(os.Rename(root, root+"-provider-archive-gone"))
+	require.NoError(os.Rename(
 		filepath.Join(captureDir, archiveFileName),
 		filepath.Join(t.TempDir(), "prior-capture.db"),
 	))
 
 	var recoveredJSON bytes.Buffer
-	reporting, err := Report(context.Background(), ReportOptions{
+	reporting, err := Report(t.Context(), ReportOptions{
 		CaptureDir: captureDir, ResultPath: "-", Stdout: &recoveredJSON,
 		CustomPricing: testPricing(),
 	})
-	require.NoError(t, err)
-	assert.Equal(t, ReportingComplete, reporting.Outcome)
+	require.NoError(err)
+	assert.Equal(ReportingComplete, reporting.Outcome)
 	recovered, err := DecodeResult(bytes.NewReader(recoveredJSON.Bytes()))
-	require.NoError(t, err)
-	assert.Equal(t, original.Usage, recovered.Usage)
-	assert.Equal(t, original.Cost, recovered.Cost)
-	assert.Equal(t, original.Sources, recovered.Sources)
-	assert.Equal(t, original.Provider.IncludedSessionIDs,
+	require.NoError(err)
+	assert.Equal(original.Usage, recovered.Usage)
+	assert.Equal(original.Cost, recovered.Cost)
+	assert.Equal(original.Sources, recovered.Sources)
+	assert.Equal(original.Provider.IncludedSessionIDs,
 		recovered.Provider.IncludedSessionIDs)
 }
 
@@ -480,7 +504,7 @@ func TestRunClaudePassesStandardInputThrough(t *testing.T) {
 	root := t.TempDir()
 	producer := copyCaptureHelper(t, "claude")
 	var stdout bytes.Buffer
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "stdin",
 		CaptureDir:   filepath.Join(t.TempDir(), "capture"),
 		ResultPath:   filepath.Join(t.TempDir(), "result.json"),
@@ -497,6 +521,8 @@ func TestRunClaudePassesStandardInputThrough(t *testing.T) {
 }
 
 func TestRunRejectsReuseOfCompletedCapture(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	resultPath := filepath.Join(t.TempDir(), "result.json")
@@ -510,25 +536,28 @@ func TestRunRejectsReuseOfCompletedCapture(t *testing.T) {
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      testLimits(), CustomPricing: testPricing(),
 	}
-	_, err := Run(context.Background(), options)
-	require.NoError(t, err)
+	_, err := Run(t.Context(), options)
+	require.NoError(err)
 	before, err := os.ReadFile(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	_, err = Run(context.Background(), options)
-	require.ErrorContains(t, err, "capture directory already exists")
+	_, err = Run(t.Context(), options)
+	require.ErrorContains(err, "capture directory already exists")
 	after, err := os.ReadFile(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Equal(t, before, after)
 }
 
 func TestRunRejectsPreexistingCaptureDirectoryWithoutChangingIt(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	captureDir := t.TempDir()
 	sentinelPath := filepath.Join(captureDir, "unrelated.txt")
-	require.NoError(t, os.WriteFile(sentinelPath, []byte("keep me"), 0o600))
+	require.NoError(os.WriteFile(sentinelPath, []byte("keep me"), 0o600))
 	producer := copyCaptureHelper(t, "claude")
 
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "existing-directory",
 		CaptureDir: captureDir, ResultPath: filepath.Join(t.TempDir(), "result.json"),
 		ProviderRoot: t.TempDir(), WorkDir: t.TempDir(),
@@ -538,34 +567,39 @@ func TestRunRejectsPreexistingCaptureDirectoryWithoutChangingIt(t *testing.T) {
 		Limits:      testLimits(),
 	})
 
-	require.ErrorContains(t, err, "capture directory already exists")
+	require.ErrorContains(err, "capture directory already exists")
 	data, readErr := os.ReadFile(sentinelPath)
-	require.NoError(t, readErr)
-	assert.Equal(t, "keep me", string(data))
-	assert.NoFileExists(t, filepath.Join(captureDir, manifestFileName))
-	assert.NoFileExists(t, filepath.Join(captureDir, lockFileName))
+	require.NoError(readErr)
+	assert.Equal("keep me", string(data))
+	assert.NoFileExists(filepath.Join(captureDir, manifestFileName))
+	assert.NoFileExists(filepath.Join(captureDir, lockFileName))
 }
 
 func TestReportRejectsInvalidStateBeforeCreatingRecoveryFiles(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	captureDir := t.TempDir()
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(captureDir, manifestFileName), []byte("not json"), 0o600))
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 
-	_, err := Report(context.Background(), ReportOptions{
+	_, err := Report(t.Context(), ReportOptions{
 		CaptureDir: captureDir, ResultPath: resultPath,
 	})
 
-	require.ErrorContains(t, err, "decoding capture manifest")
-	assert.NoFileExists(t, filepath.Join(captureDir, lockFileName))
-	assert.NoFileExists(t, resultPath)
+	require.ErrorContains(err, "decoding capture manifest")
+	assert.NoFileExists(filepath.Join(captureDir, lockFileName))
+	assert.NoFileExists(resultPath)
 }
 
 func TestReportRejectsUnexpectedCaptureContentsWithoutRemovingThem(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	producer := copyCaptureHelper(t, "claude")
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "unexpected-recovery-state",
 		CaptureDir: captureDir, ResultPath: filepath.Join(t.TempDir(), "result.json"),
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -574,27 +608,29 @@ func TestReportRejectsUnexpectedCaptureContentsWithoutRemovingThem(t *testing.T)
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      testLimits(), CustomPricing: testPricing(),
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	unrelated := filepath.Join(captureDir, "unrelated.txt")
-	require.NoError(t, os.WriteFile(unrelated, []byte("keep me"), 0o600))
+	require.NoError(os.WriteFile(unrelated, []byte("keep me"), 0o600))
 
-	_, err = Report(context.Background(), ReportOptions{
+	_, err = Report(t.Context(), ReportOptions{
 		CaptureDir: captureDir, ResultPath: "-", Stdout: io.Discard,
 	})
 
-	require.ErrorContains(t, err, "unexpected entry")
+	require.ErrorContains(err, "unexpected entry")
 	data, readErr := os.ReadFile(unrelated)
-	require.NoError(t, readErr)
+	require.NoError(readErr)
 	assert.Equal(t, "keep me", string(data))
 }
 
 func TestRunRejectsHistoricalClaudeSessionSources(t *testing.T) {
 	for _, existing := range []string{"root", "subagent tree", "other project"} {
 		t.Run(existing, func(t *testing.T) {
+			require := require.New(t)
+
 			root := t.TempDir()
 			workDir := t.TempDir()
 			physicalWorkDir, err := filepath.EvalSymlinks(workDir)
-			require.NoError(t, err)
+			require.NoError(err)
 			sessionID := "33333333-3333-4333-8333-333333333333"
 			rootPath := filepath.Join(
 				root, encodeClaudeWorkDir(physicalWorkDir), sessionID+".jsonl")
@@ -603,16 +639,16 @@ func TestRunRejectsHistoricalClaudeSessionSources(t *testing.T) {
 					root, "different-project", sessionID+".jsonl")
 			}
 			if existing == "root" || existing == "other project" {
-				require.NoError(t, os.MkdirAll(filepath.Dir(rootPath), 0o700))
-				require.NoError(t, os.WriteFile(rootPath, []byte("historical\n"), 0o600))
+				require.NoError(os.MkdirAll(filepath.Dir(rootPath), 0o700))
+				require.NoError(os.WriteFile(rootPath, []byte("historical\n"), 0o600))
 			} else {
-				require.NoError(t, os.MkdirAll(
+				require.NoError(os.MkdirAll(
 					strings.TrimSuffix(rootPath, ".jsonl"), 0o700))
 			}
 			captureDir := filepath.Join(t.TempDir(), "capture")
 			producer := copyCaptureHelper(t, "run-claude-ci")
 
-			_, err = Run(context.Background(), RunOptions{
+			_, err = Run(t.Context(), RunOptions{
 				Provider: ProviderClaude, OccurrenceID: "historical-session",
 				ProviderSessionID: sessionID,
 				CaptureDir:        captureDir, ResultPath: filepath.Join(t.TempDir(), "result.json"),
@@ -623,13 +659,16 @@ func TestRunRejectsHistoricalClaudeSessionSources(t *testing.T) {
 				Limits:      testLimits(),
 			})
 
-			require.ErrorContains(t, err, "already has provider source data")
+			require.ErrorContains(err, "already has provider source data")
 			assert.NoDirExists(t, captureDir)
 		})
 	}
 }
 
 func TestProviderRootsDoNotRequireHomeWhenConfigured(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Setenv("HOME", "")
 	t.Setenv("USERPROFILE", "")
 	t.Setenv("HOMEDRIVE", "")
@@ -640,27 +679,30 @@ func TestProviderRootsDoNotRequireHomeWhenConfigured(t *testing.T) {
 	claudeRoot := t.TempDir()
 	t.Setenv("CLAUDE_CONFIG_DIR", claudeRoot)
 	got, err := producerRoot(ProviderClaude, "")
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(claudeRoot, "projects"), got)
+	require.NoError(err)
+	assert.Equal(filepath.Join(claudeRoot, "projects"), got)
 
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	codexRoot := t.TempDir()
 	t.Setenv("CODEX_HOME", codexRoot)
 	got, err = producerRoot(ProviderCodex, "")
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(codexRoot, "sessions"), got)
+	require.NoError(err)
+	assert.Equal(filepath.Join(codexRoot, "sessions"), got)
 
 	explicit := t.TempDir()
 	got, err = producerRoot(ProviderClaude, explicit)
-	require.NoError(t, err)
-	assert.Equal(t, explicit, got)
+	require.NoError(err)
+	assert.Equal(explicit, got)
 }
 
 func TestCaptureRejectsResultPathsInsideCaptureState(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	producer := copyCaptureHelper(t, "claude")
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "result-collision",
 		CaptureDir:   captureDir,
 		ResultPath:   filepath.Join(captureDir, sourcesDirName, bundleFileName),
@@ -670,11 +712,11 @@ func TestCaptureRejectsResultPathsInsideCaptureState(t *testing.T) {
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      testLimits(),
 	})
-	require.ErrorContains(t, err, "result path must be outside")
-	assert.NoDirExists(t, captureDir)
+	require.ErrorContains(err, "result path must be outside")
+	assert.NoDirExists(captureDir)
 
 	externalResult := filepath.Join(t.TempDir(), "result.json")
-	_, err = Run(context.Background(), RunOptions{
+	_, err = Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "report-result-collision",
 		CaptureDir: captureDir, ResultPath: externalResult,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -683,42 +725,45 @@ func TestCaptureRejectsResultPathsInsideCaptureState(t *testing.T) {
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      testLimits(), CustomPricing: testPricing(),
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	manifestPath := filepath.Join(captureDir, manifestFileName)
 	before, err := os.ReadFile(manifestPath)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	_, err = Report(context.Background(), ReportOptions{
+	_, err = Report(t.Context(), ReportOptions{
 		CaptureDir: captureDir, ResultPath: manifestPath,
 	})
-	require.ErrorContains(t, err, "result path must be outside")
+	require.ErrorContains(err, "result path must be outside")
 	after, err := os.ReadFile(manifestPath)
-	require.NoError(t, err)
-	assert.Equal(t, before, after)
+	require.NoError(err)
+	assert.Equal(before, after)
 
 	alias := filepath.Join(t.TempDir(), "capture-alias")
 	if err := os.Symlink(captureDir, alias); err == nil {
-		_, err = Report(context.Background(), ReportOptions{
+		_, err = Report(t.Context(), ReportOptions{
 			CaptureDir: captureDir,
 			ResultPath: filepath.Join(alias, manifestFileName),
 		})
-		require.ErrorContains(t, err, "result path must be outside")
+		require.ErrorContains(err, "result path must be outside")
 	}
 }
 
 func TestRunRejectsResultPathInsideProviderRootBeforeStarting(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	workDir := t.TempDir()
 	physicalWorkDir, err := filepath.EvalSymlinks(workDir)
-	require.NoError(t, err)
+	require.NoError(err)
 	sessionID := "11111111-2222-4333-8444-555555555555"
 	resultPath := filepath.Join(
 		root, encodeClaudeWorkDir(physicalWorkDir), sessionID+".jsonl")
 	producer := copyCaptureHelper(t, "claude")
 	var stdout bytes.Buffer
 
-	_, err = Run(context.Background(), RunOptions{
+	_, err = Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "provider-result-collision",
 		ProviderSessionID: sessionID,
 		CaptureDir:        captureDir, ResultPath: resultPath,
@@ -729,17 +774,20 @@ func TestRunRejectsResultPathInsideProviderRootBeforeStarting(t *testing.T) {
 		Limits:      testLimits(), CustomPricing: testPricing(),
 	})
 
-	require.ErrorContains(t, err, "result path must be outside the provider root")
-	assert.NoDirExists(t, captureDir)
-	assert.NoFileExists(t, resultPath)
-	assert.Empty(t, stdout.String())
+	require.ErrorContains(err, "result path must be outside the provider root")
+	assert.NoDirExists(captureDir)
+	assert.NoFileExists(resultPath)
+	assert.Empty(stdout.String())
 }
 
 func TestRunRejectsResultDirectoryBeforeCreatingState(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	resultPath := filepath.Join(t.TempDir(), "usage.json")
-	require.NoError(t, os.Mkdir(resultPath, 0o700))
+	require.NoError(os.Mkdir(resultPath, 0o700))
 	producer := copyCaptureHelper(t, "claude")
 	var stdout bytes.Buffer
 	opts := RunOptions{
@@ -752,17 +800,17 @@ func TestRunRejectsResultDirectoryBeforeCreatingState(t *testing.T) {
 		Limits:      testLimits(), CustomPricing: testPricing(),
 	}
 
-	_, err := Run(context.Background(), opts)
+	_, err := Run(t.Context(), opts)
 
-	require.ErrorContains(t, err, "not a regular file")
-	assert.DirExists(t, resultPath)
-	assert.NoDirExists(t, captureDir)
-	assert.Empty(t, stdout.String(), "the producer must not start")
+	require.ErrorContains(err, "not a regular file")
+	assert.DirExists(resultPath)
+	assert.NoDirExists(captureDir)
+	assert.Empty(stdout.String(), "the producer must not start")
 
 	opts.ResultPath = filepath.Join(t.TempDir(), "usage.json")
-	_, err = Run(context.Background(), opts)
-	require.NoError(t, err)
-	assert.FileExists(t, opts.ResultPath)
+	_, err = Run(t.Context(), opts)
+	require.NoError(err)
+	assert.FileExists(opts.ResultPath)
 }
 
 func TestRunRejectsOverlappingCaptureAndProviderRoots(t *testing.T) {
@@ -789,7 +837,7 @@ func TestRunRejectsOverlappingCaptureAndProviderRoots(t *testing.T) {
 			captureDir := filepath.Join(base, tt.capturePath)
 			var stdout bytes.Buffer
 
-			_, err := Run(context.Background(), RunOptions{
+			_, err := Run(t.Context(), RunOptions{
 				Provider: ProviderClaude, OccurrenceID: "overlapping-roots",
 				CaptureDir:   captureDir,
 				ResultPath:   filepath.Join(t.TempDir(), "result.json"),
@@ -809,10 +857,13 @@ func TestRunRejectsOverlappingCaptureAndProviderRoots(t *testing.T) {
 }
 
 func TestRunClaudeWrapperRequiresAndUsesCallerSessionID(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	producer := copyCaptureHelper(t, "run-claude-ci")
 	claudeWorkDir := t.TempDir()
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "wrapper-missing-id",
 		CaptureDir:   filepath.Join(t.TempDir(), "capture"),
 		ResultPath:   filepath.Join(t.TempDir(), "result.json"),
@@ -821,7 +872,7 @@ func TestRunClaudeWrapperRequiresAndUsesCallerSessionID(t *testing.T) {
 		Environment: helperEnvironment(root, "claude-final", 0),
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard}, Limits: testLimits(),
 	})
-	require.ErrorContains(t, err, "requires --session-id")
+	require.ErrorContains(err, "requires --session-id")
 
 	sessionID := "33333333-3333-4333-8333-333333333333"
 	env := append(
@@ -830,7 +881,7 @@ func TestRunClaudeWrapperRequiresAndUsesCallerSessionID(t *testing.T) {
 		"AGENTSVIEW_CAPTURE_TEST_CHDIR="+claudeWorkDir,
 	)
 	missingWorkDirCapture := filepath.Join(t.TempDir(), "capture")
-	_, err = Run(context.Background(), RunOptions{
+	_, err = Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "wrapper-missing-work-dir",
 		ProviderSessionID: sessionID,
 		CaptureDir:        missingWorkDirCapture,
@@ -839,11 +890,11 @@ func TestRunClaudeWrapperRequiresAndUsesCallerSessionID(t *testing.T) {
 		Environment: env, Streams: Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits: testLimits(),
 	})
-	require.ErrorContains(t, err, "requires --claude-work-dir")
-	assert.NoDirExists(t, missingWorkDirCapture)
+	require.ErrorContains(err, "requires --claude-work-dir")
+	assert.NoDirExists(missingWorkDirCapture)
 
 	resultPath := filepath.Join(t.TempDir(), "result.json")
-	_, err = Run(context.Background(), RunOptions{
+	_, err = Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "wrapper",
 		ProviderSessionID: sessionID,
 		CaptureDir:        filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
@@ -852,12 +903,12 @@ func TestRunClaudeWrapperRequiresAndUsesCallerSessionID(t *testing.T) {
 		Environment: env, Streams: Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits: testLimits(), CustomPricing: testPricing(),
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	data, err := os.ReadFile(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	result, err := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, err)
-	assert.Equal(t, sessionID, result.Provider.SessionID)
+	require.NoError(err)
+	assert.Equal(sessionID, result.Provider.SessionID)
 }
 
 func TestRunRejectsUppercaseClaudeSessionIDsBeforeStarting(t *testing.T) {
@@ -885,7 +936,7 @@ func TestRunRejectsUppercaseClaudeSessionIDsBeforeStarting(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			producer := copyCaptureHelper(t, test.executable)
 			captureDir := filepath.Join(t.TempDir(), "capture")
-			_, err := Run(context.Background(), RunOptions{
+			_, err := Run(t.Context(), RunOptions{
 				Provider: ProviderClaude, OccurrenceID: "uppercase-session",
 				ProviderSessionID: test.supplied,
 				CaptureDir:        captureDir, ResultPath: filepath.Join(t.TempDir(), "result.json"),
@@ -951,7 +1002,7 @@ func TestRunRejectsUnsupportedSessionModesBeforeStarting(t *testing.T) {
 			captureDir := filepath.Join(t.TempDir(), "capture")
 			root := t.TempDir()
 			var stdout bytes.Buffer
-			_, err := Run(context.Background(), RunOptions{
+			_, err := Run(t.Context(), RunOptions{
 				Provider: test.provider, OccurrenceID: "unsupported-session-mode",
 				CaptureDir: captureDir, ResultPath: filepath.Join(t.TempDir(), "result.json"),
 				ProviderRoot: root, WorkDir: t.TempDir(),
@@ -981,7 +1032,7 @@ func TestRunRejectsImpossibleTimingBeforeStarting(t *testing.T) {
 	limits.FinalizationWait = time.Second
 	limits.Quiescence = time.Second
 
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "invalid-timing",
 		CaptureDir:   filepath.Join(t.TempDir(), "capture"),
 		ResultPath:   filepath.Join(t.TempDir(), "result.json"),
@@ -993,17 +1044,22 @@ func TestRunRejectsImpossibleTimingBeforeStarting(t *testing.T) {
 }
 
 func TestPruneUnlistedSourcesRemovesInterruptedAtomicWrite(t *testing.T) {
-	state := &captureState{dir: t.TempDir(), manifest: manifest{Limits: testLimits()}}
-	require.NoError(t, os.MkdirAll(state.sourcesPath(), 0o700))
-	leftover := state.sourcesPath(".agentsview-capture-interrupted")
-	require.NoError(t, os.WriteFile(leftover, []byte("partial"), 0o600))
+	require := require.New(t)
 
-	require.NoError(t, state.pruneUnlistedSources(t.Context()))
+	state := &captureState{dir: t.TempDir(), manifest: manifest{Limits: testLimits()}}
+	require.NoError(os.MkdirAll(state.sourcesPath(), 0o700))
+	leftover := state.sourcesPath(".agentsview-capture-interrupted")
+	require.NoError(os.WriteFile(leftover, []byte("partial"), 0o600))
+
+	require.NoError(state.pruneUnlistedSources(t.Context()))
 
 	assert.NoFileExists(t, leftover)
 }
 
 func TestResetPersistedSourcesRemovesIncompleteAttemptCopies(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	state := &captureState{
 		dir: t.TempDir(),
 		manifest: manifest{
@@ -1023,25 +1079,25 @@ func TestResetPersistedSourcesRemovesIncompleteAttemptCopies(t *testing.T) {
 	uncommitted := state.sourcesPath(
 		"claude", "projects", "project-b", "new-session.jsonl",
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(recorded), 0o700))
-	require.NoError(t, os.MkdirAll(filepath.Dir(uncommitted), 0o700))
-	require.NoError(t, os.WriteFile(recorded, []byte("old\n"), 0o600))
-	require.NoError(t, os.WriteFile(uncommitted, []byte("new\n"), 0o600))
-	require.NoError(t, os.WriteFile(state.bundlePath(), []byte("{}\n"), 0o600))
-	require.NoError(t, os.WriteFile(state.archivePath(), []byte("db"), 0o600))
+	require.NoError(os.MkdirAll(filepath.Dir(recorded), 0o700))
+	require.NoError(os.MkdirAll(filepath.Dir(uncommitted), 0o700))
+	require.NoError(os.WriteFile(recorded, []byte("old\n"), 0o600))
+	require.NoError(os.WriteFile(uncommitted, []byte("new\n"), 0o600))
+	require.NoError(os.WriteFile(state.bundlePath(), []byte("{}\n"), 0o600))
+	require.NoError(os.WriteFile(state.archivePath(), []byte("db"), 0o600))
 
-	require.NoError(t, state.resetPersistedSources(t.Context()))
+	require.NoError(state.resetPersistedSources(t.Context()))
 
-	assert.NoDirExists(t, state.sourcesPath())
-	assert.NoFileExists(t, state.archivePath())
-	assert.Empty(t, state.manifest.Sources)
-	assert.False(t, state.manifest.SourcesComplete)
+	assert.NoDirExists(state.sourcesPath())
+	assert.NoFileExists(state.archivePath())
+	assert.Empty(state.manifest.Sources)
+	assert.False(state.manifest.SourcesComplete)
 	data, err := os.ReadFile(state.manifestPath())
-	require.NoError(t, err)
+	require.NoError(err)
 	var persisted manifest
-	require.NoError(t, json.Unmarshal(data, &persisted))
-	assert.Empty(t, persisted.Sources)
-	assert.False(t, persisted.SourcesComplete)
+	require.NoError(json.Unmarshal(data, &persisted))
+	assert.Empty(persisted.Sources)
+	assert.False(persisted.SourcesComplete)
 }
 
 func TestRunClaudeReportingFailuresAreDistinctAndWriteResults(t *testing.T) {
@@ -1073,10 +1129,13 @@ func TestRunClaudeReportingFailuresAreDistinctAndWriteResults(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			root := t.TempDir()
 			resultPath := filepath.Join(t.TempDir(), "result.json")
 			producer := copyCaptureHelper(t, "claude")
-			outcome, err := Run(context.Background(), RunOptions{
+			outcome, err := Run(t.Context(), RunOptions{
 				Provider: ProviderClaude, OccurrenceID: "failure-case",
 				CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 				ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1085,31 +1144,34 @@ func TestRunClaudeReportingFailuresAreDistinctAndWriteResults(t *testing.T) {
 				Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 				Limits:      tt.limits, CustomPricing: testPricing(),
 			})
-			require.Error(t, err)
-			assert.Equal(t, ReportFailureExitCode, outcome.ExitCode)
+			require.Error(err)
+			assert.Equal(ReportFailureExitCode, outcome.ExitCode)
 			data, readErr := os.ReadFile(resultPath)
-			require.NoError(t, readErr)
+			require.NoError(readErr)
 			result, decodeErr := DecodeResult(bytes.NewReader(data))
-			require.NoError(t, decodeErr)
-			assert.Equal(t, ReportingFailed, result.Reporting.Outcome)
-			assert.Equal(t, tt.wantReason, result.Reporting.Reason)
-			assert.Nil(t, result.Usage)
+			require.NoError(decodeErr)
+			assert.Equal(ReportingFailed, result.Reporting.Outcome)
+			assert.Equal(tt.wantReason, result.Reporting.Reason)
+			assert.Nil(result.Usage)
 		})
 	}
 }
 
 func TestFailedReportRetryPreservesFirstFailureUntilSuccess(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	workDir := t.TempDir()
 	physicalWorkDir, err := filepath.EvalSymlinks(workDir)
-	require.NoError(t, err)
+	require.NoError(err)
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	firstResultPath := filepath.Join(t.TempDir(), "first.json")
 	limits := testLimits()
 	limits.MaxSourceBytes = 8 << 10
 	producer := copyCaptureHelper(t, "claude")
 
-	_, err = Run(context.Background(), RunOptions{
+	_, err = Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "stable-failure",
 		CaptureDir: captureDir, ResultPath: firstResultPath,
 		ProviderRoot: root, WorkDir: workDir,
@@ -1118,63 +1180,66 @@ func TestFailedReportRetryPreservesFirstFailureUntilSuccess(t *testing.T) {
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      limits, CustomPricing: testPricing(),
 	})
-	require.Error(t, err)
+	require.Error(err)
 	firstData, err := os.ReadFile(firstResultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	first, err := DecodeResult(bytes.NewReader(firstData))
-	require.NoError(t, err)
-	require.Equal(t, ReasonNoSession, first.Reporting.Reason)
+	require.NoError(err)
+	require.Equal(ReasonNoSession, first.Reporting.Reason)
 
 	manifestData, err := os.ReadFile(filepath.Join(captureDir, manifestFileName))
-	require.NoError(t, err)
+	require.NoError(err)
 	var captured manifest
-	require.NoError(t, json.Unmarshal(manifestData, &captured))
+	require.NoError(json.Unmarshal(manifestData, &captured))
 	sourcePath := filepath.Join(
 		root, encodeClaudeWorkDir(physicalWorkDir), captured.ProviderSessionID+".jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(sourcePath), 0o700))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(filepath.Dir(sourcePath), 0o700))
+	require.NoError(os.WriteFile(
 		sourcePath, bytes.Repeat([]byte("x"), int(limits.MaxSourceBytes)+1), 0o600))
 
 	retryPath := filepath.Join(t.TempDir(), "retry.json")
-	reporting, err := Report(context.Background(), ReportOptions{
+	reporting, err := Report(t.Context(), ReportOptions{
 		CaptureDir: captureDir, ResultPath: retryPath,
 		CustomPricing: testPricing(),
 	})
-	require.Error(t, err)
-	assert.Equal(t, first.Reporting, reporting)
+	require.Error(err)
+	assert.Equal(first.Reporting, reporting)
 	retryData, err := os.ReadFile(retryPath)
-	require.NoError(t, err)
-	assert.Equal(t, firstData, retryData)
+	require.NoError(err)
+	assert.Equal(firstData, retryData)
 	storedData, err := os.ReadFile(filepath.Join(captureDir, sealedFileName))
-	require.NoError(t, err)
-	assert.Equal(t, firstData, storedData)
+	require.NoError(err)
+	assert.Equal(firstData, storedData)
 
 	validData := []byte(strings.Join(
 		claudeHelperLines(captured.ProviderSessionID, physicalWorkDir, false), "\n") + "\n")
-	require.Less(t, int64(len(validData)), limits.MaxSourceBytes)
-	require.NoError(t, os.WriteFile(sourcePath, validData, 0o600))
+	require.Less(int64(len(validData)), limits.MaxSourceBytes)
+	require.NoError(os.WriteFile(sourcePath, validData, 0o600))
 	successPath := filepath.Join(t.TempDir(), "success.json")
-	reporting, err = Report(context.Background(), ReportOptions{
+	reporting, err = Report(t.Context(), ReportOptions{
 		CaptureDir: captureDir, ResultPath: successPath,
 		CustomPricing: testPricing(),
 	})
-	require.NoError(t, err)
-	assert.Equal(t, ReportingComplete, reporting.Outcome)
+	require.NoError(err)
+	assert.Equal(ReportingComplete, reporting.Outcome)
 	successData, err := os.ReadFile(successPath)
-	require.NoError(t, err)
-	assert.NotEqual(t, firstData, successData)
+	require.NoError(err)
+	assert.NotEqual(firstData, successData)
 	storedData, err = os.ReadFile(filepath.Join(captureDir, sealedFileName))
-	require.NoError(t, err)
-	assert.Equal(t, successData, storedData)
+	require.NoError(err)
+	assert.Equal(successData, storedData)
 }
 
 func TestReportRefusesQuiescentSourceWithoutDurableExecutionCompletion(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	workDir := t.TempDir()
 	physicalWorkDir, err := filepath.EvalSymlinks(workDir)
-	require.NoError(t, err)
+	require.NoError(err)
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	sessionID := "11111111-1111-4111-8111-111111111111"
@@ -1190,53 +1255,57 @@ func TestReportRefusesQuiescentSourceWithoutDurableExecutionCompletion(
 		Invocation:        invocationName(ProviderClaude),
 		Limits:            testLimits(),
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	state.close()
 	sourcePath := filepath.Join(
 		root, encodeClaudeWorkDir(physicalWorkDir), sessionID+".jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(sourcePath), 0o700))
+	require.NoError(os.MkdirAll(filepath.Dir(sourcePath), 0o700))
 	initial := []byte(strings.Join(
 		claudeHelperLines(sessionID, physicalWorkDir, false), "\n") + "\n")
-	require.NoError(t, os.WriteFile(sourcePath, initial, 0o600))
-	time.Sleep(testLimits().Quiescence + time.Millisecond)
+	require.NoError(os.WriteFile(sourcePath, initial, 0o600))
+	settledAt := time.Now().Add(-2 * testLimits().Quiescence)
+	require.NoError(os.Chtimes(sourcePath, settledAt, settledAt))
 
-	reporting, reportErr := Report(context.Background(), ReportOptions{
+	reporting, reportErr := Report(t.Context(), ReportOptions{
 		CaptureDir: captureDir, ResultPath: resultPath,
 		CustomPricing: testPricing(),
 	})
 
-	require.Error(t, reportErr)
-	assert.Equal(t, ReportingFailed, reporting.Outcome)
-	assert.Equal(t, ReasonUnfinishedSession, reporting.Reason)
+	require.Error(reportErr)
+	assert.Equal(ReportingFailed, reporting.Outcome)
+	assert.Equal(ReasonUnfinishedSession, reporting.Reason)
 	manifestData, err := os.ReadFile(filepath.Join(captureDir, manifestFileName))
-	require.NoError(t, err)
+	require.NoError(err)
 	var captured manifest
-	require.NoError(t, json.Unmarshal(manifestData, &captured))
-	assert.Empty(t, captured.SealedDigest)
-	assert.False(t, captured.SourcesComplete)
-	require.NoError(t, os.WriteFile(
+	require.NoError(json.Unmarshal(manifestData, &captured))
+	assert.Empty(captured.SealedDigest)
+	assert.False(captured.SourcesComplete)
+	require.NoError(os.WriteFile(
 		sourcePath, append(initial, []byte(`{"type":"assistant"}`+"\n")...), 0o600))
-	retry, retryErr := Report(context.Background(), ReportOptions{
+	retry, retryErr := Report(t.Context(), ReportOptions{
 		CaptureDir:    captureDir,
 		ResultPath:    filepath.Join(t.TempDir(), "retry.json"),
 		CustomPricing: testPricing(),
 	})
-	require.Error(t, retryErr)
-	assert.Equal(t, ReportingFailed, retry.Outcome)
-	assert.Equal(t, ReasonUnfinishedSession, retry.Reason)
+	require.Error(retryErr)
+	assert.Equal(ReportingFailed, retry.Outcome)
+	assert.Equal(ReasonUnfinishedSession, retry.Reason)
 	manifestData, err = os.ReadFile(filepath.Join(captureDir, manifestFileName))
-	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(manifestData, &captured))
-	assert.Empty(t, captured.SealedDigest)
-	assert.False(t, captured.SourcesComplete)
+	require.NoError(err)
+	require.NoError(json.Unmarshal(manifestData, &captured))
+	assert.Empty(captured.SealedDigest)
+	assert.False(captured.SourcesComplete)
 }
 
 func TestRunClaudeQuiescentUnfinishedSessionSealsPartialUsage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "claude")
-	outcome, err := Run(context.Background(), RunOptions{
+	outcome, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "interrupted-usage",
 		CaptureDir: captureDir, ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1245,29 +1314,29 @@ func TestRunClaudeQuiescentUnfinishedSessionSealsPartialUsage(t *testing.T) {
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      testLimits(), CustomPricing: testPricing(),
 	})
-	require.NoError(t, err)
-	assert.Equal(t, 7, outcome.ExitCode)
+	require.NoError(err)
+	assert.Equal(7, outcome.ExitCode)
 	data, err := os.ReadFile(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	result, err := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, err)
-	assert.Equal(t, ReportingComplete, result.Reporting.Outcome)
-	assert.Empty(t, result.Reporting.Reason)
-	assert.Equal(t, AssurancePartial, result.Assurance.State)
-	assert.Contains(t, result.Assurance.Reasons, ReasonUnfinishedSession)
-	assert.Contains(t, result.Assurance.Reasons, ReasonCostUnavailable)
-	assert.Nil(t, result.Cost)
-	require.NotNil(t, result.Usage)
+	require.NoError(err)
+	assert.Equal(ReportingComplete, result.Reporting.Outcome)
+	assert.Empty(result.Reporting.Reason)
+	assert.Equal(AssurancePartial, result.Assurance.State)
+	assert.Contains(result.Assurance.Reasons, ReasonUnfinishedSession)
+	assert.Contains(result.Assurance.Reasons, ReasonCostUnavailable)
+	assert.Nil(result.Cost)
+	require.NotNil(result.Usage)
 	assertIntPointer(t, result.Usage.InputTokens, 100)
 	assertIntPointer(t, result.Usage.OutputTokens, 50)
 
 	var replay bytes.Buffer
-	_, err = Report(context.Background(), ReportOptions{
+	_, err = Report(t.Context(), ReportOptions{
 		CaptureDir: captureDir, ResultPath: "-", Stdout: &replay,
 		CustomPricing: testPricing(),
 	})
-	require.NoError(t, err)
-	assert.Equal(t, data, replay.Bytes())
+	require.NoError(err)
+	assert.Equal(data, replay.Bytes())
 }
 
 func TestRunClaudeMalformedMiddleRecordSealsPartialUsage(t *testing.T) {
@@ -1279,10 +1348,13 @@ func TestRunClaudeMalformedMiddleRecordSealsPartialUsage(t *testing.T) {
 		{name: "descendant", mode: "claude-subagent-malformed"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			root := t.TempDir()
 			resultPath := filepath.Join(t.TempDir(), "result.json")
 			producer := copyCaptureHelper(t, "claude")
-			_, err := Run(context.Background(), RunOptions{
+			_, err := Run(t.Context(), RunOptions{
 				Provider: ProviderClaude, OccurrenceID: "malformed-" + tc.name,
 				CaptureDir: filepath.Join(t.TempDir(), "capture"),
 				ResultPath: resultPath, ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1291,20 +1363,20 @@ func TestRunClaudeMalformedMiddleRecordSealsPartialUsage(t *testing.T) {
 				Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 				Limits:      testLimits(), CustomPricing: testPricing(),
 			})
-			require.NoError(t, err)
+			require.NoError(err)
 
 			data, err := os.ReadFile(resultPath)
-			require.NoError(t, err)
+			require.NoError(err)
 			result, err := DecodeResult(bytes.NewReader(data))
-			require.NoError(t, err)
-			assert.Equal(t, ReportingComplete, result.Reporting.Outcome)
-			assert.Equal(t, AssurancePartial, result.Assurance.State)
-			assert.Contains(t, result.Assurance.Reasons, ReasonMalformedTranscript)
-			assert.Contains(t, result.Assurance.Reasons, ReasonCostUnavailable)
-			assert.Nil(t, result.Cost)
-			require.NotNil(t, result.Usage)
-			require.NotNil(t, result.Usage.OutputTokens)
-			assert.Positive(t, *result.Usage.OutputTokens)
+			require.NoError(err)
+			assert.Equal(ReportingComplete, result.Reporting.Outcome)
+			assert.Equal(AssurancePartial, result.Assurance.State)
+			assert.Contains(result.Assurance.Reasons, ReasonMalformedTranscript)
+			assert.Contains(result.Assurance.Reasons, ReasonCostUnavailable)
+			assert.Nil(result.Cost)
+			require.NotNil(result.Usage)
+			require.NotNil(result.Usage.OutputTokens)
+			assert.Positive(*result.Usage.OutputTokens)
 		})
 	}
 }
@@ -1320,10 +1392,13 @@ func TestRunCodexMalformedRecordSealsPartialUsage(t *testing.T) {
 		{name: "descendant", mode: "codex-subagent-malformed", outputTokens: 12},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			root := t.TempDir()
 			resultPath := filepath.Join(t.TempDir(), "result.json")
 			producer := copyCaptureHelper(t, "codex")
-			_, err := Run(context.Background(), RunOptions{
+			_, err := Run(t.Context(), RunOptions{
 				Provider: ProviderCodex, OccurrenceID: "codex-malformed-" + tc.name,
 				CaptureDir: filepath.Join(t.TempDir(), "capture"),
 				ResultPath: resultPath, ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1332,32 +1407,35 @@ func TestRunCodexMalformedRecordSealsPartialUsage(t *testing.T) {
 				Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 				Limits:      testLimits(), CustomPricing: testPricing(),
 			})
-			require.NoError(t, err)
+			require.NoError(err)
 
 			data, err := os.ReadFile(resultPath)
-			require.NoError(t, err)
+			require.NoError(err)
 			result, err := DecodeResult(bytes.NewReader(data))
-			require.NoError(t, err)
-			assert.Equal(t, ReportingComplete, result.Reporting.Outcome)
-			assert.Equal(t, AssurancePartial, result.Assurance.State)
-			assert.Contains(t, result.Assurance.Reasons, ReasonMalformedTranscript)
-			assert.Contains(t, result.Assurance.Reasons, ReasonCostUnavailable)
-			assert.Nil(t, result.Cost)
-			require.NotNil(t, result.Usage)
+			require.NoError(err)
+			assert.Equal(ReportingComplete, result.Reporting.Outcome)
+			assert.Equal(AssurancePartial, result.Assurance.State)
+			assert.Contains(result.Assurance.Reasons, ReasonMalformedTranscript)
+			assert.Contains(result.Assurance.Reasons, ReasonCostUnavailable)
+			assert.Nil(result.Cost)
+			require.NotNil(result.Usage)
 			assertIntPointer(t, result.Usage.OutputTokens, tc.outputTokens)
 		})
 	}
 }
 
 func TestRunCodexRequiresJSONAndUsesExactThreadMarker(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	producer := copyCaptureHelper(t, "codex")
 	_, err := prepareInvocation(ProviderCodex, []string{producer, "exec", "prompt"}, "")
-	require.ErrorContains(t, err, "--json")
+	require.ErrorContains(err, "--json")
 
 	root := t.TempDir()
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	var stdout bytes.Buffer
-	outcome, err := Run(context.Background(), RunOptions{
+	outcome, err := Run(t.Context(), RunOptions{
 		Provider: ProviderCodex, OccurrenceID: "codex-run",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1366,31 +1444,34 @@ func TestRunCodexRequiresJSONAndUsesExactThreadMarker(t *testing.T) {
 		Streams:     Streams{Stdout: &stdout, Stderr: io.Discard},
 		Limits:      testLimits(), CustomPricing: testPricing(),
 	})
-	require.NoError(t, err)
-	assert.Zero(t, outcome.ExitCode)
-	assert.Contains(t, stdout.String(), `"type":"thread.started"`)
-	assert.Contains(t, stdout.String(), `"type":"turn.completed"`)
+	require.NoError(err)
+	assert.Zero(outcome.ExitCode)
+	assert.Contains(stdout.String(), `"type":"thread.started"`)
+	assert.Contains(stdout.String(), `"type":"turn.completed"`)
 
 	data, err := os.ReadFile(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	result, err := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, err)
-	assert.Equal(t, ProviderCodex, Provider(result.Provider.Name))
-	assert.Equal(t, "11111111-1111-4111-8111-111111111111", result.Provider.SessionID)
-	require.NotNil(t, result.Usage)
+	require.NoError(err)
+	assert.Equal(ProviderCodex, Provider(result.Provider.Name))
+	assert.Equal("11111111-1111-4111-8111-111111111111", result.Provider.SessionID)
+	require.NotNil(result.Usage)
 	assertIntPointer(t, result.Usage.InputTokens, 40)
 	assertIntPointer(t, result.Usage.OutputTokens, 10)
 	assertIntPointer(t, result.Usage.CacheReadInputTokens, 60)
-	assert.Nil(t, result.Usage.CacheCreationInputTokens)
-	assert.Contains(t, result.Assurance.Reasons, ReasonCodexCacheWriteAbsent)
-	assert.Contains(t, result.Assurance.Reasons, ReasonReasoningAbsent)
+	assert.Nil(result.Usage.CacheCreationInputTokens)
+	assert.Contains(result.Assurance.Reasons, ReasonCodexCacheWriteAbsent)
+	assert.Contains(result.Assurance.Reasons, ReasonReasoningAbsent)
 }
 
 func TestRunCodexQuiescentUnfinishedSessionSealsPartialUsage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "codex")
-	outcome, err := Run(context.Background(), RunOptions{
+	outcome, err := Run(t.Context(), RunOptions{
 		Provider: ProviderCodex, OccurrenceID: "codex-interrupted",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1399,28 +1480,31 @@ func TestRunCodexQuiescentUnfinishedSessionSealsPartialUsage(t *testing.T) {
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      testLimits(), CustomPricing: testPricing(),
 	})
-	require.NoError(t, err)
-	assert.Equal(t, 9, outcome.ExitCode)
+	require.NoError(err)
+	assert.Equal(9, outcome.ExitCode)
 	data, err := os.ReadFile(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	result, err := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, err)
-	assert.Equal(t, ReportingComplete, result.Reporting.Outcome)
-	assert.Equal(t, AssurancePartial, result.Assurance.State)
-	assert.Contains(t, result.Assurance.Reasons, ReasonUnfinishedSession)
-	assert.Contains(t, result.Assurance.Reasons, ReasonCostUnavailable)
-	assert.Nil(t, result.Cost)
-	require.NotNil(t, result.Usage)
+	require.NoError(err)
+	assert.Equal(ReportingComplete, result.Reporting.Outcome)
+	assert.Equal(AssurancePartial, result.Assurance.State)
+	assert.Contains(result.Assurance.Reasons, ReasonUnfinishedSession)
+	assert.Contains(result.Assurance.Reasons, ReasonCostUnavailable)
+	assert.Nil(result.Cost)
+	require.NotNil(result.Usage)
 	assertIntPointer(t, result.Usage.OutputTokens, 10)
 }
 
 func TestRunCodexPersistsDiscoveredSubagentSources(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "codex")
 	limits := testLimits()
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderCodex, OccurrenceID: "codex-delegated",
 		CaptureDir: captureDir, ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1429,28 +1513,28 @@ func TestRunCodexPersistsDiscoveredSubagentSources(t *testing.T) {
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      limits, CustomPricing: testPricing(),
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	data, err := os.ReadFile(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	result, err := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{
+	require.NoError(err)
+	assert.ElementsMatch([]string{
 		"11111111-1111-4111-8111-111111111111",
 		"22222222-2222-4222-8222-222222222222",
 	}, result.Provider.IncludedSessionIDs)
-	require.Len(t, result.Sources, 2)
-	require.NotNil(t, result.Usage)
+	require.Len(result.Sources, 2)
+	require.NotNil(result.Usage)
 	assertIntPointer(t, result.Usage.InputTokens, 45)
 	assertIntPointer(t, result.Usage.OutputTokens, 12)
 
 	bundleFile, err := os.Open(filepath.Join(captureDir, sourcesDirName, bundleFileName))
-	require.NoError(t, err)
+	require.NoError(err)
 	bundle, err := DecodeTranscriptBundle(bundleFile)
-	require.NoError(t, bundleFile.Close())
-	require.NoError(t, err)
-	require.Len(t, bundle.Sources, 2)
+	require.NoError(bundleFile.Close())
+	require.NoError(err)
+	require.Len(bundle.Sources, 2)
 	for _, source := range bundle.Sources {
-		assert.Contains(t, source.RawSource.Path, "codex/sessions/")
+		assert.Contains(source.RawSource.Path, "codex/sessions/")
 	}
 	assertBundleImportsUsage(
 		t,
@@ -1462,11 +1546,13 @@ func TestRunCodexPersistsDiscoveredSubagentSources(t *testing.T) {
 }
 
 func TestRunCodexFindsChildInSpawnDayShard(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "codex")
 	limits := testLimits()
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderCodex, OccurrenceID: "codex-late-child",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1475,21 +1561,24 @@ func TestRunCodexFindsChildInSpawnDayShard(t *testing.T) {
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      limits, CustomPricing: testPricing(),
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	data, err := os.ReadFile(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	result, err := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.ElementsMatch(t, []string{
 		"11111111-1111-4111-8111-111111111111",
 		"22222222-2222-4222-8222-222222222222",
 	}, result.Provider.IncludedSessionIDs)
-	require.NotNil(t, result.Usage)
+	require.NotNil(result.Usage)
 	assertIntPointer(t, result.Usage.InputTokens, 45)
 	assertIntPointer(t, result.Usage.OutputTokens, 12)
 }
 
 func TestRunCodexRetriesWhenChildChangesDuringFinalization(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	resultPath := filepath.Join(t.TempDir(), "result.json")
@@ -1503,7 +1592,7 @@ func TestRunCodexRetriesWhenChildChangesDuringFinalization(t *testing.T) {
 		"rollout-child-"+childID+".jsonl",
 	)
 	changedDuringFinalization := false
-	outcome, err := runWithHooks(context.Background(), RunOptions{
+	outcome, err := runWithHooks(t.Context(), RunOptions{
 		Provider: ProviderCodex, OccurrenceID: "codex-changing-child",
 		CaptureDir: captureDir, ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1514,36 +1603,39 @@ func TestRunCodexRetriesWhenChildChangesDuringFinalization(t *testing.T) {
 	}, &captureHooks{
 		afterPersistedSources: func() {
 			child, openErr := os.OpenFile(childPath, os.O_APPEND|os.O_WRONLY, 0)
-			require.NoError(t, openErr)
+			require.NoError(openErr)
 			_, writeErr := io.WriteString(child, testjsonl.JoinJSONL(
 				testjsonl.CodexMsgJSON(
 					"assistant", "updated child answer", "2026-08-16T10:00:05.9Z",
 				),
 				testjsonl.CodexTokenCountJSON("2026-08-16T10:00:06Z", 7, 3, 0),
 			))
-			require.NoError(t, errors.Join(writeErr, child.Close()))
+			require.NoError(errors.Join(writeErr, child.Close()))
 			changedDuringFinalization = true
 		},
 	})
-	require.NoError(t, err)
-	assert.True(t, changedDuringFinalization)
-	assert.Zero(t, outcome.ExitCode)
+	require.NoError(err)
+	assert.True(changedDuringFinalization)
+	assert.Zero(outcome.ExitCode)
 	data, err := os.ReadFile(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	result, err := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, err)
-	assert.Equal(t, ReportingComplete, result.Reporting.Outcome)
-	require.NotNil(t, result.Usage)
+	require.NoError(err)
+	assert.Equal(ReportingComplete, result.Reporting.Outcome)
+	require.NotNil(result.Usage)
 	assertIntPointer(t, result.Usage.InputTokens, 52)
 	assertIntPointer(t, result.Usage.OutputTokens, 15)
 }
 
 func TestRunCodexConflictingMarkersReportCorrelationConflict(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	producer := copyCaptureHelper(t, "codex")
 	resultPath := filepath.Join(t.TempDir(), "result.json")
-	outcome, err := Run(context.Background(), RunOptions{
+	outcome, err := Run(t.Context(), RunOptions{
 		Provider: ProviderCodex, OccurrenceID: "codex-marker-conflict",
 		CaptureDir: captureDir, ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1552,17 +1644,17 @@ func TestRunCodexConflictingMarkersReportCorrelationConflict(t *testing.T) {
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      testLimits(),
 	})
-	require.Error(t, err)
-	assert.Equal(t, ReportFailureExitCode, outcome.ExitCode)
+	require.Error(err)
+	assert.Equal(ReportFailureExitCode, outcome.ExitCode)
 	data, readErr := os.ReadFile(resultPath)
-	require.NoError(t, readErr)
+	require.NoError(readErr)
 	result, decodeErr := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, decodeErr)
-	assert.Equal(t, ReasonCorrelationConflict, result.Reporting.Reason)
+	require.NoError(decodeErr)
+	assert.Equal(ReasonCorrelationConflict, result.Reporting.Reason)
 
 	firstID := "11111111-1111-4111-8111-111111111111"
 	dayDir := filepath.Join(root, filepath.FromSlash(time.Now().UTC().Format("2006/01/02")))
-	require.NoError(t, os.MkdirAll(dayDir, 0o700))
+	require.NoError(os.MkdirAll(dayDir, 0o700))
 	lines := []string{
 		testjsonl.CodexSessionMetaJSON(
 			firstID, "/workspace", "codex_exec", "2026-08-16T10:00:00Z"),
@@ -1571,18 +1663,18 @@ func TestRunCodexConflictingMarkersReportCorrelationConflict(t *testing.T) {
 		testjsonl.CodexTokenCountJSON("2026-08-16T10:00:02Z", 100, 10, 0),
 		`{"type":"event_msg","timestamp":"2026-08-16T10:00:03Z","payload":{"type":"task_complete"}}`,
 	}
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(dayDir, "rollout-test-"+firstID+".jsonl"),
 		[]byte(strings.Join(lines, "\n")+"\n"), 0o600,
 	))
-	recovered, reportErr := Report(context.Background(), ReportOptions{
+	recovered, reportErr := Report(t.Context(), ReportOptions{
 		CaptureDir:    captureDir,
 		ResultPath:    filepath.Join(t.TempDir(), "recovered.json"),
 		CustomPricing: testPricing(),
 	})
-	require.Error(t, reportErr)
-	assert.Equal(t, ReportingFailed, recovered.Outcome)
-	assert.Equal(t, ReasonCorrelationConflict, recovered.Reason)
+	require.Error(reportErr)
+	assert.Equal(ReportingFailed, recovered.Outcome)
+	assert.Equal(ReasonCorrelationConflict, recovered.Reason)
 }
 
 func TestCodexCorrelationFailureIsDurableBeforeChildWaitReturns(t *testing.T) {
@@ -1609,6 +1701,9 @@ func TestCodexCorrelationFailureIsDurableBeforeChildWaitReturns(t *testing.T) {
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			root := t.TempDir()
 			captureDir := filepath.Join(t.TempDir(), "capture")
 			started := time.Now()
@@ -1621,19 +1716,19 @@ func TestCodexCorrelationFailureIsDurableBeforeChildWaitReturns(t *testing.T) {
 				Execution:  ExecutionOutcome{StartedAt: started},
 				Invocation: invocationName(ProviderCodex), Limits: limits,
 			})
-			require.NoError(t, err)
+			require.NoError(err)
 			defer state.close()
 			marker := newCodexThreadMarker(state, limits.MaxLineBytes)
 			for _, write := range test.writes {
 				_, err = marker.Write(write)
-				require.NoError(t, err)
+				require.NoError(err)
 			}
-			require.NoError(t, marker.persistenceError())
+			require.NoError(marker.persistenceError())
 			state.close()
 
 			dayDir := filepath.Join(
 				root, filepath.FromSlash(started.UTC().Format("2006/01/02")))
-			require.NoError(t, os.MkdirAll(dayDir, 0o700))
+			require.NoError(os.MkdirAll(dayDir, 0o700))
 			lines := []string{
 				testjsonl.CodexSessionMetaJSON(
 					firstID, "/workspace", "codex_exec", "2026-08-16T10:00:00Z"),
@@ -1642,27 +1737,30 @@ func TestCodexCorrelationFailureIsDurableBeforeChildWaitReturns(t *testing.T) {
 				testjsonl.CodexTokenCountJSON("2026-08-16T10:00:02Z", 100, 10, 0),
 				`{"type":"event_msg","timestamp":"2026-08-16T10:00:03Z","payload":{"type":"task_complete"}}`,
 			}
-			require.NoError(t, os.WriteFile(
+			require.NoError(os.WriteFile(
 				filepath.Join(dayDir, "rollout-test-"+firstID+".jsonl"),
 				[]byte(strings.Join(lines, "\n")+"\n"), 0o600,
 			))
 
-			reporting, reportErr := Report(context.Background(), ReportOptions{
+			reporting, reportErr := Report(t.Context(), ReportOptions{
 				CaptureDir: captureDir, ResultPath: filepath.Join(t.TempDir(), "result.json"),
 				CustomPricing: testPricing(),
 			})
-			require.Error(t, reportErr)
-			assert.Equal(t, ReportingFailed, reporting.Outcome)
-			assert.Equal(t, test.reason, reporting.Reason)
+			require.Error(reportErr)
+			assert.Equal(ReportingFailed, reporting.Outcome)
+			assert.Equal(test.reason, reporting.Reason)
 		})
 	}
 }
 
 func TestRunCodexRejectsSeveralExactCandidates(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "codex")
-	outcome, err := Run(context.Background(), RunOptions{
+	outcome, err := Run(t.Context(), RunOptions{
 		Provider: ProviderCodex, OccurrenceID: "codex-conflict",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1671,13 +1769,13 @@ func TestRunCodexRejectsSeveralExactCandidates(t *testing.T) {
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      testLimits(), CustomPricing: testPricing(),
 	})
-	require.Error(t, err)
-	assert.Equal(t, ReportFailureExitCode, outcome.ExitCode)
+	require.Error(err)
+	assert.Equal(ReportFailureExitCode, outcome.ExitCode)
 	data, readErr := os.ReadFile(resultPath)
-	require.NoError(t, readErr)
+	require.NoError(readErr)
 	result, decodeErr := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, decodeErr)
-	assert.Equal(t, ReasonMultipleSessions, result.Reporting.Reason)
+	require.NoError(decodeErr)
+	assert.Equal(ReasonMultipleSessions, result.Reporting.Reason)
 }
 
 func TestCodexExactLookupCoversLocalAndUTCDateShards(t *testing.T) {
@@ -1688,17 +1786,19 @@ func TestCodexExactLookupCoversLocalAndUTCDateShards(t *testing.T) {
 		started.Format("2006/01/02"), started.UTC().Format("2006/01/02"),
 	} {
 		t.Run(day, func(t *testing.T) {
+			require := require.New(t)
+
 			root := t.TempDir()
 			dir := filepath.Join(root, filepath.FromSlash(day))
-			require.NoError(t, os.MkdirAll(dir, 0o700))
+			require.NoError(os.MkdirAll(dir, 0o700))
 			path := filepath.Join(dir, "rollout-test-"+id+".jsonl")
 			meta := testjsonl.CodexSessionMetaJSON(
 				id, "/workspace", "codex_exec", "2026-08-17T04:30:00Z")
-			require.NoError(t, os.WriteFile(path, []byte(meta+"\n"), 0o600))
+			require.NoError(os.WriteFile(path, []byte(meta+"\n"), 0o600))
 
 			matches, err := locateCodexRoot(
 				t.Context(), root, id, started, testLimits())
-			require.NoError(t, err)
+			require.NoError(err)
 			assert.Equal(t, []string{path}, matches)
 		})
 	}
@@ -1721,6 +1821,9 @@ func TestCodexExactLookupStopsWhenCanceled(t *testing.T) {
 }
 
 func TestConcurrentClaudeCapturesCannotSelectEachOthersSessions(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	workDir := t.TempDir()
 	producer := copyCaptureHelper(t, "claude")
@@ -1732,7 +1835,7 @@ func TestConcurrentClaudeCapturesCannotSelectEachOthersSessions(t *testing.T) {
 	for i := range 2 {
 		go func() {
 			resultPath := filepath.Join(t.TempDir(), fmt.Sprintf("result-%d.json", i))
-			_, runErr := Run(context.Background(), RunOptions{
+			_, runErr := Run(t.Context(), RunOptions{
 				Provider: ProviderClaude, OccurrenceID: fmt.Sprintf("parallel-%d", i),
 				CaptureDir: filepath.Join(t.TempDir(), fmt.Sprintf("capture-%d", i)),
 				ResultPath: resultPath, ProviderRoot: root, WorkDir: workDir,
@@ -1755,14 +1858,17 @@ func TestConcurrentClaudeCapturesCannotSelectEachOthersSessions(t *testing.T) {
 		}()
 	}
 	first, second := <-responses, <-responses
-	require.NoError(t, first.err)
-	require.NoError(t, second.err)
-	assert.NotEqual(t, first.result.Provider.SessionID, second.result.Provider.SessionID)
-	assert.ElementsMatch(t, []string{"parallel-0", "parallel-1"},
+	require.NoError(first.err)
+	require.NoError(second.err)
+	assert.NotEqual(first.result.Provider.SessionID, second.result.Provider.SessionID)
+	assert.ElementsMatch([]string{"parallel-0", "parallel-1"},
 		[]string{first.result.OccurrenceID, second.result.OccurrenceID})
 }
 
 func TestConcurrentClaudeCapturesCannotReserveSameSession(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	workDir := t.TempDir()
 	producer := copyCaptureHelper(t, "claude")
@@ -1807,7 +1913,7 @@ func TestConcurrentClaudeCapturesCannotReserveSameSession(t *testing.T) {
 			t.Error("reserved capture did not stop during cleanup")
 		}
 	})
-	require.Eventually(t, func() bool {
+	require.Eventually(func() bool {
 		_, err := os.Stat(marker)
 		return err == nil
 	}, 20*time.Second, 10*time.Millisecond)
@@ -1829,14 +1935,14 @@ func TestConcurrentClaudeCapturesCannotReserveSameSession(t *testing.T) {
 		Streams:     Streams{Stdout: &secondOutput, Stderr: io.Discard},
 		Limits:      secondLimits,
 	})
-	require.ErrorContains(t, err, "already reserved")
-	assert.Empty(t, secondOutput.String())
-	assert.NoDirExists(t, secondCaptureDir)
+	require.ErrorContains(err, "already reserved")
+	assert.Empty(secondOutput.String())
+	assert.NoDirExists(secondCaptureDir)
 
-	require.NoError(t, os.WriteFile(release, []byte("release"), 0o600))
+	require.NoError(os.WriteFile(release, []byte("release"), 0o600))
 	resolvedWorkDir, err := resolveWorkDir(workDir)
-	require.NoError(t, err)
-	require.Eventually(t, func() bool {
+	require.NoError(err)
+	require.Eventually(func() bool {
 		_, err := os.Stat(filepath.Join(
 			root, encodeClaudeWorkDir(resolvedWorkDir), sessionID+".jsonl",
 		))
@@ -1844,18 +1950,20 @@ func TestConcurrentClaudeCapturesCannotReserveSameSession(t *testing.T) {
 	}, 20*time.Second, 10*time.Millisecond)
 	select {
 	case first := <-firstDone:
-		require.NoError(t, first.err)
-		assert.Equal(t, 0, first.outcome.ExitCode)
+		require.NoError(first.err)
+		assert.Equal(0, first.outcome.ExitCode)
 	case <-time.After(20 * time.Second):
-		require.FailNow(t, "reserved capture did not finish after release")
+		require.FailNow("reserved capture did not finish after release")
 	}
 }
 
 func TestClaudeCaptureUsesCanonicalDelegatedUsageWithoutDoubleCounting(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "claude")
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "delegated",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1864,23 +1972,25 @@ func TestClaudeCaptureUsesCanonicalDelegatedUsageWithoutDoubleCounting(t *testin
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      testLimits(), CustomPricing: testPricing(),
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	data, err := os.ReadFile(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	result, err := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, err)
-	require.Len(t, result.Provider.IncludedSessionIDs, 2)
+	require.NoError(err)
+	require.Len(result.Provider.IncludedSessionIDs, 2)
 	assert.Contains(t, result.Provider.IncludedSessionIDs, "agent-abc123")
-	require.NotNil(t, result.Usage)
+	require.NotNil(result.Usage)
 	assertIntPointer(t, result.Usage.InputTokens, 30)
 	assertIntPointer(t, result.Usage.OutputTokens, 15)
 }
 
 func TestClaudeCaptureIncludesChildWithoutFlushedLinkMetadata(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "claude")
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "unlinked-child",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1889,22 +1999,25 @@ func TestClaudeCaptureIncludesChildWithoutFlushedLinkMetadata(t *testing.T) {
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      testLimits(), CustomPricing: testPricing(),
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	data, err := os.ReadFile(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	result, err := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Contains(t, result.Provider.IncludedSessionIDs, "agent-abc123")
-	require.NotNil(t, result.Usage)
+	require.NotNil(result.Usage)
 	assertIntPointer(t, result.Usage.InputTokens, 30)
 	assertIntPointer(t, result.Usage.OutputTokens, 15)
 }
 
 func TestClaudeCaptureRejectsMissingReferencedChild(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "claude")
-	outcome, err := Run(context.Background(), RunOptions{
+	outcome, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "missing-child",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1913,21 +2026,24 @@ func TestClaudeCaptureRejectsMissingReferencedChild(t *testing.T) {
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      testLimits(), CustomPricing: testPricing(),
 	})
-	require.Error(t, err)
-	assert.Equal(t, ReportFailureExitCode, outcome.ExitCode)
+	require.Error(err)
+	assert.Equal(ReportFailureExitCode, outcome.ExitCode)
 	data, readErr := os.ReadFile(resultPath)
-	require.NoError(t, readErr)
+	require.NoError(readErr)
 	result, decodeErr := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, decodeErr)
-	assert.Equal(t, ReasonSourceUnavailable, result.Reporting.Reason)
-	assert.Nil(t, result.Usage)
+	require.NoError(decodeErr)
+	assert.Equal(ReasonSourceUnavailable, result.Reporting.Reason)
+	assert.Nil(result.Usage)
 }
 
 func TestClaudeCaptureRetryDropsRemovedSubagentUsage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	workDir := t.TempDir()
 	physicalWorkDir, err := filepath.EvalSymlinks(workDir)
-	require.NoError(t, err)
+	require.NoError(err)
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "claude")
@@ -1939,7 +2055,7 @@ func TestClaudeCaptureRetryDropsRemovedSubagentUsage(t *testing.T) {
 	persisted := make(chan struct{})
 	release := make(chan struct{}, 1)
 	go func() {
-		outcome, runErr := runWithHooks(context.Background(), RunOptions{
+		outcome, runErr := runWithHooks(t.Context(), RunOptions{
 			Provider: ProviderClaude, OccurrenceID: "subagent-removed",
 			CaptureDir: captureDir, ResultPath: resultPath,
 			ProviderRoot: root, WorkDir: workDir,
@@ -1965,48 +2081,51 @@ func TestClaudeCaptureRetryDropsRemovedSubagentUsage(t *testing.T) {
 	select {
 	case <-persisted:
 	case response := <-done:
-		require.NoError(t, response.err)
-		require.Fail(t, "capture completed before persisting its source set")
+		require.NoError(response.err)
+		require.Fail("capture completed before persisting its source set")
 	case <-time.After(20 * time.Second):
-		require.Fail(t, "capture did not persist its source set")
+		require.Fail("capture did not persist its source set")
 	}
 	data, err := os.ReadFile(filepath.Join(captureDir, manifestFileName))
-	require.NoError(t, err)
+	require.NoError(err)
 	var captured manifest
-	require.NoError(t, json.Unmarshal(data, &captured))
+	require.NoError(json.Unmarshal(data, &captured))
 	sessionID := captured.ProviderSessionID
-	require.NotEmpty(t, sessionID)
+	require.NotEmpty(sessionID)
 
 	rootPath := filepath.Join(root, encodeClaudeWorkDir(physicalWorkDir), sessionID+".jsonl")
 	rootData := []byte(strings.Join(
 		claudeHelperLines(sessionID, physicalWorkDir, false), "\n") + "\n")
-	require.NoError(t, os.WriteFile(rootPath, rootData, 0o600))
+	require.NoError(os.WriteFile(rootPath, rootData, 0o600))
 	childPath := filepath.Join(
 		strings.TrimSuffix(rootPath, ".jsonl"), "subagents", "agent-abc123.jsonl")
-	require.NoError(t, os.Rename(childPath, filepath.Join(t.TempDir(), "removed.jsonl")))
+	require.NoError(os.Rename(childPath, filepath.Join(t.TempDir(), "removed.jsonl")))
 	release <- struct{}{}
 
 	response := <-done
-	require.NoError(t, response.err)
-	assert.Zero(t, response.outcome.ExitCode)
+	require.NoError(response.err)
+	assert.Zero(response.outcome.ExitCode)
 	data, err = os.ReadFile(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	result, err := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, err)
-	assert.Equal(t, []string{sessionID}, result.Provider.IncludedSessionIDs)
-	require.NotNil(t, result.Usage)
+	require.NoError(err)
+	assert.Equal([]string{sessionID}, result.Provider.IncludedSessionIDs)
+	require.NotNil(result.Usage)
 	assertIntPointer(t, result.Usage.InputTokens, 100)
 	assertIntPointer(t, result.Usage.OutputTokens, 50)
-	assert.Len(t, result.Sources, 1)
+	assert.Len(result.Sources, 1)
 }
 
 func TestCaptureSourceByteLimitIsActionable(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "claude")
 	limits := testLimits()
 	limits.MaxSourceBytes = 32
-	outcome, err := Run(context.Background(), RunOptions{
+	outcome, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "bounded",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -2015,20 +2134,23 @@ func TestCaptureSourceByteLimitIsActionable(t *testing.T) {
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      limits, CustomPricing: testPricing(),
 	})
-	require.Error(t, err)
-	assert.Equal(t, ReportFailureExitCode, outcome.ExitCode)
+	require.Error(err)
+	assert.Equal(ReportFailureExitCode, outcome.ExitCode)
 	data, readErr := os.ReadFile(resultPath)
-	require.NoError(t, readErr)
+	require.NoError(readErr)
 	result, decodeErr := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, decodeErr)
-	assert.Equal(t, ReasonSourceBytesLimit, result.Reporting.Reason)
+	require.NoError(decodeErr)
+	assert.Equal(ReasonSourceBytesLimit, result.Reporting.Reason)
 }
 
 func TestCaptureAggregateSourceByteLimitIsActionable(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	workDir := t.TempDir()
 	physicalWorkDir, err := filepath.EvalSymlinks(workDir)
-	require.NoError(t, err)
+	require.NoError(err)
 	rootLines, childLines := claudeSubagentHelperLines(
 		"11111111-1111-4111-8111-111111111111", physicalWorkDir)
 	rootBytes := int64(len(strings.Join(rootLines, "\n") + "\n"))
@@ -2040,7 +2162,7 @@ func TestCaptureAggregateSourceByteLimitIsActionable(t *testing.T) {
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "claude")
 
-	_, err = Run(context.Background(), RunOptions{
+	_, err = Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "bounded-total",
 		CaptureDir: captureDir, ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: workDir,
@@ -2049,12 +2171,12 @@ func TestCaptureAggregateSourceByteLimitIsActionable(t *testing.T) {
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      limits, CustomPricing: testPricing(),
 	})
-	require.Error(t, err)
+	require.Error(err)
 	data, readErr := os.ReadFile(resultPath)
-	require.NoError(t, readErr)
+	require.NoError(readErr)
 	result, decodeErr := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, decodeErr)
-	assert.Equal(t, ReasonSourceBytesLimit, result.Reporting.Reason)
+	require.NoError(decodeErr)
+	assert.Equal(ReasonSourceBytesLimit, result.Reporting.Reason)
 	jsonlCopies := 0
 	walkErr := filepath.WalkDir(
 		filepath.Join(captureDir, sourcesDirName),
@@ -2066,18 +2188,20 @@ func TestCaptureAggregateSourceByteLimitIsActionable(t *testing.T) {
 		},
 	)
 	if !errors.Is(walkErr, os.ErrNotExist) {
-		require.NoError(t, walkErr)
+		require.NoError(walkErr)
 	}
-	assert.Zero(t, jsonlCopies, "aggregate limit must fail before copying")
+	assert.Zero(jsonlCopies, "aggregate limit must fail before copying")
 }
 
 func TestCaptureSourceCountLimitIsActionable(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "claude")
 	limits := testLimits()
 	limits.MaxSources = 2
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "bounded-count",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -2086,15 +2210,18 @@ func TestCaptureSourceCountLimitIsActionable(t *testing.T) {
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      limits, CustomPricing: testPricing(),
 	})
-	require.Error(t, err)
+	require.Error(err)
 	data, readErr := os.ReadFile(resultPath)
-	require.NoError(t, readErr)
+	require.NoError(readErr)
 	result, decodeErr := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, decodeErr)
+	require.NoError(decodeErr)
 	assert.Equal(t, ReasonSourceLimit, result.Reporting.Reason)
 }
 
 func TestCaptureDistinguishesAnObservedSourceThatDisappears(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	workDir := t.TempDir()
@@ -2109,7 +2236,7 @@ func TestCaptureDistinguishesAnObservedSourceThatDisappears(t *testing.T) {
 	persisted := make(chan struct{})
 	release := make(chan struct{}, 1)
 	go func() {
-		outcome, runErr := runWithHooks(context.Background(), RunOptions{
+		outcome, runErr := runWithHooks(t.Context(), RunOptions{
 			Provider: ProviderClaude, OccurrenceID: "source-disappeared",
 			CaptureDir: captureDir, ResultPath: resultPath,
 			ProviderRoot: root, WorkDir: workDir,
@@ -2135,21 +2262,21 @@ func TestCaptureDistinguishesAnObservedSourceThatDisappears(t *testing.T) {
 	select {
 	case <-persisted:
 	case response := <-done:
-		require.Failf(t, "capture completed before persisting its source set",
+		require.Failf("capture completed before persisting its source set",
 			"exit=%d err=%v", response.outcome.ExitCode, response.err)
 	case <-time.After(20 * time.Second):
-		require.Fail(t, "capture did not persist its source set")
+		require.Fail("capture did not persist its source set")
 	}
-	require.NoError(t, os.Rename(root, root+"-gone"))
+	require.NoError(os.Rename(root, root+"-gone"))
 	release <- struct{}{}
 	response := <-done
-	require.Error(t, response.err)
-	assert.Equal(t, ReportFailureExitCode, response.outcome.ExitCode)
+	require.Error(response.err)
+	assert.Equal(ReportFailureExitCode, response.outcome.ExitCode)
 	data, err := os.ReadFile(resultPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	result, err := DecodeResult(bytes.NewReader(data))
-	require.NoError(t, err)
-	assert.Equal(t, ReasonSourceUnavailable, result.Reporting.Reason,
+	require.NoError(err)
+	assert.Equal(ReasonSourceUnavailable, result.Reporting.Reason,
 		"run error: %v", response.err)
 }
 
@@ -2158,7 +2285,7 @@ func TestCaptureLeavesNormalRuntimeStateUntouched(t *testing.T) {
 	t.Setenv("AGENTSVIEW_DATA_DIR", normalDataDir)
 	root := t.TempDir()
 	producer := copyCaptureHelper(t, "claude")
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "isolated",
 		CaptureDir:   filepath.Join(t.TempDir(), "capture"),
 		ResultPath:   filepath.Join(t.TempDir(), "result.json"),

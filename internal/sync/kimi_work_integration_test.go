@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -24,6 +23,8 @@ import (
 // kimi-work: ID prefix, skip auxiliary daimon sessions entirely, and
 // SyncSingleSession must re-derive the same identity on resync.
 func TestSyncPathsAndSingleSession_KimiWork(t *testing.T) {
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -42,8 +43,8 @@ func TestSyncPathsAndSingleSession_KimiWork(t *testing.T) {
 	wirePath := filepath.Join(
 		kimiWorkDir, workdirDir, sessionDir, "agents", "main", "wire.jsonl",
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(wirePath), 0o755))
-	require.NoError(t, os.WriteFile(wirePath, []byte(
+	require.NoError(os.MkdirAll(filepath.Dir(wirePath), 0o755))
+	require.NoError(os.WriteFile(wirePath, []byte(
 		`{"type": "metadata", "protocol_version": "1.4", "created_at": 1704067200000}`+"\n"+
 			`{"timestamp": 1704067200.0, "type": "turn.prompt", "input": [{"type": "text", "text": "Hello Kimi Work"}]}`+"\n"+
 			`{"timestamp": 1704067202.0, "type": "context.append_loop_event", "event": {"type": "step.end", "finishReason": "stop"}}`+"\n",
@@ -54,8 +55,8 @@ func TestSyncPathsAndSingleSession_KimiWork(t *testing.T) {
 		"ctitle-019f85a8-bd77-7f02-ad95-ce249ffdc5c5",
 		"agents", "main", "wire.jsonl",
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(auxPath), 0o755))
-	require.NoError(t, os.WriteFile(auxPath, []byte(
+	require.NoError(os.MkdirAll(filepath.Dir(auxPath), 0o755))
+	require.NoError(os.WriteFile(auxPath, []byte(
 		`{"type": "metadata", "protocol_version": "1.4"}`+"\n"+
 			`{"timestamp": 1704067200.0, "type": "turn.prompt", "input": [{"type": "text", "text": "title me"}]}`+"\n",
 	), 0o644))
@@ -68,18 +69,18 @@ func TestSyncPathsAndSingleSession_KimiWork(t *testing.T) {
 	// The aux session must not have been imported.
 	auxSess, err := testDB.GetSession(t.Context(),
 		"kimi-work:"+workdirDir+":main:ctitle-019f85a8-bd77-7f02-ad95-ce249ffdc5c5")
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Nil(t, auxSess, "aux daimon sessions must not be imported")
 
 	// Force a single-session resync; identity and project must hold.
-	require.NoError(t, testDB.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	require.NoError(testDB.Update(func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET file_mtime = NULL WHERE id = ?",
 			sessionID,
 		)
 		return err
 	}))
-	require.NoError(t, engine.SyncSingleSession(sessionID))
+	require.NoError(engine.SyncSingleSession(sessionID))
 	assertSessionProject(t, testDB, sessionID, "agentsview")
 }
 
@@ -155,8 +156,11 @@ func TestSyncKimiWorkMissingModelPricesAcrossK3Cutoff(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			result, err := testDB.GetDailyUsage(
-				context.Background(),
+				t.Context(),
 				db.UsageFilter{
 					From:     tt.day,
 					To:       tt.day,
@@ -164,14 +168,14 @@ func TestSyncKimiWorkMissingModelPricesAcrossK3Cutoff(t *testing.T) {
 					Timezone: "UTC",
 				},
 			)
-			require.NoError(t, err)
-			assert.Equal(t, tt.wantCost, result.Totals.TotalCost)
-			require.NotNil(t, result.Pricing)
-			require.Contains(t, result.Pricing.Models, "daimon-kimi-code")
+			require.NoError(err)
+			assert.Equal(tt.wantCost, result.Totals.TotalCost)
+			require.NotNil(result.Pricing)
+			require.Contains(result.Pricing.Models, "daimon-kimi-code")
 			resolutions :=
 				result.Pricing.Models["daimon-kimi-code"].Resolutions
-			require.Len(t, resolutions, 1)
-			assert.Equal(t, tt.wantPricedModel,
+			require.Len(resolutions, 1)
+			assert.Equal(tt.wantPricedModel,
 				resolutions[0].PricedModel)
 		})
 	}

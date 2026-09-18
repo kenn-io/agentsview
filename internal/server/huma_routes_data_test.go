@@ -44,6 +44,9 @@ func TestDataProjectsEndpoint(t *testing.T) {
 }
 
 func TestDataProjectsDateRangeAppliesToFoldersAndPreviews(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 	for _, fixture := range []struct{ id, cwd, started string }{
 		{"august", "/work/august", "2026-08-15T12:00:00Z"},
@@ -60,8 +63,8 @@ func TestDataProjectsDateRangeAppliesToFoldersAndPreviews(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	var inv db.ProjectInventory
 	decodeInto(t, w, &inv)
-	require.Len(t, inv.Projects, 1)
-	assert.Equal(t, 1, inv.TotalSessions)
+	require.Len(inv.Projects, 1)
+	assert.Equal(1, inv.TotalSessions)
 	key := url.QueryEscape(inv.Projects[0].ProjectKey)
 	w = te.get(t, "/api/v1/data/project-reclassification/candidates?project_label=alpha&project_key="+key+"&"+dates)
 	assertStatus(t, w, http.StatusOK)
@@ -69,24 +72,27 @@ func TestDataProjectsDateRangeAppliesToFoldersAndPreviews(t *testing.T) {
 		Candidates []db.WorktreeReclassificationCandidate `json:"candidates"`
 	}
 	decodeInto(t, w, &folders)
-	require.Len(t, folders.Candidates, 1)
-	assert.Equal(t, "/work/august", folders.Candidates[0].SuggestedPrefix)
+	require.Len(folders.Candidates, 1)
+	assert.Equal("/work/august", folders.Candidates[0].SuggestedPrefix)
 	w = te.get(t, "/api/v1/data/projects/"+url.PathEscape(inv.Projects[0].ProjectKey)+"/sessions?"+dates)
 	assertStatus(t, w, http.StatusOK)
 	var page db.SessionPage
 	decodeInto(t, w, &page)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "august", page.Sessions[0].ID)
+	require.Len(page.Sessions, 1)
+	assert.Equal("august", page.Sessions[0].ID)
 }
 
 func TestDataProjectRulesEndpoint(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
-	require.NoError(t, te.db.SetSyncState(db.MachineAliasKeyPrefix+"old-workstation", "ws"))
-	_, err := te.db.CreateWorktreeProjectMapping(context.Background(), db.WorktreeProjectMapping{
+	require.NoError(te.db.SetSyncState(db.MachineAliasKeyPrefix+"old-workstation", "ws"))
+	_, err := te.db.CreateWorktreeProjectMapping(t.Context(), db.WorktreeProjectMapping{
 		Machine: "ws", PathPrefix: "/work", Layout: db.WorktreeMappingLayoutExplicit,
 		Project: "outer", Enabled: true,
 	})
-	require.NoError(t, err, "create /work mapping")
+	require.NoError(err, "create /work mapping")
 	te.seedSession(t, "repo-1", "misc", 1, func(s *db.Session) {
 		s.Machine = "ws"
 		s.Cwd = "/work/a"
@@ -97,14 +103,16 @@ func TestDataProjectRulesEndpoint(t *testing.T) {
 
 	var rules db.ProjectRules
 	decodeInto(t, w, &rules)
-	assert.Equal(t, "ws", rules.Machine)
-	assert.Contains(t, rules.Machines, "ws")
-	require.Len(t, rules.Rules, 1)
-	assert.Equal(t, "/work", rules.Rules[0].PathPrefix)
-	assert.Equal(t, 1, rules.Rules[0].GovernedSessions)
+	assert.Equal("ws", rules.Machine)
+	assert.Contains(rules.Machines, "ws")
+	require.Len(rules.Rules, 1)
+	assert.Equal("/work", rules.Rules[0].PathPrefix)
+	assert.Equal(1, rules.Rules[0].GovernedSessions)
 }
 
 func TestDataProjectSessionsEndpointUsesExactOpaqueIdentity(t *testing.T) {
+	require := require.New(t)
+
 	te := setup(t)
 	const targetLabel = "https://one.example/project"
 	const otherLabel = "https://two.example/project"
@@ -126,11 +134,11 @@ func TestDataProjectSessionsEndpointUsesExactOpaqueIdentity(t *testing.T) {
 	})
 
 	projects, err := te.db.BuildProjectIdentityMap(
-		context.Background(), []string{targetLabel, otherLabel},
+		t.Context(), []string{targetLabel, otherLabel},
 	)
-	require.NoError(t, err)
-	require.Empty(t, export.SafeProjectDisplayLabel(targetLabel))
-	require.Empty(t, export.SafeProjectDisplayLabel(otherLabel),
+	require.NoError(err)
+	require.Empty(export.SafeProjectDisplayLabel(targetLabel))
+	require.Empty(export.SafeProjectDisplayLabel(otherLabel),
 		"the transport labels deliberately collide after sanitization")
 
 	w := te.get(t, "/api/v1/data/projects/"+
@@ -138,13 +146,16 @@ func TestDataProjectSessionsEndpointUsesExactOpaqueIdentity(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	var page db.SessionPage
 	decodeInto(t, w, &page)
-	require.Len(t, page.Sessions, 2)
+	require.Len(page.Sessions, 2)
 	assert.ElementsMatch(t, []string{"target-root", "target-child"}, []string{
 		page.Sessions[0].ID, page.Sessions[1].ID,
 	})
 }
 
 func TestDataProjectSessionsPaginationAndAutomation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 	for i := range 25 {
 		te.seedSession(t, fmt.Sprintf("preview-%02d", i), "project-a", 1)
@@ -152,48 +163,51 @@ func TestDataProjectSessionsPaginationAndAutomation(t *testing.T) {
 	te.seedSession(t, "automated-preview", "project-a", 1, func(s *db.Session) {
 		s.IsAutomated = true
 	})
-	identities, err := te.db.BuildProjectIdentityMap(context.Background(), []string{"project-a"})
-	require.NoError(t, err)
+	identities, err := te.db.BuildProjectIdentityMap(t.Context(), []string{"project-a"})
+	require.NoError(err)
 	endpoint := "/api/v1/data/projects/" + url.PathEscape(identities["project-a"].ProjectKey) + "/sessions"
 	w := te.get(t, endpoint+"?limit=20")
 	assertStatus(t, w, http.StatusOK)
 	var first db.SessionPage
 	decodeInto(t, w, &first)
-	require.Len(t, first.Sessions, 20)
-	assert.Equal(t, 25, first.Total)
-	require.NotEmpty(t, first.NextCursor)
+	require.Len(first.Sessions, 20)
+	assert.Equal(25, first.Total)
+	require.NotEmpty(first.NextCursor)
 	w = te.get(t, endpoint+"?limit=20&cursor="+url.QueryEscape(first.NextCursor))
 	assertStatus(t, w, http.StatusOK)
 	var last db.SessionPage
 	decodeInto(t, w, &last)
-	require.Len(t, last.Sessions, 5)
-	assert.Empty(t, last.NextCursor)
+	require.Len(last.Sessions, 5)
+	assert.Empty(last.NextCursor)
 	ids := make(map[string]bool)
 	for _, session := range append(first.Sessions, last.Sessions...) {
-		assert.False(t, session.IsAutomated)
+		assert.False(session.IsAutomated)
 		ids[session.ID] = true
 	}
-	assert.Len(t, ids, 25)
+	assert.Len(ids, 25)
 	w = te.get(t, endpoint+"?include_automated=true")
 	assertStatus(t, w, http.StatusOK)
 	var all db.SessionPage
 	decodeInto(t, w, &all)
-	assert.Equal(t, 26, all.Total)
-	assert.Len(t, all.Sessions, 26)
+	assert.Equal(26, all.Total)
+	assert.Len(all.Sessions, 26)
 }
 
 func TestDataProjectSessionsIncludesEmptySessionsForMapping(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 	te.seedSession(t, "empty-preview", "empty-project", 0)
-	identities, err := te.db.BuildProjectIdentityMap(context.Background(), []string{"empty-project"})
-	require.NoError(t, err)
+	identities, err := te.db.BuildProjectIdentityMap(t.Context(), []string{"empty-project"})
+	require.NoError(err)
 	w := te.get(t, "/api/v1/data/projects/"+url.PathEscape(identities["empty-project"].ProjectKey)+"/sessions")
 	assertStatus(t, w, http.StatusOK)
 	var page db.SessionPage
 	decodeInto(t, w, &page)
-	require.Len(t, page.Sessions, 1)
-	assert.Equal(t, "empty-preview", page.Sessions[0].ID)
-	assert.Equal(t, 1, page.Total)
+	require.Len(page.Sessions, 1)
+	assert.Equal("empty-preview", page.Sessions[0].ID)
+	assert.Equal(1, page.Total)
 }
 
 func TestDataProjectRulesDefaultsToLocalMachine(t *testing.T) {
@@ -212,6 +226,9 @@ func TestDataProjectRulesDefaultsToLocalMachine(t *testing.T) {
 }
 
 func TestDataProjectReclassificationCandidatesEndpoint(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 	const rawProject = "branch-label"
 	te.seedSession(t, "selected", rawProject, 1, func(s *db.Session) {
@@ -219,8 +236,8 @@ func TestDataProjectReclassificationCandidatesEndpoint(t *testing.T) {
 		s.Cwd = "/srv/worktrees/example/selected"
 	})
 
-	projects, err := te.db.BuildProjectIdentityMap(context.Background(), []string{rawProject})
-	require.NoError(t, err)
+	projects, err := te.db.BuildProjectIdentityMap(t.Context(), []string{rawProject})
+	require.NoError(err)
 
 	w := te.get(t, buildPathURL(
 		"/api/v1/data/project-reclassification/candidates",
@@ -235,9 +252,9 @@ func TestDataProjectReclassificationCandidatesEndpoint(t *testing.T) {
 		Candidates []db.WorktreeReclassificationCandidate `json:"candidates"`
 	}
 	decodeInto(t, w, &response)
-	require.Len(t, response.Candidates, 1)
-	assert.Equal(t, "host-a.example", response.Candidates[0].Machine)
-	assert.Equal(t, 1, response.Candidates[0].ContributingSessions)
+	require.Len(response.Candidates, 1)
+	assert.Equal("host-a.example", response.Candidates[0].Machine)
+	assert.Equal(1, response.Candidates[0].ContributingSessions)
 }
 
 func TestDataProjectReclassificationCandidatesMissingProjectKey(t *testing.T) {
@@ -252,6 +269,8 @@ func TestDataProjectReclassificationCandidatesMissingProjectKey(t *testing.T) {
 }
 
 func TestDataRoutesRegistered(t *testing.T) {
+	assert := assert.New(t)
+
 	te := setup(t)
 	paths := []string{
 		"/api/v1/data/projects",
@@ -263,19 +282,19 @@ func TestDataRoutesRegistered(t *testing.T) {
 	}
 	for _, path := range paths {
 		w := te.get(t, path)
-		assert.NotEqual(t, http.StatusNotFound, w.Code, "path %q must be registered", path)
-		assert.Contains(t, w.Header().Get("Content-Type"), "application/json",
+		assert.NotEqual(http.StatusNotFound, w.Code, "path %q must be registered", path)
+		assert.Contains(w.Header().Get("Content-Type"), "application/json",
 			"path %q must be routed to a JSON handler, not the SPA fallback", path)
 	}
 	w := te.post(t, "/api/v1/data/compact", `{}`)
-	assert.NotEqual(t, http.StatusNotFound, w.Code)
-	assert.Contains(t, w.Header().Get("Content-Type"), "application/json")
+	assert.NotEqual(http.StatusNotFound, w.Code)
+	assert.Contains(w.Header().Get("Content-Type"), "application/json")
 	wPreview := te.post(t, "/api/v1/data/strip-images/preview", `{}`)
-	assert.NotEqual(t, http.StatusNotFound, wPreview.Code)
-	assert.Contains(t, wPreview.Header().Get("Content-Type"), "application/json")
+	assert.NotEqual(http.StatusNotFound, wPreview.Code)
+	assert.Contains(wPreview.Header().Get("Content-Type"), "application/json")
 	wStrip := te.post(t, "/api/v1/data/strip-images", `{}`)
-	assert.NotEqual(t, http.StatusNotFound, wStrip.Code)
-	assert.Contains(t, wStrip.Header().Get("Content-Type"), "application/json")
+	assert.NotEqual(http.StatusNotFound, wStrip.Code)
+	assert.Contains(wStrip.Header().Get("Content-Type"), "application/json")
 }
 
 func TestDataStripImagesRejectsNonLocalhost(t *testing.T) {
@@ -293,7 +312,7 @@ func TestDataStripImagesRejectsNonLocalhost(t *testing.T) {
 		{"/api/v1/data/strip-images/preview", `{}`},
 		{"/api/v1/data/strip-images", `{"confirmed":true}`},
 	} {
-		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, tc.path, strings.NewReader(tc.body))
 		req.Header.Set("Content-Type", "application/json")
 		req.RemoteAddr = "198.51.100.7:5555"
 		w := httptest.NewRecorder()
@@ -321,7 +340,7 @@ func TestDataStripImagesRejectsForwardedLoopback(t *testing.T) {
 		{"/api/v1/data/strip-images/preview", `{}`},
 		{"/api/v1/data/strip-images", `{"confirmed":true}`},
 	} {
-		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, tc.path, strings.NewReader(tc.body))
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Forwarded-For", "10.0.0.1")
 		req.RemoteAddr = "127.0.0.1:5555"
@@ -384,7 +403,7 @@ func testImgDecodedBytes(t *testing.T) int64 {
 	require.GreaterOrEqual(t, start, 0, "seed payload must carry a data: URI")
 	encoded := testImgPayload[start+len(prefix):]
 	end := strings.IndexByte(encoded, '"')
-	require.Greater(t, end, 0, "seed payload data: URI must be quoted")
+	require.Positive(t, end, "seed payload data: URI must be quoted")
 	decoded, err := base64.StdEncoding.DecodeString(encoded[:end])
 	require.NoError(t, err, "seed payload must be valid base64")
 	return int64(len(decoded))
@@ -454,7 +473,7 @@ func seedSessionWithContent(t *testing.T, te *testEnv, sessionID, project, resul
 // that should have made no writes.
 func readToolCallContent(t *testing.T, te *testEnv, sessionID string) string {
 	t.Helper()
-	msgs, err := te.db.GetMessages(context.Background(), sessionID, 0, 100, true)
+	msgs, err := te.db.GetMessages(t.Context(), sessionID, 0, 100, true)
 	require.NoError(t, err, "readToolCallContent: GetMessages")
 	for _, msg := range msgs {
 		if len(msg.ToolCalls) > 0 {
@@ -483,6 +502,8 @@ func TestDataStripImagesPreviewReportsPayloads(t *testing.T) {
 }
 
 func TestDataStripImagesAppliesAndIsIdempotent(t *testing.T) {
+	assert := assert.New(t)
+
 	const sid = "img-apply-1"
 	var notified int
 	te := setupWithServerOpts(t, []server.Option{
@@ -497,13 +518,13 @@ func TestDataStripImagesAppliesAndIsIdempotent(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	var report db.StripImagesReport
 	decodeInto(t, w, &report)
-	assert.Equal(t, 1, report.Changed, "first apply must change exactly one session")
+	assert.Equal(1, report.Changed, "first apply must change exactly one session")
 	// The stored row must now hold the agentsview_image placeholder, not the original data: URI.
-	assert.Contains(t, readToolCallContent(t, te, sid), "agentsview_image", "stored row must hold the placeholder after apply")
-	assert.Equal(t, 1, notified, "committed cleanup must notify session consumers")
+	assert.Contains(readToolCallContent(t, te, sid), "agentsview_image", "stored row must hold the placeholder after apply")
+	assert.Equal(1, notified, "committed cleanup must notify session consumers")
 	select {
 	case event := <-events:
-		assert.Equal(t, "sessions", event.Scope)
+		assert.Equal("sessions", event.Scope)
 	default:
 		require.FailNow(t, "committed cleanup must broadcast a sessions event")
 	}
@@ -513,18 +534,21 @@ func TestDataStripImagesAppliesAndIsIdempotent(t *testing.T) {
 	assertStatus(t, w2, http.StatusOK)
 	var report2 db.StripImagesReport
 	decodeInto(t, w2, &report2)
-	assert.Equal(t, 0, report2.Sessions, "second apply must select no sessions (PI-5)")
-	assert.Equal(t, 0, report2.Changed, "second apply must change nothing (PI-5)")
-	assert.Equal(t, int64(0), report2.Payloads, "second apply must find no payloads (PI-5)")
-	assert.Equal(t, 1, notified, "unchanged cleanup must not notify again")
+	assert.Equal(0, report2.Sessions, "second apply must select no sessions (PI-5)")
+	assert.Equal(0, report2.Changed, "second apply must change nothing (PI-5)")
+	assert.Equal(int64(0), report2.Payloads, "second apply must find no payloads (PI-5)")
+	assert.Equal(1, notified, "unchanged cleanup must not notify again")
 	select {
 	case event := <-events:
-		assert.Fail(t, "unchanged cleanup broadcast an unexpected event", "%+v", event)
+		assert.Fail("unchanged cleanup broadcast an unexpected event", "%+v", event)
 	default:
 	}
 }
 
 func TestDataStripImagesNotifiesAfterPartialCommit(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	var notified int
 	te := setupWithServerOpts(t, []server.Option{
 		server.WithSessionMutationNotifier(func() { notified++ }),
@@ -536,8 +560,8 @@ func TestDataStripImagesNotifiesAfterPartialCommit(t *testing.T) {
 	originalContent := readToolCallContent(t, te, "img-b")
 	// The cleanup visits sessions by ID within the project. Fail the
 	// second session's write after the first session has committed.
-	require.NoError(t, te.db.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
+	require.NoError(te.db.Update(func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
 			CREATE TRIGGER fail_second_image_cleanup
 			BEFORE UPDATE OF result_content ON tool_calls
 			WHEN OLD.session_id = 'img-b'
@@ -549,39 +573,44 @@ func TestDataStripImagesNotifiesAfterPartialCommit(t *testing.T) {
 
 	w := te.post(t, "/api/v1/data/strip-images", `{"confirmed":true}`)
 	assertStatus(t, w, http.StatusInternalServerError)
-	assert.Contains(t, readToolCallContent(t, te, "img-a"), "agentsview_image")
-	assert.Equal(t, originalContent, readToolCallContent(t, te, "img-b"))
-	assert.Equal(t, 1, notified, "committed sessions must notify even when cleanup fails")
+	assert.Contains(readToolCallContent(t, te, "img-a"), "agentsview_image")
+	assert.Equal(originalContent, readToolCallContent(t, te, "img-b"))
+	assert.Equal(1, notified, "committed sessions must notify even when cleanup fails")
 	select {
 	case event := <-events:
-		assert.Equal(t, "sessions", event.Scope)
+		assert.Equal("sessions", event.Scope)
 	default:
-		require.FailNow(t, "partially committed cleanup must broadcast a sessions event")
+		require.FailNow("partially committed cleanup must broadcast a sessions event")
 	}
 }
 
 func TestDataStripImagesPreviewLeavesArchiveUnchanged(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const sid = "img-prev-unchanged-1"
 	te := setup(t)
 	seedSessionWithImage(t, te, sid, "test-project")
 
 	// Snapshot the stored content and transcript_revision before preview.
 	originalContent := readToolCallContent(t, te, sid)
-	session, err := te.db.GetSession(context.Background(), sid)
-	require.NoError(t, err, "GetSession before preview")
+	session, err := te.db.GetSession(t.Context(), sid)
+	require.NoError(err, "GetSession before preview")
 	originalRevision := session.TranscriptRevision
 
 	w := te.post(t, "/api/v1/data/strip-images/preview", `{}`)
 	assertStatus(t, w, http.StatusOK)
 
 	// Both must be unchanged: preview writes nothing.
-	assert.Equal(t, originalContent, readToolCallContent(t, te, sid), "result_content must not change after preview")
-	sessionAfter, err := te.db.GetSession(context.Background(), sid)
-	require.NoError(t, err, "GetSession after preview")
-	assert.Equal(t, originalRevision, sessionAfter.TranscriptRevision, "transcript_revision must not change after preview")
+	assert.Equal(originalContent, readToolCallContent(t, te, sid), "result_content must not change after preview")
+	sessionAfter, err := te.db.GetSession(t.Context(), sid)
+	require.NoError(err, "GetSession after preview")
+	assert.Equal(originalRevision, sessionAfter.TranscriptRevision, "transcript_revision must not change after preview")
 }
 
 func TestDataStripImagesIgnoresUndecodableImageBlocks(t *testing.T) {
+	assert := assert.New(t)
+
 	const sid = "img-url-1"
 	te := setup(t)
 	// Seed a block whose image_url is an https URL, not a data: URI.
@@ -591,19 +620,21 @@ func TestDataStripImagesIgnoresUndecodableImageBlocks(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	var report db.StripImagesReport
 	decodeInto(t, w, &report)
-	assert.Equal(t, 0, report.Sessions, "non-data: URL must not be counted as a session (PI-3)")
-	assert.Equal(t, int64(0), report.Payloads, "non-data: URL must not be counted as a payload (PI-3)")
+	assert.Equal(0, report.Sessions, "non-data: URL must not be counted as a session (PI-3)")
+	assert.Equal(int64(0), report.Payloads, "non-data: URL must not be counted as a payload (PI-3)")
 
 	// Apply: must change nothing.
 	w2 := te.post(t, "/api/v1/data/strip-images", `{"confirmed":true}`)
 	assertStatus(t, w2, http.StatusOK)
 	var report2 db.StripImagesReport
 	decodeInto(t, w2, &report2)
-	assert.Equal(t, 0, report2.Changed, "apply must change nothing for a non-data: URL block")
-	assert.Equal(t, testURLPayload, readToolCallContent(t, te, sid), "row must be unchanged (PI-3)")
+	assert.Equal(0, report2.Changed, "apply must change nothing for a non-data: URL block")
+	assert.JSONEq(testURLPayload, readToolCallContent(t, te, sid), "row must be unchanged (PI-3)")
 }
 
 func TestDataStripImagesFiltersByProjectAndBefore(t *testing.T) {
+	assert := assert.New(t)
+
 	te := setup(t)
 	// Three sessions: two projects, two end dates. The alpha pair straddles the
 	// bound so a `before` filter has something to include and something to drop.
@@ -616,14 +647,14 @@ func TestDataStripImagesFiltersByProjectAndBefore(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	var rAlpha db.StripImagesReport
 	decodeInto(t, w, &rAlpha)
-	assert.Equal(t, 2, rAlpha.Sessions, "project filter 'alpha' must select 2 sessions")
+	assert.Equal(2, rAlpha.Sessions, "project filter 'alpha' must select 2 sessions")
 
 	// Filter by project "beta": must select exactly 1 session.
 	w2 := te.post(t, "/api/v1/data/strip-images/preview", `{"project":"beta"}`)
 	assertStatus(t, w2, http.StatusOK)
 	var rBeta db.StripImagesReport
 	decodeInto(t, w2, &rBeta)
-	assert.Equal(t, 1, rBeta.Sessions, "project filter 'beta' must select 1 session")
+	assert.Equal(1, rBeta.Sessions, "project filter 'beta' must select 1 session")
 
 	// Filter by project " alpha" (leading space): the substring is not trimmed,
 	// so it must select 0 sessions, not 2.
@@ -631,16 +662,16 @@ func TestDataStripImagesFiltersByProjectAndBefore(t *testing.T) {
 	assertStatus(t, w3, http.StatusOK)
 	var rSpaced db.StripImagesReport
 	decodeInto(t, w3, &rSpaced)
-	assert.Equal(t, 0, rSpaced.Sessions, "project filter ' alpha' (leading space) must not match 'alpha'")
+	assert.Equal(0, rSpaced.Sessions, "project filter ' alpha' (leading space) must not match 'alpha'")
 
 	// Date bound: only the session that ended before 2025-01-10 is selected.
 	w4 := te.post(t, "/api/v1/data/strip-images/preview", `{"before":"2025-01-10"}`)
 	assertStatus(t, w4, http.StatusOK)
 	var rBefore db.StripImagesReport
 	decodeInto(t, w4, &rBefore)
-	assert.Equal(t, 1, rBefore.Sessions, "before '2025-01-10' must select only the earlier session")
+	assert.Equal(1, rBefore.Sessions, "before '2025-01-10' must select only the earlier session")
 	require.Len(t, rBefore.Projects, 1, "before filter must report one project")
-	assert.Equal(t, "alpha", rBefore.Projects[0].Project)
+	assert.Equal("alpha", rBefore.Projects[0].Project)
 
 	// Project and date together narrow to the same single session.
 	w5 := te.post(t, "/api/v1/data/strip-images/preview",
@@ -648,14 +679,14 @@ func TestDataStripImagesFiltersByProjectAndBefore(t *testing.T) {
 	assertStatus(t, w5, http.StatusOK)
 	var rBoth db.StripImagesReport
 	decodeInto(t, w5, &rBoth)
-	assert.Equal(t, 1, rBoth.Sessions, "project and date together must select 1 session")
+	assert.Equal(1, rBoth.Sessions, "project and date together must select 1 session")
 
 	// A bound before every seeded session selects nothing.
 	w6 := te.post(t, "/api/v1/data/strip-images/preview", `{"before":"2024-12-31"}`)
 	assertStatus(t, w6, http.StatusOK)
 	var rNone db.StripImagesReport
 	decodeInto(t, w6, &rNone)
-	assert.Equal(t, 0, rNone.Sessions, "a bound before every session must select nothing")
+	assert.Equal(0, rNone.Sessions, "a bound before every session must select nothing")
 }
 
 func TestDataStripImagesReturnsBusyWhileEngineHeld(t *testing.T) {
@@ -706,7 +737,7 @@ func TestDataStripImagesReadOnlyArchive(t *testing.T) {
 	handler := wrapTestHandler(cfg, roSrv.Handler())
 
 	postTo := func(path, body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, path, strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
@@ -786,7 +817,7 @@ func TestDataCompactEndpointRejectsNonLocalhost(t *testing.T) {
 			return db.CompactResult{}, nil
 		}),
 	})
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/data/compact", strings.NewReader(`{}`))
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/data/compact", strings.NewReader(`{}`))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Origin", "http://127.0.0.1:0")
 	req.RemoteAddr = "203.0.113.10:4242"

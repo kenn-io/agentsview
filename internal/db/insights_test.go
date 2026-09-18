@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -12,8 +11,11 @@ import (
 )
 
 func TestInsights_InsertAndGet(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	want := &Insight{
 		Type:     "daily_activity",
@@ -27,21 +29,21 @@ func TestInsights_InsertAndGet(t *testing.T) {
 	}
 
 	id, err := d.InsertInsight(*want)
-	require.NoError(t, err, "InsertInsight")
-	require.Positive(t, id, "expected positive ID")
+	require.NoError(err, "InsertInsight")
+	require.Positive(id, "expected positive ID")
 
 	got, err := d.GetInsight(ctx, id)
-	require.NoError(t, err, "GetInsight")
-	require.NotNil(t, got, "expected insight")
+	require.NoError(err, "GetInsight")
+	require.NotNil(got, "expected insight")
 
 	diff := cmp.Diff(want, got, cmpopts.IgnoreFields(Insight{}, "ID", "CreatedAt"))
-	assert.Empty(t, diff, "Insight mismatch (-want +got)")
-	assert.NotEmpty(t, got.CreatedAt, "expected created_at to be set")
+	assert.Empty(diff, "Insight mismatch (-want +got)")
+	assert.NotEmpty(got.CreatedAt, "expected created_at to be set")
 }
 
 func TestInsights_CannedMetadataAndCacheLookup(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	id, err := d.InsertInsight(Insight{
 		Type:            "llm_canned",
@@ -79,8 +81,10 @@ func TestInsights_CannedMetadataAndCacheLookup(t *testing.T) {
 }
 
 func TestInsights_InsertDateRange(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	want := &Insight{
 		Type:     "daily_activity",
@@ -91,11 +95,11 @@ func TestInsights_InsertDateRange(t *testing.T) {
 	}
 
 	id, err := d.InsertInsight(*want)
-	require.NoError(t, err, "InsertInsight")
+	require.NoError(err, "InsertInsight")
 
 	got, err := d.GetInsight(ctx, id)
-	require.NoError(t, err, "GetInsight")
-	require.NotNil(t, got, "expected insight")
+	require.NoError(err, "GetInsight")
+	require.NotNil(got, "expected insight")
 
 	diff := cmp.Diff(want, got, cmpopts.IgnoreFields(Insight{}, "ID", "CreatedAt"))
 	assert.Empty(t, diff, "Insight mismatch (-want +got)")
@@ -103,7 +107,7 @@ func TestInsights_InsertDateRange(t *testing.T) {
 
 func TestInsights_GetNonexistent(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	got, err := d.GetInsight(ctx, 99999)
 	require.NoError(t, err, "GetInsight")
@@ -119,7 +123,7 @@ func insertInsightFixtures(t *testing.T, d *DB, entries []Insight) []int64 {
 	require.NoError(t, err, "begin insights seed tx")
 	defer func() { _ = tx.Rollback() }()
 
-	stmt, err := tx.Prepare(`
+	stmt, err := tx.PrepareContext(t.Context(), `
 		INSERT INTO insights (
 			type, date_from, date_to, project,
 			agent, model, prompt, content,
@@ -132,7 +136,7 @@ func insertInsightFixtures(t *testing.T, d *DB, entries []Insight) []int64 {
 
 	ids := make([]int64, 0, len(entries))
 	for i, s := range entries {
-		res, err := stmt.Exec(
+		res, err := stmt.ExecContext(t.Context(),
 			s.Type, s.DateFrom, s.DateTo, s.Project,
 			s.Agent, s.Model, s.Prompt, s.Content,
 			s.Kind, s.SchemaVersion, s.TemplateID,
@@ -150,7 +154,7 @@ func insertInsightFixtures(t *testing.T, d *DB, entries []Insight) []int64 {
 }
 
 func TestListInsights(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedFiltersData := func(t *testing.T, d *DB) []int64 {
 		entries := []Insight{
@@ -296,41 +300,45 @@ func TestListInsights(t *testing.T) {
 }
 
 func TestListInsights_DateFilter(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := d.InsertInsight(Insight{Type: "daily_activity",
 		DateFrom: "2026-06-16", DateTo: "2026-06-16", Agent: "claude", Content: "x"})
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = d.InsertInsight(Insight{Type: "daily_activity",
 		DateFrom: "2026-06-17", DateTo: "2026-06-17", Agent: "claude", Content: "y"})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	got, err := d.ListInsights(ctx, InsightFilter{
 		Type: "daily_activity", DateFrom: "2026-06-16", DateTo: "2026-06-16"})
-	require.NoError(t, err)
-	require.Len(t, got, 1)
+	require.NoError(err)
+	require.Len(got, 1)
 	assert.Equal(t, "2026-06-16", got[0].DateFrom)
 }
 
 func TestListInsights_DistinguishesByDateTo(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
 	// A single-day insight and a week insight sharing the same date_from.
 	_, err := d.InsertInsight(Insight{
 		Type: "daily_activity", DateFrom: "2026-06-15", DateTo: "2026-06-15",
 		Agent: "claude", Content: "day",
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = d.InsertInsight(Insight{
 		Type: "daily_activity", DateFrom: "2026-06-15", DateTo: "2026-06-21",
 		Agent: "claude", Content: "week",
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 
-	got, err := d.ListInsights(context.Background(), InsightFilter{
+	got, err := d.ListInsights(t.Context(), InsightFilter{
 		Type: "daily_activity", DateFrom: "2026-06-15", DateTo: "2026-06-15",
 	})
-	require.NoError(t, err)
-	require.Len(t, got, 1, "filtering both bounds isolates the single-day insight")
+	require.NoError(err)
+	require.Len(got, 1, "filtering both bounds isolates the single-day insight")
 	assert.Equal(t, "day", got[0].Content)
 }
 
@@ -348,19 +356,21 @@ func TestInsightsLookupIndexHasDateTo(t *testing.T) {
 }
 
 func TestInsights_Delete(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	id, err := d.InsertInsight(Insight{
 		Type:     "daily_activity",
 		DateFrom: "2025-01-15", DateTo: "2025-01-15",
 		Agent: "claude", Content: "to be deleted",
 	})
-	require.NoError(t, err, "InsertInsight")
+	require.NoError(err, "InsertInsight")
 
-	require.NoError(t, d.DeleteInsight(id), "DeleteInsight")
+	require.NoError(d.DeleteInsight(id), "DeleteInsight")
 
 	got, err := d.GetInsight(ctx, id)
-	require.NoError(t, err, "GetInsight after delete")
+	require.NoError(err, "GetInsight after delete")
 	assert.Nil(t, got, "expected nil after delete")
 }

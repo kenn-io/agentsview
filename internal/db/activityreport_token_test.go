@@ -9,17 +9,20 @@ import (
 )
 
 func TestActivityReportTokenRoundTripAndSignature(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	secret := bytes.Repeat([]byte{1}, 32)
 	token, err := EncodeSignedActivityReportToken(secret, []byte(`{"query":"month"}`))
-	require.NoError(t, err)
+	require.NoError(err)
 	payload, err := DecodeSignedActivityReportToken(secret, token)
-	require.NoError(t, err)
-	assert.JSONEq(t, `{"query":"month"}`, string(payload))
+	require.NoError(err)
+	assert.JSONEq(`{"query":"month"}`, string(payload))
 
 	_, err = DecodeSignedActivityReportToken(bytes.Repeat([]byte{2}, 32), token)
-	assert.ErrorIs(t, err, ErrInvalidActivityReportToken)
+	assert.ErrorIs(err, ErrInvalidActivityReportToken)
 	_, err = DecodeSignedActivityReportToken(secret, "v2.payload.signature")
-	assert.ErrorIs(t, err, ErrInvalidActivityReportToken)
+	assert.ErrorIs(err, ErrInvalidActivityReportToken)
 }
 
 func TestActivityReportTokenRejectsImpracticalURLLength(t *testing.T) {

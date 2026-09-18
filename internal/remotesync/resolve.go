@@ -2,6 +2,7 @@ package remotesync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -208,7 +209,7 @@ func resolveFileScopedTarget(agent parser.AgentType, root string) (string, []str
 				return "", nil, err
 			}
 			if !supported {
-				return "", nil, fmt.Errorf("evener provider does not declare source companions")
+				return "", nil, errors.New("evener provider does not declare source companions")
 			}
 			for _, entry := range plan.Entries {
 				// Capture validation canonicalizes paths; retain the configured

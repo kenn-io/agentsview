@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -159,7 +160,7 @@ func validateSnapshotFile(path string) error {
 		return fmt.Errorf("stat snapshot: %w", err)
 	}
 	if info.Size() == 0 {
-		return fmt.Errorf("empty snapshot")
+		return errors.New("empty snapshot")
 	}
 	if info.Size() > maxSnapshotCompressedBytes {
 		return fmt.Errorf(
@@ -190,20 +191,20 @@ func validateSnapshotFile(path string) error {
 		return fmt.Errorf("parsing snapshot json: %w", err)
 	}
 	if snapshot.Version == "" {
-		return fmt.Errorf("missing snapshot version")
+		return errors.New("missing snapshot version")
 	}
 	if !immutableGitRefPattern.MatchString(snapshot.SourceRef) {
-		return fmt.Errorf("missing immutable LiteLLM source ref")
+		return errors.New("missing immutable LiteLLM source ref")
 	}
 	if len(snapshot.Models) == 0 {
-		return fmt.Errorf("missing snapshot models")
+		return errors.New("missing snapshot models")
 	}
 	if len(snapshot.Models) > maxSnapshotModels {
 		return fmt.Errorf("snapshot models exceed %d entries", maxSnapshotModels)
 	}
 	for _, model := range snapshot.Models {
 		if strings.TrimSpace(model.ModelPattern) == "" {
-			return fmt.Errorf("snapshot contains model with empty pattern")
+			return errors.New("snapshot contains model with empty pattern")
 		}
 		if err := catalog.NormalizePricingBands(model.ModelPattern, model.Bands); err != nil {
 			return err
@@ -222,13 +223,13 @@ func restoreSnapshotFile(
 	snapshotURL string,
 ) error {
 	if ref == "" {
-		return fmt.Errorf("missing artifact ref")
+		return errors.New("missing artifact ref")
 	}
 	if snapshotPath == "" {
-		return fmt.Errorf("missing artifact snapshot path")
+		return errors.New("missing artifact snapshot path")
 	}
 	if expectedSHA256 == "" {
-		return fmt.Errorf("missing expected snapshot SHA256")
+		return errors.New("missing expected snapshot SHA256")
 	}
 
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {

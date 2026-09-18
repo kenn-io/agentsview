@@ -184,7 +184,7 @@ func TestResolveBareCodebuffID_LocalMachine_Match(t *testing.T) {
 		},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "local",
+		t.Context(), svc, &cfg, "1704067200", "local",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, candidate, got,
@@ -213,7 +213,7 @@ func TestResolveBareCodebuffID_LocalMachine_Mismatch(t *testing.T) {
 		},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "local",
+		t.Context(), svc, &cfg, "1704067200", "local",
 	)
 	require.NoError(t, err)
 	assert.Empty(t, got,
@@ -242,7 +242,7 @@ func TestResolveBareCodebuffID_WildcardMatch(t *testing.T) {
 		},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "*",
+		t.Context(), svc, &cfg, "1704067200", "*",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, candidate, got,
@@ -269,7 +269,7 @@ func TestResolveBareCodebuffID_SpecificMachineMatch(t *testing.T) {
 		},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "laptop",
+		t.Context(), svc, &cfg, "1704067200", "laptop",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, candidate, got,
@@ -299,7 +299,7 @@ func TestResolveBareCodebuffID_SpecificMachineMismatch(t *testing.T) {
 		},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "laptop",
+		t.Context(), svc, &cfg, "1704067200", "laptop",
 	)
 	require.NoError(t, err)
 	assert.Empty(t, got)
@@ -340,7 +340,7 @@ func TestResolveBareCodebuffID_FreebuffPrefixProbeFromCodebuffRoots(t *testing.T
 		},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "local",
+		t.Context(), svc, &cfg, "1704067200", "local",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, freebuffID, got,
@@ -353,12 +353,15 @@ func TestResolveBareCodebuffID_FreebuffPrefixProbeFromCodebuffRoots(t *testing.T
 // surface). Instead it returns an action-oriented error pointing at
 // `session list` and the canonical ID shapes.
 func TestResolveCodebuffBareID_ServerBareReturnsError(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	cmd := &cobra.Command{Use: "test"}
 	cmd.Flags().String("server", "", "")
 	cmd.Flags().String("machine", "local", "")
 	cmd.Flags().Bool("pg", false, "")
-	require.NoError(t, cmd.Flags().Set("server", "http://remote.example"))
+	require.NoError(cmd.Flags().Set("server", "http://remote.example"))
 	// svc.Get would panic because Get panics in stubGetService when
 	// the path is wrong. We must never reach it. The bare input is
 	// an ISO 8601 timestamp ("YYYY-MM-DDTHH-MM-SS.fffZ") — the
@@ -371,18 +374,18 @@ func TestResolveCodebuffBareID_ServerBareReturnsError(t *testing.T) {
 	got, err := resolveCodebuffBareID(
 		cmd, svc, "2026-07-16T00-09-00.236Z",
 	)
-	require.Error(t, err)
-	assert.Empty(t, got)
-	assert.Contains(t, err.Error(), "session list")
+	require.Error(err)
+	assert.Empty(got)
+	assert.Contains(err.Error(), "session list")
 	// Regression-test every canonical-ID shape the error
 	// enumerates. Stripping any of these lines from
 	// errBareCodebuffRemoteUnsupported must break this test.
-	assert.Contains(t, err.Error(), "codebuff:<project>:<ts>")
-	assert.Contains(t, err.Error(), "freebuff:<project>:<ts>")
-	assert.Contains(t, err.Error(), "host~codebuff:<project>:<ts>")
-	assert.Contains(t, err.Error(), "host~freebuff:<project>:<ts>")
+	assert.Contains(err.Error(), "codebuff:<project>:<ts>")
+	assert.Contains(err.Error(), "freebuff:<project>:<ts>")
+	assert.Contains(err.Error(), "host~codebuff:<project>:<ts>")
+	assert.Contains(err.Error(), "host~freebuff:<project>:<ts>")
 	// No Get calls must occur on the remote-error path.
-	assert.Empty(t, svc.getCalls,
+	assert.Empty(svc.getCalls,
 		"--server must not probe svc.Get for bare timestamps")
 }
 
@@ -390,26 +393,29 @@ func TestResolveCodebuffBareID_ServerBareReturnsError(t *testing.T) {
 // test for the --pg path, which was the second roborev-flagged code
 // path. Symmetric coverage guards against future divergence.
 func TestResolveCodebuffBareID_PGBareReturnsError(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	cmd := &cobra.Command{Use: "test"}
 	cmd.Flags().String("server", "", "")
 	cmd.Flags().String("machine", "local", "")
 	cmd.Flags().Bool("pg", false, "")
-	require.NoError(t, cmd.Flags().Set("pg", "true"))
+	require.NoError(cmd.Flags().Set("pg", "true"))
 	// Same ISO-8601 shape as the --server variant — see comment
 	// on TestResolveCodebuffBareID_ServerBareReturnsError.
 	svc := &stubGetService{}
 	got, err := resolveCodebuffBareID(
 		cmd, svc, "2026-07-16T00-09-00.236Z",
 	)
-	require.Error(t, err)
-	assert.Empty(t, got)
-	assert.Contains(t, err.Error(), "session list")
-	assert.Contains(t, err.Error(), "codebuff:<project>:<ts>")
-	assert.Contains(t, err.Error(), "freebuff:<project>:<ts>")
-	assert.Contains(t, err.Error(), "host~codebuff:<project>:<ts>")
-	assert.Contains(t, err.Error(), "host~freebuff:<project>:<ts>")
-	assert.Empty(t, svc.getCalls)
+	require.Error(err)
+	assert.Empty(got)
+	assert.Contains(err.Error(), "session list")
+	assert.Contains(err.Error(), "codebuff:<project>:<ts>")
+	assert.Contains(err.Error(), "freebuff:<project>:<ts>")
+	assert.Contains(err.Error(), "host~codebuff:<project>:<ts>")
+	assert.Contains(err.Error(), "host~freebuff:<project>:<ts>")
+	assert.Empty(svc.getCalls)
 }
 
 // TestResolveCodebuffBareID_ServerBareUUIDForOtherAgent pins the
@@ -421,12 +427,15 @@ func TestResolveCodebuffBareID_PGBareReturnsError(t *testing.T) {
 // that previously fell through resolveServiceSessionID's prefix
 // loop would short-circuit to the Codebuff error.
 func TestResolveCodebuffBareID_ServerBareUUIDForOtherAgent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	cmd := &cobra.Command{Use: "test"}
 	cmd.Flags().String("server", "", "")
 	cmd.Flags().String("machine", "local", "")
 	cmd.Flags().Bool("pg", false, "")
-	require.NoError(t, cmd.Flags().Set("server", "http://remote.example"))
+	require.NoError(cmd.Flags().Set("server", "http://remote.example"))
 	svc := &stubGetService{}
 	// 36-char hex with dashes — the shape of a real Codex /
 	// Copilot / Gemini bare UUID. Definitely not a
@@ -434,16 +443,16 @@ func TestResolveCodebuffBareID_ServerBareUUIDForOtherAgent(t *testing.T) {
 	got, err := resolveCodebuffBareID(
 		cmd, svc, "abcdef01-2345-6789-abcd-ef0123456789",
 	)
-	require.NoError(t, err,
+	require.NoError(err,
 		"non-Codebuff bare input must NOT fire the Codebuff error "+
 			"on --server; it must fall through to the generic "+
 			"resolver so resolveServiceSessionID can retry the "+
 			"registered agent prefixes")
-	assert.Empty(t, got,
+	assert.Empty(got,
 		"resolveCodebuffBareID has no canonical ID to produce "+
 			"for a non-Codebuff-shape input; calling code "+
 			"preserves id for lookupSessionWithPrefixes")
-	assert.Empty(t, svc.getCalls,
+	assert.Empty(svc.getCalls,
 		"the early-exit path must not probe svc.Get")
 }
 
@@ -451,19 +460,22 @@ func TestResolveCodebuffBareID_ServerBareUUIDForOtherAgent(t *testing.T) {
 // previous test for the --pg transport. Symmetric coverage guards
 // against future divergence between --server and --pg paths.
 func TestResolveCodebuffBareID_PGBareUUIDForOtherAgent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	cmd := &cobra.Command{Use: "test"}
 	cmd.Flags().String("server", "", "")
 	cmd.Flags().String("machine", "local", "")
 	cmd.Flags().Bool("pg", false, "")
-	require.NoError(t, cmd.Flags().Set("pg", "true"))
+	require.NoError(cmd.Flags().Set("pg", "true"))
 	svc := &stubGetService{}
 	got, err := resolveCodebuffBareID(
 		cmd, svc, "abcdef01-2345-6789-abcd-ef0123456789",
 	)
-	require.NoError(t, err)
-	assert.Empty(t, got)
-	assert.Empty(t, svc.getCalls)
+	require.NoError(err)
+	assert.Empty(got)
+	assert.Empty(svc.getCalls)
 }
 
 // TestResolveCodebuffBareID_CanonicalSkipsBare pins pass-through
@@ -555,7 +567,7 @@ func TestResolveBareCodebuffID_RemoteHostPrefixedMatch(t *testing.T) {
 		partialIDs: []string{remoteID},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "laptop",
+		t.Context(), svc, &cfg, "1704067200", "laptop",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, remoteID, got,
@@ -567,6 +579,8 @@ func TestResolveBareCodebuffID_RemoteHostPrefixedMatch(t *testing.T) {
 // machine filter, producing an ambiguity error instead of silently
 // picking the first.
 func TestResolveBareCodebuffID_RemoteAmbiguity(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Parallel()
 	tmp := t.TempDir()
 	stageCodebuffSession(t, tmp, "myproject", "1704067200")
@@ -595,13 +609,13 @@ func TestResolveBareCodebuffID_RemoteAmbiguity(t *testing.T) {
 		partialIDs: []string{remoteA, remoteB},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "*",
+		t.Context(), svc, &cfg, "1704067200", "*",
 	)
 	require.Error(t, err)
-	assert.Empty(t, got)
-	assert.Contains(t, err.Error(), "ambiguous session id")
-	assert.Contains(t, err.Error(), remoteA)
-	assert.Contains(t, err.Error(), remoteB)
+	assert.Empty(got)
+	assert.Contains(err.Error(), "ambiguous session id")
+	assert.Contains(err.Error(), remoteA)
+	assert.Contains(err.Error(), remoteB)
 }
 
 // TestResolveBareCodebuffID_RemoteOnlyNoLocations exercises the
@@ -633,7 +647,7 @@ func TestResolveBareCodebuffID_RemoteOnlyNoLocations(t *testing.T) {
 		partialIDs: []string{remoteID},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "*",
+		t.Context(), svc, &cfg, "1704067200", "*",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, remoteID, got,
@@ -672,7 +686,7 @@ func TestResolveBareCodebuffID_FailClosedOnLookupError(t *testing.T) {
 		},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "local",
+		t.Context(), svc, &cfg, "1704067200", "local",
 	)
 	require.Error(t, err)
 	assert.Empty(t, got)
@@ -707,7 +721,7 @@ func TestResolveBareCodebuffID_ArchiveOnlyLocalMatch(t *testing.T) {
 		partialIDs: []string{archived},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "local",
+		t.Context(), svc, &cfg, "1704067200", "local",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, archived, got,
@@ -721,6 +735,8 @@ func TestResolveBareCodebuffID_ArchiveOnlyLocalMatch(t *testing.T) {
 // timestamp, so the resolver must return the ambiguity error listing
 // both canonical IDs instead of silently picking the remote one.
 func TestResolveBareCodebuffID_ArchivedLocalAndRemoteTwinAmbiguous(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Parallel()
 	// No on-disk session: the local row exists only in the archive.
 	tmp := t.TempDir()
@@ -746,15 +762,15 @@ func TestResolveBareCodebuffID_ArchivedLocalAndRemoteTwinAmbiguous(t *testing.T)
 		partialIDs: []string{localID, remoteID},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "*",
+		t.Context(), svc, &cfg, "1704067200", "*",
 	)
 	require.Error(t, err,
 		"a local archive row plus a remote twin is ambiguous under "+
 			"--machine=*")
-	assert.Empty(t, got)
-	assert.Contains(t, err.Error(), "ambiguous session id")
-	assert.Contains(t, err.Error(), localID)
-	assert.Contains(t, err.Error(), remoteID)
+	assert.Empty(got)
+	assert.Contains(err.Error(), "ambiguous session id")
+	assert.Contains(err.Error(), localID)
+	assert.Contains(err.Error(), remoteID)
 }
 
 // TestResolveBareCodebuffID_OnDiskRowNotDoubleCounted pins the
@@ -785,7 +801,7 @@ func TestResolveBareCodebuffID_OnDiskRowNotDoubleCounted(t *testing.T) {
 		partialIDs: []string{candidate},
 	}
 	got, err := resolveBareCodebuffID(
-		context.Background(), svc, &cfg, "1704067200", "local",
+		t.Context(), svc, &cfg, "1704067200", "local",
 	)
 	require.NoError(t, err,
 		"a session's own archive row must not make it ambiguous")

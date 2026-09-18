@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -33,7 +32,10 @@ func projectRulesByPrefix(rules []db.ProjectRule) map[string]db.ProjectRule {
 // governed count, and a rule for a different machine is excluded from the
 // rules list but its machine still appears in the typeahead list.
 func TestDuckProjectRulesMatchesSQLite(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	seedInventorySession(t, local, "alpha-1", "alpha", func(s *db.Session) {
@@ -53,55 +55,55 @@ func TestDuckProjectRulesMatchesSQLite(t *testing.T) {
 		Machine: duckPushMachine, PathPrefix: "/w/a",
 		Layout: db.WorktreeMappingLayoutExplicit, Project: "alpha", Enabled: true,
 	})
-	require.NoError(t, err, "CreateWorktreeProjectMapping alpha")
+	require.NoError(err, "CreateWorktreeProjectMapping alpha")
 	_, err = local.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
 		Machine: duckPushMachine, PathPrefix: "/w/b",
 		Layout: db.WorktreeMappingLayoutExplicit, Project: "beta",
 		OriginalProject: "beta", Enabled: false,
 	})
-	require.NoError(t, err, "CreateWorktreeProjectMapping beta")
+	require.NoError(err, "CreateWorktreeProjectMapping beta")
 	_, err = local.CreateWorktreeProjectMapping(ctx, db.WorktreeProjectMapping{
 		Machine: "m-other", PathPrefix: "/w/c",
 		Layout: db.WorktreeMappingLayoutExplicit, Project: "gamma", Enabled: true,
 	})
-	require.NoError(t, err, "CreateWorktreeProjectMapping gamma")
+	require.NoError(err, "CreateWorktreeProjectMapping gamma")
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
 	localRules, err := local.ListProjectRules(ctx, duckPushMachine)
-	require.NoError(t, err, "local ListProjectRules")
+	require.NoError(err, "local ListProjectRules")
 
 	duckStore := NewStoreFromDB(syncer.DB())
 	duckRules, err := duckStore.ListProjectRules(ctx, duckPushMachine)
-	require.NoError(t, err, "duckdb ListProjectRules")
+	require.NoError(err, "duckdb ListProjectRules")
 
-	assert.ElementsMatch(t, localRules.Machines, duckRules.Machines,
+	assert.ElementsMatch(localRules.Machines, duckRules.Machines,
 		"machine typeahead list is the same set regardless of the machine filter")
-	assert.Contains(t, duckRules.Machines, "m-other",
+	assert.Contains(duckRules.Machines, "m-other",
 		"machines list includes a machine that only has a mapping, no live session")
 
-	require.Len(t, duckRules.Rules, 2, "only duckPushMachine's rules are returned")
-	require.Len(t, localRules.Rules, 2)
+	require.Len(duckRules.Rules, 2, "only duckPushMachine's rules are returned")
+	require.Len(localRules.Rules, 2)
 
 	localByPrefix := projectRulesByPrefix(localRules.Rules)
 	duckByPrefix := projectRulesByPrefix(duckRules.Rules)
 	for prefix, localRule := range localByPrefix {
 		duckRule, ok := duckByPrefix[prefix]
-		require.True(t, ok, "prefix %s present on both sides", prefix)
-		assert.Equal(t, localRule.Machine, duckRule.Machine)
-		assert.Equal(t, localRule.Layout, duckRule.Layout)
-		assert.Equal(t, localRule.Project, duckRule.Project)
-		assert.Equal(t, localRule.OriginalProject, duckRule.OriginalProject)
-		assert.Equal(t, localRule.Enabled, duckRule.Enabled)
-		assert.Equal(t, localRule.GovernedSessions, duckRule.GovernedSessions)
-		assert.Equal(t, localRule.SourceArchiveID, duckRule.SourceArchiveID,
+		require.True(ok, "prefix %s present on both sides", prefix)
+		assert.Equal(localRule.Machine, duckRule.Machine)
+		assert.Equal(localRule.Layout, duckRule.Layout)
+		assert.Equal(localRule.Project, duckRule.Project)
+		assert.Equal(localRule.OriginalProject, duckRule.OriginalProject)
+		assert.Equal(localRule.Enabled, duckRule.Enabled)
+		assert.Equal(localRule.GovernedSessions, duckRule.GovernedSessions)
+		assert.Equal(localRule.SourceArchiveID, duckRule.SourceArchiveID,
 			"duckdb rule's source_archive_id must equal the pushing archive's id")
 	}
 
-	assert.Equal(t, 1, duckByPrefix["/w/a"].GovernedSessions,
+	assert.Equal(1, duckByPrefix["/w/a"].GovernedSessions,
 		"alpha-1 governed via the enabled rule; alpha-2's cwd doesn't match")
-	assert.Equal(t, 0, duckByPrefix["/w/b"].GovernedSessions,
+	assert.Equal(0, duckByPrefix["/w/b"].GovernedSessions,
 		"disabled rule never governs sessions, even though its cwd matches")
 }
 
@@ -119,7 +121,10 @@ func TestDuckProjectRulesMatchesSQLite(t *testing.T) {
 // for every machine into an empty-machine request. The machine typeahead
 // list is unaffected either way, per ListProjectRules's contract.
 func TestDuckProjectRulesEmptyMachineMatchesSQLite(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	seedInventorySession(t, local, "alpha-1", "alpha", func(s *db.Session) {
@@ -130,31 +135,31 @@ func TestDuckProjectRulesEmptyMachineMatchesSQLite(t *testing.T) {
 		Machine: duckPushMachine, PathPrefix: "/w/a",
 		Layout: db.WorktreeMappingLayoutExplicit, Project: "alpha", Enabled: true,
 	})
-	require.NoError(t, err, "CreateWorktreeProjectMapping alpha")
+	require.NoError(err, "CreateWorktreeProjectMapping alpha")
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
 	localRules, err := local.ListProjectRules(ctx, "")
-	require.NoError(t, err, "local ListProjectRules")
-	require.Empty(t, localRules.Rules,
+	require.NoError(err, "local ListProjectRules")
+	require.Empty(localRules.Rules,
 		"sanity: SQLite's own empty-machine contract returns zero rules")
-	require.NotEmpty(t, localRules.Machines,
+	require.NotEmpty(localRules.Machines,
 		"sanity: SQLite's machine list stays populated regardless of the filter")
 
 	duckStore := NewStoreFromDB(syncer.DB())
 	duckRules, err := duckStore.ListProjectRules(ctx, "")
-	require.NoError(t, err, "duckdb ListProjectRules")
+	require.NoError(err, "duckdb ListProjectRules")
 
-	assert.Empty(t, duckRules.Rules,
+	assert.Empty(duckRules.Rules,
 		"an empty machine argument must match zero rules, not every archive's "+
 			"rules for every machine")
-	assert.ElementsMatch(t, localRules.Machines, duckRules.Machines,
+	assert.ElementsMatch(localRules.Machines, duckRules.Machines,
 		"machine typeahead list is unaffected by the empty machine filter")
 
 	whitespaceRules, err := duckStore.ListProjectRules(ctx, "   ")
-	require.NoError(t, err, "duckdb ListProjectRules whitespace")
-	assert.Empty(t, whitespaceRules.Rules,
+	require.NoError(err, "duckdb ListProjectRules whitespace")
+	assert.Empty(whitespaceRules.Rules,
 		"a whitespace-only machine argument trims to empty and must also "+
 			"match zero rules")
 }
@@ -173,7 +178,10 @@ func TestDuckProjectRulesEmptyMachineMatchesSQLite(t *testing.T) {
 // governed session leak into archive A's count too, producing 1/1 instead
 // of the expected 0/1.
 func TestDuckProjectRulesCrossArchiveIsolation(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	seedInventorySession(t, local, "a-session", "proja", func(s *db.Session) {
@@ -183,7 +191,7 @@ func TestDuckProjectRulesCrossArchiveIsolation(t *testing.T) {
 		Machine: duckPushMachine, PathPrefix: "/repos/shared",
 		Layout: db.WorktreeMappingLayoutExplicit, Project: "proja", Enabled: true,
 	})
-	require.NoError(t, err, "CreateWorktreeProjectMapping proja")
+	require.NoError(err, "CreateWorktreeProjectMapping proja")
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
 	pushDataReadMirror(t, ctx, syncer)
@@ -195,7 +203,7 @@ func TestDuckProjectRulesCrossArchiveIsolation(t *testing.T) {
 		 original_project, enabled, updated_at)
 		VALUES (?, ?, '/repos/shared', 'explicit', 'projb',
 		 '', TRUE, '')`, archiveB, duckPushMachine)
-	require.NoError(t, err, "seed archive B mapping")
+	require.NoError(err, "seed archive B mapping")
 	_, err = syncer.DB().ExecContext(ctx, `
 		INSERT INTO sessions
 		(id, machine, project, agent, message_count, user_message_count,
@@ -203,30 +211,30 @@ func TestDuckProjectRulesCrossArchiveIsolation(t *testing.T) {
 		VALUES ('b-session', ?, 'projb', 'claude', 1, 1,
 		 'root', '/repos/shared', CAST(? AS TIMESTAMP), CAST(? AS TIMESTAMP), ?)`,
 		duckPushMachine, "2024-03-01T00:00:00Z", "2024-03-01T00:00:00Z", archiveB)
-	require.NoError(t, err, "seed archive B session")
+	require.NoError(err, "seed archive B session")
 
 	localArchiveID, err := local.GetArchiveID(ctx)
-	require.NoError(t, err, "GetArchiveID")
+	require.NoError(err, "GetArchiveID")
 
 	duckStore := NewStoreFromDB(syncer.DB())
 	rules, err := duckStore.ListProjectRules(ctx, duckPushMachine)
-	require.NoError(t, err, "ListProjectRules")
+	require.NoError(err, "ListProjectRules")
 
-	require.Len(t, rules.Rules, 2,
+	require.Len(rules.Rules, 2,
 		"both archives' rules for duckPushMachine/repos/shared are returned")
 
 	byArchive := map[string]db.ProjectRule{}
 	for _, r := range rules.Rules {
 		byArchive[r.SourceArchiveID] = r
 	}
-	require.Contains(t, byArchive, localArchiveID)
-	require.Contains(t, byArchive, archiveB)
+	require.Contains(byArchive, localArchiveID)
+	require.Contains(byArchive, archiveB)
 
-	assert.Equal(t, "proja", byArchive[localArchiveID].Project)
-	assert.Equal(t, "projb", byArchive[archiveB].Project)
+	assert.Equal("proja", byArchive[localArchiveID].Project)
+	assert.Equal("projb", byArchive[archiveB].Project)
 
-	assert.Equal(t, 0, byArchive[localArchiveID].GovernedSessions,
+	assert.Equal(0, byArchive[localArchiveID].GovernedSessions,
 		"archive A's own session doesn't match its own rule's cwd prefix")
-	assert.Equal(t, 1, byArchive[archiveB].GovernedSessions,
+	assert.Equal(1, byArchive[archiveB].GovernedSessions,
 		"archive B's own session is governed by archive B's own rule")
 }

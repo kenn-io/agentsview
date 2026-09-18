@@ -3,7 +3,6 @@
 package db
 
 import (
-	"context"
 	"encoding/json"
 	"sort"
 	"strings"
@@ -14,6 +13,9 @@ import (
 )
 
 func TestCaptureUsageQueryBoundedCandidatesAndMetadata(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := usageCandidateFixture(t)
 	filter := UsageFilter{
 		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
@@ -21,19 +23,19 @@ func TestCaptureUsageQueryBoundedCandidatesAndMetadata(t *testing.T) {
 	}
 
 	snapshot, err := database.captureUsageQuery(
-		context.Background(), filter, usageQueryKindToken,
+		t.Context(), filter, usageQueryKindToken,
 	)
-	require.NoError(t, err)
-	require.NoError(t, snapshot.Close())
+	require.NoError(err)
+	require.NoError(snapshot.Close())
 
-	assert.NotEmpty(t, snapshot.DatabaseID)
-	assert.Equal(t, int64(1), snapshot.CursorHighWater)
-	assert.Equal(t, []usageQueryInterval{{
+	assert.NotEmpty(snapshot.DatabaseID)
+	assert.Equal(int64(1), snapshot.CursorHighWater)
+	assert.Equal([]usageQueryInterval{{
 		FromMillis: 1786320000000, ToMillis: 1786406400000,
 		FromLocalDate: "2026-08-10", ToLocalDate: "2026-08-10",
 	}}, snapshot.Intervals)
 
-	assert.Equal(t, []string{
+	assert.Equal([]string{
 		"blank-message", "event", "filtered-competitor", "inside-message",
 		"model-filtered",
 	}, usageQuerySessionIDs(snapshot.Sessions))
@@ -41,7 +43,7 @@ func TestCaptureUsageQueryBoundedCandidatesAndMetadata(t *testing.T) {
 	for _, session := range snapshot.Sessions {
 		byID[session.ID] = session
 	}
-	assert.Equal(t, usageQuerySession{
+	assert.Equal(usageQuerySession{
 		ID: "inside-message", Project: "keep", Machine: "machine-a",
 		Agent: "claude", GitBranch: "main",
 		CreatedAt:   "2026-08-01T00:00:00.000Z",
@@ -50,52 +52,54 @@ func TestCaptureUsageQueryBoundedCandidatesAndMetadata(t *testing.T) {
 		StartedAtNanos:   new(int64(0)),
 		UserMessageCount: 2, PassesFilter: true,
 	}, byID["inside-message"])
-	assert.False(t, byID["filtered-competitor"].PassesFilter,
+	assert.False(byID["filtered-competitor"].PassesFilter,
 		"session filters must be recorded, not applied to candidate discovery")
-	assert.True(t, byID["model-filtered"].PassesFilter,
+	assert.True(byID["model-filtered"].PassesFilter,
 		"model filters apply to facts after ranking, not session metadata")
 
-	assert.Equal(t, usageQuerySessionIDs(snapshot.Sessions),
+	assert.Equal(usageQuerySessionIDs(snapshot.Sessions),
 		usageSourceVersionIDs(snapshot.Versions))
 	versionByID := make(map[string]usageSourceVersion, len(snapshot.Versions))
 	for _, version := range snapshot.Versions {
 		versionByID[version.SessionID] = version
-		assert.NotEmpty(t, version.SyncMarker)
-		assert.NotEmpty(t, version.TranscriptRevision)
+		assert.NotEmpty(version.SyncMarker)
+		assert.NotEmpty(version.TranscriptRevision)
 	}
-	assert.Equal(t,
-		"false|0|7:session|7:model-x|0:|1|2|0|0|0|false|0|0:|0:|20:2026-08-10T12:00:00Z|2:e1;",
+	assert.Equal("false|0|7:session|7:model-x|0:|1|2|0|0|0|false|0|0:|0:|20:2026-08-10T12:00:00Z|2:e1;",
 		versionByID["event"].UsageEventFingerprint)
-	assert.Empty(t, versionByID["inside-message"].UsageEventFingerprint)
+	assert.Empty(versionByID["inside-message"].UsageEventFingerprint)
 
 	// The returned value owns no live archive transaction.
-	require.NoError(t, database.RenameSession("inside-message", new("renamed")))
+	require.NoError(database.RenameSession("inside-message", new("renamed")))
 }
 
 func TestCaptureUsageQueryRelaxedAndAllHistoryCandidates(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := usageCandidateFixture(t)
 	filter := UsageFilter{
 		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
 	}
 
 	relaxed, err := database.captureUsageQuery(
-		context.Background(), filter, usageQueryKindActivity,
+		t.Context(), filter, usageQueryKindActivity,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, []string{
+	require.NoError(err)
+	assert.Equal([]string{
 		"blank-message", "event", "filtered-competitor", "inside-message",
 		"model-filtered", "relaxed",
 	}, usageQuerySessionIDs(relaxed.Sessions))
 
 	allHistory, err := database.captureUsageQuery(
-		context.Background(), UsageFilter{}, usageQueryKindToken,
+		t.Context(), UsageFilter{}, usageQueryKindToken,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, []string{
+	require.NoError(err)
+	assert.Equal([]string{
 		"all-empty", "blank-message", "event", "filtered-competitor",
 		"inside-message", "model-filtered", "outside", "relaxed", "user-only",
 	}, usageQuerySessionIDs(allHistory.Sessions))
-	assert.Empty(t, allHistory.Intervals)
+	assert.Empty(allHistory.Intervals)
 }
 
 func TestUsageCandidateDiscoveryQueryPlans(t *testing.T) {
@@ -127,7 +131,7 @@ func TestUsageCandidateDiscoveryCoversOppositeDateLineOffsets(t *testing.T) {
 		Timestamp: started, Model: "model",
 		TokenUsage: json.RawMessage(`{"input_tokens":1}`),
 	}}))
-	snapshot, err := database.captureUsageQuery(context.Background(), UsageFilter{
+	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{
 		From: "2026-08-10", To: "2026-08-10", Timezone: "Pacific/Kiritimati",
 	}, usageQueryKindToken)
 	require.NoError(t, err)

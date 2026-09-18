@@ -235,7 +235,7 @@ func gooseSessionColumns(
 		return nil, err
 	}
 	if !hasMessages {
-		return nil, fmt.Errorf("unsupported goose sessions schema: missing messages table")
+		return nil, errors.New("unsupported goose sessions schema: missing messages table")
 	}
 	messageColumns, err := gooseTableColumns(ctx, db, "messages")
 	if err != nil {

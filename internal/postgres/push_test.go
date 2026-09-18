@@ -230,23 +230,29 @@ func (r *pushAliasRoutingRows) Next(dest []driver.Value) error {
 }
 
 func TestPushMarkerIDReturnsInsertWinner(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
-	require.NoError(t, err, "db.Open")
+	require.NoError(err, "db.Open")
 	defer local.Close()
-	require.NoError(t, local.SetSyncState(pushMarkerIDStateKey, "winner-marker"))
+	require.NoError(local.SetSyncState(pushMarkerIDStateKey, "winner-marker"))
 	sync := &Sync{local: local}
 
 	got, err := sync.pushMarkerID()
-	require.NoError(t, err, "pushMarkerID")
-	assert.Equal(t, "winner-marker", got)
+	require.NoError(err, "pushMarkerID")
+	assert.Equal("winner-marker", got)
 	stored, err := local.GetSyncState(pushMarkerIDStateKey)
-	require.NoError(t, err, "GetSyncState")
-	assert.Equal(t, "winner-marker", stored)
+	require.NoError(err, "GetSyncState")
+	assert.Equal("winner-marker", stored)
 }
 
 func TestPushMarkerIDUsesUnscopedStateAcrossNamedTargets(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
-	require.NoError(t, err, "db.Open")
+	require.NoError(err, "db.Open")
 	defer local.Close()
 
 	workSync := &Sync{
@@ -259,95 +265,104 @@ func TestPushMarkerIDUsesUnscopedStateAcrossNamedTargets(t *testing.T) {
 	}
 
 	workMarker, err := workSync.pushMarkerID()
-	require.NoError(t, err, "work pushMarkerID")
+	require.NoError(err, "work pushMarkerID")
 	archiveMarker, err := archiveSync.pushMarkerID()
-	require.NoError(t, err, "archive pushMarkerID")
+	require.NoError(err, "archive pushMarkerID")
 
-	assert.Equal(t, workMarker, archiveMarker)
+	assert.Equal(workMarker, archiveMarker)
 
 	stored, err := local.GetSyncState(pushMarkerIDStateKey)
-	require.NoError(t, err, "GetSyncState")
-	assert.Equal(t, workMarker, stored)
+	require.NoError(err, "GetSyncState")
+	assert.Equal(workMarker, stored)
 
 	for _, key := range []string{
 		pushMarkerIDStateKey + ":work",
 		pushMarkerIDStateKey + ":archive",
 	} {
 		value, err := local.GetSyncState(key)
-		require.NoError(t, err, "GetSyncState %s", key)
-		assert.Empty(t, value)
+		require.NoError(err, "GetSyncState %s", key)
+		assert.Empty(value)
 	}
 }
 
 func TestSessionAliasBackfillForcesOneFullPush(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store := &syncStateStoreStub{}
 
 	full, needed, err := applySessionAliasBackfillRequirement(
 		store, false,
 	)
 
-	require.NoError(t, err)
-	assert.True(t, full, "missing alias backfill marker should force full push")
-	assert.True(t, needed)
+	require.NoError(err)
+	assert.True(full, "missing alias backfill marker should force full push")
+	assert.True(needed)
 
-	require.NoError(t, markSessionAliasBackfillDone(store))
+	require.NoError(markSessionAliasBackfillDone(store))
 
 	full, needed, err = applySessionAliasBackfillRequirement(
 		store, false,
 	)
 
-	require.NoError(t, err)
-	assert.False(t, full,
+	require.NoError(err)
+	assert.False(full,
 		"completed alias backfill should preserve incremental push")
-	assert.False(t, needed)
+	assert.False(needed)
 
 	full, needed, err = applySessionAliasBackfillRequirement(
 		store, true,
 	)
 
-	require.NoError(t, err)
-	assert.True(t, full, "explicit full push should stay full")
-	assert.False(t, needed)
+	require.NoError(err)
+	assert.True(full, "explicit full push should stay full")
+	assert.False(needed)
 }
 
 func TestTranscriptRevisionBackfillForcesOneFullPush(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store := &syncStateStoreStub{}
 
 	full, needed, err := applyTranscriptRevisionBackfillRequirement(
 		store, false,
 	)
-	require.NoError(t, err)
-	assert.True(t, full)
-	assert.True(t, needed)
+	require.NoError(err)
+	assert.True(full)
+	assert.True(needed)
 
-	require.NoError(t, markTranscriptRevisionBackfillDone(store))
+	require.NoError(markTranscriptRevisionBackfillDone(store))
 	full, needed, err = applyTranscriptRevisionBackfillRequirement(
 		store, false,
 	)
-	require.NoError(t, err)
-	assert.False(t, full)
-	assert.False(t, needed)
+	require.NoError(err)
+	assert.False(full)
+	assert.False(needed)
 }
 
 func TestTimestampNormalizationBackfillForcesOneFullPush(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store := &syncStateStoreStub{}
 
 	full, needed, err := applyTimestampNormalizationBackfillRequirement(
 		store, false,
 	)
-	require.NoError(t, err)
-	assert.True(t, full)
-	assert.True(t, needed)
+	require.NoError(err)
+	assert.True(full)
+	assert.True(needed)
 
-	require.NoError(t, completeTimestampNormalizationBackfill(
+	require.NoError(completeTimestampNormalizationBackfill(
 		store, needed, PushResult{},
 	))
 	full, needed, err = applyTimestampNormalizationBackfillRequirement(
 		store, false,
 	)
-	require.NoError(t, err)
-	assert.False(t, full)
-	assert.False(t, needed)
+	require.NoError(err)
+	assert.False(full)
+	assert.False(needed)
 }
 
 func TestTimestampNormalizationBackfillRetriesAfterPushErrors(t *testing.T) {
@@ -391,6 +406,9 @@ func TestCompleteSessionAliasBackfillMarksDoneUnlessErrors(t *testing.T) {
 }
 
 func TestSessionAliasBackfillRequirementUsesSyncAliasStateAcrossFilters(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	filterScopeA := pushSyncStateScope(
 		"work",
 		[]string{"alpha"},
@@ -415,11 +433,11 @@ func TestSessionAliasBackfillRequirementUsesSyncAliasStateAcrossFilters(t *testi
 	full, needed, err := applySessionAliasBackfillRequirement(
 		syncA.aliasBackfillSyncStateOrDefault(), false,
 	)
-	require.NoError(t, err)
-	assert.True(t, full)
-	assert.True(t, needed)
+	require.NoError(err)
+	assert.True(full)
+	assert.True(needed)
 
-	require.NoError(t, completeSessionAliasBackfill(
+	require.NoError(completeSessionAliasBackfill(
 		syncA.aliasBackfillSyncStateOrDefault(),
 		true,
 		PushResult{},
@@ -428,20 +446,23 @@ func TestSessionAliasBackfillRequirementUsesSyncAliasStateAcrossFilters(t *testi
 	full, needed, err = applySessionAliasBackfillRequirement(
 		syncB.aliasBackfillSyncStateOrDefault(), false,
 	)
-	require.NoError(t, err)
-	assert.False(t, full, "head behavior: target scope keeps marker across filters")
-	assert.False(t, needed, "head behavior: marker should not re-arm full push")
-	assert.Empty(t, store.values[sessionAliasBackfillStateKey+":"+filterScopeA])
-	assert.Empty(t, store.values[sessionAliasBackfillStateKey+":"+filterScopeB])
-	assert.Equal(t, "1", store.values[sessionAliasBackfillStateKey+":work"])
+	require.NoError(err)
+	assert.False(full, "head behavior: target scope keeps marker across filters")
+	assert.False(needed, "head behavior: marker should not re-arm full push")
+	assert.Empty(store.values[sessionAliasBackfillStateKey+":"+filterScopeA])
+	assert.Empty(store.values[sessionAliasBackfillStateKey+":"+filterScopeB])
+	assert.Equal("1", store.values[sessionAliasBackfillStateKey+":work"])
 }
 
 func TestPushUsesTargetScopedAliasBackfillStateAcrossFilters(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	filterScopeA := pushSyncStateScope("work", []string{"alpha"}, nil)
 	filterScopeB := pushSyncStateScope("work", []string{"beta"}, nil)
 	local := testDB(t)
 	pg := newPushAliasRoutingDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	syncA := &Sync{
 		pg:                 pg,
@@ -469,33 +490,33 @@ func TestPushUsesTargetScopedAliasBackfillStateAcrossFilters(t *testing.T) {
 	}
 
 	_, err := syncA.Push(ctx, false, nil)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = syncB.Push(ctx, false, nil)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	targetMarker, err := local.GetSyncState(
 		sessionAliasBackfillStateKey + ":work",
 	)
-	require.NoError(t, err)
-	assert.Equal(t, "1", targetMarker)
+	require.NoError(err)
+	assert.Equal("1", targetMarker)
 
 	filterMarkerB, err := local.GetSyncState(
 		sessionAliasBackfillStateKey + ":" + filterScopeB,
 	)
-	require.NoError(t, err)
-	assert.Empty(t, filterMarkerB)
+	require.NoError(err)
+	assert.Empty(filterMarkerB)
 
 	filteredLastPushA, err := local.GetSyncState("last_push_at:" + filterScopeA)
-	require.NoError(t, err)
-	assert.NotEmpty(t, filteredLastPushA)
+	require.NoError(err)
+	assert.NotEmpty(filteredLastPushA)
 
 	filteredLastPushB, err := local.GetSyncState("last_push_at:" + filterScopeB)
-	require.NoError(t, err)
-	assert.NotEmpty(t, filteredLastPushB)
+	require.NoError(err)
+	assert.NotEmpty(filteredLastPushB)
 
 	unscopedLastPush, err := local.GetSyncState("last_push_at:work")
-	require.NoError(t, err)
-	assert.Empty(t, unscopedLastPush)
+	require.NoError(err)
+	assert.Empty(unscopedLastPush)
 }
 
 func TestSessionAliasBackfillStateFallsBackToEffectiveScope(t *testing.T) {
@@ -512,6 +533,9 @@ func TestSessionAliasBackfillStateFallsBackToEffectiveScope(t *testing.T) {
 }
 
 func TestSessionAliasBackfillKeysStayFilteredForPushState(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	filterScopeA := pushSyncStateScope("work", []string{"alpha"}, nil)
 	filterScopeB := pushSyncStateScope("work", []string{"beta"}, nil)
 	store := &syncStateStoreStub{}
@@ -520,45 +544,41 @@ func TestSessionAliasBackfillKeysStayFilteredForPushState(t *testing.T) {
 		aliasBackfillState: newScopedSyncStateStore(store, "work", false),
 	}
 
-	require.NoError(t, syncA.effectiveSyncState().SetSyncState(
+	require.NoError(syncA.effectiveSyncState().SetSyncState(
 		"last_push_at", "2026-03-11T12:00:00.000Z",
 	))
-	require.NoError(t, syncA.effectiveSyncState().SetSyncState(
+	require.NoError(syncA.effectiveSyncState().SetSyncState(
 		lastPushBoundaryStateKey, `{"cutoff":"2026-03-11T12:00:00.000Z"}`,
 	))
-	require.NoError(t, syncA.effectiveSyncState().SetSyncState(
+	require.NoError(syncA.effectiveSyncState().SetSyncState(
 		lastPushTargetFingerprintKey, "fp-1",
 	))
-	require.NoError(t, markSessionAliasBackfillDone(
+	require.NoError(markSessionAliasBackfillDone(
 		syncA.aliasBackfillSyncStateOrDefault(),
 	))
 
 	assert.Equal(
-		t,
 		"2026-03-11T12:00:00.000Z",
 		store.values["last_push_at:"+filterScopeA],
 	)
-	assert.Equal(
-		t,
+	assert.JSONEq(
 		`{"cutoff":"2026-03-11T12:00:00.000Z"}`,
 		store.values[lastPushBoundaryStateKey+":"+filterScopeA],
 	)
 	assert.Equal(
-		t,
 		"fp-1",
 		store.values[lastPushTargetFingerprintKey+":"+filterScopeA],
 	)
-	assert.Empty(t, store.values["last_push_at:"+filterScopeB])
-	assert.Empty(t, store.values[lastPushBoundaryStateKey+":"+filterScopeB])
-	assert.Empty(t, store.values[lastPushTargetFingerprintKey+":"+filterScopeB])
-	assert.Empty(t, store.values[sessionAliasBackfillStateKey+":"+filterScopeA])
-	assert.Empty(t, store.values[sessionAliasBackfillStateKey+":"+filterScopeB])
+	assert.Empty(store.values["last_push_at:"+filterScopeB])
+	assert.Empty(store.values[lastPushBoundaryStateKey+":"+filterScopeB])
+	assert.Empty(store.values[lastPushTargetFingerprintKey+":"+filterScopeB])
+	assert.Empty(store.values[sessionAliasBackfillStateKey+":"+filterScopeA])
+	assert.Empty(store.values[sessionAliasBackfillStateKey+":"+filterScopeB])
 	assert.Equal(
-		t,
 		"1",
 		store.values[sessionAliasBackfillStateKey+":work"],
 	)
-	assert.Empty(t, store.values["last_push_at:work"])
+	assert.Empty(store.values["last_push_at:work"])
 }
 
 func TestReadPushBoundaryStateValidity(t *testing.T) {
@@ -616,34 +636,37 @@ func TestReadPushBoundaryStateValidity(t *testing.T) {
 }
 
 func TestPGExcludedSessionIDsQueryUsesSingleArrayParameter(t *testing.T) {
+	assert := assert.New(t)
+
 	query, args := pgExcludedSessionIDsQuery([]string{
 		"sess-001",
 		"sess-002",
 		"sess-003",
 	})
 
-	assert.Contains(t, query, "id = ANY($1)")
-	assert.NotContains(t, query, "$2")
+	assert.Contains(query, "id = ANY($1)")
+	assert.NotContains(query, "$2")
 	require.Len(t, args, 1)
-	assert.Equal(t,
-		[]string{"sess-001", "sess-002", "sess-003"},
+	assert.Equal([]string{"sess-001", "sess-002", "sess-003"},
 		args[0],
 	)
 }
 
 func TestDeletePGExcludedSessionRowsUsesSingleArrayParameter(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	execer := &capturePGExec{}
 
-	require.NoError(t, deletePGExcludedSessionRows(
-		context.Background(), execer,
+	require.NoError(deletePGExcludedSessionRows(
+		t.Context(), execer,
 		[]string{"sess-001", "sess-002", "sess-003"},
 	))
 
-	assert.Contains(t, execer.query, "DELETE FROM sessions")
-	assert.Contains(t, execer.query, "id = ANY($1)")
-	require.Len(t, execer.args, 1)
-	assert.Equal(t,
-		[]string{"sess-001", "sess-002", "sess-003"},
+	assert.Contains(execer.query, "DELETE FROM sessions")
+	assert.Contains(execer.query, "id = ANY($1)")
+	require.Len(execer.args, 1)
+	assert.Equal([]string{"sess-001", "sess-002", "sess-003"},
 		execer.args[0],
 	)
 }
@@ -662,18 +685,21 @@ func (c *capturePGExec) ExecContext(
 }
 
 func TestPushSessionRechecksExclusionAfterSuccessfulUpsert(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	state := &pushSessionProbeState{
 		existingExcluded: map[string]bool{
 			"sess-race": true,
 		},
 	}
 	pg := newPushSessionProbeDB(t, state)
-	tx, err := pg.BeginTx(context.Background(), nil)
-	require.NoError(t, err, "BeginTx")
+	tx, err := pg.BeginTx(t.Context(), nil)
+	require.NoError(err, "BeginTx")
 
 	syncer := &Sync{machine: "push-machine"}
 	err = syncer.pushSession(
-		context.Background(), tx,
+		t.Context(), tx,
 		db.Session{
 			ID:        "sess-race",
 			Project:   "proj",
@@ -684,12 +710,12 @@ func TestPushSessionRechecksExclusionAfterSuccessfulUpsert(t *testing.T) {
 		"marker", nil,
 	)
 
-	require.ErrorIs(t, err, errSessionExcluded)
-	assert.Equal(t, 1, state.upserts)
-	assert.Equal(t, 1, state.exclusionChecks)
-	assert.True(t, state.deletedExcluded,
+	require.ErrorIs(err, errSessionExcluded)
+	assert.Equal(1, state.upserts)
+	assert.Equal(1, state.exclusionChecks)
+	assert.True(state.deletedExcluded,
 		"excluded row should be deleted after the tombstone is observed")
-	require.NoError(t, tx.Rollback(), "Rollback")
+	require.NoError(tx.Rollback(), "Rollback")
 }
 
 func TestPushSessionRejectsInvalidTimestamps(t *testing.T) {
@@ -719,11 +745,14 @@ func TestPushSessionRejectsInvalidTimestamps(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			t.Parallel()
 			state := &pushSessionProbeState{}
 			pg := newPushSessionProbeDB(t, state)
 			tx, err := pg.BeginTx(t.Context(), nil)
-			require.NoError(t, err)
+			require.NoError(err)
 			t.Cleanup(func() { _ = tx.Rollback() })
 
 			sess := db.Session{
@@ -735,18 +764,21 @@ func TestPushSessionRejectsInvalidTimestamps(t *testing.T) {
 				t.Context(), tx, sess, "marker", nil,
 			)
 
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.field)
-			assert.Zero(t, state.upserts)
+			require.Error(err)
+			assert.Contains(err.Error(), tt.field)
+			assert.Zero(state.upserts)
 		})
 	}
 }
 
 func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	state := &pushSessionProbeState{}
 	pg := newPushSessionProbeDB(t, state)
 	tx, err := pg.BeginTx(t.Context(), nil)
-	require.NoError(t, err)
+	require.NoError(err)
 	deletedAt := "2026-07-14T12:34:56Z"
 	cause := "source_missing"
 
@@ -759,25 +791,25 @@ func TestPushSessionCarriesDeletionCauseInStableParameterOrder(t *testing.T) {
 		},
 		"marker", nil,
 	)
-	require.NoError(t, err)
-	require.Len(t, state.upsertArgs, 70)
-	assert.IsType(t, time.Time{}, state.upsertArgs[12].Value)
-	assert.IsType(t, time.Time{}, state.upsertArgs[13].Value)
-	assert.Equal(t, cause, state.upsertArgs[14].Value)
+	require.NoError(err)
+	require.Len(state.upsertArgs, 70)
+	assert.IsType(time.Time{}, state.upsertArgs[12].Value)
+	assert.IsType(time.Time{}, state.upsertArgs[13].Value)
+	assert.Equal(cause, state.upsertArgs[14].Value)
 	// session_kind sits between entrypoint and the archive-provenance
 	// parameters; it is empty when the session carries no kind marker.
-	assert.Equal(t, "", state.upsertArgs[63].Value)
-	assert.Equal(t, false, state.upsertArgs[67].Value)
-	assert.Equal(t, "[]", state.upsertArgs[68].Value)
+	assert.Empty(state.upsertArgs[63].Value)
+	assert.Equal(false, state.upsertArgs[67].Value)
+	assert.Equal("[]", state.upsertArgs[68].Value)
 
 	query := strings.ToLower(strings.Join(strings.Fields(state.upsertQuery), " "))
-	assert.Contains(t, query,
+	assert.Contains(query,
 		"deleted_at, source_deleted_at, deletion_cause")
-	assert.Contains(t, query,
+	assert.Contains(query,
 		"when sessions.deleted_at is distinct from sessions.source_deleted_at then sessions.deletion_cause else excluded.deletion_cause")
-	assert.Contains(t, query,
+	assert.Contains(query,
 		"sessions.deletion_cause is distinct from excluded.deletion_cause")
-	require.NoError(t, tx.Rollback())
+	require.NoError(tx.Rollback())
 }
 
 func TestSessionPushFingerprintIncludesDeletionCause(t *testing.T) {
@@ -793,10 +825,12 @@ func TestSessionPushFingerprintIncludesDeletionCause(t *testing.T) {
 }
 
 func TestPushSessionStoresVibeFallbackAlias(t *testing.T) {
+	require := require.New(t)
+
 	state := &pushSessionProbeState{aliases: map[string]string{}}
 	pg := newPushSessionProbeDB(t, state)
-	tx, err := pg.BeginTx(context.Background(), nil)
-	require.NoError(t, err, "BeginTx")
+	tx, err := pg.BeginTx(t.Context(), nil)
+	require.NoError(err, "BeginTx")
 
 	sessionDir := filepath.Join(
 		t.TempDir(),
@@ -805,7 +839,7 @@ func TestPushSessionStoresVibeFallbackAlias(t *testing.T) {
 	filePath := filepath.Join(sessionDir, "messages.jsonl")
 	syncer := &Sync{machine: "push-machine"}
 	err = syncer.pushSession(
-		context.Background(), tx,
+		t.Context(), tx,
 		db.Session{
 			ID:        "vibe:canonical-uuid",
 			Project:   "proj",
@@ -817,15 +851,17 @@ func TestPushSessionStoresVibeFallbackAlias(t *testing.T) {
 		"marker", nil,
 	)
 
-	require.NoError(t, err, "pushSession")
+	require.NoError(err, "pushSession")
 	assert.Equal(t,
 		"vibe:session_20260616_083518_abc123",
 		state.aliases["vibe:canonical-uuid"],
 	)
-	require.NoError(t, tx.Rollback(), "Rollback")
+	require.NoError(tx.Rollback(), "Rollback")
 }
 
 func TestPushSessionExcludesVibeFallbackAliasWhenCanonicalExcluded(t *testing.T) {
+	require := require.New(t)
+
 	state := &pushSessionProbeState{
 		existingExcluded: map[string]bool{
 			"vibe:canonical-deleted": true,
@@ -833,8 +869,8 @@ func TestPushSessionExcludesVibeFallbackAliasWhenCanonicalExcluded(t *testing.T)
 		excludedIDs: map[string]bool{},
 	}
 	pg := newPushSessionProbeDB(t, state)
-	tx, err := pg.BeginTx(context.Background(), nil)
-	require.NoError(t, err, "BeginTx")
+	tx, err := pg.BeginTx(t.Context(), nil)
+	require.NoError(err, "BeginTx")
 
 	sessionDir := filepath.Join(
 		t.TempDir(),
@@ -843,7 +879,7 @@ func TestPushSessionExcludesVibeFallbackAliasWhenCanonicalExcluded(t *testing.T)
 	filePath := filepath.Join(sessionDir, "messages.jsonl")
 	syncer := &Sync{machine: "push-machine"}
 	err = syncer.pushSession(
-		context.Background(), tx,
+		t.Context(), tx,
 		db.Session{
 			ID:        "vibe:canonical-deleted",
 			Project:   "proj",
@@ -855,15 +891,18 @@ func TestPushSessionExcludesVibeFallbackAliasWhenCanonicalExcluded(t *testing.T)
 		"marker", nil,
 	)
 
-	require.ErrorIs(t, err, errSessionExcluded)
+	require.ErrorIs(err, errSessionExcluded)
 	assert.True(t,
 		state.excludedIDs["vibe:session_20260616_083518_def456"],
 		"excluded canonical Vibe pushes should tombstone the fallback alias",
 	)
-	require.NoError(t, tx.Rollback(), "Rollback")
+	require.NoError(tx.Rollback(), "Rollback")
 }
 
 func TestPushSessionSkipsVibeCanonicalWhenFallbackAliasExcluded(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	state := &pushSessionProbeState{
 		existingExcluded: map[string]bool{
 			"vibe:session_20260616_083518_ghi789": true,
@@ -871,8 +910,8 @@ func TestPushSessionSkipsVibeCanonicalWhenFallbackAliasExcluded(t *testing.T) {
 		excludedIDs: map[string]bool{},
 	}
 	pg := newPushSessionProbeDB(t, state)
-	tx, err := pg.BeginTx(context.Background(), nil)
-	require.NoError(t, err, "BeginTx")
+	tx, err := pg.BeginTx(t.Context(), nil)
+	require.NoError(err, "BeginTx")
 
 	sessionDir := filepath.Join(
 		t.TempDir(),
@@ -881,7 +920,7 @@ func TestPushSessionSkipsVibeCanonicalWhenFallbackAliasExcluded(t *testing.T) {
 	filePath := filepath.Join(sessionDir, "messages.jsonl")
 	syncer := &Sync{machine: "push-machine"}
 	err = syncer.pushSession(
-		context.Background(), tx,
+		t.Context(), tx,
 		db.Session{
 			ID:        "vibe:canonical-active",
 			Project:   "proj",
@@ -893,17 +932,17 @@ func TestPushSessionSkipsVibeCanonicalWhenFallbackAliasExcluded(t *testing.T) {
 		"marker", nil,
 	)
 
-	require.ErrorIs(t, err, errSessionExcluded)
-	assert.True(t, state.excludedIDs["vibe:canonical-active"])
-	assert.True(t,
-		state.excludedIDs["vibe:session_20260616_083518_ghi789"],
-	)
-	assert.True(t, state.deletedExcluded,
+	require.ErrorIs(err, errSessionExcluded)
+	assert.True(state.excludedIDs["vibe:canonical-active"])
+	assert.True(state.excludedIDs["vibe:session_20260616_083518_ghi789"])
+	assert.True(state.deletedExcluded,
 		"all excluded aliases should be purged from PG sessions")
-	require.NoError(t, tx.Rollback(), "Rollback")
+	require.NoError(tx.Rollback(), "Rollback")
 }
 
 func TestPurgePGExcludedPushSessionsChecksDerivedAliases(t *testing.T) {
+	assert := assert.New(t)
+
 	state := &pushSessionProbeState{
 		existingExcluded: map[string]bool{
 			"vibe:session_20260616_083518_jkl012": true,
@@ -929,19 +968,17 @@ func TestPurgePGExcludedPushSessionsChecksDerivedAliases(t *testing.T) {
 	}
 
 	err := purgePGExcludedPushSessions(
-		context.Background(), pg, sessionByID,
+		t.Context(), pg, sessionByID,
 	)
 
 	require.NoError(t, err, "purgePGExcludedPushSessions")
-	assert.Empty(t, sessionByID)
-	assert.True(t, state.excludedIDs["vibe:canonical-unchanged"])
-	assert.True(t,
-		state.excludedIDs["vibe:session_20260616_083518_jkl012"],
-	)
-	assert.True(t, state.deletedExcluded,
+	assert.Empty(sessionByID)
+	assert.True(state.excludedIDs["vibe:canonical-unchanged"])
+	assert.True(state.excludedIDs["vibe:session_20260616_083518_jkl012"])
+	assert.True(state.deletedExcluded,
 		"all excluded aliases should be purged before fingerprint pruning")
-	assert.Equal(t, 1, state.exclusionChecks)
-	assert.Equal(t, 0, state.upserts)
+	assert.Equal(1, state.exclusionChecks)
+	assert.Equal(0, state.upserts)
 }
 
 type pushSessionProbeDriver struct{}
@@ -1320,9 +1357,12 @@ func TestSessionPushFingerprintIgnoresVolatileStatFields(t *testing.T) {
 func TestLocalSessionDependencyPushFingerprintTracksMessageEditsWithoutFileHash(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	localDB := testDB(t)
 	const sessID = "sess-message-edit"
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(localDB.UpsertSession(db.Session{
 		ID:               sessID,
 		Project:          "proj",
 		Machine:          "laptop",
@@ -1331,7 +1371,7 @@ func TestLocalSessionDependencyPushFingerprintTracksMessageEditsWithoutFileHash(
 		UserMessageCount: 1,
 		CreatedAt:        "2026-03-11T12:00:00Z",
 	}))
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(localDB.InsertMessages([]db.Message{{
 		SessionID: sessID,
 		Ordinal:   0,
 		Role:      "user",
@@ -1339,9 +1379,9 @@ func TestLocalSessionDependencyPushFingerprintTracksMessageEditsWithoutFileHash(
 	}}))
 
 	depsBefore, err := localSessionDependencyPushFingerprint(
-		context.Background(), localDB, sessID, "", true,
+		t.Context(), localDB, sessID, "", true,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	session := db.Session{
 		ID:               sessID,
 		Project:          "proj",
@@ -1355,22 +1395,22 @@ func TestLocalSessionDependencyPushFingerprintTracksMessageEditsWithoutFileHash(
 		session, session.Machine, "", "", "", depsBefore,
 	)
 
-	require.NoError(t, localDB.ReplaceSessionMessages(sessID, []db.Message{{
+	require.NoError(localDB.ReplaceSessionMessages(sessID, []db.Message{{
 		SessionID: sessID,
 		Ordinal:   0,
 		Role:      "user",
 		Content:   "after",
 	}}))
 	depsAfter, err := localSessionDependencyPushFingerprint(
-		context.Background(), localDB, sessID, "", true,
+		t.Context(), localDB, sessID, "", true,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	fpAfter := sessionPushFingerprint(
 		session, session.Machine, "", "", "", depsAfter,
 	)
 
-	assert.NotEqual(t, depsBefore, depsAfter)
-	assert.NotEqual(t, fpBefore, fpAfter,
+	assert.NotEqual(depsBefore, depsAfter)
+	assert.NotEqual(fpBefore, fpAfter,
 		"same-count message edits should remain push candidates without file_hash")
 }
 
@@ -1499,19 +1539,22 @@ func TestSessionPushFingerprintNoFieldCollisions(
 func TestLocalMessageRoleTimePGFingerprintNormalizesNanoseconds(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
-	require.NoError(t, err, "db.Open")
+	require.NoError(err, "db.Open")
 	defer localDB.Close()
 
 	const sessID = "pg-role-time-nanos"
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(localDB.UpsertSession(db.Session{
 		ID:        sessID,
 		Project:   "proj",
 		Machine:   "host",
 		Agent:     "shelley",
 		CreatedAt: "2026-03-11T12:34:56Z",
 	}), "UpsertSession")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(localDB.InsertMessages([]db.Message{{
 		SessionID:     sessID,
 		Ordinal:       1,
 		Role:          "assistant",
@@ -1521,66 +1564,74 @@ func TestLocalMessageRoleTimePGFingerprintNormalizesNanoseconds(
 	}}), "InsertMessages")
 
 	got, err := localMessageRoleTimePGFingerprint(localDB, sessID)
-	require.NoError(t, err)
-	assert.Equal(t,
-		"1|9:assistant|27:2026-03-11T12:34:56.123456Z;",
+	require.NoError(err)
+	assert.Equal("1|9:assistant|27:2026-03-11T12:34:56.123456Z;",
 		got)
 
 	raw, err := localDB.MessageRoleTimeFingerprint(sessID)
-	require.NoError(t, err)
-	assert.NotEqual(t, raw, got,
+	require.NoError(err)
+	assert.NotEqual(raw, got,
 		"PG push fingerprint must not use raw nanosecond text")
 }
 
 func TestFinalizePushStatePersistsEmptyBoundary(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const cutoff = "2026-03-11T12:34:56.123Z"
 
 	store := &syncStateStoreStub{}
-	require.NoError(t, finalizePushState(
+	require.NoError(finalizePushState(
 		store, cutoff, nil, nil, map[string]string{},
 	))
-	assert.Equal(t, cutoff, store.values["last_push_at"])
+	assert.Equal(cutoff, store.values["last_push_at"])
 
 	raw := store.values[lastPushBoundaryStateKey]
-	require.NotEmpty(t, raw, "last_push_boundary_state should be written")
+	require.NotEmpty(raw, "last_push_boundary_state should be written")
 
 	var state pushBoundaryState
-	require.NoError(t, json.Unmarshal([]byte(raw), &state))
-	assert.Equal(t, cutoff, state.Cutoff)
-	assert.Empty(t, state.Fingerprints)
+	require.NoError(json.Unmarshal([]byte(raw), &state))
+	assert.Equal(cutoff, state.Cutoff)
+	assert.Empty(state.Fingerprints)
 }
 
 func TestFinalizeUnfilteredPushStatePreservesPriorFingerprintsWithoutPushedSessions(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const (
 		lastPush = "2026-03-11T12:00:00.000Z"
 		cutoff   = "2026-03-11T12:34:56.123Z"
 	)
 
 	store := &syncStateStoreStub{}
-	require.NoError(t, finalizeUnfilteredPushState(
+	require.NoError(finalizeUnfilteredPushState(
 		store, lastPush, cutoff, nil,
 		map[string]string{"sess-001": "fp-001"},
 		map[string]string{},
 		0,
 	))
-	assert.Equal(t, cutoff, store.values["last_push_at"])
+	assert.Equal(cutoff, store.values["last_push_at"])
 
 	raw := store.values[lastPushBoundaryStateKey]
-	require.NotEmpty(t, raw, "last_push_boundary_state should be written")
+	require.NotEmpty(raw, "last_push_boundary_state should be written")
 
 	var state pushBoundaryState
-	require.NoError(t, json.Unmarshal([]byte(raw), &state))
-	assert.Equal(t, cutoff, state.Cutoff)
-	assert.Equal(t, "fp-001", state.Fingerprints["sess-001"])
+	require.NoError(json.Unmarshal([]byte(raw), &state))
+	assert.Equal(cutoff, state.Cutoff)
+	assert.Equal("fp-001", state.Fingerprints["sess-001"])
 }
 
 func TestFinalizeUnfilteredPushStatePreservesSkippedFingerprintsAfterSuccessfulPush(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const (
 		lastPush = "2026-03-11T12:00:00.000Z"
 		cutoff   = "2026-03-11T12:34:56.123Z"
@@ -1591,89 +1642,98 @@ func TestFinalizeUnfilteredPushStatePreservesSkippedFingerprintsAfterSuccessfulP
 	}}
 
 	store := &syncStateStoreStub{}
-	require.NoError(t, finalizeUnfilteredPushState(
+	require.NoError(finalizeUnfilteredPushState(
 		store, lastPush, cutoff, pushed,
 		map[string]string{"sess-001": "fp-001"},
 		map[string]string{"sess-002": "fp-002"},
 		0,
 	))
-	assert.Equal(t, cutoff, store.values["last_push_at"])
+	assert.Equal(cutoff, store.values["last_push_at"])
 
 	raw := store.values[lastPushBoundaryStateKey]
-	require.NotEmpty(t, raw, "last_push_boundary_state should be written")
+	require.NotEmpty(raw, "last_push_boundary_state should be written")
 
 	var state pushBoundaryState
-	require.NoError(t, json.Unmarshal([]byte(raw), &state))
-	assert.Equal(t, cutoff, state.Cutoff)
-	assert.Equal(t, "fp-001", state.Fingerprints["sess-001"])
-	assert.Equal(t, "fp-002", state.Fingerprints["sess-002"])
+	require.NoError(json.Unmarshal([]byte(raw), &state))
+	assert.Equal(cutoff, state.Cutoff)
+	assert.Equal("fp-001", state.Fingerprints["sess-001"])
+	assert.Equal("fp-002", state.Fingerprints["sess-002"])
 }
 
 func TestFinalizeFilteredPushStateAdvancesScopedWatermark(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const cutoff = "2026-03-11T12:34:56.123Z"
 
 	store := &syncStateStoreStub{}
-	require.NoError(t, finalizeFilteredPushState(
+	require.NoError(finalizeFilteredPushState(
 		store, "", cutoff, nil, nil, map[string]string{}, 0,
 	))
-	assert.Equal(t, cutoff, store.values["last_push_at"])
+	assert.Equal(cutoff, store.values["last_push_at"])
 
 	raw := store.values[lastPushBoundaryStateKey]
-	require.NotEmpty(t, raw, "last_push_boundary_state should be written")
+	require.NotEmpty(raw, "last_push_boundary_state should be written")
 
 	var state pushBoundaryState
-	require.NoError(t, json.Unmarshal([]byte(raw), &state))
-	assert.Equal(t, cutoff, state.Cutoff)
-	assert.Empty(t, state.Fingerprints)
+	require.NoError(json.Unmarshal([]byte(raw), &state))
+	assert.Equal(cutoff, state.Cutoff)
+	assert.Empty(state.Fingerprints)
 }
 
 func TestFinalizeFilteredPushStatePreservesPriorFingerprintsOnSuccess(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const cutoff = "2026-03-11T12:34:56.123Z"
 
 	store := &syncStateStoreStub{}
-	require.NoError(t, finalizeFilteredPushState(
+	require.NoError(finalizeFilteredPushState(
 		store, "", cutoff, nil,
 		map[string]string{"sess-001": "fp-001"},
 		map[string]string{},
 		0,
 	))
-	assert.Equal(t, cutoff, store.values["last_push_at"])
+	assert.Equal(cutoff, store.values["last_push_at"])
 
 	raw := store.values[lastPushBoundaryStateKey]
-	require.NotEmpty(t, raw, "last_push_boundary_state should be written")
+	require.NotEmpty(raw, "last_push_boundary_state should be written")
 
 	var state pushBoundaryState
-	require.NoError(t, json.Unmarshal([]byte(raw), &state))
-	assert.Equal(t, cutoff, state.Cutoff)
-	assert.Equal(t, "fp-001", state.Fingerprints["sess-001"])
+	require.NoError(json.Unmarshal([]byte(raw), &state))
+	assert.Equal(cutoff, state.Cutoff)
+	assert.Equal("fp-001", state.Fingerprints["sess-001"])
 }
 
 func TestFinalizeFilteredPushStateKeepsWatermarkOnErrors(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const lastPush = "2026-03-11T12:00:00.000Z"
 	const cutoff = "2026-03-11T12:34:56.123Z"
 
 	store := &syncStateStoreStub{}
-	require.NoError(t, finalizeFilteredPushState(
+	require.NoError(finalizeFilteredPushState(
 		store, lastPush, cutoff, nil,
 		map[string]string{"sess-001": "fp-001"},
 		map[string]string{},
 		1,
 	))
-	assert.Equal(t, lastPush, store.values["last_push_at"])
+	assert.Equal(lastPush, store.values["last_push_at"])
 
 	raw := store.values[lastPushBoundaryStateKey]
-	require.NotEmpty(t, raw, "last_push_boundary_state should be written")
+	require.NotEmpty(raw, "last_push_boundary_state should be written")
 
 	var state pushBoundaryState
-	require.NoError(t, json.Unmarshal([]byte(raw), &state))
-	assert.Equal(t, lastPush, state.Cutoff)
-	assert.Equal(t, "fp-001", state.Fingerprints["sess-001"])
+	require.NoError(json.Unmarshal([]byte(raw), &state))
+	assert.Equal(lastPush, state.Cutoff)
+	assert.Equal("fp-001", state.Fingerprints["sess-001"])
 }
 
 func TestPushTargetState(t *testing.T) {
@@ -1759,6 +1819,9 @@ func TestPushTargetState(t *testing.T) {
 func TestFinalizePushStateMergesPriorFingerprints(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const cutoff = "2026-03-11T12:34:56.123Z"
 
 	priorFingerprints := map[string]string{
@@ -1774,22 +1837,22 @@ func TestFinalizePushStateMergesPriorFingerprints(
 	}
 
 	store := &syncStateStoreStub{}
-	require.NoError(t, finalizePushState(
+	require.NoError(finalizePushState(
 		store, cutoff, cycle2Sessions,
 		priorFingerprints,
 		map[string]string{"sess-002": sessionPushFingerprint(cycle2Sessions[0], cycle2Sessions[0].Machine, "", "", "", "")},
 	))
 
 	raw := store.values[lastPushBoundaryStateKey]
-	require.NotEmpty(t, raw, "last_push_boundary_state should be written")
+	require.NotEmpty(raw, "last_push_boundary_state should be written")
 
 	var state pushBoundaryState
-	require.NoError(t, json.Unmarshal([]byte(raw), &state))
+	require.NoError(json.Unmarshal([]byte(raw), &state))
 
-	require.Len(t, state.Fingerprints, 2)
-	assert.Equal(t, "fp-001", state.Fingerprints["sess-001"])
+	require.Len(state.Fingerprints, 2)
+	assert.Equal("fp-001", state.Fingerprints["sess-001"])
 	_, ok := state.Fingerprints["sess-002"]
-	assert.True(t, ok, "sess-002 fingerprint should be present")
+	assert.True(ok, "sess-002 fingerprint should be present")
 }
 
 func TestSanitizePG(t *testing.T) {
@@ -1868,6 +1931,8 @@ func TestNilStrSanitizes(t *testing.T) {
 }
 
 func TestShouldSkipSessionMessagesInBatchedPush(t *testing.T) {
+	assert := assert.New(t)
+
 	const sessionID = "sess-batched"
 	baseComparisons := &pushMessageComparison{
 		MessageAggregates: map[string]pushMessageAggregate{
@@ -1917,23 +1982,23 @@ func TestShouldSkipSessionMessagesInBatchedPush(t *testing.T) {
 		UsageEventFP:  "usage",
 	}
 
-	assert.True(t, shouldSkipSessionMessages(
+	assert.True(shouldSkipSessionMessages(
 		sessionID, 2, unchangedFP, false, baseComparisons,
 	), "unchanged sessions should be skipped as unchanged")
 
 	changedFP := unchangedFP
 	changedFP.ToolCallSum = 100
-	assert.False(t, shouldSkipSessionMessages(
+	assert.False(shouldSkipSessionMessages(
 		sessionID, 2, changedFP, false, baseComparisons,
 	), "tool-call sum mismatch should force push")
 
 	changedFP = unchangedFP
 	changedFP.ToolResultFP = "changed-results"
-	assert.False(t, shouldSkipSessionMessages(
+	assert.False(shouldSkipSessionMessages(
 		sessionID, 2, changedFP, false, baseComparisons,
 	), "tool-result event mismatch should force push")
 
-	assert.False(t, shouldSkipSessionMessages(
+	assert.False(shouldSkipSessionMessages(
 		sessionID, 2, unchangedFP, true, baseComparisons,
 	), "full mode should not skip by fingerprint check")
 }

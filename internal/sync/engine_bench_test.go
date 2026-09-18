@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"os"
@@ -192,7 +191,7 @@ func BenchmarkSyncAllWarmNoop(b *testing.B) {
 	dir := b.TempDir()
 	writeBenchClaudeArchive(b, dir, sessions, perSession)
 	engine, _ := openBenchEngine(b, dir)
-	ctx := context.Background()
+	ctx := b.Context()
 
 	first := engine.SyncAll(ctx, nil)
 	if first.Synced != sessions {
@@ -252,7 +251,7 @@ func benchSyncPathsIncrementalAppend(b *testing.B, withUsage bool) {
 	}
 	writeArchive(b, dir, 1, benchLargeSessionLines)
 	engine, database := openBenchEngine(b, dir)
-	ctx := context.Background()
+	ctx := b.Context()
 
 	first := engine.SyncAll(ctx, nil)
 	if first.Synced != 1 {
@@ -427,7 +426,7 @@ func BenchmarkSyncAllColdArchiveUsage(b *testing.B) {
 }
 
 func benchSyncAllColdArchive(b *testing.B, withUsage bool) {
-	ctx := context.Background()
+	ctx := b.Context()
 	benchColdArchive(b, withUsage,
 		func(engine *Engine) SyncStats {
 			return engine.SyncAll(ctx, nil)
@@ -461,7 +460,7 @@ func BenchmarkResyncBulkIngestUsage(b *testing.B) {
 }
 
 func benchResyncBulkIngest(b *testing.B, withUsage bool) {
-	ctx := context.Background()
+	ctx := b.Context()
 	benchColdArchive(b, withUsage,
 		func(engine *Engine) SyncStats {
 			engine.syncMu.Lock()
@@ -502,7 +501,7 @@ func BenchmarkResyncBulkContributorIngestUsage(b *testing.B) {
 }
 
 func benchResyncBulkContributorIngest(b *testing.B, withUsage bool) {
-	ctx := context.Background()
+	ctx := b.Context()
 	benchColdArchive(b, withUsage,
 		func(engine *Engine) SyncStats {
 			dir := engine.agentDirs[parser.AgentClaude][0]

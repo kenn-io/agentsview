@@ -14,6 +14,14 @@ pass_filenames = false
 always_run = true
 
 [[repos.hooks]]
+id = "lint-config-check"
+name = "Check shared Go lint configuration"
+language = "system"
+entry = "make lint-config-check lint-sql"
+pass_filenames = false
+always_run = true
+
+[[repos.hooks]]
 id = "golangci-lint"
 name = "golangci-lint"
 language = "system"

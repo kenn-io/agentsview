@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -15,16 +14,19 @@ import (
 func TestEnsureProjectIdentityBackfillRequeuesUnverifiedCompletedGap(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
-	require.NoError(t, d.UpsertSession(Session{
+	ctx := t.Context()
+	require.NoError(d.UpsertSession(Session{
 		ID: "missing-snapshot", Project: "app", Machine: "local",
 		Agent: "codex",
 	}))
 	_, err := d.getWriter().ExecContext(ctx,
 		`DELETE FROM session_project_identity_snapshots WHERE session_id = ?`,
 		"missing-snapshot")
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = d.getWriter().ExecContext(ctx, `
 		INSERT INTO background_migrations (
 			name, state, total_items, completed_items, completed_at
@@ -35,30 +37,32 @@ func TestEnsureProjectIdentityBackfillRequeuesUnverifiedCompletedGap(
 			completed_items = excluded.completed_items,
 			completed_at = excluded.completed_at`,
 		ProjectIdentityBackfillName)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.NoError(t, d.EnsureProjectIdentityBackfillQueued(ctx))
+	require.NoError(d.EnsureProjectIdentityBackfillQueued(ctx))
 	status, err := d.ProjectIdentityBackfillStatus(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, "pending", status.State)
-	assert.Equal(t, 1, status.TotalItems)
+	require.NoError(err)
+	assert.Equal("pending", status.State)
+	assert.Equal(1, status.TotalItems)
 }
 
 func TestEnsureProjectIdentityBackfillVerifiesCompleteSnapshotSetOnce(
 	t *testing.T,
 ) {
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := d.getWriter().ExecContext(ctx, `
 		INSERT INTO background_migrations (
 			name, state, total_items, completed_items, completed_at
 		) VALUES (?, 'completed', 0, 0, strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
 		ProjectIdentityBackfillName)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.NoError(t, d.EnsureProjectIdentityBackfillQueued(ctx))
+	require.NoError(d.EnsureProjectIdentityBackfillQueued(ctx))
 	var verified string
-	require.NoError(t, d.getReader().QueryRowContext(ctx,
+	require.NoError(d.getReader().QueryRowContext(ctx,
 		`SELECT value FROM stats WHERE key = ?`,
 		projectIdentityBackfillVerifiedKey,
 	).Scan(&verified))
@@ -66,50 +70,56 @@ func TestEnsureProjectIdentityBackfillVerifiesCompleteSnapshotSetOnce(
 }
 
 func TestSessionInsertCreatesUnknownProjectIdentitySnapshot(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
-	require.NoError(t, d.UpsertSession(Session{
+	ctx := t.Context()
+	require.NoError(d.UpsertSession(Session{
 		ID: "atomic-snapshot", Project: "app", Machine: "local",
 		Agent: "codex", Cwd: "/tmp/app", GitBranch: "feature/test",
 	}))
 
 	snapshots, err := d.ListSessionProjectIdentitySnapshots(ctx)
-	require.NoError(t, err)
-	require.Len(t, snapshots, 1)
-	assert.Equal(t, "atomic-snapshot", snapshots[0].SessionID)
-	assert.Equal(t, export.ProjectResolutionUnknown, snapshots[0].RemoteResolution)
-	assert.Equal(t, export.CheckoutBranch, snapshots[0].CheckoutState)
-	assert.Equal(t, "feature/test", snapshots[0].GitBranch)
+	require.NoError(err)
+	require.Len(snapshots, 1)
+	assert.Equal("atomic-snapshot", snapshots[0].SessionID)
+	assert.Equal(export.ProjectResolutionUnknown, snapshots[0].RemoteResolution)
+	assert.Equal(export.CheckoutBranch, snapshots[0].CheckoutState)
+	assert.Equal("feature/test", snapshots[0].GitBranch)
 
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			SessionID: "atomic-snapshot", Project: "app", Machine: "local",
 			RootPath: "/tmp/app", ObservedAt: time.Now().UTC(),
 		}))
 	snapshots, err = d.ListSessionProjectIdentitySnapshots(ctx)
-	require.NoError(t, err)
-	require.Len(t, snapshots, 1)
-	assert.Equal(t, export.ProjectIdentityKeySourceRootPath, snapshots[0].KeySource)
-	assert.NotEmpty(t, snapshots[0].Key)
+	require.NoError(err)
+	require.Len(snapshots, 1)
+	assert.Equal(export.ProjectIdentityKeySourceRootPath, snapshots[0].KeySource)
+	assert.NotEmpty(snapshots[0].Key)
 }
 
 func TestResyncOrphanCopyLeavesLegacySnapshotGapEligibleForBackfill(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 	sourcePath := filepath.Join(dir, "source.db")
 
 	source, err := Open(sourcePath)
-	require.NoError(t, err)
+	require.NoError(err)
 	for _, session := range []Session{
 		{ID: "live", Project: "app", Machine: "local", Agent: "codex"},
 		{ID: "legacy-orphan", Project: "app", Machine: "local", Agent: "codex"},
 		{ID: "known-orphan", Project: "app", Machine: "local", Agent: "codex"},
 	} {
-		require.NoError(t, source.UpsertSession(session))
+		require.NoError(source.UpsertSession(session))
 	}
-	require.NoError(t, source.UpsertProjectIdentityObservation(ctx,
+	require.NoError(source.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			SessionID: "known-orphan", Project: "app", Machine: "local",
 			RootPath:   "/historical/app",
@@ -119,46 +129,49 @@ func TestResyncOrphanCopyLeavesLegacySnapshotGapEligibleForBackfill(
 	_, err = source.getWriter().ExecContext(ctx, `
 		DELETE FROM session_project_identity_snapshots
 		WHERE session_id IN ('live', 'legacy-orphan')`)
-	require.NoError(t, err)
-	require.NoError(t, source.Close())
+	require.NoError(err)
+	require.NoError(source.Close())
 
 	destination := testDB(t)
-	require.NoError(t, destination.UpsertSession(Session{
+	require.NoError(destination.UpsertSession(Session{
 		ID: "live", Project: "app", Machine: "local", Agent: "codex",
 		Cwd: "/fresh/app",
 	}))
 
 	copied, err := destination.CopyOrphanedDataFrom(sourcePath)
-	require.NoError(t, err)
-	assert.Equal(t, 2, copied)
-	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(err)
+	assert.Equal(2, copied)
+	require.NoError(destination.CopySessionMetadataFrom(sourcePath))
 
 	snapshots, err := destination.listSessionProjectIdentitySnapshots(
 		ctx, []string{"known-orphan", "legacy-orphan", "live"},
 	)
-	require.NoError(t, err)
-	require.Contains(t, snapshots, "known-orphan")
-	assert.Equal(t, "https://example.com/example/app.git",
+	require.NoError(err)
+	require.Contains(snapshots, "known-orphan")
+	assert.Equal("https://example.com/example/app.git",
 		snapshots["known-orphan"].GitRemote)
-	assert.NotContains(t, snapshots, "legacy-orphan",
+	assert.NotContains(snapshots, "legacy-orphan",
 		"a legacy orphan without source evidence must remain backfill-eligible")
-	require.Contains(t, snapshots, "live")
-	assert.Equal(t, "/fresh/app", snapshots["live"].RootPath,
+	require.Contains(snapshots, "live")
+	assert.Equal("/fresh/app", snapshots["live"].RootPath,
 		"orphan cleanup must not touch sessions outside the copied batch")
 
 	status, err := destination.ProjectIdentityBackfillStatus(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, "pending", status.State)
-	assert.Equal(t, 1, status.TotalItems)
+	require.NoError(err)
+	assert.Equal("pending", status.State)
+	assert.Equal(1, status.TotalItems)
 }
 
 func TestVersion76ResyncRejectsLegacyProjectIdentitySnapshots(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 	sourcePath := filepath.Join(dir, "source.db")
 
 	source, err := Open(sourcePath)
-	require.NoError(t, err)
+	require.NoError(err)
 	for _, session := range []Session{
 		{
 			ID: "live", Project: "mapped-app", Machine: "local",
@@ -169,8 +182,8 @@ func TestVersion76ResyncRejectsLegacyProjectIdentitySnapshots(t *testing.T) {
 			Agent: "codex",
 		},
 	} {
-		require.NoError(t, source.UpsertSession(session))
-		require.NoError(t, source.UpsertProjectIdentityObservation(ctx,
+		require.NoError(source.UpsertSession(session))
+		require.NoError(source.UpsertProjectIdentityObservation(ctx,
 			export.ProjectIdentityObservation{
 				SessionID: session.ID, Project: "mapped-app", Machine: "local",
 				RootPath:   "/legacy/mapped-app",
@@ -179,14 +192,14 @@ func TestVersion76ResyncRejectsLegacyProjectIdentitySnapshots(t *testing.T) {
 			}))
 	}
 	_, err = source.getWriter().ExecContext(ctx, `PRAGMA user_version = 76`)
-	require.NoError(t, err)
-	require.NoError(t, source.Close())
+	require.NoError(err)
+	require.NoError(source.Close())
 
 	destination := testDB(t)
-	require.NoError(t, destination.UpsertSession(Session{
+	require.NoError(destination.UpsertSession(Session{
 		ID: "live", Project: "source-app", Machine: "local", Agent: "codex",
 	}))
-	require.NoError(t, destination.UpsertProjectIdentityObservation(ctx,
+	require.NoError(destination.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			SessionID: "live", Project: "source-app", Machine: "local",
 			RootPath:   "/fresh/source-app",
@@ -195,33 +208,36 @@ func TestVersion76ResyncRejectsLegacyProjectIdentitySnapshots(t *testing.T) {
 		}))
 
 	copied, err := destination.CopyOrphanedDataFrom(sourcePath)
-	require.NoError(t, err)
-	assert.Equal(t, 1, copied)
-	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(err)
+	assert.Equal(1, copied)
+	require.NoError(destination.CopySessionMetadataFrom(sourcePath))
 
 	snapshots, err := destination.listSessionProjectIdentitySnapshots(
 		ctx, []string{"live", "orphan"},
 	)
-	require.NoError(t, err)
-	require.Contains(t, snapshots, "live")
-	assert.Equal(t, "source-app", snapshots["live"].Project)
-	assert.Equal(t, "/fresh/source-app", snapshots["live"].RootPath)
-	assert.Equal(t, "https://example.com/source/source-app.git",
+	require.NoError(err)
+	require.Contains(snapshots, "live")
+	assert.Equal("source-app", snapshots["live"].Project)
+	assert.Equal("/fresh/source-app", snapshots["live"].RootPath)
+	assert.Equal("https://example.com/source/source-app.git",
 		snapshots["live"].GitRemote)
-	assert.NotContains(t, snapshots, "orphan",
+	assert.NotContains(snapshots, "orphan",
 		"an orphan must not inherit target-labelled version 76 evidence")
 }
 
 func TestResyncTrashedCopyLeavesLegacySnapshotGapEligibleForBackfill(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 	sourcePath := filepath.Join(dir, "source.db")
 
 	source, err := Open(sourcePath)
-	require.NoError(t, err)
-	require.NoError(t, source.UpsertSession(Session{
+	require.NoError(err)
+	require.NoError(source.UpsertSession(Session{
 		ID: "legacy-trashed", Project: "app", Machine: "local", Agent: "codex",
 	}))
 	_, err = source.getWriter().ExecContext(ctx, `
@@ -230,47 +246,50 @@ func TestResyncTrashedCopyLeavesLegacySnapshotGapEligibleForBackfill(
 		WHERE id = 'legacy-trashed';
 		DELETE FROM session_project_identity_snapshots
 		WHERE session_id = 'legacy-trashed'`)
-	require.NoError(t, err)
-	require.NoError(t, source.Close())
+	require.NoError(err)
+	require.NoError(source.Close())
 
 	destination := testDB(t)
 	copied, err := destination.CopyTrashedDataFrom(sourcePath)
-	require.NoError(t, err)
-	assert.Len(t, copied, 1)
-	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(err)
+	assert.Len(copied, 1)
+	require.NoError(destination.CopySessionMetadataFrom(sourcePath))
 
 	snapshots, err := destination.listSessionProjectIdentitySnapshots(
 		ctx, []string{"legacy-trashed"},
 	)
-	require.NoError(t, err)
-	assert.NotContains(t, snapshots, "legacy-trashed")
+	require.NoError(err)
+	assert.NotContains(snapshots, "legacy-trashed")
 	status, err := destination.ProjectIdentityBackfillStatus(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, "pending", status.State)
-	assert.Equal(t, 1, status.TotalItems)
+	require.NoError(err)
+	assert.Equal("pending", status.State)
+	assert.Equal(1, status.TotalItems)
 }
 
 func TestProjectIdentityBackfillBatchUsesKeysetAndAdvancesAtomically(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, id := range []string{"batch-a", "batch-b", "batch-c"} {
-		require.NoError(t, d.UpsertSession(Session{
+		require.NoError(d.UpsertSession(Session{
 			ID: id, Project: "app", Machine: "local", Agent: "codex",
 		}))
 	}
 	_, err := d.getWriter().ExecContext(ctx,
 		`DELETE FROM session_project_identity_snapshots`)
-	require.NoError(t, err)
-	require.NoError(t, d.EnsureProjectIdentityBackfillQueued(ctx))
-	require.NoError(t, d.StartProjectIdentityBackfill(ctx))
+	require.NoError(err)
+	require.NoError(d.EnsureProjectIdentityBackfillQueued(ctx))
+	require.NoError(d.StartProjectIdentityBackfill(ctx))
 
 	candidates, err := d.ProjectIdentityBackfillCandidatesAfter(ctx, "batch-a")
-	require.NoError(t, err)
-	require.Len(t, candidates, 2)
-	assert.Equal(t, "batch-b", candidates[0].ID)
-	assert.Equal(t, "batch-c", candidates[1].ID)
+	require.NoError(err)
+	require.Len(candidates, 2)
+	assert.Equal("batch-b", candidates[0].ID)
+	assert.Equal("batch-c", candidates[1].ID)
 
 	now := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
 	batch := []export.ProjectIdentityObservation{
@@ -283,48 +302,51 @@ func TestProjectIdentityBackfillBatchUsesKeysetAndAdvancesAtomically(
 			RootPath: "/tmp/app", ObservedAt: now,
 		},
 	}
-	require.NoError(t, d.ApplyProjectIdentityBackfillBatch(ctx, batch))
+	require.NoError(d.ApplyProjectIdentityBackfillBatch(ctx, batch))
 
 	status, err := d.ProjectIdentityBackfillStatus(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, 2, status.CompletedItems)
+	require.NoError(err)
+	assert.Equal(2, status.CompletedItems)
 	snapshots, err := d.ListSessionProjectIdentitySnapshots(ctx)
-	require.NoError(t, err)
-	require.Len(t, snapshots, 2)
-	assert.Equal(t, "batch-b", snapshots[0].SessionID)
-	assert.Equal(t, "batch-c", snapshots[1].SessionID)
+	require.NoError(err)
+	require.Len(snapshots, 2)
+	assert.Equal("batch-b", snapshots[0].SessionID)
+	assert.Equal("batch-c", snapshots[1].SessionID)
 }
 
 func TestProjectIdentityBackfillPersistsUnknownSnapshotForEmptyProject(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
-	require.NoError(t, d.UpsertSession(Session{
+	ctx := t.Context()
+	require.NoError(d.UpsertSession(Session{
 		ID: "unresolved", Machine: "local", Agent: "antigravity-cli",
 	}))
 	_, err := d.getWriter().ExecContext(ctx,
 		`DELETE FROM session_project_identity_snapshots WHERE session_id = ?`,
 		"unresolved")
-	require.NoError(t, err)
-	require.NoError(t, d.EnsureProjectIdentityBackfillQueued(ctx))
-	require.NoError(t, d.StartProjectIdentityBackfill(ctx))
+	require.NoError(err)
+	require.NoError(d.EnsureProjectIdentityBackfillQueued(ctx))
+	require.NoError(d.StartProjectIdentityBackfill(ctx))
 
-	require.NoError(t, d.ApplyProjectIdentityBackfillBatch(ctx,
+	require.NoError(d.ApplyProjectIdentityBackfillBatch(ctx,
 		[]export.ProjectIdentityObservation{{
 			SessionID: "unresolved", Machine: "local",
 			ObservedAt: time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC),
 		}}))
-	require.NoError(t, d.CompleteProjectIdentityBackfill(ctx))
+	require.NoError(d.CompleteProjectIdentityBackfill(ctx))
 
 	snapshots, err := d.ListSessionProjectIdentitySnapshots(ctx)
-	require.NoError(t, err)
-	require.Len(t, snapshots, 1)
-	assert.Equal(t, "unresolved", snapshots[0].SessionID)
-	assert.Empty(t, snapshots[0].Project)
-	assert.Equal(t, export.ProjectResolutionUnknown,
+	require.NoError(err)
+	require.Len(snapshots, 1)
+	assert.Equal("unresolved", snapshots[0].SessionID)
+	assert.Empty(snapshots[0].Project)
+	assert.Equal(export.ProjectResolutionUnknown,
 		snapshots[0].RemoteResolution)
 	status, err := d.ProjectIdentityBackfillStatus(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, "completed", status.State)
+	require.NoError(err)
+	assert.Equal("completed", status.State)
 }

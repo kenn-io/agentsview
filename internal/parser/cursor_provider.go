@@ -13,8 +13,10 @@ import (
 	"go.kenn.io/agentsview/internal/pathutil"
 )
 
-var _ Provider = (*cursorProvider)(nil)
-var _ S3Provider = (*cursorProvider)(nil)
+var (
+	_ Provider   = (*cursorProvider)(nil)
+	_ S3Provider = (*cursorProvider)(nil)
+)
 
 type cursorProviderFactory struct {
 	def        AgentDef
@@ -115,7 +117,7 @@ func (p *cursorProvider) Parse(
 	}
 	path, ok := p.sources.pathFromSource(req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("cursor source path unavailable")
+		return ParseOutcome{}, errors.New("cursor source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	cwd := ""
@@ -913,7 +915,7 @@ func (s cursorSourceSet) Fingerprint(
 	}
 	path, ok := s.pathFromSource(source)
 	if !ok {
-		return SourceFingerprint{}, fmt.Errorf("cursor source path unavailable")
+		return SourceFingerprint{}, errors.New("cursor source path unavailable")
 	}
 	info, err := os.Stat(path)
 	if err != nil {

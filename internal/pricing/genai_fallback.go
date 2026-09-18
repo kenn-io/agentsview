@@ -6,15 +6,18 @@ import (
 	"embed"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io/fs"
 	"regexp"
 	"sync"
 )
 
-const genAISnapshotPath = "snapshot/genai_prices.json.gz"
-const maxGenAISnapshotCompressedBytes = 2 << 20
-const maxGenAISnapshotJSONBytes = 8 << 20
+const (
+	genAISnapshotPath               = "snapshot/genai_prices.json.gz"
+	maxGenAISnapshotCompressedBytes = 2 << 20
+	maxGenAISnapshotJSONBytes       = 8 << 20
+)
 
 var immutableGenAISourceRefPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
@@ -64,7 +67,7 @@ func decodeGenAISnapshotFromFS(fsys fs.FS) (genAIFallbackSnapshot, error) {
 		return genAIFallbackSnapshot{}, fmt.Errorf("reading snapshot: %w", err)
 	}
 	if len(blob) == 0 {
-		return genAIFallbackSnapshot{}, fmt.Errorf("empty snapshot")
+		return genAIFallbackSnapshot{}, errors.New("empty snapshot")
 	}
 	if len(blob) > maxGenAISnapshotCompressedBytes {
 		return genAIFallbackSnapshot{}, fmt.Errorf(
@@ -86,15 +89,13 @@ func decodeGenAISnapshotFromFS(fsys fs.FS) (genAIFallbackSnapshot, error) {
 		return genAIFallbackSnapshot{}, fmt.Errorf("parsing snapshot JSON: %w", err)
 	}
 	if snapshot.Version == "" {
-		return genAIFallbackSnapshot{}, fmt.Errorf("missing snapshot version")
+		return genAIFallbackSnapshot{}, errors.New("missing snapshot version")
 	}
 	if !immutableGenAISourceRefPattern.MatchString(snapshot.SourceRef) {
-		return genAIFallbackSnapshot{}, fmt.Errorf(
-			"missing immutable GenAI Prices source ref",
-		)
+		return genAIFallbackSnapshot{}, errors.New("missing immutable GenAI Prices source ref")
 	}
 	if len(snapshot.Data) == 0 {
-		return genAIFallbackSnapshot{}, fmt.Errorf("missing snapshot data")
+		return genAIFallbackSnapshot{}, errors.New("missing snapshot data")
 	}
 	return snapshot, nil
 }

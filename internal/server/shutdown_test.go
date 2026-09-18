@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -26,7 +25,7 @@ func TestShutdownClosesOnDemandEngine(t *testing.T) {
 	require.NotNil(t, srv.syncEngineForLocal(database),
 		"on-demand engine should be created lazily")
 
-	require.NoError(t, srv.Shutdown(context.Background()))
+	require.NoError(t, srv.Shutdown(t.Context()))
 
 	srv.mu.RLock()
 	defer srv.mu.RUnlock()

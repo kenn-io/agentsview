@@ -101,7 +101,7 @@ func createPiebaldDB(t *testing.T, dir string) *piebaldTestDB {
 
 func (p *piebaldTestDB) mustExec(t *testing.T, msg, query string, args ...any) {
 	t.Helper()
-	_, err := p.db.Exec(query, args...)
+	_, err := p.db.ExecContext(t.Context(), query, args...)
 	require.NoError(t, err, msg)
 }
 
@@ -211,7 +211,7 @@ func TestSyncPiebaldSingleBulkAndIncremental(t *testing.T) {
 		wantSrc := filepath.Join(env.piebaldDir, "app.db") + "#42"
 		assert.Equal(t, wantSrc, src)
 
-		mtime := env.engine.SourceMtime("piebald:42-200")
+		mtime := env.engine.SourceMtime(t.Context(), "piebald:42-200")
 		assert.NotZero(t, mtime, "SourceMtime(fork) returned zero")
 	})
 
@@ -220,12 +220,15 @@ func TestSyncPiebaldSingleBulkAndIncremental(t *testing.T) {
 		require.Error(t, err, "SyncSingleSession(piebald:42-999) returned nil; want not-found error")
 		src := env.engine.FindSourceFile("piebald:42-999")
 		assert.Empty(t, src, "FindSourceFile(piebald:42-999)")
-		mtime := env.engine.SourceMtime("piebald:42-999")
+		mtime := env.engine.SourceMtime(t.Context(), "piebald:42-999")
 		assert.Zero(t, mtime, "SourceMtime(piebald:42-999)")
 	})
 
 	t.Run("chat", func(t *testing.T) {
-		require.NoError(t, env.engine.SyncSingleSession("piebald:7"), "SyncSingleSession")
+		assert := assert.New(t)
+		require := require.New(t)
+
+		require.NoError(env.engine.SyncSingleSession("piebald:7"), "SyncSingleSession")
 		assertSessionProject(t, env.db, "piebald:7", "app")
 		assertSessionMessageCount(t, env.db, "piebald:7", 2)
 
@@ -233,14 +236,14 @@ func TestSyncPiebaldSingleBulkAndIncremental(t *testing.T) {
 		// Piebald resolves the per-session virtual <db>#<chatID> path the provider
 		// parses, matching the stored session file_path.
 		wantSrc := filepath.Join(env.piebaldDir, "app.db") + "#7"
-		assert.Equal(t, wantSrc, src)
+		assert.Equal(wantSrc, src)
 
-		mtime := env.engine.SourceMtime("piebald:7")
-		require.NotZero(t, mtime, "SourceMtime returned zero")
+		mtime := env.engine.SourceMtime(t.Context(), "piebald:7")
+		require.NotZero(mtime, "SourceMtime returned zero")
 
 		_, storedMtime, ok := env.db.GetSessionFileInfo("piebald:7")
-		require.True(t, ok, "session file info not found")
-		assert.Equal(t, mtime, storedMtime)
+		require.True(ok, "session file info not found")
+		assert.Equal(mtime, storedMtime)
 	})
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 3, Synced: 3, Skipped: 0})

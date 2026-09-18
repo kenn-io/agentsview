@@ -1,5 +1,7 @@
 package main
 
+import "context"
+
 import (
 	"database/sql"
 	"errors"
@@ -84,24 +86,26 @@ func newDoctorSyncCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return runDoctorSync(cmd.OutOrStdout(), cfg)
+			return runDoctorSync(cmd.Context(), cmd.OutOrStdout(), cfg)
 		},
 	}
 }
 
-func runDoctorSync(w io.Writer, cfg config.Config) error {
-	report := collectDoctorSyncReport(cfg)
+func runDoctorSync(ctx context.Context, w io.Writer, cfg config.Config) error {
+	report := collectDoctorSyncReport(ctx, cfg)
 	writeDoctorSyncReport(w, report)
 	return nil
 }
 
-func collectDoctorSyncReport(cfg config.Config) doctorSyncReport {
-	report := doctorSyncReport{Config: cfg,
+func collectDoctorSyncReport(ctx context.Context, cfg config.Config) doctorSyncReport {
+	report := doctorSyncReport{
+		Config: cfg,
 
 		doctorDBInspection: inspectDoctorDB(cfg.DBPath),
 		TempFiles:          listDoctorResyncTempFiles(cfg.DBPath),
-		AgentRoots:         collectDoctorAgentRoots(cfg)}
-	report.TraeEncryptedRoots = collectDoctorTraeEncryptedRoots(report.AgentRoots)
+		AgentRoots:         collectDoctorAgentRoots(cfg),
+	}
+	report.TraeEncryptedRoots = collectDoctorTraeEncryptedRoots(ctx, report.AgentRoots)
 	report.DebugLines, report.DebugLogErr = readDoctorDebugLines(
 		filepath.Join(cfg.DataDir, "debug.log"),
 	)
@@ -122,7 +126,7 @@ func inspectDoctorDB(path string) doctorDBInspection {
 	}
 	insp.DBExists = true
 	if info.IsDir() {
-		insp.DBError = fmt.Errorf("database path is a directory")
+		insp.DBError = errors.New("database path is a directory")
 		return insp
 	}
 
@@ -349,10 +353,10 @@ func writeDoctorTraeEncryptedLayouts(w io.Writer, report doctorSyncReport) {
 	}
 }
 
-func collectDoctorTraeEncryptedRoots(roots []doctorAgentRoot) []string {
+func collectDoctorTraeEncryptedRoots(ctx context.Context, roots []doctorAgentRoot) []string {
 	var detected []string
 	for _, root := range roots {
-		if root.Agent == parser.AgentTrae && root.Exists && parser.TraeEncryptedLayoutDetected(root.Path) {
+		if root.Agent == parser.AgentTrae && root.Exists && parser.TraeEncryptedLayoutDetected(ctx, root.Path) {
 			detected = append(detected, root.Path)
 		}
 	}

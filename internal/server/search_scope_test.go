@@ -68,6 +68,8 @@ func TestSearchContentScopeRequiresSemanticOrHybridMode(t *testing.T) {
 // keeps only it, and the default returns both even though include_children
 // is not set (precedence over the sidebar-child exclusion).
 func TestSearchContentScopeFiltersSemanticResults(t *testing.T) {
+	assert := assert.New(t)
+
 	te := setup(t)
 	te.seedSession(t, "top-sess", "proj", 2)
 	te.seedMessages(t, "top-sess", 1, func(_ int, m *db.Message) {
@@ -107,11 +109,11 @@ func TestSearchContentScopeFiltersSemanticResults(t *testing.T) {
 	def := search(t, "")
 	require.Contains(t, def, "sub-sess",
 		"default scope must return the subordinate unit despite include_children being unset")
-	assert.Contains(t, def, "top-sess")
+	assert.Contains(def, "top-sess")
 
-	assert.Equal(t, []string{"top-sess"}, search(t, "top"))
-	assert.Equal(t, []string{"sub-sess"}, search(t, "subordinate"))
-	assert.ElementsMatch(t, []string{"top-sess", "sub-sess"}, search(t, "all"))
+	assert.Equal([]string{"top-sess"}, search(t, "top"))
+	assert.Equal([]string{"sub-sess"}, search(t, "subordinate"))
+	assert.ElementsMatch([]string{"top-sess", "sub-sess"}, search(t, "all"))
 }
 
 // TestSearchContentSemanticResponseCarriesUnitRangeAndLineage pins the HTTP
@@ -121,6 +123,9 @@ func TestSearchContentScopeFiltersSemanticResults(t *testing.T) {
 // ordinal 0 still serializes "ordinal_range":[0,0] even though its other
 // zero-valued unit/lineage fields are omitted via omitempty.
 func TestSearchContentSemanticResponseCarriesUnitRangeAndLineage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 	te.seedSession(t, "top-sess", "proj", 2)
 	te.seedMessages(t, "top-sess", 1, func(_ int, m *db.Message) {
@@ -152,30 +157,30 @@ func TestSearchContentSemanticResponseCarriesUnitRangeAndLineage(t *testing.T) {
 	var res struct {
 		Matches []map[string]any `json:"matches"`
 	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &res))
-	require.Len(t, res.Matches, 2)
+	require.NoError(json.Unmarshal(w.Body.Bytes(), &res))
+	require.Len(res.Matches, 2)
 	byID := map[string]map[string]any{}
 	for _, m := range res.Matches {
 		byID[m["session_id"].(string)] = m
 	}
 
 	sub, ok := byID["sub-sess"]
-	require.True(t, ok, "subordinate run hit present")
-	assert.EqualValues(t, 1, sub["ordinal"], "ordinal stays the anchor")
-	assert.Equal(t, []any{float64(1), float64(2)}, sub["ordinal_range"])
-	assert.Equal(t, true, sub["subordinate"])
-	assert.Equal(t, "subagent", sub["relationship"])
-	assert.Equal(t, "top-sess", sub["parent_session_id"])
-	assert.Equal(t, true, sub["is_sidechain"])
+	require.True(ok, "subordinate run hit present")
+	assert.EqualValues(1, sub["ordinal"], "ordinal stays the anchor")
+	assert.Equal([]any{float64(1), float64(2)}, sub["ordinal_range"])
+	assert.Equal(true, sub["subordinate"])
+	assert.Equal("subagent", sub["relationship"])
+	assert.Equal("top-sess", sub["parent_session_id"])
+	assert.Equal(true, sub["is_sidechain"])
 
 	top, ok := byID["top-sess"]
-	require.True(t, ok, "top-level hit present")
-	assert.Equal(t, []any{float64(0), float64(0)}, top["ordinal_range"],
+	require.True(ok, "top-level hit present")
+	assert.Equal([]any{float64(0), float64(0)}, top["ordinal_range"],
 		"ordinal_range is always present, even for a zero-valued single-message hit")
 	for _, key := range []string{
 		"subordinate", "relationship", "parent_session_id", "is_sidechain",
 	} {
-		assert.NotContains(t, top, key,
+		assert.NotContains(top, key,
 			"zero-valued lineage keys must be omitted from the wire")
 	}
 }

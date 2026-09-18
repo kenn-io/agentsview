@@ -3,7 +3,6 @@
 package db
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 
@@ -13,7 +12,7 @@ import (
 
 func TestTopSessionsRollupMatchesLegacy(t *testing.T) {
 	database := openDailyUsageFixtureDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, filter := range []UsageFilter{
 		{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC"},
 		{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC",
@@ -32,7 +31,7 @@ func TestTopSessionsRollupMatchesLegacy(t *testing.T) {
 
 func TestUsageSessionCountsRollupMatchesLegacy(t *testing.T) {
 	database := openDailyUsageFixtureDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, filter := range []UsageFilter{
 		{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC"},
 		{From: "2024-06-01", To: "2024-06-30", Timezone: "UTC",
@@ -47,60 +46,67 @@ func TestUsageSessionCountsRollupMatchesLegacy(t *testing.T) {
 }
 
 func TestUsageMatchingSessionCountRollupMatchesLegacy(t *testing.T) {
+	require := require.New(t)
+
 	database := testDB(t)
 	insertSession(t, database, "relaxed", "project", func(session *Session) {
 		session.Agent = "copilot"
 		session.StartedAt = Ptr("2026-08-10T08:00:00Z")
 	})
-	require.NoError(t, database.InsertMessages([]Message{{
+	require.NoError(database.InsertMessages([]Message{{
 		SessionID: "relaxed", Ordinal: 0, Role: "assistant",
 		Timestamp: "2026-08-10T09:00:00Z", Model: "",
 	}}))
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
 	legacy, err := database.getUsageMatchingSessionCountLegacy(
-		context.Background(), filter)
-	require.NoError(t, err)
+		t.Context(), filter)
+	require.NoError(err)
 	facts, err := database.GetUsageMatchingSessionCount(
-		context.Background(), filter)
-	require.NoError(t, err)
+		t.Context(), filter)
+	require.NoError(err)
 	assert.Equal(t, legacy, facts)
 }
 
 func TestUsageMatchingSessionCountRollupPreservesUndatedActivity(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	insertSession(t, database, "undated", "project")
-	require.NoError(t, database.InsertMessages([]Message{{
+	require.NoError(database.InsertMessages([]Message{{
 		SessionID: "undated", Ordinal: 0, Role: "assistant",
 	}}))
 
-	ctx := context.Background()
+	ctx := t.Context()
 	unbounded := UsageFilter{}
 	legacy, err := database.getUsageMatchingSessionCountLegacy(ctx, unbounded)
-	require.NoError(t, err)
-	require.Equal(t, 1, legacy)
+	require.NoError(err)
+	require.Equal(1, legacy)
 	got, err := database.GetUsageMatchingSessionCount(ctx, unbounded)
-	require.NoError(t, err)
-	assert.Equal(t, legacy, got)
+	require.NoError(err)
+	assert.Equal(legacy, got)
 
 	bounded := UsageFilter{
 		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
 	}
 	legacy, err = database.getUsageMatchingSessionCountLegacy(ctx, bounded)
-	require.NoError(t, err)
-	require.Zero(t, legacy)
+	require.NoError(err)
+	require.Zero(legacy)
 	got, err = database.GetUsageMatchingSessionCount(ctx, bounded)
-	require.NoError(t, err)
-	assert.Equal(t, legacy, got)
+	require.NoError(err)
+	assert.Equal(legacy, got)
 }
 
 func TestUsageMatchingSessionCountRollupCountsDuplicateActivityOwners(t *testing.T) {
+	require := require.New(t)
+
 	database := testDB(t)
 	for _, id := range []string{"first", "second"} {
 		insertSession(t, database, id, "project", func(session *Session) {
 			session.Agent = "claude"
 			session.StartedAt = Ptr("2026-08-10T08:00:00Z")
 		})
-		require.NoError(t, database.InsertMessages([]Message{{
+		require.NoError(database.InsertMessages([]Message{{
 			SessionID: id, Ordinal: 0, Role: "assistant",
 			Timestamp: "2026-08-10T09:00:00Z", Model: "model",
 			TokenUsage:      json.RawMessage(`{"input_tokens":1,"output_tokens":1}`),
@@ -109,44 +115,48 @@ func TestUsageMatchingSessionCountRollupCountsDuplicateActivityOwners(t *testing
 	}
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
 	legacy, err := database.getUsageMatchingSessionCountLegacy(
-		context.Background(), filter)
-	require.NoError(t, err)
+		t.Context(), filter)
+	require.NoError(err)
 	facts, err := database.GetUsageMatchingSessionCount(
-		context.Background(), filter)
-	require.NoError(t, err)
+		t.Context(), filter)
+	require.NoError(err)
 	assert.Equal(t, legacy, facts)
 }
 
 func TestUsageMatchingSessionCountRollupCountsUsageEventSessions(t *testing.T) {
+	require := require.New(t)
+
 	database := testDB(t)
 	for _, id := range []string{"first-event", "second-event"} {
 		insertSession(t, database, id, "project", func(session *Session) {
 			session.Agent = "copilot"
 			session.StartedAt = Ptr("2026-08-10T08:00:00Z")
 		})
-		require.NoError(t, database.ReplaceSessionUsageEvents(id, []UsageEvent{{
+		require.NoError(database.ReplaceSessionUsageEvents(id, []UsageEvent{{
 			Source: "session", Model: "model", InputTokens: 1,
 			OccurredAt: "2026-08-10T09:00:00Z", DedupKey: "event",
 		}}))
 	}
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
 	legacy, err := database.getUsageMatchingSessionCountLegacy(
-		context.Background(), filter)
-	require.NoError(t, err)
-	require.Equal(t, 2, legacy)
+		t.Context(), filter)
+	require.NoError(err)
+	require.Equal(2, legacy)
 	facts, err := database.GetUsageMatchingSessionCount(
-		context.Background(), filter)
-	require.NoError(t, err)
+		t.Context(), filter)
+	require.NoError(err)
 	assert.Equal(t, legacy, facts)
 }
 
 func TestDailyUsageFactsDoesNotDeduplicateSourceUUIDWithoutAgent(t *testing.T) {
+	require := require.New(t)
+
 	database := testDB(t)
 	insertSession(t, database, "blank-agent", "project", func(session *Session) {
 		session.Agent = ""
 		session.StartedAt = Ptr("2026-08-10T08:00:00Z")
 	})
-	require.NoError(t, database.InsertMessages([]Message{{
+	require.NoError(database.InsertMessages([]Message{{
 		SessionID: "blank-agent", Ordinal: 0, Role: "assistant",
 		Timestamp: "2026-08-10T09:00:00Z", Model: "model",
 		TokenUsage: []byte(`{"input_tokens":3,"output_tokens":4}`),
@@ -156,9 +166,9 @@ func TestDailyUsageFactsDoesNotDeduplicateSourceUUIDWithoutAgent(t *testing.T) {
 		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
 		SkipSessionCounts: true,
 	}
-	legacy, err := database.getDailyUsageLegacy(context.Background(), filter)
-	require.NoError(t, err)
-	facts, err := database.GetDailyUsage(context.Background(), filter)
-	require.NoError(t, err)
+	legacy, err := database.getDailyUsageLegacy(t.Context(), filter)
+	require.NoError(err)
+	facts, err := database.GetDailyUsage(t.Context(), filter)
+	require.NoError(err)
 	assert.Equal(t, legacy.Totals, facts.Totals)
 }

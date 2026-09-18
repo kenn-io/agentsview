@@ -67,19 +67,22 @@ func TestJSONLProviderFingerprintStopsAfterContextCancellation(t *testing.T) {
 }
 
 func TestClaudeCanceledHeadSniffIsNotCached(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "fork.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte(
+	require.NoError(os.WriteFile(path, []byte(
 		`{"type":"user","uuid":"root","parentUuid":null,"sessionKind":"bg"}`+"\n",
 	), 0o600))
 
 	_, err := claudeSniffHead(newCancelOnErrCheckContext(t, 3), path)
-	require.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(err, context.Canceled)
 
 	sniff, err := claudeSniffHead(t.Context(), path)
-	require.NoError(t, err)
-	assert.True(t, sniff.ok)
-	assert.True(t, sniff.rootIsBG)
-	assert.Equal(t, "root", sniff.rootUUID)
+	require.NoError(err)
+	assert.True(sniff.ok)
+	assert.True(sniff.rootIsBG)
+	assert.Equal("root", sniff.rootUUID)
 }
 
 func TestClaudeDAGPostProcessingStopsAfterContextCancellation(t *testing.T) {

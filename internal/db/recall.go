@@ -182,7 +182,7 @@ func (db *DB) InsertRecallEntry(m RecallEntry) (string, error) {
 	defer db.mu.Unlock()
 
 	if m.ID == "" {
-		return "", fmt.Errorf("recall entry id is required")
+		return "", errors.New("recall entry id is required")
 	}
 	if m.Status == "" {
 		m.Status = corerecall.StatusAccepted
@@ -516,13 +516,13 @@ func (db *DB) SupersedeRecallEntry(
 	}
 	oldID = strings.TrimSpace(oldID)
 	if oldID == "" {
-		return "", fmt.Errorf("superseded entry id is required")
+		return "", errors.New("superseded entry id is required")
 	}
 	if replacement.ID == "" {
-		return "", fmt.Errorf("replacement entry id is required")
+		return "", errors.New("replacement entry id is required")
 	}
 	if replacement.ID == oldID {
-		return "", fmt.Errorf("replacement entry id must differ from superseded entry id")
+		return "", errors.New("replacement entry id must differ from superseded entry id")
 	}
 	if err := normalizeRecallEntryReviewState(&replacement); err != nil {
 		return "", err

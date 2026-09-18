@@ -43,7 +43,7 @@ func createForgeDB(t *testing.T, dir string) *forgeTestDB {
 			metrics TEXT
 		);
 	`
-	_, err = d.Exec(schema)
+	_, err = d.ExecContext(t.Context(), schema)
 	require.NoError(t, err, "creating forge schema")
 	return fixture
 }
@@ -56,7 +56,7 @@ func (f *forgeTestDB) close(t *testing.T) {
 
 func (f *forgeTestDB) mustExec(t *testing.T, msg, query string, args ...any) {
 	t.Helper()
-	_, err := f.db.Exec(query, args...)
+	_, err := f.db.ExecContext(t.Context(), query, args...)
 	require.NoError(t, err, msg)
 }
 
@@ -197,6 +197,8 @@ func TestSyncEngineForgeBulkSync(t *testing.T) {
 }
 
 func TestReconcileWatchRootsGenericDBBackedProviderPreservesArchive(t *testing.T) {
+	require := require.New(t)
+
 	env := setupSingleAgentTestEnv(t, parser.AgentForge)
 	forge := createForgeDB(t, env.forgeDir)
 	forge.addConversation(
@@ -209,20 +211,23 @@ func TestReconcileWatchRootsGenericDBBackedProviderPreservesArchive(t *testing.T
 		`{"input_tokens":360,"output_tokens":55,"cached_input_tokens":85}`,
 	)
 	forge.close(t)
-	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	require.NoError(t, os.Remove(forge.path))
+	require.Equal(1, env.engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(os.Remove(forge.path))
 
-	require.NoError(t, env.engine.ReconcileWatchRoots(
+	require.NoError(env.engine.ReconcileWatchRoots(
 		t.Context(), []string{env.forgeDir}, false,
 	))
 
 	sess, err := env.db.GetSession(t.Context(), "forge:persistent-archive")
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.NotNil(t, sess,
 		"the generic DB-backed provider must preserve members after its SQLite archive vanishes")
 }
 
 func TestReconcileWatchRootsForgeDeletedMemberTombstonesSession(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	env := setupSingleAgentTestEnv(t, parser.AgentForge)
 	forge := createForgeDB(t, env.forgeDir)
 	for _, id := range []string{"deleted-member", "surviving-member"} {
@@ -234,32 +239,34 @@ func TestReconcileWatchRootsForgeDeletedMemberTombstonesSession(t *testing.T) {
 			`{"input_tokens":1,"output_tokens":1,"cached_input_tokens":0}`,
 		)
 	}
-	require.Equal(t, 2, env.engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(2, env.engine.SyncAll(t.Context(), nil).Synced)
 	beforeDelete, err := env.db.GetSessionFull(t.Context(), "forge:deleted-member")
-	require.NoError(t, err)
-	require.NotNil(t, beforeDelete)
+	require.NoError(err)
+	require.NotNil(beforeDelete)
 	forge.mustExec(t, "delete Forge conversation",
 		"DELETE FROM conversations WHERE conversation_id = ?", "deleted-member")
 
-	require.NoError(t, env.engine.ReconcileWatchRoots(
+	require.NoError(env.engine.ReconcileWatchRoots(
 		t.Context(), []string{env.forgeDir}, false,
 	))
 
 	deleted, err := env.db.GetSession(t.Context(), "forge:deleted-member")
-	require.NoError(t, err)
-	assert.NotNil(t, deleted,
+	require.NoError(err)
+	assert.NotNil(deleted,
 		"full sync must baseline dedicated streaming sources for later reconciliation")
 	archived, err := env.db.GetSessionFull(t.Context(), "forge:deleted-member")
-	require.NoError(t, err)
+	require.NoError(err)
 	assertSourceMissingState(t, archived)
-	assert.Equal(t, beforeDelete.MessageCount, archived.MessageCount,
+	assert.Equal(beforeDelete.MessageCount, archived.MessageCount,
 		"source loss must retain the archived transcript")
 	surviving, err := env.db.GetSession(t.Context(), "forge:surviving-member")
-	require.NoError(t, err)
-	assert.NotNil(t, surviving)
+	require.NoError(err)
+	assert.NotNil(surviving)
 }
 
 func TestReconcileWatchRootsForgeScopedPassPreservesUnscannedReplacement(t *testing.T) {
+	require := require.New(t)
+
 	rootA := t.TempDir()
 	rootB := t.TempDir()
 	env := setupSingleAgentTestEnvWithDirs(
@@ -273,7 +280,7 @@ func TestReconcileWatchRootsForgeScopedPassPreservesUnscannedReplacement(t *test
 		"2026-05-02 10:00:16.848497543",
 		`{"input_tokens":1,"output_tokens":1,"cached_input_tokens":0}`,
 	)
-	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(1, env.engine.SyncAll(t.Context(), nil).Synced)
 
 	forgeB := createForgeDB(t, rootB)
 	forgeB.addConversation(
@@ -286,17 +293,20 @@ func TestReconcileWatchRootsForgeScopedPassPreservesUnscannedReplacement(t *test
 	forgeA.mustExec(t, "remove original Forge conversation",
 		"DELETE FROM conversations WHERE conversation_id = ?", "moved-member")
 
-	require.NoError(t, env.engine.ReconcileWatchRoots(
+	require.NoError(env.engine.ReconcileWatchRoots(
 		t.Context(), []string{rootA}, false,
 	))
 
 	active, err := env.db.GetSession(t.Context(), "forge:moved-member")
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.NotNil(t, active,
 		"a scoped pass cannot prove absence below an unscanned provider root")
 }
 
 func TestSyncSingleSessionForge(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	env := setupTestEnv(t)
 	forge := createForgeDB(t, env.forgeDir)
 	forge.addConversation(
@@ -309,7 +319,7 @@ func TestSyncSingleSessionForge(t *testing.T) {
 		`{"input_tokens":360,"output_tokens":55,"cached_input_tokens":85}`,
 	)
 
-	require.NoError(t, env.engine.SyncSingleSession("forge:forge-sync-single"), "SyncSingleSession")
+	require.NoError(env.engine.SyncSingleSession("forge:forge-sync-single"), "SyncSingleSession")
 	assertSessionProject(t, env.db, "forge:forge-sync-single", "agentsview")
 	assertSessionMessageCount(t, env.db, "forge:forge-sync-single", 3)
 
@@ -318,14 +328,14 @@ func TestSyncSingleSessionForge(t *testing.T) {
 	// resolves the per-session virtual <db>#<conversationID> path the
 	// provider parses, matching the stored session file_path.
 	wantSrc := filepath.Join(env.forgeDir, ".forge.db") + "#forge-sync-single"
-	assert.Equal(t, wantSrc, src)
+	assert.Equal(wantSrc, src)
 
-	mtime := env.engine.SourceMtime("forge:forge-sync-single")
-	require.NotZero(t, mtime, "SourceMtime returned zero")
+	mtime := env.engine.SourceMtime(t.Context(), "forge:forge-sync-single")
+	require.NotZero(mtime, "SourceMtime returned zero")
 
 	_, storedMtime, ok := env.db.GetSessionFileInfo("forge:forge-sync-single")
-	require.True(t, ok, "session file info not found")
-	assert.Equal(t, mtime, storedMtime)
+	require.True(ok, "session file info not found")
+	assert.Equal(mtime, storedMtime)
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 0, Synced: 0, Skipped: 0})
 }
@@ -335,6 +345,9 @@ func TestSyncSingleSessionForge(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSyncForgeMultiConversationIncremental(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	env := setupTestEnv(t)
 	forge := createForgeDB(t, env.forgeDir)
 
@@ -361,7 +374,7 @@ func TestSyncForgeMultiConversationIncremental(t *testing.T) {
 
 	// Capture the stored mtime for A (should remain unchanged after the partial sync).
 	_, storedMtimeA, okA := env.db.GetSessionFileInfo("forge:multi-conv-A")
-	require.True(t, okA, "session A file info not found after initial sync")
+	require.True(okA, "session A file info not found after initial sync")
 
 	// Update only B's updated_at (and its context) to simulate a newer version.
 	updatedContextB := forgeTestContext("First prompt B updated.", "Answer B updated.")
@@ -375,13 +388,13 @@ func TestSyncForgeMultiConversationIncremental(t *testing.T) {
 
 	// A's stored mtime must be unchanged.
 	_, storedMtimeA2, okA2 := env.db.GetSessionFileInfo("forge:multi-conv-A")
-	require.True(t, okA2, "session A file info not found after partial sync")
-	assert.Equal(t, storedMtimeA, storedMtimeA2, "A's stored mtime changed")
+	require.True(okA2, "session A file info not found after partial sync")
+	assert.Equal(storedMtimeA, storedMtimeA2, "A's stored mtime changed")
 
 	// B's stored mtime must have advanced.
 	_, storedMtimeB2, okB2 := env.db.GetSessionFileInfo("forge:multi-conv-B")
-	require.True(t, okB2, "session B file info not found after partial sync")
-	assert.Greater(t, storedMtimeB2, storedMtimeA, "B's stored mtime did not advance")
+	require.True(okB2, "session B file info not found after partial sync")
+	assert.Greater(storedMtimeB2, storedMtimeA, "B's stored mtime did not advance")
 }
 
 // ---------------------------------------------------------------------------
@@ -389,6 +402,9 @@ func TestSyncForgeMultiConversationIncremental(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestSyncForgeMissingConversation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	env := setupTestEnv(t)
 	forge := createForgeDB(t, env.forgeDir)
 
@@ -400,7 +416,7 @@ func TestSyncForgeMissingConversation(t *testing.T) {
 		`{"input_tokens":50,"output_tokens":10}`,
 	)
 
-	require.NoError(t, env.engine.SyncSingleSession("forge:disappearing-conv"), "SyncSingleSession")
+	require.NoError(env.engine.SyncSingleSession("forge:disappearing-conv"), "SyncSingleSession")
 
 	// Now delete the conversation from .forge.db.
 	forge.mustExec(t, "delete conversation",
@@ -409,18 +425,18 @@ func TestSyncForgeMissingConversation(t *testing.T) {
 
 	// FindSourceFile still returns the db path (it's a directory-level lookup).
 	// SourceMtime returns 0 because the conversation row is gone.
-	mtime := env.engine.SourceMtime("forge:disappearing-conv")
-	assert.Zero(t, mtime, "SourceMtime after delete")
+	mtime := env.engine.SourceMtime(t.Context(), "forge:disappearing-conv")
+	assert.Zero(mtime, "SourceMtime after delete")
 
 	src := env.engine.FindSourceFile("forge:disappearing-conv")
-	assert.Empty(t, src, "FindSourceFile after delete")
+	assert.Empty(src, "FindSourceFile after delete")
 
 	// SyncSingleSession must return an error indicating the conversation
 	// could not be found (either "not found" or a db no-rows error).
 	err := env.engine.SyncSingleSession("forge:disappearing-conv")
-	require.Error(t, err, "expected error from SyncSingleSession for deleted conversation")
+	require.Error(err, "expected error from SyncSingleSession for deleted conversation")
 	msg := strings.ToLower(err.Error())
-	assert.True(t, strings.Contains(msg, "not found") || strings.Contains(msg, "no rows"),
+	assert.True(strings.Contains(msg, "not found") || strings.Contains(msg, "no rows"),
 		"expected 'not found' or 'no rows' error, got: %v", err)
 }
 
@@ -473,6 +489,9 @@ func forgeParentContext(childConvID string) string {
 }
 
 func TestSyncForgeSubagentLinking(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	env := setupTestEnv(t)
 	forge := createForgeDB(t, env.forgeDir)
 
@@ -503,9 +522,9 @@ func TestSyncForgeSubagentLinking(t *testing.T) {
 		`SELECT subagent_session_id FROM tool_calls WHERE session_id = ? AND tool_name = 'task'`,
 		"forge:"+parentID,
 	).Scan(&subagentSessID)
-	require.NoError(t, err, "query tool_calls for parent")
-	require.True(t, subagentSessID.Valid, "tool_calls.subagent_session_id not valid")
-	assert.Equal(t, "forge:"+childID, subagentSessID.String)
+	require.NoError(err, "query tool_calls for parent")
+	require.True(subagentSessID.Valid, "tool_calls.subagent_session_id not valid")
+	assert.Equal("forge:"+childID, subagentSessID.String)
 
 	// SyncAll must now call LinkSubagentSessions after the Forge write,
 	// so parent_session_id and relationship_type on the child must already
@@ -516,11 +535,11 @@ func TestSyncForgeSubagentLinking(t *testing.T) {
 		`SELECT parent_session_id, relationship_type FROM sessions WHERE id = ?`,
 		"forge:"+childID,
 	).Scan(&parentSessID, &relType)
-	require.NoError(t, err, "query child session")
-	require.True(t, parentSessID.Valid, "child parent_session_id not valid")
-	assert.Equal(t, "forge:"+parentID, parentSessID.String)
-	require.True(t, relType.Valid, "child relationship_type not valid")
-	assert.Equal(t, "subagent", relType.String)
+	require.NoError(err, "query child session")
+	require.True(parentSessID.Valid, "child parent_session_id not valid")
+	assert.Equal("forge:"+parentID, parentSessID.String)
+	require.True(relType.Valid, "child relationship_type not valid")
+	assert.Equal("subagent", relType.String)
 }
 
 // ---------------------------------------------------------------------------

@@ -781,7 +781,7 @@ func vsCopilotClassifyPath(
 	return multiSessionMatch{}, false
 }
 
-func vsCopilotFindMember(root, rawID string) (multiSessionMatch, bool) {
+func vsCopilotFindMember(_ context.Context, root, rawID string) (multiSessionMatch, bool) {
 	path := findVisualStudioCopilotSourceFile(root, rawID)
 	if path == "" {
 		return multiSessionMatch{}, false

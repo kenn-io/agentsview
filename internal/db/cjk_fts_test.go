@@ -2,7 +2,6 @@ package db
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"log"
 	"os"
@@ -16,20 +15,25 @@ import (
 )
 
 func TestContainsCJK(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Parallel()
-	assert.True(t, containsCJK("SQLite 中文搜索"))
-	assert.True(t, containsCJK("日本語"))
-	assert.True(t, containsCJK("한국어"))
-	assert.False(t, containsCJK("get_views error-401"))
+	assert.True(containsCJK("SQLite 中文搜索"))
+	assert.True(containsCJK("日本語"))
+	assert.True(containsCJK("한국어"))
+	assert.False(containsCJK("get_views error-401"))
 }
 
 func TestDiscoverSimpleFTSRuntimeFrom(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(dir, "libsimple.so"), []byte("library"), 0o600,
 	))
 	dictDir := filepath.Join(dir, "dict")
-	require.NoError(t, os.Mkdir(dictDir, 0o700))
+	require.NoError(os.Mkdir(dictDir, 0o700))
 	for _, name := range []string{
 		"hmm_model.utf8",
 		"idf.utf8",
@@ -37,7 +41,7 @@ func TestDiscoverSimpleFTSRuntimeFrom(t *testing.T) {
 		"stop_words.utf8",
 		"user.dict.utf8",
 	} {
-		require.NoError(t, os.WriteFile(
+		require.NoError(os.WriteFile(
 			filepath.Join(dictDir, name), []byte(name), 0o600,
 		))
 	}
@@ -45,20 +49,20 @@ func TestDiscoverSimpleFTSRuntimeFrom(t *testing.T) {
 	got, err := discoverSimpleFTSRuntimeFrom(
 		filepath.Join(t.TempDir(), "agentsview"), dir, "linux",
 	)
-	require.NoError(t, err)
-	assert.Equal(t, filepath.Join(dir, "libsimple.so"), got.libraryPath)
-	assert.Equal(t, dictDir, got.dictionaryPath)
-	assert.NotEmpty(t, got.fingerprint)
+	require.NoError(err)
+	assert.Equal(filepath.Join(dir, "libsimple.so"), got.libraryPath)
+	assert.Equal(dictDir, got.dictionaryPath)
+	assert.NotEmpty(got.fingerprint)
 
 	originalFingerprint := got.fingerprint
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(dictDir, "user.dict.utf8"), []byte("changed"), 0o600,
 	))
 	changed, err := discoverSimpleFTSRuntimeFrom(
 		filepath.Join(t.TempDir(), "agentsview"), dir, "linux",
 	)
-	require.NoError(t, err)
-	assert.NotEqual(t, originalFingerprint, changed.fingerprint)
+	require.NoError(err)
+	assert.NotEqual(originalFingerprint, changed.fingerprint)
 }
 
 func TestDiscoverSimpleFTSRuntimeUnsupportedPlatformIsOptional(t *testing.T) {
@@ -83,6 +87,9 @@ func TestDiscoverSimpleFTSRuntimeExplicitDirIsValidated(t *testing.T) {
 }
 
 func TestCJKFTSChineseSearch(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if !simpleFTSRuntimeConfig.available() {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
 	}
@@ -102,10 +109,10 @@ func TestCJKFTSChineseSearch(t *testing.T) {
 	})
 
 	var pending int
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT count(*) FROM messages_cjk_fts_pending_sessions",
 	).Scan(&pending))
-	assert.Zero(t, pending)
+	assert.Zero(pending)
 
 	var pinyinMatch string
 	simpleFTSJiebaMu.Lock()
@@ -113,109 +120,109 @@ func TestCJKFTSChineseSearch(t *testing.T) {
 		"SELECT jieba_query(?, 0)", "zhong",
 	).Scan(&pinyinMatch)
 	simpleFTSJiebaMu.Unlock()
-	require.NoError(t, err)
+	require.NoError(err)
 	var pinyinHits int
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		`SELECT count(*) FROM messages_cjk_fts
 		 WHERE messages_cjk_fts MATCH ?`, pinyinMatch,
 	).Scan(&pinyinHits))
-	assert.Zero(t, pinyinHits)
+	assert.Zero(pinyinHits)
 
 	for _, query := range []string{"中文搜索", "搜索", "错", "SQLite 中文搜索"} {
-		page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 			Pattern: query,
 			Mode:    "fts",
 			Sources: []string{"messages"},
 			Limit:   20,
 		})
-		require.NoError(t, err, "query %q", query)
-		require.NotEmpty(t, page.Matches, "query %q", query)
-		assert.Equal(t, "chinese", page.Matches[0].SessionID, "query %q", query)
+		require.NoError(err, "query %q", query)
+		require.NotEmpty(page.Matches, "query %q", query)
+		assert.Equal("chinese", page.Matches[0].SessionID, "query %q", query)
 	}
 
 	seedSearchSession(t, d, "separated", "proj", [][2]string{
 		{"user", "中文和搜索之间插入了额外内容。"},
 	})
 
-	andQuery, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	andQuery, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "中文 搜索",
 		Mode:    "fts",
 		Sources: []string{"messages"},
 		Limit:   20,
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	andIDs := make(map[string]bool)
 	for _, match := range andQuery.Matches {
 		andIDs[match.SessionID] = true
 	}
-	assert.True(t, andIDs["chinese"])
-	assert.True(t, andIDs["separated"])
+	assert.True(andIDs["chinese"])
+	assert.True(andIDs["separated"])
 
-	phrase, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	phrase, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: `"中文 搜索"`,
 		Mode:    "fts",
 		Sources: []string{"messages"},
 		Limit:   20,
 	})
-	require.NoError(t, err)
-	require.Len(t, phrase.Matches, 1)
-	assert.Equal(t, "chinese", phrase.Matches[0].SessionID)
+	require.NoError(err)
+	require.Len(phrase.Matches, 1)
+	assert.Equal("chinese", phrase.Matches[0].SessionID)
 
 	expression, err := d.prepareMessageFTSQuery(
-		context.Background(), `"中文" OR "国法"`,
+		t.Context(), `"中文" OR "国法"`,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, `"中文" OR "国法"`, expression.match)
+	require.NoError(err)
+	assert.Equal(`"中文" OR "国法"`, expression.match)
 
-	orQuery, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	orQuery, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: `"中文" OR "国法"`,
 		Mode:    "fts",
 		Sources: []string{"messages"},
 		Limit:   20,
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	orIDs := make(map[string]bool)
 	for _, match := range orQuery.Matches {
 		orIDs[match.SessionID] = true
 	}
-	assert.True(t, orIDs["chinese"])
-	assert.True(t, orIDs["reverse"])
+	assert.True(orIDs["chinese"])
+	assert.True(orIDs["reverse"])
 
-	ordered, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	ordered, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "法国",
 		Mode:    "fts",
 		Sources: []string{"messages"},
 		Limit:   20,
 	})
-	require.NoError(t, err)
-	require.Len(t, ordered.Matches, 1)
-	assert.Equal(t, "france", ordered.Matches[0].SessionID)
+	require.NoError(err)
+	require.Len(ordered.Matches, 1)
+	assert.Equal("france", ordered.Matches[0].SessionID)
 
-	grouped, err := d.Search(context.Background(), SearchFilter{
+	grouped, err := d.Search(t.Context(), SearchFilter{
 		Query: "中文搜索",
 		Limit: 20,
 	})
-	require.NoError(t, err)
-	require.NotEmpty(t, grouped.Results)
-	assert.Equal(t, "chinese", grouped.Results[0].SessionID)
+	require.NoError(err)
+	require.NotEmpty(grouped.Results)
+	assert.Equal("chinese", grouped.Results[0].SessionID)
 
 	// ASCII-only queries continue through the existing Porter-tokenized index.
-	english, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	english, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "run",
 		Mode:    "fts",
 		Sources: []string{"messages"},
 		Limit:   20,
 	})
-	require.NoError(t, err)
-	require.NotEmpty(t, english.Matches)
-	assert.Equal(t, "english", english.Matches[0].SessionID)
+	require.NoError(err)
+	require.NotEmpty(english.Matches)
+	assert.Equal("english", english.Matches[0].SessionID)
 
 	var storedFingerprint string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT CAST(value AS TEXT) FROM stats WHERE key = ?",
 		cjkFTSFingerprintStatsKey,
 	).Scan(&storedFingerprint))
-	assert.Equal(t, simpleFTSRuntimeConfig.fingerprint, storedFingerprint)
+	assert.Equal(simpleFTSRuntimeConfig.fingerprint, storedFingerprint)
 
 	// Simulate a pre-fix partial build: the table exists without the atomic
 	// completion fingerprint. Reopen must replace and backfill it.
@@ -231,55 +238,55 @@ func TestCJKFTSChineseSearch(t *testing.T) {
 			tokenize='simple'
 		);
 		DELETE FROM stats WHERE key = '` + cjkFTSFingerprintStatsKey + `'`)
-	require.NoError(t, err)
-	require.NoError(t, d.Reopen())
-	repaired, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	require.NoError(err)
+	require.NoError(d.Reopen())
+	repaired, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "中文搜索",
 		Mode:    "fts",
 		Sources: []string{"messages"},
 		Limit:   20,
 	})
-	require.NoError(t, err)
-	require.NotEmpty(t, repaired.Matches)
-	assert.Equal(t, "chinese", repaired.Matches[0].SessionID)
+	require.NoError(err)
+	require.NotEmpty(repaired.Matches)
+	assert.Equal("chinese", repaired.Matches[0].SessionID)
 
 	_, err = d.getWriter().Exec(
 		"UPDATE stats SET value = 'stale' WHERE key = ?",
 		cjkFTSFingerprintStatsKey,
 	)
-	require.NoError(t, err)
-	assert.False(t, d.HasCJKFTS())
-	require.NoError(t, d.Reopen())
-	assert.True(t, d.HasCJKFTS())
+	require.NoError(err)
+	assert.False(d.HasCJKFTS())
+	require.NoError(d.Reopen())
+	assert.True(d.HasCJKFTS())
 
-	require.NoError(t, d.CloseWriter())
-	require.NoError(t, d.ReopenWriter())
+	require.NoError(d.CloseWriter())
+	require.NoError(d.ReopenWriter())
 	seedSearchSession(t, d, "reopened", "proj", [][2]string{
 		{"user", "重新打开写连接以后仍然可以搜索新增中文。"},
 	})
-	reopened, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	reopened, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "新增中文",
 		Mode:    "fts",
 		Sources: []string{"messages"},
 		Limit:   20,
 	})
-	require.NoError(t, err)
-	require.NotEmpty(t, reopened.Matches)
-	assert.Equal(t, "reopened", reopened.Matches[0].SessionID)
+	require.NoError(err)
+	require.NotEmpty(reopened.Matches)
+	assert.Equal("reopened", reopened.Matches[0].SessionID)
 
-	require.NoError(t, d.Reopen())
+	require.NoError(d.Reopen())
 	seedSearchSession(t, d, "swapped", "proj", [][2]string{
 		{"user", "完整重开数据库以后继续索引中文消息。"},
 	})
-	swapped, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	swapped, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "索引中文",
 		Mode:    "fts",
 		Sources: []string{"messages"},
 		Limit:   20,
 	})
-	require.NoError(t, err)
-	require.NotEmpty(t, swapped.Matches)
-	assert.Equal(t, "swapped", swapped.Matches[0].SessionID)
+	require.NoError(err)
+	require.NotEmpty(swapped.Matches)
+	assert.Equal("swapped", swapped.Matches[0].SessionID)
 }
 
 func TestCJKFTSContentSnippetCentersOnMatch(t *testing.T) {
@@ -298,7 +305,7 @@ func TestCJKFTSContentSnippetCentersOnMatch(t *testing.T) {
 			body := tc.opening + strings.Repeat("开场说明。", 100) + tc.match + "实现说明。"
 			seedSearchSession(t, d, "long-chinese", "proj", [][2]string{{"user", body}})
 
-			page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+			page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 				Pattern: tc.query,
 				Mode:    "fts",
 				Sources: []string{"messages"},
@@ -312,94 +319,102 @@ func TestCJKFTSContentSnippetCentersOnMatch(t *testing.T) {
 }
 
 func TestCJKFTSTableCanBeDroppedWithoutExtension(t *testing.T) {
+	require := require.New(t)
+
 	if !simpleFTSRuntimeConfig.available() {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
 	}
 	path := filepath.Join(t.TempDir(), "drop-without-extension.db")
 	d, err := Open(path)
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
+	require.NoError(err)
+	require.NoError(d.Close())
 
 	raw, err := sql.Open("sqlite3", makeDSN(path, false))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, raw.Close()) })
-	_, err = raw.Exec("DROP TABLE messages_cjk_fts")
-	require.NoError(t, err)
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(raw.Close()) })
+	_, err = raw.ExecContext(t.Context(), "DROP TABLE messages_cjk_fts")
+	require.NoError(err)
 }
 
 func TestCJKFTSRebuildsAfterLegacyWriter(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if !simpleFTSRuntimeConfig.available() {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
 	}
 	path := filepath.Join(t.TempDir(), "legacy-writer.db")
 	d, err := Open(path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, d.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(d.Close()) })
 	seedSearchSession(t, d, "legacy", "proj", [][2]string{
 		{"user", "原始中文内容。"},
 	})
 
 	raw, err := sql.Open("sqlite3", makeDSN(path, false))
-	require.NoError(t, err)
-	tx, err := raw.Begin()
-	require.NoError(t, err)
-	_, err = tx.Exec(
+	require.NoError(err)
+	tx, err := raw.BeginTx(t.Context(), nil)
+	require.NoError(err)
+	_, err = tx.ExecContext(t.Context(),
 		"UPDATE messages SET content = ? WHERE session_id = ?",
 		"旧版本写入的新内容可以在重开后检索。", "legacy",
 	)
-	require.NoError(t, err)
-	_, err = tx.Exec(`
+	require.NoError(err)
+	_, err = tx.ExecContext(t.Context(), `
 		UPDATE sessions
 		SET transcript_revision = COALESCE(transcript_revision, 0) + 1
 		WHERE id = ?`, "legacy")
-	require.NoError(t, err)
-	require.NoError(t, tx.Commit())
+	require.NoError(err)
+	require.NoError(tx.Commit())
 
 	var pending int
-	require.NoError(t, raw.QueryRow(
+	require.NoError(raw.QueryRowContext(t.Context(),
 		"SELECT count(*) FROM messages_cjk_fts_pending_sessions",
 	).Scan(&pending))
-	assert.Equal(t, 1, pending)
-	require.NoError(t, raw.Close())
-	require.False(t, d.HasCJKFTS())
+	assert.Equal(1, pending)
+	require.NoError(raw.Close())
+	require.False(d.HasCJKFTS())
 
 	// A local metadata update does not repair the other writer's message index.
 	name := "Renamed session"
-	require.NoError(t, d.RenameSession("legacy", &name))
-	require.False(t, d.HasCJKFTS(), "renaming must preserve the stale marker")
+	require.NoError(d.RenameSession("legacy", &name))
+	require.False(d.HasCJKFTS(), "renaming must preserve the stale marker")
 	insertSession(t, d, "legacy", "proj", func(s *Session) {
 		s.UserMessageCount = 2
 	})
-	require.False(t, d.HasCJKFTS(), "upserts must preserve the stale marker")
-	require.NoError(t, d.InsertMessages([]Message{{
+	require.False(d.HasCJKFTS(), "upserts must preserve the stale marker")
+	require.NoError(d.InsertMessages([]Message{{
 		SessionID: "legacy", Ordinal: 1, Role: "assistant",
 		Content: "本地追加的消息。",
 	}}))
-	require.False(t, d.HasCJKFTS(), "appends do not repair earlier stale content")
+	require.False(d.HasCJKFTS(), "appends do not repair earlier stale content")
 
 	var output bytes.Buffer
 	previousWriter := log.Writer()
 	log.SetOutput(&output)
 	t.Cleanup(func() { log.SetOutput(previousWriter) })
-	require.NoError(t, d.Reopen())
-	assert.Contains(t, output.String(), "rebuilding CJK FTS index; startup waits")
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	require.NoError(d.Reopen())
+	assert.Contains(output.String(), "rebuilding CJK FTS index; startup waits")
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "旧版本写入",
 		Mode:    "fts",
 		Sources: []string{"messages"},
 		Limit:   20,
 	})
-	require.NoError(t, err)
-	require.NotEmpty(t, page.Matches)
-	assert.Equal(t, "legacy", page.Matches[0].SessionID)
+	require.NoError(err)
+	require.NotEmpty(page.Matches)
+	assert.Equal("legacy", page.Matches[0].SessionID)
 
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT count(*) FROM messages_cjk_fts_pending_sessions",
 	).Scan(&pending))
-	assert.Zero(t, pending)
+	assert.Zero(pending)
 }
 
 func TestCJKFTSForeignFingerprintDefersMaintenance(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if !simpleFTSRuntimeConfig.available() {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
 	}
@@ -416,19 +431,19 @@ func TestCJKFTSForeignFingerprintDefersMaintenance(t *testing.T) {
 		"UPDATE stats SET value = 'foreign-runtime' WHERE key = ?",
 		cjkFTSFingerprintStatsKey,
 	)
-	require.NoError(t, err)
-	assert.False(t, d.HasCJKFTS())
-	assert.False(t, d.HasCJKFTS())
-	assert.Equal(t, 1, strings.Count(output.String(), "CJK FTS unavailable or stale"))
+	require.NoError(err)
+	assert.False(d.HasCJKFTS())
+	assert.False(d.HasCJKFTS())
+	assert.Equal(1, strings.Count(output.String(), "CJK FTS unavailable or stale"))
 
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		if _, err := tx.Exec(
+	require.NoError(d.Update(func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(),
 			"UPDATE messages SET content = ? WHERE session_id = ?",
 			"跨版本写入的新中文内容。", "foreign-runtime",
 		); err != nil {
 			return err
 		}
-		_, err := tx.Exec(`
+		_, err := tx.ExecContext(t.Context(), `
 			UPDATE sessions
 			SET transcript_revision = CAST(
 				CAST(transcript_revision AS INTEGER) + 1 AS TEXT
@@ -438,10 +453,10 @@ func TestCJKFTSForeignFingerprintDefersMaintenance(t *testing.T) {
 	}))
 
 	var pending int
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT count(*) FROM messages_cjk_fts_pending_sessions",
 	).Scan(&pending))
-	assert.Equal(t, 1, pending)
+	assert.Equal(1, pending)
 
 	var match string
 	simpleFTSJiebaMu.Lock()
@@ -449,30 +464,30 @@ func TestCJKFTSForeignFingerprintDefersMaintenance(t *testing.T) {
 		"SELECT jieba_query(?, 0)", "跨版本写入",
 	).Scan(&match)
 	simpleFTSJiebaMu.Unlock()
-	require.NoError(t, err)
+	require.NoError(err)
 
 	var staleMatches int
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		`SELECT count(*) FROM messages_cjk_fts
 		 WHERE messages_cjk_fts MATCH ?`, match,
 	).Scan(&staleMatches))
-	assert.Zero(t, staleMatches)
+	assert.Zero(staleMatches)
 
-	require.NoError(t, d.Reopen())
-	assert.True(t, d.HasCJKFTS())
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	require.NoError(d.Reopen())
+	assert.True(d.HasCJKFTS())
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "跨版本写入",
 		Mode:    "fts",
 		Sources: []string{"messages"},
 		Limit:   20,
 	})
-	require.NoError(t, err)
-	require.NotEmpty(t, page.Matches)
-	assert.Equal(t, "foreign-runtime", page.Matches[0].SessionID)
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(err)
+	require.NotEmpty(page.Matches)
+	assert.Equal("foreign-runtime", page.Matches[0].SessionID)
+	require.NoError(d.getReader().QueryRow(
 		"SELECT count(*) FROM messages_cjk_fts_pending_sessions",
 	).Scan(&pending))
-	assert.Zero(t, pending)
+	assert.Zero(pending)
 }
 
 func TestCJKFTSJiebaConfigurationSerializesWithQueries(t *testing.T) {
@@ -501,7 +516,7 @@ func TestCJKFTSJiebaConfigurationSerializesWithQueries(t *testing.T) {
 						sqliteArchiveDriverName, makeDSN(path, true),
 					)
 					if err == nil {
-						err = conn.Ping()
+						err = conn.PingContext(t.Context())
 					}
 					if conn != nil {
 						if closeErr := conn.Close(); err == nil {
@@ -514,7 +529,7 @@ func TestCJKFTSJiebaConfigurationSerializesWithQueries(t *testing.T) {
 					continue
 				}
 				if _, err := d.prepareMessageFTSQuery(
-					context.Background(), "并发中文搜索",
+					t.Context(), "并发中文搜索",
 				); err != nil {
 					errs <- err
 				}
@@ -530,6 +545,9 @@ func TestCJKFTSJiebaConfigurationSerializesWithQueries(t *testing.T) {
 
 // Session upserts and no-op recall inserts must leave a healthy index usable.
 func TestCJKFTSSurvivesSessionResyncUpsert(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if !simpleFTSRuntimeConfig.available() {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
 	}
@@ -537,7 +555,7 @@ func TestCJKFTSSurvivesSessionResyncUpsert(t *testing.T) {
 	seedSearchSession(t, d, "resync", "proj", [][2]string{
 		{"user", "中文搜索必须在重新同步之后仍然可用。"},
 	})
-	require.True(t, d.HasCJKFTS(), "CJK FTS live after the first write")
+	require.True(d.HasCJKFTS(), "CJK FTS live after the first write")
 
 	// Re-upsert the same session id, leaving transcript_revision alone. This
 	// is the shape of every ordinary resync of an unchanged session.
@@ -546,26 +564,26 @@ func TestCJKFTSSurvivesSessionResyncUpsert(t *testing.T) {
 		s.UserMessageCount = 2
 	})
 	// Recall imports use this insert even when the session already exists.
-	require.NoError(t, d.insertSessionIfAbsent(context.Background(), Session{
+	require.NoError(d.insertSessionIfAbsent(t.Context(), Session{
 		ID: "resync", Project: "proj", Machine: "recall-import", Agent: "claude",
 	}))
 
 	var pending int
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT count(*) FROM messages_cjk_fts_pending_sessions",
 	).Scan(&pending))
-	assert.Zero(t, pending, "resync upsert must not strand a pending row")
-	assert.True(t, d.HasCJKFTS(), "CJK FTS stays live across a resync")
+	assert.Zero(pending, "resync upsert must not strand a pending row")
+	assert.True(d.HasCJKFTS(), "CJK FTS stays live across a resync")
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "重新同步",
 		Mode:    "fts",
 		Sources: []string{"messages"},
 		Limit:   20,
 	})
-	require.NoError(t, err)
-	require.NotEmpty(t, page.Matches, "Chinese search still returns after resync")
-	assert.Equal(t, "resync", page.Matches[0].SessionID)
+	require.NoError(err)
+	require.NotEmpty(page.Matches, "Chinese search still returns after resync")
+	assert.Equal("resync", page.Matches[0].SessionID)
 }
 
 // TestCJKFTSSurvivesCompaction pins that staged archive compaction keeps
@@ -574,6 +592,9 @@ func TestCJKFTSSurvivesSessionResyncUpsert(t *testing.T) {
 // tokenizer sidecar, and then swaps that candidate in, so the index surviving
 // the round trip is worth holding still.
 func TestCJKFTSSurvivesCompaction(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if !simpleFTSRuntimeConfig.available() {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
 	}
@@ -581,21 +602,21 @@ func TestCJKFTSSurvivesCompaction(t *testing.T) {
 	seedSearchSession(t, d, "compact-cn", "proj", [][2]string{
 		{"user", "压缩之后中文索引必须继续可用。"},
 	})
-	require.True(t, d.HasCJKFTS(), "CJK FTS live before compaction")
+	require.True(d.HasCJKFTS(), "CJK FTS live before compaction")
 
-	_, err := d.Compact(context.Background(), CompactOptions{
+	_, err := d.Compact(t.Context(), CompactOptions{
 		StagingDir: t.TempDir(),
 	})
-	require.NoError(t, err, "compaction must not fail on an archive with a CJK index")
+	require.NoError(err, "compaction must not fail on an archive with a CJK index")
 
-	assert.True(t, d.HasCJKFTS(), "CJK FTS still live after compaction")
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	assert.True(d.HasCJKFTS(), "CJK FTS still live after compaction")
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "中文索引",
 		Mode:    "fts",
 		Sources: []string{"messages"},
 		Limit:   20,
 	})
-	require.NoError(t, err)
-	require.NotEmpty(t, page.Matches, "Chinese search still returns after compaction")
-	assert.Equal(t, "compact-cn", page.Matches[0].SessionID)
+	require.NoError(err)
+	require.NotEmpty(page.Matches, "Chinese search still returns after compaction")
+	assert.Equal("compact-cn", page.Matches[0].SessionID)
 }

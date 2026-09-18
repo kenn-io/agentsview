@@ -14,6 +14,8 @@ import (
 )
 
 func TestClassifyUsageRollupFactsFinalizesSafeGroups(t *testing.T) {
+	assert := assert.New(t)
+
 	plain := rollupSnapshotFact(1, 0, "session-a", "2026-08-01", "model-a", 5)
 	plain.Fact.ClaudeMessageID = ""
 	plain.Fact.ClaudeRequestID = ""
@@ -30,18 +32,18 @@ func TestClassifyUsageRollupFactsFinalizesSafeGroups(t *testing.T) {
 		newUsageDedupIdentitySet(),
 	)
 
-	assert.Empty(t, exceptions)
+	assert.Empty(exceptions)
 	require.Len(t, survivors, 3)
-	assert.Equal(t, "1:0", usageRollupFactIdentity(survivors[0].Fact))
-	assert.Equal(t, "1:1", usageRollupFactIdentity(survivors[1].Fact))
-	assert.Zero(t, survivors[1].DiscardedSnapshotOutputTokens)
+	assert.Equal("1:0", usageRollupFactIdentity(survivors[0].Fact))
+	assert.Equal("1:1", usageRollupFactIdentity(survivors[1].Fact))
+	assert.Zero(survivors[1].DiscardedSnapshotOutputTokens)
 	ranked := survivors[2]
-	assert.Equal(t, "1:3", usageRollupFactIdentity(ranked.Fact),
+	assert.Equal("1:3", usageRollupFactIdentity(ranked.Fact),
 		"the greater output snapshot must win")
-	assert.Equal(t, int64(20), ranked.DiscardedSnapshotOutputTokens)
-	assert.Equal(t, int64(4), ranked.Fact.Fact.WebSearchRequests,
+	assert.Equal(int64(20), ranked.DiscardedSnapshotOutputTokens)
+	assert.Equal(int64(4), ranked.Fact.Fact.WebSearchRequests,
 		"the maximum web-search count must carry across snapshots")
-	assert.Equal(t, "session-a", ranked.Fact.AttributionSessionID)
+	assert.Equal("session-a", ranked.Fact.AttributionSessionID)
 }
 
 func TestClassifyUsageRollupFactsFinalizesSafeGeneralGroups(t *testing.T) {
@@ -180,6 +182,9 @@ func TestCompareUsageFactTiesUsesAscendingIdentity(t *testing.T) {
 }
 
 func TestPriceUsageFactRoundsEachSurvivor(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "model-a",
 		Rates: export.ModelRates{
@@ -191,15 +196,18 @@ func TestPriceUsageFactRoundsEachSurvivor(t *testing.T) {
 	}}
 
 	first, err := priceUsageFact(input, resolver)
-	require.NoError(t, err)
+	require.NoError(err)
 	second, err := priceUsageFact(input, resolver)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.Equal(t, int64(1), first.Cost.Microdollars)
-	assert.Equal(t, int64(2), first.Cost.Microdollars+second.Cost.Microdollars)
+	assert.Equal(int64(1), first.Cost.Microdollars)
+	assert.Equal(int64(2), first.Cost.Microdollars+second.Cost.Microdollars)
 }
 
 func TestPriceUsageFactSelectsRequestBand(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "model-a",
 		Rates: export.ModelRates{
@@ -217,16 +225,19 @@ func TestPriceUsageFactSelectsRequestBand(t *testing.T) {
 			Model: "model-a", InputTokens: 101, RequestScoped: true,
 		},
 	}, resolver)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.NotNil(t, got.BandThreshold)
-	assert.Equal(t, 100, *got.BandThreshold)
-	assert.Equal(t, int64(202), got.Cost.Microdollars)
-	assert.Equal(t, 1, got.ComputedRequest)
-	assert.Equal(t, 0, got.BaseRequest)
+	require.NotNil(got.BandThreshold)
+	assert.Equal(100, *got.BandThreshold)
+	assert.Equal(int64(202), got.Cost.Microdollars)
+	assert.Equal(1, got.ComputedRequest)
+	assert.Equal(0, got.BaseRequest)
 }
 
 func TestPriceUsageFactPreservesReportedAndAuthoritativeCosts(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	resolver := export.NewPricingResolver(nil)
 	reported := int64(77)
 
@@ -237,10 +248,10 @@ func TestPriceUsageFactPreservesReportedAndAuthoritativeCosts(t *testing.T) {
 			CostSource: "provider-reported",
 		},
 	}, resolver)
-	require.NoError(t, err)
-	assert.Equal(t, int64(77), ordinary.Cost.Microdollars)
-	assert.Nil(t, ordinary.AuthoritativeCost)
-	assert.Equal(t, 1, ordinary.Reported)
+	require.NoError(err)
+	assert.Equal(int64(77), ordinary.Cost.Microdollars)
+	assert.Nil(ordinary.AuthoritativeCost)
+	assert.Equal(1, ordinary.Reported)
 
 	authoritative, err := priceUsageFact(usagePriceInput{
 		ReportedModel: "model-a",
@@ -249,10 +260,10 @@ func TestPriceUsageFactPreservesReportedAndAuthoritativeCosts(t *testing.T) {
 			CostSource: CopilotReportedCostSource,
 		},
 	}, resolver)
-	require.NoError(t, err)
-	require.NotNil(t, authoritative.AuthoritativeCost)
-	assert.Equal(t, int64(77), authoritative.AuthoritativeCost.Microdollars)
-	assert.Equal(t, 1, authoritative.ComputedAggregate)
+	require.NoError(err)
+	require.NotNil(authoritative.AuthoritativeCost)
+	assert.Equal(int64(77), authoritative.AuthoritativeCost.Microdollars)
+	assert.Equal(1, authoritative.ComputedAggregate)
 }
 
 func TestPriceUsageFactUsesBilledRatesForReportedCacheSavings(t *testing.T) {
@@ -320,6 +331,9 @@ func TestPriceUsageFactComputesCacheSavingsAndWebSearchFee(t *testing.T) {
 }
 
 func TestBuildUsageDailyContributionsRecordsDiscardedSnapshots(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	loser := rollupSnapshotFact(1, 0, "session-a", "2026-08-01", "model-a", 10)
 	winner := rollupSnapshotFact(1, 1, "session-a", "2026-08-01", "model-a", 20)
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
@@ -332,12 +346,12 @@ func TestBuildUsageDailyContributionsRecordsDiscardedSnapshots(t *testing.T) {
 	survivors, exceptions := classifyUsageRollupFacts(
 		[]usageRollupFact{loser, winner}, newUsageDedupIdentitySet(),
 	)
-	require.Empty(t, exceptions)
+	require.Empty(exceptions)
 	daily, err := buildUsageDailyContributions(survivors, resolver)
-	require.NoError(t, err)
-	require.Len(t, daily, 1)
-	assert.Equal(t, int64(20), daily[0].OutputTokens)
-	assert.Equal(t, int64(10), daily[0].DiscardedSnapshotOutputTokens)
+	require.NoError(err)
+	require.Len(daily, 1)
+	assert.Equal(int64(20), daily[0].OutputTokens)
+	assert.Equal(int64(10), daily[0].DiscardedSnapshotOutputTokens)
 }
 
 func TestBuildUsageDailyContributionsPricesBeforeSumming(t *testing.T) {

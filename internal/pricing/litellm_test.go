@@ -10,6 +10,9 @@ import (
 )
 
 func TestParseLiteLLMPricing(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	data := []byte(`{
 		"sample_spec": {"max_tokens": 4096},
 		"claude-sonnet-4-20250514": {
@@ -22,7 +25,7 @@ func TestParseLiteLLMPricing(t *testing.T) {
 	}`)
 
 	prices, err := ParseLiteLLMPricing(data)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	var found *ModelPricing
 	for i := range prices {
@@ -31,16 +34,14 @@ func TestParseLiteLLMPricing(t *testing.T) {
 			break
 		}
 	}
-	require.NotNil(t, found, "claude-sonnet-4-20250514 not found in results")
+	require.NotNil(found, "claude-sonnet-4-20250514 not found in results")
 
-	assert.Equal(t, money.Money{Microdollars: 3_000_000}, found.InputPerMTok)
-	assert.Equal(t, money.Money{Microdollars: 15_000_000}, found.OutputPerMTok)
-	assert.Equal(t,
-		money.Money{Microdollars: 3_750_000},
+	assert.Equal(money.Money{Microdollars: 3_000_000}, found.InputPerMTok)
+	assert.Equal(money.Money{Microdollars: 15_000_000}, found.OutputPerMTok)
+	assert.Equal(money.Money{Microdollars: 3_750_000},
 		found.CacheCreationPerMTok,
 	)
-	assert.Equal(t,
-		money.Money{Microdollars: 300_000},
+	assert.Equal(money.Money{Microdollars: 300_000},
 		found.CacheReadPerMTok,
 	)
 }

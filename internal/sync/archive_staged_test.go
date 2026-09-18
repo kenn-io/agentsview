@@ -13,6 +13,9 @@ func TestCodexStagedArchiveProjection(t *testing.T) {
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b05"
 	for _, policy := range []config.ArchiveContent{config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
 		t.Run(string(policy), func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			root := writeCodexParityRoot(t, uuid)
 			database := openTestDB(t)
 			engine := NewEngine(database, EngineConfig{
@@ -21,45 +24,45 @@ func TestCodexStagedArchiveProjection(t *testing.T) {
 			})
 			t.Cleanup(engine.Close)
 			stats := engine.SyncAll(t.Context(), nil)
-			require.Zero(t, stats.Failed)
-			require.Equal(t, 1, stats.Synced)
+			require.Zero(stats.Failed)
+			require.Equal(1, stats.Synced)
 			id := "codex:" + uuid
 			msgs, err := database.GetAllMessages(t.Context(), id)
-			require.NoError(t, err)
-			require.NotEmpty(t, msgs)
+			require.NoError(err)
+			require.NotEmpty(msgs)
 			for _, msg := range msgs {
 				if policy.UsageOnly() {
-					assert.Empty(t, msg.Content)
-					assert.Empty(t, msg.ToolCalls)
+					assert.Empty(msg.Content)
+					assert.Empty(msg.ToolCalls)
 				}
 				for _, call := range msg.ToolCalls {
-					assert.Empty(t, call.InputJSON)
-					assert.Empty(t, call.ResultContent)
+					assert.Empty(call.InputJSON)
+					assert.Empty(call.ResultContent)
 					for _, event := range call.ResultEvents {
-						assert.Empty(t, event.Content)
+						assert.Empty(event.Content)
 					}
 				}
 			}
 			if !policy.UsageOnly() {
-				assert.Equal(t, "run the suite", msgs[0].Content)
+				assert.Equal("run the suite", msgs[0].Content)
 			}
 			sess, err := database.GetSessionFull(t.Context(), id)
-			require.NoError(t, err)
-			require.NotNil(t, sess)
-			assert.Zero(t, sess.SecretLeakCount)
+			require.NoError(err)
+			require.NotNil(sess)
+			assert.Zero(sess.SecretLeakCount)
 			if policy.UsageOnly() {
-				assert.Zero(t, sess.ToolFailureSignalCount)
+				assert.Zero(sess.ToolFailureSignalCount)
 			} else {
 				// Keep the explicit error status, discard the content-only failure.
-				assert.Equal(t, 1, sess.ToolFailureSignalCount)
+				assert.Equal(1, sess.ToolFailureSignalCount)
 			}
 			findings, err := database.SessionSecretFindings(t.Context(), id)
-			require.NoError(t, err)
-			assert.Empty(t, findings)
+			require.NoError(err)
+			assert.Empty(findings)
 			// Resumable SHA state may include raw trailing transcript bytes.
 			_, found, err := database.GetParserCheckpointBlobs(id)
-			require.NoError(t, err)
-			assert.False(t, found)
+			require.NoError(err)
+			assert.False(found)
 		})
 	}
 }

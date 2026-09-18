@@ -17,11 +17,11 @@ import (
 func TestOpenCursorAttributionDB_ReadOnly(t *testing.T) {
 	path := seedCursorAttributionDBTest(t)
 
-	conn, err := openCursorAttributionDB(path)
+	conn, err := openCursorAttributionDB(t.Context(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	_, err = conn.Exec(
+	_, err = conn.ExecContext(t.Context(),
 		`INSERT INTO conversation_summaries (model, mode, updatedAt)
 		 VALUES ('m', 'tab', 0)`,
 	)
@@ -32,7 +32,7 @@ func TestOpenCursorAttributionDB_ReadOnly(t *testing.T) {
 func TestOpenCursorAttributionDB_DoesNotCreateMissingDB(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.db")
 
-	conn, err := openCursorAttributionDB(missing)
+	conn, err := openCursorAttributionDB(t.Context(), missing)
 	if err == nil {
 		_ = conn.Close()
 	}
@@ -44,36 +44,39 @@ func TestOpenCursorAttributionDB_DoesNotCreateMissingDB(t *testing.T) {
 }
 
 func TestLoadCursorAttribution_Happy(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := seedCursorAttributionDBTest(t)
 	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", path)
 
 	from := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
 	to := time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC)
 
-	got, status, err := LoadCursorAttribution(from, to)
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.Equal(t, CursorAttributionAvailable, status)
+	got, status, err := LoadCursorAttribution(t.Context(), from, to)
+	require.NoError(err)
+	require.NotNil(got)
+	assert.Equal(CursorAttributionAvailable, status)
 
-	assert.Equal(t, int64(2), got.ScoredCommits)
-	assert.Equal(t, int64(18), got.LinesAdded)
-	assert.Equal(t, int64(6), got.LinesDeleted)
-	assert.Equal(t, int64(6), got.TabLinesAdded)
-	assert.Equal(t, int64(4), got.ComposerLinesAdded)
-	assert.Equal(t, int64(5), got.HumanLinesAdded)
-	assert.Equal(t, int64(3), got.BlankLinesAdded)
-	assert.InDelta(t, 10.0/18.0, got.AIAuthoredPct, 1e-9)
-	require.Len(t, got.ConversationCounts, 2)
-	assert.Equal(t, "model-a", got.ConversationCounts[0].Model)
-	assert.Equal(t, "composer", got.ConversationCounts[0].Mode)
-	assert.Equal(t, int64(3), got.ConversationCounts[0].Count)
+	assert.Equal(int64(2), got.ScoredCommits)
+	assert.Equal(int64(18), got.LinesAdded)
+	assert.Equal(int64(6), got.LinesDeleted)
+	assert.Equal(int64(6), got.TabLinesAdded)
+	assert.Equal(int64(4), got.ComposerLinesAdded)
+	assert.Equal(int64(5), got.HumanLinesAdded)
+	assert.Equal(int64(3), got.BlankLinesAdded)
+	assert.InDelta(10.0/18.0, got.AIAuthoredPct, 1e-9)
+	require.Len(got.ConversationCounts, 2)
+	assert.Equal("model-a", got.ConversationCounts[0].Model)
+	assert.Equal("composer", got.ConversationCounts[0].Mode)
+	assert.Equal(int64(3), got.ConversationCounts[0].Count)
 }
 
 func TestLoadCursorAttribution_MissingDB(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.db")
 	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", missing)
 
-	got, status, err := LoadCursorAttribution(
+	got, status, err := LoadCursorAttribution(t.Context(),
 		time.Unix(0, 0).UTC(),
 		time.Unix(0, 1).UTC(),
 	)
@@ -86,7 +89,7 @@ func TestLoadCursorAttribution_EmptyDB(t *testing.T) {
 	path := seedEmptyCursorAttributionDBTest(t)
 	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", path)
 
-	got, status, err := LoadCursorAttribution(
+	got, status, err := LoadCursorAttribution(t.Context(),
 		time.Unix(0, 0).UTC(),
 		time.Unix(0, 1).UTC(),
 	)
@@ -96,37 +99,40 @@ func TestLoadCursorAttribution_EmptyDB(t *testing.T) {
 }
 
 func TestLoadCursorAttribution_NormalizesEmptyConversationKeys(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := seedCursorAttributionDBTest(t)
 	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", path)
 
 	conn, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(func() { _ = conn.Close() })
 
 	ts := time.Date(2026, 6, 1, 14, 0, 0, 0, time.UTC).UnixMilli()
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		INSERT INTO conversation_summaries (model, mode, updatedAt) VALUES
 			(NULL, NULL, ?),
 			('', '', ?)
 	`, ts, ts)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	got, status, err := LoadCursorAttribution(
+	got, status, err := LoadCursorAttribution(t.Context(),
 		time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC),
 		time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC),
 	)
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.Equal(t, CursorAttributionAvailable, status)
+	require.NoError(err)
+	require.NotNil(got)
+	assert.Equal(CursorAttributionAvailable, status)
 
 	emptyRows := 0
 	for _, entry := range got.ConversationCounts {
 		if entry.Model == "" && entry.Mode == "" {
 			emptyRows++
-			assert.Equal(t, int64(2), entry.Count)
+			assert.Equal(int64(2), entry.Count)
 		}
 	}
-	assert.Equal(t, 1, emptyRows)
+	assert.Equal(1, emptyRows)
 }
 
 func seedCursorAttributionDBTest(t *testing.T) string {
@@ -137,7 +143,7 @@ func seedCursorAttributionDBTest(t *testing.T) string {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		CREATE TABLE scored_commits (
 			commitHash TEXT PRIMARY KEY,
 			scoredAt INTEGER NOT NULL,
@@ -155,7 +161,7 @@ func seedCursorAttributionDBTest(t *testing.T) string {
 		)
 	`)
 	require.NoError(t, err)
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		CREATE TABLE conversation_summaries (
 			model TEXT,
 			mode TEXT,
@@ -173,7 +179,7 @@ func seedCursorAttributionDBTest(t *testing.T) string {
 	outside := time.Date(2026, 6, 1, 15, 0, 0, 0,
 		time.FixedZone("EDT", -4*60*60))
 
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		INSERT INTO scored_commits (
 			commitHash, scoredAt, commitDate,
 			linesAdded, linesDeleted,
@@ -194,7 +200,7 @@ func seedCursorAttributionDBTest(t *testing.T) string {
 		formatCursorCommitDate(outside),
 	)
 	require.NoError(t, err)
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		INSERT INTO conversation_summaries (model, mode, updatedAt) VALUES
 			('model-a', 'composer', ?),
 			('model-a', 'composer', ?),
@@ -213,7 +219,7 @@ func seedEmptyCursorAttributionDBTest(t *testing.T) string {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
 
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		CREATE TABLE scored_commits (
 			commitHash TEXT PRIMARY KEY,
 			scoredAt INTEGER NOT NULL,
@@ -231,7 +237,7 @@ func seedEmptyCursorAttributionDBTest(t *testing.T) string {
 		)
 	`)
 	require.NoError(t, err)
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		CREATE TABLE conversation_summaries (
 			model TEXT,
 			mode TEXT,

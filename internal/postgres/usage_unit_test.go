@@ -259,26 +259,28 @@ func (r *usageProbeRows) Next(dest []driver.Value) error {
 }
 
 func TestPGGetDailyUsageReturnsDedupedSessionCounts(t *testing.T) {
+	assert := assert.New(t)
+
 	store := &Store{
 		pg: newUsageProbeDB(t, &usageProbeState{}),
 	}
 
-	result, err := store.GetDailyUsage(context.Background(), db.UsageFilter{
+	result, err := store.GetDailyUsage(t.Context(), db.UsageFilter{
 		From: "2024-06-15",
 		To:   "2024-06-15",
 	})
 	require.NoError(t, err, "GetDailyUsage")
 
-	assert.Equal(t, 1, result.SessionCounts.Total)
+	assert.Equal(1, result.SessionCounts.Total)
 	countsByDisplay := make(map[string]int, len(result.Projects))
 	for key, project := range result.Projects {
 		countsByDisplay[project.DisplayLabel] = result.SessionCounts.ByProject[key]
-		assert.NotContains(t, key, project.DisplayLabel)
+		assert.NotContains(key, project.DisplayLabel)
 	}
-	assert.Equal(t, map[string]int{"proj-a": 1}, countsByDisplay)
-	assert.Equal(t, 1, result.SessionCounts.ByAgent["claude"])
-	assert.NotContains(t, countsByDisplay, "proj-b")
-	assert.Zero(t, result.SessionCounts.ByAgent["codex"])
+	assert.Equal(map[string]int{"proj-a": 1}, countsByDisplay)
+	assert.Equal(1, result.SessionCounts.ByAgent["claude"])
+	assert.NotContains(countsByDisplay, "proj-b")
+	assert.Zero(result.SessionCounts.ByAgent["codex"])
 }
 
 func TestPGUsageDedupTokenForRowFallsBackToSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
@@ -298,6 +300,9 @@ func TestPGUsageDedupTokenForRowFallsBackToSourceUUIDWhenClaudePairIncomplete(t 
 }
 
 func TestPGUsageAmountsPreserveSessionSummaryUsageEventTokens(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	rawInput := db.MaxPlausibleTokens + 250_000
 	rawOutput := db.MaxPlausibleTokens + 500_000
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
@@ -316,15 +321,15 @@ func TestPGUsageAmountsPreserveSessionSummaryUsageEventTokens(t *testing.T) {
 		},
 		resolver,
 	)
-	require.NoError(t, priceErr)
-	assert.Equal(t, rawInput, inTok, "daily input")
-	assert.Equal(t, rawOutput, outTok, "daily output")
+	require.NoError(priceErr)
+	assert.Equal(rawInput, inTok, "daily input")
+	assert.Equal(rawOutput, outTok, "daily output")
 	wantCost, err := money.CostPerMillion([]money.RatedTokens{
 		{Tokens: int64(rawInput), Rate: money.MustParseDollars("1")},
 		{Tokens: int64(rawOutput), Rate: money.MustParseDollars("2")},
 	})
-	require.NoError(t, err)
-	assert.Equal(t, wantCost, cost, "daily cost")
+	require.NoError(err)
+	assert.Equal(wantCost, cost, "daily cost")
 
 	cost, priced, contributes, priceErr := pgSessionRowCost(pgUsageScanRow{
 		usageSource:  "session",
@@ -332,10 +337,10 @@ func TestPGUsageAmountsPreserveSessionSummaryUsageEventTokens(t *testing.T) {
 		inputTokens:  rawInput,
 		outputTokens: rawOutput,
 	}, resolver)
-	require.NoError(t, priceErr)
-	require.True(t, priced, "priced")
-	require.True(t, contributes, "contributes")
-	assert.Equal(t, wantCost, cost, "session cost")
+	require.NoError(priceErr)
+	require.True(priced, "priced")
+	require.True(contributes, "contributes")
+	assert.Equal(wantCost, cost, "session cost")
 }
 
 func TestPGDailyUsageAmountsPricingBandRequestScope(t *testing.T) {
@@ -375,6 +380,9 @@ func TestPGDailyUsageAmountsPricingBandRequestScope(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			resolver := pgPricingBandTestResolver()
 			_, _, _, _, cost, _, err := pgDailyUsageAmounts(pgDailyUsageScanRow{
 				messageOrdinal: tt.messageOrdinal,
@@ -382,18 +390,18 @@ func TestPGDailyUsageAmountsPricingBandRequestScope(t *testing.T) {
 				model:          "banded-model",
 				inputTokens:    300_000,
 			}, resolver)
-			require.NoError(t, err)
+			require.NoError(err)
 			block, err := resolver.BuildBlock()
-			require.NoError(t, err)
+			require.NoError(err)
 			provenance := block.Models["banded-model"]
-			require.Len(t, provenance.Resolutions, 1)
+			require.Len(provenance.Resolutions, 1)
 			application := provenance.Resolutions[0].Application
 
-			assert.Equal(t, money.Money{Microdollars: tt.wantCost}, cost)
-			assert.Equal(t, tt.wantAggregate, application.AggregateRowCount)
+			assert.Equal(money.Money{Microdollars: tt.wantCost}, cost)
+			assert.Equal(tt.wantAggregate, application.AggregateRowCount)
 			if tt.wantBand > 0 {
-				require.Len(t, application.Bands, 1)
-				assert.Equal(t, tt.wantBand, application.Bands[0].RequestCount)
+				require.Len(application.Bands, 1)
+				assert.Equal(tt.wantBand, application.Bands[0].RequestCount)
 			}
 		})
 	}
@@ -419,6 +427,8 @@ func pgPricingBandTestResolver() *export.PricingResolver {
 }
 
 func TestPGUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
+	assert := assert.New(t)
+
 	pb := &paramBuilder{}
 	query := pgUsageRowQuery(pb, db.UsageFilter{
 		From:             "2024-06-01",
@@ -427,35 +437,35 @@ func TestPGUsageRowQueryPushesDateBoundsIntoUnion(t *testing.T) {
 	})
 
 	normalized := strings.ToLower(query)
-	assert.NotContains(t, normalized, "and u.ts >=")
-	assert.NotContains(t, normalized, "and u.ts <=")
-	assert.NotContains(t, normalized, " or ")
-	assert.NotContains(t, normalized, "display_name")
-	assert.NotContains(t, normalized, "first_message")
-	assert.NotContains(t, normalized, "cost_status")
-	assert.Contains(t, normalized, "u.cost_source")
-	assert.Contains(t, normalized, "u.reasoning_tokens")
-	assert.NotContains(t, normalized, "user_message_count")
-	assert.NotContains(t, normalized, "session_activity_at")
-	assert.NotContains(t, normalized, " as started_at")
-	assert.NotContains(t, normalized, "u.machine")
-	assert.Contains(t, normalized, "message_timestamp_rows as materialized")
-	assert.Contains(t, normalized, "usage_event_timestamp_rows as materialized")
-	assert.Contains(t, normalized, "from message_timestamp_rows m\njoin sessions s")
-	assert.Contains(t, normalized, "from usage_event_timestamp_rows ue\njoin sessions s")
-	assert.Contains(t, normalized, "m.timestamp is not null")
-	assert.Contains(t, normalized, "ue.occurred_at is not null")
-	assert.Contains(t, normalized, "m.timestamp is null")
-	assert.Contains(t, normalized, "ue.occurred_at is null")
-	assert.Contains(t, normalized, "m.timestamp >= $1::timestamptz")
-	assert.Contains(t, normalized, "ue.occurred_at >= $1::timestamptz")
-	assert.Contains(t, normalized, "s.started_at >= $1::timestamptz")
-	assert.Contains(t, normalized, "m.timestamp <= $2::timestamptz")
-	assert.Contains(t, normalized, "ue.occurred_at <= $2::timestamptz")
-	assert.Contains(t, normalized, "s.started_at <= $2::timestamptz")
+	assert.NotContains(normalized, "and u.ts >=")
+	assert.NotContains(normalized, "and u.ts <=")
+	assert.NotContains(normalized, " or ")
+	assert.NotContains(normalized, "display_name")
+	assert.NotContains(normalized, "first_message")
+	assert.NotContains(normalized, "cost_status")
+	assert.Contains(normalized, "u.cost_source")
+	assert.Contains(normalized, "u.reasoning_tokens")
+	assert.NotContains(normalized, "user_message_count")
+	assert.NotContains(normalized, "session_activity_at")
+	assert.NotContains(normalized, " as started_at")
+	assert.NotContains(normalized, "u.machine")
+	assert.Contains(normalized, "message_timestamp_rows as materialized")
+	assert.Contains(normalized, "usage_event_timestamp_rows as materialized")
+	assert.Contains(normalized, "from message_timestamp_rows m\njoin sessions s")
+	assert.Contains(normalized, "from usage_event_timestamp_rows ue\njoin sessions s")
+	assert.Contains(normalized, "m.timestamp is not null")
+	assert.Contains(normalized, "ue.occurred_at is not null")
+	assert.Contains(normalized, "m.timestamp is null")
+	assert.Contains(normalized, "ue.occurred_at is null")
+	assert.Contains(normalized, "m.timestamp >= $1::timestamptz")
+	assert.Contains(normalized, "ue.occurred_at >= $1::timestamptz")
+	assert.Contains(normalized, "s.started_at >= $1::timestamptz")
+	assert.Contains(normalized, "m.timestamp <= $2::timestamptz")
+	assert.Contains(normalized, "ue.occurred_at <= $2::timestamptz")
+	assert.Contains(normalized, "s.started_at <= $2::timestamptz")
 	require.Len(t, pb.args, 2)
-	assert.Equal(t, "2024-05-31T10:00:00Z", pb.args[0])
-	assert.Equal(t, "2024-07-01T13:59:59Z", pb.args[1])
+	assert.Equal("2024-05-31T10:00:00Z", pb.args[0])
+	assert.Equal("2024-07-01T13:59:59Z", pb.args[1])
 }
 
 func TestPGDailyUsageDetailedQuerySelectsMachine(t *testing.T) {
@@ -499,36 +509,39 @@ func TestPGBoundedDailyUsageRowsCTEProjectsReasoningTokens(t *testing.T) {
 // timestamped-CTE path (see TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility
 // for that SQL shape) and are not exercised by this probe-mock test.
 func TestPGGetUsageMatchingSessionCountUsesSessionQuery(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	state := &usageProbeState{}
 	store := &Store{
 		pg: newUsageProbeDB(t, state),
 	}
 
-	count, err := store.GetUsageMatchingSessionCount(context.Background(), db.UsageFilter{
+	count, err := store.GetUsageMatchingSessionCount(t.Context(), db.UsageFilter{
 		Agent: "copilot",
 		Model: "gpt-5.3-codex",
 	})
-	require.NoError(t, err, "GetUsageMatchingSessionCount")
-	assert.Equal(t, 1, count)
+	require.NoError(err, "GetUsageMatchingSessionCount")
+	assert.Equal(1, count)
 
 	state.mu.Lock()
 	queries := append([]string(nil), state.queries...)
 	state.mu.Unlock()
-	require.NotEmpty(t, queries)
+	require.NotEmpty(queries)
 
 	last := strings.ToLower(queries[len(queries)-1])
-	assert.Contains(t, last, "select count(*)")
-	assert.Contains(t, last, "from sessions s")
-	assert.Contains(t, last, "exists (")
-	assert.Contains(t, last, "from messages m")
-	assert.Contains(t, last, "from usage_events ue")
-	assert.Contains(t, last, "s.agent = ")
-	assert.Contains(t, last, "m.model = ")
+	assert.Contains(last, "select count(*)")
+	assert.Contains(last, "from sessions s")
+	assert.Contains(last, "exists (")
+	assert.Contains(last, "from messages m")
+	assert.Contains(last, "from usage_events ue")
+	assert.Contains(last, "s.agent = ")
+	assert.Contains(last, "m.model = ")
 	// The message EXISTS uses the relaxed matching eligibility: assistant
 	// rows without requiring a model name, so empty-model Copilot
 	// assistant messages match the same way they do on the bounded path.
-	assert.Contains(t, last, "m.role = 'assistant'")
-	assert.NotContains(t, last, "m.model != ''")
+	assert.Contains(last, "m.role = 'assistant'")
+	assert.NotContains(last, "m.model != ''")
 }
 
 // TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility asserts the
@@ -541,6 +554,8 @@ func TestPGGetUsageMatchingSessionCountUsesSessionQuery(t *testing.T) {
 // Mirrors TestPGUsageRowQueryPushesDateBoundsIntoUnion's direct-call style
 // with no live DB and no probe mock.
 func TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility(t *testing.T) {
+	assert := assert.New(t)
+
 	pb := &paramBuilder{}
 	f := db.UsageFilter{
 		From:  "2024-06-01",
@@ -551,21 +566,23 @@ func TestPGMatchingUsageRowsSQLForBoundsRelaxesTokenEligibility(t *testing.T) {
 	query := pgMatchingUsageRowsSQLForBounds(pb, f, bounds)
 
 	normalized := strings.ToLower(query)
-	assert.Contains(t, normalized, "message_timestamp_rows as materialized")
-	assert.Contains(t, normalized, "usage_event_timestamp_rows as materialized")
-	assert.Contains(t, normalized, "m.role = 'assistant'")
-	assert.NotContains(t, normalized, "m.model != ''")
-	assert.NotContains(t, normalized, "m.token_usage != ''")
+	assert.Contains(normalized, "message_timestamp_rows as materialized")
+	assert.Contains(normalized, "usage_event_timestamp_rows as materialized")
+	assert.Contains(normalized, "m.role = 'assistant'")
+	assert.NotContains(normalized, "m.model != ''")
+	assert.NotContains(normalized, "m.token_usage != ''")
 	// Model is filtered on the bounded row directly, not via a
 	// session-wide EXISTS: each of the four branches (message-timestamp
 	// source, event-timestamp source, message fallback, event fallback)
 	// applies its own m.model/ue.model comparison, no EXISTS subqueries.
-	assert.Equal(t, 0, strings.Count(normalized, "exists ("))
-	assert.Equal(t, 2, strings.Count(normalized, "m.model = "))
-	assert.Equal(t, 2, strings.Count(normalized, "ue.model = "))
+	assert.Equal(0, strings.Count(normalized, "exists ("))
+	assert.Equal(2, strings.Count(normalized, "m.model = "))
+	assert.Equal(2, strings.Count(normalized, "ue.model = "))
 }
 
 func TestPGTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
+	assert := assert.New(t)
+
 	pb := &paramBuilder{}
 	query := pgTopSessionsUsageRowQuery(pb, db.UsageFilter{
 		From:     "2024-06-01",
@@ -574,37 +591,40 @@ func TestPGTopSessionsUsageRowQueryUsesNarrowScan(t *testing.T) {
 	})
 
 	normalized := strings.ToLower(query)
-	assert.NotContains(t, normalized, "display_name")
-	assert.NotContains(t, normalized, "first_message")
-	assert.NotContains(t, normalized, "cost_status")
-	assert.Contains(t, normalized, "u.cost_source")
-	assert.Contains(t, normalized, "u.reasoning_tokens")
-	assert.NotContains(t, normalized, "user_message_count")
-	assert.NotContains(t, normalized, "session_activity_at")
-	assert.NotContains(t, normalized, " as started_at")
-	assert.NotContains(t, normalized, "u.machine")
-	assert.Contains(t, normalized, "m.timestamp is not null")
-	assert.Contains(t, normalized, "ue.occurred_at is not null")
-	assert.Contains(t, normalized, "m.timestamp is null")
-	assert.Contains(t, normalized, "ue.occurred_at is null")
-	assert.Contains(t, normalized, "m.timestamp >= $1::timestamptz")
-	assert.Contains(t, normalized, "ue.occurred_at >= $1::timestamptz")
-	assert.Contains(t, normalized,
+	assert.NotContains(normalized, "display_name")
+	assert.NotContains(normalized, "first_message")
+	assert.NotContains(normalized, "cost_status")
+	assert.Contains(normalized, "u.cost_source")
+	assert.Contains(normalized, "u.reasoning_tokens")
+	assert.NotContains(normalized, "user_message_count")
+	assert.NotContains(normalized, "session_activity_at")
+	assert.NotContains(normalized, " as started_at")
+	assert.NotContains(normalized, "u.machine")
+	assert.Contains(normalized, "m.timestamp is not null")
+	assert.Contains(normalized, "ue.occurred_at is not null")
+	assert.Contains(normalized, "m.timestamp is null")
+	assert.Contains(normalized, "ue.occurred_at is null")
+	assert.Contains(normalized, "m.timestamp >= $1::timestamptz")
+	assert.Contains(normalized, "ue.occurred_at >= $1::timestamptz")
+	assert.Contains(normalized,
 		"m.timestamp is null\n\tand s.started_at >= $1::timestamptz")
-	assert.Contains(t, normalized,
+	assert.Contains(normalized,
 		"ue.occurred_at is null\n\tand s.started_at >= $1::timestamptz")
-	assert.Contains(t, normalized, "m.timestamp <= $2::timestamptz")
-	assert.Contains(t, normalized, "ue.occurred_at <= $2::timestamptz")
-	assert.Contains(t, normalized, "u.ts >= $3::timestamptz")
-	assert.Contains(t, normalized, "u.ts < $4::timestamptz")
+	assert.Contains(normalized, "m.timestamp <= $2::timestamptz")
+	assert.Contains(normalized, "ue.occurred_at <= $2::timestamptz")
+	assert.Contains(normalized, "u.ts >= $3::timestamptz")
+	assert.Contains(normalized, "u.ts < $4::timestamptz")
 	require.Len(t, pb.args, 4)
-	assert.Equal(t, "2024-05-31T10:00:00Z", pb.args[0])
-	assert.Equal(t, "2024-07-01T13:59:59Z", pb.args[1])
-	assert.Equal(t, time.Date(2024, 6, 1, 4, 0, 0, 0, time.UTC), pb.args[2])
-	assert.Equal(t, time.Date(2024, 7, 1, 4, 0, 0, 0, time.UTC), pb.args[3])
+	assert.Equal("2024-05-31T10:00:00Z", pb.args[0])
+	assert.Equal("2024-07-01T13:59:59Z", pb.args[1])
+	assert.Equal(time.Date(2024, 6, 1, 4, 0, 0, 0, time.UTC), pb.args[2])
+	assert.Equal(time.Date(2024, 7, 1, 4, 0, 0, 0, time.UTC), pb.args[3])
 }
 
 func TestPGSessionRowCostIncludesReasoningOnlyRows(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	resolver := export.NewPricingResolver(
 		[]export.EffectivePricingRow{{
 			ModelPattern: "reasoning-model",
@@ -621,14 +641,14 @@ func TestPGSessionRowCostIncludesReasoningOnlyRows(t *testing.T) {
 		reasoningTokens: 25,
 	}, resolver)
 
-	require.NoError(t, err)
-	assert.True(t, contributes)
-	assert.True(t, priced)
-	assert.Equal(t, money.MustParseDollars("0.0005"), cost)
+	require.NoError(err)
+	assert.True(contributes)
+	assert.True(priced)
+	assert.Equal(money.MustParseDollars("0.0005"), cost)
 	block, err := resolver.BuildBlock()
-	require.NoError(t, err)
-	require.Contains(t, block.Models, "reasoning-model")
-	assert.Equal(t, export.CostSourceComputed,
+	require.NoError(err)
+	require.Contains(block.Models, "reasoning-model")
+	assert.Equal(export.CostSourceComputed,
 		block.Models["reasoning-model"].CostSource)
 }
 
@@ -655,6 +675,9 @@ func TestPGActivityReportRowStatusCanonicalizesKimiAliasByTimestamp(t *testing.T
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			resolver := export.NewPricingResolver([]export.EffectivePricingRow{
 				{
 					ModelPattern: pricingpkg.KimiK26Canonical,
@@ -681,22 +704,25 @@ func TestPGActivityReportRowStatusCanonicalizesKimiAliasByTimestamp(t *testing.T
 				resolver,
 			)
 
-			require.NoError(t, err)
-			assert.True(t, priced)
-			assert.True(t, contributes)
-			assert.Equal(t, tt.expectedCost, cost)
+			require.NoError(err)
+			assert.True(priced)
+			assert.True(contributes)
+			assert.Equal(tt.expectedCost, cost)
 			block, err := resolver.BuildBlock()
-			require.NoError(t, err)
-			require.Contains(t, block.Models, "daimon-kimi-code")
+			require.NoError(err)
+			require.Contains(block.Models, "daimon-kimi-code")
 			resolutions := block.Models["daimon-kimi-code"].Resolutions
-			require.Len(t, resolutions, 1)
-			assert.Equal(t, tt.canonical, resolutions[0].PricedModel)
-			assert.NotContains(t, block.Models, tt.canonical)
+			require.Len(resolutions, 1)
+			assert.Equal(tt.canonical, resolutions[0].PricedModel)
+			assert.NotContains(block.Models, tt.canonical)
 		})
 	}
 }
 
 func TestPGActivityReportRowStatusPrefersExactCustomKimiAlias(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{
 		{
 			ModelPattern: "daimon-kimi-code",
@@ -731,19 +757,22 @@ func TestPGActivityReportRowStatusPrefersExactCustomKimiAlias(t *testing.T) {
 		resolver,
 	)
 
-	require.NoError(t, err)
-	assert.True(t, priced)
-	assert.True(t, contributes)
-	assert.Equal(t, money.MustParseDollars("7"), cost)
+	require.NoError(err)
+	assert.True(priced)
+	assert.True(contributes)
+	assert.Equal(money.MustParseDollars("7"), cost)
 	block, err := resolver.BuildBlock()
-	require.NoError(t, err)
-	require.Contains(t, block.Models, "daimon-kimi-code")
+	require.NoError(err)
+	require.Contains(block.Models, "daimon-kimi-code")
 	resolutions := block.Models["daimon-kimi-code"].Resolutions
-	require.Len(t, resolutions, 1)
-	assert.Equal(t, "daimon-kimi-code", resolutions[0].PricedModel)
+	require.Len(resolutions, 1)
+	assert.Equal("daimon-kimi-code", resolutions[0].PricedModel)
 }
 
 func TestPGUsageAmountsIncludeMessageReasoningTokens(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	resolver := export.NewPricingResolver(
 		[]export.EffectivePricingRow{{
 			ModelPattern: "gpt-5.4",
@@ -761,23 +790,26 @@ func TestPGUsageAmountsIncludeMessageReasoningTokens(t *testing.T) {
 	}
 
 	inTok, outTok, _, _, cost, _, err := pgDailyUsageAmounts(row, resolver)
-	require.NoError(t, err)
-	assert.Equal(t, 1000, inTok)
-	assert.Zero(t, outTok)
-	assert.Equal(t, money.MustParseDollars("0.002"), cost)
+	require.NoError(err)
+	assert.Equal(1000, inTok)
+	assert.Zero(outTok)
+	assert.Equal(money.MustParseDollars("0.002"), cost)
 
 	sessionCost, priced, contributes, err := pgSessionRowCost(pgUsageScanRow{
 		usageSource: "message",
 		model:       "gpt-5.4",
 		tokenJSON:   row.tokenJSON,
 	}, resolver)
-	require.NoError(t, err)
-	assert.True(t, priced)
-	assert.True(t, contributes)
-	assert.Equal(t, money.MustParseDollars("0.002"), sessionCost)
+	require.NoError(err)
+	assert.True(priced)
+	assert.True(contributes)
+	assert.Equal(money.MustParseDollars("0.002"), sessionCost)
 }
 
 func TestPGDailyUsageAmountsPrefersExactCustomKimiAlias(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{
 		{
 			ModelPattern: "kimi-for-coding",
@@ -805,17 +837,20 @@ func TestPGDailyUsageAmountsPrefersExactCustomKimiAlias(t *testing.T) {
 		inputTokens: 1_000_000,
 	}, resolver)
 
-	require.NoError(t, err)
-	assert.Equal(t, money.MustParseDollars("7"), cost)
+	require.NoError(err)
+	assert.Equal(money.MustParseDollars("7"), cost)
 	block, err := resolver.BuildBlock()
-	require.NoError(t, err)
-	require.Contains(t, block.Models, "kimi-for-coding")
+	require.NoError(err)
+	require.Contains(block.Models, "kimi-for-coding")
 	resolutions := block.Models["kimi-for-coding"].Resolutions
-	require.Len(t, resolutions, 1)
-	assert.Equal(t, "kimi-for-coding", resolutions[0].PricedModel)
+	require.Len(resolutions, 1)
+	assert.Equal("kimi-for-coding", resolutions[0].PricedModel)
 }
 
 func TestPGDailyUsageAmountsPricesGPTReserveAsLuna(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	lunaCost := money.MustParseDollars("0.20")
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: pricingpkg.GPT56LunaCanonical,
@@ -827,18 +862,21 @@ func TestPGDailyUsageAmountsPricesGPTReserveAsLuna(t *testing.T) {
 		model:       pricingpkg.GPTReserveModelName,
 		inputTokens: 1_000_000,
 	}, resolver)
-	require.NoError(t, err)
-	assert.Equal(t, lunaCost, cost)
+	require.NoError(err)
+	assert.Equal(lunaCost, cost)
 	block, err := resolver.BuildBlock()
-	require.NoError(t, err)
-	require.Contains(t, block.Models, pricingpkg.GPTReserveModelName)
+	require.NoError(err)
+	require.Contains(block.Models, pricingpkg.GPTReserveModelName)
 	resolutions := block.Models[pricingpkg.GPTReserveModelName].Resolutions
-	require.Len(t, resolutions, 1)
-	assert.Equal(t, pricingpkg.GPT56LunaCanonical, resolutions[0].PricedModel)
-	assert.NotContains(t, block.Models, pricingpkg.GPT56LunaCanonical)
+	require.Len(resolutions, 1)
+	assert.Equal(pricingpkg.GPT56LunaCanonical, resolutions[0].PricedModel)
+	assert.NotContains(block.Models, pricingpkg.GPT56LunaCanonical)
 }
 
 func TestPGDailyUsageAmountsPrefersExactCustomGPTReserve(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{
 		{
 			ModelPattern: pricingpkg.GPTReserveModelName,
@@ -861,16 +899,19 @@ func TestPGDailyUsageAmountsPrefersExactCustomGPTReserve(t *testing.T) {
 		model:       pricingpkg.GPTReserveModelName,
 		inputTokens: 1_000_000,
 	}, resolver)
-	require.NoError(t, err)
-	assert.Equal(t, money.MustParseDollars("7"), cost)
+	require.NoError(err)
+	assert.Equal(money.MustParseDollars("7"), cost)
 	block, err := resolver.BuildBlock()
-	require.NoError(t, err)
+	require.NoError(err)
 	resolutions := block.Models[pricingpkg.GPTReserveModelName].Resolutions
-	require.Len(t, resolutions, 1)
-	assert.Equal(t, pricingpkg.GPTReserveModelName, resolutions[0].PricedModel)
+	require.Len(resolutions, 1)
+	assert.Equal(pricingpkg.GPTReserveModelName, resolutions[0].PricedModel)
 }
 
 func TestPGDailyUsageAmountsForwardsProviderToBilling(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "posit-model",
 		Rates:        export.ModelRates{InputPerMTok: money.MustParseDollars("1")},
@@ -885,11 +926,11 @@ func TestPGDailyUsageAmountsForwardsProviderToBilling(t *testing.T) {
 		}
 	}
 	_, _, _, _, positCost, _, err := pgDailyUsageAmounts(row("positai"), resolver)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, _, _, _, plainCost, _, err := pgDailyUsageAmounts(row("claude"), resolver)
-	require.NoError(t, err)
-	assert.Equal(t, money.MustParseDollars("1.1"), positCost)
-	assert.Equal(t, money.MustParseDollars("1"), plainCost)
+	require.NoError(err)
+	assert.Equal(money.MustParseDollars("1.1"), positCost)
+	assert.Equal(money.MustParseDollars("1"), plainCost)
 }
 
 func TestPGDailyUsageAmountsUsesBilledRatesForReportedCacheSavings(t *testing.T) {

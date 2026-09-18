@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -25,20 +24,22 @@ func TestMigrationCreatesModelPricingTable(t *testing.T) {
 }
 
 func TestMigrationCreatesModelPricingBandsTable(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
 
 	rows, err := d.getReader().Query(
 		`SELECT name FROM pragma_table_info('model_pricing_bands') ORDER BY cid`,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	defer rows.Close()
 	var columns []string
 	for rows.Next() {
 		var column string
-		require.NoError(t, rows.Scan(&column))
+		require.NoError(rows.Scan(&column))
 		columns = append(columns, column)
 	}
-	require.NoError(t, rows.Err())
+	require.NoError(rows.Err())
 
 	assert.Equal(t, []string{
 		"model_pattern",
@@ -53,6 +54,9 @@ func TestMigrationCreatesModelPricingBandsTable(t *testing.T) {
 }
 
 func TestUpsertModelPricingPricingBandsReplacesCompleteSet(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	initial := ModelPricing{
 		ModelPattern: "banded-model",
@@ -62,41 +66,41 @@ func TestUpsertModelPricingPricingBandsReplacesCompleteSet(t *testing.T) {
 			{AboveInputTokens: 200_000, InputPerMTok: money.MustParseDollars("2")},
 		},
 	}
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{initial}))
+	require.NoError(d.UpsertModelPricing([]ModelPricing{initial}))
 
 	got, err := d.GetModelPricing("banded-model")
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	require.Len(t, got.Bands, 2)
-	assert.Equal(t, 200_000, got.Bands[0].AboveInputTokens)
-	assert.Equal(t, 272_000, got.Bands[1].AboveInputTokens)
-	assert.NotEmpty(t, got.Bands[0].UpdatedAt)
-	require.NoError(t, d.SetPricingMeta("banded-model", "2000-01-01T00:00:00Z"))
+	require.NoError(err)
+	require.NotNil(got)
+	require.Len(got.Bands, 2)
+	assert.Equal(200_000, got.Bands[0].AboveInputTokens)
+	assert.Equal(272_000, got.Bands[1].AboveInputTokens)
+	assert.NotEmpty(got.Bands[0].UpdatedAt)
+	require.NoError(d.SetPricingMeta("banded-model", "2000-01-01T00:00:00Z"))
 
 	updated := initial
 	updated.Bands = []PricingBand{{
 		AboveInputTokens: 200_000,
 		InputPerMTok:     money.MustParseDollars("3"),
 	}}
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{updated}))
+	require.NoError(d.UpsertModelPricing([]ModelPricing{updated}))
 
 	got, err = d.GetModelPricing("banded-model")
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	require.Len(t, got.Bands, 1)
-	assert.Equal(t, 200_000, got.Bands[0].AboveInputTokens)
-	assert.Equal(t, money.MustParseDollars("3"), got.Bands[0].InputPerMTok)
-	assert.NotEqual(t, "2000-01-01T00:00:00Z", got.UpdatedAt)
+	require.NoError(err)
+	require.NotNil(got)
+	require.Len(got.Bands, 1)
+	assert.Equal(200_000, got.Bands[0].AboveInputTokens)
+	assert.Equal(money.MustParseDollars("3"), got.Bands[0].InputPerMTok)
+	assert.NotEqual("2000-01-01T00:00:00Z", got.UpdatedAt)
 	firstRevision := got.UpdatedAt
 
 	removed := initial
 	removed.Bands = nil
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{removed}))
+	require.NoError(d.UpsertModelPricing([]ModelPricing{removed}))
 	got, err = d.GetModelPricing("banded-model")
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.Empty(t, got.Bands)
-	assert.Greater(t, got.UpdatedAt, firstRevision)
+	require.NoError(err)
+	require.NotNil(got)
+	assert.Empty(got.Bands)
+	assert.Greater(got.UpdatedAt, firstRevision)
 }
 
 func TestFilterChangedModelPricingDetectsPricingBandOnlyChange(t *testing.T) {
@@ -126,6 +130,9 @@ func TestFilterChangedModelPricingDetectsPricingBandOnlyChange(t *testing.T) {
 }
 
 func TestUpsertModelPricing(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 
 	prices := []ModelPricing{
@@ -139,21 +146,24 @@ func TestUpsertModelPricing(t *testing.T) {
 	}
 
 	err := d.UpsertModelPricing(prices)
-	require.NoError(t, err, "UpsertModelPricing")
+	require.NoError(err, "UpsertModelPricing")
 
 	got, err := d.GetModelPricing("claude-sonnet-4")
-	require.NoError(t, err, "GetModelPricing")
-	require.NotNil(t, got, "expected pricing")
+	require.NoError(err, "GetModelPricing")
+	require.NotNil(got, "expected pricing")
 
-	assert.Equal(t, "claude-sonnet-4", got.ModelPattern)
-	assert.Equal(t, money.MustParseDollars("3.0"), got.InputPerMTok)
-	assert.Equal(t, money.MustParseDollars("15.0"), got.OutputPerMTok)
-	assert.Equal(t, money.MustParseDollars("3.75"), got.CacheCreationPerMTok)
-	assert.Equal(t, money.MustParseDollars("0.30"), got.CacheReadPerMTok)
-	assert.NotEmpty(t, got.UpdatedAt, "expected UpdatedAt to be set")
+	assert.Equal("claude-sonnet-4", got.ModelPattern)
+	assert.Equal(money.MustParseDollars("3.0"), got.InputPerMTok)
+	assert.Equal(money.MustParseDollars("15.0"), got.OutputPerMTok)
+	assert.Equal(money.MustParseDollars("3.75"), got.CacheCreationPerMTok)
+	assert.Equal(money.MustParseDollars("0.30"), got.CacheReadPerMTok)
+	assert.NotEmpty(got.UpdatedAt, "expected UpdatedAt to be set")
 }
 
 func TestUpsertModelPricingRoundTrips1hCacheCreationRate(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 
 	prices := []ModelPricing{{
@@ -172,14 +182,14 @@ func TestUpsertModelPricingRoundTrips1hCacheCreationRate(t *testing.T) {
 			CacheReadPerMTok:       money.MustParseDollars("2.00"),
 		}},
 	}}
-	require.NoError(t, d.UpsertModelPricing(prices), "UpsertModelPricing")
+	require.NoError(d.UpsertModelPricing(prices), "UpsertModelPricing")
 
 	got, err := d.GetModelPricing("claude-fable-5")
-	require.NoError(t, err, "GetModelPricing")
-	require.NotNil(t, got, "expected pricing")
-	assert.Equal(t, money.MustParseDollars("20.0"), got.CacheCreation1hPerMTok)
-	require.Len(t, got.Bands, 1)
-	assert.Equal(t, money.MustParseDollars("40.0"),
+	require.NoError(err, "GetModelPricing")
+	require.NotNil(got, "expected pricing")
+	assert.Equal(money.MustParseDollars("20.0"), got.CacheCreation1hPerMTok)
+	require.Len(got.Bands, 1)
+	assert.Equal(money.MustParseDollars("40.0"),
 		got.Bands[0].CacheCreation1hPerMTok)
 }
 
@@ -203,6 +213,9 @@ func TestFilterChangedModelPricingDetects1hRateOnlyChange(t *testing.T) {
 }
 
 func TestUpsertModelPricingOverwrites(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 
 	initial := []ModelPricing{
@@ -215,7 +228,7 @@ func TestUpsertModelPricingOverwrites(t *testing.T) {
 		},
 	}
 	err := d.UpsertModelPricing(initial)
-	require.NoError(t, err, "UpsertModelPricing initial")
+	require.NoError(err, "UpsertModelPricing initial")
 
 	updated := []ModelPricing{
 		{
@@ -227,21 +240,23 @@ func TestUpsertModelPricingOverwrites(t *testing.T) {
 		},
 	}
 	err = d.UpsertModelPricing(updated)
-	require.NoError(t, err, "UpsertModelPricing updated")
+	require.NoError(err, "UpsertModelPricing updated")
 
 	got, err := d.GetModelPricing("claude-opus-4")
-	require.NoError(t, err, "GetModelPricing after update")
-	require.NotNil(t, got, "expected pricing")
+	require.NoError(err, "GetModelPricing after update")
+	require.NotNil(got, "expected pricing")
 
-	assert.Equal(t, money.MustParseDollars("10.0"), got.InputPerMTok)
-	assert.Equal(t, money.MustParseDollars("50.0"), got.OutputPerMTok)
-	assert.Equal(t, money.MustParseDollars("12.50"), got.CacheCreationPerMTok)
-	assert.Equal(t, money.MustParseDollars("1.00"), got.CacheReadPerMTok)
+	assert.Equal(money.MustParseDollars("10.0"), got.InputPerMTok)
+	assert.Equal(money.MustParseDollars("50.0"), got.OutputPerMTok)
+	assert.Equal(money.MustParseDollars("12.50"), got.CacheCreationPerMTok)
+	assert.Equal(money.MustParseDollars("1.00"), got.CacheReadPerMTok)
 }
 
 // Model rows compare by rate; sentinel metadata rows keep their value in
 // updated_at, so a new value is a change.
 func TestFilterChangedModelPricingIgnoresUpdatedAtOnlyDifferences(t *testing.T) {
+	assert := assert.New(t)
+
 	existing := []ModelPricing{
 		{
 			ModelPattern:         "_fallback_version",
@@ -305,45 +320,45 @@ func TestFilterChangedModelPricingIgnoresUpdatedAtOnlyDifferences(t *testing.T) 
 
 	gotSummary, gotRows := FilterChangedModelPricing(existing, desired)
 
-	assert.Equal(t, PricingChangeSummary{
+	assert.Equal(PricingChangeSummary{
 		Total:     4,
 		Missing:   1,
 		Changed:   2,
 		Unchanged: 1,
 	}, gotSummary)
 	require.Len(t, gotRows, 3)
-	assert.Equal(t, "_fallback_version", gotRows[0].ModelPattern)
-	assert.Equal(t, "changed-model", gotRows[1].ModelPattern)
-	assert.Equal(t, "missing-model", gotRows[2].ModelPattern)
+	assert.Equal("_fallback_version", gotRows[0].ModelPattern)
+	assert.Equal("changed-model", gotRows[1].ModelPattern)
+	assert.Equal("missing-model", gotRows[2].ModelPattern)
 }
 
 func TestPricingMeta(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
 
 	// Initially empty.
 	got, err := d.GetPricingMeta("_fallback_version")
-	require.NoError(t, err, "GetPricingMeta empty")
-	require.Empty(t, got)
+	require.NoError(err, "GetPricingMeta empty")
+	require.Empty(got)
 
 	// Set and read back.
-	require.NoError(t,
-		d.SetPricingMeta("_fallback_version", "v1"),
+	require.NoError(d.SetPricingMeta("_fallback_version", "v1"),
 		"SetPricingMeta v1")
 	got, err = d.GetPricingMeta("_fallback_version")
-	require.NoError(t, err, "GetPricingMeta v1")
-	require.Equal(t, "v1", got)
+	require.NoError(err, "GetPricingMeta v1")
+	require.Equal("v1", got)
 
 	// Update overwrites.
-	require.NoError(t,
-		d.SetPricingMeta("_fallback_version", "v2"),
+	require.NoError(d.SetPricingMeta("_fallback_version", "v2"),
 		"SetPricingMeta v2")
 	got, err = d.GetPricingMeta("_fallback_version")
-	require.NoError(t, err, "GetPricingMeta v2")
-	require.Equal(t, "v2", got)
+	require.NoError(err, "GetPricingMeta v2")
+	require.Equal("v2", got)
 
 	// Sentinel row does not interfere with model lookups.
 	p, err := d.GetModelPricing("_fallback_version")
-	require.NoError(t, err, "GetModelPricing sentinel")
+	require.NoError(err, "GetModelPricing sentinel")
 	if p != nil {
 		assert.Zero(t, p.InputPerMTok,
 			"sentinel should have zero pricing, got %+v", p)
@@ -351,8 +366,11 @@ func TestPricingMeta(t *testing.T) {
 }
 
 func TestReconcileModelPricing(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
+	require.NoError(d.UpsertModelPricing([]ModelPricing{
 		{
 			ModelPattern: "minimax/minimax-m3",
 			InputPerMTok: money.MustParseDollars("9"),
@@ -364,7 +382,7 @@ func TestReconcileModelPricing(t *testing.T) {
 		{ModelPattern: "acme/keep", InputPerMTok: money.MustParseDollars("1")},
 	}))
 
-	require.NoError(t, d.ReconcileModelPricing(
+	require.NoError(d.ReconcileModelPricing(
 		[]ModelPricing{
 			{
 				ModelPattern: "minimax/MiniMax-M3",
@@ -378,31 +396,31 @@ func TestReconcileModelPricing(t *testing.T) {
 	))
 
 	removed, err := d.GetModelPricing("minimax/minimax-m3")
-	require.NoError(t, err)
-	assert.Nil(t, removed)
+	require.NoError(err)
+	assert.Nil(removed)
 	var bands int
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		`SELECT COUNT(*) FROM model_pricing_bands WHERE model_pattern = ?`,
 		"minimax/minimax-m3",
 	).Scan(&bands))
-	assert.Zero(t, bands, "bands of a removed pattern are deleted")
+	assert.Zero(bands, "bands of a removed pattern are deleted")
 	kept, err := d.GetModelPricing("acme/keep")
-	require.NoError(t, err)
-	require.NotNil(t, kept)
-	assert.Equal(t, money.MustParseDollars("1"), kept.InputPerMTok)
+	require.NoError(err)
+	require.NotNil(kept)
+	assert.Equal(money.MustParseDollars("1"), kept.InputPerMTok)
 	added, err := d.GetModelPricing("minimax/MiniMax-M3")
-	require.NoError(t, err)
-	require.NotNil(t, added)
+	require.NoError(err)
+	require.NotNil(added)
 	meta, err := d.GetPricingMeta("_openrouter_models")
-	require.NoError(t, err)
-	assert.Equal(t, `[]`, meta, "meta written with the rows")
+	require.NoError(err)
+	assert.Equal(`[]`, meta, "meta written with the rows")
 
-	require.NoError(t, d.ReconcileModelPricing(
+	require.NoError(d.ReconcileModelPricing(
 		nil, nil, PricingMeta{Key: "_openrouter_models", Value: `["x"]`},
 	))
 	meta, err = d.GetPricingMeta("_openrouter_models")
-	require.NoError(t, err)
-	assert.Equal(t, `["x"]`, meta, "meta-only reconcile still writes")
+	require.NoError(err)
+	assert.Equal(`["x"]`, meta, "meta-only reconcile still writes")
 }
 
 func TestPlanModelPricingSync(t *testing.T) {
@@ -519,10 +537,13 @@ func TestGetModelPricingNotFound(t *testing.T) {
 }
 
 func TestInsertMissingModelPricing_DoesNotOverwrite(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 
 	// Seed an existing row (simulating a LiteLLM rate already present).
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+	require.NoError(d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern:         "claude-opus-4-6",
 		InputPerMTok:         money.MustParseDollars("5.0"),
 		OutputPerMTok:        money.MustParseDollars("25.0"),
@@ -536,28 +557,31 @@ func TestInsertMissingModelPricing_DoesNotOverwrite(t *testing.T) {
 		{ModelPattern: "claude-opus-4-6", InputPerMTok: money.MustParseDollars("999.0"), OutputPerMTok: money.MustParseDollars("999.0")},
 		{ModelPattern: "gpt-5.4", InputPerMTok: money.MustParseDollars("2.5"), OutputPerMTok: money.MustParseDollars("15.0")},
 	})
-	require.NoError(t, err, "InsertMissingModelPricing")
+	require.NoError(err, "InsertMissingModelPricing")
 
 	// Existing row is untouched.
 	opus, err := d.GetModelPricing("claude-opus-4-6")
-	require.NoError(t, err, "GetModelPricing opus")
-	require.NotNil(t, opus)
-	assert.Equal(t, money.MustParseDollars("5.0"), opus.InputPerMTok, "opus InputPerMTok not overwritten")
+	require.NoError(err, "GetModelPricing opus")
+	require.NotNil(opus)
+	assert.Equal(money.MustParseDollars("5.0"), opus.InputPerMTok, "opus InputPerMTok not overwritten")
 	// New row was inserted.
 	gpt, err := d.GetModelPricing("gpt-5.4")
-	require.NoError(t, err, "GetModelPricing gpt")
-	require.NotNil(t, gpt)
-	assert.Equal(t, money.MustParseDollars("2.5"), gpt.InputPerMTok, "gpt-5.4 InputPerMTok inserted")
+	require.NoError(err, "GetModelPricing gpt")
+	require.NotNil(gpt)
+	assert.Equal(money.MustParseDollars("2.5"), gpt.InputPerMTok, "gpt-5.4 InputPerMTok inserted")
 }
 
 func TestInsertMissingModelPricingDoesNotAttachBandsToExistingFlatModel(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+	require.NoError(d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern: "existing-model",
 		InputPerMTok: money.MustParseDollars("1"),
 	}}))
 
-	require.NoError(t, d.InsertMissingModelPricing([]ModelPricing{
+	require.NoError(d.InsertMissingModelPricing([]ModelPricing{
 		{
 			ModelPattern: "existing-model",
 			InputPerMTok: money.MustParseDollars("99"),
@@ -577,23 +601,26 @@ func TestInsertMissingModelPricingDoesNotAttachBandsToExistingFlatModel(t *testi
 	}))
 
 	existing, err := d.GetModelPricing("existing-model")
-	require.NoError(t, err)
-	require.NotNil(t, existing)
-	assert.Empty(t, existing.Bands)
+	require.NoError(err)
+	require.NotNil(existing)
+	assert.Empty(existing.Bands)
 	added, err := d.GetModelPricing("new-model")
-	require.NoError(t, err)
-	require.NotNil(t, added)
-	require.Len(t, added.Bands, 1)
-	assert.Equal(t, money.MustParseDollars("4"), added.Bands[0].InputPerMTok)
+	require.NoError(err)
+	require.NotNil(added)
+	require.Len(added.Bands, 1)
+	assert.Equal(money.MustParseDollars("4"), added.Bands[0].InputPerMTok)
 }
 
 func TestLoadPricingMapKeepsCustomSourceWhenRatesMatchFallback(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	fallback := fallbackRateMap()
 	fallbackRates, ok := fallback["gpt-5.5"]
-	require.True(t, ok, "expected gpt-5.5 fallback rates")
+	require.True(ok, "expected gpt-5.5 fallback rates")
 	d.SetCustomPricing(map[string]config.CustomModelRate{
 		"gpt-5.5": {
 			InputMicrodollarsPerMTok:         fallbackRates.InputPerMTok.Microdollars,
@@ -604,24 +631,27 @@ func TestLoadPricingMapKeepsCustomSourceWhenRatesMatchFallback(t *testing.T) {
 	})
 
 	rows, err := d.loadPricingMap(ctx)
-	require.NoError(t, err, "loadPricingMap")
+	require.NoError(err, "loadPricingMap")
 	resolver := export.NewPricingResolver(rows)
 	lookup := resolver.Lookup("gpt-5.5")
-	require.True(t, lookup.OK, "lookup custom fallback-rate row")
-	assert.Equal(t, export.PricingRowSourceCustom,
+	require.True(lookup.OK, "lookup custom fallback-rate row")
+	assert.Equal(export.PricingRowSourceCustom,
 		lookup.Rates.Source)
-	assert.Empty(t, lookup.Rates.Bands)
+	assert.Empty(lookup.Rates.Bands)
 
 	block, err := resolver.BuildBlock()
-	require.NoError(t, err)
-	assert.Equal(t, "custom+embedded", block.Source)
-	assert.Equal(t, 1, block.CustomOverrideCount)
+	require.NoError(err)
+	assert.Equal("custom+embedded", block.Source)
+	assert.Equal(1, block.CustomOverrideCount)
 }
 
 func TestDeleteModelPricing(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
+	require.NoError(d.UpsertModelPricing([]ModelPricing{
 		{
 			ModelPattern:  "kimi-for-coding",
 			InputPerMTok:  money.MustParseDollars("0.95"),
@@ -640,32 +670,34 @@ func TestDeleteModelPricing(t *testing.T) {
 	}), "UpsertModelPricing")
 
 	err := d.DeleteModelPricing([]string{"kimi-for-coding", "daimon-kimi-code"})
-	require.NoError(t, err, "DeleteModelPricing")
+	require.NoError(err, "DeleteModelPricing")
 
 	for _, model := range []string{"kimi-for-coding", "daimon-kimi-code"} {
 		row, err := d.GetModelPricing(model)
-		require.NoError(t, err, "GetModelPricing %s", model)
-		assert.Nil(t, row, "%s must be deleted", model)
+		require.NoError(err, "GetModelPricing %s", model)
+		assert.Nil(row, "%s must be deleted", model)
 	}
 
 	// Untargeted rows survive.
 	row, err := d.GetModelPricing("claude-opus-4-6")
-	require.NoError(t, err, "GetModelPricing claude-opus-4-6")
-	require.NotNil(t, row)
-	assert.Equal(t, money.MustParseDollars("5.0"), row.InputPerMTok)
+	require.NoError(err, "GetModelPricing claude-opus-4-6")
+	require.NotNil(row)
+	assert.Equal(money.MustParseDollars("5.0"), row.InputPerMTok)
 
 	// Deleting absent patterns and an empty list are no-ops.
-	require.NoError(t,
-		d.DeleteModelPricing([]string{"kimi-for-coding"}), "re-delete")
-	require.NoError(t, d.DeleteModelPricing(nil), "empty delete")
+	require.NoError(d.DeleteModelPricing([]string{"kimi-for-coding"}), "re-delete")
+	require.NoError(d.DeleteModelPricing(nil), "empty delete")
 }
 
 func TestLoadPricingMapTreatsBandOnlyFallbackMismatchAsFetched(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	fallback, ok := fallbackRateMap()["gpt-5.5"]
-	require.True(t, ok)
-	require.NotEmpty(t, fallback.Bands)
-	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
+	require.True(ok)
+	require.NotEmpty(fallback.Bands)
+	require.NoError(d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern:         "gpt-5.5",
 		InputPerMTok:         fallback.InputPerMTok,
 		OutputPerMTok:        fallback.OutputPerMTok,
@@ -673,11 +705,11 @@ func TestLoadPricingMapTreatsBandOnlyFallbackMismatchAsFetched(t *testing.T) {
 		CacheReadPerMTok:     fallback.CacheReadPerMTok,
 	}}))
 
-	rows, err := d.loadPricingMap(context.Background())
-	require.NoError(t, err)
+	rows, err := d.loadPricingMap(t.Context())
+	require.NoError(err)
 	lookup := export.NewPricingResolver(rows).Lookup("gpt-5.5")
-	require.True(t, lookup.OK)
+	require.True(lookup.OK)
 
-	assert.Equal(t, export.PricingRowSourceFetched, lookup.Rates.Source)
-	assert.Empty(t, lookup.Rates.Bands)
+	assert.Equal(export.PricingRowSourceFetched, lookup.Rates.Source)
+	assert.Empty(lookup.Rates.Bands)
 }

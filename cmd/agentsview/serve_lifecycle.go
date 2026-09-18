@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -198,11 +199,11 @@ func runServeStatus(cfg config.Config) {
 // serveStatusLines renders the human-readable status of a discovered daemon.
 func serveStatusLines(rt *DaemonRuntime) []string {
 	lines := []string{
-		fmt.Sprintf("agentsview running at %s", urlFromDaemonRuntime(rt)),
+		"agentsview running at " + urlFromDaemonRuntime(rt),
 		fmt.Sprintf("  pid:     %d", rt.Record.PID),
 	}
 	if rt.Record.Version != "" {
-		lines = append(lines, fmt.Sprintf("  version: %s", rt.Record.Version))
+		lines = append(lines, "  version: "+rt.Record.Version)
 	}
 	if !rt.Record.StartedAt.IsZero() {
 		uptime := time.Since(rt.Record.StartedAt).Round(time.Second)
@@ -382,9 +383,7 @@ func stopWritableDaemonsForUpdate(
 		result.Stopped = true
 	}
 	if !result.Stopped && IsDaemonStarting(cfg.DataDir) {
-		return result, fmt.Errorf(
-			"agentsview server is starting; retry the update once it is ready",
-		)
+		return result, errors.New("agentsview server is starting; retry the update once it is ready")
 	}
 	return result, nil
 }

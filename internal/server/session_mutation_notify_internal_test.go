@@ -28,6 +28,8 @@ import (
 // scheduler's retraction pass) otherwise only learn about these changes
 // from sync activity that may never come.
 func TestSessionMutationRoutesNotify(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 	database := dbtest.OpenTestDBAt(t, dbPath)
@@ -41,7 +43,7 @@ func TestSessionMutationRoutesNotify(t *testing.T) {
 	}, database, engine, WithSessionMutationNotifier(func() {
 		notified.Add(1)
 	}))
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: "sess-1", Project: "proj", Machine: "local", Agent: "claude",
 	}))
 
@@ -51,7 +53,7 @@ func TestSessionMutationRoutesNotify(t *testing.T) {
 		if body != "" {
 			reader = strings.NewReader(body)
 		}
-		req := httptest.NewRequest(method, path, reader)
+		req := httptest.NewRequestWithContext(t.Context(), method, path, reader)
 		if body != "" {
 			req.Header.Set("Content-Type", "application/json")
 		}
@@ -62,48 +64,51 @@ func TestSessionMutationRoutesNotify(t *testing.T) {
 
 	w := do(http.MethodPost, "/api/v1/sessions/batch-delete",
 		`{"session_ids":["sess-1"]}`)
-	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
-	require.Equal(t, int32(1), notified.Load(), "trashing must notify")
+	require.Equal(http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+	require.Equal(int32(1), notified.Load(), "trashing must notify")
 
 	w = do(http.MethodPost, "/api/v1/sessions/sess-1/restore", "")
-	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
-	require.Equal(t, int32(2), notified.Load(), "restoring must notify")
+	require.Equal(http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+	require.Equal(int32(2), notified.Load(), "restoring must notify")
 
 	w = do(http.MethodPost, "/api/v1/sessions/missing/restore", "")
-	require.Equal(t, http.StatusNotFound, w.Code)
-	require.Equal(t, int32(2), notified.Load(),
+	require.Equal(http.StatusNotFound, w.Code)
+	require.Equal(int32(2), notified.Load(),
 		"a failed restore must not notify")
 
 	w = do(http.MethodPost, "/api/v1/sessions/batch-delete",
 		`{"session_ids":["sess-1"]}`)
-	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+	require.Equal(http.StatusNoContent, w.Code, "body: %s", w.Body.String())
 	w = do(http.MethodDelete, "/api/v1/sessions/sess-1/permanent", "")
-	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
-	require.Equal(t, int32(4), notified.Load(),
+	require.Equal(http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+	require.Equal(int32(4), notified.Load(),
 		"permanent deletion must notify")
 
 	w = do(http.MethodDelete, "/api/v1/trash", "")
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	require.Equal(t, int32(5), notified.Load(), "emptying trash must notify")
+	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(int32(5), notified.Load(), "emptying trash must notify")
 
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: "sess-2", Project: "proj", Machine: "local", Agent: "claude",
 	}))
 	w = do(http.MethodDelete, "/api/v1/sessions/sess-2", "")
-	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
-	require.Equal(t, int32(6), notified.Load(),
+	require.Equal(http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+	require.Equal(int32(6), notified.Load(),
 		"single-session deletion must notify")
 
 	// A daemon-delegated secret scan changes eligibility in both
 	// directions: new findings retract generated entries, and fresh clean
 	// stamps make sessions extractable.
 	w = do(http.MethodPost, "/api/v1/secrets/scan", "")
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
-	require.Equal(t, int32(7), notified.Load(),
+	require.Equal(http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(int32(7), notified.Load(),
 		"a completed daemon scan must notify")
 }
 
 func TestSessionMutationRoutesFanOutToAllNotifiers(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 	database := dbtest.OpenTestDBAt(t, dbPath)
@@ -114,17 +119,17 @@ func TestSessionMutationRoutesFanOutToAllNotifiers(t *testing.T) {
 		WithSessionMutationNotifier(func() { extractionNotified.Add(1) }),
 		WithSessionMutationNotifier(func() { recallNotified.Add(1) }),
 	)
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: "sess-1", Project: "proj", Machine: "local", Agent: "claude",
 	}))
 
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sessions/sess-1", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/api/v1/sessions/sess-1", nil)
 	w := httptest.NewRecorder()
 	s.mux.ServeHTTP(w, req)
 
-	require.Equal(t, http.StatusNoContent, w.Code, "body: %s", w.Body.String())
-	assert.Equal(t, int32(1), extractionNotified.Load())
-	assert.Equal(t, int32(1), recallNotified.Load())
+	require.Equal(http.StatusNoContent, w.Code, "body: %s", w.Body.String())
+	assert.Equal(int32(1), extractionNotified.Load())
+	assert.Equal(int32(1), recallNotified.Load())
 }
 
 // cancelOnProgressWriter cancels the request context as soon as the
@@ -148,6 +153,8 @@ func (w *cancelOnProgressWriter) Write(b []byte) (int, error) {
 // cancellation mid-scan has already changed eligibility even though the
 // scan itself returns an error.
 func TestSecretScanNotifiesOnPartialCommit(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
 	database := dbtest.OpenTestDBAt(t, dbPath)
@@ -165,18 +172,18 @@ func TestSecretScanNotifiesOnPartialCommit(t *testing.T) {
 	// lands mid-scan with sessions still queued behind it.
 	for i := range 60 {
 		id := fmt.Sprintf("sess-%02d", i)
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(database.UpsertSession(db.Session{
 			ID: id, Project: "proj", Machine: "local", Agent: "claude",
 			MessageCount: 1,
 		}))
-		require.NoError(t, database.InsertMessages([]db.Message{{
+		require.NoError(database.InsertMessages([]db.Message{{
 			SessionID: id, Ordinal: 0, Role: "user", Content: "hello",
 		}}))
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(ctx,
 		http.MethodPost, "/api/v1/secrets/scan?backfill=true", nil,
 	).WithContext(ctx)
 	w := &cancelOnProgressWriter{
@@ -184,9 +191,9 @@ func TestSecretScanNotifiesOnPartialCommit(t *testing.T) {
 	}
 	s.mux.ServeHTTP(w, req)
 
-	require.Contains(t, w.Body.String(), "error",
+	require.Contains(w.Body.String(), "error",
 		"the cancelled scan must surface the error event")
-	require.Equal(t, int32(1), notified.Load(),
+	require.Equal(int32(1), notified.Load(),
 		"a scan that committed work before failing must notify "+
 			"extraction scheduling; the committed stamps already "+
 			"changed eligibility")

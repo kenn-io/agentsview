@@ -3,7 +3,9 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -140,7 +142,7 @@ func (db *DB) GetCachedInsight(
 		cacheKey,
 	)
 	s, err := scanInsightRow(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -162,7 +164,7 @@ func (db *DB) ListInsights(
 	query := "SELECT " + insightBaseCols +
 		" FROM insights WHERE " + where +
 		" ORDER BY created_at DESC, id DESC" +
-		" LIMIT " + fmt.Sprintf("%d", maxInsights)
+		" LIMIT " + strconv.Itoa(maxInsights)
 
 	rows, err := db.getReader().QueryContext(ctx, query, args...)
 	if err != nil {
@@ -193,7 +195,7 @@ func (db *DB) GetInsight(
 		id,
 	)
 	s, err := scanInsightRow(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

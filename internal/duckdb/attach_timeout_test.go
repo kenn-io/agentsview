@@ -86,7 +86,7 @@ func TestQuackDialAddress(t *testing.T) {
 // by opening and immediately closing a listener.
 func closedLoopbackPort(t *testing.T) string {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err, "allocate probe listener")
 	addr := ln.Addr().String()
 	require.NoError(t, ln.Close(), "close probe listener")
@@ -97,7 +97,7 @@ func closedLoopbackPort(t *testing.T) string {
 // writing a byte, simulating a server stuck in (for example) an SSL handshake.
 func unresponsiveListener(t *testing.T) net.Listener {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err, "start unresponsive listener")
 	var (
 		mu    sync.Mutex
@@ -150,6 +150,8 @@ func TestPreflightQuackDial(t *testing.T) {
 
 func TestRunWithAttachTimeout(t *testing.T) {
 	t.Run("times out on unresponsive server", func(t *testing.T) {
+		assert := assert.New(t)
+
 		ln := unresponsiveListener(t)
 		timeout := 150 * time.Millisecond
 		start := time.Now()
@@ -158,7 +160,7 @@ func TestRunWithAttachTimeout(t *testing.T) {
 				// Faithfully reproduce the hang: connect (accepted) then
 				// block on a read that never returns because the server
 				// never responds.
-				conn, dialErr := net.Dial("tcp", ln.Addr().String())
+				conn, dialErr := (&net.Dialer{}).DialContext(t.Context(), "tcp", ln.Addr().String())
 				if dialErr != nil {
 					return dialErr
 				}
@@ -170,10 +172,10 @@ func TestRunWithAttachTimeout(t *testing.T) {
 		)
 		elapsed := time.Since(start)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "timed out")
-		assert.Contains(t, err.Error(), "attach_timeout")
-		assert.Less(t, elapsed, time.Second, "should give up near the timeout")
-		assert.GreaterOrEqual(t, elapsed, timeout)
+		assert.Contains(err.Error(), "timed out")
+		assert.Contains(err.Error(), "attach_timeout")
+		assert.Less(elapsed, time.Second, "should give up near the timeout")
+		assert.GreaterOrEqual(elapsed, timeout)
 	})
 
 	t.Run("returns attach result when it completes", func(t *testing.T) {
@@ -197,6 +199,8 @@ func TestRunWithAttachTimeout(t *testing.T) {
 }
 
 func TestOpenQuackClientPreflightFailsFast(t *testing.T) {
+	assert := assert.New(t)
+
 	// A closed loopback port makes the TCP preflight fail before the quack
 	// extension is even loaded, so an unreachable endpoint returns promptly
 	// instead of hanging.
@@ -206,7 +210,7 @@ func TestOpenQuackClientPreflightFailsFast(t *testing.T) {
 		"quack:"+addr, "token", false, 2*time.Second,
 	)
 	require.Error(t, err)
-	assert.Nil(t, client)
-	assert.Less(t, time.Since(start), 2*time.Second)
-	assert.Contains(t, err.Error(), "connecting to quack endpoint")
+	assert.Nil(client)
+	assert.Less(time.Since(start), 2*time.Second)
+	assert.Contains(err.Error(), "connecting to quack endpoint")
 }

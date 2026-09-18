@@ -1,7 +1,6 @@
 package server_test
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"net/http"
@@ -57,7 +56,7 @@ func TestActivityReportRejectsFilterWhoseSignedIDExceedsLimit(t *testing.T) {
 		"automation": {"all"},
 	}
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodGet, "/api/v1/activity/report?"+values.Encode(), nil,
 	)
 	req.Header.Set("Accept", "text/event-stream")
@@ -186,6 +185,9 @@ func TestActivityReportEndpoint_Presets(t *testing.T) {
 }
 
 func TestActivityReportJSONIncludesExportMetadata(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 	seedActivityReportMetadataFixture(t, te)
 
@@ -195,28 +197,28 @@ func TestActivityReportJSONIncludesExportMetadata(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 
 	resp := decode[activity.Report](t, w)
-	assert.Equal(t, export.ActivityReportSchemaVersion,
+	assert.Equal(export.ActivityReportSchemaVersion,
 		resp.SchemaVersion)
-	require.NotNil(t, resp.Pricing)
-	require.Contains(t, resp.Pricing.Models, "gpt-5.1")
+	require.NotNil(resp.Pricing)
+	require.Contains(resp.Pricing.Models, "gpt-5.1")
 	fallbackModel := activityReportFallbackModel(t)
-	require.Contains(t, resp.Pricing.Models, fallbackModel)
-	assert.Equal(t, export.CostSourceReported,
+	require.Contains(resp.Pricing.Models, fallbackModel)
+	assert.Equal(export.CostSourceReported,
 		resp.Pricing.Models["gpt-5.1"].CostSource)
-	assert.Equal(t, export.CostSourceComputed,
+	assert.Equal(export.CostSourceComputed,
 		resp.Pricing.Models[fallbackModel].CostSource)
-	assert.True(t, resp.Pricing.Fallback.Used)
-	assert.Contains(t, resp.Pricing.Fallback.Models, fallbackModel)
-	require.Len(t, resp.Projects, 1)
+	assert.True(resp.Pricing.Fallback.Used)
+	assert.Contains(resp.Pricing.Fallback.Models, fallbackModel)
+	require.Len(resp.Projects, 1)
 	for key, project := range resp.Projects {
-		assert.NotContains(t, key, "shared-project")
-		assert.Equal(t, "shared-project", project.DisplayLabel)
-		assert.Equal(t, export.ProjectResolutionUnknown, project.Resolution)
+		assert.NotContains(key, "shared-project")
+		assert.Equal("shared-project", project.DisplayLabel)
+		assert.Equal(export.ProjectResolutionUnknown, project.Resolution)
 	}
-	assert.Equal(t, 2, resp.Totals.Sessions)
-	assert.Equal(t, 150, resp.Totals.OutputTokens)
-	assert.NotEmpty(t, resp.Buckets)
-	assert.Len(t, resp.BySession, 2)
+	assert.Equal(2, resp.Totals.Sessions)
+	assert.Equal(150, resp.Totals.OutputTokens)
+	assert.NotEmpty(resp.Buckets)
+	assert.Len(resp.BySession, 2)
 }
 
 func seedActivityReportMetadataFixture(t *testing.T, te *testEnv) {
@@ -302,7 +304,6 @@ func seedFallbackModelPricing(t *testing.T, database *db.DB, model string) {
 // MUST appear in the report. A refactor flipping those flags to match
 // the analytics defaults would drop these sessions and fail here.
 func TestActivityReportEndpoint_IncludesOneShotAndAutomated(t *testing.T) {
-
 	te := setup(t)
 
 	// One-shot: a single user message (user_message_count = 1).
@@ -354,7 +355,6 @@ func TestActivityReportEndpoint_IncludesOneShotAndAutomated(t *testing.T) {
 }
 
 func TestActivityReportEndpoint_Validation(t *testing.T) {
-
 	te := setup(t)
 
 	ts := activityDate + "T00:00:00Z"
@@ -434,7 +434,6 @@ func TestActivityReportEndpoint_Validation(t *testing.T) {
 // "automated" drops interactive ones. It also confirms the response Totals
 // carry the automated/interactive session-count split.
 func TestActivityReportEndpoint_AutomationFilter(t *testing.T) {
-
 	te := setup(t)
 
 	// Automated: a single-turn session whose first message matches a known
@@ -483,6 +482,8 @@ func TestActivityReportEndpoint_AutomationFilter(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			params := map[string]string{
 				"preset": "day", "date": activityDate, "timezone": "UTC",
 			}
@@ -492,16 +493,16 @@ func TestActivityReportEndpoint_AutomationFilter(t *testing.T) {
 			w := te.get(t, buildPathURL("/api/v1/activity/report", params))
 			assertStatus(t, w, http.StatusOK)
 			resp := decode[activity.Report](t, w)
-			assert.Equal(t, len(tc.wantIDs), resp.Totals.Sessions)
-			assert.Equal(t, tc.wantAutomated, resp.Totals.AutomatedSessions)
-			assert.Equal(t, tc.wantInteractive, resp.Totals.InteractiveSessions)
+			assert.Equal(len(tc.wantIDs), resp.Totals.Sessions)
+			assert.Equal(tc.wantAutomated, resp.Totals.AutomatedSessions)
+			assert.Equal(tc.wantInteractive, resp.Totals.InteractiveSessions)
 			ids := make(map[string]struct{}, len(resp.BySession))
 			for _, s := range resp.BySession {
 				ids[s.SessionID] = struct{}{}
 			}
-			assert.Len(t, ids, len(tc.wantIDs))
+			assert.Len(ids, len(tc.wantIDs))
 			for _, id := range tc.wantIDs {
-				assert.Contains(t, ids, id)
+				assert.Contains(ids, id)
 			}
 		})
 	}
@@ -515,12 +516,20 @@ func TestActivityReportEndpoint_GitBranchFilter(t *testing.T) {
 		id, branch, started, ended string
 		times                      []string
 	}{
-		{"b1", "main", activityDate + "T10:00:00Z", activityDate + "T10:08:00Z",
-			[]string{activityDate + "T10:00:00Z", activityDate + "T10:02:00Z",
-				activityDate + "T10:05:00Z", activityDate + "T10:07:00Z"}},
-		{"b2", "feature-x", activityDate + "T10:01:00Z", activityDate + "T10:09:00Z",
-			[]string{activityDate + "T10:01:00Z", activityDate + "T10:03:00Z",
-				activityDate + "T10:06:00Z", activityDate + "T10:08:00Z"}},
+		{
+			"b1", "main", activityDate + "T10:00:00Z", activityDate + "T10:08:00Z",
+			[]string{
+				activityDate + "T10:00:00Z", activityDate + "T10:02:00Z",
+				activityDate + "T10:05:00Z", activityDate + "T10:07:00Z",
+			},
+		},
+		{
+			"b2", "feature-x", activityDate + "T10:01:00Z", activityDate + "T10:09:00Z",
+			[]string{
+				activityDate + "T10:01:00Z", activityDate + "T10:03:00Z",
+				activityDate + "T10:06:00Z", activityDate + "T10:08:00Z",
+			},
+		},
 	}
 	for _, e := range seed {
 		started, ended, branch := e.started, e.ended, e.branch
@@ -551,6 +560,9 @@ func TestActivityReportEndpoint_GitBranchFilter(t *testing.T) {
 }
 
 func TestActivityReportEndpointNegotiatesProgressAndPagesSessions(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 	seedActivityReportFixture(t, te)
 	path := "/api/v1/activity/report?preset=day&date=" + activityDate + "&timezone=UTC"
@@ -558,10 +570,10 @@ func TestActivityReportEndpointNegotiatesProgressAndPagesSessions(t *testing.T) 
 	plain := te.get(t, path)
 	assertStatus(t, plain, http.StatusOK)
 	report := decode[activity.Report](t, plain)
-	require.NotEmpty(t, report.ReportID)
-	require.Len(t, report.BySession, 2)
-	assert.Equal(t, 2, report.SessionsTotal)
-	assert.NotContains(t, plain.Body.String(), `"intervals"`)
+	require.NotEmpty(report.ReportID)
+	require.Len(report.BySession, 2)
+	assert.Equal(2, report.SessionsTotal)
+	assert.NotContains(plain.Body.String(), `"intervals"`)
 
 	pageResponse := te.get(t, "/api/v1/activity/report/"+report.ReportID+
 		"/sessions?limit=1")
@@ -572,11 +584,11 @@ func TestActivityReportEndpointNegotiatesProgressAndPagesSessions(t *testing.T) 
 		Total      int                   `json:"total"`
 		Report     *activity.Report      `json:"report"`
 	}
-	require.NoError(t, json.Unmarshal(pageResponse.Body.Bytes(), &first))
-	require.Len(t, first.Sessions, 1)
-	require.NotEmpty(t, first.NextCursor)
-	assert.Equal(t, 2, first.Total)
-	assert.Nil(t, first.Report, "ordinary browser pages omit full report metadata")
+	require.NoError(json.Unmarshal(pageResponse.Body.Bytes(), &first))
+	require.Len(first.Sessions, 1)
+	require.NotEmpty(first.NextCursor)
+	assert.Equal(2, first.Total)
+	assert.Nil(first.Report, "ordinary browser pages omit full report metadata")
 
 	metadataResponse := te.get(t, "/api/v1/activity/report/"+report.ReportID+
 		"/sessions?limit=1&include_report=true")
@@ -585,19 +597,19 @@ func TestActivityReportEndpointNegotiatesProgressAndPagesSessions(t *testing.T) 
 		Sessions []activity.SessionRow `json:"sessions"`
 		Report   *activity.Report      `json:"report"`
 	}
-	require.NoError(t, json.Unmarshal(metadataResponse.Body.Bytes(), &metadataPage))
-	require.NotNil(t, metadataPage.Report)
-	assert.Equal(t, report.ReportID, metadataPage.Report.ReportID)
-	assert.Equal(t, metadataPage.Sessions, metadataPage.Report.BySession)
+	require.NoError(json.Unmarshal(metadataResponse.Body.Bytes(), &metadataPage))
+	require.NotNil(metadataPage.Report)
+	assert.Equal(report.ReportID, metadataPage.Report.ReportID)
+	assert.Equal(metadataPage.Sessions, metadataPage.Report.BySession)
 	secondResponse := te.get(t, "/api/v1/activity/report/"+report.ReportID+
 		"/sessions?limit=1&cursor="+url.QueryEscape(first.NextCursor))
 	assertStatus(t, secondResponse, http.StatusOK)
 	var second struct {
 		Sessions []activity.SessionRow `json:"sessions"`
 	}
-	require.NoError(t, json.Unmarshal(secondResponse.Body.Bytes(), &second))
-	require.Len(t, second.Sessions, 1)
-	assert.NotEqual(t, first.Sessions[0].SessionID, second.Sessions[0].SessionID)
+	require.NoError(json.Unmarshal(secondResponse.Body.Bytes(), &second))
+	require.Len(second.Sessions, 1)
+	assert.NotEqual(first.Sessions[0].SessionID, second.Sessions[0].SessionID)
 
 	nonDefaultResponse := te.get(t, "/api/v1/activity/report/"+report.ReportID+
 		"/sessions?limit=1&sort=project&direction=asc&bucket_start=120&bucket_end=122")
@@ -606,9 +618,9 @@ func TestActivityReportEndpointNegotiatesProgressAndPagesSessions(t *testing.T) 
 		Sessions   []activity.SessionRow `json:"sessions"`
 		NextCursor string                `json:"next_cursor"`
 	}
-	require.NoError(t, json.Unmarshal(nonDefaultResponse.Body.Bytes(), &nonDefaultFirst))
-	require.Len(t, nonDefaultFirst.Sessions, 1)
-	require.NotEmpty(t, nonDefaultFirst.NextCursor)
+	require.NoError(json.Unmarshal(nonDefaultResponse.Body.Bytes(), &nonDefaultFirst))
+	require.Len(nonDefaultFirst.Sessions, 1)
+	require.NotEmpty(nonDefaultFirst.NextCursor)
 
 	inheritedResponse := te.get(t, "/api/v1/activity/report/"+report.ReportID+
 		"/sessions?cursor="+url.QueryEscape(nonDefaultFirst.NextCursor))
@@ -616,9 +628,9 @@ func TestActivityReportEndpointNegotiatesProgressAndPagesSessions(t *testing.T) 
 	var inherited struct {
 		Sessions []activity.SessionRow `json:"sessions"`
 	}
-	require.NoError(t, json.Unmarshal(inheritedResponse.Body.Bytes(), &inherited))
-	require.Len(t, inherited.Sessions, 1)
-	assert.NotEqual(t, nonDefaultFirst.Sessions[0].SessionID, inherited.Sessions[0].SessionID)
+	require.NoError(json.Unmarshal(inheritedResponse.Body.Bytes(), &inherited))
+	require.Len(inherited.Sessions, 1)
+	assert.NotEqual(nonDefaultFirst.Sessions[0].SessionID, inherited.Sessions[0].SessionID)
 
 	for name, query := range map[string]string{
 		"sort":         "&sort=agent",
@@ -647,22 +659,25 @@ func TestActivityReportEndpointNegotiatesProgressAndPagesSessions(t *testing.T) 
 		RefreshRequired bool             `json:"refresh_required"`
 		Report          *activity.Report `json:"report"`
 	}
-	require.NoError(t, json.Unmarshal(refreshResponse.Body.Bytes(), &refreshed))
-	assert.True(t, refreshed.RefreshRequired)
-	require.NotNil(t, refreshed.Report)
-	assert.Equal(t, 3, refreshed.Report.Totals.Sessions)
-	assert.NotEqual(t, report.ReportID, refreshed.Report.ReportID)
+	require.NoError(json.Unmarshal(refreshResponse.Body.Bytes(), &refreshed))
+	assert.True(refreshed.RefreshRequired)
+	require.NotNil(refreshed.Report)
+	assert.Equal(3, refreshed.Report.Totals.Sessions)
+	assert.NotEqual(report.ReportID, refreshed.Report.ReportID)
 
-	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
 	req.Header.Set("Accept", "text/event-stream")
 	recorder := httptest.NewRecorder()
 	te.handler.ServeHTTP(recorder, req)
 	assertStatus(t, recorder, http.StatusOK)
-	assert.True(t, strings.Contains(recorder.Body.String(), "event: progress\n"))
-	assert.True(t, strings.Contains(recorder.Body.String(), "event: report\n"))
+	assert.Contains(recorder.Body.String(), "event: progress\n")
+	assert.Contains(recorder.Body.String(), "event: report\n")
 }
 
 func TestActivityReportSessionPageRefreshesAfterIdentityOnlyChange(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 	seedActivityReportFixture(t, te)
 	path := "/api/v1/activity/report?preset=day&date=" + activityDate +
@@ -671,10 +686,10 @@ func TestActivityReportSessionPageRefreshesAfterIdentityOnlyChange(t *testing.T)
 	initialResponse := te.get(t, path)
 	assertStatus(t, initialResponse, http.StatusOK)
 	initial := decode[activity.Report](t, initialResponse)
-	require.NotEmpty(t, initial.ReportID)
+	require.NotEmpty(initial.ReportID)
 
-	require.NoError(t, te.db.UpsertProjectIdentityObservation(
-		context.Background(), export.ProjectIdentityObservation{
+	require.NoError(te.db.UpsertProjectIdentityObservation(
+		t.Context(), export.ProjectIdentityObservation{
 			Project: "alpha", Machine: "test", RootPath: "/fixtures/alpha",
 			GitRemote:     "https://example.com/acme/alpha.git",
 			GitRemoteName: "origin",
@@ -689,10 +704,10 @@ func TestActivityReportSessionPageRefreshesAfterIdentityOnlyChange(t *testing.T)
 		RefreshRequired bool             `json:"refresh_required"`
 		Report          *activity.Report `json:"report"`
 	}
-	require.NoError(t, json.Unmarshal(pageResponse.Body.Bytes(), &page))
-	assert.True(t, page.RefreshRequired)
-	require.NotNil(t, page.Report)
-	assert.NotEqual(t, initial.ReportID, page.Report.ReportID)
+	require.NoError(json.Unmarshal(pageResponse.Body.Bytes(), &page))
+	assert.True(page.RefreshRequired)
+	require.NotNil(page.Report)
+	assert.NotEqual(initial.ReportID, page.Report.ReportID)
 	var alphaProjectKey string
 	for _, row := range page.Report.BySession {
 		if row.Project == "alpha" {
@@ -700,9 +715,9 @@ func TestActivityReportSessionPageRefreshesAfterIdentityOnlyChange(t *testing.T)
 			break
 		}
 	}
-	require.NotEmpty(t, alphaProjectKey)
+	require.NotEmpty(alphaProjectKey)
 	project, ok := page.Report.Projects[alphaProjectKey]
-	require.True(t, ok)
-	require.NotNil(t, project.Identity,
+	require.True(ok)
+	require.NotNil(project.Identity,
 		"replacement report must carry refreshed project identity metadata")
 }

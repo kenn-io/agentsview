@@ -23,15 +23,17 @@ import (
 const oneDayUsageRange = "from=2024-06-01&to=2024-06-01"
 
 func TestUsageInputAPIErrorPreservesMachineReadableCode(t *testing.T) {
+	assert := assert.New(t)
+
 	err := usageInputAPIError(&service.UsageInputError{
 		Code: service.UsageErrorCodeUnknownProjectKey,
 		Msg:  "wording may change",
 	})
 	var response *apiErrorResponse
 	require.ErrorAs(t, err, &response)
-	assert.Equal(t, http.StatusBadRequest, response.Status)
-	assert.Equal(t, service.UsageErrorCodeUnknownProjectKey, response.Code)
-	assert.Equal(t, "wording may change", response.Message)
+	assert.Equal(http.StatusBadRequest, response.Status)
+	assert.Equal(service.UsageErrorCodeUnknownProjectKey, response.Code)
+	assert.Equal("wording may change", response.Message)
 }
 
 type usageSummaryCountsSpy struct {
@@ -179,6 +181,8 @@ func TestUsageSummaryCanSkipSessionCounts(t *testing.T) {
 }
 
 func TestUsageComparisonScansPriorPeriodOnly(t *testing.T) {
+	assert := assert.New(t)
+
 	spy := &usageSummaryCountsSpy{}
 	s := newRoutedTestServerWithStore(t, spy)
 
@@ -191,10 +195,10 @@ func TestUsageComparisonScansPriorPeriodOnly(t *testing.T) {
 
 	var out Comparison
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &out))
-	assert.Equal(t, "2024-05-31", out.PriorFrom)
-	assert.Equal(t, "2024-05-31", out.PriorTo)
-	assert.Equal(t, money.MustParseDollars("1"), out.PriorTotalCost)
-	assert.Equal(t, 2.0, out.DeltaPct)
+	assert.Equal("2024-05-31", out.PriorFrom)
+	assert.Equal("2024-05-31", out.PriorTo)
+	assert.Equal(money.MustParseDollars("1"), out.PriorTotalCost)
+	assert.Equal(2.0, out.DeltaPct)
 }
 
 func TestUsageComparisonCopiesGitBranchFilterToPriorPeriod(t *testing.T) {
@@ -416,6 +420,8 @@ func TestUsageSummarySkipsUnsupportedUsageForMixedAgentFilters(t *testing.T) {
 }
 
 func TestUsagePairwiseComparisonScansTwoDailyFilters(t *testing.T) {
+	assert := assert.New(t)
+
 	spy := &usageSummaryCountsSpy{}
 	s := newRoutedTestServerWithStore(t, spy)
 
@@ -425,17 +431,19 @@ func TestUsagePairwiseComparisonScansTwoDailyFilters(t *testing.T) {
 			"&right_dimension=project&right_value=beta")
 	assertRecorderStatus(t, w, http.StatusOK)
 
-	assert.Equal(t, 2, spy.dailyCalls)
+	assert.Equal(2, spy.dailyCalls)
 	require.Len(t, spy.filters, 2)
-	assert.Equal(t, "claude-sonnet-4-20250514", spy.filters[0].Model)
-	assert.Equal(t, "", spy.filters[0].Project)
-	assert.Equal(t, "", spy.filters[1].Model)
-	assert.Equal(t, "beta", spy.filters[1].Project)
-	assert.False(t, spy.filters[0].SkipSessionCounts)
-	assert.False(t, spy.filters[1].SkipSessionCounts)
+	assert.Equal("claude-sonnet-4-20250514", spy.filters[0].Model)
+	assert.Empty(spy.filters[0].Project)
+	assert.Empty(spy.filters[1].Model)
+	assert.Equal("beta", spy.filters[1].Project)
+	assert.False(spy.filters[0].SkipSessionCounts)
+	assert.False(spy.filters[1].SkipSessionCounts)
 }
 
 func TestUsagePairwiseComparisonOpenAPIRequiresSideParams(t *testing.T) {
+	assert := assert.New(t)
+
 	s := testServer(t, 30)
 	spec := readOpenAPISpec(t, s.Handler())
 	op := requireOpenAPIOperation(t, spec, "get", "/api/v1/usage/pairwise-comparison")
@@ -447,25 +455,27 @@ func TestUsagePairwiseComparisonOpenAPIRequiresSideParams(t *testing.T) {
 		}
 	}
 
-	assert.True(t, required["left_dimension"])
-	assert.True(t, required["left_value"])
-	assert.True(t, required["right_dimension"])
-	assert.True(t, required["right_value"])
+	assert.True(required["left_dimension"])
+	assert.True(required["left_value"])
+	assert.True(required["right_dimension"])
+	assert.True(required["right_value"])
 }
 
 func TestUsagePairwiseComparisonOpenAPIAllowsNullCostPerSessionDelta(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	spec := OpenAPISpec(VersionInfo{})
 	deltaSchema, ok := spec.Components.Schemas.Map()["ServiceUsagePairwiseComparisonDelta"]
-	require.True(t, ok, "pairwise comparison delta schema missing")
+	require.True(ok, "pairwise comparison delta schema missing")
 	costPerSessionSchema, ok := deltaSchema.Properties["costPerSessionDelta"]
-	require.True(t, ok, "costPerSessionDelta schema missing")
+	require.True(ok, "costPerSessionDelta schema missing")
 
-	require.Len(t, costPerSessionSchema.AnyOf, 2)
-	assert.Equal(t,
-		"#/components/schemas/MoneyMoney",
+	require.Len(costPerSessionSchema.AnyOf, 2)
+	assert.Equal("#/components/schemas/MoneyMoney",
 		costPerSessionSchema.AnyOf[0].Ref,
 	)
-	assert.Equal(t, "null", costPerSessionSchema.AnyOf[1].Type)
+	assert.Equal("null", costPerSessionSchema.AnyOf[1].Type)
 }

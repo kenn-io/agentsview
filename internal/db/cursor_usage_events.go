@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -82,16 +83,16 @@ func (db *DB) InsertCursorUsageEvents(
 
 	for _, ev := range events {
 		if ev.Model == "" {
-			return fmt.Errorf("cursor usage event model is required")
+			return errors.New("cursor usage event model is required")
 		}
 		if ev.OccurredAt == "" {
-			return fmt.Errorf("cursor usage event timestamp is required")
+			return errors.New("cursor usage event timestamp is required")
 		}
 		if ev.DedupKey == "" {
 			ev.DedupKey = CursorUsageEventDedupKey(ev)
 		}
 		if ev.DedupKey == "" {
-			return fmt.Errorf("cursor usage event dedup key is required")
+			return errors.New("cursor usage event dedup key is required")
 		}
 
 		isHeadless := 0

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -210,9 +211,7 @@ func installFromArchiveTo(
 	precomputedChecksum string,
 ) error {
 	if expectedChecksum == "" {
-		return fmt.Errorf(
-			"empty checksum - refusing unverified binary",
-		)
+		return errors.New("empty checksum - refusing unverified binary")
 	}
 
 	checksum := precomputedChecksum
@@ -539,18 +538,18 @@ func extractTarGz(archivePath, destDir string) error {
 // sanitizePath validates a path to prevent directory traversal.
 func sanitizePath(destDir, name string) (string, error) {
 	if strings.HasPrefix(name, "/") {
-		return "", fmt.Errorf("absolute path not allowed")
+		return "", errors.New("absolute path not allowed")
 	}
 
 	cleanName := filepath.Clean(name)
 	if filepath.IsAbs(cleanName) {
-		return "", fmt.Errorf("absolute path not allowed")
+		return "", errors.New("absolute path not allowed")
 	}
 	if strings.HasPrefix(cleanName, "..") ||
 		strings.Contains(
 			cleanName, string(filepath.Separator)+"..",
 		) {
-		return "", fmt.Errorf("path traversal not allowed")
+		return "", errors.New("path traversal not allowed")
 	}
 
 	target := filepath.Join(destDir, cleanName)
@@ -565,7 +564,7 @@ func sanitizePath(destDir, name string) (string, error) {
 	if !strings.HasPrefix(
 		absTarget, absDestDir+string(filepath.Separator),
 	) && absTarget != absDestDir {
-		return "", fmt.Errorf("path escapes destination directory")
+		return "", errors.New("path escapes destination directory")
 	}
 	return target, nil
 }

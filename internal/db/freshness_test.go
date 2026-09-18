@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,8 +14,11 @@ import (
 // step, so the per-component stat-digest shortcut cannot skip
 // re-processing a session whose mtime was just zeroed.
 func TestResetAllMtimes_ZeroesMtimesAndClearsFreshness(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	const sessionID = "codebuff:proj:1704067200"
 	const chatPath = "/sessions/proj/chats/1704067200"
@@ -24,70 +26,75 @@ func TestResetAllMtimes_ZeroesMtimesAndClearsFreshness(t *testing.T) {
 		s.Agent = "codebuff"
 		s.FileMtime = new(int64(1704067200))
 	})
-	require.NoError(t, d.UpsertProviderStatHash(
+	require.NoError(d.UpsertProviderStatHash(
 		ctx, parser.AgentCodebuff, chatPath, 42))
 
 	_, mtime, ok := d.GetSessionFileInfo(sessionID)
-	require.True(t, ok)
-	require.Equal(t, int64(1704067200), mtime,
+	require.True(ok)
+	require.Equal(int64(1704067200), mtime,
 		"precondition: session must start with a non-zero mtime")
 	hash, present, err := d.GetProviderStatHash(
 		ctx, parser.AgentCodebuff, chatPath)
-	require.NoError(t, err)
-	require.True(t, present,
+	require.NoError(err)
+	require.True(present,
 		"precondition: freshness row must exist before the reset")
-	require.Equal(t, uint64(42), hash)
+	require.Equal(uint64(42), hash)
 
-	require.NoError(t, d.ResetAllMtimes())
+	require.NoError(d.ResetAllMtimes())
 
 	_, mtime, ok = d.GetSessionFileInfo(sessionID)
-	require.True(t, ok)
-	assert.Zero(t, mtime, "file_mtime must be zeroed for every session")
+	require.True(ok)
+	assert.Zero(mtime, "file_mtime must be zeroed for every session")
 	_, present, err = d.GetProviderStatHash(
 		ctx, parser.AgentCodebuff, chatPath)
-	require.NoError(t, err)
-	assert.False(t, present,
+	require.NoError(err)
+	assert.False(present,
 		"provider_freshness must be cleared so the stat-digest "+
 			"shortcut cannot defeat the forced re-sync")
 }
 
 func TestRestoreSessionStalesSourceAndClearsFreshness(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	ctx := t.Context()
 	path := "/sessions/project/transcript.jsonl"
 
 	insertSessionWithSourcePath(t, d, "restored", "claude", path)
-	require.NoError(t, d.SetSessionDataVersion(
+	require.NoError(d.SetSessionDataVersion(
 		"restored", CurrentDataVersion(),
 	))
-	require.NoError(t, d.UpsertProviderStatHash(
+	require.NoError(d.UpsertProviderStatHash(
 		ctx, parser.AgentClaude, path, 42,
 	))
-	require.NoError(t, d.SoftDeleteSession("restored"))
+	require.NoError(d.SoftDeleteSession("restored"))
 
 	restored, err := d.RestoreSession("restored")
-	require.NoError(t, err)
-	require.EqualValues(t, 1, restored)
-	assert.Less(t, d.GetSessionDataVersion("restored"), CurrentDataVersion(),
+	require.NoError(err)
+	require.EqualValues(1, restored)
+	assert.Less(d.GetSessionDataVersion("restored"), CurrentDataVersion(),
 		"restoring a source member must force a source reparse")
 	_, present, err := d.GetProviderStatHash(
 		ctx, parser.AgentClaude, path,
 	)
-	require.NoError(t, err)
-	assert.False(t, present,
+	require.NoError(err)
+	assert.False(present,
 		"restoring a source member must invalidate its source digest")
 }
 
 func TestGetSessionFilePathNotSourceMissing(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
 	ctx := t.Context()
 	path := "/sessions/project/transcript.jsonl"
 	insertSessionWithSourcePath(t, d, "active", "claude", path)
 	insertSessionWithSourcePath(t, d, "trashed", "claude", path)
-	require.NoError(t, d.SoftDeleteSession("trashed"))
+	require.NoError(d.SoftDeleteSession("trashed"))
 	insertSessionWithSourcePath(t, d, "missing", "claude", path,
 		func(s *Session) { s.Machine = "local" })
-	require.NoError(t, d.BaselineActiveSessionSourceOwnerships(
+	require.NoError(d.BaselineActiveSessionSourceOwnerships(
 		ctx, []SessionSourceOwnership{{
 			ID: "missing", Machine: "local", Agent: "claude", FilePath: path,
 		}},
@@ -95,9 +102,9 @@ func TestGetSessionFilePathNotSourceMissing(t *testing.T) {
 	tombstoned, err := d.MarkSessionSourceMissing(
 		ctx, "local", "claude", "missing", path,
 	)
-	require.NoError(t, err)
-	require.True(t, tombstoned)
-	require.Equal(t, path, d.GetSessionFilePath("missing"),
+	require.NoError(err)
+	require.True(tombstoned)
+	require.Equal(path, d.GetSessionFilePath("missing"),
 		"the unfiltered lookup still returns tombstoned paths")
 
 	tests := []struct {

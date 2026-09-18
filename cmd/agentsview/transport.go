@@ -75,6 +75,7 @@ type transport struct {
 	DirectIncompatible bool // live daemon owns DB but cannot serve this client
 	DirectDaemonAhead  bool // that daemon runs a newer API or data version than this client
 	DirectReason       string
+	DirectError        error
 	Runtime            *DaemonRuntime
 }
 
@@ -160,11 +161,13 @@ func detectTransportContext(
 		}
 	}
 	if IsLocalDaemonActive(dataDir, authToken) {
-		reason := errLocalDaemonUnreachable.Error()
+		directErr := errLocalDaemonUnreachable
+		reason := directErr.Error()
 		incompatible := false
 		ahead := false
 		if rt, err := FindIncompatibleDaemonRuntime(dataDir, authToken); err != nil {
 			reason = err.Error()
+			directErr = err
 			incompatible = true
 			ahead = daemonRuntimeAhead(rt)
 		}
@@ -174,6 +177,7 @@ func detectTransportContext(
 			DirectIncompatible: incompatible,
 			DirectDaemonAhead:  ahead,
 			DirectReason:       reason,
+			DirectError:        directErr,
 		}, nil
 	}
 	return transport{Mode: transportDirect}, nil
@@ -290,7 +294,7 @@ func ensureTransportContext(
 		}
 		if tr.DirectReadOnly {
 			if tr.DirectReason != "" {
-				if tr.DirectReason == errLocalDaemonUnreachable.Error() {
+				if errors.Is(tr.DirectError, errLocalDaemonUnreachable) {
 					return transport{}, errLocalDaemonUnreachable
 				}
 				return transport{}, appendDaemonCompatibilityHint(
@@ -324,7 +328,7 @@ func ensureTransportContext(
 	}
 	if tr.DirectReadOnly {
 		if tr.DirectReason != "" {
-			if tr.DirectReason == errLocalDaemonUnreachable.Error() {
+			if errors.Is(tr.DirectError, errLocalDaemonUnreachable) {
 				return transport{}, errLocalDaemonUnreachable
 			}
 			return transport{}, appendDaemonCompatibilityHint(

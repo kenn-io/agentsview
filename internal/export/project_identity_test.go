@@ -199,52 +199,60 @@ func TestSafeProjectDisplayLabelRejectsURLSchemes(t *testing.T) {
 }
 
 func TestProjectIdentitySelectRemotePrefersOriginAndRejectsAmbiguity(t *testing.T) {
+	assert := assert.New(t)
+
 	name, raw, ok := SelectRemote(map[string]string{
 		"upstream": "https://github.com/acme/upstream.git",
 		"origin":   "git@github.com:acme/app.git",
 	})
 	require.True(t, ok)
-	assert.Equal(t, "origin", name)
-	assert.Equal(t, "git@github.com:acme/app.git", raw)
+	assert.Equal("origin", name)
+	assert.Equal("git@github.com:acme/app.git", raw)
 
 	name, raw, ok = SelectRemote(map[string]string{
 		"zeta": "https://github.com/acme/zeta.git",
 		"beta": "https://github.com/acme/beta.git",
 	})
-	assert.False(t, ok)
-	assert.Empty(t, name)
-	assert.Empty(t, raw)
+	assert.False(ok)
+	assert.Empty(name)
+	assert.Empty(raw)
 }
 
 func TestProjectIdentityRootPathFallbackNormalizesLocalPath(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink path separators in this contract are POSIX-specific")
 	}
 	base := t.TempDir()
 	realRoot := filepath.Join(base, "real")
 	linkRoot := filepath.Join(base, "link")
-	require.NoError(t, mkdirAll(realRoot))
-	require.NoError(t, symlink(realRoot, linkRoot))
+	require.NoError(mkdirAll(realRoot))
+	require.NoError(symlink(realRoot, linkRoot))
 
 	got, ok, err := NormalizeRootPath(linkRoot + string(filepath.Separator))
-	require.NoError(t, err)
-	require.True(t, ok)
+	require.NoError(err)
+	require.True(ok)
 	expectedRoot, ok, err := NormalizeRootPath(realRoot)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, expectedRoot, got)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(expectedRoot, got)
 
 	identity := BuildProjectIdentity(ProjectIdentityInput{RootPath: linkRoot + "/"})
-	require.NotEmpty(t, identity.Key)
-	assert.Equal(t, "root_path", identity.KeySource)
-	assert.Equal(t, expectedRoot, identity.RootPath)
+	require.NotEmpty(identity.Key)
+	assert.Equal("root_path", identity.KeySource)
+	assert.Equal(expectedRoot, identity.RootPath)
 }
 
 func TestProjectIdentityStoredRootPathUsesLexicalSymlinkPath(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	base := t.TempDir()
 	realRoot := filepath.Join(base, "real")
 	linkRoot := filepath.Join(base, "link")
-	require.NoError(t, mkdirAll(realRoot))
+	require.NoError(mkdirAll(realRoot))
 	if err := symlink(realRoot, linkRoot); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
@@ -252,23 +260,26 @@ func TestProjectIdentityStoredRootPathUsesLexicalSymlinkPath(t *testing.T) {
 	live := BuildProjectIdentity(ProjectIdentityInput{RootPath: linkRoot})
 	stored := BuildStoredProjectIdentity(ProjectIdentityInput{RootPath: linkRoot})
 
-	require.NotEmpty(t, live.Key)
-	require.NotEmpty(t, stored.Key)
-	assert.NotEqual(t, live.Key, stored.Key)
-	assert.Equal(t, filepath.ToSlash(filepath.Clean(linkRoot)), stored.RootPath)
+	require.NotEmpty(live.Key)
+	require.NotEmpty(stored.Key)
+	assert.NotEqual(live.Key, stored.Key)
+	assert.Equal(filepath.ToSlash(filepath.Clean(linkRoot)), stored.RootPath)
 	expectedLive, ok, err := NormalizeRootPath(realRoot)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, expectedLive, live.RootPath)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(expectedLive, live.RootPath)
 }
 
 func TestStoredProjectReferenceDoesNotFollowRetargetedSymlink(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	base := t.TempDir()
 	firstRoot := filepath.Join(base, "first")
 	secondRoot := filepath.Join(base, "second")
 	linkRoot := filepath.Join(base, "link")
-	require.NoError(t, mkdirAll(firstRoot))
-	require.NoError(t, mkdirAll(secondRoot))
+	require.NoError(mkdirAll(firstRoot))
+	require.NoError(mkdirAll(secondRoot))
 	if err := symlink(firstRoot, linkRoot); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
@@ -280,12 +291,12 @@ func TestStoredProjectReferenceDoesNotFollowRetargetedSymlink(t *testing.T) {
 	scope := IdentityScope{ArchiveID: "archive", ArchiveSalt: "salt"}
 	before := ResolveProjectReferenceFromObservation(obs, scope)
 
-	require.NoError(t, os.Remove(linkRoot))
-	require.NoError(t, symlink(secondRoot, linkRoot))
+	require.NoError(os.Remove(linkRoot))
+	require.NoError(symlink(secondRoot, linkRoot))
 	after := ResolveProjectReferenceFromObservation(obs, scope)
 
-	assert.Equal(t, before.Identity, after.Identity)
-	assert.Equal(t, before.Worktree, after.Worktree)
+	assert.Equal(before.Identity, after.Identity)
+	assert.Equal(before.Worktree, after.Worktree)
 }
 
 func TestProjectIdentityWindowsDriveRootPathsAreLocal(t *testing.T) {
@@ -318,20 +329,23 @@ func TestProjectIdentityWindowsDriveRootPathsAreLocal(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			got, ok, err := NormalizeRootPath(tt.raw)
-			require.NoError(t, err)
-			require.True(t, ok)
-			assert.Equal(t, tt.want, got)
+			require.NoError(err)
+			require.True(ok)
+			assert.Equal(tt.want, got)
 
 			stored, ok := NormalizeStoredRootPath(tt.raw)
-			require.True(t, ok)
-			assert.Equal(t, tt.want, stored)
+			require.True(ok)
+			assert.Equal(tt.want, stored)
 
 			identity := BuildStoredProjectIdentity(ProjectIdentityInput{RootPath: tt.raw})
-			require.NotEmpty(t, identity.Key)
-			assert.Equal(t, ProjectIdentityKeySourceRootPath, identity.KeySource)
-			assert.Equal(t, tt.want, identity.RootPath)
-			assert.True(t, identity.MachineLocal)
+			require.NotEmpty(identity.Key)
+			assert.Equal(ProjectIdentityKeySourceRootPath, identity.KeySource)
+			assert.Equal(tt.want, identity.RootPath)
+			assert.True(identity.MachineLocal)
 		})
 	}
 
@@ -344,62 +358,73 @@ func TestProjectIdentityWindowsDriveRootPathsAreLocal(t *testing.T) {
 }
 
 func TestProjectIdentityStoredRootPathAcceptsPOSIXAbsolutePath(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	got, ok := NormalizeStoredRootPath(`/fixtures\repo/../repo/worktree/`)
-	require.True(t, ok)
-	assert.Equal(t, "/fixtures/repo/worktree", got)
+	require.True(ok)
+	assert.Equal("/fixtures/repo/worktree", got)
 
 	identity := BuildStoredProjectIdentity(ProjectIdentityInput{
 		RootPath: `/fixtures\repo/../repo/worktree/`,
 	})
-	require.NotEmpty(t, identity.Key)
-	assert.Equal(t, ProjectIdentityKeySourceRootPath, identity.KeySource)
-	assert.Equal(t, "/fixtures/repo/worktree", identity.RootPath)
+	require.NotEmpty(identity.Key)
+	assert.Equal(ProjectIdentityKeySourceRootPath, identity.KeySource)
+	assert.Equal("/fixtures/repo/worktree", identity.RootPath)
 }
 
 func TestProjectIdentityKeysUseTypedSHA256Inputs(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	remoteIdentity := BuildProjectIdentity(ProjectIdentityInput{
 		GitRemote: "git@github.com:Org/Repo.git",
 	})
-	assert.Equal(t,
-		"sha256:"+sha256Hex("git_remote\n"+"github.com/Org/Repo"),
+	assert.Equal("sha256:"+sha256Hex("git_remote\n"+"github.com/Org/Repo"),
 		remoteIdentity.Key,
 	)
-	assert.Equal(t, "git_remote", remoteIdentity.KeySource)
+	assert.Equal("git_remote", remoteIdentity.KeySource)
 
 	root, ok, err := NormalizeRootPath(t.TempDir())
-	require.NoError(t, err)
-	require.True(t, ok)
+	require.NoError(err)
+	require.True(ok)
 
 	rootIdentity := BuildProjectIdentity(ProjectIdentityInput{RootPath: root})
-	assert.Equal(t, "sha256:"+sha256Hex("root_path\n"+root), rootIdentity.Key)
-	assert.Equal(t, "root_path", rootIdentity.KeySource)
+	assert.Equal("sha256:"+sha256Hex("root_path\n"+root), rootIdentity.Key)
+	assert.Equal("root_path", rootIdentity.KeySource)
 }
 
 func TestProjectIdentityJSONUsesNormalizedRemoteField(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	reference := ResolveProjectReference(ProjectIdentityInput{
 		RootPath:         "/work/repo",
 		WorktreeRootPath: "/work/repo",
 		WorktreeKind:     WorktreeMain,
 		GitRemote:        "git@github.com:Org/Repo.git",
 	}, IdentityScope{ArchiveID: "archive", ArchiveSalt: "salt", MachineID: "machine"})
-	require.NotNil(t, reference.Identity)
+	require.NotNil(reference.Identity)
 
 	data, err := json.Marshal(reference.Identity)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	var got map[string]any
-	require.NoError(t, json.Unmarshal(data, &got))
-	assert.Equal(t, "github.com/Org/Repo", got["normalized_remote"])
-	assert.NotContains(t, got, "git_remote")
-	assert.NotContains(t, got, "root_path")
-	assert.NotContains(t, got, "key_source")
-	assert.NotContains(t, got, "machine_local")
-	assert.Equal(t, string(ProjectKindGitRemote), got["kind"])
-	assert.Contains(t, got, "root_key")
-	assert.Contains(t, got, "repository_key")
+	require.NoError(json.Unmarshal(data, &got))
+	assert.Equal("github.com/Org/Repo", got["normalized_remote"])
+	assert.NotContains(got, "git_remote")
+	assert.NotContains(got, "root_path")
+	assert.NotContains(got, "key_source")
+	assert.NotContains(got, "machine_local")
+	assert.Equal(string(ProjectKindGitRemote), got["kind"])
+	assert.Contains(got, "root_key")
+	assert.Contains(got, "repository_key")
 }
 
 func TestProjectIdentityBuildProjectsMapResolvesUnknownAndAmbiguous(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	observations := []ProjectIdentityObservation{
 		{
 			Project:   "app",
@@ -422,17 +447,17 @@ func TestProjectIdentityBuildProjectsMapResolvesUnknownAndAmbiguous(t *testing.T
 
 	got := BuildProjectsMap([]string{"app", "missing", "ambiguous"}, observations)
 
-	require.Equal(t, ProjectResolutionResolved, got["app"].Resolution)
-	require.NotNil(t, got["app"].Identity)
-	assert.Equal(t, "github.com/Org/Repo", got["app"].Identity.NormalizedRemote)
-	assert.Equal(t, ProjectKindGitRemote, got["app"].Identity.Kind)
-	assert.NotEmpty(t, got["app"].Identity.Key)
+	require.Equal(ProjectResolutionResolved, got["app"].Resolution)
+	require.NotNil(got["app"].Identity)
+	assert.Equal("github.com/Org/Repo", got["app"].Identity.NormalizedRemote)
+	assert.Equal(ProjectKindGitRemote, got["app"].Identity.Kind)
+	assert.NotEmpty(got["app"].Identity.Key)
 
-	assert.Equal(t, ProjectResolutionUnknown, got["missing"].Resolution)
-	assert.Nil(t, got["missing"].Identity)
+	assert.Equal(ProjectResolutionUnknown, got["missing"].Resolution)
+	assert.Nil(got["missing"].Identity)
 
-	assert.Equal(t, ProjectResolutionAmbiguous, got["ambiguous"].Resolution)
-	assert.Nil(t, got["ambiguous"].Identity)
+	assert.Equal(ProjectResolutionAmbiguous, got["ambiguous"].Resolution)
+	assert.Nil(got["ambiguous"].Identity)
 }
 
 func TestProjectIdentityBuildProjectsMapUsesObservationArchiveScope(t *testing.T) {
@@ -623,6 +648,8 @@ func TestIsCanonicalAutomountNamespacePath(t *testing.T) {
 // predicate only the mount table's exact form, and the classification walk
 // refuses a symlink into a custom mount without Lstat-ing inside it.
 func TestRegisteredAutomountPrefixes(t *testing.T) {
+	assert := assert.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("the predicate compares POSIX home paths built with filepath")
 	}
@@ -630,24 +657,24 @@ func TestRegisteredAutomountPrefixes(t *testing.T) {
 	t.Cleanup(func() { RegisterAutomountPrefixes(orig) })
 	RegisterAutomountPrefixes([]string{"/corp/home/"})
 
-	assert.True(t, IsAutomountNamespacePath("darwin", "/corp/home/user"),
+	assert.True(IsAutomountNamespacePath("darwin", "/corp/home/user"),
 		"a custom autofs mount must classify as automount")
-	assert.True(t, IsAutomountNamespacePath("darwin", "/corp/home"),
+	assert.True(IsAutomountNamespacePath("darwin", "/corp/home"),
 		"the custom mount root itself must classify as automount")
-	assert.True(t, IsAutomountNamespacePath("darwin", "/CORP/Home/user"),
+	assert.True(IsAutomountNamespacePath("darwin", "/CORP/Home/user"),
 		"case-folded spellings of a custom mount must match")
-	assert.True(t, IsAutomountNamespacePath(
+	assert.True(IsAutomountNamespacePath(
 		"darwin", "/System/Volumes/Data/corp/home/user",
 	), "the data-volume spelling of a custom mount must match")
-	assert.False(t, IsAutomountNamespacePath("darwin", "/corp/homework"),
+	assert.False(IsAutomountNamespacePath("darwin", "/corp/homework"),
 		"prefix matching must respect component boundaries")
-	assert.False(t, IsAutomountNamespacePath("linux", "/corp/home/user"),
+	assert.False(IsAutomountNamespacePath("linux", "/corp/home/user"),
 		"custom mounts are darwin-only like the fixed namespaces")
 
-	assert.True(t, IsCanonicalAutomountNamespacePath(
+	assert.True(IsCanonicalAutomountNamespacePath(
 		"darwin", "/corp/home/user",
 	), "the canonical predicate accepts the mount table's exact form")
-	assert.False(t, IsCanonicalAutomountNamespacePath(
+	assert.False(IsCanonicalAutomountNamespacePath(
 		"darwin", "/CORP/home/user",
 	), "the canonical predicate must not accept case-folded forms")
 
@@ -659,11 +686,11 @@ func TestRegisteredAutomountPrefixes(t *testing.T) {
 	t.Cleanup(func() { osLstat = origLstat })
 	osLstat = func(path string) (os.FileInfo, error) {
 		if path == "/corp" || strings.HasPrefix(path, "/corp/") {
-			assert.Fail(t, "custom automount must not be walked", path)
+			assert.Fail("custom automount must not be walked", path)
 		}
 		return origLstat(path)
 	}
-	assert.Equal(t, LocalPathProbeAutomountNamespace, ClassifyLocalPathProbe(
+	assert.Equal(LocalPathProbeAutomountNamespace, ClassifyLocalPathProbe(
 		"darwin", home, filepath.Join(home, "tocorp", "repo"), false,
 	), "a symlink into a custom mount must stop the walk")
 }
@@ -672,23 +699,25 @@ func TestRegisteredAutomountPrefixes(t *testing.T) {
 // working directories that only reach a protected folder through a symlink,
 // which the lexical predicates alone cannot see.
 func TestClassifyLocalPathProbe(t *testing.T) {
+	require := require.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("the predicate compares POSIX home paths built with filepath")
 	}
 	home := t.TempDir()
-	require.NoError(t, os.MkdirAll(
+	require.NoError(os.MkdirAll(
 		filepath.Join(home, "Documents", "proj"), 0o755,
 	))
-	require.NoError(t, os.MkdirAll(filepath.Join(home, "src", "app"), 0o755))
-	require.NoError(t, os.Symlink(
+	require.NoError(os.MkdirAll(filepath.Join(home, "src", "app"), 0o755))
+	require.NoError(os.Symlink(
 		filepath.Join(home, "Documents"), filepath.Join(home, "code"),
 	))
-	require.NoError(t, os.Symlink("./Documents", filepath.Join(home, "rel")))
-	require.NoError(t, os.Symlink(
+	require.NoError(os.Symlink("./Documents", filepath.Join(home, "rel")))
+	require.NoError(os.Symlink(
 		filepath.Join(home, "loop"), filepath.Join(home, "loop"),
 	))
 	outside := t.TempDir()
-	require.NoError(t, os.Symlink(outside, filepath.Join(home, "out")))
+	require.NoError(os.Symlink(outside, filepath.Join(home, "out")))
 
 	tests := []struct {
 		name string
@@ -751,24 +780,26 @@ func TestClassifyLocalPathProbeSkipsAutomountNamespace(t *testing.T) {
 // would drop an unresolved symlink component and classify a path as safe
 // while real filesystem resolution reaches a protected location through it.
 func TestClassifyLocalPathProbeDotDotTraversalOrder(t *testing.T) {
+	require := require.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("the predicate compares POSIX home paths built with filepath")
 	}
 	home := t.TempDir()
-	require.NoError(t, os.MkdirAll(
+	require.NoError(os.MkdirAll(
 		filepath.Join(home, "Documents", "sub"), 0o755,
 	))
-	require.NoError(t, os.MkdirAll(filepath.Join(home, "src", "app"), 0o755))
+	require.NoError(os.MkdirAll(filepath.Join(home, "src", "app"), 0o755))
 	// q links into Documents; home/q/../x resolves through Documents.
-	require.NoError(t, os.Symlink(
+	require.NoError(os.Symlink(
 		filepath.Join(home, "Documents", "sub"), filepath.Join(home, "q"),
 	))
 	// Chained relative target: l1 -> "l2/../safe" where l2 links into
 	// Documents; the kernel resolves l2 before applying "..".
-	require.NoError(t, os.Symlink(
+	require.NoError(os.Symlink(
 		filepath.Join(home, "Documents", "sub"), filepath.Join(home, "l2"),
 	))
-	require.NoError(t, os.Symlink("l2/../safe", filepath.Join(home, "l1")))
+	require.NoError(os.Symlink("l2/../safe", filepath.Join(home, "l1")))
 
 	tests := []struct {
 		name string
@@ -796,20 +827,23 @@ func TestClassifyLocalPathProbeDotDotTraversalOrder(t *testing.T) {
 // prompts, never automountd wakeups. Without the opt-in the walk still
 // stops at the protected prefix untouched.
 func TestClassifyLocalPathProbeOptInStillRefusesAutomount(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("the predicate compares POSIX home paths built with filepath")
 	}
 	home := t.TempDir()
-	require.NoError(t, os.MkdirAll(filepath.Join(home, "Documents"), 0o755))
-	require.NoError(t, os.Symlink(
+	require.NoError(os.MkdirAll(filepath.Join(home, "Documents"), 0o755))
+	require.NoError(os.Symlink(
 		"/home/user", filepath.Join(home, "Documents", "tohome"),
 	))
 	hidden := filepath.Join(home, "Documents", "tohome", "repo")
 
-	assert.Equal(t, LocalPathProbeAutomountNamespace,
+	assert.Equal(LocalPathProbeAutomountNamespace,
 		ClassifyLocalPathProbe("darwin", home, hidden, true),
 		"opt-in must keep resolving and find the automount target")
-	assert.Equal(t, LocalPathProbeProtectedUserData,
+	assert.Equal(LocalPathProbeProtectedUserData,
 		ClassifyLocalPathProbe("darwin", home,
 			filepath.Join(home, "Documents", "proj"), true),
 		"a protected-only path stays protected under the opt-in")
@@ -818,11 +852,11 @@ func TestClassifyLocalPathProbeOptInStillRefusesAutomount(t *testing.T) {
 	t.Cleanup(func() { osLstat = orig })
 	osLstat = func(path string) (os.FileInfo, error) {
 		if strings.HasPrefix(path, filepath.Join(home, "Documents")) {
-			assert.Fail(t, "opt-out must not Lstat inside protected", path)
+			assert.Fail("opt-out must not Lstat inside protected", path)
 		}
 		return orig(path)
 	}
-	assert.Equal(t, LocalPathProbeProtectedUserData,
+	assert.Equal(LocalPathProbeProtectedUserData,
 		ClassifyLocalPathProbe("darwin", home, hidden, false),
 		"without the opt-in the walk stops at the protected prefix")
 }
@@ -861,20 +895,25 @@ func TestClassifyLocalPathProbeAutomountHomeNeverResolved(t *testing.T) {
 // path names a directory on another machine) and expensive (each probe wakes
 // automountd/opendirectoryd, and negative results are not cached).
 func TestNormalizeStoredRootPathSkipsAutomountNamespace(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if runtime.GOOS != "darwin" {
 		t.Skip("automount namespaces are a darwin-only concern")
 	}
 	got, ok := NormalizeStoredRootPath("/home/user/work/repo")
-	require.True(t, ok)
-	assert.Equal(t, "/home/user/work/repo", got)
+	require.True(ok)
+	assert.Equal("/home/user/work/repo", got)
 
 	normalized, ok, err := NormalizeRootPath("/home/user/work/repo")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, "/home/user/work/repo", normalized)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal("/home/user/work/repo", normalized)
 }
 
 func TestResolveProjectReferenceScrubsPrivateLocalIdentity(t *testing.T) {
+	assert := assert.New(t)
+
 	got := ResolveProjectReference(ProjectIdentityInput{
 		DisplayLabel:     "app-copy",
 		RootPath:         "/private/work/app-copy",
@@ -890,25 +929,28 @@ func TestResolveProjectReferenceScrubsPrivateLocalIdentity(t *testing.T) {
 	})
 
 	require.NotNil(t, got.Identity)
-	assert.Equal(t, "app-copy", got.DisplayLabel)
-	assert.Equal(t, ProjectResolutionResolved, got.Resolution)
-	assert.Equal(t, ProjectKindGitRemote, got.Identity.Kind)
-	assert.Equal(t, "example.com/acme/app", got.Identity.NormalizedRemote)
-	assert.NotEmpty(t, got.Identity.Key)
-	assert.NotEmpty(t, got.Identity.RootKey)
-	assert.NotEmpty(t, got.Identity.RepositoryKey)
-	assert.Equal(t, WorktreeLinked, got.Worktree.Relationship)
-	assert.NotEmpty(t, got.Worktree.WorktreeKey)
-	assert.Equal(t, got.Identity.RepositoryKey, got.Worktree.RepositoryKey)
-	assert.Equal(t, CheckoutBranch, got.Checkout.State)
-	assert.Equal(t, "feature/a", got.Checkout.Branch)
+	assert.Equal("app-copy", got.DisplayLabel)
+	assert.Equal(ProjectResolutionResolved, got.Resolution)
+	assert.Equal(ProjectKindGitRemote, got.Identity.Kind)
+	assert.Equal("example.com/acme/app", got.Identity.NormalizedRemote)
+	assert.NotEmpty(got.Identity.Key)
+	assert.NotEmpty(got.Identity.RootKey)
+	assert.NotEmpty(got.Identity.RepositoryKey)
+	assert.Equal(WorktreeLinked, got.Worktree.Relationship)
+	assert.NotEmpty(got.Worktree.WorktreeKey)
+	assert.Equal(got.Identity.RepositoryKey, got.Worktree.RepositoryKey)
+	assert.Equal(CheckoutBranch, got.Checkout.State)
+	assert.Equal("feature/a", got.Checkout.Branch)
 
 	encoded := marshalProjectJSON(t, got)
-	assert.NotContains(t, encoded, "/private/work")
-	assert.NotContains(t, encoded, "user:token")
+	assert.NotContains(encoded, "/private/work")
+	assert.NotContains(encoded, "user:token")
 }
 
 func TestResolveProjectReferenceUsesMachineScopedRootWithoutRemote(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	input := ProjectIdentityInput{
 		DisplayLabel:     "local-app",
 		RootPath:         "/work/local-app",
@@ -923,28 +965,32 @@ func TestResolveProjectReferenceUsesMachineScopedRootWithoutRemote(t *testing.T)
 		ArchiveID: "archive", ArchiveSalt: "salt", MachineID: "machine-b",
 	})
 
-	require.NotNil(t, first.Identity)
-	require.NotNil(t, second.Identity)
-	assert.Equal(t, ProjectKindMachineRoot, first.Identity.Kind)
-	assert.NotEqual(t, first.Identity.Key, second.Identity.Key)
-	assert.Empty(t, first.Identity.NormalizedRemote)
-	assert.Equal(t, CheckoutUnknown, first.Checkout.State)
-	assert.NotContains(t, marshalProjectJSON(t, first), "/work/local-app")
+	require.NotNil(first.Identity)
+	require.NotNil(second.Identity)
+	assert.Equal(ProjectKindMachineRoot, first.Identity.Kind)
+	assert.NotEqual(first.Identity.Key, second.Identity.Key)
+	assert.Empty(first.Identity.NormalizedRemote)
+	assert.Equal(CheckoutUnknown, first.Checkout.State)
+	assert.NotContains(marshalProjectJSON(t, first), "/work/local-app")
 }
 
 func TestResolveRemoteSelectionFailsClosedWithoutOrigin(t *testing.T) {
+	assert := assert.New(t)
+
 	selection := ResolveRemoteSelection(map[string]string{
 		"beta": "https://example.com/acme/beta.git",
 		"zeta": "https://example.com/acme/zeta.git",
 	})
 
-	assert.Equal(t, ProjectResolutionAmbiguous, selection.Resolution)
-	assert.Empty(t, selection.Name)
-	assert.Empty(t, selection.Raw)
-	assert.Empty(t, selection.Normalized)
+	assert.Equal(ProjectResolutionAmbiguous, selection.Resolution)
+	assert.Empty(selection.Name)
+	assert.Empty(selection.Raw)
+	assert.Empty(selection.Normalized)
 }
 
 func TestResolveProjectReferencePropagatesAmbiguousRemoteSelection(t *testing.T) {
+	assert := assert.New(t)
+
 	got := ResolveProjectReference(ProjectIdentityInput{
 		DisplayLabel:     "app",
 		RootPath:         "/work/app-worktree",
@@ -958,13 +1004,13 @@ func TestResolveProjectReferencePropagatesAmbiguousRemoteSelection(t *testing.T)
 		}),
 	}, IdentityScope{ArchiveID: "archive", ArchiveSalt: "salt", MachineID: "machine"})
 
-	assert.Equal(t, ProjectResolutionAmbiguous, got.Resolution)
-	assert.Nil(t, got.Identity)
-	assert.Equal(t, WorktreeLinked, got.Worktree.Relationship)
-	assert.NotEmpty(t, got.Worktree.WorktreeKey)
-	assert.NotEmpty(t, got.Worktree.RepositoryKey)
-	assert.Equal(t, CheckoutDetached, got.Checkout.State)
-	assert.NotContains(t, marshalProjectJSON(t, got), `"identity"`)
+	assert.Equal(ProjectResolutionAmbiguous, got.Resolution)
+	assert.Nil(got.Identity)
+	assert.Equal(WorktreeLinked, got.Worktree.Relationship)
+	assert.NotEmpty(got.Worktree.WorktreeKey)
+	assert.NotEmpty(got.Worktree.RepositoryKey)
+	assert.Equal(CheckoutDetached, got.Checkout.State)
+	assert.NotContains(marshalProjectJSON(t, got), `"identity"`)
 }
 
 func TestBuildProjectsMapPreservesObservedRemoteAmbiguity(t *testing.T) {
@@ -980,6 +1026,8 @@ func TestBuildProjectsMapPreservesObservedRemoteAmbiguity(t *testing.T) {
 }
 
 func TestAggregateIdentityScopeIsOrderIndependentAndArchiveSensitive(t *testing.T) {
+	assert := assert.New(t)
+
 	first := AggregateIdentityScope([]IdentityScope{
 		{ArchiveID: "archive-b", ArchiveSalt: "salt-b"},
 		{ArchiveID: "archive-a", ArchiveSalt: "salt-a"},
@@ -993,13 +1041,16 @@ func TestAggregateIdentityScopeIsOrderIndependentAndArchiveSensitive(t *testing.
 		{ArchiveID: "archive-c", ArchiveSalt: "salt-c"},
 	})
 
-	assert.Equal(t, first, reordered)
-	assert.NotEmpty(t, first.ArchiveID)
-	assert.NotEmpty(t, first.ArchiveSalt)
-	assert.NotEqual(t, first, changed)
+	assert.Equal(first, reordered)
+	assert.NotEmpty(first.ArchiveID)
+	assert.NotEmpty(first.ArchiveSalt)
+	assert.NotEqual(first, changed)
 }
 
 func TestResolveProjectReferenceSharesNoRemoteRepositoryAcrossWorktrees(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	scope := IdentityScope{ArchiveID: "archive", ArchiveSalt: "salt", MachineID: "machine"}
 	main := ResolveProjectReference(ProjectIdentityInput{
 		RootPath:         "/work/app",
@@ -1014,12 +1065,12 @@ func TestResolveProjectReferenceSharesNoRemoteRepositoryAcrossWorktrees(t *testi
 		WorktreeKind:     WorktreeLinked,
 	}, scope)
 
-	require.NotNil(t, main.Identity)
-	require.NotNil(t, linked.Identity)
-	assert.Equal(t, main.Identity.Key, linked.Identity.Key)
-	assert.Equal(t, main.Identity.RepositoryKey, linked.Identity.RepositoryKey)
-	assert.NotEqual(t, main.Identity.RootKey, linked.Identity.RootKey)
-	assert.NotEqual(t, main.Worktree.WorktreeKey, linked.Worktree.WorktreeKey)
+	require.NotNil(main.Identity)
+	require.NotNil(linked.Identity)
+	assert.Equal(main.Identity.Key, linked.Identity.Key)
+	assert.Equal(main.Identity.RepositoryKey, linked.Identity.RepositoryKey)
+	assert.NotEqual(main.Identity.RootKey, linked.Identity.RootKey)
+	assert.NotEqual(main.Worktree.WorktreeKey, linked.Worktree.WorktreeKey)
 }
 
 func TestResolveProjectReferenceRequiresCompleteLocalScope(t *testing.T) {
@@ -1076,6 +1127,9 @@ func TestResolveProjectReferenceRemoteRenameAndSelectionMatrix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			selection := ResolveRemoteSelection(tt.remotes)
 			got := ResolveProjectReference(ProjectIdentityInput{
 				RootPath:         "/old/app",
@@ -1084,12 +1138,12 @@ func TestResolveProjectReferenceRemoteRenameAndSelectionMatrix(t *testing.T) {
 				WorktreeKind:     WorktreeMain,
 				RemoteSelection:  selection,
 			}, scope)
-			assert.Equal(t, tt.resolution, got.Resolution)
+			assert.Equal(tt.resolution, got.Resolution)
 			if tt.resolution != ProjectResolutionResolved {
-				assert.Nil(t, got.Identity)
+				assert.Nil(got.Identity)
 				return
 			}
-			require.NotNil(t, got.Identity)
+			require.NotNil(got.Identity)
 			renamed := ResolveProjectReference(ProjectIdentityInput{
 				RootPath:         "/renamed/app",
 				RepositoryPath:   "/renamed/app/.git",
@@ -1097,15 +1151,17 @@ func TestResolveProjectReferenceRemoteRenameAndSelectionMatrix(t *testing.T) {
 				WorktreeKind:     WorktreeMain,
 				RemoteSelection:  selection,
 			}, scope)
-			require.NotNil(t, renamed.Identity)
-			assert.Equal(t, got.Identity.Key, renamed.Identity.Key)
-			assert.Equal(t, got.Identity.RepositoryKey, renamed.Identity.RepositoryKey)
-			assert.NotEqual(t, got.Identity.RootKey, renamed.Identity.RootKey)
+			require.NotNil(renamed.Identity)
+			assert.Equal(got.Identity.Key, renamed.Identity.Key)
+			assert.Equal(got.Identity.RepositoryKey, renamed.Identity.RepositoryKey)
+			assert.NotEqual(got.Identity.RootKey, renamed.Identity.RootKey)
 		})
 	}
 }
 
 func TestResolveProjectReferenceRejectsContradictoryOrPrivateContext(t *testing.T) {
+	assert := assert.New(t)
+
 	got := ResolveProjectReference(ProjectIdentityInput{
 		DisplayLabel:     "/private/app",
 		RootPath:         "/work/app",
@@ -1115,13 +1171,13 @@ func TestResolveProjectReferenceRejectsContradictoryOrPrivateContext(t *testing.
 		GitBranch:        "https://user:token@example.com/private",
 	}, IdentityScope{ArchiveID: "archive", ArchiveSalt: "salt", MachineID: "machine"})
 
-	assert.Empty(t, got.DisplayLabel)
-	assert.Empty(t, got.Worktree.WorktreeKey)
-	assert.Equal(t, CheckoutUnknown, got.Checkout.State)
-	assert.Empty(t, got.Checkout.Branch)
+	assert.Empty(got.DisplayLabel)
+	assert.Empty(got.Worktree.WorktreeKey)
+	assert.Equal(CheckoutUnknown, got.Checkout.State)
+	assert.Empty(got.Checkout.Branch)
 	encoded := marshalProjectJSON(t, got)
-	assert.NotContains(t, encoded, "/private/app")
-	assert.NotContains(t, encoded, "token")
+	assert.NotContains(encoded, "/private/app")
+	assert.NotContains(encoded, "token")
 }
 
 func TestResolveProjectReferenceMarksDetachedCheckout(t *testing.T) {

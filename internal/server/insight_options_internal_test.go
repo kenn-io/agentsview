@@ -14,6 +14,8 @@ import (
 )
 
 func TestDefaultInsightGenerateStreamUsesServerConfig(t *testing.T) {
+	require := require.New(t)
+
 	endpoint := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter, _ *http.Request,
 	) {
@@ -27,15 +29,17 @@ func TestDefaultInsightGenerateStreamUsesServerConfig(t *testing.T) {
 	srv.cfg.Insights.Model = "snapshot-model"
 	srv.cfg.Insights.AllowHTTP = true
 	result, err := srv.defaultInsightGenerateStream(
-		context.Background(), "claude", "prompt", nil,
+		t.Context(), "claude", "prompt", nil,
 	)
-	require.NoError(t, err)
-	require.Equal(t, "openai", result.Agent)
-	require.Equal(t, "snapshot-model", result.Model)
-	require.Equal(t, "ok", result.Content)
+	require.NoError(err)
+	require.Equal("openai", result.Agent)
+	require.Equal("snapshot-model", result.Model)
+	require.Equal("ok", result.Content)
 }
 
 func TestCannedGenerationPassesSnapshotToGenerator(t *testing.T) {
+	require := require.New(t)
+
 	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"model":"snapshot-model","choices":[{"message":{"role":"assistant","content":"{\"schema_version\":\"llm_insight.v1\",\"kind\":\"prompt_maturity_review\",\"summary\":\"ok\",\"confidence\":\"low\",\"recommendations\":[{\"title\":\"ok\",\"rationale\":\"ok\",\"actions\":[\"ok\"],\"evidence_refs\":[\"aggregate:empty\"],\"impact\":\"low\",\"effort\":\"low\"}],\"risks\":[],\"evidence_refs\":[\"aggregate:empty\"]}"}}]}`))
@@ -61,7 +65,7 @@ func TestCannedGenerationPassesSnapshotToGenerator(t *testing.T) {
 	srv.cfg.Insights.Model = "snapshot-model"
 	srv.cfg.Insights.AllowHTTP = true
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost, "/api/v1/insights/generate", strings.NewReader(
 			`{"type":"llm_canned","kind":"prompt_maturity_review","date_from":"2025-01-15","date_to":"2025-01-15","agent":"claude","llm_opt_in":true}`,
 		),
@@ -72,8 +76,8 @@ func TestCannedGenerationPassesSnapshotToGenerator(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(recorder, req)
 
-	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	require.Contains(t, recorder.Body.String(), "snapshot-model")
-	require.Contains(t, recorder.Body.String(), "ok")
-	require.NotContains(t, recorder.Body.String(), "mutated-model")
+	require.Equal(http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Contains(recorder.Body.String(), "snapshot-model")
+	require.Contains(recorder.Body.String(), "ok")
+	require.NotContains(recorder.Body.String(), "mutated-model")
 }

@@ -598,7 +598,7 @@ func TestRawSyncHeadConflictReturnsReconciliationState(t *testing.T) {
 	)
 
 	require.Equal(t, http.StatusConflict, recorder.Code, recorder.Body.String())
-	var response apiErrorResponse
+	var response apiResponseError
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
 	assert.Equal(t, "head_conflict", response.Code)
 	assert.Equal(t, currentManifest, response.CurrentManifestID)
@@ -704,6 +704,7 @@ func TestRawSyncCustodyDeadlineReturnsGatewayTimeout(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			srv := newRawSyncHTTPTestServer(t, auth, tt.custody)
 			recorder := serveRawSyncJSON(
 				t, srv, http.MethodPost, tt.path, tt.body, tt.bearer, "",
@@ -828,7 +829,7 @@ func TestRawSyncTokenPreflightAllowsDeviceIDHeader(t *testing.T) {
 	srv := newRawSyncHTTPTestServer(
 		t, new(rawSyncAuthStub), new(rawSyncCustodyStub),
 	)
-	req := httptest.NewRequest(http.MethodOptions, "/api/v1/raw-sync/tokens", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodOptions, "/api/v1/raw-sync/tokens", nil)
 	req.Host = "127.0.0.1:8080"
 	req.RemoteAddr = "192.0.2.10:54321"
 	req.Header.Set("Origin", "https://client.example")
@@ -1010,7 +1011,7 @@ func serveRawSyncJSON(
 	deviceID string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
 	req.Host = "127.0.0.1:8080"
 	req.RemoteAddr = "192.0.2.10:54321"
 	req.Header.Set("Content-Type", "application/json")

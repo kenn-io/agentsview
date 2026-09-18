@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
@@ -48,10 +47,13 @@ func TestActivityReportCommand_Flags(t *testing.T) {
 }
 
 func TestResolveCLIActivitySelection(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Setenv("TZ", "America/New_York")
-	oldLocal := time.Local
-	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60)
-	t.Cleanup(func() { time.Local = oldLocal })
+	oldLocal := time.Local                                         //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
+	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60) //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
+	t.Cleanup(func() { time.Local = oldLocal })                    //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
 	oldNow := activityReportNow
 	activityReportNow = func() time.Time {
 		return time.Date(2026, 3, 9, 2, 30, 0, 0, time.UTC)
@@ -61,20 +63,22 @@ func TestResolveCLIActivitySelection(t *testing.T) {
 	query, filter, err := resolveCLIActivitySelection(ActivityReportConfig{
 		Preset: "day",
 	})
-	require.NoError(t, err)
-	assert.Equal(t, "America/New_York", query.Timezone)
-	assert.Equal(t, "America/New_York", filter.Timezone)
-	assert.Equal(t, "2026-03-08T05:00:00Z", query.RangeStart.Format(time.RFC3339))
+	require.NoError(err)
+	assert.Equal("America/New_York", query.Timezone)
+	assert.Equal("America/New_York", filter.Timezone)
+	assert.Equal("2026-03-08T05:00:00Z", query.RangeStart.Format(time.RFC3339))
 
 	query, filter, err = resolveCLIActivitySelection(ActivityReportConfig{
 		Preset: "day", Date: "2026-03-09", Timezone: "Europe/Berlin",
 	})
-	require.NoError(t, err)
-	assert.Equal(t, "Europe/Berlin", query.Timezone)
-	assert.Equal(t, "Europe/Berlin", filter.Timezone)
+	require.NoError(err)
+	assert.Equal("Europe/Berlin", query.Timezone)
+	assert.Equal("Europe/Berlin", filter.Timezone)
 }
 
 func TestResolveActivityReportPagesSessionsWithDirectCursor(t *testing.T) {
+	require := require.New(t)
+
 	dataDir := setupExportGoldenDataDir(t)
 	database := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
 	database.SetCursorSecret(goldenCursorSecret)
@@ -84,18 +88,20 @@ func TestResolveActivityReportPagesSessionsWithDirectCursor(t *testing.T) {
 		SessionsLimit: 1,
 	}
 	first, err := resolveActivityReport(base, database)
-	require.NoError(t, err)
-	require.Len(t, first.BySession, 1)
-	require.NotEmpty(t, first.SessionsNextCursor)
+	require.NoError(err)
+	require.Len(first.BySession, 1)
+	require.NotEmpty(first.SessionsNextCursor)
 
 	base.SessionsCursor = first.SessionsNextCursor
 	second, err := resolveActivityReport(base, database)
-	require.NoError(t, err)
-	require.Len(t, second.BySession, 1)
+	require.NoError(err)
+	require.Len(second.BySession, 1)
 	assert.NotEqual(t, first.BySession[0].SessionID, second.BySession[0].SessionID)
 }
 
 func TestResolveActivityReportCursorInheritsPagingOptions(t *testing.T) {
+	require := require.New(t)
+
 	dataDir := setupExportGoldenDataDir(t)
 	database := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
 	database.SetCursorSecret(goldenCursorSecret)
@@ -105,15 +111,15 @@ func TestResolveActivityReportCursorInheritsPagingOptions(t *testing.T) {
 		SessionsLimit: 1, SessionsSort: "project", SessionsDirection: "asc",
 		SessionsBucketStart: "0", SessionsBucketEnd: "1",
 	}, database)
-	require.NoError(t, err)
-	require.Len(t, first.BySession, 1)
-	require.NotEmpty(t, first.SessionsNextCursor)
+	require.NoError(err)
+	require.Len(first.BySession, 1)
+	require.NotEmpty(first.SessionsNextCursor)
 
 	second, err := resolveActivityReport(ActivityReportConfig{
 		SessionsCursor: first.SessionsNextCursor,
 	}, database)
-	require.NoError(t, err)
-	require.Len(t, second.BySession, 1)
+	require.NoError(err)
+	require.Len(second.BySession, 1)
 	assert.NotEqual(t, first.BySession[0].SessionID, second.BySession[0].SessionID)
 }
 
@@ -152,6 +158,9 @@ func TestResolveActivityReportCursorRejectsExplicitPagingMismatch(t *testing.T) 
 }
 
 func TestResolveActivityReportCursorPreservesPartialGeneration(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := setupExportGoldenDataDir(t)
 	database := dbtest.OpenTestDBAt(t, sessionsDBPath(dataDir))
 	database.SetCursorSecret(goldenCursorSecret)
@@ -166,17 +175,17 @@ func TestResolveActivityReportCursorPreservesPartialGeneration(t *testing.T) {
 		SessionsLimit: 1,
 	}
 	first, err := resolveActivityReport(base, database)
-	require.NoError(t, err)
-	require.True(t, first.Partial)
-	require.NotEmpty(t, first.SessionsNextCursor)
+	require.NoError(err)
+	require.True(first.Partial)
+	require.NotEmpty(first.SessionsNextCursor)
 
 	now = now.Add(15 * time.Minute)
 	base.SessionsCursor = first.SessionsNextCursor
 	second, err := resolveActivityReport(base, database)
-	require.NoError(t, err)
-	assert.Equal(t, first.EffectiveEnd, second.EffectiveEnd)
-	assert.Equal(t, first.AsOf, second.AsOf)
-	assert.NotEqual(t, first.BySession[0].SessionID, second.BySession[0].SessionID)
+	require.NoError(err)
+	assert.Equal(first.EffectiveEnd, second.EffectiveEnd)
+	assert.Equal(first.AsOf, second.AsOf)
+	assert.NotEqual(first.BySession[0].SessionID, second.BySession[0].SessionID)
 }
 
 func TestActivityReportCommand_HelpText(t *testing.T) {
@@ -218,6 +227,8 @@ func TestResolveActivityReport_JSONShape(t *testing.T) {
 }
 
 func TestActivityReport_UsesDiscoveredDaemon(t *testing.T) {
+	assert := assert.New(t)
+
 	dataDir := testDataDir(t)
 
 	var gotQuery url.Values
@@ -252,36 +263,39 @@ func TestActivityReport_UsesDiscoveredDaemon(t *testing.T) {
 			Date: "2026-06-16", Timezone: "UTC",
 		})
 	})
-	assert.Equal(t, "day", gotQuery.Get("preset"))
-	assert.Equal(t, "2026-06-16", gotQuery.Get("date"))
-	assert.Equal(t, "UTC", gotQuery.Get("timezone"))
+	assert.Equal("day", gotQuery.Get("preset"))
+	assert.Equal("2026-06-16", gotQuery.Get("date"))
+	assert.Equal("UTC", gotQuery.Get("timezone"))
 
 	var payload activity.Report
 	require.NoError(t, json.Unmarshal([]byte(out), &payload))
-	assert.Equal(t, "UTC", payload.Timezone)
-	assert.Equal(t, 3, payload.Totals.Sessions)
-	assert.NoFileExists(t, filepath.Join(dataDir, "sessions.db"))
+	assert.Equal("UTC", payload.Timezone)
+	assert.Equal(3, payload.Totals.Sessions)
+	assert.NoFileExists(filepath.Join(dataDir, "sessions.db"))
 }
 
 func TestFetchHTTPActivityReportContinuesRequestedGeneration(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	reportRequests := 0
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/activity/report", func(w http.ResponseWriter, _ *http.Request) {
 		reportRequests++
-		require.NoError(t, json.MarshalWrite(w, activity.Report{
+		require.NoError(json.MarshalWrite(w, activity.Report{
 			ReportID: "fresh-report", Timezone: "UTC",
 		}))
 	})
 	mux.HandleFunc(
 		"/api/v1/activity/report/original-report/sessions",
 		func(w http.ResponseWriter, r *http.Request) {
-			assert.Equal(t, "original-cursor", r.URL.Query().Get("cursor"))
-			assert.False(t, r.URL.Query().Has("sort"))
-			assert.False(t, r.URL.Query().Has("direction"))
-			assert.False(t, r.URL.Query().Has("bucket_start"))
-			assert.False(t, r.URL.Query().Has("bucket_end"))
-			assert.Equal(t, "true", r.URL.Query().Get("include_report"))
-			require.NoError(t, json.MarshalWrite(w, map[string]any{
+			assert.Equal("original-cursor", r.URL.Query().Get("cursor"))
+			assert.False(r.URL.Query().Has("sort"))
+			assert.False(r.URL.Query().Has("direction"))
+			assert.False(r.URL.Query().Has("bucket_start"))
+			assert.False(r.URL.Query().Has("bucket_end"))
+			assert.Equal("true", r.URL.Query().Get("include_report"))
+			require.NoError(json.MarshalWrite(w, map[string]any{
 				"report_id": "original-report",
 				"sessions":  []activity.SessionRow{{SessionID: "continued"}},
 				"total":     2,
@@ -297,21 +311,24 @@ func TestFetchHTTPActivityReportContinuesRequestedGeneration(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	report, err := fetchHTTPActivityReport(
-		context.Background(), transport{URL: ts.URL}, "", ActivityReportConfig{
+		t.Context(), transport{URL: ts.URL}, "", ActivityReportConfig{
 			Preset: "day", Date: "2026-06-16", Timezone: "UTC",
 			SessionsReportID: "original-report",
 			SessionsCursor:   "original-cursor",
 		},
 	)
-	require.NoError(t, err)
-	assert.Zero(t, reportRequests,
+	require.NoError(err)
+	assert.Zero(reportRequests,
 		"saved-generation continuation must not build an unrelated fresh report")
-	assert.Equal(t, "original-report", report.ReportID)
-	require.Len(t, report.BySession, 1)
-	assert.Equal(t, "continued", report.BySession[0].SessionID)
+	assert.Equal("original-report", report.ReportID)
+	require.Len(report.BySession, 1)
+	assert.Equal("continued", report.BySession[0].SessionID)
 }
 
 func TestActivityReportCommandCursorInheritsNonDefaultPagingFlags(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := testDataDir(t)
 	queries := make(chan url.Values, 2)
 	pageResponse := func(sessionID, nextCursor string) string {
@@ -324,7 +341,7 @@ func TestActivityReportCommandCursorInheritsNonDefaultPagingFlags(t *testing.T) 
 			"report_id": "saved-report", "sessions": report.BySession,
 			"next_cursor": nextCursor, "total": 2, "report": report,
 		})
-		require.NoError(t, err)
+		require.NoError(err)
 		return string(payload)
 	}
 	firstPage := pageResponse("first", "project-ascending-cursor")
@@ -354,10 +371,10 @@ func TestActivityReportCommandCursorInheritsNonDefaultPagingFlags(t *testing.T) 
 	firstOutput := captureStdout(t, func() {
 		_, firstErr = firstCommand.ExecuteC()
 	})
-	require.NoError(t, firstErr)
+	require.NoError(firstErr)
 	var first activity.Report
-	require.NoError(t, json.Unmarshal([]byte(firstOutput), &first))
-	require.Equal(t, "project-ascending-cursor", first.SessionsNextCursor)
+	require.NoError(json.Unmarshal([]byte(firstOutput), &first))
+	require.Equal("project-ascending-cursor", first.SessionsNextCursor)
 
 	secondCommand := newRootCommand()
 	secondCommand.SetArgs([]string{
@@ -368,23 +385,23 @@ func TestActivityReportCommandCursorInheritsNonDefaultPagingFlags(t *testing.T) 
 	secondOutput := captureStdout(t, func() {
 		_, secondErr = secondCommand.ExecuteC()
 	})
-	require.NoError(t, secondErr)
+	require.NoError(secondErr)
 	var second activity.Report
-	require.NoError(t, json.Unmarshal([]byte(secondOutput), &second))
-	require.Len(t, second.BySession, 1)
-	assert.Equal(t, "second", second.BySession[0].SessionID)
+	require.NoError(json.Unmarshal([]byte(secondOutput), &second))
+	require.Len(second.BySession, 1)
+	assert.Equal("second", second.BySession[0].SessionID)
 
 	firstQuery := <-queries
-	assert.Equal(t, "project", firstQuery.Get("sort"))
-	assert.Equal(t, "asc", firstQuery.Get("direction"))
-	assert.Equal(t, "2", firstQuery.Get("bucket_start"))
-	assert.Equal(t, "4", firstQuery.Get("bucket_end"))
+	assert.Equal("project", firstQuery.Get("sort"))
+	assert.Equal("asc", firstQuery.Get("direction"))
+	assert.Equal("2", firstQuery.Get("bucket_start"))
+	assert.Equal("4", firstQuery.Get("bucket_end"))
 	secondQuery := <-queries
-	assert.Equal(t, "project-ascending-cursor", secondQuery.Get("cursor"))
-	assert.False(t, secondQuery.Has("sort"))
-	assert.False(t, secondQuery.Has("direction"))
-	assert.False(t, secondQuery.Has("bucket_start"))
-	assert.False(t, secondQuery.Has("bucket_end"))
+	assert.Equal("project-ascending-cursor", secondQuery.Get("cursor"))
+	assert.False(secondQuery.Has("sort"))
+	assert.False(secondQuery.Has("direction"))
+	assert.False(secondQuery.Has("bucket_start"))
+	assert.False(secondQuery.Has("bucket_end"))
 }
 
 // mustLocation loads a named time zone, failing the test if it is unavailable.
@@ -418,6 +435,8 @@ func TestFmtInstant_NilAndTimezone(t *testing.T) {
 // crafted imported or synced metadata cannot drive terminal escape sequences.
 // JSON output is left untouched and is covered separately.
 func TestPrintActivityReport_SanitizesSessionDerivedStrings(t *testing.T) {
+	assert := assert.New(t)
+
 	mins := 1.0
 	// OSC title-set + BEL, then a bare CR overwrite: all control bytes stripped.
 	evil := "\x1b]0;pwned\x07safe\rEVIL"
@@ -438,10 +457,10 @@ func TestPrintActivityReport_SanitizesSessionDerivedStrings(t *testing.T) {
 
 	out := captureStdout(t, func() { printActivityReport(r) })
 
-	assert.NotContains(t, out, "\x1b", "ESC must be stripped from output")
-	assert.NotContains(t, out, "\x07", "BEL must be stripped from output")
-	assert.NotContains(t, out, "\r", "bare CR must be stripped from output")
-	assert.Contains(t, out, "safeEVIL",
+	assert.NotContains(out, "\x1b", "ESC must be stripped from output")
+	assert.NotContains(out, "\x07", "BEL must be stripped from output")
+	assert.NotContains(out, "\r", "bare CR must be stripped from output")
+	assert.Contains(out, "safeEVIL",
 		"printable text survives once control bytes are removed")
 }
 
@@ -463,13 +482,16 @@ func fallbackPricedModel(t *testing.T) string {
 // seeds the fallback rates before resolving, exactly as runActivityReport does,
 // so the report's cost is non-zero.
 func TestResolveActivityReport_PricesFreshDBUsage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := newTestDB(t)
 	model := fallbackPricedModel(t)
 
 	started := "2026-06-15T10:00:00Z"
 	ended := "2026-06-15T10:05:00Z"
 	usage, err := json.Marshal(map[string]int{"input_tokens": 100, "output_tokens": 500})
-	require.NoError(t, err)
+	require.NoError(err)
 	first := "first message"
 	_, err = d.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
 		Session: db.Session{
@@ -479,33 +501,40 @@ func TestResolveActivityReport_PricesFreshDBUsage(t *testing.T) {
 			RelationshipType: "root", DataVersion: 1,
 		},
 		Messages: []db.Message{
-			{SessionID: "cost-1", Ordinal: 0, Role: "user", Content: "u",
-				Timestamp: started, ContentLength: 1},
-			{SessionID: "cost-1", Ordinal: 1, Role: "assistant", Content: "a",
+			{
+				SessionID: "cost-1", Ordinal: 0, Role: "user", Content: "u",
+				Timestamp: started, ContentLength: 1,
+			},
+			{
+				SessionID: "cost-1", Ordinal: 1, Role: "assistant", Content: "a",
 				Timestamp: ended, ContentLength: 1, Model: model,
-				TokenUsage: usage, OutputTokens: 500, HasOutputTokens: true},
+				TokenUsage: usage, OutputTokens: 500, HasOutputTokens: true,
+			},
 		},
 		DataVersion: 1, ReplaceMessages: true,
 	}})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// resolveActivityReportPriced seeds fallback pricing (Offline => no network)
 	// exactly as runActivityReport does, so removing that seeding fails here.
 	r, err := resolveActivityReportPriced(ActivityReportConfig{
 		Preset: "day", Date: "2026-06-15", Timezone: "UTC", Offline: true,
 	}, d, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 500, r.Totals.OutputTokens)
-	assert.Positive(t, r.Totals.Cost.Microdollars,
+	require.NoError(err)
+	assert.Equal(500, r.Totals.OutputTokens)
+	assert.Positive(r.Totals.Cost.Microdollars,
 		"resolveActivityReportPriced must seed fallback pricing for fresh-DB usage")
 }
 
 func TestActivityReportJSONMatchesHTTPExportMetadata(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := testDataDir(t)
 	dbPath := filepath.Join(dataDir, "sessions.db")
 	database := dbtest.OpenTestDBAt(t, dbPath)
 	fallbackModel := fallbackPricedModel(t)
-	require.NoError(t, pricingrefresh.SeedFallback(database))
+	require.NoError(pricingrefresh.SeedFallback(database))
 	seedUsageDailyExportMetadataFixture(t, database, fallbackModel)
 
 	cliOut := captureStdout(t, func() {
@@ -515,8 +544,8 @@ func TestActivityReportJSONMatchesHTTPExportMetadata(t *testing.T) {
 		})
 	})
 	var cliReport activity.Report
-	require.NoError(t, json.Unmarshal([]byte(cliOut), &cliReport))
-	assert.Equal(t, export.ActivityReportSchemaVersion, cliReport.SchemaVersion)
+	require.NoError(json.Unmarshal([]byte(cliOut), &cliReport))
+	assert.Equal(export.ActivityReportSchemaVersion, cliReport.SchemaVersion)
 
 	srv := server.New(config.Config{
 		Host: "127.0.0.1", Port: 0, DataDir: dataDir, DBPath: dbPath,
@@ -527,7 +556,7 @@ func TestActivityReportJSONMatchesHTTPExportMetadata(t *testing.T) {
 		},
 		Machine: "test",
 	}))
-	req := httptest.NewRequest(http.MethodGet,
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet,
 		"http://127.0.0.1:0/api/v1/activity/report?"+
 			url.Values{
 				"preset":   {"day"},
@@ -537,38 +566,38 @@ func TestActivityReportJSONMatchesHTTPExportMetadata(t *testing.T) {
 	req.RemoteAddr = "127.0.0.1:1234"
 	w := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(http.StatusOK, w.Code)
 	var httpReport activity.Report
-	require.NoError(t, json.UnmarshalRead(w.Body, &httpReport))
+	require.NoError(json.UnmarshalRead(w.Body, &httpReport))
 
-	assert.Equal(t, export.ActivityReportSchemaVersion,
+	assert.Equal(export.ActivityReportSchemaVersion,
 		cliReport.SchemaVersion)
-	assert.Equal(t, cliReport.SchemaVersion, httpReport.SchemaVersion)
-	require.NotNil(t, cliReport.Pricing)
-	require.NotNil(t, httpReport.Pricing)
-	assert.Contains(t, cliReport.Pricing.Models, "gpt-5.1")
-	assert.Contains(t, cliReport.Pricing.Models, fallbackModel)
-	assert.Equal(t, cliReport.Pricing.Models, httpReport.Pricing.Models)
-	require.Len(t, cliReport.Projects, 1)
-	require.Len(t, httpReport.Projects, 1)
+	assert.Equal(cliReport.SchemaVersion, httpReport.SchemaVersion)
+	require.NotNil(cliReport.Pricing)
+	require.NotNil(httpReport.Pricing)
+	assert.Contains(cliReport.Pricing.Models, "gpt-5.1")
+	assert.Contains(cliReport.Pricing.Models, fallbackModel)
+	assert.Equal(cliReport.Pricing.Models, httpReport.Pricing.Models)
+	require.Len(cliReport.Projects, 1)
+	require.Len(httpReport.Projects, 1)
 	for key, project := range cliReport.Projects {
-		assert.NotContains(t, key, "shared-project")
-		assert.Equal(t, "shared-project", project.DisplayLabel)
+		assert.NotContains(key, "shared-project")
+		assert.Equal("shared-project", project.DisplayLabel)
 	}
-	assert.Equal(t, cliReport.Projects, httpReport.Projects)
-	assert.Equal(t, "UTC", cliReport.Timezone)
-	assert.Equal(t, cliReport.Timezone, httpReport.Timezone)
-	assert.Equal(t, cliReport.Totals.Sessions, httpReport.Totals.Sessions)
-	assert.Equal(t, cliReport.Totals.OutputTokens,
+	assert.Equal(cliReport.Projects, httpReport.Projects)
+	assert.Equal("UTC", cliReport.Timezone)
+	assert.Equal(cliReport.Timezone, httpReport.Timezone)
+	assert.Equal(cliReport.Totals.Sessions, httpReport.Totals.Sessions)
+	assert.Equal(cliReport.Totals.OutputTokens,
 		httpReport.Totals.OutputTokens)
-	assert.NotEmpty(t, cliReport.Buckets)
-	assert.Equal(t, len(cliReport.BySession), len(httpReport.BySession))
+	assert.NotEmpty(cliReport.Buckets)
+	assert.Len(httpReport.BySession, len(cliReport.BySession))
 }
 
 func TestRunActivityReportOfflineUsesReadOnlyDBWhenWriteLockHeld(t *testing.T) {
 	dataDir := setupGoldenStatsDataDir(t)
 
-	lock, err := acquireWriteOwnerLock(context.Background(), dataDir)
+	lock, err := acquireWriteOwnerLock(t.Context(), dataDir)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, lock.Close()) }()
 

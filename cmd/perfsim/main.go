@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -60,13 +61,13 @@ func main() {
 
 func execute(ctx context.Context, o options) error {
 	if o.SourceFormat != "jsonl" && o.SourceFormat != "opencode" && o.SourceFormat != "opencode-v2" {
-		return fmt.Errorf("source-format must be jsonl, opencode or opencode-v2")
+		return errors.New("source-format must be jsonl, opencode or opencode-v2")
 	}
 	if (o.SourceFormat == "opencode" || o.SourceFormat == "opencode-v2") && o.Empty != 0 {
-		return fmt.Errorf("empty sources apply only to the jsonl workload")
+		return errors.New("empty sources apply only to the jsonl workload")
 	}
 	if o.Sessions < 2 || o.Turns < 1 || o.ActiveTurns < 0 || o.Active < 1 || o.Active > o.Sessions || o.Iterations < 1 || o.Empty < 0 || o.ReconcileEvery < 0 || o.QueryEvery < 0 || o.ContentBytes < 1 {
-		return fmt.Errorf("sessions >= 2, turns/iterations/message-bytes >= 1, 1 <= active <= sessions, and active-turns/empty/reconcile-every/query-every >= 0 are required")
+		return errors.New("sessions >= 2, turns/iterations/message-bytes >= 1, 1 <= active <= sessions, and active-turns/empty/reconcile-every/query-every >= 0 are required")
 	}
 	if o.Output == "" {
 		var err error

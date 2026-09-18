@@ -25,9 +25,11 @@ var errServeStartupInProgress = errors.New(
 	"agentsview serve startup is already in progress",
 )
 
-var waitForDaemonStartupForEnsure = WaitForDaemonStartupContext
-var startServeBackgroundProcessForEnsure = startServeBackgroundProcess
-var startServeBackgroundProcessForRun = startServeBackgroundProcess
+var (
+	waitForDaemonStartupForEnsure        = WaitForDaemonStartupContext
+	startServeBackgroundProcessForEnsure = startServeBackgroundProcess
+	startServeBackgroundProcessForRun    = startServeBackgroundProcess
+)
 
 type backgroundLaunchPolicy struct {
 	// ConfigOnly starts exclusively from persistent configuration. In
@@ -46,10 +48,11 @@ type backgroundServeReadyWaitPolicy struct {
 }
 
 type backgroundLaunchResult struct {
-	Runtime  *DaemonRuntime
-	Started  bool
-	LogPath  string
-	childPID int
+	Runtime              *DaemonRuntime
+	Started              bool
+	LogPath              string
+	childPID             int
+	errorIncludesLogPath bool
 }
 
 func (p backgroundLaunchPolicy) operation() string {
@@ -361,6 +364,7 @@ func startServeBackground(
 				"%s: waiting for server readiness: %w", operation, err,
 			)
 		}
+		result.errorIncludesLogPath = true
 		return result, fmt.Errorf(
 			"%s: server exited before becoming ready: %w\nLogs: %s",
 			operation, err, logPath,
@@ -418,7 +422,7 @@ func ensureBackgroundServe(
 	waitTimeout time.Duration,
 ) (*DaemonRuntime, error) {
 	if cfg == nil {
-		return nil, fmt.Errorf("nil config")
+		return nil, errors.New("nil config")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -455,9 +459,7 @@ func ensureBackgroundServe(
 		if rt := FindDaemonRuntime(cfg.DataDir, cfg.AuthToken); rt != nil &&
 			!rt.ReadOnly {
 			if shouldUpgradeDaemonRuntime(rt, version) {
-				return nil, fmt.Errorf(
-					"agentsview serve --background is already in progress",
-				)
+				return nil, errors.New("agentsview serve --background is already in progress")
 			}
 			return rt, nil
 		}
@@ -471,13 +473,9 @@ func ensureBackgroundServe(
 			)
 		}
 		if IsLocalDaemonActive(cfg.DataDir, cfg.AuthToken) {
-			return nil, fmt.Errorf(
-				"agentsview serve --background is already in progress",
-			)
+			return nil, errors.New("agentsview serve --background is already in progress")
 		}
-		return nil, fmt.Errorf(
-			"agentsview serve --background did not publish a runtime record",
-		)
+		return nil, errors.New("agentsview serve --background did not publish a runtime record")
 	}
 	defer func() { _ = launchLock.Unlock() }()
 
@@ -696,9 +694,8 @@ func waitForExternalServeStartup(
 			err,
 		)
 	}
-	return nil, true, fmt.Errorf(
-		"agentsview serve startup finished without publishing a writable " +
-			"runtime record",
+	return nil, true, errors.New("agentsview serve startup finished without publishing a writable " +
+		"runtime record",
 	)
 }
 
@@ -1046,7 +1043,7 @@ func waitForBackgroundServeReadyWithPolicy(
 		select {
 		case err := <-waitCh:
 			if err == nil {
-				err = fmt.Errorf("server process exited")
+				err = errors.New("server process exited")
 			}
 			return nil, err
 		case <-ctx.Done():

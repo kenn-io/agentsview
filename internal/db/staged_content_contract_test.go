@@ -11,15 +11,17 @@ import (
 )
 
 func TestStagedPublishWithinSQLiteVariableLimit(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "s1", "project-a")
 	conn, err := d.getWriter().Conn(t.Context())
-	require.NoError(t, err)
-	require.NoError(t, conn.Raw(func(raw any) error {
+	require.NoError(err)
+	require.NoError(conn.Raw(func(raw any) error {
 		raw.(*sqlite3.SQLiteConn).SetLimit(sqlite3.SQLITE_LIMIT_VARIABLE_NUMBER, 999)
 		return nil
 	}))
-	require.NoError(t, conn.Close())
+	require.NoError(conn.Close())
 
 	staged := newScratchStagedResults(t)
 	calls := make([]ToolCall, 501)
@@ -29,13 +31,13 @@ func TestStagedPublishWithinSQLiteVariableLimit(t *testing.T) {
 		}
 	}
 	msgs := []Message{{SessionID: "s1", Ordinal: 0, Role: "assistant", ToolCalls: calls}}
-	require.NoError(t, d.ReplaceSessionContentStaged(t.Context(), "s1", msgs, staged, nil, nil))
+	require.NoError(d.ReplaceSessionContentStaged(t.Context(), "s1", msgs, staged, nil, nil))
 	stored, err := d.GetAllMessages(t.Context(), "s1")
-	require.NoError(t, err)
-	require.Len(t, stored, 1)
-	require.Len(t, stored[0].ToolCalls, len(calls))
+	require.NoError(err)
+	require.Len(stored, 1)
+	require.Len(stored[0].ToolCalls, len(calls))
 	for i, call := range stored[0].ToolCalls {
-		require.Equal(t, calls[i].ToolUseID, call.ToolUseID)
+		require.Equal(calls[i].ToolUseID, call.ToolUseID)
 	}
 }
 
@@ -74,6 +76,8 @@ func (s *cancellingStagedResults) InsertEventsTx(
 func TestStagedPublishCancellationPreservesTranscript(t *testing.T) {
 	for _, phase := range []string{"summary", "events"} {
 		t.Run(phase, func(t *testing.T) {
+			require := require.New(t)
+
 			d := testDB(t)
 			insertSession(t, d, "s1", "project")
 			insertMessages(t, d, Message{
@@ -95,41 +99,45 @@ func TestStagedPublishCancellationPreservesTranscript(t *testing.T) {
 			err := d.ReplaceSessionContentStaged(ctx, "s1", msgs, staged, nil, func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) {
 				return SessionSignalUpdate{}, nil, nil
 			})
-			require.ErrorIs(t, err, context.Canceled)
-			require.ErrorIs(t, staged.receivedErr, context.Canceled, "cancellation must reach the staging operation")
+			require.ErrorIs(err, context.Canceled)
+			require.ErrorIs(staged.receivedErr, context.Canceled, "cancellation must reach the staging operation")
 			stored, err := d.GetAllMessages(t.Context(), "s1")
-			require.NoError(t, err)
-			require.Len(t, stored, 1)
-			require.Equal(t, "original", stored[0].Content)
+			require.NoError(err)
+			require.Len(stored, 1)
+			require.Equal("original", stored[0].Content)
 		})
 	}
 }
 
 func TestDetachStagedConnAfterCancellationKeepsWriter(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
 	scratch := newScratchStagedResults(t)
 	conn, err := d.getWriter().Conn(t.Context())
-	require.NoError(t, err)
+	require.NoError(err)
 	defer conn.Close()
 	_, err = conn.ExecContext(t.Context(), `
 		CREATE TEMP TABLE writer_probe(value TEXT);
 		INSERT INTO writer_probe VALUES ('same connection')`)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = conn.ExecContext(t.Context(), "ATTACH DATABASE ? AS "+stagedAttachName, scratch.Path())
-	require.NoError(t, err)
+	require.NoError(err)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	detachStagedConn(ctx, conn)
 	var value string
-	require.NoError(t, conn.QueryRowContext(t.Context(), "SELECT value FROM writer_probe").Scan(&value))
-	require.Equal(t, "same connection", value)
+	require.NoError(conn.QueryRowContext(t.Context(), "SELECT value FROM writer_probe").Scan(&value))
+	require.Equal("same connection", value)
 	// A new attachment succeeds only if cancellation did not leave the old one attached.
 	_, err = conn.ExecContext(t.Context(), "ATTACH DATABASE ? AS "+stagedAttachName, scratch.Path())
-	require.NoError(t, err)
+	require.NoError(err)
 	detachStagedConn(t.Context(), conn)
 }
 
 func TestStagedPublishWithoutSignalsInvalidatesChangedTranscript(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "s1", "project-a")
 	staged := newScratchStagedResults(t)
@@ -138,7 +146,7 @@ func TestStagedPublishWithoutSignalsInvalidatesChangedTranscript(t *testing.T) {
 		SessionID: "s1", Ordinal: 0, Role: "assistant", Content: "original",
 		ToolCalls: []ToolCall{{ToolUseID: "call", ToolName: "exec_command", Category: "Bash"}},
 	}}
-	require.NoError(t, d.ReplaceSessionContentStaged(t.Context(), "s1", msgs, staged, nil,
+	require.NoError(d.ReplaceSessionContentStaged(t.Context(), "s1", msgs, staged, nil,
 		func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) {
 			return SessionSignalUpdate{
 				QualitySignals:  QualitySignals{Version: CurrentQualitySignalVersion},
@@ -150,36 +158,36 @@ func TestStagedPublishWithoutSignalsInvalidatesChangedTranscript(t *testing.T) {
 			}}, nil
 		}))
 	originalRevision, err := d.TranscriptRevision("s1")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// A no-op publish can retain findings for the same transcript even when
 	// recomputation is disabled. A changed transcript must become stale.
 	for _, content := range []string{"original", "replacement"} {
 		msgs[0].Content = content
-		require.NoError(t, d.ReplaceSessionContentStaged(t.Context(), "s1", msgs, staged, nil, nil))
+		require.NoError(d.ReplaceSessionContentStaged(t.Context(), "s1", msgs, staged, nil, nil))
 		stored, err := d.GetAllMessages(t.Context(), "s1")
-		require.NoError(t, err)
-		require.Len(t, stored, 1)
-		require.Equal(t, content, stored[0].Content)
+		require.NoError(err)
+		require.Len(stored, 1)
+		require.Equal(content, stored[0].Content)
 		session, err := d.GetSessionFull(t.Context(), "s1")
-		require.NoError(t, err)
-		require.NotNil(t, session)
+		require.NoError(err)
+		require.NotNil(session)
 		findings, err := d.SessionSecretFindings(t.Context(), "s1")
-		require.NoError(t, err)
+		require.NoError(err)
 		revision, err := d.TranscriptRevision("s1")
-		require.NoError(t, err)
+		require.NoError(err)
 		if content == "original" {
-			require.Equal(t, originalRevision, revision)
-			require.Len(t, findings, 1)
-			require.Equal(t, 1, session.SecretLeakCount)
-			require.Equal(t, "test-rules", session.SecretsRulesVersion)
-			require.Equal(t, CurrentQualitySignalVersion, session.QualitySignalVersion)
+			require.Equal(originalRevision, revision)
+			require.Len(findings, 1)
+			require.Equal(1, session.SecretLeakCount)
+			require.Equal("test-rules", session.SecretsRulesVersion)
+			require.Equal(CurrentQualitySignalVersion, session.QualitySignalVersion)
 		} else {
-			require.NotEqual(t, originalRevision, revision)
-			require.Empty(t, findings)
-			require.Zero(t, session.SecretLeakCount)
-			require.Empty(t, session.SecretsRulesVersion)
-			require.Zero(t, session.QualitySignalVersion)
+			require.NotEqual(originalRevision, revision)
+			require.Empty(findings)
+			require.Zero(session.SecretLeakCount)
+			require.Empty(session.SecretsRulesVersion)
+			require.Zero(session.QualitySignalVersion)
 		}
 	}
 }

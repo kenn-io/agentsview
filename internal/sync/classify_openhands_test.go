@@ -11,25 +11,27 @@ import (
 )
 
 func TestClassifyOnePath_OpenHands(t *testing.T) {
+	parentRequire := require.New(t)
+
 	root := t.TempDir()
 	sessionDir := filepath.Join(
 		root, "086c7ecf6cb746b69fbcb900358d1247",
 	)
 	eventsDir := filepath.Join(sessionDir, "events")
-	require.NoError(t, os.MkdirAll(eventsDir, 0o755))
+	parentRequire.NoError(os.MkdirAll(eventsDir, 0o755))
 
 	baseStatePath := filepath.Join(sessionDir, "base_state.json")
 	tasksPath := filepath.Join(sessionDir, "TASKS.json")
 	eventPath := filepath.Join(
 		eventsDir, "event-00001-abc.json",
 	)
-	require.NoError(t, os.WriteFile(
+	parentRequire.NoError(os.WriteFile(
 		baseStatePath, []byte(`{}`), 0o644,
 	))
-	require.NoError(t, os.WriteFile(
+	parentRequire.NoError(os.WriteFile(
 		tasksPath, []byte(`{}`), 0o644,
 	))
-	require.NoError(t, os.WriteFile(
+	parentRequire.NoError(os.WriteFile(
 		eventPath, []byte(`{}`), 0o644,
 	))
 
@@ -84,15 +86,17 @@ func TestClassifyOnePath_OpenHands(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			files := requireClassifyPaths(t, eng, []string{tt.path})
 			if !tt.want {
-				assert.Empty(t, files)
+				assert.Empty(files)
 				return
 			}
 			require.Len(t, files, 1)
 			got := files[0]
-			assert.Equal(t, parser.AgentOpenHands, got.Agent)
-			assert.Equal(t, tt.retPath, got.Path)
+			assert.Equal(parser.AgentOpenHands, got.Agent)
+			assert.Equal(tt.retPath, got.Path)
 		})
 	}
 }

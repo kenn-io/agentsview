@@ -645,18 +645,18 @@ func (s *Server) routes() {
 	s.registerTypedAPIRoutes()
 
 	if s.pprofEnabled {
-		s.mux.HandleFunc("/debug/pprof/", httppprof.Index)
-		s.mux.HandleFunc("/debug/pprof/cmdline", httppprof.Cmdline)
-		s.mux.HandleFunc("/debug/pprof/profile", httppprof.Profile)
-		s.mux.HandleFunc("/debug/pprof/symbol", httppprof.Symbol)
-		s.mux.HandleFunc("/debug/pprof/trace", httppprof.Trace)
+		s.handleHTTP(&huma.Operation{Path: "/debug/pprof/", Hidden: true}, httppprof.Index)
+		s.handleHTTP(&huma.Operation{Path: "/debug/pprof/cmdline", Hidden: true}, httppprof.Cmdline)
+		s.handleHTTP(&huma.Operation{Path: "/debug/pprof/profile", Hidden: true}, httppprof.Profile)
+		s.handleHTTP(&huma.Operation{Path: "/debug/pprof/symbol", Hidden: true}, httppprof.Symbol)
+		s.handleHTTP(&huma.Operation{Path: "/debug/pprof/trace", Hidden: true}, httppprof.Trace)
 	}
 
 	s.registerEvalIngestRoutes()
 
 	if s.artifactExchangeRunner != nil {
-		s.mux.HandleFunc(
-			"POST /api/v1/artifacts/exchange",
+		s.handleHTTP(
+			s.api.OpenAPI().Paths["/api/v1/artifacts/exchange"].Post,
 			s.handleArtifactExchange,
 		)
 	}
@@ -664,7 +664,7 @@ func (s *Server) routes() {
 
 	// SPA fallback: serve embedded frontend
 	// Do not use timeout handler for static assets to avoid buffering.
-	s.mux.Handle("/", http.HandlerFunc(s.handleSPA))
+	s.handleHTTP(&huma.Operation{Path: "/", Hidden: true}, s.handleSPA)
 }
 
 func (s *Server) handleSPA(w http.ResponseWriter, r *http.Request) {

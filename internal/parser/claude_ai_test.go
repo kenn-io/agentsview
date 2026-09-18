@@ -71,6 +71,9 @@ const testExportJSON = `[
 ]`
 
 func TestParseClaudeAIExport(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	var results []ParseResult
 	err := parseClaudeAIExport(
 		strings.NewReader(testExportJSON),
@@ -79,42 +82,44 @@ func TestParseClaudeAIExport(t *testing.T) {
 			return nil
 		},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// conv-002 has no messages, should be skipped.
-	require.Len(t, results, 2)
+	require.Len(results, 2)
 
 	// First conversation.
 	s := results[0].Session
-	assert.Equal(t, "claude-ai:conv-001", s.ID)
-	assert.Equal(t, "claude.ai", s.Project)
-	assert.Equal(t, "local", s.Machine)
-	assert.Equal(t, AgentClaudeAI, s.Agent)
-	assert.Equal(t, "Hello, how are you?", s.FirstMessage)
-	assert.Equal(t, "Test Chat", s.SessionName)
-	assert.Equal(t, 2, s.MessageCount)
-	assert.Equal(t, 1, s.UserMessageCount)
-	assert.Equal(t,
-		"2026-01-15T10:00:00.000000Z",
+	assert.Equal("claude-ai:conv-001", s.ID)
+	assert.Equal("claude.ai", s.Project)
+	assert.Equal("local", s.Machine)
+	assert.Equal(AgentClaudeAI, s.Agent)
+	assert.Equal("Hello, how are you?", s.FirstMessage)
+	assert.Equal("Test Chat", s.SessionName)
+	assert.Equal(2, s.MessageCount)
+	assert.Equal(1, s.UserMessageCount)
+	assert.Equal("2026-01-15T10:00:00.000000Z",
 		s.StartedAt.Format("2006-01-02T15:04:05.000000Z"),
 	)
 
 	msgs := results[0].Messages
-	require.Len(t, msgs, 2)
-	assert.Equal(t, 0, msgs[0].Ordinal)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, "Hello, how are you?", msgs[0].Content)
-	assert.Equal(t, 1, msgs[1].Ordinal)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	require.Len(msgs, 2)
+	assert.Equal(0, msgs[0].Ordinal)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal("Hello, how are you?", msgs[0].Content)
+	assert.Equal(1, msgs[1].Ordinal)
+	assert.Equal(RoleAssistant, msgs[1].Role)
 
 	// Third conversation (second result).
 	s2 := results[1].Session
-	assert.Equal(t, "claude-ai:conv-003", s2.ID)
-	assert.Equal(t, 1, s2.MessageCount)
-	assert.Equal(t, 1, s2.UserMessageCount)
+	assert.Equal("claude-ai:conv-003", s2.ID)
+	assert.Equal(1, s2.MessageCount)
+	assert.Equal(1, s2.UserMessageCount)
 }
 
 func TestParseClaudeAIExport_ContentBlocks(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	input := `[{
 		"uuid": "conv-blocks",
 		"name": "Block Test",
@@ -155,24 +160,26 @@ func TestParseClaudeAIExport_ContentBlocks(t *testing.T) {
 			return nil
 		},
 	)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
+	require.NoError(err)
+	require.Len(results, 1)
 
 	msgs := results[0].Messages
 
 	// Message with tool_use/tool_result blocks should use
 	// text blocks, not the truncated top-level text.
-	assert.Equal(t, "First part.\n\nSecond part.", msgs[0].Content)
-	assert.False(t, msgs[0].HasThinking)
+	assert.Equal("First part.\n\nSecond part.", msgs[0].Content)
+	assert.False(msgs[0].HasThinking)
 
 	// Message with thinking block.
-	assert.Contains(t, msgs[1].Content, "[Thinking]")
-	assert.Contains(t, msgs[1].Content, "deep thought")
-	assert.Contains(t, msgs[1].Content, "The answer.")
-	assert.True(t, msgs[1].HasThinking)
+	assert.Contains(msgs[1].Content, "[Thinking]")
+	assert.Contains(msgs[1].Content, "deep thought")
+	assert.Contains(msgs[1].Content, "The answer.")
+	assert.True(msgs[1].HasThinking)
 }
 
 func TestParseClaudeAIExport_AttachmentContent(t *testing.T) {
+	require := require.New(t)
+
 	input := `[{
 		"uuid": "conv-attachments",
 		"name": "Attachment Test",
@@ -206,11 +213,11 @@ func TestParseClaudeAIExport_AttachmentContent(t *testing.T) {
 			return nil
 		},
 	)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
+	require.NoError(err)
+	require.Len(results, 1)
 
 	msgs := results[0].Messages
-	require.Len(t, msgs, 1)
+	require.Len(msgs, 1)
 
 	assert.Equal(
 		t,
@@ -220,6 +227,9 @@ func TestParseClaudeAIExport_AttachmentContent(t *testing.T) {
 }
 
 func TestParseClaudeAIExport_AttachmentFallbackPaths(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	input := `[{
 		"uuid": "conv-attachment-fallbacks",
 		"name": "Attachment Fallback Test",
@@ -264,24 +274,25 @@ func TestParseClaudeAIExport_AttachmentFallbackPaths(t *testing.T) {
 			return nil
 		},
 	)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
+	require.NoError(err)
+	require.Len(results, 1)
 
 	msgs := results[0].Messages
-	require.Len(t, msgs, 2)
+	require.Len(msgs, 2)
 	assert.Equal(
-		t,
 		"Top-level text survives.\n\nattachment with no filename",
 		msgs[0].Content,
 	)
 	assert.Equal(
-		t,
 		"Fallback text survives too.\n\nattachment after unsupported block",
 		msgs[1].Content,
 	)
 }
 
 func TestParseClaudeAIExport_IgnoredAttachments(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	input := `[{
 		"uuid": "conv-attachments-ignored",
 		"name": "Attachment Ignore Test",
@@ -328,19 +339,21 @@ func TestParseClaudeAIExport_IgnoredAttachments(t *testing.T) {
 			return nil
 		},
 	)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
+	require.NoError(err)
+	require.Len(results, 1)
 
 	msgs := results[0].Messages
-	require.Len(t, msgs, 2)
+	require.Len(msgs, 2)
 
-	assert.Equal(t, "User prompt", msgs[0].Content)
-	assert.Equal(t, "Response kept the same.", msgs[1].Content)
-	assert.NotContains(t, msgs[1].Content, "metadata.json")
-	assert.NotContains(t, msgs[1].Content, "unexpected")
+	assert.Equal("User prompt", msgs[0].Content)
+	assert.Equal("Response kept the same.", msgs[1].Content)
+	assert.NotContains(msgs[1].Content, "metadata.json")
+	assert.NotContains(msgs[1].Content, "unexpected")
 }
 
 func TestParseClaudeAIExport_TextFallbackPreservesWhitespace(t *testing.T) {
+	require := require.New(t)
+
 	input := `[{
 		"uuid": "conv-fallback",
 		"name": "Fallback Test",
@@ -367,9 +380,9 @@ func TestParseClaudeAIExport_TextFallbackPreservesWhitespace(t *testing.T) {
 			return nil
 		},
 	)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 1)
+	require.NoError(err)
+	require.Len(results, 1)
+	require.Len(results[0].Messages, 1)
 	assert.Equal(
 		t,
 		"  keep surrounding whitespace  ",

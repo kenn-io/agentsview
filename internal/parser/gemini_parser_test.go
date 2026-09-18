@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -44,7 +43,7 @@ func parseGeminiTestSession(
 func discoverGeminiTestSessions(t *testing.T, root string) []DiscoveredFile {
 	t.Helper()
 	provider := newGeminiTestProvider(t, root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	if len(sources) == 0 {
 		return nil
@@ -76,6 +75,8 @@ func runGeminiParserTest(t *testing.T, content string) (*ParsedSession, []Parsed
 }
 
 func TestParseGeminiSession_Basic(t *testing.T) {
+	assert := assert.New(t)
+
 	content := loadFixture(t, "gemini/standard_session.json")
 	sess, msgs := runGeminiParserTest(t, content)
 
@@ -83,15 +84,18 @@ func TestParseGeminiSession_Basic(t *testing.T) {
 	assertMessageCount(t, len(msgs), 4)
 	assertMessageCount(t, sess.MessageCount, 4)
 	assertSessionMeta(t, sess, "gemini:sess-uuid-1", "my_project", AgentGemini)
-	assert.Equal(t, "Fix the login bug", sess.FirstMessage)
+	assert.Equal("Fix the login bug", sess.FirstMessage)
 
 	assertMessage(t, msgs[0], RoleUser, "Fix the login bug")
 	assertMessage(t, msgs[1], RoleAssistant, "Looking at")
-	assert.Equal(t, 0, msgs[0].Ordinal)
-	assert.Equal(t, 1, msgs[1].Ordinal)
+	assert.Equal(0, msgs[0].Ordinal)
+	assert.Equal(1, msgs[1].Ordinal)
 }
 
 func TestParseGeminiSession_JSONLStream(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	content := strings.Join([]string{
 		`{"sessionId":"sess-jsonl-1","projectHash":"hash","startTime":"2026-04-23T16:12:42.783Z","lastUpdated":"2026-04-23T16:12:42.783Z","kind":"main"}`,
 		`{"id":"u1","timestamp":"2026-04-23T16:12:43.085Z","type":"user","content":[{"text":"Fix the import path"}]}`,
@@ -102,22 +106,21 @@ func TestParseGeminiSession_JSONLStream(t *testing.T) {
 	}, "\n")
 	path := createTestFile(t, "session.jsonl", content)
 	sess, msgs, err := parseGeminiTestSession(t, path, "my_project", "local")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.NotNil(t, sess)
-	require.Equal(t, 2, len(msgs))
+	require.NotNil(sess)
+	require.Equal(2, len(msgs))
 	assertSessionMeta(t, sess, "gemini:sess-jsonl-1", "my_project", AgentGemini)
-	assert.Equal(t, "Fix the import path", sess.FirstMessage)
+	assert.Equal("Fix the import path", sess.FirstMessage)
 	assertMessage(t, msgs[0], RoleUser, "Fix the import path")
 	assertMessage(t, msgs[1], RoleAssistant, "I found the issue.")
-	assert.True(t, msgs[1].HasThinking)
-	assert.True(t, msgs[1].HasToolUse)
-	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, "read_file_1", msgs[1].ToolCalls[0].ToolUseID)
-	require.Len(t, msgs[1].ToolResults, 1)
-	assert.Equal(t, "package main", DecodeContent(msgs[1].ToolResults[0].ContentRaw))
+	assert.True(msgs[1].HasThinking)
+	assert.True(msgs[1].HasToolUse)
+	require.Len(msgs[1].ToolCalls, 1)
+	assert.Equal("read_file_1", msgs[1].ToolCalls[0].ToolUseID)
+	require.Len(msgs[1].ToolResults, 1)
+	assert.Equal("package main", DecodeContent(msgs[1].ToolResults[0].ContentRaw))
 	assert.Equal(
-		t,
 		parseTimestamp("2026-04-23T16:12:50.158Z"),
 		sess.EndedAt,
 	)
@@ -142,6 +145,8 @@ func TestGeminiProviderMissingSessionIDIsUnsupportedSource(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			path := createTestFile(t, "session.jsonl", test.content)
 			provider := newGeminiTestProvider(t)
 
@@ -153,15 +158,17 @@ func TestGeminiProviderMissingSessionIDIsUnsupportedSource(t *testing.T) {
 			}})
 
 			require.NoError(t, err)
-			assert.True(t, outcome.ResultSetComplete)
-			assert.Equal(t, SkipUnsupportedSource, outcome.SkipReason)
-			assert.Empty(t, outcome.Results)
-			assert.Empty(t, outcome.SourceErrors)
+			assert.True(outcome.ResultSetComplete)
+			assert.Equal(SkipUnsupportedSource, outcome.SkipReason)
+			assert.Empty(outcome.Results)
+			assert.Empty(outcome.SourceErrors)
 		})
 	}
 }
 
 func TestParseGeminiSession_JSONLStreamLargeRecord(t *testing.T) {
+	require := require.New(t)
+
 	largeContent := strings.Repeat("x", 16*1024*1024+1)
 	content := strings.Join([]string{
 		`{"sessionId":"sess-jsonl-large","projectHash":"hash","startTime":"2026-04-23T16:12:42.783Z","lastUpdated":"2026-04-23T16:12:42.783Z","kind":"main"}`,
@@ -169,10 +176,10 @@ func TestParseGeminiSession_JSONLStreamLargeRecord(t *testing.T) {
 	}, "\n")
 	path := createTestFile(t, "large-session.jsonl", content)
 	sess, msgs, err := parseGeminiTestSession(t, path, "my_project", "local")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.NotNil(t, sess)
-	require.Len(t, msgs, 1)
+	require.NotNil(sess)
+	require.Len(msgs, 1)
 	assertSessionMeta(t, sess, "gemini:sess-jsonl-large", "my_project", AgentGemini)
 	assert.Equal(t, len(largeContent), len(msgs[0].Content))
 }
@@ -214,34 +221,39 @@ func TestParseGeminiSession_JSONLStreamTolerantOfPartialLines(t *testing.T) {
 
 func TestParseGeminiSession_ToolCalls(t *testing.T) {
 	t.Run("basic tool calls", func(t *testing.T) {
+		assert := assert.New(t)
+
 		content := loadFixture(t, "gemini/tool_calls.json")
 		_, msgs := runGeminiParserTest(t, content)
 
-		assert.Equal(t, 2, len(msgs))
-		assert.True(t, msgs[1].HasToolUse)
-		assert.True(t, msgs[1].HasThinking)
-		assert.True(t, strings.Contains(msgs[1].Content, "[Thinking]\nPlanning\n"))
-		assert.True(t, strings.Contains(msgs[1].Content, "[/Thinking]"))
-		assert.True(t, strings.Contains(msgs[1].Content, "[Read: main.go]"))
+		assert.Equal(2, len(msgs))
+		assert.True(msgs[1].HasToolUse)
+		assert.True(msgs[1].HasThinking)
+		assert.True(strings.Contains(msgs[1].Content, "[Thinking]\nPlanning\n"))
+		assert.True(strings.Contains(msgs[1].Content, "[/Thinking]"))
+		assert.True(strings.Contains(msgs[1].Content, "[Read: main.go]"))
 		// Chronological: thinking before content before tool calls
 		thinkIdx := strings.Index(msgs[1].Content, "[Thinking]")
 		contentIdx := strings.Index(msgs[1].Content, "Let me read it.")
 		toolIdx := strings.Index(msgs[1].Content, "[Read:")
-		assert.Less(t, thinkIdx, contentIdx)
-		assert.Less(t, contentIdx, toolIdx)
+		assert.Less(thinkIdx, contentIdx)
+		assert.Less(contentIdx, toolIdx)
 		assertToolCalls(t, msgs[1].ToolCalls, []ParsedToolCall{{ToolName: "read_file", Category: "Read"}})
 	})
 
 	t.Run("tool calls with results", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		content := loadFixture(t, "gemini/tool_calls_with_results.json")
 		_, msgs := runGeminiParserTest(t, content)
 
-		require.Equal(t, 2, len(msgs))
+		require.Equal(2, len(msgs))
 		assistantMsg := msgs[1]
-		assert.True(t, assistantMsg.HasToolUse)
+		assert.True(assistantMsg.HasToolUse)
 
 		// Verify ToolUseID and InputJSON are extracted
-		require.Equal(t, 2, len(assistantMsg.ToolCalls))
+		require.Equal(2, len(assistantMsg.ToolCalls))
 		assertToolCalls(t, assistantMsg.ToolCalls, []ParsedToolCall{
 			{
 				ToolName:  "read_file",
@@ -258,17 +270,20 @@ func TestParseGeminiSession_ToolCalls(t *testing.T) {
 		})
 
 		// Verify tool results are extracted
-		require.Equal(t, 2, len(assistantMsg.ToolResults))
-		assert.Equal(t, "read_file_1772747340739_0", assistantMsg.ToolResults[0].ToolUseID)
-		assert.Equal(t, len("# Agentstrove -- One-Pager\n\nDraft: 2026-03-04"), assistantMsg.ToolResults[0].ContentLength)
+		require.Equal(2, len(assistantMsg.ToolResults))
+		assert.Equal("read_file_1772747340739_0", assistantMsg.ToolResults[0].ToolUseID)
+		assert.Equal(len("# Agentstrove -- One-Pager\n\nDraft: 2026-03-04"), assistantMsg.ToolResults[0].ContentLength)
 		// Verify DecodeContent works on the raw content
-		assert.Equal(t, "# Agentstrove -- One-Pager\n\nDraft: 2026-03-04", DecodeContent(assistantMsg.ToolResults[0].ContentRaw))
+		assert.Equal("# Agentstrove -- One-Pager\n\nDraft: 2026-03-04", DecodeContent(assistantMsg.ToolResults[0].ContentRaw))
 
-		assert.Equal(t, "run_command_1772747340739_1", assistantMsg.ToolResults[1].ToolUseID)
-		assert.Equal(t, "total 42\ndrwxr-xr-x  5 user user 160 Mar  4 10:00 .", DecodeContent(assistantMsg.ToolResults[1].ContentRaw))
+		assert.Equal("run_command_1772747340739_1", assistantMsg.ToolResults[1].ToolUseID)
+		assert.Equal("total 42\ndrwxr-xr-x  5 user user 160 Mar  4 10:00 .", DecodeContent(assistantMsg.ToolResults[1].ContentRaw))
 	})
 
 	t.Run("programmatic tool call with result", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		content := testjsonl.GeminiSessionJSON("sess-tc-result", "hash", tsEarly, tsEarlyS5, []map[string]any{
 			testjsonl.GeminiUserMsg("u1", tsEarly, "list files"),
 			testjsonl.GeminiAssistantMsg("a1", tsEarlyS5, "Running command.", &testjsonl.GeminiMsgOpts{
@@ -284,17 +299,20 @@ func TestParseGeminiSession_ToolCalls(t *testing.T) {
 			}),
 		})
 		_, msgs := runGeminiParserTest(t, content)
-		require.Equal(t, 2, len(msgs))
-		require.Equal(t, 1, len(msgs[1].ToolCalls))
-		assert.Equal(t, "run_cmd_1", msgs[1].ToolCalls[0].ToolUseID)
+		require.Equal(2, len(msgs))
+		require.Equal(1, len(msgs[1].ToolCalls))
+		assert.Equal("run_cmd_1", msgs[1].ToolCalls[0].ToolUseID)
 
-		require.Equal(t, 1, len(msgs[1].ToolResults))
-		assert.Equal(t, "run_cmd_1", msgs[1].ToolResults[0].ToolUseID)
-		assert.Equal(t, len("file1.go\nfile2.go"), msgs[1].ToolResults[0].ContentLength)
-		assert.Equal(t, "file1.go\nfile2.go", DecodeContent(msgs[1].ToolResults[0].ContentRaw))
+		require.Equal(1, len(msgs[1].ToolResults))
+		assert.Equal("run_cmd_1", msgs[1].ToolResults[0].ToolUseID)
+		assert.Equal(len("file1.go\nfile2.go"), msgs[1].ToolResults[0].ContentLength)
+		assert.Equal("file1.go\nfile2.go", DecodeContent(msgs[1].ToolResults[0].ContentRaw))
 	})
 
 	t.Run("tool call without result", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		content := testjsonl.GeminiSessionJSON("sess-tc-no-result", "hash", tsEarly, tsEarlyS5, []map[string]any{
 			testjsonl.GeminiUserMsg("u1", tsEarly, "read it"),
 			testjsonl.GeminiAssistantMsg("a1", tsEarlyS5, "Reading.", &testjsonl.GeminiMsgOpts{
@@ -309,10 +327,10 @@ func TestParseGeminiSession_ToolCalls(t *testing.T) {
 			}),
 		})
 		_, msgs := runGeminiParserTest(t, content)
-		require.Equal(t, 2, len(msgs))
-		require.Equal(t, 1, len(msgs[1].ToolCalls))
-		assert.Equal(t, "read_1", msgs[1].ToolCalls[0].ToolUseID)
-		assert.Equal(t, 0, len(msgs[1].ToolResults))
+		require.Equal(2, len(msgs))
+		require.Equal(1, len(msgs[1].ToolCalls))
+		assert.Equal("read_1", msgs[1].ToolCalls[0].ToolUseID)
+		assert.Equal(0, len(msgs[1].ToolResults))
 	})
 
 	t.Run("empty tool name skipped", func(t *testing.T) {
@@ -330,18 +348,20 @@ func TestParseGeminiSession_ToolCalls(t *testing.T) {
 }
 
 func TestParseGeminiSession_ThinkingWithText(t *testing.T) {
+	assert := assert.New(t)
+
 	content := loadFixture(t, "gemini/thinking_only.json")
 	_, msgs := runGeminiParserTest(t, content)
 
 	require.Equal(t, 2, len(msgs))
 
 	msg := msgs[1]
-	assert.True(t, msg.HasThinking)
-	assert.False(t, msg.HasToolUse)
+	assert.True(msg.HasThinking)
+	assert.False(msg.HasToolUse)
 
 	// Thinking and content should be separated by blank lines
-	assert.Contains(t, msg.Content, "[Thinking]")
-	assert.Contains(t, msg.Content, "Here is how it works")
+	assert.Contains(msg.Content, "[Thinking]")
+	assert.Contains(msg.Content, "Here is how it works")
 
 	// Verify blank-line separation between thinking blocks
 	// and between thinking and content
@@ -352,71 +372,75 @@ func TestParseGeminiSession_ThinkingWithText(t *testing.T) {
 		msg.Content,
 		"Here is how it works",
 	)
-	assert.Less(t, thinkIdx, contentIdx)
+	assert.Less(thinkIdx, contentIdx)
 
 	// The text between last thinking block and response
 	// should contain a blank line
 	between := msg.Content[thinkIdx:contentIdx]
-	assert.Contains(t, between, "\n\n")
+	assert.Contains(between, "\n\n")
 }
 
 func TestParseGeminiSession_TokenUsage(t *testing.T) {
 	t.Run("per-message tokens from fixture", func(t *testing.T) {
+		assert := assert.New(t)
+
 		content := loadFixture(t, "gemini/standard_session.json")
 		sess, msgs := runGeminiParserTest(t, content)
 
 		require.Equal(t, 4, len(msgs))
 
 		// User messages have no tokens
-		assert.Equal(t, 0, msgs[0].ContextTokens)
-		assert.Equal(t, 0, msgs[0].OutputTokens)
-		assert.False(t, msgs[0].HasContextTokens)
-		assert.False(t, msgs[0].HasOutputTokens)
-		assert.Empty(t, msgs[0].TokenUsage)
+		assert.Equal(0, msgs[0].ContextTokens)
+		assert.Equal(0, msgs[0].OutputTokens)
+		assert.False(msgs[0].HasContextTokens)
+		assert.False(msgs[0].HasOutputTokens)
+		assert.Empty(msgs[0].TokenUsage)
 
 		// First assistant message (a1): input=1500, cached=100,
 		// output=200, thoughts=50; deltas equal cumulative (first turn).
-		assert.Equal(t, 1600, msgs[1].ContextTokens)
-		assert.Equal(t, 250, msgs[1].OutputTokens)
-		assert.True(t, msgs[1].HasContextTokens)
-		assert.True(t, msgs[1].HasOutputTokens)
-		assert.NotEmpty(t, msgs[1].TokenUsage)
-		assert.Equal(t, int64(1500),
+		assert.Equal(1600, msgs[1].ContextTokens)
+		assert.Equal(250, msgs[1].OutputTokens)
+		assert.True(msgs[1].HasContextTokens)
+		assert.True(msgs[1].HasOutputTokens)
+		assert.NotEmpty(msgs[1].TokenUsage)
+		assert.Equal(int64(1500),
 			gjson.GetBytes(msgs[1].TokenUsage, "input_tokens").Int())
-		assert.Equal(t, int64(250),
+		assert.Equal(int64(250),
 			gjson.GetBytes(msgs[1].TokenUsage, "output_tokens").Int())
-		assert.Equal(t, int64(100),
+		assert.Equal(int64(100),
 			gjson.GetBytes(msgs[1].TokenUsage, "cache_read_input_tokens").Int())
 
 		// Second user message has no tokens
-		assert.Equal(t, 0, msgs[2].ContextTokens)
-		assert.Equal(t, 0, msgs[2].OutputTokens)
-		assert.False(t, msgs[2].HasContextTokens)
-		assert.False(t, msgs[2].HasOutputTokens)
+		assert.Equal(0, msgs[2].ContextTokens)
+		assert.Equal(0, msgs[2].OutputTokens)
+		assert.False(msgs[2].HasContextTokens)
+		assert.False(msgs[2].HasOutputTokens)
 
 		// Second assistant message (a2): input=2000, cached=50;
 		// cached went down from 100 so it resets, inputDelta=500,
 		// cachedDelta=50, ContextTokens=550.
-		assert.Equal(t, 550, msgs[3].ContextTokens)
-		assert.Equal(t, 400, msgs[3].OutputTokens)
-		assert.True(t, msgs[3].HasContextTokens)
-		assert.True(t, msgs[3].HasOutputTokens)
-		assert.NotEmpty(t, msgs[3].TokenUsage)
-		assert.Equal(t, int64(500),
+		assert.Equal(550, msgs[3].ContextTokens)
+		assert.Equal(400, msgs[3].OutputTokens)
+		assert.True(msgs[3].HasContextTokens)
+		assert.True(msgs[3].HasOutputTokens)
+		assert.NotEmpty(msgs[3].TokenUsage)
+		assert.Equal(int64(500),
 			gjson.GetBytes(msgs[3].TokenUsage, "input_tokens").Int())
-		assert.Equal(t, int64(400),
+		assert.Equal(int64(400),
 			gjson.GetBytes(msgs[3].TokenUsage, "output_tokens").Int())
-		assert.Equal(t, int64(50),
+		assert.Equal(int64(50),
 			gjson.GetBytes(msgs[3].TokenUsage, "cache_read_input_tokens").Int())
 
 		// Session totals
-		assert.Equal(t, 650, sess.TotalOutputTokens)
-		assert.Equal(t, 1600, sess.PeakContextTokens)
-		assert.True(t, sess.HasTotalOutputTokens)
-		assert.True(t, sess.HasPeakContextTokens)
+		assert.Equal(650, sess.TotalOutputTokens)
+		assert.Equal(1600, sess.PeakContextTokens)
+		assert.True(sess.HasTotalOutputTokens)
+		assert.True(sess.HasPeakContextTokens)
 	})
 
 	t.Run("messages without tokens get zero values", func(t *testing.T) {
+		assert := assert.New(t)
+
 		content := testjsonl.GeminiSessionJSON(
 			"sess-no-tokens", "hash", tsEarly, tsEarlyS5,
 			[]map[string]any{
@@ -427,20 +451,22 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		sess, msgs := runGeminiParserTest(t, content)
 
 		require.Equal(t, 2, len(msgs))
-		assert.Equal(t, 0, msgs[0].ContextTokens)
-		assert.Equal(t, 0, msgs[1].ContextTokens)
-		assert.Equal(t, 0, msgs[1].OutputTokens)
-		assert.False(t, msgs[0].HasContextTokens)
-		assert.False(t, msgs[0].HasOutputTokens)
-		assert.False(t, msgs[1].HasContextTokens)
-		assert.False(t, msgs[1].HasOutputTokens)
-		assert.Equal(t, 0, sess.TotalOutputTokens)
-		assert.Equal(t, 0, sess.PeakContextTokens)
-		assert.False(t, sess.HasTotalOutputTokens)
-		assert.False(t, sess.HasPeakContextTokens)
+		assert.Equal(0, msgs[0].ContextTokens)
+		assert.Equal(0, msgs[1].ContextTokens)
+		assert.Equal(0, msgs[1].OutputTokens)
+		assert.False(msgs[0].HasContextTokens)
+		assert.False(msgs[0].HasOutputTokens)
+		assert.False(msgs[1].HasContextTokens)
+		assert.False(msgs[1].HasOutputTokens)
+		assert.Equal(0, sess.TotalOutputTokens)
+		assert.Equal(0, sess.PeakContextTokens)
+		assert.False(sess.HasTotalOutputTokens)
+		assert.False(sess.HasPeakContextTokens)
 	})
 
 	t.Run("tokens with programmatic fixture", func(t *testing.T) {
+		assert := assert.New(t)
+
 		content := testjsonl.GeminiSessionJSON(
 			"sess-tokens-prog", "hash", tsEarly, tsEarlyS5,
 			[]map[string]any{
@@ -464,25 +490,27 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		sess, msgs := runGeminiParserTest(t, content)
 
 		require.Equal(t, 2, len(msgs))
-		assert.Equal(t, 5200, msgs[1].ContextTokens)
-		assert.Equal(t, 900, msgs[1].OutputTokens)
-		assert.True(t, msgs[1].HasContextTokens)
-		assert.True(t, msgs[1].HasOutputTokens)
-		assert.NotEmpty(t, msgs[1].TokenUsage)
-		assert.Equal(t, int64(5000),
+		assert.Equal(5200, msgs[1].ContextTokens)
+		assert.Equal(900, msgs[1].OutputTokens)
+		assert.True(msgs[1].HasContextTokens)
+		assert.True(msgs[1].HasOutputTokens)
+		assert.NotEmpty(msgs[1].TokenUsage)
+		assert.Equal(int64(5000),
 			gjson.GetBytes(msgs[1].TokenUsage, "input_tokens").Int())
-		assert.Equal(t, int64(900),
+		assert.Equal(int64(900),
 			gjson.GetBytes(msgs[1].TokenUsage, "output_tokens").Int())
-		assert.Equal(t, int64(200),
+		assert.Equal(int64(200),
 			gjson.GetBytes(msgs[1].TokenUsage,
 				"cache_read_input_tokens").Int())
-		assert.Equal(t, 900, sess.TotalOutputTokens)
-		assert.Equal(t, 5200, sess.PeakContextTokens)
-		assert.True(t, sess.HasTotalOutputTokens)
-		assert.True(t, sess.HasPeakContextTokens)
+		assert.Equal(900, sess.TotalOutputTokens)
+		assert.Equal(5200, sess.PeakContextTokens)
+		assert.True(sess.HasTotalOutputTokens)
+		assert.True(sess.HasPeakContextTokens)
 	})
 
 	t.Run("zero-valued token keys preserve coverage", func(t *testing.T) {
+		assert := assert.New(t)
+
 		content := testjsonl.GeminiSessionJSON(
 			"sess-zero-explicit", "hash", tsEarly, tsEarlyS5,
 			[]map[string]any{
@@ -503,24 +531,24 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		sess, msgs := runGeminiParserTest(t, content)
 
 		require.Equal(t, 2, len(msgs))
-		assert.Equal(t, 0, msgs[1].ContextTokens)
-		assert.Equal(t, 0, msgs[1].OutputTokens)
-		assert.True(t, msgs[1].HasContextTokens)
-		assert.True(t, msgs[1].HasOutputTokens)
+		assert.Equal(0, msgs[1].ContextTokens)
+		assert.Equal(0, msgs[1].OutputTokens)
+		assert.True(msgs[1].HasContextTokens)
+		assert.True(msgs[1].HasOutputTokens)
 		msgHasCtx, msgHasOut := msgs[1].TokenPresence()
-		assert.True(t, msgHasCtx)
-		assert.True(t, msgHasOut)
+		assert.True(msgHasCtx)
+		assert.True(msgHasOut)
 
-		assert.Equal(t, 0, sess.TotalOutputTokens)
-		assert.Equal(t, 0, sess.PeakContextTokens)
-		assert.True(t, sess.HasTotalOutputTokens)
-		assert.True(t, sess.HasPeakContextTokens)
+		assert.Equal(0, sess.TotalOutputTokens)
+		assert.Equal(0, sess.PeakContextTokens)
+		assert.True(sess.HasTotalOutputTokens)
+		assert.True(sess.HasPeakContextTokens)
 		sessHasTotal, sessHasPeak := sess.AggregateTokenPresence()
-		assert.True(t, sessHasTotal)
-		assert.True(t, sessHasPeak)
+		assert.True(sessHasTotal)
+		assert.True(sessHasPeak)
 		coverageTotal, coveragePeak := sess.TokenCoverage(msgs)
-		assert.True(t, coverageTotal)
-		assert.True(t, coveragePeak)
+		assert.True(coverageTotal)
+		assert.True(coveragePeak)
 	})
 }
 
@@ -601,6 +629,8 @@ func TestParseGeminiSession_EdgeCases(t *testing.T) {
 
 func TestParseGeminiSession_ContextTokensDelta(t *testing.T) {
 	t.Run("multi-turn increasing cumulative", func(t *testing.T) {
+		assert := assert.New(t)
+
 		content := `{"sessionId":"sess-ctx-delta","startTime":"2026-04-23T16:12:42.783Z","lastUpdated":"2026-04-23T16:13:42.783Z","messages":[
   {"type":"user","timestamp":"2026-04-23T16:12:43Z","content":[{"text":"first question"}]},
   {"type":"gemini","timestamp":"2026-04-23T16:12:45Z","content":"answer one","tokens":{"input":10000,"output":50,"cached":0}},
@@ -612,23 +642,25 @@ func TestParseGeminiSession_ContextTokensDelta(t *testing.T) {
 
 		// user messages have no tokens
 		require.Len(t, msgs, 5)
-		assert.False(t, msgs[0].HasContextTokens)
-		assert.False(t, msgs[2].HasContextTokens)
+		assert.False(msgs[0].HasContextTokens)
+		assert.False(msgs[2].HasContextTokens)
 
 		// gemini msg 0 (answer one): input=10000, cached=0, deltas=10000+0
-		assert.Equal(t, 10000, msgs[1].ContextTokens)
+		assert.Equal(10000, msgs[1].ContextTokens)
 		// gemini msg 1 (answer two): input=22000, cached=3000,
 		// inputDelta=12000, cachedDelta=3000, total=15000
-		assert.Equal(t, 15000, msgs[3].ContextTokens)
+		assert.Equal(15000, msgs[3].ContextTokens)
 		// gemini msg 2 (answer three): input=60000, cached=0;
 		// cached reset (3000->0), inputDelta=38000, cachedDelta=0, total=38000
-		assert.Equal(t, 38000, msgs[4].ContextTokens)
+		assert.Equal(38000, msgs[4].ContextTokens)
 
 		// PeakContextTokens is the largest delta, not the final cumulative
-		assert.Equal(t, 38000, sess.PeakContextTokens)
+		assert.Equal(38000, sess.PeakContextTokens)
 	})
 
 	t.Run("counter reset clamps to cumulative", func(t *testing.T) {
+		assert := assert.New(t)
+
 		content := `{"sessionId":"sess-ctx-reset","startTime":"2026-04-23T16:12:42.783Z","lastUpdated":"2026-04-23T16:13:42.783Z","messages":[
   {"type":"user","timestamp":"2026-04-23T16:12:43Z","content":[{"text":"first"}]},
   {"type":"gemini","timestamp":"2026-04-23T16:12:45Z","content":"reply one","tokens":{"input":10000,"output":50,"cached":0}},
@@ -641,9 +673,9 @@ func TestParseGeminiSession_ContextTokensDelta(t *testing.T) {
 
 		require.Len(t, msgs, 6)
 		// deltas: 10000, 15000, 5000 (reset clamps to cumulative)
-		assert.Equal(t, 10000, msgs[1].ContextTokens)
-		assert.Equal(t, 15000, msgs[3].ContextTokens)
-		assert.Equal(t, 5000, msgs[5].ContextTokens)
+		assert.Equal(10000, msgs[1].ContextTokens)
+		assert.Equal(15000, msgs[3].ContextTokens)
+		assert.Equal(5000, msgs[5].ContextTokens)
 	})
 
 	t.Run("no token field", func(t *testing.T) {

@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -109,7 +108,7 @@ func seedShelleyConvo(
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	defer db.Close()
-	_, err = db.Exec(
+	_, err = db.ExecContext(t.Context(),
 		`INSERT INTO conversations
 			(conversation_id, slug, user_initiated, created_at,
 			 updated_at, cwd, parent_conversation_id, model)
@@ -119,7 +118,7 @@ func seedShelleyConvo(
 	)
 	require.NoError(t, err, "insert conversation %s", id)
 	for _, m := range msgs {
-		_, err = db.Exec(
+		_, err = db.ExecContext(t.Context(),
 			`INSERT INTO messages
 				(message_id, conversation_id, sequence_id, type,
 				 llm_data, usage_data, created_at)
@@ -160,84 +159,98 @@ func sessionIDs(sessions []db.Session) []string {
 
 func mainConvoMsgs() []shelleyMsg {
 	return []shelleyMsg{
-		{1, "user",
+		{
+			1, "user",
 			`{"Role":0,"Content":[{"Type":2,"Text":"hello shelley"}]}`,
-			"", "2026-06-15T10:00:00Z"},
-		{2, "agent",
+			"", "2026-06-15T10:00:00Z",
+		},
+		{
+			2, "agent",
 			`{"Role":1,"Content":[{"Type":2,"Text":"hi"},` +
 				`{"ID":"toolu_x","Type":5,"ToolName":"bash","ToolInput":{"cmd":"ls"}}]}`,
 			`{"input_tokens":500,"cache_read_input_tokens":0,` +
 				`"cache_creation_input_tokens":0,"output_tokens":50,` +
 				`"model":"claude-sonnet-4-6"}`,
-			"2026-06-15T10:00:05Z"},
-		{3, "tool",
+			"2026-06-15T10:00:05Z",
+		},
+		{
+			3, "tool",
 			`{"Role":0,"Content":[{"Type":6,"ToolUseID":"toolu_x",` +
 				`"ToolResult":[{"Type":2,"Text":"file1"}]}]}`,
-			"", "2026-06-15T10:00:06Z"},
+			"", "2026-06-15T10:00:06Z",
+		},
 	}
 }
 
 func TestSyncSingleSessionShelleyUsesVirtualSourcePath(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	dbPath := createShelleyMainDB(t, dir)
 
 	engine, database := newShelleyEngine(t, dir)
 
-	assert.Equal(t, dbPath+"#cMAIN1",
+	assert.Equal(dbPath+"#cMAIN1",
 		engine.FindSourceFile("shelley:cMAIN1"), "virtual source path")
-	require.NoError(t, engine.SyncSingleSession("shelley:cMAIN1"))
+	require.NoError(engine.SyncSingleSession("shelley:cMAIN1"))
 
-	sess, err := database.GetSession(context.Background(), "shelley:cMAIN1")
-	require.NoError(t, err)
-	require.NotNil(t, sess, "session present")
+	sess, err := database.GetSession(t.Context(), "shelley:cMAIN1")
+	require.NoError(err)
+	require.NotNil(sess, "session present")
 	// The user prompt and the agent reply remain; the tool-result-only
 	// carrier message is paired into the tool call and dropped.
-	assert.Equal(t, 2, sess.MessageCount, "message count")
-	assert.Equal(t, "app", sess.Project, "project")
-	assert.Equal(t, dbPath+"#cMAIN1",
+	assert.Equal(2, sess.MessageCount, "message count")
+	assert.Equal("app", sess.Project, "project")
+	assert.Equal(dbPath+"#cMAIN1",
 		database.GetSessionFilePath("shelley:cMAIN1"), "stored file path")
 }
 
 func TestSyncSingleSessionShelleyForceRewritesUnchangedSession(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	dbPath := createShelleyMainDB(t, dir)
 
 	engine, database := newShelleyEngine(t, dir)
-	require.NoError(t, engine.SyncSingleSession("shelley:cMAIN1"))
-	sess, err := database.GetSession(context.Background(), "shelley:cMAIN1")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	require.Equal(t, 2, sess.MessageCount)
+	require.NoError(engine.SyncSingleSession("shelley:cMAIN1"))
+	sess, err := database.GetSession(t.Context(), "shelley:cMAIN1")
+	require.NoError(err)
+	require.NotNil(sess)
+	require.Equal(2, sess.MessageCount)
 
 	sess.MessageCount = 0
-	require.NoError(t, database.UpsertSession(*sess))
+	require.NoError(database.UpsertSession(*sess))
 
-	require.NoError(t, engine.SyncSingleSession("shelley:cMAIN1"))
+	require.NoError(engine.SyncSingleSession("shelley:cMAIN1"))
 
-	sess, err = database.GetSession(context.Background(), "shelley:cMAIN1")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, 2, sess.MessageCount)
-	assert.Equal(t, dbPath+"#cMAIN1",
+	sess, err = database.GetSession(t.Context(), "shelley:cMAIN1")
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal(2, sess.MessageCount)
+	assert.Equal(dbPath+"#cMAIN1",
 		database.GetSessionFilePath("shelley:cMAIN1"), "stored file path")
 }
 
 func TestSyncPathsShelleyDeletedPhysicalDBPreservesSessions(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	dbPath := createShelleyMainDB(t, dir)
 
 	engine, database := newShelleyEngine(t, dir)
-	stats := engine.SyncAll(context.Background(), nil)
-	require.Equal(t, 1, stats.Synced)
-	require.NoError(t, os.Remove(dbPath))
+	stats := engine.SyncAll(t.Context(), nil)
+	require.Equal(1, stats.Synced)
+	require.NoError(os.Remove(dbPath))
 
 	engine.SyncPaths([]string{dbPath})
 
 	// The SQLite store is a persistent archive: removing the backing DB file
 	// must not delete the already-synced session.
-	sess, err := database.GetSession(context.Background(), "shelley:cMAIN1")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
+	sess, err := database.GetSession(t.Context(), "shelley:cMAIN1")
+	require.NoError(err)
+	require.NotNil(sess)
 	assert.Equal(t, "shelley:cMAIN1", sess.ID)
 }
 
@@ -250,34 +263,45 @@ func TestSourceMtimeShelleyResolvesVirtualPath(t *testing.T) {
 	createShelleyMainDB(t, dir)
 
 	engine, _ := newShelleyEngine(t, dir)
-	assert.Positive(t, engine.SourceMtime("shelley:cMAIN1"),
+	assert.Positive(t, engine.SourceMtime(t.Context(), "shelley:cMAIN1"),
 		"SourceMtime must resolve the virtual path, not return 0")
 }
 
 func TestShelleySyncAllAndResyncAllArchiveBehavior(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	dbPath := createShelleyMainDB(t, dir)
 	seedShelleyConvo(t, dbPath, "cAUX1", "aux", "/home/u/dev/app",
 		"claude-sonnet-4-6", "", true,
 		"2026-06-15T10:01:00Z", "2026-06-15T10:01:10Z", []shelleyMsg{
-			{1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"second"}]}`,
-				"", "2026-06-15T10:01:00Z"},
-			{2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"ok"}]}`,
-				"", "2026-06-15T10:01:10Z"},
+			{
+				1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"second"}]}`,
+				"", "2026-06-15T10:01:00Z",
+			},
+			{
+				2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"ok"}]}`,
+				"", "2026-06-15T10:01:10Z",
+			},
 		})
 	seedShelleyConvo(t, dbPath, "cGONE1", "gone", "/home/u/dev/app",
 		"claude-sonnet-4-6", "", true,
 		"2026-06-15T09:00:00Z", "2026-06-15T09:00:10Z", []shelleyMsg{
-			{1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"old work"}]}`,
-				"", "2026-06-15T09:00:00Z"},
-			{2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"old reply"}]}`,
-				"", "2026-06-15T09:00:10Z"},
+			{
+				1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"old work"}]}`,
+				"", "2026-06-15T09:00:00Z",
+			},
+			{
+				2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"old reply"}]}`,
+				"", "2026-06-15T09:00:10Z",
+			},
 		})
 
 	engine, database := newShelleyEngine(t, dir)
-	stats := engine.SyncAll(context.Background(), nil)
-	require.False(t, stats.Aborted, "sync aborted: %+v", stats)
-	assert.Equal(t, 3, stats.Synced, "synced count")
+	stats := engine.SyncAll(t.Context(), nil)
+	require.False(stats.Aborted, "sync aborted: %+v", stats)
+	assert.Equal(3, stats.Synced, "synced count")
 
 	assertSessionMessageCount(t, database, "shelley:cMAIN1", 2)
 	assertSessionMessageCount(t, database, "shelley:cAUX1", 2)
@@ -288,36 +312,39 @@ func TestShelleySyncAllAndResyncAllArchiveBehavior(t *testing.T) {
 	// The tool result from the dropped carrier message is paired into
 	// the tool call's result_content.
 	var resultContent string
-	require.NoError(t, database.Reader().QueryRow(
+	require.NoError(database.Reader().QueryRow(
 		`SELECT COALESCE(result_content, '') FROM tool_calls WHERE session_id = ?`,
 		"shelley:cMAIN1",
 	).Scan(&resultContent), "query tool result content")
-	assert.Contains(t, resultContent, "file1", "tool result preserved on tool call")
+	assert.Contains(resultContent, "file1", "tool result preserved on tool call")
 
 	// Remove cGONE1 from the source DB entirely, then verify a full resync
 	// rebuilds present conversations and preserves the removed conversation
 	// from the old archive.
 	conn, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
-	_, err = conn.Exec(`DELETE FROM messages WHERE conversation_id = 'cGONE1'`)
-	require.NoError(t, err)
-	_, err = conn.Exec(`DELETE FROM conversations WHERE conversation_id = 'cGONE1'`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	require.NoError(err)
+	_, err = conn.ExecContext(t.Context(), `DELETE FROM messages WHERE conversation_id = 'cGONE1'`)
+	require.NoError(err)
+	_, err = conn.ExecContext(t.Context(), `DELETE FROM conversations WHERE conversation_id = 'cGONE1'`)
+	require.NoError(err)
+	require.NoError(conn.Close())
 
-	stats = engine.ResyncAll(context.Background(), nil)
-	assert.False(t, stats.Aborted, "resync aborted: %+v", stats)
-	assert.NotZero(t, stats.Synced, "resync should re-parse fresh")
+	stats = engine.ResyncAll(t.Context(), nil)
+	assert.False(stats.Aborted, "resync aborted: %+v", stats)
+	assert.NotZero(stats.Synced, "resync should re-parse fresh")
 
 	assertSessionMessageCount(t, database, "shelley:cMAIN1", 2)
 	assertSessionMessageCount(t, database, "shelley:cAUX1", 2)
-	gone, err := database.GetSession(context.Background(), "shelley:cGONE1")
-	require.NoError(t, err)
-	require.NotNil(t, gone, "removed conversation should survive resync")
-	assert.Equal(t, 2, gone.MessageCount, "preserved message count")
+	gone, err := database.GetSession(t.Context(), "shelley:cGONE1")
+	require.NoError(err)
+	require.NotNil(gone, "removed conversation should survive resync")
+	assert.Equal(2, gone.MessageCount, "preserved message count")
 }
 
 func TestSyncShelleyRemotePathRewriterSkip(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	dbPath := createShelleyMainDB(t, dir)
 
@@ -333,35 +360,35 @@ func TestSyncShelleyRemotePathRewriterSkip(t *testing.T) {
 		},
 	})
 
-	stats := engine.SyncAll(context.Background(), nil)
-	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
-	assert.Equal(t, 1, stats.Synced, "first sync should write the session")
+	stats := engine.SyncAll(t.Context(), nil)
+	require.False(stats.Aborted, "first sync aborted: %+v", stats)
+	assert.Equal(1, stats.Synced, "first sync should write the session")
 
 	const sessionID = "host~shelley:cMAIN1"
 	storedPath := "host:" + dbPath + "#cMAIN1"
-	assert.Equal(t, storedPath,
+	assert.Equal(storedPath,
 		database.GetSessionFilePath(sessionID), "stored remote path")
-	before, err := database.GetSessionFull(context.Background(), sessionID)
-	require.NoError(t, err, "GetSessionFull before second sync")
-	require.NotNil(t, before, "session before second sync")
-	require.NotNil(t, before.LocalModifiedAt,
+	before, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(err, "GetSessionFull before second sync")
+	require.NotNil(before, "session before second sync")
+	require.NotNil(before.LocalModifiedAt,
 		"local_modified_at before second sync")
 	_, storedMtime, ok := database.GetFileInfoByPath(storedPath)
-	require.True(t, ok, "remote virtual path should be indexed")
-	assert.NotZero(t, storedMtime, "stored mtime")
+	require.True(ok, "remote virtual path should be indexed")
+	assert.NotZero(storedMtime, "stored mtime")
 
 	time.Sleep(20 * time.Millisecond)
-	stats = engine.SyncAll(context.Background(), nil)
-	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
-	assert.Equal(t, 0, stats.Synced,
+	stats = engine.SyncAll(t.Context(), nil)
+	require.False(stats.Aborted, "second sync aborted: %+v", stats)
+	assert.Equal(0, stats.Synced,
 		"unchanged remote Shelley conversation should be skipped")
 
-	after, err := database.GetSessionFull(context.Background(), sessionID)
-	require.NoError(t, err, "GetSessionFull after second sync")
-	require.NotNil(t, after, "session after second sync")
-	require.NotNil(t, after.LocalModifiedAt,
+	after, err := database.GetSessionFull(t.Context(), sessionID)
+	require.NoError(err, "GetSessionFull after second sync")
+	require.NotNil(after, "session after second sync")
+	require.NotNil(after.LocalModifiedAt,
 		"local_modified_at after second sync")
-	assert.Equal(t, *before.LocalModifiedAt, *after.LocalModifiedAt,
+	assert.Equal(*before.LocalModifiedAt, *after.LocalModifiedAt,
 		"skip lookup must use the rewritten virtual path")
 }
 
@@ -370,37 +397,43 @@ func TestSyncShelleyRemotePathRewriterSkip(t *testing.T) {
 // updated_at), a re-sync fully replaces the session's messages rather
 // than appending duplicates.
 func TestSyncShelleyForceReplaceOnInPlaceUpdate(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	dbPath := createShelleyDB(t, dir)
 	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
 		"claude-sonnet-4-6", "", true,
 		"2026-06-15T10:00:00Z", "2026-06-15T10:00:10Z", []shelleyMsg{
-			{1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"q"}]}`,
-				"", "2026-06-15T10:00:00Z"},
-			{2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"first answer"}]}`,
-				"", "2026-06-15T10:00:10Z"},
+			{
+				1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"q"}]}`,
+				"", "2026-06-15T10:00:00Z",
+			},
+			{
+				2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"first answer"}]}`,
+				"", "2026-06-15T10:00:10Z",
+			},
 		})
 
 	engine, database := newShelleyEngine(t, dir)
-	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
+	require.False(engine.SyncAll(t.Context(), nil).Aborted)
 	assertMessageContent(t, database, "shelley:cMAIN1", "q", "first answer")
 
 	// Rewrite the agent message in place and bump updated_at so the
 	// per-session skip detects the change.
 	conn, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
-	_, err = conn.Exec(
+	require.NoError(err)
+	_, err = conn.ExecContext(t.Context(),
 		`UPDATE messages SET llm_data = ? WHERE conversation_id = 'cMAIN1' AND sequence_id = 2`,
 		`{"Role":1,"Content":[{"Type":2,"Text":"second answer"}]}`,
 	)
-	require.NoError(t, err)
-	_, err = conn.Exec(
+	require.NoError(err)
+	_, err = conn.ExecContext(t.Context(),
 		`UPDATE conversations SET updated_at = '2026-06-15T10:05:00Z' WHERE conversation_id = 'cMAIN1'`,
 	)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	require.NoError(err)
+	require.NoError(conn.Close())
 
-	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
+	require.False(engine.SyncAll(t.Context(), nil).Aborted)
 	// Replaced, not appended: still two messages, new content.
 	assertSessionMessageCount(t, database, "shelley:cMAIN1", 2)
 	assertMessageContent(t, database, "shelley:cMAIN1", "q", "second answer")
@@ -413,6 +446,8 @@ func TestSyncShelleyForceReplaceOnInPlaceUpdate(t *testing.T) {
 // ListSessionsModifiedBetween would treat it as future. The stored
 // file_mtime must equal the conversation's real updated_at instant.
 func TestSyncShelleyStoresRealTimestamp(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	dbPath := createShelleyDB(t, dir)
 	const updatedAt = "2026-06-15T10:00:05Z"
@@ -421,12 +456,12 @@ func TestSyncShelleyStoresRealTimestamp(t *testing.T) {
 		"2026-06-15T10:00:00Z", updatedAt, mainConvoMsgs())
 
 	engine, database := newShelleyEngine(t, dir)
-	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
+	require.False(engine.SyncAll(t.Context(), nil).Aborted)
 
 	want, err := time.Parse(time.RFC3339, updatedAt)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, mtime, ok := database.GetSessionFileInfo("shelley:cMAIN1")
-	require.True(t, ok, "session file info present")
+	require.True(ok, "session file info present")
 	assert.Equal(t, want.UnixNano(), mtime,
 		"stored file_mtime is the real updated_at, not a synthetic offset")
 }
@@ -438,28 +473,35 @@ func TestSyncShelleyStoresRealTimestamp(t *testing.T) {
 // detects it, so a re-sync replaces the stored transcript instead of
 // skipping it as unchanged.
 func TestSyncShelleySameSecondInPlaceRewrite(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	dbPath := createShelleyDB(t, dir)
 	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
 		"claude-sonnet-4-6", "", true,
 		"2026-06-15T10:00:00Z", "2026-06-15T10:00:10Z", []shelleyMsg{
-			{1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"q"}]}`,
-				"", "2026-06-15T10:00:00Z"},
-			{2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"partial"}]}`,
-				"", "2026-06-15T10:00:10Z"},
+			{
+				1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"q"}]}`,
+				"", "2026-06-15T10:00:00Z",
+			},
+			{
+				2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"partial"}]}`,
+				"", "2026-06-15T10:00:10Z",
+			},
 		})
 
 	engine, database := newShelleyEngine(t, dir)
-	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
+	require.False(engine.SyncAll(t.Context(), nil).Aborted)
 	assertMessageContent(t, database, "shelley:cMAIN1", "q", "partial")
 	before, err := database.GetSessionFull(
-		context.Background(), "shelley:cMAIN1",
+		t.Context(), "shelley:cMAIN1",
 	)
-	require.NoError(t, err, "GetSessionFull before rewrite")
-	require.NotNil(t, before, "session before rewrite")
-	require.NotNil(t, before.FileMtime, "file_mtime before rewrite")
-	require.NotNil(t, before.FileHash, "file_hash before rewrite")
-	require.NotNil(t, before.LocalModifiedAt,
+	require.NoError(err, "GetSessionFull before rewrite")
+	require.NotNil(before, "session before rewrite")
+	require.NotNil(before.FileMtime, "file_mtime before rewrite")
+	require.NotNil(before.FileHash, "file_hash before rewrite")
+	require.NotNil(before.LocalModifiedAt,
 		"local_modified_at before rewrite")
 
 	// Rewrite the agent message in place. Crucially, updated_at is left
@@ -467,45 +509,45 @@ func TestSyncShelleySameSecondInPlaceRewrite(t *testing.T) {
 	// content fingerprint differs.
 	time.Sleep(20 * time.Millisecond)
 	conn, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
-	_, err = conn.Exec(
+	require.NoError(err)
+	_, err = conn.ExecContext(t.Context(),
 		`UPDATE messages SET llm_data = ? WHERE conversation_id = 'cMAIN1' AND sequence_id = 2`,
 		`{"Role":1,"Content":[{"Type":2,"Text":"the full streamed answer"}]}`,
 	)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	require.NoError(err)
+	require.NoError(conn.Close())
 
-	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
+	require.False(engine.SyncAll(t.Context(), nil).Aborted)
 	// Detected via the content fingerprint: replaced, not skipped.
 	assertSessionMessageCount(t, database, "shelley:cMAIN1", 2)
 	assertMessageContent(
 		t, database, "shelley:cMAIN1", "q", "the full streamed answer",
 	)
 	after, err := database.GetSessionFull(
-		context.Background(), "shelley:cMAIN1",
+		t.Context(), "shelley:cMAIN1",
 	)
-	require.NoError(t, err, "GetSessionFull after rewrite")
-	require.NotNil(t, after, "session after rewrite")
-	require.NotNil(t, after.FileMtime, "file_mtime after rewrite")
-	require.NotNil(t, after.FileHash, "file_hash after rewrite")
-	require.NotNil(t, after.LocalModifiedAt,
+	require.NoError(err, "GetSessionFull after rewrite")
+	require.NotNil(after, "session after rewrite")
+	require.NotNil(after.FileMtime, "file_mtime after rewrite")
+	require.NotNil(after.FileHash, "file_hash after rewrite")
+	require.NotNil(after.LocalModifiedAt,
 		"local_modified_at after rewrite")
-	assert.Equal(t, *before.FileMtime, *after.FileMtime,
+	assert.Equal(*before.FileMtime, *after.FileMtime,
 		"same-second rewrite keeps the real Shelley updated_at timestamp")
-	assert.NotEqual(t, *before.FileHash, *after.FileHash,
+	assert.NotEqual(*before.FileHash, *after.FileHash,
 		"same-count same-second rewrite changes the content fingerprint")
-	assert.Greater(t, *after.LocalModifiedAt, *before.LocalModifiedAt,
+	assert.Greater(*after.LocalModifiedAt, *before.LocalModifiedAt,
 		"successful rewrite must bump local_modified_at for push windows")
 
 	candidates, err := database.ListSessionsModifiedBetween(
-		context.Background(),
+		t.Context(),
 		*before.LocalModifiedAt,
 		time.Now().UTC().Add(time.Second).Format(time.RFC3339Nano),
 		nil,
 		nil,
 	)
-	require.NoError(t, err, "ListSessionsModifiedBetween after rewrite")
-	assert.Contains(t, sessionIDs(candidates), "shelley:cMAIN1",
+	require.NoError(err, "ListSessionsModifiedBetween after rewrite")
+	assert.Contains(sessionIDs(candidates), "shelley:cMAIN1",
 		"local_modified_at must select the rewritten session for pushes")
 }
 
@@ -514,56 +556,63 @@ func TestSyncShelleySameSecondInPlaceRewrite(t *testing.T) {
 // must change the stored fingerprint so the bulk skip re-parses the
 // conversation and refreshes session metadata.
 func TestSyncShelleySameSecondMetadataRewrite(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	dbPath := createShelleyDB(t, dir)
 	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
 		"claude-sonnet-4-6", "", true,
 		"2026-06-15T10:00:00Z", "2026-06-15T10:00:10Z", []shelleyMsg{
-			{1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"q"}]}`,
-				"", "2026-06-15T10:00:00Z"},
-			{2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"answer"}]}`,
-				"", "2026-06-15T10:00:10Z"},
+			{
+				1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"q"}]}`,
+				"", "2026-06-15T10:00:00Z",
+			},
+			{
+				2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"answer"}]}`,
+				"", "2026-06-15T10:00:10Z",
+			},
 		})
 
 	engine, database := newShelleyEngine(t, dir)
-	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
+	require.False(engine.SyncAll(t.Context(), nil).Aborted)
 	before, err := database.GetSessionFull(
-		context.Background(), "shelley:cMAIN1",
+		t.Context(), "shelley:cMAIN1",
 	)
-	require.NoError(t, err, "GetSessionFull before metadata rewrite")
-	require.NotNil(t, before, "session before metadata rewrite")
-	require.NotNil(t, before.SessionName, "session_name before rewrite")
-	require.NotNil(t, before.FileMtime, "file_mtime before rewrite")
-	require.NotNil(t, before.FileHash, "file_hash before rewrite")
-	assert.Equal(t, "main", *before.SessionName)
-	assert.Equal(t, "app", before.Project)
+	require.NoError(err, "GetSessionFull before metadata rewrite")
+	require.NotNil(before, "session before metadata rewrite")
+	require.NotNil(before.SessionName, "session_name before rewrite")
+	require.NotNil(before.FileMtime, "file_mtime before rewrite")
+	require.NotNil(before.FileHash, "file_hash before rewrite")
+	assert.Equal("main", *before.SessionName)
+	assert.Equal("app", before.Project)
 
 	conn, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
-	_, err = conn.Exec(
+	require.NoError(err)
+	_, err = conn.ExecContext(t.Context(),
 		`UPDATE conversations
 		    SET slug = 'renamed',
 		        cwd = '/home/u/dev/renamed-app'
 		  WHERE conversation_id = 'cMAIN1'`,
 	)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	require.NoError(err)
+	require.NoError(conn.Close())
 
-	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
+	require.False(engine.SyncAll(t.Context(), nil).Aborted)
 	after, err := database.GetSessionFull(
-		context.Background(), "shelley:cMAIN1",
+		t.Context(), "shelley:cMAIN1",
 	)
-	require.NoError(t, err, "GetSessionFull after metadata rewrite")
-	require.NotNil(t, after, "session after metadata rewrite")
-	require.NotNil(t, after.SessionName, "session_name after rewrite")
-	require.NotNil(t, after.FileMtime, "file_mtime after rewrite")
-	require.NotNil(t, after.FileHash, "file_hash after rewrite")
-	assert.Equal(t, *before.FileMtime, *after.FileMtime,
+	require.NoError(err, "GetSessionFull after metadata rewrite")
+	require.NotNil(after, "session after metadata rewrite")
+	require.NotNil(after.SessionName, "session_name after rewrite")
+	require.NotNil(after.FileMtime, "file_mtime after rewrite")
+	require.NotNil(after.FileHash, "file_hash after rewrite")
+	assert.Equal(*before.FileMtime, *after.FileMtime,
 		"same-second metadata rewrite keeps the real updated_at timestamp")
-	assert.NotEqual(t, *before.FileHash, *after.FileHash,
+	assert.NotEqual(*before.FileHash, *after.FileHash,
 		"metadata rewrite must change the Shelley fingerprint")
-	assert.Equal(t, "renamed", *after.SessionName)
-	assert.Equal(t, "renamed_app", after.Project)
+	assert.Equal("renamed", *after.SessionName)
+	assert.Equal("renamed_app", after.Project)
 }
 
 // TestSyncShelleyLengthPreservingRewrite is the case a byte-length signal
@@ -572,33 +621,39 @@ func TestSyncShelleySameSecondMetadataRewrite(t *testing.T) {
 // real content digest detects it, so the re-sync must replace the stored
 // transcript rather than skip it.
 func TestSyncShelleyLengthPreservingRewrite(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	dbPath := createShelleyDB(t, dir)
 	seedShelleyConvo(t, dbPath, "cMAIN1", "main", "/home/u/dev/app",
 		"claude-sonnet-4-6", "", true,
 		"2026-06-15T10:00:00Z", "2026-06-15T10:00:10Z", []shelleyMsg{
-			{1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"q"}]}`,
-				"", "2026-06-15T10:00:00Z"},
-			{2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"answer aaaa"}]}`,
-				"", "2026-06-15T10:00:10Z"},
+			{
+				1, "user", `{"Role":0,"Content":[{"Type":2,"Text":"q"}]}`,
+				"", "2026-06-15T10:00:00Z",
+			},
+			{
+				2, "agent", `{"Role":1,"Content":[{"Type":2,"Text":"answer aaaa"}]}`,
+				"", "2026-06-15T10:00:10Z",
+			},
 		})
 
 	engine, database := newShelleyEngine(t, dir)
-	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
+	require.False(engine.SyncAll(t.Context(), nil).Aborted)
 	assertMessageContent(t, database, "shelley:cMAIN1", "q", "answer aaaa")
 
 	// Same byte length, different content. updated_at and sequence_id are
 	// untouched, so a byte-length signal would skip this as unchanged.
 	conn, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
-	_, err = conn.Exec(
+	require.NoError(err)
+	_, err = conn.ExecContext(t.Context(),
 		`UPDATE messages SET llm_data = ? WHERE conversation_id = 'cMAIN1' AND sequence_id = 2`,
 		`{"Role":1,"Content":[{"Type":2,"Text":"answer bbbb"}]}`,
 	)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	require.NoError(err)
+	require.NoError(conn.Close())
 
-	require.False(t, engine.SyncAll(context.Background(), nil).Aborted)
+	require.False(engine.SyncAll(t.Context(), nil).Aborted)
 	assertSessionMessageCount(t, database, "shelley:cMAIN1", 2)
 	assertMessageContent(t, database, "shelley:cMAIN1", "q", "answer bbbb")
 }

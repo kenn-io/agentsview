@@ -506,7 +506,7 @@ func (c *Capturer) observePlan(
 		pathInfo, err := c.files.stat(entry.planned.LocalPath)
 		if err != nil {
 			closeObservedEntries(observed)
-			if sourcePathChangedError(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				return nil, 0, ErrSourceChanged
 			}
 			return nil, 0, fmt.Errorf(
@@ -521,7 +521,7 @@ func (c *Capturer) observePlan(
 		file, err := entry.root.Open(entry.relative)
 		if err != nil {
 			closeObservedEntries(observed)
-			if sourcePathChangedError(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				return nil, 0, ErrSourceChanged
 			}
 			return nil, 0, fmt.Errorf(
@@ -559,11 +559,6 @@ func (c *Capturer) observePlan(
 		})
 	}
 	return observed, sourceBytes, nil
-}
-
-func sourcePathChangedError(err error) bool {
-	return errors.Is(err, os.ErrNotExist) ||
-		sanitizeFilesystemError(err).Error() == "path escapes from parent"
 }
 
 func (c *Capturer) assessCapture(

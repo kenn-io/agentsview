@@ -15,9 +15,12 @@ import (
 )
 
 func TestSyncChangedPathPlanDoesNotTombstonePendingDeletion(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := dbtest.OpenTestDB(t)
 	deletedPath := filepath.Join(t.TempDir(), "deleted.jsonl")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: "remote:retained", Agent: string(parser.AgentCowork),
 		Project: "fixture", Machine: "remote", FilePath: &deletedPath,
 	}))
@@ -28,15 +31,17 @@ func TestSyncChangedPathPlanDoesNotTombstonePendingDeletion(t *testing.T) {
 	}}
 
 	result, err := engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
-	require.NoError(t, err)
-	assert.Zero(t, result.FilesDiscovered)
+	require.NoError(err)
+	assert.Zero(result.FilesDiscovered)
 	retained, err := database.GetSession(t.Context(), "remote:retained")
-	require.NoError(t, err)
-	require.NotNil(t, retained)
-	assert.Nil(t, retained.DeletedAt)
+	require.NoError(err)
+	require.NotNil(retained)
+	assert.Nil(retained.DeletedAt)
 }
 
 func TestSyncChangedPathPlanReportsOnlyMtimeCacheSuppression(t *testing.T) {
+	assert := assert.New(t)
+
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
 	path := filepath.Join(root, "cached.jsonl")
@@ -71,12 +76,12 @@ func TestSyncChangedPathPlanReportsOnlyMtimeCacheSuppression(t *testing.T) {
 
 	result, err := engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
 	require.NoError(t, err)
-	assert.Equal(t, 1, result.FilesDiscovered)
-	assert.Equal(t, 1, result.FilesProcessed)
-	assert.Equal(t, 1, result.Stats.Skipped)
-	assert.Equal(t, map[string]struct{}{changedPathSourceKey(file): {}}, result.CachedSourceKeys)
-	assert.Empty(t, result.CachedFallbackProviders)
-	assert.NotContains(t, provider.calls, "parse")
+	assert.Equal(1, result.FilesDiscovered)
+	assert.Equal(1, result.FilesProcessed)
+	assert.Equal(1, result.Stats.Skipped)
+	assert.Equal(map[string]struct{}{changedPathSourceKey(file): {}}, result.CachedSourceKeys)
+	assert.Empty(result.CachedFallbackProviders)
+	assert.NotContains(provider.calls, "parse")
 }
 
 func TestSyncChangedPathPlanFullParseScopeUsesDurableAttemptCache(t *testing.T) {
@@ -143,6 +148,9 @@ func TestSyncChangedPathPlanFullParseScopeUsesDurableAttemptCache(t *testing.T) 
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			database := dbtest.OpenTestDB(t)
 			root := t.TempDir()
 			path, fingerprint := writeProcessProviderSource(t, root, "armed.jsonl")
@@ -180,21 +188,23 @@ func TestSyncChangedPathPlanFullParseScopeUsesDurableAttemptCache(t *testing.T) 
 			result, err := engine.SyncChangedPathPlanWithOptionsContext(
 				t.Context(), tc.plan(file), tc.options(file), nil,
 			)
-			require.NoError(t, err)
-			assert.Equal(t, 1, result.FilesProcessed)
+			require.NoError(err)
+			assert.Equal(1, result.FilesProcessed)
 			if tc.cached {
-				assert.Equal(t, 1, result.Stats.Skipped)
-				assert.Empty(t, provider.parseRequests)
+				assert.Equal(1, result.Stats.Skipped)
+				assert.Empty(provider.parseRequests)
 			} else {
-				assert.Zero(t, result.Stats.Skipped)
-				require.Len(t, provider.parseRequests, 1)
-				assert.True(t, provider.parseRequests[0].ForceParse)
+				assert.Zero(result.Stats.Skipped)
+				require.Len(provider.parseRequests, 1)
+				assert.True(provider.parseRequests[0].ForceParse)
 			}
 		})
 	}
 }
 
 func TestSyncChangedPathPlanFallbackDiscoveryStaysProviderBounded(t *testing.T) {
+	assert := assert.New(t)
+
 	rootA := t.TempDir()
 	rootB := t.TempDir()
 	var callsA, callsB int
@@ -222,14 +232,17 @@ func TestSyncChangedPathPlanFallbackDiscoveryStaysProviderBounded(t *testing.T) 
 
 	result, err := engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
 	require.Error(t, err, "the fake has no fingerprint implementation")
-	assert.Equal(t, 1, result.FilesDiscovered)
-	assert.Equal(t, 1, result.FilesProcessed)
-	assert.Equal(t, 1, result.Stats.Failed)
-	assert.Equal(t, 1, callsA)
-	assert.Zero(t, callsB)
+	assert.Equal(1, result.FilesDiscovered)
+	assert.Equal(1, result.FilesProcessed)
+	assert.Equal(1, result.Stats.Failed)
+	assert.Equal(1, callsA)
+	assert.Zero(callsB)
 }
 
 func TestSyncChangedPathPlanRemoteForceReplacePreservesMissingOwnedMember(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
 	path, fingerprint := writeProcessProviderSource(t, root, "container.jsonl")
@@ -240,7 +253,7 @@ func TestSyncChangedPathPlanRemoteForceReplacePreservesMissingOwnedMember(t *tes
 		ForceReplace:      true,
 	})
 	storedPath := "remote:" + path
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: "cowork:missing", Agent: string(parser.AgentCowork),
 		Project: "fixture-project", Machine: "remote", FilePath: &storedPath,
 	}))
@@ -262,12 +275,12 @@ func TestSyncChangedPathPlanRemoteForceReplacePreservesMissingOwnedMember(t *tes
 	result, err := engine.SyncChangedPathPlanContext(t.Context(), ChangedPathPlan{
 		Files: []parser.DiscoveredFile{file},
 	}, nil)
-	require.NoError(t, err)
-	assert.Zero(t, result.Stats.Failed)
+	require.NoError(err)
+	assert.Zero(result.Stats.Failed)
 	retained, err := database.GetSession(t.Context(), "cowork:missing")
-	require.NoError(t, err)
-	require.NotNil(t, retained)
-	assert.Nil(t, retained.DeletedAt)
+	require.NoError(err)
+	require.NotNil(retained)
+	assert.Nil(retained.DeletedAt)
 }
 
 func TestRemoteChangedPathWorkBoundedByPlannedSources(t *testing.T) {

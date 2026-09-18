@@ -85,7 +85,7 @@ func newPiebaldTestDB(t *testing.T) string {
 		)`,
 	}
 	for _, stmt := range stmts {
-		_, err := db.Exec(stmt)
+		_, err := db.ExecContext(t.Context(), stmt)
 		require.NoError(t, err, "exec schema")
 	}
 	return dbPath
@@ -96,7 +96,7 @@ func execPiebaldTestSQL(t *testing.T, dbPath, stmt string, args ...any) {
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open test db")
 	defer db.Close()
-	_, err = db.Exec(stmt, args...)
+	_, err = db.ExecContext(t.Context(), stmt, args...)
 	require.NoError(t, err, "exec %q", stmt)
 }
 
@@ -105,7 +105,7 @@ func withPiebaldTestTx(t *testing.T, dbPath string, fn func(*sql.Tx)) {
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open test db")
 	defer db.Close()
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(t.Context(), nil)
 	require.NoError(t, err, "begin test tx")
 	defer tx.Rollback()
 	fn(tx)
@@ -114,7 +114,7 @@ func withPiebaldTestTx(t *testing.T, dbPath string, fn func(*sql.Tx)) {
 
 func execPiebaldTestTx(t *testing.T, tx *sql.Tx, stmt string, args ...any) {
 	t.Helper()
-	_, err := tx.Exec(stmt, args...)
+	_, err := tx.ExecContext(t.Context(), stmt, args...)
 	require.NoError(t, err, "exec %q", stmt)
 }
 
@@ -200,6 +200,9 @@ func parsePiebaldOneSession(
 }
 
 func TestParsePiebaldSessionBasic(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dbPath := newPiebaldTestDB(t)
 	execPiebaldTestSQL(t, dbPath,
 		`INSERT INTO projects (id, directory, name) VALUES (1, '/repo/app', 'app')`)
@@ -219,30 +222,33 @@ func TestParsePiebaldSessionBasic(t *testing.T) {
 	seedPiebaldTextPart(t, dbPath, 201, 101, 0, "I fixed it", false)
 
 	sess, msgs := parsePiebaldOneSession(t, dbPath, "42", "machine")
-	require.NotNil(t, sess, "expected session")
-	assert.Equal(t, "piebald:42", sess.ID)
-	assert.Equal(t, AgentPiebald, sess.Agent)
-	assert.Equal(t, "app", sess.Project)
-	assert.Equal(t, "/repo/app", sess.Cwd)
-	assert.Equal(t, "main", sess.GitBranch)
-	assert.Equal(t, "Please fix this", sess.FirstMessage)
-	require.Len(t, msgs, 2)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, "Please fix this", msgs[0].Content)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.Equal(t, "I fixed it", msgs[1].Content)
-	assert.Equal(t, "claude-test", msgs[1].Model)
-	assert.True(t, msgs[1].HasContextTokens)
-	assert.Equal(t, 15, msgs[1].ContextTokens)
-	assert.True(t, msgs[1].HasOutputTokens)
-	assert.Equal(t, 20, msgs[1].OutputTokens)
-	require.NotEmpty(t, msgs[1].TokenUsage, "TokenUsage empty")
-	assert.Equal(t, int64(10), gjson.GetBytes(msgs[1].TokenUsage, "input_tokens").Int(), "input_tokens")
-	assert.Equal(t, int64(20), gjson.GetBytes(msgs[1].TokenUsage, "output_tokens").Int(), "output_tokens")
-	assert.Equal(t, int64(5), gjson.GetBytes(msgs[1].TokenUsage, "cache_read_input_tokens").Int(), "cache_read_input_tokens")
+	require.NotNil(sess, "expected session")
+	assert.Equal("piebald:42", sess.ID)
+	assert.Equal(AgentPiebald, sess.Agent)
+	assert.Equal("app", sess.Project)
+	assert.Equal("/repo/app", sess.Cwd)
+	assert.Equal("main", sess.GitBranch)
+	assert.Equal("Please fix this", sess.FirstMessage)
+	require.Len(msgs, 2)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal("Please fix this", msgs[0].Content)
+	assert.Equal(RoleAssistant, msgs[1].Role)
+	assert.Equal("I fixed it", msgs[1].Content)
+	assert.Equal("claude-test", msgs[1].Model)
+	assert.True(msgs[1].HasContextTokens)
+	assert.Equal(15, msgs[1].ContextTokens)
+	assert.True(msgs[1].HasOutputTokens)
+	assert.Equal(20, msgs[1].OutputTokens)
+	require.NotEmpty(msgs[1].TokenUsage, "TokenUsage empty")
+	assert.Equal(int64(10), gjson.GetBytes(msgs[1].TokenUsage, "input_tokens").Int(), "input_tokens")
+	assert.Equal(int64(20), gjson.GetBytes(msgs[1].TokenUsage, "output_tokens").Int(), "output_tokens")
+	assert.Equal(int64(5), gjson.GetBytes(msgs[1].TokenUsage, "cache_read_input_tokens").Int(), "cache_read_input_tokens")
 }
 
 func TestParsePiebaldSessionToolCall(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dbPath := newPiebaldTestDB(t)
 	execPiebaldTestSQL(t, dbPath,
 		`INSERT INTO chats (id, title, created_at, updated_at, is_deleted, message_count)
@@ -253,18 +259,21 @@ func TestParsePiebaldSessionToolCall(t *testing.T) {
 	seedPiebaldToolPart(t, dbPath, 700, 70, 0)
 
 	sess, msgs := parsePiebaldOneSession(t, dbPath, "7", "machine")
-	require.NotNil(t, sess)
-	require.Len(t, msgs, 1)
-	require.Len(t, msgs[0].ToolCalls, 1)
+	require.NotNil(sess)
+	require.Len(msgs, 1)
+	require.Len(msgs[0].ToolCalls, 1)
 	call := msgs[0].ToolCalls[0]
-	assert.Equal(t, "toolu_1", call.ToolUseID)
-	assert.Equal(t, "Read", call.ToolName)
-	assert.Equal(t, "Read", call.Category)
-	require.Len(t, msgs[0].ToolResults, 1)
-	assert.Equal(t, len("file contents"), msgs[0].ToolResults[0].ContentLength)
+	assert.Equal("toolu_1", call.ToolUseID)
+	assert.Equal("Read", call.ToolName)
+	assert.Equal("Read", call.Category)
+	require.Len(msgs[0].ToolResults, 1)
+	assert.Equal(len("file contents"), msgs[0].ToolResults[0].ContentLength)
 }
 
 func TestParsePiebaldSessionSubagentToolCall(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dbPath := newPiebaldTestDB(t)
 	execPiebaldTestSQL(t, dbPath,
 		`INSERT INTO chats (id, title, created_at, updated_at, is_deleted, message_count)
@@ -276,16 +285,19 @@ func TestParsePiebaldSessionSubagentToolCall(t *testing.T) {
 	seedPiebaldSubagentToolPart(t, dbPath, 700, 70, 0, 99)
 
 	sess, msgs := parsePiebaldOneSession(t, dbPath, "7", "machine")
-	require.NotNil(t, sess)
-	require.Len(t, msgs, 1)
-	require.Len(t, msgs[0].ToolCalls, 1)
+	require.NotNil(sess)
+	require.Len(msgs, 1)
+	require.Len(msgs[0].ToolCalls, 1)
 	call := msgs[0].ToolCalls[0]
-	assert.Equal(t, "LaunchSubagent", call.ToolName)
-	assert.Equal(t, "Task", call.Category)
-	assert.Equal(t, "piebald:99", call.SubagentSessionID)
+	assert.Equal("LaunchSubagent", call.ToolName)
+	assert.Equal("Task", call.Category)
+	assert.Equal("piebald:99", call.SubagentSessionID)
 }
 
 func TestParsePiebaldSessionResultsSplitsForks(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dbPath := newPiebaldTestDB(t)
 	execPiebaldTestSQL(t, dbPath,
 		`INSERT INTO chats (id, title, created_at, updated_at, is_deleted, message_count)
@@ -308,24 +320,27 @@ func TestParsePiebaldSessionResultsSplitsForks(t *testing.T) {
 	)
 
 	results, err := parsePiebaldSessionResults(t.Context(), dbPath, "42", "machine", false)
-	require.NoError(t, err, "parsePiebaldSessionResults")
-	require.Len(t, results, 2)
+	require.NoError(err, "parsePiebaldSessionResults")
+	require.Len(results, 2)
 	main := results[0]
-	assert.Equal(t, "piebald:42", main.Session.ID)
-	assert.Empty(t, main.Session.ParentSessionID)
-	assert.Equal(t, RelNone, main.Session.RelationshipType)
-	require.Len(t, main.Messages, 4)
-	assert.Equal(t, "main followup", main.Messages[2].Content)
+	assert.Equal("piebald:42", main.Session.ID)
+	assert.Empty(main.Session.ParentSessionID)
+	assert.Equal(RelNone, main.Session.RelationshipType)
+	require.Len(main.Messages, 4)
+	assert.Equal("main followup", main.Messages[2].Content)
 	fork := results[1]
-	assert.Equal(t, "piebald:42-200", fork.Session.ID)
-	assert.Equal(t, "piebald:42", fork.Session.ParentSessionID)
-	assert.Equal(t, RelFork, fork.Session.RelationshipType)
-	require.Len(t, fork.Messages, 2)
-	assert.Equal(t, "fork question", fork.Messages[0].Content)
-	assert.Equal(t, 0, fork.Messages[0].Ordinal)
+	assert.Equal("piebald:42-200", fork.Session.ID)
+	assert.Equal("piebald:42", fork.Session.ParentSessionID)
+	assert.Equal(RelFork, fork.Session.RelationshipType)
+	require.Len(fork.Messages, 2)
+	assert.Equal("fork question", fork.Messages[0].Content)
+	assert.Equal(0, fork.Messages[0].Ordinal)
 }
 
 func TestParsePiebaldSessionResultsHandlesNestedForks(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dbPath := newPiebaldTestDB(t)
 	execPiebaldTestSQL(t, dbPath,
 		`INSERT INTO chats (id, title, created_at, updated_at, is_deleted, message_count)
@@ -367,8 +382,8 @@ func TestParsePiebaldSessionResultsHandlesNestedForks(t *testing.T) {
 	)
 
 	results, err := parsePiebaldSessionResults(t.Context(), dbPath, "42", "machine", false)
-	require.NoError(t, err, "parsePiebaldSessionResults")
-	require.Len(t, results, 3, "main + outer fork + nested fork")
+	require.NoError(err, "parsePiebaldSessionResults")
+	require.Len(results, 3, "main + outer fork + nested fork")
 
 	byID := make(map[string]ParseResult, len(results))
 	for _, r := range results {
@@ -376,25 +391,28 @@ func TestParsePiebaldSessionResultsHandlesNestedForks(t *testing.T) {
 	}
 
 	main, ok := byID["piebald:42"]
-	require.True(t, ok, "missing main session piebald:42")
-	assert.Equal(t, RelNone, main.Session.RelationshipType)
-	assert.Empty(t, main.Session.ParentSessionID)
-	assert.Len(t, main.Messages, 4)
+	require.True(ok, "missing main session piebald:42")
+	assert.Equal(RelNone, main.Session.RelationshipType)
+	assert.Empty(main.Session.ParentSessionID)
+	assert.Len(main.Messages, 4)
 
 	outer, ok := byID["piebald:42-200"]
-	require.True(t, ok, "missing outer fork session piebald:42-200")
-	assert.Equal(t, RelFork, outer.Session.RelationshipType)
-	assert.Equal(t, "piebald:42", outer.Session.ParentSessionID)
-	assert.Len(t, outer.Messages, 4)
+	require.True(ok, "missing outer fork session piebald:42-200")
+	assert.Equal(RelFork, outer.Session.RelationshipType)
+	assert.Equal("piebald:42", outer.Session.ParentSessionID)
+	assert.Len(outer.Messages, 4)
 
 	nested, ok := byID["piebald:42-300"]
-	require.True(t, ok, "missing nested fork session piebald:42-300 (lost by append/walk evaluation order bug)")
-	assert.Equal(t, RelFork, nested.Session.RelationshipType)
-	assert.Equal(t, "piebald:42-200", nested.Session.ParentSessionID)
-	assert.Len(t, nested.Messages, 2)
+	require.True(ok, "missing nested fork session piebald:42-300 (lost by append/walk evaluation order bug)")
+	assert.Equal(RelFork, nested.Session.RelationshipType)
+	assert.Equal("piebald:42-200", nested.Session.ParentSessionID)
+	assert.Len(nested.Messages, 2)
 }
 
 func TestListPiebaldSessionMetaSkipsDeletedAndEmpty(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dbPath := newPiebaldTestDB(t)
 	execPiebaldTestSQL(t, dbPath,
 		`INSERT INTO chats (id, title, created_at, updated_at, is_deleted, message_count)
@@ -402,8 +420,8 @@ func TestListPiebaldSessionMetaSkipsDeletedAndEmpty(t *testing.T) {
 		        (2, 'empty', '2026-05-01T10:00:00Z', '2026-05-01T10:01:00Z', 0, 0),
 		        (3, 'deleted', '2026-05-01T10:00:00Z', '2026-05-01T10:01:00Z', 1, 1)`)
 	metas, err := ListPiebaldSessionMeta(dbPath)
-	require.NoError(t, err, "ListPiebaldSessionMeta")
-	require.Len(t, metas, 1)
-	assert.Equal(t, "1", metas[0].SessionID)
-	assert.Equal(t, dbPath+"#1", metas[0].VirtualPath)
+	require.NoError(err, "ListPiebaldSessionMeta")
+	require.Len(metas, 1)
+	assert.Equal("1", metas[0].SessionID)
+	assert.Equal(dbPath+"#1", metas[0].VirtualPath)
 }

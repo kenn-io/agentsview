@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +10,9 @@ import (
 )
 
 func TestPrimeAgentProviderParsesFlatSessionAndAttributedUsage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	// Prime Agent v0.7.0 can allocate the transcript filename before the
 	// session header, so their UUIDs are not guaranteed to match.
@@ -28,44 +30,44 @@ func TestPrimeAgentProviderParsesFlatSessionAndAttributedUsage(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
+	require.True(ok)
 
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	assert.Equal(t, AgentPrimeAgent, sources[0].Provider)
-	assert.Equal(t, sourcePath, sources[0].DisplayPath)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(sources, 1)
+	assert.Equal(AgentPrimeAgent, sources[0].Provider)
+	assert.Equal(sourcePath, sources[0].DisplayPath)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~prime-agent:019c1234-session",
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, sourcePath, found.DisplayPath)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(sourcePath, found.DisplayPath)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0],
 	})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
-	assert.True(t, outcome.ForceReplace)
+	require.NoError(err)
+	require.Len(outcome.Results, 1)
+	assert.True(outcome.ForceReplace)
 
 	result := outcome.Results[0].Result
-	assert.Equal(t, "prime-agent:019c1234-session", result.Session.ID)
-	assert.Equal(t, AgentPrimeAgent, result.Session.Agent)
-	assert.Equal(t, "prime_project", result.Session.Project)
-	assert.Equal(t, "devbox", result.Session.Machine)
-	assert.Equal(t, "Investigate scheduler", result.Session.SessionName)
-	assert.Equal(t, "prime-agent:019c0000-parent", result.Session.ParentSessionID)
-	assert.Equal(t, RelFork, result.Session.RelationshipType)
-	assert.Equal(t, 37, result.Session.PeakContextTokens)
-	assert.Equal(t, 7, result.Session.TotalOutputTokens)
+	assert.Equal("prime-agent:019c1234-session", result.Session.ID)
+	assert.Equal(AgentPrimeAgent, result.Session.Agent)
+	assert.Equal("prime_project", result.Session.Project)
+	assert.Equal("devbox", result.Session.Machine)
+	assert.Equal("Investigate scheduler", result.Session.SessionName)
+	assert.Equal("prime-agent:019c0000-parent", result.Session.ParentSessionID)
+	assert.Equal(RelFork, result.Session.RelationshipType)
+	assert.Equal(37, result.Session.PeakContextTokens)
+	assert.Equal(7, result.Session.TotalOutputTokens)
 
-	require.Len(t, result.Messages, 2)
-	assert.Equal(t, "Inspect the scheduler.", result.Messages[0].Content)
-	assert.Equal(t, "I found the issue.", result.Messages[1].Content)
-	assert.Equal(t, "intellect-3", result.Messages[1].Model)
-	assert.JSONEq(t, `{
+	require.Len(result.Messages, 2)
+	assert.Equal("Inspect the scheduler.", result.Messages[0].Content)
+	assert.Equal("I found the issue.", result.Messages[1].Content)
+	assert.Equal("intellect-3", result.Messages[1].Model)
+	assert.JSONEq(`{
 		"input_tokens": 30,
 		"output_tokens": 7,
 		"cache_read_input_tokens": 5,
@@ -102,6 +104,8 @@ func TestPrimeAgentParentSessionPathSeparators(t *testing.T) {
 }
 
 func TestPrimeAgentAttributedUsageUsesLastKnownTargetAggregate(t *testing.T) {
+	assert := assert.New(t)
+
 	content := strings.Join([]string{
 		`{"type":"session","version":3,"id":"usage-session","timestamp":"2026-08-06T12:00:00Z","cwd":"/work/project"}`,
 		`{"type":"message","id":"user-1","parentId":null,"timestamp":"2026-08-06T12:00:01Z","message":{"role":"user","content":"hello"}}`,
@@ -114,10 +118,10 @@ func TestPrimeAgentAttributedUsageUsesLastKnownTargetAggregate(t *testing.T) {
 
 	session, messages := parsePiLikeTestSession(t, AgentPrimeAgent, content)
 	require.Len(t, messages, 2)
-	assert.Equal(t, 37, messages[1].ContextTokens)
-	assert.Equal(t, 7, messages[1].OutputTokens)
-	assert.Equal(t, 37, session.PeakContextTokens)
-	assert.Equal(t, 7, session.TotalOutputTokens)
+	assert.Equal(37, messages[1].ContextTokens)
+	assert.Equal(7, messages[1].OutputTokens)
+	assert.Equal(37, session.PeakContextTokens)
+	assert.Equal(7, session.TotalOutputTokens)
 }
 
 func TestPrimeAgentFindSourceVerifiesDirectFilenameHeader(t *testing.T) {
@@ -142,6 +146,8 @@ func TestPrimeAgentFindSourceVerifiesDirectFilenameHeader(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			require := require.New(t)
+
 			root := t.TempDir()
 			directPath := filepath.Join(root, "target-session.jsonl")
 			writeSourceFile(t, directPath,
@@ -154,12 +160,12 @@ func TestPrimeAgentFindSourceVerifiesDirectFilenameHeader(t *testing.T) {
 			provider, ok := NewProvider(AgentPrimeAgent, ProviderConfig{
 				Roots: []string{root},
 			})
-			require.True(t, ok)
-			found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+			require.True(ok)
+			found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 				FullSessionID: "prime-agent:target-session",
 			})
-			require.NoError(t, err)
-			require.True(t, ok)
+			require.NoError(err)
+			require.True(ok)
 			assert.Equal(t, filepath.Join(root, tt.wantFile), found.DisplayPath)
 		})
 	}
@@ -176,6 +182,8 @@ func TestPrimeAgentFindSourceRejectsMismatchedStoredHints(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			require := require.New(t)
+
 			root := t.TempDir()
 			stalePath := filepath.Join(root, "stale-transcript.jsonl")
 			matchingPath := filepath.Join(root, "matching-transcript.jsonl")
@@ -187,7 +195,7 @@ func TestPrimeAgentFindSourceRejectsMismatchedStoredHints(t *testing.T) {
 			provider, ok := NewProvider(AgentPrimeAgent, ProviderConfig{
 				Roots: []string{root},
 			})
-			require.True(t, ok)
+			require.True(ok)
 			request := FindSourceRequest{
 				FullSessionID: "prime-agent:target-session",
 			}
@@ -197,15 +205,17 @@ func TestPrimeAgentFindSourceRejectsMismatchedStoredHints(t *testing.T) {
 				request.StoredFilePath = stalePath
 			}
 
-			found, ok, err := provider.FindSource(context.Background(), request)
-			require.NoError(t, err)
-			require.True(t, ok)
+			found, ok, err := provider.FindSource(t.Context(), request)
+			require.NoError(err)
+			require.True(ok)
 			assert.Equal(t, matchingPath, found.DisplayPath)
 		})
 	}
 }
 
 func TestPrimeAgentParentSessionUsesSiblingHeaderID(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	parentPath := filepath.Join(root, "parent-file-id.jsonl")
 	childPath := filepath.Join(root, "child-file-id.jsonl")
@@ -223,18 +233,18 @@ func TestPrimeAgentParentSessionUsesSiblingHeaderID(t *testing.T) {
 	provider, ok := NewProvider(AgentPrimeAgent, ProviderConfig{
 		Roots: []string{root},
 	})
-	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, sources, 2)
+	require.True(ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(sources, 2)
 
 	var parentID, childParentID string
 	for _, source := range sources {
-		outcome, err := provider.Parse(context.Background(), ParseRequest{
+		outcome, err := provider.Parse(t.Context(), ParseRequest{
 			Source: source,
 		})
-		require.NoError(t, err)
-		require.Len(t, outcome.Results, 1)
+		require.NoError(err)
+		require.Len(outcome.Results, 1)
 		session := outcome.Results[0].Result.Session
 		switch session.ID {
 		case "prime-agent:parent-header-id":
@@ -244,6 +254,6 @@ func TestPrimeAgentParentSessionUsesSiblingHeaderID(t *testing.T) {
 		}
 	}
 
-	require.NotEmpty(t, parentID)
+	require.NotEmpty(parentID)
 	assert.Equal(t, parentID, childParentID)
 }

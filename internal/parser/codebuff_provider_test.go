@@ -62,23 +62,26 @@ func TestCodebuffFindFile_RejectsHostileRawIDs(t *testing.T) {
 // shapes: "project:timestamp" resolves directly, and a bare legacy
 // timestamp searches all project subdirectories.
 func TestCodebuffFindFile_ResolvesValidIDs(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	ts := "2026-07-15T20-01-32.065Z"
 	valid := filepath.Join(root, "proj", "chats", ts, "chat-messages.json")
 	codebuffWriteFile(t, valid, "[]")
 
 	match, ok := codebuffFindFile(root, "proj:"+ts)
-	require.True(t, ok, "project:timestamp rawID must resolve")
-	assert.Equal(t, valid, match.Path)
-	assert.Equal(t, "proj", match.ProjectHint)
+	require.True(ok, "project:timestamp rawID must resolve")
+	assert.Equal(valid, match.Path)
+	assert.Equal("proj", match.ProjectHint)
 
 	match, ok = codebuffFindFile(root, ts)
-	require.True(t, ok, "legacy bare timestamp rawID must resolve")
-	assert.Equal(t, valid, match.Path)
-	assert.Equal(t, "proj", match.ProjectHint)
+	require.True(ok, "legacy bare timestamp rawID must resolve")
+	assert.Equal(valid, match.Path)
+	assert.Equal("proj", match.ProjectHint)
 
 	_, ok = codebuffFindFile(root, "other:"+ts)
-	assert.False(t, ok, "wrong project must not resolve")
+	assert.False(ok, "wrong project must not resolve")
 	_, ok = codebuffFindFile(root, "proj:2030-01-01T00-00-00.000Z")
-	assert.False(t, ok, "unknown timestamp must not resolve")
+	assert.False(ok, "unknown timestamp must not resolve")
 }

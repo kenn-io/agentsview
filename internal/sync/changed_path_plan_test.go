@@ -144,6 +144,9 @@ func newChangedPathPlanEngine(
 }
 
 func TestPlanChangedPathsExactIrrelevantAndOutsideRoot(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	exactPath := filepath.Join(root, "changed.jsonl")
 	nonDataPath := filepath.Join(root, "metadata.json")
@@ -164,10 +167,10 @@ func TestPlanChangedPathsExactIrrelevantAndOutsideRoot(t *testing.T) {
 	}, factory)
 
 	plan, err := engine.PlanChangedPathsContext(t.Context(), []string{exactPath, exactPath})
-	require.NoError(t, err)
-	require.Len(t, plan.Files, 1)
-	assert.Equal(t, sourcePath, plan.Files[0].Path)
-	assert.Empty(t, plan.FallbackProviders)
+	require.NoError(err)
+	require.Len(plan.Files, 1)
+	assert.Equal(sourcePath, plan.Files[0].Path)
+	assert.Empty(plan.FallbackProviders)
 
 	factory.provider = func(parser.ProviderConfig) *changedPathPlanProvider {
 		return &changedPathPlanProvider{relevance: parser.ChangedPathNonData}
@@ -178,12 +181,15 @@ func TestPlanChangedPathsExactIrrelevantAndOutsideRoot(t *testing.T) {
 	plan, err = engine.PlanChangedPathsContext(t.Context(), []string{
 		nonDataPath, filepath.Join(t.TempDir(), "outside.jsonl"),
 	})
-	require.NoError(t, err)
-	assert.Empty(t, plan.Files)
-	assert.Empty(t, plan.FallbackProviders)
+	require.NoError(err)
+	assert.Empty(plan.Files)
+	assert.Empty(plan.FallbackProviders)
 }
 
 func TestPlanChangedPathsProviderErrorFallsBackWithoutDroppingExactWork(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	rootA := t.TempDir()
 	rootB := t.TempDir()
 	caps := changedPathPlanCapabilities()
@@ -214,10 +220,10 @@ func TestPlanChangedPathsProviderErrorFallsBackWithoutDroppingExactWork(t *testi
 		filepath.Join(rootA, "changed.jsonl"),
 		filepath.Join(rootB, "changed.jsonl"),
 	})
-	require.NoError(t, err)
-	require.Len(t, plan.Files, 1)
-	assert.Equal(t, exactSource, plan.Files[0].Path)
-	assert.Equal(t, []parser.AgentType{fallbackFactory.agent}, plan.FallbackProviders)
+	require.NoError(err)
+	require.Len(plan.Files, 1)
+	assert.Equal(exactSource, plan.Files[0].Path)
+	assert.Equal([]parser.AgentType{fallbackFactory.agent}, plan.FallbackProviders)
 }
 
 func TestPlanChangedPathsCancellationAbortsInsteadOfFallingBack(t *testing.T) {
@@ -274,16 +280,19 @@ func TestPlanChangedPathsUnprovenPathsUseOwningProviderFallback(t *testing.T) {
 }
 
 func TestPlanChangedPathsClaudeProcessesOnlyChangedSession(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "project-a")
-	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	require.NoError(os.MkdirAll(projectDir, 0o755))
 	var changedPath string
 	for i := range 12 {
 		path := filepath.Join(projectDir, fmt.Sprintf("session-%02d.jsonl", i))
 		body := testjsonl.NewSessionBuilder().AddClaudeUser(
 			"2026-08-14T10:00:00Z", fmt.Sprintf("message %d", i),
 		).String()
-		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+		require.NoError(os.WriteFile(path, []byte(body), 0o600))
 		if i == 5 {
 			changedPath = path
 		}
@@ -298,29 +307,32 @@ func TestPlanChangedPathsClaudeProcessesOnlyChangedSession(t *testing.T) {
 	plan, err := engine.PlanChangedPathsContext(
 		t.Context(), []string{changedPath},
 	)
-	require.NoError(t, err)
-	require.Len(t, plan.Files, 1)
-	assert.Equal(t, changedPath, plan.Files[0].Path)
-	assert.Empty(t, plan.FallbackProviders)
+	require.NoError(err)
+	require.Len(plan.Files, 1)
+	assert.Equal(changedPath, plan.Files[0].Path)
+	assert.Empty(plan.FallbackProviders)
 
 	result, err := engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, result.FilesDiscovered)
-	assert.Equal(t, 1, result.FilesProcessed)
-	assert.Equal(t, 1, result.Stats.Synced)
+	require.NoError(err)
+	assert.Equal(1, result.FilesDiscovered)
+	assert.Equal(1, result.FilesProcessed)
+	assert.Equal(1, result.Stats.Synced)
 	page, err := database.ListSessions(t.Context(), db.SessionFilter{Limit: 20})
-	require.NoError(t, err)
-	require.Len(t, page.Sessions, 1,
+	require.NoError(err)
+	require.Len(page.Sessions, 1,
 		"bounded processing must not import unrelated Claude sessions")
-	assert.Equal(t, "session-05", page.Sessions[0].ID)
+	assert.Equal("session-05", page.Sessions[0].ID)
 }
 
 func TestPlanChangedPathsCodexIndexUsesStoredArchivedDuplicate(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	liveRoot := filepath.Join(root, "sessions")
 	archiveRoot := filepath.Join(root, "archived_sessions")
-	require.NoError(t, os.MkdirAll(liveRoot, 0o755))
-	require.NoError(t, os.MkdirAll(archiveRoot, 0o755))
+	require.NoError(os.MkdirAll(liveRoot, 0o755))
+	require.NoError(os.MkdirAll(archiveRoot, 0o755))
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122abc"
 	livePath := filepath.Join(
 		liveRoot, "2026", "08", "15",
@@ -333,17 +345,17 @@ func TestPlanChangedPathsCodexIndexUsesStoredArchivedDuplicate(t *testing.T) {
 		livePath:    "live stale copy",
 		archivePath: "archived tracked copy",
 	} {
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
 		body := testjsonl.JoinJSONL(
 			testjsonl.CodexSessionMetaJSON(
 				uuid, "/workspace/project", "codex_cli_rs", "2026-08-15T10:00:00Z",
 			),
 			testjsonl.CodexMsgJSON("user", content, "2026-08-15T10:00:01Z"),
 		)
-		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+		require.NoError(os.WriteFile(path, []byte(body), 0o600))
 	}
 	indexPath := filepath.Join(root, parser.CodexSessionIndexFilename)
-	require.NoError(t, os.WriteFile(indexPath, []byte(
+	require.NoError(os.WriteFile(indexPath, []byte(
 		`{"id":"`+uuid+`","thread_name":"Renamed title"}`+"\n",
 	), 0o600))
 	database := dbtest.OpenTestDB(t)
@@ -356,7 +368,7 @@ func TestPlanChangedPathsCodexIndexUsesStoredArchivedDuplicate(t *testing.T) {
 	}
 	storedPath := toStoredPath(archivePath)
 	oldName := "Old title"
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: "remote~codex:" + uuid, Agent: string(parser.AgentCodex),
 		Machine: "remote", FilePath: &storedPath, SessionName: &oldName,
 	}))
@@ -370,13 +382,16 @@ func TestPlanChangedPathsCodexIndexUsesStoredArchivedDuplicate(t *testing.T) {
 
 	plan, err := engine.PlanChangedPathsContext(t.Context(), []string{indexPath})
 
-	require.NoError(t, err)
-	require.Len(t, plan.Files, 1)
-	assert.Equal(t, archivePath, plan.Files[0].Path)
-	assert.Empty(t, plan.FallbackProviders)
+	require.NoError(err)
+	require.Len(plan.Files, 1)
+	assert.Equal(archivePath, plan.Files[0].Path)
+	assert.Empty(plan.FallbackProviders)
 }
 
 func TestSyncChangedPathPlanPrefersLiveCodexDuplicate(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	liveRoot := filepath.Join(root, "sessions")
 	archiveRoot := filepath.Join(root, "archived_sessions")
@@ -392,14 +407,14 @@ func TestSyncChangedPathPlanPrefersLiveCodexDuplicate(t *testing.T) {
 		livePath:    "preferred live content",
 		archivePath: "stale archived content",
 	} {
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
 		body := testjsonl.JoinJSONL(
 			testjsonl.CodexSessionMetaJSON(
 				uuid, "/workspace/project", "codex_cli_rs", "2026-08-15T10:00:00Z",
 			),
 			testjsonl.CodexMsgJSON("user", content, "2026-08-15T10:00:01Z"),
 		)
-		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
+		require.NoError(os.WriteFile(path, []byte(body), 0o600))
 	}
 	database := dbtest.OpenTestDB(t)
 	engine := NewEngine(database, EngineConfig{
@@ -413,32 +428,35 @@ func TestSyncChangedPathPlanPrefersLiveCodexDuplicate(t *testing.T) {
 	plan, err := engine.PlanChangedPathsContext(
 		t.Context(), []string{archivePath, livePath},
 	)
-	require.NoError(t, err)
-	require.Len(t, plan.Files, 1)
-	assert.Equal(t, livePath, plan.Files[0].Path)
+	require.NoError(err)
+	require.Len(plan.Files, 1)
+	assert.Equal(livePath, plan.Files[0].Path)
 	prune := plan.PruneScope(map[string]struct{}{
 		archivePath: {},
 		livePath:    {},
 	})
-	require.Len(t, prune.Files, 2)
-	assert.ElementsMatch(t, []string{archivePath, livePath}, []string{
+	require.Len(prune.Files, 2)
+	assert.ElementsMatch([]string{archivePath, livePath}, []string{
 		prune.Files[0].Path,
 		prune.Files[1].Path,
 	})
 
 	result, err := engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, result.FilesProcessed)
-	assert.Equal(t, 1, result.Stats.Synced)
+	require.NoError(err)
+	assert.Equal(1, result.FilesProcessed)
+	assert.Equal(1, result.Stats.Synced)
 	messages, err := database.GetMessages(
 		t.Context(), "codex:"+uuid, 0, 10, true,
 	)
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	assert.Equal(t, "preferred live content", messages[0].Content)
+	require.NoError(err)
+	require.Len(messages, 1)
+	assert.Equal("preferred live content", messages[0].Content)
 }
 
 func TestPlanChangedPathsOmnigentIncludesStoredDescendants(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := dbtest.OpenTestDB(t)
 	physicalRoot := t.TempDir()
 	physicalContainer := filepath.Join(physicalRoot, "chat.db")
@@ -448,11 +466,11 @@ func TestPlanChangedPathsOmnigentIncludesStoredDescendants(t *testing.T) {
 	storedParent := parser.VirtualSourcePath(storedContainer, "parent")
 	storedChild := parser.VirtualSourcePath(storedContainer, "child")
 	parentID := "remote~omnigent:parent"
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: parentID, Agent: string(parser.AgentOmnigent), Machine: "remote",
 		FilePath: &storedParent,
 	}))
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: "remote~omnigent:child", Agent: string(parser.AgentOmnigent),
 		Machine: "remote", ParentSessionID: &parentID, FilePath: &storedChild,
 	}))
@@ -532,25 +550,27 @@ func TestPlanChangedPathsOmnigentIncludesStoredDescendants(t *testing.T) {
 		t.Context(), []string{physicalContainer},
 	)
 
-	require.NoError(t, err)
-	require.Len(t, plan.Files, 2)
-	assert.ElementsMatch(t, []string{physicalParent, physicalChild}, []string{
+	require.NoError(err)
+	require.Len(plan.Files, 2)
+	assert.ElementsMatch([]string{physicalParent, physicalChild}, []string{
 		plan.Files[0].Path, plan.Files[1].Path,
 	})
-	assert.Empty(t, plan.FallbackProviders)
+	assert.Empty(plan.FallbackProviders)
 
 	result, err := engine.SyncChangedPathPlanContext(t.Context(), plan, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 2, result.FilesProcessed)
-	require.Len(t, parseRequests, 2)
+	require.NoError(err)
+	assert.Equal(2, result.FilesProcessed)
+	require.Len(parseRequests, 2)
 	child, err := database.GetSession(t.Context(), "remote~omnigent:child")
-	require.NoError(t, err)
-	require.NotNil(t, child)
-	assert.Equal(t, "/workspace/new", child.Cwd)
-	assert.Equal(t, "feature", child.GitBranch)
+	require.NoError(err)
+	require.NotNil(child)
+	assert.Equal("/workspace/new", child.Cwd)
+	assert.Equal("feature", child.GitBranch)
 }
 
 func TestPlanChangedPathsDeletionClassifiesWithoutPhysicalStat(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	deletedPath := filepath.Join(root, "deleted.jsonl")
 	ownerPath := filepath.Join(root, "owner.jsonl")
@@ -568,38 +588,41 @@ func TestPlanChangedPathsDeletionClassifiesWithoutPhysicalStat(t *testing.T) {
 	engine := newChangedPathPlanEngine(t, map[parser.AgentType][]string{
 		factory.agent: {root},
 	}, factory)
-	require.NoFileExists(t, deletedPath)
+	require.NoFileExists(deletedPath)
 
 	plan, err := engine.PlanChangedPathsContext(t.Context(), []string{deletedPath})
-	require.NoError(t, err)
-	require.Len(t, plan.Files, 1)
+	require.NoError(err)
+	require.Len(plan.Files, 1)
 	assert.Equal(t, ownerPath, plan.Files[0].Path)
 }
 
 func TestPlanChangedPathsExactUsesPreferredClaudeDuplicate(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	liveRoot := t.TempDir()
 	archiveRoot := t.TempDir()
 	livePath := filepath.Join(liveRoot, "proj-live", "exact-duplicate.jsonl")
 	archivePath := filepath.Join(archiveRoot, "proj-archive", "exact-duplicate.jsonl")
 	for _, path := range []string{livePath, archivePath} {
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-		require.NoError(t, os.WriteFile(path, []byte("{}\n"), 0o600))
+		require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
+		require.NoError(os.WriteFile(path, []byte("{}\n"), 0o600))
 	}
 	older := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
 	newer := older.Add(time.Second)
-	require.NoError(t, os.Chtimes(archivePath, older, older))
-	require.NoError(t, os.Chtimes(livePath, newer, newer))
+	require.NoError(os.Chtimes(archivePath, older, older))
+	require.NoError(os.Chtimes(livePath, newer, newer))
 
 	database := dbtest.OpenTestDB(t)
 	liveInfo, err := os.Stat(livePath)
-	require.NoError(t, err)
+	require.NoError(err)
 	liveSize := liveInfo.Size()
 	liveMtime := liveInfo.ModTime().UnixNano()
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: "exact-duplicate", Agent: string(parser.AgentClaude), Machine: "remote",
 		FilePath: &livePath, FileSize: &liveSize, FileMtime: &liveMtime,
 	}))
-	require.NoError(t, database.SetSessionDataVersion(
+	require.NoError(database.SetSessionDataVersion(
 		"exact-duplicate", db.CurrentDataVersion(),
 	))
 	engine := NewEngine(database, EngineConfig{
@@ -616,14 +639,17 @@ func TestPlanChangedPathsExactUsesPreferredClaudeDuplicate(t *testing.T) {
 	}
 
 	plan, err := engine.PlanChangedPathsContext(t.Context(), []string{archivePath})
-	require.NoError(t, err)
-	require.Len(t, plan.Files, 1)
-	assert.Equal(t, livePath, plan.Files[0].Path)
-	assert.Zero(t, scanCalls,
+	require.NoError(err)
+	require.Len(plan.Files, 1)
+	assert.Equal(livePath, plan.Files[0].Path)
+	assert.Zero(scanCalls,
 		"exact duplicate lookup must not enumerate the full Claude corpus")
 }
 
 func TestPlanChangedPathsDoesNotScanClaudeCorpusForExactBatch(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "project", "shared-session.jsonl")
 	caps := changedPathPlanCapabilities()
@@ -652,23 +678,26 @@ func TestPlanChangedPathsDoesNotScanClaudeCorpusForExactBatch(t *testing.T) {
 
 	plan, err := engine.PlanChangedPathsContext(t.Context(), changedPaths)
 
-	require.NoError(t, err)
-	assert.Zero(t, scanCalls,
+	require.NoError(err)
+	assert.Zero(scanCalls,
 		"exact planning must not enumerate the full Claude corpus")
-	require.Len(t, plan.Files, 1)
-	assert.Equal(t, sourcePath, plan.Files[0].Path)
+	require.Len(plan.Files, 1)
+	assert.Equal(sourcePath, plan.Files[0].Path)
 	for _, changedPath := range changedPaths {
 		attribution, ok := plan.attribution[changedPath]
-		require.True(t, ok)
-		require.Len(t, attribution.files, 1)
-		assert.Equal(t, sourcePath, attribution.files[0].Path)
+		require.True(ok)
+		require.Len(attribution.files, 1)
+		assert.Equal(sourcePath, attribution.files[0].Path)
 	}
 }
 
 func TestPlanChangedPathsTranslatesStoredHintsOrFallsBack(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	changedPath := filepath.Join(root, "container.db")
-	require.NoError(t, os.WriteFile(changedPath, []byte("fixture"), 0o600))
+	require.NoError(os.WriteFile(changedPath, []byte("fixture"), 0o600))
 	storedPath := "remote:/sessions/container.db#member"
 	physicalHint := changedPath + "#member"
 	storedContainer := "remote:/sessions/container.db"
@@ -690,7 +719,7 @@ func TestPlanChangedPathsTranslatesStoredHintsOrFallsBack(t *testing.T) {
 		}
 	}
 	database := dbtest.OpenTestDB(t)
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: "plan-hints:member", Agent: string(factory.agent), Machine: "remote",
 		Project: "fixture", FilePath: &storedPath,
 	}))
@@ -712,21 +741,24 @@ func TestPlanChangedPathsTranslatesStoredHintsOrFallsBack(t *testing.T) {
 	})
 
 	plan, err := engine.PlanChangedPathsContext(t.Context(), []string{changedPath})
-	require.NoError(t, err)
-	assert.Empty(t, plan.FallbackProviders)
-	require.Len(t, requests, 1)
-	assert.Equal(t, []string{physicalHint}, requests[0].StoredSourcePaths)
+	require.NoError(err)
+	assert.Empty(plan.FallbackProviders)
+	require.Len(requests, 1)
+	assert.Equal([]string{physicalHint}, requests[0].StoredSourcePaths)
 
 	engine.storedPathResolver = func(string) (string, bool) { return "", false }
 	requests = nil
 	plan, err = engine.PlanChangedPathsContext(t.Context(), []string{changedPath})
-	require.NoError(t, err)
-	assert.Empty(t, plan.Files)
-	assert.Equal(t, []parser.AgentType{factory.agent}, plan.FallbackProviders)
-	assert.Empty(t, requests, "untranslated hints must prevent bounded classification")
+	require.NoError(err)
+	assert.Empty(plan.Files)
+	assert.Equal([]parser.AgentType{factory.agent}, plan.FallbackProviders)
+	assert.Empty(requests, "untranslated hints must prevent bounded classification")
 }
 
 func TestPlanChangedPathsRejectsUntrustedInputAndOwnership(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	caps := changedPathPlanCapabilities()
 	factory := changedPathPlanFactory{agent: "configured-owner", caps: caps}
@@ -738,9 +770,9 @@ func TestPlanChangedPathsRejectsUntrustedInputAndOwnership(t *testing.T) {
 	}, factory)
 
 	plan, err := engine.PlanChangedPathsContext(t.Context(), []string{"relative/path"})
-	require.Error(t, err)
-	assert.Empty(t, plan.Files)
-	assert.Empty(t, plan.FallbackProviders)
+	require.Error(err)
+	assert.Empty(plan.Files)
+	assert.Empty(plan.FallbackProviders)
 
 	mismatched := factory
 	mismatched.agent = "different-owner"
@@ -748,12 +780,14 @@ func TestPlanChangedPathsRejectsUntrustedInputAndOwnership(t *testing.T) {
 	plan, err = engine.PlanChangedPathsContext(
 		t.Context(), []string{filepath.Join(root, "changed.jsonl")},
 	)
-	require.Error(t, err)
-	assert.Empty(t, plan.Files)
-	assert.Empty(t, plan.FallbackProviders)
+	require.Error(err)
+	assert.Empty(plan.Files)
+	assert.Empty(plan.FallbackProviders)
 }
 
 func TestChangedPathPlanPruneScopeUsesOnlyArmedAttribution(t *testing.T) {
+	assert := assert.New(t)
+
 	root := t.TempDir()
 	armedPath := filepath.Join(root, "armed.jsonl")
 	disarmedPath := filepath.Join(root, "disarmed.jsonl")
@@ -780,10 +814,10 @@ func TestChangedPathPlanPruneScopeUsesOnlyArmedAttribution(t *testing.T) {
 	nonCanonicalArmedPath := filepath.Join(root, "nested", "..", filepath.Base(armedPath))
 	prune := plan.PruneScope(map[string]struct{}{nonCanonicalArmedPath: {}})
 	require.Len(t, prune.Files, 1)
-	assert.Equal(t, armedSource, prune.Files[0].Path)
-	assert.Empty(t, prune.FallbackProviders)
-	assert.Len(t, plan.Files, 2)
-	assert.Equal(t, []parser.AgentType{agent}, plan.FallbackProviders)
+	assert.Equal(armedSource, prune.Files[0].Path)
+	assert.Empty(prune.FallbackProviders)
+	assert.Len(plan.Files, 2)
+	assert.Equal([]parser.AgentType{agent}, plan.FallbackProviders)
 }
 
 func TestChangedPathPlanCountsEveryDisarmedFallbackInput(t *testing.T) {
@@ -806,6 +840,9 @@ func TestChangedPathPlanCountsEveryDisarmedFallbackInput(t *testing.T) {
 }
 
 func TestDiscoverChangedPathFallbackIsProviderBounded(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	rootA := t.TempDir()
 	rootB := t.TempDir()
 	var discoveriesA, discoveriesB int
@@ -832,10 +869,10 @@ func TestDiscoverChangedPathFallbackIsProviderBounded(t *testing.T) {
 	files, counts, err := engine.discoverChangedPathFallbackProviders(
 		t.Context(), []parser.AgentType{factoryA.agent},
 	)
-	require.NoError(t, err)
-	require.Len(t, files, 1)
-	assert.Equal(t, source, files[0].Path)
-	assert.Equal(t, map[parser.AgentType]int{factoryA.agent: 1}, counts)
-	assert.Equal(t, 1, discoveriesA)
-	assert.Zero(t, discoveriesB)
+	require.NoError(err)
+	require.Len(files, 1)
+	assert.Equal(source, files[0].Path)
+	assert.Equal(map[parser.AgentType]int{factoryA.agent: 1}, counts)
+	assert.Equal(1, discoveriesA)
+	assert.Zero(discoveriesB)
 }

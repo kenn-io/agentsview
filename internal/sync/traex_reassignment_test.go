@@ -95,11 +95,14 @@ func seedSharedPathProjectRepairConflict(
 }
 
 func TestTraeXRepeatSyncSkipsUnchangedRollout(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 	fx := newTraeXRepairFixture(t)
-	require.NoError(t, fx.database.ReplaceSkippedFiles(map[string]int64{}))
+	require.NoError(fx.database.ReplaceSkippedFiles(map[string]int64{}))
 
 	repeat := agentsync.NewEngine(fx.database, agentsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
@@ -111,13 +114,16 @@ func TestTraeXRepeatSyncSkipsUnchangedRollout(t *testing.T) {
 
 	stats := repeat.SyncAll(t.Context(), nil)
 
-	require.Zero(t, stats.Failed)
-	assert.Zero(t, stats.Synced,
+	require.Zero(stats.Failed)
+	assert.Zero(stats.Synced,
 		"an untouched TraeX rollout must not be rewritten")
-	assert.Equal(t, 1, stats.Skipped)
+	assert.Equal(1, stats.Skipped)
 }
 
 func TestTraeXCachedSkipDoesNotBorrowCodexRepairState(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -125,31 +131,34 @@ func TestTraeXCachedSkipDoesNotBorrowCodexRepairState(t *testing.T) {
 	initial, err := fx.database.GetSessionFull(
 		t.Context(), "traex:"+fx.uuid,
 	)
-	require.NoError(t, err)
-	require.NotNil(t, initial)
-	require.NotNil(t, initial.FileMtime)
-	require.NotNil(t, initial.FileHash)
+	require.NoError(err)
+	require.NotNil(initial)
+	require.NotNil(initial.FileMtime)
+	require.NotNil(initial.FileHash)
 	cacheKey := fx.path + "?agent=traex?source_hash=" + *initial.FileHash
 	fx.engine.InjectSkipCache(map[string]int64{
 		cacheKey: *initial.FileMtime,
 	})
-	require.NotEmpty(t, fx.engine.SnapshotSkipCache(),
+	require.NotEmpty(fx.engine.SnapshotSkipCache(),
 		"test must prime the provider skip-cache branch")
 	seedSharedPathProjectRepairConflict(t, fx)
 
 	stats := fx.engine.SyncAll(t.Context(), nil)
-	require.Zero(t, stats.Failed)
+	require.Zero(stats.Failed)
 
 	session, err := fx.database.GetSessionFull(
 		t.Context(), "traex:"+fx.uuid,
 	)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, "project", session.Project)
-	assert.False(t, session.LastWriteIncremental)
+	require.NoError(err)
+	require.NotNil(session)
+	assert.Equal("project", session.Project)
+	assert.False(session.LastWriteIncremental)
 }
 
 func TestTraeXIncrementalDoesNotBorrowCodexRepairState(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -157,31 +166,34 @@ func TestTraeXIncrementalDoesNotBorrowCodexRepairState(t *testing.T) {
 	seedSharedPathProjectRepairConflict(t, fx)
 
 	file, err := os.OpenFile(fx.path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = file.WriteString(
 		testjsonl.CodexMsgJSON("assistant", "incremental reply", tsEarlyS5) + "\n",
 	)
-	require.NoError(t, err)
-	require.NoError(t, file.Close())
+	require.NoError(err)
+	require.NoError(file.Close())
 	info, err := os.Stat(fx.path)
-	require.NoError(t, err)
+	require.NoError(err)
 	appendTime := info.ModTime().Add(2 * time.Second)
-	require.NoError(t, os.Chtimes(fx.path, appendTime, appendTime))
+	require.NoError(os.Chtimes(fx.path, appendTime, appendTime))
 
 	fx.engine.SyncPaths([]string{fx.path})
 
 	session, err := fx.database.GetSessionFull(
 		t.Context(), "traex:"+fx.uuid,
 	)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, 2, session.MessageCount)
-	assert.Equal(t, "project", session.Project)
-	assert.False(t, session.LastWriteIncremental,
+	require.NoError(err)
+	require.NotNil(session)
+	assert.Equal(2, session.MessageCount)
+	assert.Equal("project", session.Project)
+	assert.False(session.LastWriteIncremental,
 		"stale TraeX metadata must force an authoritative full parse")
 }
 
 func TestTraeXIncrementalSyncStoresTranscriptMtime(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -192,22 +204,22 @@ func TestTraeXIncrementalSyncStoresTranscriptMtime(t *testing.T) {
 		sessionsRoot, "2026", "08", "01",
 		"rollout-2026-08-01T18-07-03-"+uuid+".jsonl",
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
 	content := testjsonl.NewSessionBuilder().
 		AddCodexMeta(tsEarly, uuid, "/workspace/project", "codex-tui").
 		AddCodexMessage(tsEarlyS1, "user", "first prompt").
 		String()
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(os.WriteFile(path, []byte(content), 0o644))
 
 	rolloutTime := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
 	appendTime := rolloutTime.Add(30 * time.Minute)
 	indexTime := rolloutTime.Add(time.Hour)
-	require.NoError(t, os.Chtimes(path, rolloutTime, rolloutTime))
+	require.NoError(os.Chtimes(path, rolloutTime, rolloutTime))
 	indexPath := filepath.Join(root, parser.CodexSessionIndexFilename)
-	require.NoError(t, os.WriteFile(indexPath, []byte(
+	require.NoError(os.WriteFile(indexPath, []byte(
 		`{"id":"`+uuid+`","thread_name":"Codex-only title"}`+"\n",
 	), 0o644))
-	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
+	require.NoError(os.Chtimes(indexPath, indexTime, indexTime))
 
 	database := dbtest.OpenTestDB(t)
 	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
@@ -218,27 +230,27 @@ func TestTraeXIncrementalSyncStoresTranscriptMtime(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 	stats := engine.SyncAll(t.Context(), nil)
-	require.Zero(t, stats.Failed)
+	require.Zero(stats.Failed)
 
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = file.WriteString(
 		testjsonl.CodexMsgJSON("assistant", "incremental reply", tsEarlyS5) + "\n",
 	)
-	require.NoError(t, err)
-	require.NoError(t, file.Close())
-	require.NoError(t, os.Chtimes(path, appendTime, appendTime))
+	require.NoError(err)
+	require.NoError(file.Close())
+	require.NoError(os.Chtimes(path, appendTime, appendTime))
 
 	engine.SyncPaths([]string{path})
 
 	session, err := database.GetSessionFull(t.Context(), "traex:"+uuid)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	require.NotNil(t, session.FileMtime)
-	assert.Equal(t, 2, session.MessageCount)
-	assert.True(t, session.LastWriteIncremental)
-	assert.Equal(t, appendTime.UnixNano(), *session.FileMtime)
-	assert.NotEqual(t, indexTime.UnixNano(), *session.FileMtime,
+	require.NoError(err)
+	require.NotNil(session)
+	require.NotNil(session.FileMtime)
+	assert.Equal(2, session.MessageCount)
+	assert.True(session.LastWriteIncremental)
+	assert.Equal(appendTime.UnixNano(), *session.FileMtime)
+	assert.NotEqual(indexTime.UnixNano(), *session.FileMtime,
 		"TraeX incremental freshness must ignore Codex session_index.jsonl")
 }
 
@@ -247,13 +259,16 @@ func TestTraeXIncrementalSyncStoresTranscriptMtime(t *testing.T) {
 // pass must create the TraeX session without adding relabeled messages to the
 // Codex row returned by the path-based incremental lookup.
 func TestTraeXReassignsCodexPathWithoutCrossAgentFreshness(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 	root := t.TempDir()
 	const uuid = "019fbcca-9fd4-7d20-83dc-0762b2f839b3"
 	dir := filepath.Join(root, "2026", "08", "01")
-	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(os.MkdirAll(dir, 0o755))
 	path := filepath.Join(
 		dir, "rollout-2026-08-01T18-07-03-"+uuid+".jsonl",
 	)
@@ -261,7 +276,7 @@ func TestTraeXReassignsCodexPathWithoutCrossAgentFreshness(t *testing.T) {
 		AddCodexMeta(tsEarly, uuid, "/workspace/project", "codex-tui").
 		AddCodexMessage(tsEarlyS1, "user", "first prompt").
 		String()
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(os.WriteFile(path, []byte(content), 0o644))
 
 	database := dbtest.OpenTestDB(t)
 	newEngine := func(agent parser.AgentType) *agentsync.Engine {
@@ -275,29 +290,29 @@ func TestTraeXReassignsCodexPathWithoutCrossAgentFreshness(t *testing.T) {
 
 	codexEngine := newEngine(parser.AgentCodex)
 	stats := codexEngine.SyncAll(t.Context(), nil)
-	require.Zero(t, stats.Failed)
-	require.Equal(t, path, database.GetSessionFilePath("codex:"+uuid))
+	require.Zero(stats.Failed)
+	require.Equal(path, database.GetSessionFilePath("codex:"+uuid))
 
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = file.WriteString(
 		testjsonl.CodexMsgJSON("user", "second prompt", tsEarlyS5) + "\n",
 	)
-	require.NoError(t, err)
-	require.NoError(t, file.Close())
+	require.NoError(err)
+	require.NoError(file.Close())
 
 	traexEngine := newEngine(parser.AgentTraeX)
 	stats = traexEngine.SyncAll(t.Context(), nil)
-	require.Zero(t, stats.Failed)
+	require.Zero(stats.Failed)
 
 	traexSession, err := database.GetSession(t.Context(), "traex:"+uuid)
-	require.NoError(t, err)
-	require.NotNil(t, traexSession)
-	assert.Equal(t, 2, traexSession.MessageCount)
+	require.NoError(err)
+	require.NotNil(traexSession)
+	assert.Equal(2, traexSession.MessageCount)
 
 	codexSession, err := database.GetSession(t.Context(), "codex:"+uuid)
-	require.NoError(t, err)
-	require.NotNil(t, codexSession)
-	assert.Equal(t, 1, codexSession.MessageCount,
+	require.NoError(err)
+	require.NotNil(codexSession)
+	assert.Equal(1, codexSession.MessageCount,
 		"TraeX append must not reach the previous Codex session")
 }

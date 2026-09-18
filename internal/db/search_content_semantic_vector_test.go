@@ -61,7 +61,10 @@ func (s vectorIndexSearcher) ResolveMessageUnits(
 // fell back to centering on the query pattern (absent here), i.e. the start
 // of the message — losing the matched region entirely.
 func TestSearchContentSemanticCrossMemberChunkCentersOnAnchorMessage(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	d := dbtest.OpenTestDB(t)
 
 	memberA := "a short first assistant step"
@@ -91,11 +94,11 @@ func TestSearchContentSemanticCrossMemberChunkCentersOnAnchorMessage(t *testing.
 	}
 
 	ix, err := vector.Open(ctx, filepath.Join(t.TempDir(), "vectors.db"), false, 4000)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, ix.Close()) }()
+	require.NoError(err)
+	defer func() { require.NoError(ix.Close()) }()
 	gen := kitvec.Generation{Model: "fake-model", Dimensions: 3}
 	_, err = ix.Build(ctx, d, enc, gen, vector.BuildOptions{})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	d.SetVectorSearcher(vectorIndexSearcher{ix: ix, enc: enc})
 
@@ -104,15 +107,15 @@ func TestSearchContentSemanticCrossMemberChunkCentersOnAnchorMessage(t *testing.
 	page, err := d.SearchContent(ctx, db.ContentSearchFilter{
 		Pattern: "quantum superposition", Mode: "semantic", Limit: 10,
 	})
-	require.NoError(t, err)
-	require.NotEmpty(t, page.Matches)
+	require.NoError(err)
+	require.NotEmpty(page.Matches)
 
 	m := page.Matches[0]
-	assert.Equal(t, "s1", m.SessionID)
-	assert.Equal(t, 2, m.Ordinal,
+	assert.Equal("s1", m.SessionID)
+	assert.Equal(2, m.Ordinal,
 		"anchor: the member containing the matched chunk's center")
-	assert.Contains(t, m.Snippet, "entangled",
+	assert.Contains(m.Snippet, "entangled",
 		"snippet must center on the anchor message's matched content")
-	assert.NotContains(t, m.Snippet, memberA,
+	assert.NotContains(m.Snippet, memberA,
 		"snippet must not carry text from a different run member")
 }

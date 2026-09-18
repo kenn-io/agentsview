@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -13,6 +12,9 @@ import (
 )
 
 func TestCommandCodeProviderSourceMethods(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "users-alice-code-sample-project")
 	sourcePath := filepath.Join(projectDir, "sess_123.jsonl")
@@ -24,40 +26,43 @@ func TestCommandCodeProviderSourceMethods(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
+	require.True(ok)
 
-	discovered, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, discovered, 1)
-	assert.Equal(t, AgentCommandCode, discovered[0].Provider)
-	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
-	assert.Empty(t, discovered[0].ProjectHint)
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(discovered, 1)
+	assert.Equal(AgentCommandCode, discovered[0].Provider)
+	assert.Equal(sourcePath, discovered[0].DisplayPath)
+	assert.Empty(discovered[0].ProjectHint)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~commandcode:sess_123",
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, sourcePath, found.DisplayPath)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(sourcePath, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		FingerprintKey: sourcePath,
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, sourcePath, found.DisplayPath)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(sourcePath, found.DisplayPath)
 
-	require.NoError(t, os.Remove(sourcePath))
+	require.NoError(os.Remove(sourcePath))
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: root},
 	)
-	require.NoError(t, err)
-	require.Len(t, changed, 1)
-	assert.Equal(t, sourcePath, changed[0].DisplayPath)
+	require.NoError(err)
+	require.Len(changed, 1)
+	assert.Equal(sourcePath, changed[0].DisplayPath)
 }
 
 func TestCommandCodeProviderWatchRootsStayBounded(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	transcript := filepath.Join(root, "project", "session.jsonl")
 	writeSourceFile(t, transcript, "{}\n")
@@ -75,27 +80,30 @@ func TestCommandCodeProviderWatchRootsStayBounded(t *testing.T) {
 		),
 	}
 
-	assert.Equal(t, CapabilitySupported, provider.Capabilities().Source.WatchRoots)
-	assert.Implements(t, (*WatchRootPlanner)(nil), provider)
-	roots, err := ResolveWatchRoots(context.Background(), provider)
-	require.NoError(t, err)
-	assert.Equal(t, []WatchRoot{{
+	assert.Equal(CapabilitySupported, provider.Capabilities().Source.WatchRoots)
+	assert.Implements((*WatchRootPlanner)(nil), provider)
+	roots, err := ResolveWatchRoots(t.Context(), provider)
+	require.NoError(err)
+	assert.Equal([]WatchRoot{{
 		Path:        root,
 		Recursive:   true,
 		DebounceKey: string(AgentCommandCode) + ":jsonl:" + root,
 	}}, roots)
-	assert.Zero(t, companionCalls,
+	assert.Zero(companionCalls,
 		"bounded root scheduling must not discover transcript companions")
 
-	plan, err := provider.WatchPlan(context.Background())
-	require.NoError(t, err)
-	require.Len(t, plan.Roots, 1)
-	assert.Contains(t, plan.Roots[0].IncludeGlobs, "session.meta.json")
-	assert.Equal(t, 1, companionCalls,
+	plan, err := provider.WatchPlan(t.Context())
+	require.NoError(err)
+	require.Len(plan.Roots, 1)
+	assert.Contains(plan.Roots[0].IncludeGlobs, "session.meta.json")
+	assert.Equal(1, companionCalls,
 		"legacy WatchPlan must retain companion glob discovery")
 }
 
 func TestCommandCodeProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	realProjectDir := filepath.Join(t.TempDir(), "real-project")
 	linkProjectDir := filepath.Join(root, "linked-project")
@@ -112,22 +120,25 @@ func TestCommandCodeProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
+	require.True(ok)
 
-	discovered, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, discovered, 1)
-	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(discovered, 1)
+	assert.Equal(sourcePath, discovered[0].DisplayPath)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "sess_123",
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, sourcePath, found.DisplayPath)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(sourcePath, found.DisplayPath)
 }
 
 func TestCommandCodeProviderParse(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "project", "sess_123.jsonl")
 	transcript := commandCodeProviderFixture()
@@ -137,25 +148,25 @@ func TestCommandCodeProviderParse(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	require.True(ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(sources, 1)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
-	require.NoError(t, err)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+	require.NoError(err)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fingerprint,
 	})
-	require.NoError(t, err)
-	require.True(t, outcome.ResultSetComplete)
-	require.Len(t, outcome.Results, 1)
-	assert.Equal(t, DataVersionCurrent, outcome.Results[0].DataVersion)
-	assert.Equal(t, "commandcode:sess_123", outcome.Results[0].Result.Session.ID)
-	assert.Equal(t, "devbox", outcome.Results[0].Result.Session.Machine)
-	assert.Equal(t, fingerprint.Hash, outcome.Results[0].Result.Session.File.Hash)
-	assert.Len(t, outcome.Results[0].Result.Messages, 2)
+	require.NoError(err)
+	require.True(outcome.ResultSetComplete)
+	require.Len(outcome.Results, 1)
+	assert.Equal(DataVersionCurrent, outcome.Results[0].DataVersion)
+	assert.Equal("commandcode:sess_123", outcome.Results[0].Result.Session.ID)
+	assert.Equal("devbox", outcome.Results[0].Result.Session.Machine)
+	assert.Equal(fingerprint.Hash, outcome.Results[0].Result.Session.File.Hash)
+	assert.Len(outcome.Results[0].Result.Messages, 2)
 }
 
 // TestCommandCodeProviderParseUsesSharedFingerprintHash verifies that file_hash
@@ -163,6 +174,8 @@ func TestCommandCodeProviderParse(t *testing.T) {
 // WithCompanionFiles, rather than a bespoke transcript-only hash. A title-only
 // .meta.json change therefore moves both the fingerprint and the stored hash.
 func TestCommandCodeProviderParseUsesSharedFingerprintHash(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "project", "sess_123.jsonl")
 	transcript := commandCodeProviderFixture()
@@ -173,25 +186,25 @@ func TestCommandCodeProviderParseUsesSharedFingerprintHash(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	require.True(ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(sources, 1)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
-	require.NoError(t, err)
-	require.NotEmpty(t, fingerprint.Hash)
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+	require.NoError(err)
+	require.NotEmpty(fingerprint.Hash)
 	transcriptHash := fmt.Sprintf("%x", sha256.Sum256([]byte(transcript)))
-	require.NotEqual(t, transcriptHash, fingerprint.Hash,
+	require.NotEqual(transcriptHash, fingerprint.Hash,
 		"the .meta.json companion must participate in the fingerprint hash")
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fingerprint,
 	})
-	require.NoError(t, err)
-	require.True(t, outcome.ResultSetComplete)
-	require.Len(t, outcome.Results, 1)
+	require.NoError(err)
+	require.True(outcome.ResultSetComplete)
+	require.Len(outcome.Results, 1)
 	assert.Equal(t, fingerprint.Hash, outcome.Results[0].Result.Session.File.Hash,
 		"parse threads the shared fingerprint hash, not a transcript-only hash")
 }
@@ -207,25 +220,27 @@ func commandCodeProviderFixture() string {
 // is empty and a resync clears the stored file_hash to NULL. Toggle-provable:
 // removing WithContentHashing from newCommandCodeSourceSet fails here.
 func TestCommandCodeProviderFingerprintIncludesContentHash(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "users-alice-code-sample-project", "sess_123.jsonl")
 	writeSourceFile(t, sourcePath, commandCodeProviderFixture())
 
 	provider, ok := NewProvider(AgentCommandCode, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	require.True(ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(sources, 1)
 
-	fp, err := provider.Fingerprint(context.Background(), sources[0])
-	require.NoError(t, err)
-	require.NotEmpty(t, fp.Hash)
+	fp, err := provider.Fingerprint(t.Context(), sources[0])
+	require.NoError(err)
+	require.NotEmpty(fp.Hash)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fp,
 	})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
+	require.NoError(err)
+	require.Len(outcome.Results, 1)
 	assert.Equal(t, fp.Hash, outcome.Results[0].Result.Session.File.Hash)
 }

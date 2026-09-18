@@ -238,7 +238,7 @@ func isGeneratedSweepName(name, prefix string) bool {
 	if suffix == "" {
 		return false
 	}
-	for i := 0; i < len(suffix); i++ {
+	for i := range len(suffix) {
 		if suffix[i] < '0' || suffix[i] > '9' {
 			return false
 		}

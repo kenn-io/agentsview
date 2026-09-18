@@ -27,7 +27,7 @@ func TestCanonicalCheckpointGolden(t *testing.T) {
 	data, err := canonicalJSON(cp)
 	require.NoError(t, err)
 
-	assert.Equal(t,
+	assert.JSONEq(t,
 		"{\"origin\":\"laptop-a1b2c3\",\"seq\":7,\"sessions\":{\"laptop-a1b2c3~sess-a\":\"a111\",\"laptop-a1b2c3~sess-b\":\"b222\"},\"v\":1}\n",
 		string(data),
 	)
@@ -101,7 +101,7 @@ func TestCanonicalManifestGolden(t *testing.T) {
 	data, err := canonicalJSON(m)
 	require.NoError(t, err)
 
-	assert.Equal(t,
+	assert.JSONEq(t,
 		"{\"data_version\":99,\"generation\":3,\"native_session_id\":\"sess-1\",\"origin\":\"laptop-a1b2c3\",\"raw_source\":{\"hash\":\"raw123\",\"media_type\":\"application/jsonl\",\"path\":\"claude/session.jsonl\",\"size\":4096},\"segments\":[\"seg222\",\"seg111\"],\"session\":{\"agent\":\"claude\",\"compaction_count\":0,\"consecutive_failure_max\":0,\"created_at\":\"2026-06-14T01:02:03Z\",\"edit_churn_count\":0,\"ended_at\":\"2026-06-14T01:03:03Z\",\"ended_with_role\":\"\",\"final_failure_streak\":0,\"first_message\":\"hello\",\"has_peak_context_tokens\":false,\"has_total_output_tokens\":false,\"id\":\"sess-1\",\"is_automated\":false,\"machine\":\"laptop-a1b2c3\",\"message_count\":2,\"mid_task_compaction_count\":0,\"outcome\":\"\",\"outcome_confidence\":\"\",\"parent_session_id\":\"parent-1\",\"peak_context_tokens\":0,\"project\":\"alpha\",\"relationship_type\":\"subagent\",\"secret_leak_count\":0,\"started_at\":\"2026-06-14T01:02:03Z\",\"tool_failure_signal_count\":0,\"tool_retry_count\":0,\"total_output_tokens\":42,\"user_message_count\":1},\"session_has_context_data\":true,\"session_has_tool_calls\":true,\"session_name\":\"Fixture\",\"session_quality_signals\":{\"duplicate_prompt_count\":6,\"missing_success_criteria_count\":4,\"missing_verification_count\":5,\"no_code_context_count\":7,\"runaway_tool_loop_count\":1,\"short_prompt_count\":2,\"unstructured_start\":true,\"version\":3},\"usage_events\":[{\"cost\":{\"microdollars\":31250},\"cost_source\":\"fixture\",\"cost_status\":\"known\",\"dedup_key\":\"usage-1\",\"input_tokens\":11,\"message_ordinal\":2,\"model\":\"claude-test\",\"occurred_at\":\"2026-06-14T01:02:04Z\",\"output_tokens\":7,\"source\":\"fixture\"}],\"v\":4}\n",
 		string(data),
 	)
@@ -165,6 +165,8 @@ func TestDecodeSegmentAcceptsPriorVersionWithoutPromptSource(t *testing.T) {
 }
 
 func TestCanonicalMessageSegmentGolden(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Parallel()
 
 	msgs := []db.Message{
@@ -220,17 +222,19 @@ func TestCanonicalMessageSegmentGolden(t *testing.T) {
 	data, err := encodeSegment(msgs)
 	require.NoError(t, err)
 
-	assert.Equal(t,
-		"{\"claude_message_id\":\"msg-1\",\"claude_request_id\":\"req-1\",\"content\":\"world\",\"content_length\":5,\"has_output_tokens\":true,\"has_tool_use\":true,\"model\":\"claude-test\",\"ordinal\":2,\"output_tokens\":2,\"role\":\"assistant\",\"source_parent_uuid\":\"uuid-parent\",\"source_subtype\":\"assistant\",\"source_type\":\"jsonl\",\"source_uuid\":\"uuid-msg-1\",\"timestamp\":\"2026-06-14T01:02:05Z\",\"token_usage\":{\"input\":1,\"output\":2},\"tool_calls\":[{\"call_index\":0,\"category\":\"file\",\"file_path\":\"README.md\",\"input_json\":\"{\\\"file_path\\\":\\\"README.md\\\"}\",\"result_content\":\"file content\",\"result_content_length\":12,\"result_events\":[{\"agent_id\":\"agent-1\",\"content\":\"done\",\"content_length\":4,\"event_index\":0,\"source\":\"tool_result\",\"status\":\"success\",\"subagent_session_id\":\"child-1\",\"timestamp\":\"2026-06-14T01:02:06Z\",\"tool_use_id\":\"tool-1\"}],\"subagent_session_id\":\"child-1\",\"tool_name\":\"Read\",\"tool_use_id\":\"tool-1\"}],\"v\":4}\n",
+	assert.JSONEq("{\"claude_message_id\":\"msg-1\",\"claude_request_id\":\"req-1\",\"content\":\"world\",\"content_length\":5,\"has_output_tokens\":true,\"has_tool_use\":true,\"model\":\"claude-test\",\"ordinal\":2,\"output_tokens\":2,\"role\":\"assistant\",\"source_parent_uuid\":\"uuid-parent\",\"source_subtype\":\"assistant\",\"source_type\":\"jsonl\",\"source_uuid\":\"uuid-msg-1\",\"timestamp\":\"2026-06-14T01:02:05Z\",\"token_usage\":{\"input\":1,\"output\":2},\"tool_calls\":[{\"call_index\":0,\"category\":\"file\",\"file_path\":\"README.md\",\"input_json\":\"{\\\"file_path\\\":\\\"README.md\\\"}\",\"result_content\":\"file content\",\"result_content_length\":12,\"result_events\":[{\"agent_id\":\"agent-1\",\"content\":\"done\",\"content_length\":4,\"event_index\":0,\"source\":\"tool_result\",\"status\":\"success\",\"subagent_session_id\":\"child-1\",\"timestamp\":\"2026-06-14T01:02:06Z\",\"tool_use_id\":\"tool-1\"}],\"subagent_session_id\":\"child-1\",\"tool_name\":\"Read\",\"tool_use_id\":\"tool-1\"}],\"v\":4}\n",
 		string(data),
 	)
-	assert.NotContains(t, string(data), `"id"`)
-	assert.NotContains(t, string(data), `"session_id"`)
-	assert.NotContains(t, string(data), `"message_id"`)
-	assert.Equal(t, "82e4eeade6fc98954138216965f85fe628f5d037ccf4ec3b4cfb7bfc71b4921a", hashHex(data))
+	assert.NotContains(string(data), `"id"`)
+	assert.NotContains(string(data), `"session_id"`)
+	assert.NotContains(string(data), `"message_id"`)
+	assert.Equal("82e4eeade6fc98954138216965f85fe628f5d037ccf4ec3b4cfb7bfc71b4921a", hashHex(data))
 }
 
 func TestEncodeSegmentPreservesPromptSource(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	msgs := []db.Message{
@@ -247,18 +251,21 @@ func TestEncodeSegmentPreservesPromptSource(t *testing.T) {
 	}
 
 	data, err := encodeSegment(msgs)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	var decoded segmentMessage
-	require.NoError(t, json.Unmarshal(data, &decoded))
-	assert.Equal(t, "typed", decoded.PromptSource)
+	require.NoError(json.Unmarshal(data, &decoded))
+	assert.Equal("typed", decoded.PromptSource)
 
 	restored := decoded.dbMessage()
-	assert.Equal(t, "typed", restored.PromptSource,
+	assert.Equal("typed", restored.PromptSource,
 		"import must carry prompt_source back into the db message")
 }
 
 func TestArtifactRoundTripPreservesProviderID(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	data, err := encodeSegment([]db.Message{{
@@ -268,11 +275,11 @@ func TestArtifactRoundTripPreservesProviderID(t *testing.T) {
 		Model:      "claude-sonnet-4-6",
 		ProviderID: "positai",
 	}})
-	require.NoError(t, err)
+	require.NoError(err)
 	decoded, err := decodeSegmentWithLimits(data, productionArtifactLimits())
-	require.NoError(t, err)
-	require.Len(t, decoded, 1)
-	assert.Equal(t, "positai", decoded[0].ProviderID,
+	require.NoError(err)
+	require.Len(decoded, 1)
+	assert.Equal("positai", decoded[0].ProviderID,
 		"import must carry the billing provider back into the db message")
 
 	events := canonicalUsageEvents([]db.UsageEvent{{
@@ -281,8 +288,8 @@ func TestArtifactRoundTripPreservesProviderID(t *testing.T) {
 		ProviderID: "positai",
 	}})
 	restored := importedUsageEvents(events, "sess-1")
-	require.Len(t, restored, 1)
-	assert.Equal(t, "positai", restored[0].ProviderID,
+	require.Len(restored, 1)
+	assert.Equal("positai", restored[0].ProviderID,
 		"import must carry the billing provider back into the usage event")
 }
 
@@ -308,7 +315,7 @@ func TestCanonicalMetadataEventGolden(t *testing.T) {
 	data, err := canonicalJSON(event)
 	require.NoError(t, err)
 
-	assert.Equal(t,
+	assert.JSONEq(t,
 		"{\"hlc\":\"2026-06-14T010203.000000001Z-laptop-a1b2c3\",\"op\":\"rename\",\"origin\":\"laptop-a1b2c3\",\"pin\":{\"note\":\"remember this\",\"ordinal\":2,\"source_uuid\":\"uuid-msg-1\"},\"session_gid\":\"desktop-d4e5f6~sess-1\",\"v\":1,\"value\":{\"display_name\":\"Renamed session\"}}\n",
 		string(data),
 	)

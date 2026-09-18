@@ -140,6 +140,9 @@ func TestPrintUsageStatuslineJSONKeepsExactMicrodollars(t *testing.T) {
 }
 
 func TestUsageDailyGolden(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	setupExportGoldenDataDir(t)
 
 	cmd := newRootCommand()
@@ -156,19 +159,22 @@ func TestUsageDailyGolden(t *testing.T) {
 	stdout := captureStdout(t, func() {
 		_, err = cmd.ExecuteC()
 	})
-	require.NoError(t, err, "usage daily json golden command")
+	require.NoError(err, "usage daily json golden command")
 	var report db.DailyUsageResult
-	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
-	assert.Equal(t, export.UsageDailySchemaVersion, report.SchemaVersion)
+	require.NoError(json.Unmarshal([]byte(stdout), &report))
+	assert.Equal(export.UsageDailySchemaVersion, report.SchemaVersion)
 	var document map[string]jsontext.Value
-	require.NoError(t, json.Unmarshal([]byte(stdout), &document))
+	require.NoError(json.Unmarshal([]byte(stdout), &document))
 	_, hasMachineLabels := document["machine_labels"]
-	assert.False(t, hasMachineLabels)
+	assert.False(hasMachineLabels)
 
 	assertCatalogGolden(t, "usage_daily_v6.json", []byte(stdout))
 }
 
 func TestUsageDailyBreakdownGolden(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	setupExportGoldenDataDir(t)
 
 	cmd := newRootCommand()
@@ -186,14 +192,14 @@ func TestUsageDailyBreakdownGolden(t *testing.T) {
 	stdout := captureStdout(t, func() {
 		_, err = cmd.ExecuteC()
 	})
-	require.NoError(t, err, "usage daily json breakdown golden command")
+	require.NoError(err, "usage daily json breakdown golden command")
 	var report usageDailyDocument
-	require.NoError(t, json.Unmarshal([]byte(stdout), &report))
-	require.NotEmpty(t, report.Daily)
-	assert.Equal(t, "Golden Host", report.MachineLabels["golden-host"])
+	require.NoError(json.Unmarshal([]byte(stdout), &report))
+	require.NotEmpty(report.Daily)
+	assert.Equal("Golden Host", report.MachineLabels["golden-host"])
 	for _, daily := range report.Daily {
-		require.Len(t, daily.MachineBreakdowns, 1)
-		assert.Equal(t, "golden-host", daily.MachineBreakdowns[0].MachineName)
+		require.Len(daily.MachineBreakdowns, 1)
+		assert.Equal("golden-host", daily.MachineBreakdowns[0].MachineName)
 	}
 
 	assertCatalogGolden(t, "usage_daily_breakdown_v6.json", []byte(stdout))
@@ -227,7 +233,7 @@ func writeGoldenCursorSecretConfig(t *testing.T, dataDir string) {
 
 func seedExportGoldenArchive(t *testing.T, database *db.DB) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	database.SetCursorSecret(goldenCursorSecret)
 	require.NoError(t, database.SetDatabaseIDForTest(ctx, goldenDatabaseID))
 	require.NoError(t, database.SetArchiveIdentityForTest(
@@ -293,7 +299,7 @@ func seedExportGoldenArchive(t *testing.T, database *db.DB) {
 
 func seedGoldenProjectIdentities(t *testing.T, database *db.DB) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, sessionID := range []string{"remote-current", "remote-yesterday"} {
 		require.NoError(t, database.UpsertProjectIdentityObservation(ctx,
 			export.ProjectIdentityObservation{
@@ -428,7 +434,7 @@ func setGoldenExportTimestamps(t *testing.T, dbPath string) {
 	defer func() {
 		require.NoError(t, conn.Close(), "close pricing timestamp db")
 	}()
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		UPDATE model_pricing SET updated_at = ?;
 		UPDATE genai_pricing SET updated_at = ?;
 		UPDATE sessions SET local_modified_at = ?`,
@@ -548,28 +554,31 @@ func TestDefaultUsageDateRange(t *testing.T) {
 }
 
 func TestFetchHTTPDailyUsage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	var gotAuth string
 	ts := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter,
 		r *http.Request,
 	) {
-		assert.Equal(t, "/api/v1/usage/summary", r.URL.Path)
-		assert.Equal(t, "2026-06-01", r.URL.Query().Get("from"))
-		assert.Equal(t, "2026-06-02", r.URL.Query().Get("to"))
-		assert.Equal(t, "America/Chicago", r.URL.Query().Get("timezone"))
-		assert.Equal(t, "codex", r.URL.Query().Get("agent"))
-		assert.Equal(t, "true", r.URL.Query().Get("no_default_range"))
-		assert.Equal(t, "false", r.URL.Query().Get("breakdowns"))
-		assert.Equal(t, "false", r.URL.Query().Get("session_counts"))
-		assert.Equal(t, "true", r.URL.Query().Get("include_one_shot"))
-		assert.Equal(t, "true", r.URL.Query().Get("include_automated"))
+		assert.Equal("/api/v1/usage/summary", r.URL.Path)
+		assert.Equal("2026-06-01", r.URL.Query().Get("from"))
+		assert.Equal("2026-06-02", r.URL.Query().Get("to"))
+		assert.Equal("America/Chicago", r.URL.Query().Get("timezone"))
+		assert.Equal("codex", r.URL.Query().Get("agent"))
+		assert.Equal("true", r.URL.Query().Get("no_default_range"))
+		assert.Equal("false", r.URL.Query().Get("breakdowns"))
+		assert.Equal("false", r.URL.Query().Get("session_counts"))
+		assert.Equal("true", r.URL.Query().Get("include_one_shot"))
+		assert.Equal("true", r.URL.Query().Get("include_automated"))
 		gotAuth = r.Header.Get("Authorization")
 		writeJSONResponse(w, sampleDailyUsageJSON)
 	}))
 	defer ts.Close()
 
 	got, err := fetchHTTPDailyUsage(
-		context.Background(),
+		t.Context(),
 		transport{Mode: transportHTTP, URL: ts.URL},
 		"secret-token",
 		dailyUsageQuery{
@@ -582,29 +591,32 @@ func TestFetchHTTPDailyUsage(t *testing.T) {
 			NoDefaultRange: true,
 		},
 	)
-	require.NoError(t, err)
-	require.Len(t, got.Daily, 1)
-	assert.Equal(t, "Bearer secret-token", gotAuth)
-	assert.Equal(t, export.UsageDailySchemaVersion, got.SchemaVersion)
-	require.NotNil(t, got.Pricing)
-	assert.Contains(t, got.Pricing.Models, "gpt-5.1")
-	require.Len(t, got.Projects, 1)
+	require.NoError(err)
+	require.Len(got.Daily, 1)
+	assert.Equal("Bearer secret-token", gotAuth)
+	assert.Equal(export.UsageDailySchemaVersion, got.SchemaVersion)
+	require.NotNil(got.Pricing)
+	assert.Contains(got.Pricing.Models, "gpt-5.1")
+	require.Len(got.Projects, 1)
 	for key, project := range got.Projects {
-		assert.NotContains(t, key, "proj")
-		assert.Equal(t, "proj", project.DisplayLabel)
-		assert.Equal(t, export.ProjectResolutionUnknown, project.Resolution)
+		assert.NotContains(key, "proj")
+		assert.Equal("proj", project.DisplayLabel)
+		assert.Equal(export.ProjectResolutionUnknown, project.Resolution)
 	}
-	assert.Equal(t, 10, got.Totals.InputTokens)
-	assert.Equal(t, 20, got.Daily[0].OutputTokens)
-	assert.Equal(t, 1, got.SessionCounts.Total)
+	assert.Equal(10, got.Totals.InputTokens)
+	assert.Equal(20, got.Daily[0].OutputTokens)
+	assert.Equal(1, got.SessionCounts.Total)
 }
 
 func TestLocalTimezoneWindowsNameProducesServerAcceptedUsageQuery(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if runtime.GOOS != "windows" {
 		t.Skip("requires the Windows local timezone resolver")
 	}
 	previousTZ, hadTZ := os.LookupEnv("TZ")
-	require.NoError(t, os.Unsetenv("TZ"))
+	require.NoError(os.Unsetenv("TZ"))
 	t.Cleanup(func() {
 		if hadTZ {
 			_ = os.Setenv("TZ", previousTZ)
@@ -612,12 +624,12 @@ func TestLocalTimezoneWindowsNameProducesServerAcceptedUsageQuery(t *testing.T) 
 			_ = os.Unsetenv("TZ")
 		}
 	})
-	oldLocal := time.Local
-	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60)
-	t.Cleanup(func() { time.Local = oldLocal })
+	oldLocal := time.Local                                         //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
+	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60) //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
+	t.Cleanup(func() { time.Local = oldLocal })                    //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
 	expected, err := tzlocal.LocalTZ()
-	require.NoError(t, err)
-	require.NotEmpty(t, expected)
+	require.NoError(err)
+	require.NotEmpty(expected)
 
 	var gotTimezones []string
 	ts := httptest.NewServer(http.HandlerFunc(func(
@@ -639,22 +651,22 @@ func TestLocalTimezoneWindowsNameProducesServerAcceptedUsageQuery(t *testing.T) 
 	}))
 	t.Cleanup(ts.Close)
 
-	base, err := fetchHTTPDailyUsage(context.Background(), transport{URL: ts.URL}, "",
+	base, err := fetchHTTPDailyUsage(t.Context(), transport{URL: ts.URL}, "",
 		dailyUsageQuery{Filter: db.UsageFilter{
 			Timezone: time.Now().Location().String(),
 		}, NoDefaultRange: true})
-	assert.Equal(t, db.DailyUsageResult{}, base)
-	require.EqualError(t, err,
+	assert.Equal(db.DailyUsageResult{}, base)
+	require.EqualError(err,
 		`usage summary: HTTP 400: {"error":"invalid timezone: Eastern Standard Time"}`)
 	t.Logf("base: timezone=%q error=%v", gotTimezones[0], err)
 
-	head, err := fetchHTTPDailyUsage(context.Background(), transport{URL: ts.URL}, "",
+	head, err := fetchHTTPDailyUsage(t.Context(), transport{URL: ts.URL}, "",
 		dailyUsageQuery{Filter: db.UsageFilter{
 			Timezone: localTimezone(),
 		}, NoDefaultRange: true})
-	require.NoError(t, err)
-	require.Len(t, head.Daily, 1)
-	assert.Equal(t, expected, gotTimezones[1])
+	require.NoError(err)
+	require.Len(head.Daily, 1)
+	assert.Equal(expected, gotTimezones[1])
 	t.Logf("head: timezone=%q status=200 daily=%d", gotTimezones[1], len(head.Daily))
 }
 
@@ -667,9 +679,9 @@ func TestUsageDateForTimezoneFallsBackToUTC(t *testing.T) {
 
 func TestRunUsageDailyDefaultsToMappedLocalTimezone(t *testing.T) {
 	t.Setenv("TZ", "America/New_York")
-	oldLocal := time.Local
-	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60)
-	t.Cleanup(func() { time.Local = oldLocal })
+	oldLocal := time.Local                                         //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
+	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60) //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
+	t.Cleanup(func() { time.Local = oldLocal })                    //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
 	dataDir := newAgentDataDir(t)
 	var gotTimezone string
 	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -686,9 +698,9 @@ func TestRunUsageDailyDefaultsToMappedLocalTimezone(t *testing.T) {
 
 func TestRunUsageStatuslineDefaultsToMappedLocalTimezone(t *testing.T) {
 	t.Setenv("TZ", "America/New_York")
-	oldLocal := time.Local
-	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60)
-	t.Cleanup(func() { time.Local = oldLocal })
+	oldLocal := time.Local                                         //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
+	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60) //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
+	t.Cleanup(func() { time.Local = oldLocal })                    //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
 	dataDir := newAgentDataDir(t)
 	var gotTimezone string
 	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -704,20 +716,21 @@ func TestRunUsageStatuslineDefaultsToMappedLocalTimezone(t *testing.T) {
 }
 
 func TestCursorUsageWindowUsesMappedLocalTimezone(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Setenv("TZ", "America/New_York")
-	oldLocal := time.Local
-	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60)
-	t.Cleanup(func() { time.Local = oldLocal })
+	oldLocal := time.Local                                         //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
+	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60) //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
+	t.Cleanup(func() { time.Local = oldLocal })                    //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
 
 	loc := timeutil.LocalLocation()
-	assert.Equal(t, "America/New_York", loc.String())
+	assert.Equal("America/New_York", loc.String())
 	start, end, err := resolveCursorUsageWindow(UsageCursorConfig{
 		Since: "2026-03-08", Until: "2026-03-08",
 	}, loc)
 	require.NoError(t, err)
-	assert.Equal(t, time.Date(2026, 3, 8, 5, 0, 0, 0, time.UTC), start)
-	assert.Equal(t,
-		time.Date(2026, 3, 9, 3, 59, 59, 999000000, time.UTC), end)
+	assert.Equal(time.Date(2026, 3, 8, 5, 0, 0, 0, time.UTC), start)
+	assert.Equal(time.Date(2026, 3, 9, 3, 59, 59, 999000000, time.UTC), end)
 }
 
 func TestFetchHTTPDailyUsageMissingProjectsDefaultsEmptyMap(t *testing.T) {
@@ -735,7 +748,7 @@ func TestFetchHTTPDailyUsageMissingProjectsDefaultsEmptyMap(t *testing.T) {
 	defer ts.Close()
 
 	got, err := fetchHTTPDailyUsage(
-		context.Background(),
+		t.Context(),
 		transport{Mode: transportHTTP, URL: ts.URL},
 		"",
 		dailyUsageQuery{NoDefaultRange: true},
@@ -757,7 +770,7 @@ func TestFetchHTTPDailyUsagePreservesExcludedSessionFilters(t *testing.T) {
 	defer ts.Close()
 
 	_, err := fetchHTTPDailyUsage(
-		context.Background(),
+		t.Context(),
 		transport{Mode: transportHTTP, URL: ts.URL},
 		"",
 		dailyUsageQuery{
@@ -775,6 +788,8 @@ func TestFetchHTTPDailyUsagePreservesExcludedSessionFilters(t *testing.T) {
 }
 
 func TestFetchHTTPDailyUsagePreservesOpenEndedRange(t *testing.T) {
+	assert := assert.New(t)
+
 	var gotQuery string
 	ts := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter,
@@ -786,7 +801,7 @@ func TestFetchHTTPDailyUsagePreservesOpenEndedRange(t *testing.T) {
 	defer ts.Close()
 
 	_, err := fetchHTTPDailyUsage(
-		context.Background(),
+		t.Context(),
 		transport{Mode: transportHTTP, URL: ts.URL},
 		"",
 		dailyUsageQuery{
@@ -795,12 +810,14 @@ func TestFetchHTTPDailyUsagePreservesOpenEndedRange(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
-	assert.Contains(t, gotQuery, "no_default_range=true")
-	assert.NotContains(t, gotQuery, "from=")
-	assert.Contains(t, gotQuery, "to=2026-06-02")
+	assert.Contains(gotQuery, "no_default_range=true")
+	assert.NotContains(gotQuery, "from=")
+	assert.Contains(gotQuery, "to=2026-06-02")
 }
 
 func TestFetchHTTPDailyUsageAllowsDefaultRangeWhenRangeEmpty(t *testing.T) {
+	assert := assert.New(t)
+
 	var gotQuery url.Values
 	ts := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter,
@@ -812,7 +829,7 @@ func TestFetchHTTPDailyUsageAllowsDefaultRangeWhenRangeEmpty(t *testing.T) {
 	defer ts.Close()
 
 	_, err := fetchHTTPDailyUsage(
-		context.Background(),
+		t.Context(),
 		transport{Mode: transportHTTP, URL: ts.URL},
 		"",
 		dailyUsageQuery{
@@ -821,9 +838,9 @@ func TestFetchHTTPDailyUsageAllowsDefaultRangeWhenRangeEmpty(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
-	assert.Equal(t, "false", gotQuery.Get("no_default_range"))
-	assert.NotContains(t, gotQuery, "from")
-	assert.NotContains(t, gotQuery, "to")
+	assert.Equal("false", gotQuery.Get("no_default_range"))
+	assert.NotContains(gotQuery, "from")
+	assert.NotContains(gotQuery, "to")
 }
 
 func TestRunUsageDailyUsesDiscoveredDaemon(t *testing.T) {
@@ -898,30 +915,43 @@ func TestResolveUsageWindow(t *testing.T) {
 		{name: "empty passes through"},
 		{name: "duration since anchors at now", since: "14d", wantFrom: "2026-04-04"},
 		{name: "Nh duration since", since: "48h", wantFrom: "2026-04-16"},
-		{name: "duration since anchors to explicit until", since: "14d",
-			until: "2026-04-10", wantFrom: "2026-03-27", wantTo: "2026-04-10"},
-		{name: "duration since anchors to duration until", since: "7d",
-			until: "30d", wantFrom: "2026-03-12", wantTo: "2026-03-19"},
-		{name: "dates pass through", since: "2026-04-01", until: "2026-04-10",
-			wantFrom: "2026-04-01", wantTo: "2026-04-10"},
-		{name: "equal bounds are a valid single day", since: "2026-04-10",
-			until: "2026-04-10", wantFrom: "2026-04-10", wantTo: "2026-04-10"},
+		{
+			name: "duration since anchors to explicit until", since: "14d",
+			until: "2026-04-10", wantFrom: "2026-03-27", wantTo: "2026-04-10",
+		},
+		{
+			name: "duration since anchors to duration until", since: "7d",
+			until: "30d", wantFrom: "2026-03-12", wantTo: "2026-03-19",
+		},
+		{
+			name: "dates pass through", since: "2026-04-01", until: "2026-04-10",
+			wantFrom: "2026-04-01", wantTo: "2026-04-10",
+		},
+		{
+			name: "equal bounds are a valid single day", since: "2026-04-10",
+			until: "2026-04-10", wantFrom: "2026-04-10", wantTo: "2026-04-10",
+		},
 		{name: "garbage since", since: "7x", wantErrSubstring: "invalid --since"},
 		{name: "garbage until", until: "nope", wantErrSubstring: "invalid --until"},
-		{name: "inverted explicit window", since: "2026-06-20", until: "2026-06-13",
-			wantErrSubstring: "must not be after"},
+		{
+			name: "inverted explicit window", since: "2026-06-20", until: "2026-06-13",
+			wantErrSubstring: "must not be after",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			from, to, err := resolveUsageWindow(tc.since, tc.until, now, time.UTC)
 			if tc.wantErrSubstring != "" {
-				require.Error(t, err, "expected an error")
-				assert.Contains(t, err.Error(), tc.wantErrSubstring)
+				require.Error(err, "expected an error")
+				assert.Contains(err.Error(), tc.wantErrSubstring)
 				return
 			}
-			require.NoError(t, err)
-			assert.Equal(t, tc.wantFrom, from, "from")
-			assert.Equal(t, tc.wantTo, to, "to")
+			require.NoError(err)
+			assert.Equal(tc.wantFrom, from, "from")
+			assert.Equal(tc.wantTo, to, "to")
 		})
 	}
 }
@@ -1008,6 +1038,8 @@ func TestRunUsageDailyBreakdownUsesDaemonBreakdowns(t *testing.T) {
 }
 
 func TestRunUsageDailyDefaultRangeUsesDaemonDefaults(t *testing.T) {
+	assert := assert.New(t)
+
 	dataDir := newAgentDataDir(t)
 
 	var gotQuery url.Values
@@ -1024,14 +1056,16 @@ func TestRunUsageDailyDefaultRangeUsesDaemonDefaults(t *testing.T) {
 		})
 	})
 
-	assert.Equal(t, "false", gotQuery.Get("no_default_range"))
-	assert.NotContains(t, gotQuery, "from")
-	assert.NotContains(t, gotQuery, "to")
-	assert.Contains(t, out, `"microdollars": 420000`)
+	assert.Equal("false", gotQuery.Get("no_default_range"))
+	assert.NotContains(gotQuery, "from")
+	assert.NotContains(gotQuery, "to")
+	assert.Contains(out, `"microdollars": 420000`)
 	assertNoLocalSessionsDB(t, dataDir)
 }
 
 func TestRunUsageDailyAllPreservesEmptyRangeWithDiscoveredDaemon(t *testing.T) {
+	assert := assert.New(t)
+
 	dataDir := newAgentDataDir(t)
 
 	var gotQuery url.Values
@@ -1049,10 +1083,10 @@ func TestRunUsageDailyAllPreservesEmptyRangeWithDiscoveredDaemon(t *testing.T) {
 		})
 	})
 
-	assert.Equal(t, "true", gotQuery.Get("no_default_range"))
-	assert.NotContains(t, gotQuery, "from")
-	assert.NotContains(t, gotQuery, "to")
-	assert.Contains(t, out, `"microdollars": 420000`)
+	assert.Equal("true", gotQuery.Get("no_default_range"))
+	assert.NotContains(gotQuery, "from")
+	assert.NotContains(gotQuery, "to")
+	assert.Contains(out, `"microdollars": 420000`)
 	assertNoLocalSessionsDB(t, dataDir)
 }
 
@@ -1082,12 +1116,15 @@ func TestRunUsageDailyNoSyncUsesDiscoveredDaemon(t *testing.T) {
 }
 
 func TestRunUsageDailyOfflineUsesReadOnlyDBWhenWriteLockHeld(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := setupGoldenStatsDataDir(t)
 	writeCustomModelPricingConfig(t, dataDir)
 
-	lock, err := acquireWriteOwnerLock(context.Background(), dataDir)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, lock.Close()) }()
+	lock, err := acquireWriteOwnerLock(t.Context(), dataDir)
+	require.NoError(err)
+	defer func() { require.NoError(lock.Close()) }()
 
 	out := captureStdout(t, func() {
 		runUsageDaily(UsageDailyConfig{
@@ -1099,24 +1136,26 @@ func TestRunUsageDailyOfflineUsesReadOnlyDBWhenWriteLockHeld(t *testing.T) {
 		})
 	})
 
-	assert.Contains(t, out, `"daily"`)
-	assert.Contains(t, out, `"totalCost"`)
+	assert.Contains(out, `"daily"`)
+	assert.Contains(out, `"totalCost"`)
 	var got db.DailyUsageResult
-	require.NoError(t, json.Unmarshal([]byte(out), &got))
-	assert.Greater(t, got.Totals.TotalCost.Microdollars, int64(600_000_000),
+	require.NoError(json.Unmarshal([]byte(out), &got))
+	assert.Greater(got.Totals.TotalCost.Microdollars, int64(600_000_000),
 		"offline read-only usage must preserve custom pricing")
 }
 
 func TestApplyFallbackPricingPreservesReadOnlyLongContextBands(t *testing.T) {
+	require := require.New(t)
+
 	dbPath := filepath.Join(t.TempDir(), "sessions.db")
 	writable := dbtest.OpenTestDBAt(t, dbPath)
 	startedAt := "2026-07-03T12:00:00Z"
-	require.NoError(t, writable.UpsertSession(db.Session{
+	require.NoError(writable.UpsertSession(db.Session{
 		ID: "long-context", Project: "pricing", Machine: "local", Agent: "codex",
 		StartedAt: &startedAt,
 	}))
 	ordinal := 1
-	require.NoError(t, writable.ReplaceSessionUsageEvents("long-context", []db.UsageEvent{{
+	require.NoError(writable.ReplaceSessionUsageEvents("long-context", []db.UsageEvent{{
 		MessageOrdinal: &ordinal,
 		Source:         "codex",
 		Model:          "gpt-5.5",
@@ -1124,17 +1163,17 @@ func TestApplyFallbackPricingPreservesReadOnlyLongContextBands(t *testing.T) {
 		OccurredAt:     startedAt,
 		DedupKey:       "request-1",
 	}}))
-	require.NoError(t, writable.Close())
+	require.NoError(writable.Close())
 
 	readonly, err := db.OpenReadOnly(dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, readonly.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(readonly.Close()) })
 	applyFallbackPricing(readonly, nil)
 
-	got, err := readonly.GetDailyUsage(context.Background(), db.UsageFilter{
+	got, err := readonly.GetDailyUsage(t.Context(), db.UsageFilter{
 		From: "2026-07-03", To: "2026-07-03", Timezone: "UTC",
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	assert.Equal(t, money.Money{Microdollars: 2_720_010}, got.Totals.TotalCost)
 }
@@ -1171,7 +1210,7 @@ func TestArchiveQueryBackendRefusesReadOnlyDaemonForDailyUsage(t *testing.T) {
 	registerTestRuntime(t, dataDir, ts.URL, true)
 
 	_, cleanup, err := resolveArchiveQueryBackend(
-		context.Background(), defaultArchiveQueryPolicy(
+		t.Context(), defaultArchiveQueryPolicy(
 			func(p *archiveQueryPolicy) { p.AutoStart = true },
 		),
 	)
@@ -1205,8 +1244,11 @@ func TestArchiveQueryBackendOfflineSkipsDaemonForDailyUsage(t *testing.T) {
 }
 
 func TestLocalArchiveQueryDailyUsageAppliesDefaultRange(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := newTestDB(t)
-	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
+	require.NoError(d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-model",
 		InputPerMTok:  money.MustParseDollars("1"),
 		OutputPerMTok: money.MustParseDollars("1"),
@@ -1218,7 +1260,7 @@ func TestLocalArchiveQueryDailyUsageAppliesDefaultRange(t *testing.T) {
 	upsertSession(t, d, "recent", "codex", recent)
 	upsertSession(t, d, "old", "codex", old)
 	upsertSession(t, d, "future", "codex", future)
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		{
 			SessionID:  "recent",
 			Ordinal:    0,
@@ -1251,37 +1293,40 @@ func TestLocalArchiveQueryDailyUsageAppliesDefaultRange(t *testing.T) {
 		offline:       true,
 		skipFreshData: true,
 	}
-	defaulted, err := backend.DailyUsage(context.Background(), dailyUsageQuery{
+	defaulted, err := backend.DailyUsage(t.Context(), dailyUsageQuery{
 		Filter: db.UsageFilter{Timezone: "UTC"},
 	})
-	require.NoError(t, err)
-	assert.Equal(t, 10, defaulted.Totals.InputTokens)
+	require.NoError(err)
+	assert.Equal(10, defaulted.Totals.InputTokens)
 
-	all, err := backend.DailyUsage(context.Background(), dailyUsageQuery{
+	all, err := backend.DailyUsage(t.Context(), dailyUsageQuery{
 		Filter:         db.UsageFilter{Timezone: "UTC"},
 		NoDefaultRange: true,
 	})
-	require.NoError(t, err)
-	assert.Equal(t, 70, all.Totals.InputTokens)
+	require.NoError(err)
+	assert.Equal(70, all.Totals.InputTokens)
 
-	withBreakdowns, err := backend.DailyUsage(context.Background(), dailyUsageQuery{
+	withBreakdowns, err := backend.DailyUsage(t.Context(), dailyUsageQuery{
 		Filter:         db.UsageFilter{Timezone: "UTC"},
 		NoDefaultRange: true,
 		Breakdowns:     true,
 	})
-	require.NoError(t, err)
-	require.NotEmpty(t, withBreakdowns.Daily)
-	assert.NotEmpty(t, withBreakdowns.Daily[0].ProjectBreakdowns)
-	assert.NotEmpty(t, withBreakdowns.Daily[0].AgentBreakdowns)
+	require.NoError(err)
+	require.NotEmpty(withBreakdowns.Daily)
+	assert.NotEmpty(withBreakdowns.Daily[0].ProjectBreakdowns)
+	assert.NotEmpty(withBreakdowns.Daily[0].AgentBreakdowns)
 }
 
 func TestUsageDailyJSONIncludesExportMetadata(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := testDataDir(t)
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	fallbackModel := fallbackPricedModel(t)
-	require.NoError(t, pricingrefresh.SeedFallback(database))
+	require.NoError(pricingrefresh.SeedFallback(database))
 	seedUsageDailyExportMetadataFixture(t, database, fallbackModel)
-	require.NoError(t, database.Close())
+	require.NoError(database.Close())
 
 	out := captureStdout(t, func() {
 		runUsageDaily(UsageDailyConfig{
@@ -1291,34 +1336,34 @@ func TestUsageDailyJSONIncludesExportMetadata(t *testing.T) {
 	})
 
 	var got db.DailyUsageResult
-	require.NoError(t, json.Unmarshal([]byte(out), &got))
-	assert.Equal(t, export.UsageDailySchemaVersion, got.SchemaVersion)
-	require.NotNil(t, got.Pricing)
-	require.Contains(t, got.Pricing.Models, "gpt-5.1")
-	require.Contains(t, got.Pricing.Models, fallbackModel)
-	assert.Equal(t, export.CostSourceReported,
+	require.NoError(json.Unmarshal([]byte(out), &got))
+	assert.Equal(export.UsageDailySchemaVersion, got.SchemaVersion)
+	require.NotNil(got.Pricing)
+	require.Contains(got.Pricing.Models, "gpt-5.1")
+	require.Contains(got.Pricing.Models, fallbackModel)
+	assert.Equal(export.CostSourceReported,
 		got.Pricing.Models["gpt-5.1"].CostSource)
-	assert.Equal(t, export.CostSourceComputed,
+	assert.Equal(export.CostSourceComputed,
 		got.Pricing.Models[fallbackModel].CostSource)
-	assert.True(t, got.Pricing.Fallback.Used)
-	assert.Contains(t, got.Pricing.Fallback.Models, fallbackModel)
-	require.Len(t, got.Projects, 1)
+	assert.True(got.Pricing.Fallback.Used)
+	assert.Contains(got.Pricing.Fallback.Models, fallbackModel)
+	require.Len(got.Projects, 1)
 	var projectKey string
 	for key, project := range got.Projects {
 		projectKey = key
-		assert.NotContains(t, key, "shared-project")
-		assert.Equal(t, "shared-project", project.DisplayLabel)
-		assert.Equal(t, export.ProjectResolutionUnknown, project.Resolution)
+		assert.NotContains(key, "shared-project")
+		assert.Equal("shared-project", project.DisplayLabel)
+		assert.Equal(export.ProjectResolutionUnknown, project.Resolution)
 	}
 
-	require.Len(t, got.Daily, 1)
-	assert.Equal(t, "2026-06-01", got.Daily[0].Date)
-	assert.ElementsMatch(t, []string{"gpt-5.1", fallbackModel},
+	require.Len(got.Daily, 1)
+	assert.Equal("2026-06-01", got.Daily[0].Date)
+	assert.ElementsMatch([]string{"gpt-5.1", fallbackModel},
 		got.Daily[0].ModelsUsed)
-	assert.Equal(t, 300, got.Totals.InputTokens)
-	assert.Equal(t, 150, got.Totals.OutputTokens)
-	assert.Equal(t, 2, got.SessionCounts.Total)
-	assert.Equal(t, map[string]int{projectKey: 2},
+	assert.Equal(300, got.Totals.InputTokens)
+	assert.Equal(150, got.Totals.OutputTokens)
+	assert.Equal(2, got.SessionCounts.Total)
+	assert.Equal(map[string]int{projectKey: 2},
 		got.SessionCounts.ByProject)
 }
 
@@ -1361,6 +1406,9 @@ func seedUsageDailyExportMetadataFixture(
 }
 
 func TestFormatDailyUsageJSON(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	result := db.DailyUsageResult{
 		Daily: []db.DailyUsageEntry{
 			{
@@ -1393,20 +1441,20 @@ func TestFormatDailyUsageJSON(t *testing.T) {
 	}
 
 	out, err := json.Marshal(result)
-	require.NoError(t, err, "json.Marshal failed")
+	require.NoError(err, "json.Marshal failed")
 
 	var decoded map[string]jsontext.Value
-	require.NoError(t, json.Unmarshal(out, &decoded),
+	require.NoError(json.Unmarshal(out, &decoded),
 		"json.Unmarshal failed")
 
-	assert.Contains(t, decoded, "daily", "missing 'daily' key in JSON output")
-	assert.Contains(t, decoded, "totals", "missing 'totals' key in JSON output")
+	assert.Contains(decoded, "daily", "missing 'daily' key in JSON output")
+	assert.Contains(decoded, "totals", "missing 'totals' key in JSON output")
 
 	// Verify daily array has expected entry
 	var daily []map[string]jsontext.Value
-	require.NoError(t, json.Unmarshal(decoded["daily"], &daily),
+	require.NoError(json.Unmarshal(decoded["daily"], &daily),
 		"parsing daily array")
-	require.Len(t, daily, 1, "daily length")
+	require.Len(daily, 1, "daily length")
 
 	// Check expected fields exist in daily entry
 	wantFields := []string{
@@ -1416,13 +1464,13 @@ func TestFormatDailyUsageJSON(t *testing.T) {
 		"machineBreakdowns",
 	}
 	for _, f := range wantFields {
-		assert.Contains(t, daily[0], f,
+		assert.Contains(daily[0], f,
 			"missing field %q in daily entry", f)
 	}
 
 	// Verify totals fields
 	var totals map[string]jsontext.Value
-	require.NoError(t, json.Unmarshal(decoded["totals"], &totals),
+	require.NoError(json.Unmarshal(decoded["totals"], &totals),
 		"parsing totals")
 	totalFields := []string{
 		"inputTokens", "outputTokens",
@@ -1430,15 +1478,18 @@ func TestFormatDailyUsageJSON(t *testing.T) {
 		"totalCost",
 	}
 	for _, f := range totalFields {
-		assert.Contains(t, totals, f,
+		assert.Contains(totals, f,
 			"missing field %q in totals", f)
 	}
 }
 
 func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(dataDir, "config.toml"),
 		[]byte(
 			"cursor_admin_api_key = 'config-key'\n"+
@@ -1450,15 +1501,15 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 
 	var requests []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/teams/filtered-usage-events", r.URL.Path)
-		require.Equal(t, http.MethodPost, r.Method)
+		require.Equal("/teams/filtered-usage-events", r.URL.Path)
+		require.Equal(http.MethodPost, r.Method)
 		user, pass, ok := r.BasicAuth()
-		require.True(t, ok, "basic auth")
-		assert.Equal(t, "config-key", user)
-		assert.Empty(t, pass)
+		require.True(ok, "basic auth")
+		assert.Equal("config-key", user)
+		assert.Empty(pass)
 
 		var req map[string]any
-		require.NoError(t, json.UnmarshalRead(r.Body, &req), "decode request")
+		require.NoError(json.UnmarshalRead(r.Body, &req), "decode request")
 		requests = append(requests, req)
 
 		page, _ := req["page"].(float64)
@@ -1524,28 +1575,28 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 		"--page-size", "1",
 	})
 	out := captureStdout(t, func() {
-		require.NoError(t, cmd.Execute(), "Execute")
+		require.NoError(cmd.Execute(), "Execute")
 	})
-	assert.Contains(t, out, "Fetched 2 Cursor usage events into the archive")
+	assert.Contains(out, "Fetched 2 Cursor usage events into the archive")
 
-	require.Len(t, requests, 2, "request count")
+	require.Len(requests, 2, "request count")
 	for _, req := range requests {
-		assert.Equal(t, "config@example.com", req["email"])
-		assert.Equal(t, float64(152683922), req["userId"])
-		assert.Equal(t, float64(1), req["pageSize"])
-		assert.IsType(t, float64(0), req["startDate"])
-		assert.IsType(t, float64(0), req["endDate"])
+		assert.Equal("config@example.com", req["email"])
+		assert.Equal(float64(152683922), req["userId"])
+		assert.Equal(float64(1), req["pageSize"])
+		assert.IsType(float64(0), req["startDate"])
+		assert.IsType(float64(0), req["endDate"])
 	}
-	assert.Equal(t, float64(1), requests[0]["page"])
-	assert.Equal(t, float64(2), requests[1]["page"])
+	assert.Equal(float64(1), requests[0]["page"])
+	assert.Equal(float64(2), requests[1]["page"])
 
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 
 	var count int
-	require.NoError(t, database.Reader().QueryRow(
+	require.NoError(database.Reader().QueryRow(
 		"SELECT count(*) FROM cursor_usage_events",
 	).Scan(&count))
-	assert.Equal(t, 2, count)
+	assert.Equal(2, count)
 
 	rows, err := database.Reader().Query(
 		`SELECT occurred_at, model, input_tokens, output_tokens,
@@ -1553,7 +1604,7 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 		FROM cursor_usage_events
 		ORDER BY occurred_at ASC`,
 	)
-	require.NoError(t, err, "query cursor events")
+	require.NoError(err, "query cursor events")
 	defer rows.Close()
 
 	type storedEvent struct {
@@ -1569,7 +1620,7 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 	var got []storedEvent
 	for rows.Next() {
 		var ev storedEvent
-		require.NoError(t, rows.Scan(
+		require.NoError(rows.Scan(
 			&ev.occurredAt,
 			&ev.model,
 			&ev.inputTokens,
@@ -1581,22 +1632,22 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 		))
 		got = append(got, ev)
 	}
-	require.NoError(t, rows.Err(), "iterate cursor events")
-	require.Len(t, got, 2)
-	assert.Equal(t, "2026-05-14T10:05:00Z", got[0].occurredAt)
-	assert.Equal(t, "claude-4.6-opus-high-thinking", got[0].model)
-	assert.Equal(t, 1234, got[0].inputTokens)
-	assert.Equal(t, 567, got[0].outputTokens)
-	assert.Equal(t, 12, got[0].cacheWriteTokens)
-	assert.Equal(t, 34, got[0].cacheReadTokens)
-	assert.Equal(t, "config@example.com", got[0].userEmail)
-	assert.Equal(t, 0, got[0].isHeadless)
-	assert.Equal(t, "2026-05-14T11:05:00Z", got[1].occurredAt)
-	assert.Equal(t, 1, got[1].inputTokens)
-	assert.Equal(t, 2, got[1].outputTokens)
-	assert.Equal(t, 3, got[1].cacheWriteTokens)
-	assert.Equal(t, 4, got[1].cacheReadTokens)
-	assert.Equal(t, 1, got[1].isHeadless)
+	require.NoError(rows.Err(), "iterate cursor events")
+	require.Len(got, 2)
+	assert.Equal("2026-05-14T10:05:00Z", got[0].occurredAt)
+	assert.Equal("claude-4.6-opus-high-thinking", got[0].model)
+	assert.Equal(1234, got[0].inputTokens)
+	assert.Equal(567, got[0].outputTokens)
+	assert.Equal(12, got[0].cacheWriteTokens)
+	assert.Equal(34, got[0].cacheReadTokens)
+	assert.Equal("config@example.com", got[0].userEmail)
+	assert.Equal(0, got[0].isHeadless)
+	assert.Equal("2026-05-14T11:05:00Z", got[1].occurredAt)
+	assert.Equal(1, got[1].inputTokens)
+	assert.Equal(2, got[1].outputTokens)
+	assert.Equal(3, got[1].cacheWriteTokens)
+	assert.Equal(4, got[1].cacheReadTokens)
+	assert.Equal(1, got[1].isHeadless)
 }
 
 func TestResolveCursorUsageWindowUntilOnlyUsesDefaultLookback(t *testing.T) {
@@ -1653,9 +1704,12 @@ func TestNewUsageCursorCommandExplicitMemberFilterDoesNotReuseConfigSibling(t *t
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			dataDir := t.TempDir()
 			t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
-			require.NoError(t, os.WriteFile(
+			require.NoError(os.WriteFile(
 				filepath.Join(dataDir, "config.toml"),
 				[]byte(
 					"cursor_admin_api_key = 'config-key'\n"+
@@ -1667,7 +1721,7 @@ func TestNewUsageCursorCommandExplicitMemberFilterDoesNotReuseConfigSibling(t *t
 
 			var request map[string]any
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				require.NoError(t, json.UnmarshalRead(r.Body, &request),
+				require.NoError(json.UnmarshalRead(r.Body, &request),
 					"decode request")
 				_, _ = w.Write([]byte(`{
 					"totalUsageEventsCount": 0,
@@ -1692,11 +1746,11 @@ func TestNewUsageCursorCommandExplicitMemberFilterDoesNotReuseConfigSibling(t *t
 
 			cmd := newUsageCursorCommand()
 			cmd.SetArgs(args)
-			require.NoError(t, cmd.Execute(), "Execute")
+			require.NoError(cmd.Execute(), "Execute")
 
-			require.NotNil(t, request, "request")
-			assert.Equal(t, tc.wantEmail, request["email"])
-			assert.Equal(t, tc.wantUser, request["userId"])
+			require.NotNil(request, "request")
+			assert.Equal(tc.wantEmail, request["email"])
+			assert.Equal(tc.wantUser, request["userId"])
 		})
 	}
 }

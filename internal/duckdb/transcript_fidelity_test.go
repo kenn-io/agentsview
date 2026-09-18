@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"encoding/json/v2"
 	"path/filepath"
 	"testing"
@@ -17,7 +16,9 @@ import (
 // TestTranscriptFidelityRoundTripsViaDuckDBPush verifies that
 // transcript_fidelity is preserved across a DuckDB push + read cycle.
 func TestTranscriptFidelityRoundTripsViaDuckDBPush(t *testing.T) {
-	ctx := context.Background()
+	require := require.New(t)
+
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	sessionID := "fidelity-round-trip"
@@ -30,17 +31,17 @@ func TestTranscriptFidelityRoundTripsViaDuckDBPush(t *testing.T) {
 		DataVersion:     1,
 		ReplaceMessages: true,
 	}})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	syncer := newTestSync(t, filepath.Join(t.TempDir(), "fidelity.duckdb"), local, SyncOptions{})
-	require.NoError(t, createSchema(ctx, syncer.DB()))
+	require.NoError(createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	store := NewStoreFromDB(syncer.DB())
 	got, err := store.GetSession(ctx, sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, got)
+	require.NoError(err)
+	require.NotNil(got)
 	assert.Equal(t, "high", got.TranscriptFidelity, "transcript_fidelity must survive push+read")
 }
 

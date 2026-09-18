@@ -11,6 +11,9 @@ import (
 )
 
 func TestBuildRecallExtractionChunksIncludesOnlyUserAssistantText(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	chunks := BuildRecallExtractionChunks("session-1", []db.Message{
 		{
 			Ordinal: 0,
@@ -45,24 +48,26 @@ func TestBuildRecallExtractionChunksIncludesOnlyUserAssistantText(t *testing.T) 
 		},
 	}, RecallExtractionChunkOptions{MaxChars: 1000})
 
-	require.Len(t, chunks, 1)
-	assert.Equal(t, "session-1", chunks[0].SessionID)
-	assert.Equal(t, 0, chunks[0].Index)
-	assert.Equal(t, 1, chunks[0].StartOrdinal)
-	assert.Equal(t, 2, chunks[0].EndOrdinal)
-	require.Len(t, chunks[0].Messages, 2)
-	assert.Equal(t, "user", chunks[0].Messages[0].Role)
-	assert.Equal(t, 1, chunks[0].Messages[0].Ordinal)
-	assert.Equal(t, "assistant", chunks[0].Messages[1].Role)
-	assert.Equal(t, 2, chunks[0].Messages[1].Ordinal)
-	assert.Contains(t, chunks[0].Text, "[1 user] We need a project recall")
-	assert.Contains(t, chunks[0].Text, "[2 assistant] I propose extracting")
-	assert.NotContains(t, chunks[0].Text, "system instruction")
-	assert.NotContains(t, chunks[0].Text, "tool output")
-	assert.NotContains(t, chunks[0].Text, "promoted system marker")
+	require.Len(chunks, 1)
+	assert.Equal("session-1", chunks[0].SessionID)
+	assert.Equal(0, chunks[0].Index)
+	assert.Equal(1, chunks[0].StartOrdinal)
+	assert.Equal(2, chunks[0].EndOrdinal)
+	require.Len(chunks[0].Messages, 2)
+	assert.Equal("user", chunks[0].Messages[0].Role)
+	assert.Equal(1, chunks[0].Messages[0].Ordinal)
+	assert.Equal("assistant", chunks[0].Messages[1].Role)
+	assert.Equal(2, chunks[0].Messages[1].Ordinal)
+	assert.Contains(chunks[0].Text, "[1 user] We need a project recall")
+	assert.Contains(chunks[0].Text, "[2 assistant] I propose extracting")
+	assert.NotContains(chunks[0].Text, "system instruction")
+	assert.NotContains(chunks[0].Text, "tool output")
+	assert.NotContains(chunks[0].Text, "promoted system marker")
 }
 
 func TestBuildRecallExtractionChunksBoundsChunksByTextSize(t *testing.T) {
+	assert := assert.New(t)
+
 	msgs := []db.Message{
 		{Ordinal: 1, Role: "user", Content: strings.Repeat("a", 36)},
 		{Ordinal: 2, Role: "assistant", Content: strings.Repeat("b", 36)},
@@ -76,10 +81,10 @@ func TestBuildRecallExtractionChunksBoundsChunksByTextSize(t *testing.T) {
 
 	require.Len(t, chunks, 4)
 	for i, chunk := range chunks {
-		assert.Equal(t, i, chunk.Index)
-		assert.Len(t, chunk.Messages, 1)
-		assert.LessOrEqual(t, len(chunk.Text), 90)
-		assert.Equal(t, chunk.Messages[0].Ordinal, chunk.StartOrdinal)
-		assert.Equal(t, chunk.Messages[0].Ordinal, chunk.EndOrdinal)
+		assert.Equal(i, chunk.Index)
+		assert.Len(chunk.Messages, 1)
+		assert.LessOrEqual(len(chunk.Text), 90)
+		assert.Equal(chunk.Messages[0].Ordinal, chunk.StartOrdinal)
+		assert.Equal(chunk.Messages[0].Ordinal, chunk.EndOrdinal)
 	}
 }

@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -47,6 +46,9 @@ func writeRooCodeSyncFixture(
 // an append-only write the second sync would only add new ordinals
 // and the stored tool call would stay pending forever.
 func TestSyncRooCodeLateCommandResultUpdatesStoredToolCall(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -67,43 +69,43 @@ func TestSyncRooCodeLateCommandResultUpdatesStoredToolCall(t *testing.T) {
 		base,
 	)
 
-	stats := engine.SyncAll(context.Background(), nil)
-	require.Equal(t, 1, stats.Synced)
+	stats := engine.SyncAll(t.Context(), nil)
+	require.Equal(1, stats.Synced)
 
 	sessionID := "roocode:task-late-result"
-	msgs, err := testDB.GetAllMessages(context.Background(), sessionID)
-	require.NoError(t, err)
-	require.Len(t, msgs, 2)
-	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, "execute_command", msgs[1].ToolCalls[0].ToolName)
-	assert.Empty(t, msgs[1].ToolCalls[0].ResultEvents,
+	msgs, err := testDB.GetAllMessages(t.Context(), sessionID)
+	require.NoError(err)
+	require.Len(msgs, 2)
+	require.Len(msgs[1].ToolCalls, 1)
+	assert.Equal("execute_command", msgs[1].ToolCalls[0].ToolName)
+	assert.Empty(msgs[1].ToolCalls[0].ResultEvents,
 		"the command has not produced output yet")
 
 	// The command's failure arrives later: RooCode appends the
 	// command_output record, which the parser pairs into the earlier
 	// tool-call message rather than emitting a new ordinal.
-	require.NoError(t, os.WriteFile(messagesPath, []byte(
+	require.NoError(os.WriteFile(messagesPath, []byte(
 		`[{"ts":1688836851000,"type":"say","say":"text","text":"Run tests"},`+
 			`{"ts":1688836860000,"type":"ask","ask":"command","text":"npm test"},`+
 			`{"ts":1688836870000,"type":"say","say":"command_output",`+
 			`"text":"error: 2 tests failed with exit code 1"}]`,
 	), 0o644))
 	later := base.Add(time.Minute)
-	require.NoError(t, os.Chtimes(messagesPath, later, later))
+	require.NoError(os.Chtimes(messagesPath, later, later))
 
-	stats = engine.SyncAll(context.Background(), nil)
-	require.Equal(t, 1, stats.Synced)
+	stats = engine.SyncAll(t.Context(), nil)
+	require.Equal(1, stats.Synced)
 
-	msgs, err = testDB.GetAllMessages(context.Background(), sessionID)
-	require.NoError(t, err)
-	require.Len(t, msgs, 2,
+	msgs, err = testDB.GetAllMessages(t.Context(), sessionID)
+	require.NoError(err)
+	require.Len(msgs, 2,
 		"the paired output must not appear as an extra message")
-	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(msgs[1].ToolCalls, 1)
 	events := msgs[1].ToolCalls[0].ResultEvents
-	require.Len(t, events, 1,
+	require.Len(events, 1,
 		"the stored tool call must carry the late result event")
-	assert.Equal(t, "errored", events[0].Status)
-	assert.Contains(t, events[0].Content, "exit code 1")
+	assert.Equal("errored", events[0].Status)
+	assert.Contains(events[0].Content, "exit code 1")
 }
 
 // SyncAllSince must exclude unchanged RooCode tasks on stat information
@@ -115,6 +117,9 @@ func TestSyncRooCodeLateCommandResultUpdatesStoredToolCall(t *testing.T) {
 // task survives the cutoff, and the downstream stat gate counts it as
 // skipped instead of it never being considered at all.
 func TestSyncAllSinceRooCodeCutoffIsStatOnly(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -137,37 +142,37 @@ func TestSyncAllSinceRooCodeCutoffIsStatOnly(t *testing.T) {
 		base,
 	)
 
-	stats := engine.SyncAll(context.Background(), nil)
-	require.Equal(t, 1, stats.Synced)
+	stats := engine.SyncAll(t.Context(), nil)
+	require.Equal(1, stats.Synced)
 
-	require.NoError(t, os.Chmod(historyPath, 0o000))
-	require.NoError(t, os.Chmod(messagesPath, 0o000))
+	require.NoError(os.Chmod(historyPath, 0o000))
+	require.NoError(os.Chmod(messagesPath, 0o000))
 	t.Cleanup(func() {
 		_ = os.Chmod(historyPath, 0o644)
 		_ = os.Chmod(messagesPath, 0o644)
 	})
 
 	cutoff := base.Add(time.Hour)
-	stats = engine.SyncAllSince(context.Background(), cutoff, nil)
-	assert.Equal(t, 0, stats.Synced)
-	assert.Equal(t, 0, stats.Failed)
-	assert.Equal(t, 0, stats.Skipped,
+	stats = engine.SyncAllSince(t.Context(), cutoff, nil)
+	assert.Equal(0, stats.Synced)
+	assert.Equal(0, stats.Failed)
+	assert.Equal(0, stats.Skipped,
 		"an unchanged task must be excluded by the cutoff on stat alone, "+
 			"not carried into the sync pass and skipped there")
 
 	// A sibling-only transcript change past the cutoff must still look
 	// fresh: the composite folds in ui_messages.json's mtime.
-	require.NoError(t, os.Chmod(historyPath, 0o644))
-	require.NoError(t, os.Chmod(messagesPath, 0o644))
-	require.NoError(t, os.WriteFile(messagesPath, []byte(
+	require.NoError(os.Chmod(historyPath, 0o644))
+	require.NoError(os.Chmod(messagesPath, 0o644))
+	require.NoError(os.WriteFile(messagesPath, []byte(
 		`[{"ts":1688836851000,"type":"say","say":"text","text":"Old task"},`+
 			`{"ts":1688836852000,"type":"say","say":"text","text":"Appended"}]`,
 	), 0o644))
 	appended := cutoff.Add(time.Minute)
-	require.NoError(t, os.Chtimes(messagesPath, appended, appended))
+	require.NoError(os.Chtimes(messagesPath, appended, appended))
 
-	stats = engine.SyncAllSince(context.Background(), cutoff, nil)
-	assert.Equal(t, 1, stats.Synced,
+	stats = engine.SyncAllSince(t.Context(), cutoff, nil)
+	assert.Equal(1, stats.Synced,
 		"a transcript append past the cutoff must re-sync the task")
 }
 
@@ -176,6 +181,9 @@ func TestSyncAllSinceRooCodeCutoffIsStatOnly(t *testing.T) {
 // the archived transcript instead of replacing it with nothing, while
 // a genuinely new metadata-only task still syncs normally.
 func TestSyncRooCodeMissingTranscriptPreservesArchive(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -196,30 +204,30 @@ func TestSyncRooCodeMissingTranscriptPreservesArchive(t *testing.T) {
 		base,
 	)
 
-	stats := engine.SyncAll(context.Background(), nil)
-	require.Equal(t, 1, stats.Synced)
+	stats := engine.SyncAll(t.Context(), nil)
+	require.Equal(1, stats.Synced)
 
 	sessionID := "roocode:task-vanish"
-	msgs, err := testDB.GetAllMessages(context.Background(), sessionID)
-	require.NoError(t, err)
-	require.Len(t, msgs, 2)
+	msgs, err := testDB.GetAllMessages(t.Context(), sessionID)
+	require.NoError(err)
+	require.Len(msgs, 2)
 
 	// The transcript disappears (deleted or temporarily unavailable);
 	// the composite stat changes, so the session re-parses as empty.
-	require.NoError(t, os.Remove(messagesPath))
+	require.NoError(os.Remove(messagesPath))
 	later := base.Add(time.Minute)
-	require.NoError(t, os.Chtimes(historyPath, later, later))
+	require.NoError(os.Chtimes(historyPath, later, later))
 
-	engine.SyncAll(context.Background(), nil)
+	engine.SyncAll(t.Context(), nil)
 
-	msgs, err = testDB.GetAllMessages(context.Background(), sessionID)
-	require.NoError(t, err)
-	assert.Len(t, msgs, 2,
+	msgs, err = testDB.GetAllMessages(t.Context(), sessionID)
+	require.NoError(err)
+	assert.Len(msgs, 2,
 		"the archived transcript must survive the missing ui_messages.json")
-	sess, err := testDB.GetSessionFull(context.Background(), sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, 2, sess.MessageCount,
+	sess, err := testDB.GetSessionFull(t.Context(), sessionID)
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal(2, sess.MessageCount,
 		"session counts must not be corrupted by the empty re-parse")
 
 	// A brand-new metadata-only task (history_item.json written before
@@ -227,12 +235,12 @@ func TestSyncRooCodeMissingTranscriptPreservesArchive(t *testing.T) {
 	// sync: the preserve guard only protects existing archives.
 	_, newMessagesPath := writeRooCodeSyncFixture(t, rooDir,
 		"task-metadata-only", `[]`, base.Add(2*time.Minute))
-	require.NoError(t, os.Remove(newMessagesPath))
-	engine.SyncAll(context.Background(), nil)
+	require.NoError(os.Remove(newMessagesPath))
+	engine.SyncAll(t.Context(), nil)
 	newSess, err := testDB.GetSessionFull(
-		context.Background(), "roocode:task-metadata-only",
+		t.Context(), "roocode:task-metadata-only",
 	)
-	require.NoError(t, err)
-	require.NotNil(t, newSess, "metadata-only tasks must still sync")
-	assert.Equal(t, 0, newSess.MessageCount)
+	require.NoError(err)
+	require.NotNil(newSess, "metadata-only tasks must still sync")
+	assert.Equal(0, newSess.MessageCount)
 }

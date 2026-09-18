@@ -8,10 +8,9 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
-	"github.com/mattn/go-sqlite3"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 // Cache is a small TTL-backed key-value store for git aggregation results.
@@ -78,7 +77,7 @@ func (c *Cache) GetOrCompute(
 ) ([]byte, error) {
 	payload, ok, err := c.lookup(ctx, key, ttl)
 	if err != nil {
-		if !c.write && isMissingCacheTable(err) {
+		if !c.write && c.isMissingCacheTable(ctx) {
 			return compute()
 		}
 		return nil, err
@@ -100,12 +99,12 @@ func (c *Cache) GetOrCompute(
 	return fresh, nil
 }
 
-func isMissingCacheTable(err error) bool {
-	var sqliteErr sqlite3.Error
-	if !errors.As(err, &sqliteErr) || sqliteErr.Code != sqlite3.ErrError {
-		return false
-	}
-	return strings.Contains(err.Error(), "no such table: git_cache")
+func (c *Cache) isMissingCacheTable(ctx context.Context) bool {
+	var exists bool
+	err := c.db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'git_cache')`,
+	).Scan(&exists)
+	return err == nil && !exists
 }
 
 // lookup returns (payload, true, nil) when a fresh row exists, (nil, false,

@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -52,29 +51,32 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 
 	t.Run("blank model returns nil", func(t *testing.T) {
 		scope, err := store.resolveAnalyticsMessageScope(
-			context.Background(), []string{sessionA}, db.AnalyticsFilter{}, false)
+			t.Context(), []string{sessionA}, db.AnalyticsFilter{}, false)
 		require.NoError(t, err)
 		assert.Nil(t, scope)
 	})
 
 	t.Run("selected model pairs user+assistant; other model yields none", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		scope, err := store.resolveAnalyticsMessageScope(
-			context.Background(), []string{sessionA, sessionB},
+			t.Context(), []string{sessionA, sessionB},
 			db.AnalyticsFilter{Model: model}, false)
-		require.NoError(t, err)
-		require.NotNil(t, scope)
+		require.NoError(err)
+		require.NotNil(scope)
 		stats := scope.StatsBySession()
 		sA, ok := stats[sessionA]
-		require.True(t, ok)
-		assert.Equal(t, 1, sA.UserMessages)
-		assert.Equal(t, 1, sA.AssistantMessages)
-		assert.Equal(t, 2, sA.Messages)
-		assert.Zero(t, stats[sessionB].Messages, "non-selected model contributes nothing")
+		require.True(ok)
+		assert.Equal(1, sA.UserMessages)
+		assert.Equal(1, sA.AssistantMessages)
+		assert.Equal(2, sA.Messages)
+		assert.Zero(stats[sessionB].Messages, "non-selected model contributes nothing")
 	})
 
 	t.Run("TimingBySession returns one entry per matched row", func(t *testing.T) {
 		scope, err := store.resolveAnalyticsMessageScope(
-			context.Background(), []string{sessionA}, db.AnalyticsFilter{Model: model}, false)
+			t.Context(), []string{sessionA}, db.AnalyticsFilter{Model: model}, false)
 		require.NoError(t, err)
 		require.NotNil(t, scope)
 		assert.Len(t, scope.TimingBySession()[sessionA], 2)
@@ -82,7 +84,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 
 	t.Run("deduplicates sessionIDs", func(t *testing.T) {
 		scope, err := store.resolveAnalyticsMessageScope(
-			context.Background(), []string{sessionA, sessionA},
+			t.Context(), []string{sessionA, sessionA},
 			db.AnalyticsFilter{Model: model}, false)
 		require.NoError(t, err)
 		require.NotNil(t, scope)
@@ -92,7 +94,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	t.Run("hour filter drops non-matching rows", func(t *testing.T) {
 		h := 14 // rows are at 09:00 UTC
 		scope, err := store.resolveAnalyticsMessageScope(
-			context.Background(), []string{sessionA},
+			t.Context(), []string{sessionA},
 			db.AnalyticsFilter{Model: model, Hour: &h, Timezone: "UTC"}, false)
 		require.NoError(t, err)
 		require.NotNil(t, scope)
@@ -100,25 +102,30 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	})
 
 	t.Run("includeContent=false leaves content empty", func(t *testing.T) {
+		require := require.New(t)
+
 		scope, err := store.resolveAnalyticsMessageScope(
-			context.Background(), []string{sessionA}, db.AnalyticsFilter{Model: model}, false)
-		require.NoError(t, err)
-		require.NotNil(t, scope)
+			t.Context(), []string{sessionA}, db.AnalyticsFilter{Model: model}, false)
+		require.NoError(err)
+		require.NotNil(scope)
 		rows := scope.MessagesBySession()[sessionA]
-		require.Len(t, rows, 2)
+		require.Len(rows, 2)
 		for _, r := range rows {
 			assert.Empty(t, r.Content)
 		}
 	})
 
 	t.Run("includeContent=true populates content", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		scope, err := store.resolveAnalyticsMessageScope(
-			context.Background(), []string{sessionA}, db.AnalyticsFilter{Model: model}, true)
-		require.NoError(t, err)
-		require.NotNil(t, scope)
+			t.Context(), []string{sessionA}, db.AnalyticsFilter{Model: model}, true)
+		require.NoError(err)
+		require.NotNil(scope)
 		rows := scope.MessagesBySession()[sessionA]
-		require.Len(t, rows, 2)
-		assert.Equal(t, "hello", rows[0].Content)
-		assert.Equal(t, "world", rows[1].Content)
+		require.Len(rows, 2)
+		assert.Equal("hello", rows[0].Content)
+		assert.Equal("world", rows[1].Content)
 	})
 }

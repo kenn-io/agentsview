@@ -1,5 +1,7 @@
 package parser
 
+import "context"
+
 import (
 	"database/sql"
 	"fmt"
@@ -41,7 +43,7 @@ type CursorConversationCount struct {
 	Count int64  `json:"count"`
 }
 
-func LoadCursorAttribution(
+func LoadCursorAttribution(ctx context.Context,
 	from, to time.Time,
 ) (*CursorAttribution, CursorAttributionStatus, error) {
 	dbPath := cursorAttributionDBPath()
@@ -55,14 +57,14 @@ func LoadCursorAttribution(
 		return nil, "", fmt.Errorf("stat cursor attribution db: %w", err)
 	}
 
-	conn, err := openCursorAttributionDB(dbPath)
+	conn, err := openCursorAttributionDB(ctx, dbPath)
 	if err != nil {
 		return nil, "", err
 	}
 	defer conn.Close()
 
 	attr := &CursorAttribution{}
-	if err := conn.QueryRow(
+	if err := conn.QueryRowContext(ctx,
 		`SELECT
 			COUNT(*),
 			COALESCE(SUM(linesAdded), 0),
@@ -94,7 +96,7 @@ func LoadCursorAttribution(
 		return nil, "", fmt.Errorf("querying scored_commits: %w", err)
 	}
 
-	rows, err := conn.Query(
+	rows, err := conn.QueryContext(ctx,
 		`SELECT
 			COALESCE(model, ''),
 			COALESCE(mode, ''),
@@ -159,13 +161,13 @@ func cursorAttributionDBPath() string {
 	return filepath.Join(home, ".cursor", "ai-tracking", "ai-code-tracking.db")
 }
 
-func openCursorAttributionDB(path string) (*sql.DB, error) {
+func openCursorAttributionDB(ctx context.Context, path string) (*sql.DB, error) {
 	conn, err := openSQLiteReadOnly(path, sqliteReadOptions{busyTimeoutMS: 3000})
 	if err != nil {
 		return nil, fmt.Errorf("opening cursor attribution db: %w", err)
 	}
 	conn.SetMaxOpenConns(1)
-	if err := conn.Ping(); err != nil {
+	if err := conn.PingContext(ctx); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("opening cursor attribution db: %w", err)
 	}

@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -55,7 +56,7 @@ func (s *Store) StarSession(sessionID string) (bool, error) {
 		`SELECT 1 FROM sessions WHERE id = $1`,
 		sessionID,
 	).Scan(&exists)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
@@ -171,7 +172,7 @@ func (s *Store) PinMessage(
 		SELECT id FROM upsert`,
 		sessionID, messageID, note,
 	).Scan(&id)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		if err := tx.Commit(); err != nil {
 			return 0, fmt.Errorf("committing empty pin transaction: %w", err)
 		}

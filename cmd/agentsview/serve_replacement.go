@@ -80,9 +80,8 @@ func prepareForegroundServeDaemon(
 		ownsStartLock, acquiredStartLock := markDaemonStarting(cfg.DataDir)
 		if !ownsStartLock {
 			releaseReplacementLock()
-			return false, noRelease, fmt.Errorf(
-				"agentsview serve startup is already in progress; " +
-					"wait for it to finish or run `agentsview daemon status`",
+			return false, noRelease, errors.New("agentsview serve startup is already in progress; " +
+				"wait for it to finish or run `agentsview daemon status`",
 			)
 		}
 		fmt.Println("Replacing agentsview daemon")
@@ -116,9 +115,8 @@ func acquireForegroundServeLaunchLock(cfg config.Config) (func(), error) {
 	}
 	lock, ok := acquireBackgroundLaunchLock(cfg.DataDir)
 	if !ok {
-		return nil, fmt.Errorf(
-			"agentsview serve --background is already in progress; " +
-				"wait for it to finish or run `agentsview daemon status`",
+		return nil, errors.New("agentsview serve --background is already in progress; " +
+			"wait for it to finish or run `agentsview daemon status`",
 		)
 	}
 	path := backgroundLaunchLockPath(cfg.DataDir)
@@ -342,10 +340,10 @@ func serveDaemonDecisionLines(
 	}
 	lines := []string{
 		header,
-		fmt.Sprintf("  url:             %s", urlFromDaemonRuntime(rt)),
+		"  url:             " + urlFromDaemonRuntime(rt),
 		fmt.Sprintf("  pid:             %d", rt.Record.PID),
-		fmt.Sprintf("  daemon version:  %s", serveDaemonVersion(rt)),
-		fmt.Sprintf("  binary version:  %s", serveCurrentVersion()),
+		"  daemon version:  " + serveDaemonVersion(rt),
+		"  binary version:  " + serveCurrentVersion(),
 		fmt.Sprintf(
 			"  API version:     daemon %d, current %d",
 			rt.API, daemonAPIVersion,
@@ -361,7 +359,7 @@ func serveDaemonDecisionLines(
 		)
 	}
 	if decision.Reason != "" {
-		lines = append(lines, fmt.Sprintf("  reason:          %s", decision.Reason))
+		lines = append(lines, "  reason:          "+decision.Reason)
 	}
 	return lines
 }

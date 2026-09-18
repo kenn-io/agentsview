@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"sort"
 	"strings"
@@ -15,8 +14,11 @@ import (
 )
 
 func TestGetProjectInventoryAggregates(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "alpha-1", "alpha", func(s *Session) {
 		s.Machine = "m1"
@@ -45,7 +47,7 @@ func TestGetProjectInventoryAggregates(t *testing.T) {
 		s.StartedAt = Ptr("2020-01-01T00:00:00Z")
 		s.EndedAt = Ptr("2020-01-02T00:00:00Z")
 	})
-	require.NoError(t, d.SoftDeleteSession("alpha-trashed"))
+	require.NoError(d.SoftDeleteSession("alpha-trashed"))
 
 	insertSession(t, d, "beta-1", "beta", func(s *Session) {
 		s.Machine = "m3"
@@ -55,50 +57,53 @@ func TestGetProjectInventoryAggregates(t *testing.T) {
 	})
 
 	inv, err := d.GetProjectInventory(ctx, ProjectDateFilter{})
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.Len(t, inv.Projects, 2)
-	assert.Equal(t, 2, inv.TotalProjects)
-	assert.Equal(t, 4, inv.TotalSessions)
-	assert.Equal(t, 0, inv.GovernedSessions)
+	require.Len(inv.Projects, 2)
+	assert.Equal(2, inv.TotalProjects)
+	assert.Equal(4, inv.TotalSessions)
+	assert.Equal(0, inv.GovernedSessions)
 
 	// Row ordering must be deterministic, sorted by label.
-	assert.Equal(t, "alpha", inv.Projects[0].Label)
-	assert.Equal(t, "beta", inv.Projects[1].Label)
+	assert.Equal("alpha", inv.Projects[0].Label)
+	assert.Equal("beta", inv.Projects[1].Label)
 
 	alpha := inv.Projects[0]
-	assert.Equal(t, 3, alpha.Sessions, "trashed session excluded")
-	assert.Equal(t, 2, alpha.Machines)
-	assert.Equal(t, 2, alpha.Agents)
-	assert.Equal(t, 1, alpha.DistinctCwds, "empty cwd not counted, duplicate collapses")
-	require.NotNil(t, alpha.FirstActivity)
-	require.NotNil(t, alpha.LastActivity)
-	assert.Equal(t, "2023-12-25T00:00:00Z", alpha.FirstActivity.UTC().Format(time.RFC3339))
-	assert.Equal(t, "2024-01-10T00:00:00Z", alpha.LastActivity.UTC().Format(time.RFC3339))
-	assert.Equal(t, 0, alpha.EnabledRulesTargeting)
-	assert.False(t, alpha.RecordedAsOriginal)
+	assert.Equal(3, alpha.Sessions, "trashed session excluded")
+	assert.Equal(2, alpha.Machines)
+	assert.Equal(2, alpha.Agents)
+	assert.Equal(1, alpha.DistinctCwds, "empty cwd not counted, duplicate collapses")
+	require.NotNil(alpha.FirstActivity)
+	require.NotNil(alpha.LastActivity)
+	assert.Equal("2023-12-25T00:00:00Z", alpha.FirstActivity.UTC().Format(time.RFC3339))
+	assert.Equal("2024-01-10T00:00:00Z", alpha.LastActivity.UTC().Format(time.RFC3339))
+	assert.Equal(0, alpha.EnabledRulesTargeting)
+	assert.False(alpha.RecordedAsOriginal)
 
 	beta := inv.Projects[1]
-	assert.Equal(t, 1, beta.Sessions)
-	assert.Equal(t, 1, beta.Machines)
-	assert.Equal(t, 1, beta.Agents)
-	assert.Equal(t, 1, beta.DistinctCwds)
-	require.NotNil(t, beta.FirstActivity)
-	require.NotNil(t, beta.LastActivity)
-	assert.Equal(t, *beta.FirstActivity, *beta.LastActivity,
+	assert.Equal(1, beta.Sessions)
+	assert.Equal(1, beta.Machines)
+	assert.Equal(1, beta.Agents)
+	assert.Equal(1, beta.DistinctCwds)
+	require.NotNil(beta.FirstActivity)
+	require.NotNil(beta.LastActivity)
+	assert.Equal(*beta.FirstActivity, *beta.LastActivity,
 		"LastActivity falls back to started_at when ended_at is unset")
 
 	projects, err := d.BuildProjectIdentityMap(ctx, []string{"alpha", "beta"})
-	require.NoError(t, err)
-	assert.NotEmpty(t, alpha.ProjectKey)
-	assert.Equal(t, export.ProjectKeyForEntry(projects["alpha"]), alpha.ProjectKey)
-	assert.NotEmpty(t, beta.ProjectKey)
-	assert.Equal(t, export.ProjectKeyForEntry(projects["beta"]), beta.ProjectKey)
+	require.NoError(err)
+	assert.NotEmpty(alpha.ProjectKey)
+	assert.Equal(export.ProjectKeyForEntry(projects["alpha"]), alpha.ProjectKey)
+	assert.NotEmpty(beta.ProjectKey)
+	assert.Equal(export.ProjectKeyForEntry(projects["beta"]), beta.ProjectKey)
 }
 
 func TestProjectDateFilterScopesInventoryAndFolders(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, fixture := range []struct{ id, project, cwd, start, end string }{
 		{"august", "alpha", "/work/august", "2026-08-15T12:00:00Z", "2026-08-15T13:00:00Z"},
 		{"september", "alpha", "/work/september", "2026-09-01T00:00:00Z", "2026-09-01T01:00:00Z"},
@@ -113,54 +118,60 @@ func TestProjectDateFilterScopesInventoryAndFolders(t *testing.T) {
 	}
 	filter := ProjectDateFilter{DateFrom: "2026-08-01", DateTo: "2026-08-31", Timezone: "UTC"}
 	inv, err := d.GetProjectInventory(ctx, filter)
-	require.NoError(t, err)
-	require.Len(t, inv.Projects, 2)
-	assert.Equal(t, 2, inv.TotalSessions)
-	assert.Equal(t, "alpha", inv.Projects[0].Label)
-	assert.Equal(t, 1, inv.Projects[0].Sessions)
-	assert.Equal(t, "beta", inv.Projects[1].Label)
+	require.NoError(err)
+	require.Len(inv.Projects, 2)
+	assert.Equal(2, inv.TotalSessions)
+	assert.Equal("alpha", inv.Projects[0].Label)
+	assert.Equal(1, inv.Projects[0].Sessions)
+	assert.Equal("beta", inv.Projects[1].Label)
 	candidates, err := d.ListArchiveWorktreeCandidates(ctx, ArchiveWorktreeCandidateRequest{
 		ProjectLabel: "alpha", ProjectKey: inv.Projects[0].ProjectKey, ProjectDateFilter: filter,
 	})
-	require.NoError(t, err)
-	require.Len(t, candidates, 1)
-	assert.Equal(t, "/work/august", candidates[0].SuggestedPrefix)
-	assert.Equal(t, 1, candidates[0].ContributingSessions)
+	require.NoError(err)
+	require.Len(candidates, 1)
+	assert.Equal("/work/august", candidates[0].SuggestedPrefix)
+	assert.Equal(1, candidates[0].ContributingSessions)
 	all, err := d.GetProjectInventory(ctx, ProjectDateFilter{})
-	require.NoError(t, err)
-	assert.Equal(t, 4, all.TotalSessions)
+	require.NoError(err)
+	assert.Equal(4, all.TotalSessions)
 }
 
 func TestGetProjectInventoryKeepsSanitizedLabelCollisionsDistinct(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "private-a-1", "/private/repos/alpha")
 	insertSession(t, d, "private-b-1", "/private/repos/beta")
 	insertSession(t, d, "private-b-2", "/private/repos/beta")
 
 	inv, err := d.GetProjectInventory(ctx, ProjectDateFilter{})
-	require.NoError(t, err)
-	require.Len(t, inv.Projects, 2)
-	assert.Equal(t, 2, inv.TotalProjects)
-	assert.Equal(t, 3, inv.TotalSessions)
+	require.NoError(err)
+	require.Len(inv.Projects, 2)
+	assert.Equal(2, inv.TotalProjects)
+	assert.Equal(3, inv.TotalSessions)
 
 	keys := map[string]struct{}{}
 	counts := make([]int, 0, len(inv.Projects))
 	for _, row := range inv.Projects {
-		assert.Empty(t, row.Label)
-		assert.NotEmpty(t, row.ProjectKey)
+		assert.Empty(row.Label)
+		assert.NotEmpty(row.ProjectKey)
 		keys[row.ProjectKey] = struct{}{}
 		counts = append(counts, row.Sessions)
 	}
-	assert.Len(t, keys, 2, "each private-path project keeps its deep-link key")
+	assert.Len(keys, 2, "each private-path project keeps its deep-link key")
 	sort.Ints(counts)
-	assert.Equal(t, []int{1, 2}, counts)
+	assert.Equal([]int{1, 2}, counts)
 }
 
 func TestGetProjectInventoryIgnoresEmptyTimestampStrings(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "legacy-1", "alpha", func(s *Session) {
 		s.StartedAt = Ptr("2024-01-05T00:00:00Z")
@@ -171,25 +182,28 @@ func TestGetProjectInventoryIgnoresEmptyTimestampStrings(t *testing.T) {
 	// corrupt MIN(started_at) without the NULLIF guard.
 	_, err := d.getWriter().Exec(
 		`UPDATE sessions SET started_at = '', ended_at = '' WHERE id = 'legacy-2'`)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	inv, err := d.GetProjectInventory(ctx, ProjectDateFilter{})
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.Len(t, inv.Projects, 1)
+	require.Len(inv.Projects, 1)
 	row := inv.Projects[0]
-	require.NotNil(t, row.FirstActivity,
+	require.NotNil(row.FirstActivity,
 		"'' started_at must not shadow the real first activity")
-	assert.Equal(t, "2024-01-05T00:00:00Z",
+	assert.Equal("2024-01-05T00:00:00Z",
 		row.FirstActivity.UTC().Format(time.RFC3339))
-	require.NotNil(t, row.LastActivity)
-	assert.Equal(t, "2024-01-05T00:00:00Z",
+	require.NotNil(row.LastActivity)
+	assert.Equal("2024-01-05T00:00:00Z",
 		row.LastActivity.UTC().Format(time.RFC3339))
 }
 
 func TestGetProjectInventoryCwdNormalization(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "win-1", "winproj", func(s *Session) {
 		s.Cwd = `C:\w\repo`
@@ -201,17 +215,20 @@ func TestGetProjectInventoryCwdNormalization(t *testing.T) {
 	})
 
 	inv, err := d.GetProjectInventory(ctx, ProjectDateFilter{})
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.Len(t, inv.Projects, 1)
-	assert.Equal(t, 2, inv.Projects[0].Sessions)
-	assert.Equal(t, 1, inv.Projects[0].DistinctCwds,
+	require.Len(inv.Projects, 1)
+	assert.Equal(2, inv.Projects[0].Sessions)
+	assert.Equal(1, inv.Projects[0].DistinctCwds,
 		"backslash and forward-slash cwds normalize to the same path")
 }
 
 func TestGetProjectInventoryAnnotations(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "alpha-1", "alpha", func(s *Session) {
 		s.StartedAt = Ptr("2024-01-01T00:00:00Z")
@@ -233,7 +250,7 @@ func TestGetProjectInventoryAnnotations(t *testing.T) {
 		Project:    "alpha",
 		Enabled:    true,
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// Disabled rule recording original_project "beta": must set
 	// RecordedAsOriginal but must NOT contribute to EnabledRulesTargeting.
@@ -245,7 +262,7 @@ func TestGetProjectInventoryAnnotations(t *testing.T) {
 		OriginalProject: "beta",
 		Enabled:         false,
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// Enabled repo_dot_worktrees rule that dynamically resolves one
 	// visible session's cwd to project "gamma".
@@ -256,7 +273,7 @@ func TestGetProjectInventoryAnnotations(t *testing.T) {
 		Layout:     WorktreeMappingLayoutRepoDotWorktrees,
 		Enabled:    true,
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	insertSession(t, d, "gamma-dynamic", "misc", func(s *Session) {
 		s.Machine = "dyn-host"
@@ -265,28 +282,28 @@ func TestGetProjectInventoryAnnotations(t *testing.T) {
 	})
 
 	inv, err := d.GetProjectInventory(ctx, ProjectDateFilter{})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	byLabel := map[string]ProjectInventoryRow{}
 	for _, row := range inv.Projects {
 		byLabel[row.Label] = row
 	}
 
-	require.Contains(t, byLabel, "alpha")
-	assert.Equal(t, 1, byLabel["alpha"].EnabledRulesTargeting,
+	require.Contains(byLabel, "alpha")
+	assert.Equal(1, byLabel["alpha"].EnabledRulesTargeting,
 		"static attribution counts even with zero governed sessions")
-	assert.False(t, byLabel["alpha"].RecordedAsOriginal)
+	assert.False(byLabel["alpha"].RecordedAsOriginal)
 
-	require.Contains(t, byLabel, "beta")
-	assert.True(t, byLabel["beta"].RecordedAsOriginal)
-	assert.Equal(t, 0, byLabel["beta"].EnabledRulesTargeting,
+	require.Contains(byLabel, "beta")
+	assert.True(byLabel["beta"].RecordedAsOriginal)
+	assert.Equal(0, byLabel["beta"].EnabledRulesTargeting,
 		"disabled rule's target must not count toward enabled attribution")
 
-	require.Contains(t, byLabel, "gamma")
-	assert.Equal(t, 1, byLabel["gamma"].EnabledRulesTargeting,
+	require.Contains(byLabel, "gamma")
+	assert.Equal(1, byLabel["gamma"].EnabledRulesTargeting,
 		"dynamic attribution from a resolving repo_dot_worktrees rule")
 
-	assert.Equal(t, 1, inv.GovernedSessions)
+	assert.Equal(1, inv.GovernedSessions)
 }
 
 // TestProjectInventorySingleAggregationPass is a cardinality-scaling
@@ -295,8 +312,10 @@ func TestGetProjectInventoryAnnotations(t *testing.T) {
 // sessions per output row), and the governed-evaluation candidate query
 // must use the sessions machine index rather than a full table scan.
 func TestGetProjectInventoryManyDistinctProjects(t *testing.T) {
+	assert := assert.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	// Exceed SQLite's bind-variable budget (32766) with distinct visible
 	// project labels: the inventory feeds every raw label to
 	// BuildProjectIdentityMap at once, so the identity-observation lookup
@@ -307,9 +326,9 @@ func TestGetProjectInventoryManyDistinctProjects(t *testing.T) {
 	inv, err := d.GetProjectInventory(ctx, ProjectDateFilter{})
 	require.NoError(t, err,
 		"inventory must not expand one bind variable per distinct project")
-	assert.Equal(t, projectCount, inv.TotalProjects)
-	assert.Equal(t, projectCount, inv.TotalSessions)
-	assert.Len(t, inv.Projects, projectCount)
+	assert.Equal(projectCount, inv.TotalProjects)
+	assert.Equal(projectCount, inv.TotalSessions)
+	assert.Len(inv.Projects, projectCount)
 }
 
 func TestProjectInventorySingleAggregationPass(t *testing.T) {

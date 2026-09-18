@@ -39,6 +39,9 @@ func TestParseIflowSession(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			results, err := parseIflowSessionForTest(
 				t,
 				tt.filename,
@@ -46,24 +49,24 @@ func TestParseIflowSession(t *testing.T) {
 				"local",
 			)
 
-			require.NoError(t, err, "ParseIflowSession error")
-			require.NotEmpty(t, results, "expected at least one result")
+			require.NoError(err, "ParseIflowSession error")
+			require.NotEmpty(results, "expected at least one result")
 
 			session := results[0].Session
-			assert.Equal(t, tt.expectID, session.ID, "ID")
-			assert.Equal(t, AgentIflow, session.Agent, "agent")
-			assert.Equal(t, "test-project", session.Project, "project")
-			assert.Equal(t, tt.expectMessageCount, session.MessageCount, "message count")
-			assert.Len(t, results[0].Messages, tt.expectMessageCount, "parsed messages")
-			assert.Equal(t, tt.expectFirstMessage, session.FirstMessage, "first message")
+			assert.Equal(tt.expectID, session.ID, "ID")
+			assert.Equal(AgentIflow, session.Agent, "agent")
+			assert.Equal("test-project", session.Project, "project")
+			assert.Equal(tt.expectMessageCount, session.MessageCount, "message count")
+			assert.Len(results[0].Messages, tt.expectMessageCount, "parsed messages")
+			assert.Equal(tt.expectFirstMessage, session.FirstMessage, "first message")
 
 			// Check that timestamps are parsed
-			assert.False(t, session.StartedAt.IsZero(), "expected non-zero StartedAt")
-			assert.False(t, session.EndedAt.IsZero(), "expected non-zero EndedAt")
+			assert.False(session.StartedAt.IsZero(), "expected non-zero StartedAt")
+			assert.False(session.EndedAt.IsZero(), "expected non-zero EndedAt")
 
 			// Check that file info is populated
-			assert.NotEmpty(t, session.File.Path, "expected non-empty file path")
-			assert.NotZero(t, session.File.Size, "expected non-zero file size")
+			assert.NotEmpty(session.File.Path, "expected non-empty file path")
+			assert.NotZero(session.File.Size, "expected non-zero file size")
 		})
 	}
 }
@@ -102,6 +105,9 @@ func TestIflowSystemMessageFiltering(t *testing.T) {
 }
 
 func TestIflowToolCallParsing(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	results, err := parseIflowSessionForTest(
 		t,
 		"testdata/iflow/session-5de701fc-7454-4858-a249-95cac4fd3b51.jsonl",
@@ -109,8 +115,8 @@ func TestIflowToolCallParsing(t *testing.T) {
 		"local",
 	)
 
-	require.NoError(t, err, "ParseIflowSession error")
-	require.NotEmpty(t, results, "expected at least one result")
+	require.NoError(err, "ParseIflowSession error")
+	require.NotEmpty(results, "expected at least one result")
 
 	messages := results[0].Messages
 
@@ -120,8 +126,8 @@ func TestIflowToolCallParsing(t *testing.T) {
 	hasToolUse := false
 	hasToolResult := false
 	for _, msg := range messages {
-		assert.Contains(t, []RoleType{RoleUser, RoleAssistant}, msg.Role, "unexpected role")
-		assert.GreaterOrEqual(t, msg.Ordinal, 0, "invalid ordinal")
+		assert.Contains([]RoleType{RoleUser, RoleAssistant}, msg.Role, "unexpected role")
+		assert.GreaterOrEqual(msg.Ordinal, 0, "invalid ordinal")
 		if len(msg.ToolCalls) > 0 {
 			hasToolUse = true
 		}
@@ -129,11 +135,14 @@ func TestIflowToolCallParsing(t *testing.T) {
 			hasToolResult = true
 		}
 	}
-	assert.True(t, hasToolUse, "expected at least one message with tool calls")
-	assert.True(t, hasToolResult, "expected at least one message with tool results")
+	assert.True(hasToolUse, "expected at least one message with tool calls")
+	assert.True(hasToolResult, "expected at least one message with tool results")
 }
 
 func TestIflowBurstMerge(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	results, err := parseIflowSessionForTest(
 		t,
 		"testdata/iflow/session-5de701fc-7454-4858-a249-95cac4fd3b51.jsonl",
@@ -141,8 +150,8 @@ func TestIflowBurstMerge(t *testing.T) {
 		"local",
 	)
 
-	require.NoError(t, err, "ParseIflowSession error")
-	require.NotEmpty(t, results, "expected at least one result")
+	require.NoError(err, "ParseIflowSession error")
+	require.NotEmpty(results, "expected at least one result")
 
 	messages := results[0].Messages
 
@@ -150,12 +159,12 @@ func TestIflowBurstMerge(t *testing.T) {
 	// streaming burst from lines 1-4 of the fixture. It must
 	// retain the explanatory text from the first snapshot and
 	// all three unique read_file tool calls.
-	require.GreaterOrEqual(t, len(messages), 2, "expected at least 2 messages")
+	require.GreaterOrEqual(len(messages), 2, "expected at least 2 messages")
 
 	first := messages[1]
-	require.Equal(t, RoleAssistant, first.Role, "expected assistant at ordinal 1")
-	assert.Contains(t, first.Content, "DOCKER_API_VERSION", "first assistant burst lost explanatory text")
-	assert.Len(t, first.ToolCalls, 3, "expected 3 tool calls in first burst")
+	require.Equal(RoleAssistant, first.Role, "expected assistant at ordinal 1")
+	assert.Contains(first.Content, "DOCKER_API_VERSION", "first assistant burst lost explanatory text")
+	assert.Len(first.ToolCalls, 3, "expected 3 tool calls in first burst")
 
 	// Verify every tool_result in the session has a matching
 	// tool_call somewhere, confirming no orphaned results.
@@ -170,11 +179,14 @@ func TestIflowBurstMerge(t *testing.T) {
 		}
 	}
 	for id := range resultIDs {
-		assert.Truef(t, callIDs[id], "orphaned tool_result %s has no tool_call", id)
+		assert.Truef(callIDs[id], "orphaned tool_result %s has no tool_call", id)
 	}
 }
 
 func TestIflowBurstBoundary(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	// Two assistant snapshots with the same parentUuid and
 	// sub-second timestamps, but separated by a user entry.
 	// They must NOT be merged into one burst.
@@ -223,10 +235,10 @@ func TestIflowBurstBoundary(t *testing.T) {
 
 	// All three entries must survive: the user entry between
 	// the two assistant entries prevents burst merging.
-	require.Len(t, result, 3, "expected 3 entries")
-	assert.Equal(t, "a1", result[0].uuid)
-	assert.Equal(t, "u1", result[1].uuid)
-	assert.Equal(t, "a2", result[2].uuid)
+	require.Len(result, 3, "expected 3 entries")
+	assert.Equal("a1", result[0].uuid)
+	assert.Equal("u1", result[1].uuid)
+	assert.Equal("a2", result[2].uuid)
 
 	// Also test: different-parent assistant between snapshots.
 	entries2 := []dagEntryIflow{
@@ -263,7 +275,7 @@ func TestIflowBurstBoundary(t *testing.T) {
 	}
 
 	result2 := deduplicateIflowEntries(entries2)
-	require.Len(t, result2, 3, "expected 3 entries with interleaved parent")
+	require.Len(result2, 3, "expected 3 entries with interleaved parent")
 
 	// Third case: a non-user/assistant event (e.g. system) was
 	// filtered out before deduplication runs, so entries are
@@ -293,10 +305,13 @@ func TestIflowBurstBoundary(t *testing.T) {
 	}
 
 	result3 := deduplicateIflowEntries(entries3)
-	require.Len(t, result3, 2, "expected 2 entries with filtered-event gap")
+	require.Len(result3, 2, "expected 2 entries with filtered-event gap")
 }
 
 func TestIflowTimestampParsing(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	results, err := parseIflowSessionForTest(
 		t,
 		"testdata/iflow/session-5de701fc-7454-4858-a249-95cac4fd3b51.jsonl",
@@ -304,22 +319,22 @@ func TestIflowTimestampParsing(t *testing.T) {
 		"local",
 	)
 
-	require.NoError(t, err, "ParseIflowSession error")
-	require.NotEmpty(t, results, "expected at least one result")
+	require.NoError(err, "ParseIflowSession error")
+	require.NotEmpty(results, "expected at least one result")
 
 	session := results[0].Session
 
 	// Verify timestamps are in reasonable range
-	assert.True(t, session.StartedAt.Before(time.Now()), "expected StartedAt to be in the past")
-	assert.True(t, session.EndedAt.Before(time.Now()), "expected EndedAt to be in the past")
-	assert.False(t, session.StartedAt.After(session.EndedAt), "expected StartedAt to be before EndedAt")
+	assert.True(session.StartedAt.Before(time.Now()), "expected StartedAt to be in the past")
+	assert.True(session.EndedAt.Before(time.Now()), "expected EndedAt to be in the past")
+	assert.False(session.StartedAt.After(session.EndedAt), "expected StartedAt to be before EndedAt")
 
 	// Verify message timestamps
 	for _, msg := range results[0].Messages {
 		if !msg.Timestamp.IsZero() {
-			assert.Falsef(t, msg.Timestamp.Before(session.StartedAt),
+			assert.Falsef(msg.Timestamp.Before(session.StartedAt),
 				"message timestamp before session start: %v < %v", msg.Timestamp, session.StartedAt)
-			assert.Falsef(t, msg.Timestamp.After(session.EndedAt),
+			assert.Falsef(msg.Timestamp.After(session.EndedAt),
 				"message timestamp after session end: %v > %v", msg.Timestamp, session.EndedAt)
 		}
 	}

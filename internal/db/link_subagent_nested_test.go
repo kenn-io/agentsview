@@ -24,6 +24,8 @@ import (
 //
 // Tree under test:  main -> orchestrator -> grandchild
 func TestLinkSubagentSessionsReParentsNestedGrandchild(t *testing.T) {
+	assert := assert.New(t)
+
 	d := testDB(t)
 
 	mainID := "main"
@@ -81,22 +83,22 @@ func TestLinkSubagentSessionsReParentsNestedGrandchild(t *testing.T) {
 	require.NoError(t, d.LinkSubagentSessions(), "LinkSubagentSessions")
 
 	// Orchestrator stays under main.
-	orch, err := d.GetSession(context.Background(), orchestratorID)
+	orch, err := d.GetSession(t.Context(), orchestratorID)
 	requireNoError(t, err, "GetSession orchestrator")
-	if assert.NotNil(t, orch.ParentSessionID, "orchestrator parent") {
-		assert.Equal(t, mainID, *orch.ParentSessionID,
+	if assert.NotNil(orch.ParentSessionID, "orchestrator parent") {
+		assert.Equal(mainID, *orch.ParentSessionID,
 			"orchestrator.parent_session_id")
 	}
 
 	// Grandchild must be re-parented to the orchestrator, NOT the main
 	// session. This is the assertion that fails on the current
 	// `WHERE relationship_type != 'subagent'` guard.
-	gc, err := d.GetSession(context.Background(), grandchildID)
+	gc, err := d.GetSession(t.Context(), grandchildID)
 	requireNoError(t, err, "GetSession grandchild")
-	assert.Equal(t, "subagent", gc.RelationshipType,
+	assert.Equal("subagent", gc.RelationshipType,
 		"grandchild relationship_type")
-	if assert.NotNil(t, gc.ParentSessionID, "grandchild parent") {
-		assert.Equal(t, orchestratorID, *gc.ParentSessionID,
+	if assert.NotNil(gc.ParentSessionID, "grandchild parent") {
+		assert.Equal(orchestratorID, *gc.ParentSessionID,
 			"grandchild.parent_session_id must be the orchestrator, "+
 				"not the flat main session")
 	}
@@ -124,6 +126,9 @@ func TestSubagentFinalizationHonorsCanceledContext(t *testing.T) {
 	})
 
 	t.Run("queued repair", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		d := testDB(t)
 		insertSession(t, d, "spawner", "p", func(s *Session) {
 			s.MessageCount = 1
@@ -134,19 +139,19 @@ func TestSubagentFinalizationHonorsCanceledContext(t *testing.T) {
 			s.RelationshipType = "subagent"
 		})
 		insertMessages(t, d, spawnEdgeTo("spawner", "kid", "spawn"))
-		require.NoError(t, d.QueueSubagentParentRepairs([]string{"kid"}))
+		require.NoError(d.QueueSubagentParentRepairs([]string{"kid"}))
 		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 
 		err := d.RepairQueuedSubagentParentsContext(ctx)
 
-		require.ErrorIs(t, err, context.Canceled)
-		assert.Equal(t, "wrong-parent", parentOfSession(t, d, "kid"))
+		require.ErrorIs(err, context.Canceled)
+		assert.Equal("wrong-parent", parentOfSession(t, d, "kid"))
 		var queued int
-		require.NoError(t, d.Reader().QueryRow(
+		require.NoError(d.Reader().QueryRow(
 			"SELECT count(*) FROM subagent_parent_repair_queue",
 		).Scan(&queued))
-		assert.Equal(t, 1, queued, "canceled repair must remain recoverable")
+		assert.Equal(1, queued, "canceled repair must remain recoverable")
 	})
 }
 
@@ -157,6 +162,8 @@ func TestSubagentFinalizationHonorsCanceledContext(t *testing.T) {
 // / empty. The type upgrade must run even when the parent does not change, or
 // the session is grouped wrong.
 func TestLinkSubagentSessionsUpgradesTypeWhenParentAlreadyMatches(t *testing.T) {
+	assert := assert.New(t)
+
 	d := testDB(t)
 
 	// Parent session with a tool call referencing the child.
@@ -186,13 +193,13 @@ func TestLinkSubagentSessionsUpgradesTypeWhenParentAlreadyMatches(t *testing.T) 
 
 	require.NoError(t, d.LinkSubagentSessions(), "LinkSubagentSessions")
 
-	child, err := d.GetSession(context.Background(), "child")
+	child, err := d.GetSession(t.Context(), "child")
 	requireNoError(t, err, "GetSession child")
-	assert.Equal(t, "subagent", child.RelationshipType,
+	assert.Equal("subagent", child.RelationshipType,
 		"relationship_type must upgrade to 'subagent' even when the parent "+
 			"already matches the tool-call spawner")
-	if assert.NotNil(t, child.ParentSessionID, "child parent") {
-		assert.Equal(t, "parent", *child.ParentSessionID,
+	if assert.NotNil(child.ParentSessionID, "child parent") {
+		assert.Equal("parent", *child.ParentSessionID,
 			"child.parent_session_id")
 	}
 }
@@ -228,7 +235,7 @@ func TestLinkSubagentSessionsLinksNullParentSubagent(t *testing.T) {
 
 	require.NoError(t, d.LinkSubagentSessions(), "LinkSubagentSessions")
 
-	orphan, err := d.GetSession(context.Background(), "orphan")
+	orphan, err := d.GetSession(t.Context(), "orphan")
 	requireNoError(t, err, "GetSession orphan")
 	if assert.NotNil(t, orphan.ParentSessionID,
 		"NULL-parent subagent must be linked to its spawner (null-safe IS NOT)") {
@@ -255,7 +262,7 @@ func spawnEdgeTo(from, child, note string) Message {
 // is unset.
 func parentOfSession(t *testing.T, d *DB, id string) string {
 	t.Helper()
-	s, err := d.GetSession(context.Background(), id)
+	s, err := d.GetSession(t.Context(), id)
 	requireNoError(t, err, "GetSession "+id)
 	require.NotNil(t, s.ParentSessionID, "%s parent must be set", id)
 	return *s.ParentSessionID
@@ -318,6 +325,9 @@ func TestLinkSubagentSessionsRejectsSelfEdges(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			d := testDB(t)
 			insertSession(t, d, "child", "p", func(s *Session) {
 				if tc.withParent {
@@ -337,16 +347,16 @@ func TestLinkSubagentSessionsRejectsSelfEdges(t *testing.T) {
 					spawnEdgeTo("real-parent", "child", "real spawn"))
 			}
 
-			require.NoError(t, tc.link(d))
-			child, err := d.GetSession(context.Background(), "child")
+			require.NoError(tc.link(d))
+			child, err := d.GetSession(t.Context(), "child")
 			requireNoError(t, err, "GetSession child")
 			if tc.withParent {
-				require.NotNil(t, child.ParentSessionID)
-				assert.Equal(t, "real-parent", *child.ParentSessionID)
-				assert.Equal(t, "subagent", child.RelationshipType)
+				require.NotNil(child.ParentSessionID)
+				assert.Equal("real-parent", *child.ParentSessionID)
+				assert.Equal("subagent", child.RelationshipType)
 			} else {
-				assert.Nil(t, child.ParentSessionID)
-				assert.Empty(t, child.RelationshipType)
+				assert.Nil(child.ParentSessionID)
+				assert.Empty(child.RelationshipType)
 			}
 		})
 	}
@@ -370,6 +380,9 @@ func TestLinkSubagentSessionsRejectsSelfEdges(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			d := testDB(t)
 			insertSession(t, d, "parser-parent", "p")
 			insertSession(t, d, "child", "p", func(s *Session) {
@@ -378,32 +391,35 @@ func TestLinkSubagentSessionsRejectsSelfEdges(t *testing.T) {
 			})
 			insertMessages(t, d, spawnEdgeTo("child", "child", "self spawn"))
 
-			require.NoError(t, tc.link(d))
-			child, err := d.GetSession(context.Background(), "child")
+			require.NoError(tc.link(d))
+			child, err := d.GetSession(t.Context(), "child")
 			requireNoError(t, err, "GetSession child")
-			require.NotNil(t, child.ParentSessionID)
-			assert.Equal(t, "parser-parent", *child.ParentSessionID,
+			require.NotNil(child.ParentSessionID)
+			assert.Equal("parser-parent", *child.ParentSessionID,
 				"self-only edge must not erase parser-derived parent")
-			assert.Equal(t, tc.relationship, child.RelationshipType,
+			assert.Equal(tc.relationship, child.RelationshipType,
 				"self-only edge must not retag parser-derived lineage")
 		})
 	}
 
 	t.Run("cleanup_ignores_self_only_edge_as_evidence", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		d := testDB(t)
 		insertSession(t, d, "child", "p", func(s *Session) {
 			s.ParentSessionID = Ptr("deleted-parent")
 			s.RelationshipType = "subagent"
 		})
 		insertMessages(t, d, spawnEdgeTo("child", "child", "self spawn"))
-		require.NoError(t, d.QueueSubagentParentCleanupRepairs([]string{"child"}))
-		require.NoError(t, d.RepairQueuedSubagentParents())
+		require.NoError(d.QueueSubagentParentCleanupRepairs([]string{"child"}))
+		require.NoError(d.RepairQueuedSubagentParents())
 
-		child, err := d.GetSession(context.Background(), "child")
+		child, err := d.GetSession(t.Context(), "child")
 		requireNoError(t, err, "GetSession child")
-		assert.Nil(t, child.ParentSessionID,
+		assert.Nil(child.ParentSessionID,
 			"a self edge is not a surviving spawn edge; the dangling parent must clear")
-		assert.Equal(t, "subagent", child.RelationshipType)
+		assert.Equal("subagent", child.RelationshipType)
 	})
 }
 
@@ -413,6 +429,9 @@ func TestLinkSubagentSessionsRejectsSelfEdges(t *testing.T) {
 // (SanitizeSession) and by the linker's self-edge guard, so the pass must not
 // re-run its full scan on later syncs.
 func TestLinkSubagentSessionsRepairsLegacySelfParentOnce(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "with-edge", "p")
 	insertMessages(t, d, spawnEdgeTo("with-edge", "with-edge", "legacy self spawn"))
@@ -431,7 +450,7 @@ func TestLinkSubagentSessionsRepairsLegacySelfParentOnce(t *testing.T) {
 	forceSelfParent(t, d, "path-derived")
 	forceBackfilledSelfParent(t, d, "backfilled")
 
-	require.NoError(t, d.LinkSubagentSessions())
+	require.NoError(d.LinkSubagentSessions())
 
 	for _, tc := range []struct {
 		id         string
@@ -442,25 +461,25 @@ func TestLinkSubagentSessionsRepairsLegacySelfParentOnce(t *testing.T) {
 		{id: "backfilled"},
 		{id: "path-derived", wantParent: Ptr("main")},
 	} {
-		s, err := d.GetSessionFull(context.Background(), tc.id)
+		s, err := d.GetSessionFull(t.Context(), tc.id)
 		requireNoError(t, err, "GetSessionFull "+tc.id)
-		assert.Equal(t, tc.wantParent, s.ParentSessionID,
+		assert.Equal(tc.wantParent, s.ParentSessionID,
 			"%s: self parent must give way to the parser parent or nothing", tc.id)
-		assert.Equal(t, "subagent", s.RelationshipType,
+		assert.Equal("subagent", s.RelationshipType,
 			"%s must keep its subagent classification", tc.id)
-		require.NotNil(t, s.LocalModifiedAt)
-		assert.Greater(t, *s.LocalModifiedAt, "2026-01-01T00:00:00.000Z",
+		require.NotNil(s.LocalModifiedAt)
+		assert.Greater(*s.LocalModifiedAt, "2026-01-01T00:00:00.000Z",
 			"%s must advance local_modified_at for mirror re-push", tc.id)
 	}
-	assert.Equal(t, "real", parentOfSession(t, d, "untouched"),
+	assert.Equal("real", parentOfSession(t, d, "untouched"),
 		"a real parent must survive the repair")
 
 	forceSelfParent(t, d, "edgeless")
-	require.NoError(t, d.LinkSubagentSessions())
-	again, err := d.GetSession(context.Background(), "edgeless")
+	require.NoError(d.LinkSubagentSessions())
+	again, err := d.GetSession(t.Context(), "edgeless")
 	requireNoError(t, err, "GetSession edgeless after second link")
-	require.NotNil(t, again.ParentSessionID)
-	assert.Equal(t, "edgeless", *again.ParentSessionID,
+	require.NotNil(again.ParentSessionID)
+	assert.Equal("edgeless", *again.ParentSessionID,
 		"the repair is one-time per archive; ingest sanitization protects new rows")
 }
 
@@ -505,41 +524,47 @@ func TestLinkSubagentSessionsConvergesAcrossIngestionOrder(t *testing.T) {
 	}
 
 	t.Run("copied edge ingested first", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		d := setup(t)
 
 		// The copied edge is briefly the only stored edge: this link runs
 		// with no record of the real spawn yet, so whatever it writes is
 		// provisional.
 		insertMessages(t, d, spawnEdgeTo(copySpawner, child, "copied spawn"))
-		require.NoError(t, d.LinkSubagentSessions(), "link (copied edge only)")
+		require.NoError(d.LinkSubagentSessions(), "link (copied edge only)")
 
 		// The real edge lands on a later sync.
 		insertMessages(t, d, spawnEdgeTo(realSpawner, child, "real spawn"))
-		require.NoError(t, d.LinkSubagentSessions(), "link (both edges)")
+		require.NoError(d.LinkSubagentSessions(), "link (both edges)")
 
-		assert.Equal(t, realSpawner, parentOfSession(t, d, child),
+		assert.Equal(realSpawner, parentOfSession(t, d, child),
 			"child must converge to the earliest-started (real) spawner "+
 				"even though the copied edge was linked first")
 
 		// ...and stay there: linking is idempotent, not oscillating.
-		require.NoError(t, d.LinkSubagentSessions(), "relink")
-		assert.Equal(t, realSpawner, parentOfSession(t, d, child),
+		require.NoError(d.LinkSubagentSessions(), "relink")
+		assert.Equal(realSpawner, parentOfSession(t, d, child),
 			"child must remain under the real spawner on later syncs")
 	})
 
 	t.Run("real edge ingested first", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		d := setup(t)
 
 		insertMessages(t, d, spawnEdgeTo(realSpawner, child, "real spawn"))
-		require.NoError(t, d.LinkSubagentSessions(), "link (real edge only)")
-		assert.Equal(t, realSpawner, parentOfSession(t, d, child),
+		require.NoError(d.LinkSubagentSessions(), "link (real edge only)")
+		assert.Equal(realSpawner, parentOfSession(t, d, child),
 			"real spawner must be linked")
 
 		// A later-arriving copied edge must not steal the child.
 		insertMessages(t, d, spawnEdgeTo(copySpawner, child, "copied spawn"))
-		require.NoError(t, d.LinkSubagentSessions(), "link (both edges)")
+		require.NoError(d.LinkSubagentSessions(), "link (both edges)")
 
-		assert.Equal(t, realSpawner, parentOfSession(t, d, child),
+		assert.Equal(realSpawner, parentOfSession(t, d, child),
 			"a later-arriving copied edge must not re-parent the child")
 	})
 }
@@ -633,7 +658,7 @@ func TestLinkSubagentSessionsResolvesConflictingEdgesDeterministically(
 	) {
 		d := setup(t, nil)
 		require.NoError(t, d.LinkSubagentSessions(), "LinkSubagentSessions")
-		kid, err := d.GetSession(context.Background(), "kid")
+		kid, err := d.GetSession(t.Context(), "kid")
 		requireNoError(t, err, "GetSession kid")
 		assert.Equal(t, "subagent", kid.RelationshipType,
 			"kid relationship_type")
@@ -714,6 +739,9 @@ func TestLinkSubagentSessionsCopyFirstTieUsesParserParent(t *testing.T) {
 			},
 		} {
 			t.Run(fmt.Sprintf("%s/%s", tc.name, linker.name), func(t *testing.T) {
+				assert := assert.New(t)
+				require := require.New(t)
+
 				d := testDB(t)
 				insertSession(t, d, "aaa-copy", "p", func(s *Session) {
 					s.MessageCount = 1
@@ -732,17 +760,17 @@ func TestLinkSubagentSessionsCopyFirstTieUsesParserParent(t *testing.T) {
 				insertMessages(t, d,
 					spawnEdgeTo("aaa-copy", "kid", "copied spawn"),
 				)
-				require.NoError(t, linker.link(d, "aaa-copy"),
+				require.NoError(linker.link(d, "aaa-copy"),
 					"link copied edge only")
-				assert.Equal(t, "aaa-copy", parentOfSession(t, d, "kid"),
+				assert.Equal("aaa-copy", parentOfSession(t, d, "kid"),
 					"the only stored edge wins provisionally")
 
 				insertMessages(t, d,
 					spawnEdgeTo("zzz-real", "kid", "real spawn"),
 				)
-				require.NoError(t, linker.link(d, "zzz-real"),
+				require.NoError(linker.link(d, "zzz-real"),
 					"link both tied edges")
-				assert.Equal(t, "zzz-real", parentOfSession(t, d, "kid"),
+				assert.Equal("zzz-real", parentOfSession(t, d, "kid"),
 					"a tied real edge must recover the parser-established parent "+
 						"instead of preserving the provisional copied parent")
 			})
@@ -760,6 +788,8 @@ func TestLinkSubagentSessionsCopyFirstTieUsesParserParent(t *testing.T) {
 func TestLinkSubagentSessionsSubMillisecondTieKeepsEstablishedParent(
 	t *testing.T,
 ) {
+	require := require.New(t)
+
 	base := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC)
 	copyStart := timeutil.Format(base.Add(100 * time.Microsecond))
 	realStart := timeutil.Format(base.Add(400 * time.Microsecond))
@@ -769,14 +799,14 @@ func TestLinkSubagentSessionsSubMillisecondTieKeepsEstablishedParent(
 	// Guard: both values must truncate to the same millisecond, or this
 	// test would pass without exercising the tie at all.
 	var normCopy, normReal string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		`SELECT strftime('%Y-%m-%dT%H:%M:%fZ', ?),
 			strftime('%Y-%m-%dT%H:%M:%fZ', ?)`,
 		copyStart, realStart,
 	).Scan(&normCopy, &normReal), "normalize start times")
-	require.Equal(t, normCopy, normReal,
+	require.Equal(normCopy, normReal,
 		"guard: sub-millisecond starts must normalize to a tie")
-	require.NotEqual(t, copyStart, realStart,
+	require.NotEqual(copyStart, realStart,
 		"guard: the raw strings must differ so raw ordering could decide")
 
 	// The copy starts 300 microseconds EARLIER and its id sorts first:
@@ -800,7 +830,7 @@ func TestLinkSubagentSessionsSubMillisecondTieKeepsEstablishedParent(
 		spawnEdgeTo("zzz-real-spawner", "kid", "real spawn"),
 	)
 
-	require.NoError(t, d.LinkSubagentSessions(), "LinkSubagentSessions")
+	require.NoError(d.LinkSubagentSessions(), "LinkSubagentSessions")
 
 	assert.Equal(t, "zzz-real-spawner", parentOfSession(t, d, "kid"),
 		"a sub-millisecond difference is below the ordering's resolution "+
@@ -930,6 +960,9 @@ func TestLinkSubagentSessionsForSessionsScopesToBatch(t *testing.T) {
 func TestLinkSubagentSessionsForSessionsConvergesAcrossIngestionOrder(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const (
 		realSpawner = "real-spawner"
 		copySpawner = "copied-spawner"
@@ -953,10 +986,9 @@ func TestLinkSubagentSessionsForSessionsConvergesAcrossIngestionOrder(
 	// The copied spawner's transcript syncs first: its edge is the only one
 	// stored, so the link it writes is provisional.
 	insertMessages(t, d, spawnEdgeTo(copySpawner, child, "copied spawn"))
-	require.NoError(t,
-		d.LinkSubagentSessionsForSessions([]string{copySpawner}),
+	require.NoError(d.LinkSubagentSessionsForSessions([]string{copySpawner}),
 		"link (copied edge only)")
-	assert.Equal(t, copySpawner, parentOfSession(t, d, child),
+	assert.Equal(copySpawner, parentOfSession(t, d, child),
 		"the only stored edge wins provisionally")
 
 	// The real spawner's transcript syncs later. Only the real spawner is
@@ -964,10 +996,9 @@ func TestLinkSubagentSessionsForSessionsConvergesAcrossIngestionOrder(
 	// re-resolved against BOTH edges and converge to the earliest-started
 	// (real) spawner.
 	insertMessages(t, d, spawnEdgeTo(realSpawner, child, "real spawn"))
-	require.NoError(t,
-		d.LinkSubagentSessionsForSessions([]string{realSpawner}),
+	require.NoError(d.LinkSubagentSessionsForSessions([]string{realSpawner}),
 		"link (both edges)")
-	assert.Equal(t, realSpawner, parentOfSession(t, d, child),
+	assert.Equal(realSpawner, parentOfSession(t, d, child),
 		"a scoped link must still converge to the real spawner once its "+
 			"edge lands")
 }
@@ -1007,6 +1038,9 @@ func TestLinkSubagentSessionsForSessionsChunksLargeBatches(t *testing.T) {
 // instead of keeping the dangling reference indefinitely. The
 // relationship_type stays 'subagent' so a reappearing edge re-links it.
 func TestLinkSubagentSessionsForSessionsClearsDanglingParent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 
 	insertSession(t, d, "spawner", "p", func(s *Session) {
@@ -1022,20 +1056,20 @@ func TestLinkSubagentSessionsForSessionsClearsDanglingParent(t *testing.T) {
 	// The spawner is parser-excluded: the delete cascades its messages
 	// and with them the only edge claiming the kid.
 	n, err := d.DeleteParserExcludedSessions([]string{"spawner"})
-	require.NoError(t, err, "DeleteParserExcludedSessions")
-	require.Equal(t, 1, n, "spawner must be deleted")
+	require.NoError(err, "DeleteParserExcludedSessions")
+	require.Equal(1, n, "spawner must be deleted")
 
 	// The engine captures the kid as a pre-write child of the deleted
 	// spawner and persists cleanup intent before the destructive write.
-	require.NoError(t, d.QueueSubagentParentCleanupRepairs([]string{"kid"}))
-	require.NoError(t, d.RepairQueuedSubagentParents())
+	require.NoError(d.QueueSubagentParentCleanupRepairs([]string{"kid"}))
+	require.NoError(d.RepairQueuedSubagentParents())
 
-	kid, err := d.GetSession(context.Background(), "kid")
+	kid, err := d.GetSession(t.Context(), "kid")
 	requireNoError(t, err, "GetSession kid")
-	assert.Nil(t, kid.ParentSessionID,
+	assert.Nil(kid.ParentSessionID,
 		"a child whose sole edge and spawner are gone must be un-parented, "+
 			"not left pointing at a deleted session")
-	assert.Equal(t, "subagent", kid.RelationshipType,
+	assert.Equal("subagent", kid.RelationshipType,
 		"the subagent classification survives so a reappearing edge "+
 			"re-links the child")
 }
@@ -1047,6 +1081,9 @@ func TestLinkSubagentSessionsForSessionsClearsDanglingParent(t *testing.T) {
 // the later parent row completes the hierarchy instead of leaving the child
 // permanently un-parented.
 func TestLinkSubagentSessionsForSessionsKeepsUnresolvedPathParent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 
 	insertSession(t, d, "kid", "p", func(s *Session) {
@@ -1055,21 +1092,21 @@ func TestLinkSubagentSessionsForSessionsKeepsUnresolvedPathParent(t *testing.T) 
 		s.RelationshipType = "subagent"
 	})
 
-	require.NoError(t, d.LinkSubagentSessionsForSessions([]string{"kid"}))
-	assert.Equal(t, "parent-not-ingested-yet", parentOfSession(t, d, "kid"),
+	require.NoError(d.LinkSubagentSessionsForSessions([]string{"kid"}))
+	assert.Equal("parent-not-ingested-yet", parentOfSession(t, d, "kid"),
 		"a generic changed-session seed must preserve parser-derived parentage")
-	require.NoError(t, d.QueueSubagentParentRepairs([]string{"kid"}))
-	require.NoError(t, d.RepairQueuedSubagentParents())
-	assert.Equal(t, "parent-not-ingested-yet", parentOfSession(t, d, "kid"),
+	require.NoError(d.QueueSubagentParentRepairs([]string{"kid"}))
+	require.NoError(d.RepairQueuedSubagentParents())
+	assert.Equal("parent-not-ingested-yet", parentOfSession(t, d, "kid"),
 		"a durable generic repair must remain relink-only")
 
 	insertSession(t, d, "parent-not-ingested-yet", "p", func(s *Session) {
 		s.MessageCount = 1
 	})
-	require.NoError(t, d.LinkSubagentSessionsForSessions(
+	require.NoError(d.LinkSubagentSessionsForSessions(
 		[]string{"parent-not-ingested-yet"},
 	))
-	assert.Equal(t, "parent-not-ingested-yet", parentOfSession(t, d, "kid"),
+	assert.Equal("parent-not-ingested-yet", parentOfSession(t, d, "kid"),
 		"ingesting the parent later must leave the valid path hierarchy intact")
 }
 
@@ -1114,6 +1151,9 @@ func TestLinkSubagentSessionsForSessionsKeepsParentWhenSpawnerRemains(
 // return the distinct children the given sessions' spawn edges reference,
 // ignore sessions with no edges, and treat an empty input as a no-op.
 func TestSubagentChildSessionIDs(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	for _, id := range []string{"s1", "s2", "quiet"} {
 		insertSession(t, d, id, "p", func(s *Session) { s.MessageCount = 1 })
@@ -1127,12 +1167,12 @@ func TestSubagentChildSessionIDs(t *testing.T) {
 	)
 
 	children, err := d.SubagentChildSessionIDs([]string{"s1", "s2", "quiet"})
-	require.NoError(t, err, "SubagentChildSessionIDs")
-	assert.ElementsMatch(t, []string{"kid-a", "kid-b"}, children)
+	require.NoError(err, "SubagentChildSessionIDs")
+	assert.ElementsMatch([]string{"kid-a", "kid-b"}, children)
 
 	none, err := d.SubagentChildSessionIDs(nil)
-	require.NoError(t, err, "empty input")
-	assert.Empty(t, none)
+	require.NoError(err, "empty input")
+	assert.Empty(none)
 }
 
 // TestQueueSubagentParentRepairsAdditionWorkIsQueueSizeIndependent protects
@@ -1165,6 +1205,9 @@ func TestQueueSubagentParentRepairsAdditionWorkIsQueueSizeIndependent(
 }
 
 func TestRepairQueuedSubagentParentsMigratesLegacyJSONQueue(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "spawner", "p", func(s *Session) {
 		s.MessageCount = 1
@@ -1175,24 +1218,26 @@ func TestRepairQueuedSubagentParentsMigratesLegacyJSONQueue(t *testing.T) {
 		s.RelationshipType = "subagent"
 	})
 	insertMessages(t, d, spawnEdgeTo("spawner", "kid", "spawn"))
-	require.NoError(t, d.SetSyncState(
+	require.NoError(d.SetSyncState(
 		subagentParentRepairQueueStateKey, `["kid"]`,
 	))
 
-	require.NoError(t, d.RepairQueuedSubagentParents())
+	require.NoError(d.RepairQueuedSubagentParents())
 
-	assert.Equal(t, "spawner", parentOfSession(t, d, "kid"))
+	assert.Equal("spawner", parentOfSession(t, d, "kid"))
 	legacy, err := d.GetSyncState(subagentParentRepairQueueStateKey)
-	require.NoError(t, err)
-	assert.Empty(t, legacy, "successful migration must remove the JSON queue")
+	require.NoError(err)
+	assert.Empty(legacy, "successful migration must remove the JSON queue")
 	var queued int
-	require.NoError(t, d.Reader().QueryRow(
+	require.NoError(d.Reader().QueryRow(
 		"SELECT count(*) FROM subagent_parent_repair_queue",
 	).Scan(&queued))
-	assert.Zero(t, queued, "successful repair must clear migrated rows")
+	assert.Zero(queued, "successful repair must clear migrated rows")
 }
 
 func TestRepairQueuedSubagentParentsMigratesLegacyCleanupIntent(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "spawner", "p", func(s *Session) {
 		s.MessageCount = 1
@@ -1203,17 +1248,17 @@ func TestRepairQueuedSubagentParentsMigratesLegacyCleanupIntent(t *testing.T) {
 		s.RelationshipType = "subagent"
 	})
 	insertMessages(t, d, spawnEdgeTo("spawner", "kid", "spawn"))
-	require.NoError(t, d.SetSyncState(
+	require.NoError(d.SetSyncState(
 		subagentParentRepairQueueStateKey, `["kid"]`,
 	))
 	_, err := d.DeleteParserExcludedSessions([]string{"spawner"})
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.NoError(t, d.RepairQueuedSubagentParents())
+	require.NoError(d.RepairQueuedSubagentParents())
 
-	kid, err := d.GetSession(context.Background(), "kid")
-	require.NoError(t, err)
-	require.NotNil(t, kid)
+	kid, err := d.GetSession(t.Context(), "kid")
+	require.NoError(err)
+	require.NotNil(kid)
 	assert.Nil(t, kid.ParentSessionID,
 		"the legacy queue contained pre-write children and must retain cleanup intent")
 }
@@ -1232,6 +1277,8 @@ func TestLinkSubagentSessionsForSessionsPlanIsBatchBounded(t *testing.T) {
 		{name: "large archive", sessions: 500},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			d := testDB(t)
 			for i := range tc.sessions {
 				insertSession(t, d, "bulk-"+strconv.Itoa(i), "p",
@@ -1253,15 +1300,15 @@ func TestLinkSubagentSessionsForSessionsPlanIsBatchBounded(t *testing.T) {
 				"spawner", "spawner",
 			)
 
-			assert.NotContains(t, plan, "SCAN s",
+			assert.NotContains(plan, "SCAN s",
 				"scoped linking must not scan sessions\n"+plan)
-			assert.NotContains(t, plan, "SCAN tc",
+			assert.NotContains(plan, "SCAN tc",
 				"scoped linking must not scan tool_calls: per-event cost "+
 					"has to track the batch, not the archive's edges\n"+plan)
-			assert.Contains(t, plan, "idx_tool_calls_session",
+			assert.Contains(plan, "idx_tool_calls_session",
 				"the spawner-side branch must seek the session_id index\n"+
 					plan)
-			assert.Contains(t, plan, "idx_tool_calls_subagent",
+			assert.Contains(plan, "idx_tool_calls_subagent",
 				"the child-side branch must seek the subagent partial "+
 					"index\n"+plan)
 		})
@@ -1295,15 +1342,17 @@ func queryPlanOf(t *testing.T, d *DB, sql string, args ...any) string {
 // which would resolve the child to the copy. The ordering must normalize
 // started_at so it compares chronologically.
 func TestLinkSubagentSessionsOrdersStartTimesChronologically(t *testing.T) {
+	require := require.New(t)
+
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	realStart := timeutil.Format(base)
 	copyStart := timeutil.Format(base.Add(100 * time.Millisecond))
 
 	// Pin the production shapes this test exists for: the real spawner starts
 	// 100ms EARLIER, yet its stored string sorts LATER lexically.
-	require.Equal(t, "2026-01-01T00:00:00Z", realStart, "whole-second form")
-	require.Equal(t, "2026-01-01T00:00:00.1Z", copyStart, "fractional form")
-	require.Less(t, copyStart, realStart,
+	require.Equal("2026-01-01T00:00:00Z", realStart, "whole-second form")
+	require.Equal("2026-01-01T00:00:00.1Z", copyStart, "fractional form")
+	require.Less(copyStart, realStart,
 		"guard: raw lexical order must be inverted here, otherwise this test "+
 			"would pass even without normalizing started_at")
 
@@ -1326,7 +1375,7 @@ func TestLinkSubagentSessionsOrdersStartTimesChronologically(t *testing.T) {
 		spawnEdgeTo("real-spawner", "kid", "real spawn"),
 	)
 
-	require.NoError(t, d.LinkSubagentSessions(), "LinkSubagentSessions")
+	require.NoError(d.LinkSubagentSessions(), "LinkSubagentSessions")
 
 	assert.Equal(t, "real-spawner", parentOfSession(t, d, "kid"),
 		"the chronologically earliest spawner must win; ordering the raw "+

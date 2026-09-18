@@ -173,7 +173,7 @@ func runPGPushTarget(
 		return err
 	}
 	if target.PG.URL == "" {
-		return fmt.Errorf("url not configured")
+		return errors.New("url not configured")
 	}
 
 	projects, excludeProjects, err := resolvePushProjects(
@@ -409,7 +409,7 @@ func runPGStatusTarget(
 		return err
 	}
 	if target.PG.URL == "" {
-		return fmt.Errorf("url not configured")
+		return errors.New("url not configured")
 	}
 	projects, excludeProjects, err := resolvePushProjects(
 		target.PG,
@@ -701,15 +701,12 @@ func resolvePushProjects(
 	pgCfg config.PGConfig, cfg PGPushConfig,
 ) (projects, exclude []string, err error) {
 	if cfg.ProjectsFlag != "" && cfg.ExcludeProjects != "" {
-		return nil, nil, fmt.Errorf(
-			"--projects and --exclude-projects are mutually exclusive",
-		)
+		return nil, nil, errors.New("--projects and --exclude-projects are mutually exclusive")
 	}
 	if cfg.AllProjects &&
 		(cfg.ProjectsFlag != "" || cfg.ExcludeProjects != "") {
-		return nil, nil, fmt.Errorf(
-			"--all-projects cannot be combined with " +
-				"--projects or --exclude-projects",
+		return nil, nil, errors.New("--all-projects cannot be combined with " +
+			"--projects or --exclude-projects",
 		)
 	}
 	projects = pgCfg.Projects
@@ -727,9 +724,7 @@ func resolvePushProjects(
 		projects = nil
 	}
 	if len(projects) > 0 && len(exclude) > 0 {
-		return nil, nil, fmt.Errorf(
-			"projects and exclude_projects are mutually exclusive",
-		)
+		return nil, nil, errors.New("projects and exclude_projects are mutually exclusive")
 	}
 	return projects, exclude, nil
 }
@@ -740,9 +735,7 @@ func resolvePGTargetSelections(
 	allTargets bool,
 ) ([]pgTargetSelection, error) {
 	if allTargets && strings.TrimSpace(targetName) != "" {
-		return nil, fmt.Errorf(
-			"target name cannot be combined with --all",
-		)
+		return nil, errors.New("target name cannot be combined with --all")
 	}
 	if len(appCfg.PGTargets) == 0 {
 		if strings.TrimSpace(targetName) != "" {

@@ -175,7 +175,7 @@ func seedTimingFixture(t *testing.T, d *db.DB, sessionID string, measured bool) 
 	if measured {
 		msgs[1].ToolCalls[0].ResultEvents = timingExecutionEvents()
 	}
-	require.NoError(t, d.ReplaceSessionMessages(sessionID, msgs))
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), sessionID, msgs))
 }
 
 func TestHandleSessionTimingWithoutCallsMatchesContract(t *testing.T) {

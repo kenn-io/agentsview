@@ -104,9 +104,7 @@ func decodeFallbackSnapshot() (litellmFallbackSnapshot, error) {
 func decodeFallbackSnapshotFromFS(fsys fs.FS) (litellmFallbackSnapshot, error) {
 	blob, err := fs.ReadFile(fsys, litellmSnapshotPath)
 	if errors.Is(err, fs.ErrNotExist) {
-		return litellmFallbackSnapshot{}, fmt.Errorf(
-			"embedded LiteLLM snapshot is missing; run make pricing-snapshot",
-		)
+		return litellmFallbackSnapshot{}, errors.New("embedded LiteLLM snapshot is missing; run make pricing-snapshot")
 	}
 	if err != nil {
 		return litellmFallbackSnapshot{}, fmt.Errorf(
@@ -114,7 +112,7 @@ func decodeFallbackSnapshotFromFS(fsys fs.FS) (litellmFallbackSnapshot, error) {
 		)
 	}
 	if len(blob) == 0 {
-		return litellmFallbackSnapshot{}, fmt.Errorf("empty snapshot")
+		return litellmFallbackSnapshot{}, errors.New("empty snapshot")
 	}
 	if len(blob) > maxFallbackSnapshotCompressedBytes {
 		return litellmFallbackSnapshot{}, fmt.Errorf(
@@ -145,19 +143,13 @@ func decodeFallbackSnapshotFromFS(fsys fs.FS) (litellmFallbackSnapshot, error) {
 		)
 	}
 	if snapshot.Version == "" {
-		return litellmFallbackSnapshot{}, fmt.Errorf(
-			"missing snapshot version",
-		)
+		return litellmFallbackSnapshot{}, errors.New("missing snapshot version")
 	}
 	if !immutableFallbackSourceRefPattern.MatchString(snapshot.SourceRef) {
-		return litellmFallbackSnapshot{}, fmt.Errorf(
-			"missing immutable LiteLLM source ref",
-		)
+		return litellmFallbackSnapshot{}, errors.New("missing immutable LiteLLM source ref")
 	}
 	if len(snapshot.Models) == 0 {
-		return litellmFallbackSnapshot{}, fmt.Errorf(
-			"missing snapshot models",
-		)
+		return litellmFallbackSnapshot{}, errors.New("missing snapshot models")
 	}
 	if len(snapshot.Models) > maxFallbackSnapshotModels {
 		return litellmFallbackSnapshot{}, fmt.Errorf(
@@ -167,9 +159,7 @@ func decodeFallbackSnapshotFromFS(fsys fs.FS) (litellmFallbackSnapshot, error) {
 	}
 	for _, model := range snapshot.Models {
 		if strings.TrimSpace(model.ModelPattern) == "" {
-			return litellmFallbackSnapshot{}, fmt.Errorf(
-				"snapshot contains model with empty pattern",
-			)
+			return litellmFallbackSnapshot{}, errors.New("snapshot contains model with empty pattern")
 		}
 		if err := catalog.NormalizePricingBands(model.ModelPattern, model.Bands); err != nil {
 			return litellmFallbackSnapshot{}, err

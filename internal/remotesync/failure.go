@@ -51,10 +51,7 @@ func FailureSummary(err error) string {
 				"incompatible remote-sync protocol versions; upgrade agentsview " +
 				"on both hosts"
 		default:
-			return fmt.Sprintf(
-				"HTTP remote sync failed: remote daemon returned %s",
-				statusLabel(statusErr.Code),
-			)
+			return "HTTP remote sync failed: remote daemon returned " + statusLabel(statusErr.Code)
 		}
 	}
 

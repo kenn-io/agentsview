@@ -1,11 +1,12 @@
 package parser
 
+import "context"
+
 import (
 	"bufio"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -254,7 +255,7 @@ func discoverOpenCodeFormatSessions(
 	return files
 }
 
-func findOpenCodeFormatSourceFile(
+func findOpenCodeFormatSourceFile(ctx context.Context,
 	f openCodeFormat, root, sessionID string,
 ) string {
 	if !IsValidSessionID(sessionID) {
@@ -280,14 +281,14 @@ func findOpenCodeFormatSourceFile(
 			}
 		}
 		for _, dbPath := range src.DBPaths {
-			if OpenCodeSQLiteSessionExists(dbPath, sessionID) {
+			if OpenCodeSQLiteSessionExists(ctx, dbPath, sessionID) {
 				return OpenCodeSQLiteVirtualPath(dbPath, sessionID)
 			}
 		}
 		return ""
 	case OpenCodeSourceSQLite:
 		for _, dbPath := range src.DBPaths {
-			if OpenCodeSQLiteSessionExists(dbPath, sessionID) {
+			if OpenCodeSQLiteSessionExists(ctx, dbPath, sessionID) {
 				return OpenCodeSQLiteVirtualPath(dbPath, sessionID)
 			}
 		}
@@ -1053,7 +1054,7 @@ func addProjectPaths(
 // matching Gemini CLI's project hash algorithm.
 func geminiPathHash(path string) string {
 	h := sha256.Sum256([]byte(path))
-	return fmt.Sprintf("%x", h)
+	return hex.EncodeToString(h[:])
 }
 
 // isHexHash reports whether s is a 64-character lowercase hex

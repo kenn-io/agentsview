@@ -23,7 +23,7 @@ func TestOpenCreatesLocalDuckDBFile(t *testing.T) {
 		require.NoError(t, db.Close(), "close DuckDB")
 	})
 
-	require.NoError(t, db.PingContext(context.Background()))
+	require.NoError(t, db.PingContext(t.Context()))
 	assert.FileExists(t, path)
 }
 
@@ -35,10 +35,13 @@ func TestOpenRejectsEmptyPath(t *testing.T) {
 }
 
 func TestEnsureSchemaCreatesRequiredMirrorTables(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	db := openTestDuckDB(t)
 
-	require.NoError(t, createSchema(ctx, db), "createSchema")
+	require.NoError(createSchema(ctx, db), "createSchema")
 
 	for _, table := range []string{
 		"sync_metadata",
@@ -55,20 +58,20 @@ func TestEnsureSchemaCreatesRequiredMirrorTables(t *testing.T) {
 		"starred_sessions",
 		"pinned_messages",
 	} {
-		assert.True(t, tableExists(t, db, table), "missing table %s", table)
+		assert.True(tableExists(t, db, table), "missing table %s", table)
 	}
-	assert.True(t, columnExists(t, db, "sessions", "agentsview_push_fingerprint"))
+	assert.True(columnExists(t, db, "sessions", "agentsview_push_fingerprint"))
 
 	var version string
-	require.NoError(t, db.QueryRowContext(ctx,
+	require.NoError(db.QueryRowContext(ctx,
 		`SELECT value FROM sync_metadata WHERE key = ?`,
 		schemaVersionMetadataKey,
 	).Scan(&version))
-	assert.Equal(t, strconv.Itoa(SchemaVersion), version)
+	assert.Equal(strconv.Itoa(SchemaVersion), version)
 }
 
 func TestUsageEventsDedupIndexAllowsRepeatedKeys(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	db := openTestDuckDB(t)
 	require.NoError(t, createSchema(ctx, db), "createSchema")
 
@@ -88,23 +91,29 @@ func TestUsageEventsDedupIndexAllowsRepeatedKeys(t *testing.T) {
 }
 
 func TestEnsureSchemaIsIdempotent(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	db := openTestDuckDB(t)
 
-	require.NoError(t, createSchema(ctx, db), "first createSchema")
-	require.NoError(t, createSchema(ctx, db), "second createSchema")
+	require.NoError(createSchema(ctx, db), "first createSchema")
+	require.NoError(createSchema(ctx, db), "second createSchema")
 
-	assert.True(t, columnExists(t, db, "sessions", "secret_leak_count"))
-	assert.True(t, columnExists(t, db, "messages", "thinking_text"))
+	assert.True(columnExists(t, db, "sessions", "secret_leak_count"))
+	assert.True(columnExists(t, db, "messages", "thinking_text"))
 }
 
 func TestCheckSchemaCompatReportsMissingTablesAndColumns(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	db := openTestDuckDB(t)
 
 	err := CheckSchemaCompat(ctx, db)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing table sessions")
+	require.Error(err)
+	assert.Contains(err.Error(), "missing table sessions")
 
 	db = openTestDuckDB(t)
 	_, err = db.ExecContext(ctx,
@@ -115,15 +124,15 @@ func TestCheckSchemaCompatReportsMissingTablesAndColumns(t *testing.T) {
 			agent TEXT NOT NULL
 		)`,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	err = CheckSchemaCompat(ctx, db)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "sessions.secret_leak_count")
+	require.Error(err)
+	assert.Contains(err.Error(), "sessions.secret_leak_count")
 }
 
 func TestCheckSchemaCompatPassesAfterCreateSchema(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	db := openTestDuckDB(t)
 
 	require.NoError(t, createSchema(ctx, db), "createSchema")
@@ -131,29 +140,34 @@ func TestCheckSchemaCompatPassesAfterCreateSchema(t *testing.T) {
 }
 
 func TestCheckSchemaCompatViaQuackRejectsPreReportedCostMirror(t *testing.T) {
-	ctx := context.Background()
+	require := require.New(t)
+
+	ctx := t.Context()
 	db := openTestDuckDB(t)
-	require.NoError(t, createSchema(ctx, db), "createSchema")
+	require.NoError(createSchema(ctx, db), "createSchema")
 	_, err := db.ExecContext(ctx,
 		`UPDATE sync_metadata SET value = '3' WHERE key = ?`,
 		schemaVersionMetadataKey,
 	)
-	require.NoError(t, err, "simulate v3 mirror schema version")
+	require.NoError(err, "simulate v3 mirror schema version")
 	_, err = db.ExecContext(ctx,
 		`UPDATE sync_metadata SET value = '68' WHERE key = ?`,
 		dataVersionMetadataKey,
 	)
-	require.NoError(t, err, "simulate v3 mirror built from parser data version 68")
+	require.NoError(err, "simulate v3 mirror built from parser data version 68")
 
 	err = CheckSchemaCompatViaQuack(ctx, db)
-	require.Error(t, err)
+	require.Error(err)
 	assert.Contains(t, err.Error(), "rebuild with 'agentsview duckdb push --full'")
 }
 
 func TestCheckSchemaCompatViaQuackReportsServerBehindOnMissingColumns(
 	t *testing.T,
 ) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	db := openTestDuckDB(t)
 	_, err := db.ExecContext(ctx,
 		`CREATE TABLE sessions (
@@ -163,16 +177,16 @@ func TestCheckSchemaCompatViaQuackReportsServerBehindOnMissingColumns(
 			agent TEXT NOT NULL
 		)`,
 	)
-	require.NoError(t, err, "simulate older server schema")
+	require.NoError(err, "simulate older server schema")
 
 	err = CheckSchemaCompatViaQuack(ctx, db)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "sessions.entrypoint")
-	assert.Contains(t, err.Error(), "older AgentsView build",
+	require.Error(err)
+	assert.Contains(err.Error(), "sessions.entrypoint")
+	assert.Contains(err.Error(), "older AgentsView build",
 		"remote incompat must point at the server build")
-	assert.Contains(t, err.Error(), "upgrade and restart the DuckDB server",
+	assert.Contains(err.Error(), "upgrade and restart the DuckDB server",
 		"remote incompat must tell the operator the fix")
-	assert.NotContains(t, err.Error(),
+	assert.NotContains(err.Error(),
 		"rebuild with 'agentsview duckdb push --full'",
 		"push cannot migrate a remote server schema")
 }
@@ -180,7 +194,10 @@ func TestCheckSchemaCompatViaQuackReportsServerBehindOnMissingColumns(
 func TestCheckSchemaCompatKeepsLocalRebuildHintOnMissingColumns(
 	t *testing.T,
 ) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	db := openTestDuckDB(t)
 	_, err := db.ExecContext(ctx,
 		`CREATE TABLE sessions (
@@ -190,14 +207,14 @@ func TestCheckSchemaCompatKeepsLocalRebuildHintOnMissingColumns(
 			agent TEXT NOT NULL
 		)`,
 	)
-	require.NoError(t, err, "simulate stale local mirror")
+	require.NoError(err, "simulate stale local mirror")
 
 	err = CheckSchemaCompat(ctx, db)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "sessions.entrypoint")
-	assert.Contains(t, err.Error(), "rebuild with 'agentsview duckdb push --full'",
+	require.Error(err)
+	assert.Contains(err.Error(), "sessions.entrypoint")
+	assert.Contains(err.Error(), "rebuild with 'agentsview duckdb push --full'",
 		"local mirrors are rebuilt, not migrated in place")
-	assert.NotContains(t, err.Error(), "older AgentsView build")
+	assert.NotContains(err.Error(), "older AgentsView build")
 }
 
 // TestCheckSchemaCompatRejectsSchemaVersionMismatchInBothDirections verifies
@@ -208,7 +225,7 @@ func TestCheckSchemaCompatKeepsLocalRebuildHintOnMissingColumns(
 func TestCheckSchemaCompatRejectsSchemaVersionMismatchInBothDirections(
 	t *testing.T,
 ) {
-	ctx := context.Background()
+	ctx := t.Context()
 	checks := map[string]func(context.Context, *sql.DB) error{
 		"local":  CheckSchemaCompat,
 		"remote": CheckSchemaCompatViaQuack,
@@ -221,18 +238,21 @@ func TestCheckSchemaCompatRejectsSchemaVersionMismatchInBothDirections(
 	for versionName, version := range versions {
 		for locationName, check := range checks {
 			t.Run(versionName+"/"+locationName, func(t *testing.T) {
+				assert := assert.New(t)
+				require := require.New(t)
+
 				db := openTestDuckDB(t)
-				require.NoError(t, createSchema(ctx, db), "createSchema")
+				require.NoError(createSchema(ctx, db), "createSchema")
 				_, err := db.ExecContext(ctx,
 					`UPDATE sync_metadata SET value = ? WHERE key = ?`,
 					version, schemaVersionMetadataKey,
 				)
-				require.NoError(t, err, "simulate mismatched schema version")
+				require.NoError(err, "simulate mismatched schema version")
 
 				err = check(ctx, db)
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), "does not match this build's")
-				assert.Contains(t, err.Error(),
+				require.Error(err)
+				assert.Contains(err.Error(), "does not match this build's")
+				assert.Contains(err.Error(),
 					"rebuild with 'agentsview duckdb push --full'")
 			})
 		}
@@ -242,19 +262,22 @@ func TestCheckSchemaCompatRejectsSchemaVersionMismatchInBothDirections(
 func TestCheckSchemaCompatViaQuackReportsServerBehindOnMissingVersionRow(
 	t *testing.T,
 ) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	db := openTestDuckDB(t)
-	require.NoError(t, createSchema(ctx, db), "createSchema")
+	require.NoError(createSchema(ctx, db), "createSchema")
 	_, err := db.ExecContext(ctx,
 		`DELETE FROM sync_metadata WHERE key = ?`,
 		schemaVersionMetadataKey,
 	)
-	require.NoError(t, err, "simulate server without a schema version row")
+	require.NoError(err, "simulate server without a schema version row")
 
 	err = CheckSchemaCompatViaQuack(ctx, db)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), schemaVersionMetadataKey)
-	assert.Contains(t, err.Error(), "upgrade and restart the DuckDB server",
+	require.Error(err)
+	assert.Contains(err.Error(), schemaVersionMetadataKey)
+	assert.Contains(err.Error(), "upgrade and restart the DuckDB server",
 		"remote missing version row must tell the operator the fix")
 }
 
@@ -263,7 +286,7 @@ func TestCheckSchemaCompatViaQuackReportsServerBehindOnMissingVersionRow(
 // Recent Edits index. DuckDB has no partial indexes, so it omits the
 // WHERE file_path IS NOT NULL clause but indexes the same column.
 func TestEnsureSchemaCreatesToolCallsFilePathIndex(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	db := openTestDuckDB(t)
 	require.NoError(t, createSchema(ctx, db), "createSchema")
 
@@ -293,7 +316,7 @@ func openTestDuckDB(t *testing.T) *sql.DB {
 func tableExists(t *testing.T, db *sql.DB, table string) bool {
 	t.Helper()
 	var exists bool
-	require.NoError(t, db.QueryRow(
+	require.NoError(t, db.QueryRowContext(t.Context(),
 		`SELECT count(*) > 0
 		 FROM information_schema.tables
 		 WHERE table_schema = current_schema()
@@ -306,7 +329,7 @@ func tableExists(t *testing.T, db *sql.DB, table string) bool {
 func columnExists(t *testing.T, db *sql.DB, table, column string) bool {
 	t.Helper()
 	var exists bool
-	require.NoError(t, db.QueryRow(
+	require.NoError(t, db.QueryRowContext(t.Context(),
 		`SELECT count(*) > 0
 		 FROM information_schema.columns
 		 WHERE table_schema = current_schema()

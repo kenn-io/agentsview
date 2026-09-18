@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
-	"fmt"
+	"errors"
 	"sort"
 	"time"
 
@@ -328,11 +328,11 @@ func (r *ArchiveRequest) UnmarshalJSON(data []byte) error {
 		return json.Unmarshal(files, &r.Files)
 	case '[':
 		if raw.DeltaFiles != nil {
-			return fmt.Errorf("archive request cannot use both files delta list and delta_files")
+			return errors.New("archive request cannot use both files delta list and delta_files")
 		}
 		return json.Unmarshal(files, &r.DeltaFiles)
 	default:
-		return fmt.Errorf("archive request files must be an object or array")
+		return errors.New("archive request files must be an object or array")
 	}
 }
 

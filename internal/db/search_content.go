@@ -778,7 +778,7 @@ func classifyFTSError(err error) error {
 	var sqliteErr sqlite3.Error
 	if errors.As(err, &sqliteErr) && sqliteErr.Code == sqlite3.ErrError {
 		return &SearchInputError{
-			Msg: fmt.Sprintf("search: invalid FTS query: %s", sqliteErr.Error()),
+			Msg: "search: invalid FTS query: " + sqliteErr.Error(),
 		}
 	}
 	return err

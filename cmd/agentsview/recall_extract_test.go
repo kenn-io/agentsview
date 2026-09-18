@@ -79,10 +79,14 @@ func seedExtractCLISession(t *testing.T, dataDir string) {
 		MessageCount: 2,
 	}))
 	require.NoError(t, d.InsertMessages([]db.Message{
-		{SessionID: "extract-session", Ordinal: 0, Role: "user",
-			Content: "fix the flaky test"},
-		{SessionID: "extract-session", Ordinal: 1, Role: "assistant",
-			Content: "pinned the clock in the scheduler test"},
+		{
+			SessionID: "extract-session", Ordinal: 0, Role: "user",
+			Content: "fix the flaky test",
+		},
+		{
+			SessionID: "extract-session", Ordinal: 1, Role: "assistant",
+			Content: "pinned the clock in the scheduler test",
+		},
 	}))
 	require.NoError(t, d.ReplaceSessionSecretFindings(
 		"extract-session", nil, 0, secrets.RulesVersion()))
@@ -111,6 +115,9 @@ func TestRecallExtractCommandsRejectRemoteServer(t *testing.T) {
 }
 
 func TestRecallExtractRunAndStatusEndToEnd(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	server := extractModelStub(t)
@@ -119,7 +126,7 @@ func TestRecallExtractRunAndStatusEndToEnd(t *testing.T) {
 
 	out, err := executeCommand(newRootCommand(),
 		"recall", "extract", "run", "--format", "json")
-	require.NoError(t, err, "run output: %s", out)
+	require.NoError(err, "run output: %s", out)
 	var run struct {
 		Sessions int  `json:"sessions"`
 		Failed   int  `json:"failed"`
@@ -127,19 +134,19 @@ func TestRecallExtractRunAndStatusEndToEnd(t *testing.T) {
 		Units    int  `json:"units"`
 		Active   bool `json:"activated"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(out), &run), "stdout: %q", out)
-	assert.Equal(t, 1, run.Sessions)
-	assert.Equal(t, 2, run.Entries)
-	assert.True(t, run.Active)
+	require.NoError(json.Unmarshal([]byte(out), &run), "stdout: %q", out)
+	assert.Equal(1, run.Sessions)
+	assert.Equal(2, run.Entries)
+	assert.True(run.Active)
 
 	out, err = executeCommand(newRootCommand(),
 		"recall", "extract", "status", "--format", "json")
-	require.NoError(t, err, "status output: %s", out)
+	require.NoError(err, "status output: %s", out)
 	var status extract.Status
-	require.NoError(t, json.Unmarshal([]byte(out), &status), "stdout: %q", out)
-	assert.Equal(t, 1, status.Stats.Done)
-	assert.Equal(t, 2, status.Stats.Entries)
-	assert.NotEmpty(t, status.Fingerprint)
+	require.NoError(json.Unmarshal([]byte(out), &status), "stdout: %q", out)
+	assert.Equal(1, status.Stats.Done)
+	assert.Equal(2, status.Stats.Entries)
+	assert.NotEmpty(status.Fingerprint)
 }
 
 // TestSetupExtractReconcileOnlyWhenDisabled pins that retraction runs even
@@ -147,7 +154,7 @@ func TestRecallExtractRunAndStatusEndToEnd(t *testing.T) {
 // keeps serving, so setup returns a reconcile-only scheduler when a
 // generation exists and nil when none does.
 func TestSetupExtractReconcileOnlyWhenDisabled(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("nil without a generation", func(t *testing.T) {
 		d, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
@@ -160,14 +167,16 @@ func TestSetupExtractReconcileOnlyWhenDisabled(t *testing.T) {
 	})
 
 	t.Run("reconciles an ineligible session's entries", func(t *testing.T) {
+		require := require.New(t)
+
 		d, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
-		require.NoError(t, err)
+		require.NoError(err)
 		t.Cleanup(func() { _ = d.Close() })
 		_, err = d.EnsureExtractGeneration(ctx, db.ExtractGeneration{
 			Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 		})
-		require.NoError(t, err)
-		require.NoError(t, d.UpsertSession(db.Session{
+		require.NoError(err)
+		require.NoError(d.UpsertSession(db.Session{
 			ID: "sess-gone", Project: "p", Machine: "m", Agent: "claude",
 		}))
 		_, err = d.InsertExtractedRecallEntries(ctx, []db.RecallEntry{{
@@ -176,17 +185,17 @@ func TestSetupExtractReconcileOnlyWhenDisabled(t *testing.T) {
 			SourceSessionID: "sess-gone", SourceRunID: "fp-a",
 			ProvenanceOK: true,
 		}})
-		require.NoError(t, err)
-		require.NoError(t, d.SoftDeleteSession("sess-gone"))
+		require.NoError(err)
+		require.NoError(d.SoftDeleteSession("sess-gone"))
 
 		sched, err := setupRecallExtraction(config.Config{}, d, nil)
-		require.NoError(t, err)
-		require.NotNil(t, sched,
+		require.NoError(err)
+		require.NotNil(sched,
 			"a disabled daemon with a generation runs reconciliation")
 
 		runCtx, cancel := context.WithCancel(ctx)
 		go sched.Run(runCtx)
-		require.Eventually(t, func() bool {
+		require.Eventually(func() bool {
 			entry, err := d.GetRecallEntry(ctx, "e-gone")
 			return err == nil && entry == nil
 		}, 5*time.Second, 10*time.Millisecond,
@@ -196,14 +205,16 @@ func TestSetupExtractReconcileOnlyWhenDisabled(t *testing.T) {
 	})
 
 	t.Run("keeps candidate-only entries when configured", func(t *testing.T) {
+		require := require.New(t)
+
 		d, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
-		require.NoError(t, err)
+		require.NoError(err)
 		t.Cleanup(func() { _ = d.Close() })
 		_, err = d.EnsureExtractGeneration(ctx, db.ExtractGeneration{
 			Fingerprint: "fp-a", Model: "m", Segmenter: "turns-v1",
 		})
-		require.NoError(t, err)
-		require.NoError(t, d.UpsertSession(db.Session{
+		require.NoError(err)
+		require.NoError(d.UpsertSession(db.Session{
 			ID: "sess-candidate", Project: "p", Machine: "m", Agent: "claude",
 		}))
 		_, err = d.InsertExtractedRecallEntries(ctx, []db.RecallEntry{{
@@ -212,25 +223,24 @@ func TestSetupExtractReconcileOnlyWhenDisabled(t *testing.T) {
 			SourceSessionID: "sess-candidate", SourceRunID: "fp-a",
 			ProvenanceOK: true,
 		}})
-		require.NoError(t, err)
-		require.NoError(t, d.ReplaceSessionSecretFindings(
+		require.NoError(err)
+		require.NoError(d.ReplaceSessionSecretFindings(
 			"sess-candidate", []db.SecretFinding{{
 				SessionID: "sess-candidate", RuleName: "high-entropy-assignment",
 				Confidence: "candidate", LocationKind: "message",
 			}}, 0, "rules-v1"))
 
 		cfg := config.Config{}
-		cfg.Recall.Extract.CandidateFindings =
-			config.RecallCandidateFindingsAllow
+		cfg.Recall.Extract.CandidateFindings = config.RecallCandidateFindingsAllow
 		sched, err := setupRecallExtraction(cfg, d, nil)
-		require.NoError(t, err)
-		require.NotNil(t, sched)
+		require.NoError(err)
+		require.NotNil(sched)
 		started, _, err := sched.mgr.TryPass(ctx, extract.PassOptions{})
-		require.NoError(t, err)
-		require.True(t, started)
+		require.NoError(err)
+		require.True(started)
 
 		entry, err := d.GetRecallEntry(ctx, "e-candidate")
-		require.NoError(t, err)
+		require.NoError(err)
 		assert.NotNil(t, entry,
 			"candidate-only session keeps serving when configured allow")
 	})
@@ -260,6 +270,8 @@ func TestRecallExtractRunRejectsNegativeLimit(t *testing.T) {
 }
 
 func TestRecallExtractRetireRequiresForceForActive(t *testing.T) {
+	require := require.New(t)
+
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	server := extractModelStub(t)
@@ -267,24 +279,26 @@ func TestRecallExtractRetireRequiresForceForActive(t *testing.T) {
 	seedExtractCLISession(t, dataDir)
 
 	_, err := executeCommand(newRootCommand(), "recall", "extract", "run")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	out, err := executeCommand(newRootCommand(),
 		"recall", "extract", "status", "--format", "json")
-	require.NoError(t, err)
+	require.NoError(err)
 	var status extract.Status
-	require.NoError(t, json.Unmarshal([]byte(out), &status))
+	require.NoError(json.Unmarshal([]byte(out), &status))
 
 	_, err = executeCommand(newRootCommand(),
 		"recall", "extract", "retire", status.Fingerprint)
-	require.Error(t, err, "retiring the active generation needs --force")
+	require.Error(err, "retiring the active generation needs --force")
 
 	_, err = executeCommand(newRootCommand(),
 		"recall", "extract", "retire", status.Fingerprint, "--force")
-	require.NoError(t, err)
+	require.NoError(err)
 }
 
 func TestRecallExtractDoctorProbesTheModel(t *testing.T) {
+	assert := assert.New(t)
+
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	server := extractModelStub(t)
@@ -292,9 +306,9 @@ func TestRecallExtractDoctorProbesTheModel(t *testing.T) {
 
 	out, err := executeCommand(newRootCommand(), "recall", "extract", "doctor")
 	require.NoError(t, err, "doctor output: %s", out)
-	assert.Contains(t, out, "Fingerprint:")
-	assert.Contains(t, out, "test-model")
-	assert.Contains(t, out, "probe: ok")
+	assert.Contains(out, "Fingerprint:")
+	assert.Contains(out, "test-model")
+	assert.Contains(out, "probe: ok")
 }
 
 // TestExtractProbeTimeoutExceedsConfiguredRequestTimeout pins that the
@@ -334,6 +348,9 @@ func TestRecallExtractDoctorSanitizesEndpointErrors(t *testing.T) {
 }
 
 func TestRecallExtractPreviewSubcommandBuildsChunks(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := t.TempDir()
 	setRecallTestEnv(t, dataDir)
 	seedRecallEntryFixture(t, dataDir)
@@ -345,18 +362,21 @@ func TestRecallExtractPreviewSubcommandBuildsChunks(t *testing.T) {
 		"--chunk-max-chars", "120",
 		"--format", "json",
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	var got struct {
 		SessionID  string `json:"session_id"`
 		ChunkCount int    `json:"chunk_count"`
 	}
-	require.NoError(t, json.Unmarshal([]byte(out), &got),
+	require.NoError(json.Unmarshal([]byte(out), &got),
 		"stdout should be valid JSON: %q", out)
-	assert.Equal(t, "recall-session", got.SessionID)
-	assert.GreaterOrEqual(t, got.ChunkCount, 2)
+	assert.Equal("recall-session", got.SessionID)
+	assert.GreaterOrEqual(got.ChunkCount, 2)
 }
 
 func TestResolveExtractDistillationAppliesOverrides(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	temp := 0.3
 	t.Setenv("AGENTSVIEW_TEST_RECALL_API_KEY", "atlas-secret")
 	cfg := config.RecallExtractConfig{
@@ -381,38 +401,40 @@ func TestResolveExtractDistillationAppliesOverrides(t *testing.T) {
 		},
 	}
 	dist, err := resolveExtractDistillation(cfg)
-	require.NoError(t, err)
-	assert.Equal(t, "local", dist.Server)
-	assert.Equal(t, "qwen", dist.Profile,
+	require.NoError(err)
+	assert.Equal("local", dist.Server)
+	assert.Equal("qwen", dist.Profile,
 		"model prefix must select the qwen profile")
-	assert.Equal(t, "http://127.0.0.1:30000/v1", dist.Client.BaseURL)
-	assert.Equal(t, "atlas-secret", dist.Client.APIKey)
-	assert.Equal(t, 0.3, dist.Client.Request.Temperature)
-	assert.Equal(t, 512, dist.Client.Request.MaxTokens)
-	assert.Equal(t, map[string]any{"custom": true},
+	assert.Equal("http://127.0.0.1:30000/v1", dist.Client.BaseURL)
+	assert.Equal("atlas-secret", dist.Client.APIKey)
+	assert.Equal(0.3, dist.Client.Request.Temperature)
+	assert.Equal(512, dist.Client.Request.MaxTokens)
+	assert.Equal(map[string]any{"custom": true},
 		dist.Client.Request.ExtraBody,
 		"configured extra_body replaces the profile's")
-	assert.Equal(t, 40000, dist.Segmenter.MaxWindowChars)
-	assert.Equal(t,
-		extract.ModelIdentity{Model: "qwen3.5-27b", Deployment: "gpu-a"},
+	assert.Equal(40000, dist.Segmenter.MaxWindowChars)
+	assert.Equal(extract.ModelIdentity{Model: "qwen3.5-27b", Deployment: "gpu-a"},
 		dist.Identity)
-	assert.Equal(t, 30*time.Minute, dist.Quiet)
-	assert.Equal(t, 2*time.Hour, dist.Backoff)
-	assert.Equal(t, time.Hour, dist.Backstop)
+	assert.Equal(30*time.Minute, dist.Quiet)
+	assert.Equal(2*time.Hour, dist.Backoff)
+	assert.Equal(time.Hour, dist.Backstop)
 
 	cfg.Enabled = false
 	_, err = resolveExtractDistillation(cfg)
-	require.Error(t, err, "disabled extraction cannot resolve")
+	require.Error(err, "disabled extraction cannot resolve")
 
 	cfg.Enabled = true
 	cfg.Prompts.Profile = "nonexistent"
 	_, err = resolveExtractDistillation(cfg)
-	require.Error(t, err, "unknown profile must surface")
+	require.Error(err, "unknown profile must surface")
 }
 
 func TestResolveExtractDistillationLoadsPromptDir(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(dir, "intent.txt"), []byte("custom intent\n"), 0o644))
 	cfg := config.RecallExtractConfig{
 		Enabled:          true,
@@ -427,9 +449,9 @@ func TestResolveExtractDistillationLoadsPromptDir(t *testing.T) {
 		Prompts: config.RecallExtractPromptsConfig{Dir: dir},
 	}
 	dist, err := resolveExtractDistillation(cfg)
-	require.NoError(t, err)
-	assert.Equal(t, "custom intent", dist.Prompts[extract.RoleIntent])
-	assert.NotEmpty(t, dist.Prompts[extract.RoleAction],
+	require.NoError(err)
+	assert.Equal("custom intent", dist.Prompts[extract.RoleIntent])
+	assert.NotEmpty(dist.Prompts[extract.RoleAction],
 		"roles without override files keep profile prompts")
 }
 
@@ -449,6 +471,9 @@ func TestRecallExtractRunRefusesWhileOfflineWriterHoldsLock(t *testing.T) {
 }
 
 func TestResolveExtractDistillationRefusesAllRedirects(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	cfg := config.RecallExtractConfig{
 		Enabled:          true,
 		Model:            "m",
@@ -461,9 +486,9 @@ func TestResolveExtractDistillationRefusesAllRedirects(t *testing.T) {
 		},
 	}
 	dist, err := resolveExtractDistillation(cfg)
-	require.NoError(t, err)
+	require.NoError(err)
 	redirect := dist.Client.HTTPClient.CheckRedirect
-	require.NotNil(t, redirect,
+	require.NotNil(redirect,
 		"the model client must refuse redirects: a compliant endpoint "+
 			"must not steer the extraction POST anywhere")
 
@@ -481,7 +506,7 @@ func TestResolveExtractDistillationRefusesAllRedirects(t *testing.T) {
 		"loopback":       "http://127.0.0.1:9/v1/x",
 	} {
 		req := &http.Request{URL: mustParseURL(t, target)}
-		require.Error(t, redirect(req, nil),
+		require.Error(redirect(req, nil),
 			"a %s redirect must be refused", name)
 	}
 
@@ -490,10 +515,10 @@ func TestResolveExtractDistillationRefusesAllRedirects(t *testing.T) {
 	credentialed := &http.Request{URL: mustParseURL(t,
 		"https://tester:hunter2@build-box:30000/v1?sig=sekret")}
 	err = redirect(credentialed, nil)
-	require.Error(t, err)
-	assert.NotContains(t, err.Error(), "hunter2")
-	assert.NotContains(t, err.Error(), "sekret")
-	assert.NotContains(t, err.Error(), "tester:")
+	require.Error(err)
+	assert.NotContains(err.Error(), "hunter2")
+	assert.NotContains(err.Error(), "sekret")
+	assert.NotContains(err.Error(), "tester:")
 }
 
 func mustParseURL(t *testing.T, raw string) *url.URL {
@@ -507,20 +532,23 @@ func mustParseURL(t *testing.T, raw string) *url.URL {
 // never shows URL userinfo: endpoints may carry Basic-auth credentials, and
 // doctor output lands in terminals, CI logs, and pasted diagnostics.
 func TestRecallExtractDoctorRedactsEndpointCredentials(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dataDir := t.TempDir()
 	t.Setenv("AGENTSVIEW_DATA_DIR", dataDir)
 	server := extractModelStub(t)
 	parsed, err := url.Parse(server.URL)
-	require.NoError(t, err)
+	require.NoError(err)
 	writeExtractConfig(t, dataDir,
 		"http://tester:hunter2@"+parsed.Host)
 
 	out, cmdErr := executeCommand(newRootCommand(), "recall", "extract", "doctor")
-	require.NoError(t, cmdErr, "doctor output: %s", out)
-	assert.Contains(t, out, parsed.Host,
+	require.NoError(cmdErr, "doctor output: %s", out)
+	assert.Contains(out, parsed.Host,
 		"the endpoint host stays visible for diagnostics")
-	assert.NotContains(t, out, "hunter2",
+	assert.NotContains(out, "hunter2",
 		"a Basic-auth password must never reach the terminal")
-	assert.NotContains(t, out, "tester:",
+	assert.NotContains(out, "tester:",
 		"URL userinfo must be dropped, not just the password")
 }

@@ -16,94 +16,100 @@ import (
 )
 
 func TestOpenCodeV2BetaWorkflow(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	// The beta CLI produced these tables through four real prompts. Keeping
 	// its schema catches assumptions about legacy tables that hand-built
 	// projection-only fixtures cannot catch.
 	raw, err := os.ReadFile("testdata/opencode_v2/beta.sql")
-	require.NoError(t, err)
+	require.NoError(err)
 	path := filepath.Join(t.TempDir(), "opencode.db")
 	writer, err := sql.Open("sqlite3", path)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(func() { writer.Close() })
-	_, err = writer.Exec(string(raw))
-	require.NoError(t, err)
+	_, err = writer.ExecContext(t.Context(), string(raw))
+	require.NoError(err)
 
 	const id = "ses_f78f34fafffeIugr4PB2oXkVD0"
 	metas, err := ListOpenCodeSessionMeta(path)
-	require.NoError(t, err)
-	require.Len(t, metas, 3)
+	require.NoError(err)
+	require.Len(metas, 3)
 	watermarks, err := ListOpenCodeSessionWatermarkMeta(path)
-	require.NoError(t, err)
-	require.Len(t, watermarks, 3)
-	assert.True(t, watermarks[0].WatermarkOnly)
-	assert.True(t, OpenCodeSQLiteSessionExists(path, id))
+	require.NoError(err)
+	require.Len(watermarks, 3)
+	assert.True(watermarks[0].WatermarkOnly)
+	assert.True(OpenCodeSQLiteSessionExists(t.Context(), path, id))
 	_, composite, found, err := openCodeSQLiteSessionWatermarkOnly(t.Context(), path, id)
-	require.NoError(t, err)
-	assert.True(t, composite)
-	assert.True(t, found)
+	require.NoError(err)
+	assert.True(composite)
+	assert.True(found)
 
 	sess, msgs, err := parseOpenCodeDBSession(path, id, "host-a")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, "/workspace/project-a", sess.Cwd)
-	assert.Equal(t, 2, sess.UserMessageCount)
-	assert.True(t, time.UnixMilli(1788972159327).Equal(sess.EndedAt))
-	require.Len(t, msgs, 5)
-	assert.Contains(t, msgs[0].Content, "Read input.txt using the read tool.")
-	require.Len(t, msgs[1].ToolCalls, 1)
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal("/workspace/project-a", sess.Cwd)
+	assert.Equal(2, sess.UserMessageCount)
+	assert.True(time.UnixMilli(1788972159327).Equal(sess.EndedAt))
+	require.Len(msgs, 5)
+	assert.Contains(msgs[0].Content, "Read input.txt using the read tool.")
+	require.Len(msgs[1].ToolCalls, 1)
 	call := msgs[1].ToolCalls[0]
-	assert.Equal(t, "read", call.ToolName)
-	assert.JSONEq(t, `{"path":"/workspace/project-a/input.txt"}`, call.InputJSON)
-	require.Len(t, call.ResultEvents, 1)
-	assert.Equal(t, "Read file /workspace/project-a/input.txt, lines 1-3\n1: alpha\n2: beta\n3: gamma", call.ResultEvents[0].Content)
-	assert.Contains(t, msgs[2].Content, "**Number of lines:** 3")
-	assert.Contains(t, msgs[4].Content, "[/Thinking]\nbeta")
-	assert.Equal(t, "big-pickle", msgs[4].Model)
-	assert.Equal(t, 26, msgs[4].OutputTokens)
-	assert.Equal(t, 7154, msgs[4].ContextTokens)
+	assert.Equal("read", call.ToolName)
+	assert.JSONEq(`{"path":"/workspace/project-a/input.txt"}`, call.InputJSON)
+	require.Len(call.ResultEvents, 1)
+	assert.Equal("Read file /workspace/project-a/input.txt, lines 1-3\n1: alpha\n2: beta\n3: gamma", call.ResultEvents[0].Content)
+	assert.Contains(msgs[2].Content, "**Number of lines:** 3")
+	assert.Contains(msgs[4].Content, "[/Thinking]\nbeta")
+	assert.Equal("big-pickle", msgs[4].Model)
+	assert.Equal(26, msgs[4].OutputTokens)
+	assert.Equal(7154, msgs[4].ContextTokens)
 
 	_, failed, err := parseOpenCodeDBSession(path, "ses_f78ee770effebwbWXea2fzwUIu", "host-a")
-	require.NoError(t, err)
-	require.Len(t, failed, 3)
-	require.Len(t, failed[1].ToolCalls, 1)
+	require.NoError(err)
+	require.Len(failed, 3)
+	require.Len(failed[1].ToolCalls, 1)
 	shell := failed[1].ToolCalls[0]
-	assert.Equal(t, "shell", shell.ToolName)
-	require.Len(t, shell.ResultEvents, 1)
-	assert.Equal(t, "errored", shell.ResultEvents[0].Status)
-	assert.Contains(t, shell.ResultEvents[0].Content, "Command exited with code 7.")
+	assert.Equal("shell", shell.ToolName)
+	require.Len(shell.ResultEvents, 1)
+	assert.Equal("errored", shell.ResultEvents[0].Status)
+	assert.Contains(shell.ResultEvents[0].Content, "Command exited with code 7.")
 
 	// Streaming finalization updates only the projection, not session metadata.
-	before, digest, composite, err := openCodeSessionCompositeMtime(writer, path, id)
-	require.NoError(t, err)
-	assert.True(t, composite)
-	_, err = writer.Exec(`UPDATE session_message SET time_updated = 1788972160000,
+	before, digest, composite, err := openCodeSessionCompositeMtime(t.Context(), writer, path, id)
+	require.NoError(err)
+	assert.True(composite)
+	_, err = writer.ExecContext(t.Context(), `UPDATE session_message SET time_updated = 1788972160000,
 	 data = json_set(data, '$.content[1].text', 'updated beta') WHERE session_id = ? AND seq = 25`, id)
-	require.NoError(t, err)
-	after, err := OpenCodeSourceMtime(path + "#" + id)
-	require.NoError(t, err)
-	assert.Greater(t, after, before*1_000_000)
-	_, updatedDigest, _, err := openCodeSessionCompositeMtime(writer, path, id)
-	require.NoError(t, err)
-	assert.NotEqual(t, digest, updatedDigest)
+	require.NoError(err)
+	after, err := OpenCodeSourceMtime(t.Context(), path+"#"+id)
+	require.NoError(err)
+	assert.Greater(after, before*1_000_000)
+	_, updatedDigest, _, err := openCodeSessionCompositeMtime(t.Context(), writer, path, id)
+	require.NoError(err)
+	assert.NotEqual(digest, updatedDigest)
 	_, msgs, err = parseOpenCodeDBSession(path, id, "host-a")
-	require.NoError(t, err)
-	require.Len(t, msgs, 5)
-	assert.Contains(t, msgs[4].Content, "[/Thinking]\nupdated beta")
+	require.NoError(err)
+	require.Len(msgs, 5)
+	assert.Contains(msgs[4].Content, "[/Thinking]\nupdated beta")
 
 	// An empty v2 session must not try to load nonexistent v1 message tables.
-	_, err = writer.Exec("DELETE FROM session_message WHERE session_id = ?", id)
-	require.NoError(t, err)
+	_, err = writer.ExecContext(t.Context(), "DELETE FROM session_message WHERE session_id = ?", id)
+	require.NoError(err)
 	sess, msgs, err = parseOpenCodeDBSession(path, id, "host-a")
-	require.NoError(t, err)
-	assert.Nil(t, sess)
-	assert.Empty(t, msgs)
+	require.NoError(err)
+	assert.Nil(sess)
+	assert.Empty(msgs)
 }
 
 func TestOpenCodeV2CapturedWorkflow(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	// Generated by OpenCode 1.18.25's /api/session v2 API, with scratch paths
 	// replaced. This fixture is producer output, not assembled by the simulator.
 	raw, err := os.ReadFile("testdata/opencode_v2/messages.json")
-	require.NoError(t, err)
+	require.NoError(err)
 	var rows []struct {
 		ID      string         `json:"id"`
 		Type    string         `json:"type"`
@@ -112,34 +118,34 @@ func TestOpenCodeV2CapturedWorkflow(t *testing.T) {
 		Updated int64          `json:"time_updated"`
 		Data    jsontext.Value `json:"data"`
 	}
-	require.NoError(t, json.Unmarshal(raw, &rows))
+	require.NoError(json.Unmarshal(raw, &rows))
 	path, seed, writer := newTestDB(t)
 	seed.AddProject("project-a", "/workspace/project-a")
 	seed.AddSession("ses_captured", "project-a", "", "Count lines", 1788899250985, 1788899253026)
-	_, err = writer.Exec(openCodeV2TestSchema)
-	require.NoError(t, err)
+	_, err = writer.ExecContext(t.Context(), openCodeV2TestSchema)
+	require.NoError(err)
 	for _, row := range rows {
-		_, err = writer.Exec(`INSERT INTO session_message VALUES (?, 'ses_captured', ?, ?, ?, ?, ?)`, row.ID, row.Type, row.Seq, row.Created, row.Updated, string(row.Data))
-		require.NoError(t, err)
+		_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES (?, 'ses_captured', ?, ?, ?, ?, ?)`, row.ID, row.Type, row.Seq, row.Created, row.Updated, string(row.Data))
+		require.NoError(err)
 	}
 	sess, msgs, err := parseOpenCodeDBSession(path, "ses_captured", "host-a")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	require.Len(t, msgs, 4)
-	assert.Equal(t, 1, sess.UserMessageCount)
-	assert.Equal(t, "Read input.txt using the read tool. Reply with the three words in order and the number of lines. Do not edit files or run other commands.", msgs[0].Content)
-	assert.True(t, msgs[1].HasThinking)
-	require.Len(t, msgs[1].ToolCalls, 1)
+	require.NoError(err)
+	require.NotNil(sess)
+	require.Len(msgs, 4)
+	assert.Equal(1, sess.UserMessageCount)
+	assert.Equal("Read input.txt using the read tool. Reply with the three words in order and the number of lines. Do not edit files or run other commands.", msgs[0].Content)
+	assert.True(msgs[1].HasThinking)
+	require.Len(msgs[1].ToolCalls, 1)
 	call := msgs[1].ToolCalls[0]
-	assert.Equal(t, "read", call.ToolName)
-	assert.JSONEq(t, `{"path":"input.txt"}`, call.InputJSON)
-	require.Len(t, call.ResultEvents, 1)
-	assert.Equal(t, "alpha\nbeta\ngamma\n", call.ResultEvents[0].Content)
-	assert.True(t, msgs[2].IsSystem)
-	assert.Equal(t, "The three words in order are: **alpha**, **beta**, **gamma**.\n\nThe file has **3 lines**.", msgs[3].Content)
-	assert.Equal(t, "big-pickle", msgs[3].Model)
-	assert.Equal(t, 25, msgs[3].OutputTokens)
-	assert.Equal(t, 3487, msgs[3].ContextTokens)
+	assert.Equal("read", call.ToolName)
+	assert.JSONEq(`{"path":"input.txt"}`, call.InputJSON)
+	require.Len(call.ResultEvents, 1)
+	assert.Equal("alpha\nbeta\ngamma\n", call.ResultEvents[0].Content)
+	assert.True(msgs[2].IsSystem)
+	assert.Equal("The three words in order are: **alpha**, **beta**, **gamma**.\n\nThe file has **3 lines**.", msgs[3].Content)
+	assert.Equal("big-pickle", msgs[3].Model)
+	assert.Equal(25, msgs[3].OutputTokens)
+	assert.Equal(3487, msgs[3].ContextTokens)
 }
 
 // Projection schema from anomalyco/opencode dff8fbc149fb, core/src/session/sql.ts.
@@ -155,34 +161,37 @@ CREATE INDEX session_message_session_time_created_id_idx ON session_message(sess
 CREATE INDEX session_message_time_created_idx ON session_message(time_created);`
 
 func TestOpenCodeV2Projection(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path, seed, writer := newTestDB(t)
 	t.Cleanup(func() { writer.Close() })
 	seed.AddProject("project-a", "/workspace/project-a")
 	seed.AddSession("ses_v2", "project-a", "ses_parent", "", 1700000000000, 1700000060000)
-	_, err := writer.Exec(openCodeV2TestSchema)
-	require.NoError(t, err)
+	_, err := writer.ExecContext(t.Context(), openCodeV2TestSchema)
+	require.NoError(err)
 	// IDs and timestamps deliberately disagree with event sequence order.
-	_, err = writer.Exec(`INSERT INTO session_message VALUES
+	_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES
  ('msg_a', 'ses_v2', 'assistant', 20, 1700000000000, 1700000000000,
  '{"agent":"build","model":{"id":"gpt-5.4","providerID":"openai"},"time":{"created":1700000000000},"content":[{"type":"text","id":"txt_a","text":"Draft"}]}'),
  ('msg_z', 'ses_v2', 'user', 10, 1700000000100, 1700000000100,
  '{"text":"Check the query","files":[],"agents":[],"time":{"created":1700000000100}}')`)
-	require.NoError(t, err)
+	require.NoError(err)
 	sess, msgs, err := parseOpenCodeDBSession(path, "ses_v2", "host-a")
-	require.NoError(t, err)
-	require.NotNil(t, sess, "v2 conversation must be imported")
-	require.Len(t, msgs, 2)
-	assert.Equal(t, "Check the query", msgs[0].Content)
-	assert.Equal(t, "Draft", msgs[1].Content)
-	assert.Equal(t, "opencode:ses_parent", sess.ParentSessionID)
-	assert.Equal(t, "Check the query", sess.FirstMessage)
-	assert.Equal(t, "/workspace/project-a", sess.Cwd)
+	require.NoError(err)
+	require.NotNil(sess, "v2 conversation must be imported")
+	require.Len(msgs, 2)
+	assert.Equal("Check the query", msgs[0].Content)
+	assert.Equal("Draft", msgs[1].Content)
+	assert.Equal("opencode:ses_parent", sess.ParentSessionID)
+	assert.Equal("Check the query", sess.FirstMessage)
+	assert.Equal("/workspace/project-a", sess.Cwd)
 	before, err := ListOpenCodeSessionMeta(path)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// Text.Ended, Tool.Success and Step.Ended update a projection in place.
 	// A high session timestamp must not hide this child-only update.
-	_, err = writer.Exec(`UPDATE session_message SET time_updated = 1700000001000, data =
+	_, err = writer.ExecContext(t.Context(), `UPDATE session_message SET time_updated = 1700000001000, data =
  '{"agent":"build","model":{"id":"gpt-5.4","providerID":"openai"},
  "time":{"created":1700000000000,"completed":1700000001000},
  "tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":30,"write":0}},
@@ -190,49 +199,49 @@ func TestOpenCodeV2Projection(t *testing.T) {
  {"type":"tool","id":"call_a","name":"bash","time":{"created":1700000000000,"completed":1700000000900},
  "state":{"status":"completed","input":{"command":"explain query"},"structured":{},"content":[{"type":"text","text":"Index scan"}]}},
  {"type":"text","id":"a","text":"Use the index"}]}' WHERE id = 'msg_a'`)
-	require.NoError(t, err)
+	require.NoError(err)
 	after, err := ListOpenCodeSessionMeta(path)
-	require.NoError(t, err)
-	require.Len(t, after, 1)
-	assert.Equal(t, before[0].FileMtime, after[0].FileMtime)
-	assert.NotEqual(t, before[0].ChildDigest, after[0].ChildDigest)
-	mtime, digest, composite, err := openCodeSessionCompositeMtime(writer, path, "ses_v2")
-	require.NoError(t, err)
-	assert.True(t, composite)
-	assert.Equal(t, after[0].ChildDigest, digest)
-	assert.Equal(t, after[0].FileMtime, mtime*1_000_000)
+	require.NoError(err)
+	require.Len(after, 1)
+	assert.Equal(before[0].FileMtime, after[0].FileMtime)
+	assert.NotEqual(before[0].ChildDigest, after[0].ChildDigest)
+	mtime, digest, composite, err := openCodeSessionCompositeMtime(t.Context(), writer, path, "ses_v2")
+	require.NoError(err)
+	assert.True(composite)
+	assert.Equal(after[0].ChildDigest, digest)
+	assert.Equal(after[0].FileMtime, mtime*1_000_000)
 	sess, msgs, err = parseOpenCodeDBSession(path, "ses_v2", "host-a")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	require.Len(t, msgs, 2)
-	assert.Equal(t, "[Thinking]\nInspect the plan\n[/Thinking]\nUse the index", msgs[1].Content)
-	assert.True(t, msgs[1].HasThinking)
-	assert.Equal(t, "gpt-5.4", msgs[1].Model)
-	assert.JSONEq(t, `{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":30,"cache_creation_input_tokens":0}`, string(msgs[1].TokenUsage))
-	require.Len(t, msgs[1].ToolCalls, 1)
+	require.NoError(err)
+	require.NotNil(sess)
+	require.Len(msgs, 2)
+	assert.Equal("[Thinking]\nInspect the plan\n[/Thinking]\nUse the index", msgs[1].Content)
+	assert.True(msgs[1].HasThinking)
+	assert.Equal("gpt-5.4", msgs[1].Model)
+	assert.JSONEq(`{"input_tokens":100,"output_tokens":20,"cache_read_input_tokens":30,"cache_creation_input_tokens":0}`, string(msgs[1].TokenUsage))
+	require.Len(msgs[1].ToolCalls, 1)
 	call := msgs[1].ToolCalls[0]
-	assert.Equal(t, "call_a", call.ToolUseID)
-	assert.Equal(t, "bash", call.ToolName)
-	assert.JSONEq(t, `{"command":"explain query"}`, call.InputJSON)
-	require.Len(t, call.ResultEvents, 1)
-	assert.Equal(t, "completed", call.ResultEvents[0].Status)
-	assert.Equal(t, "Index scan", call.ResultEvents[0].Content)
+	assert.Equal("call_a", call.ToolUseID)
+	assert.Equal("bash", call.ToolName)
+	assert.JSONEq(`{"command":"explain query"}`, call.InputJSON)
+	require.Len(call.ResultEvents, 1)
+	assert.Equal("completed", call.ResultEvents[0].Status)
+	assert.Equal("Index scan", call.ResultEvents[0].Content)
 
 	// Revert.Committed removes later projection rows without lowering session time.
-	_, err = writer.Exec(`DELETE FROM session_message WHERE session_id = 'ses_v2' AND seq > 10`)
-	require.NoError(t, err)
+	_, err = writer.ExecContext(t.Context(), `DELETE FROM session_message WHERE session_id = 'ses_v2' AND seq > 10`)
+	require.NoError(err)
 	reverted, err := ListOpenCodeSessionMeta(path)
-	require.NoError(t, err)
-	assert.NotEqual(t, after[0].ChildDigest, reverted[0].ChildDigest)
+	require.NoError(err)
+	assert.NotEqual(after[0].ChildDigest, reverted[0].ChildDigest)
 	_, msgs, err = parseOpenCodeDBSession(path, "ses_v2", "host-a")
-	require.NoError(t, err)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, "Check the query", msgs[0].Content)
+	require.NoError(err)
+	require.Len(msgs, 1)
+	assert.Equal("Check the query", msgs[0].Content)
 }
 
 func TestOpenCodeV2MixedDatabase(t *testing.T) {
 	path, seed, writer := newTestDB(t)
-	_, err := writer.Exec(openCodeV2TestSchema)
+	_, err := writer.ExecContext(t.Context(), openCodeV2TestSchema)
 	require.NoError(t, err)
 	seed.AddProject("project-a", "/workspace/project-a")
 	for _, id := range []string{"ses_v1", "ses_v2"} {
@@ -240,15 +249,18 @@ func TestOpenCodeV2MixedDatabase(t *testing.T) {
 		seed.AddMessage("msg_"+id, id, 1700000000000, 1700000000000, `{"role":"user"}`)
 		seed.AddPart("prt_"+id, "msg_"+id, id, 1700000000000, 1700000000000, `{"type":"text","text":"Legacy conversation"}`)
 	}
-	_, err = writer.Exec(`INSERT INTO session_message VALUES ('msg_ses_v2', 'ses_v2', 'user', 1, 1700000000000, 1700000000000, '{"text":"Projected conversation"}')`)
+	_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES ('msg_ses_v2', 'ses_v2', 'user', 1, 1700000000000, 1700000000000, '{"text":"Projected conversation"}')`)
 	require.NoError(t, err)
 	for _, tc := range []struct{ id, text string }{{"ses_v1", "Legacy conversation"}, {"ses_v2", "Projected conversation"}} {
 		t.Run(tc.id, func(t *testing.T) {
-			assert.True(t, OpenCodeSQLiteSessionExists(path, tc.id))
+			assert := assert.New(t)
+			require := require.New(t)
+
+			assert.True(OpenCodeSQLiteSessionExists(t.Context(), path, tc.id))
 			_, msgs, err := parseOpenCodeDBSession(path, tc.id, "host-a")
-			require.NoError(t, err)
-			require.Len(t, msgs, 1)
-			assert.Equal(t, tc.text, msgs[0].Content)
+			require.NoError(err)
+			require.Len(msgs, 1)
+			assert.Equal(tc.text, msgs[0].Content)
 		})
 	}
 }
@@ -263,25 +275,28 @@ func TestOpenCodeV2ToolStates(t *testing.T) {
 		{"exit", "bash", `{"status":"completed","input":{"command":"false"},"structured":{"exit":1},"content":[{"type":"text","text":"Command exited with code 1."}]}`, "errored", "Command exited with code 1."},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			path, seed, writer := newTestDB(t)
 			seed.AddProject("project-a", "/workspace/project-a")
 			seed.AddSession("ses_a", "project-a", "", "", 1700000000000, 1700000001000)
-			_, err := writer.Exec(openCodeV2TestSchema)
-			require.NoError(t, err)
-			_, err = writer.Exec(`INSERT INTO session_message VALUES ('msg_a', 'ses_a', 'assistant', 1, 1700000000000, 1700000001000, ?)`,
+			_, err := writer.ExecContext(t.Context(), openCodeV2TestSchema)
+			require.NoError(err)
+			_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES ('msg_a', 'ses_a', 'assistant', 1, 1700000000000, 1700000001000, ?)`,
 				fmt.Sprintf(`{"content":[{"type":"tool","id":"call_a","name":%q,"state":%s,"time":{"created":1700000000000,"completed":1700000001000}}]}`, tc.tool, tc.state))
-			require.NoError(t, err)
+			require.NoError(err)
 			_, msgs, err := parseOpenCodeDBSession(path, "ses_a", "host-a")
-			require.NoError(t, err)
-			require.Len(t, msgs, 1)
-			require.Len(t, msgs[0].ToolCalls, 1)
+			require.NoError(err)
+			require.Len(msgs, 1)
+			require.Len(msgs[0].ToolCalls, 1)
 			call := msgs[0].ToolCalls[0]
 			if tc.status == "" {
-				assert.Empty(t, call.ResultEvents)
+				assert.Empty(call.ResultEvents)
 			} else {
-				require.Len(t, call.ResultEvents, 1)
-				assert.Equal(t, tc.status, call.ResultEvents[0].Status)
-				assert.Equal(t, tc.text, call.ResultEvents[0].Content)
+				require.Len(call.ResultEvents, 1)
+				assert.Equal(tc.status, call.ResultEvents[0].Status)
+				assert.Equal(tc.text, call.ResultEvents[0].Content)
 			}
 		})
 	}
@@ -306,46 +321,52 @@ func TestOpenCodeV2MessageKinds(t *testing.T) {
 		{kind: "user", data: `{"text":`, invalid: true},
 	} {
 		t.Run(tc.kind, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			path, seed, writer := newTestDB(t)
 			seed.AddProject("project-a", "/workspace/project-a")
 			seed.AddSession("ses_a", "project-a", "", "", 1700000000000, 1700000001000)
-			_, err := writer.Exec(openCodeV2TestSchema)
-			require.NoError(t, err)
-			_, err = writer.Exec(`INSERT INTO session_message VALUES ('msg_a', 'ses_a', ?, 1, 1700000000000, 1700000001000, ?)`, tc.kind, tc.data)
-			require.NoError(t, err)
+			_, err := writer.ExecContext(t.Context(), openCodeV2TestSchema)
+			require.NoError(err)
+			_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES ('msg_a', 'ses_a', ?, 1, 1700000000000, 1700000001000, ?)`, tc.kind, tc.data)
+			require.NoError(err)
 			sess, msgs, err := parseOpenCodeDBSession(path, "ses_a", "host-a")
 			if tc.invalid {
-				require.Error(t, err)
-				assert.Nil(t, sess)
+				require.Error(err)
+				assert.Nil(sess)
 				return
 			}
-			require.NoError(t, err)
-			require.NotNil(t, sess)
-			require.Len(t, msgs, 1)
-			assert.Equal(t, tc.content, msgs[0].Content)
-			assert.Equal(t, tc.system, msgs[0].IsSystem)
-			assert.Equal(t, tc.compact, msgs[0].IsCompactBoundary)
-			assert.Equal(t, tc.tool, msgs[0].HasToolUse)
+			require.NoError(err)
+			require.NotNil(sess)
+			require.Len(msgs, 1)
+			assert.Equal(tc.content, msgs[0].Content)
+			assert.Equal(tc.system, msgs[0].IsSystem)
+			assert.Equal(tc.compact, msgs[0].IsCompactBoundary)
+			assert.Equal(tc.tool, msgs[0].HasToolUse)
 			if tc.system {
-				assert.Zero(t, sess.UserMessageCount)
+				assert.Zero(sess.UserMessageCount)
 			}
 			if tc.tool {
-				require.Len(t, msgs[0].ToolCalls, 1)
-				assert.JSONEq(t, `{"command":"echo hello"}`, msgs[0].ToolCalls[0].InputJSON)
-				require.Len(t, msgs[0].ToolCalls[0].ResultEvents, 1)
-				assert.Equal(t, "hello\n", msgs[0].ToolCalls[0].ResultEvents[0].Content)
+				require.Len(msgs[0].ToolCalls, 1)
+				assert.JSONEq(`{"command":"echo hello"}`, msgs[0].ToolCalls[0].InputJSON)
+				require.Len(msgs[0].ToolCalls[0].ResultEvents, 1)
+				assert.Equal("hello\n", msgs[0].ToolCalls[0].ResultEvents[0].Content)
 			}
 			if tc.usage {
-				assert.Equal(t, "gpt-5.4", msgs[0].Model)
-				assert.True(t, msgs[0].HasContextTokens)
-				assert.True(t, msgs[0].HasOutputTokens)
-				assert.JSONEq(t, `{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}`, string(msgs[0].TokenUsage))
+				assert.Equal("gpt-5.4", msgs[0].Model)
+				assert.True(msgs[0].HasContextTokens)
+				assert.True(msgs[0].HasOutputTokens)
+				assert.JSONEq(`{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}`, string(msgs[0].TokenUsage))
 			}
 		})
 	}
 }
 
 func TestOpenCodeV2CrossPathHistory(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	// Reproduced with 1.18.25: the v2 API accepts an existing CLI session
 	// and appends projections without converting its older message/part rows.
 	path, seed, writer := newTestDB(t)
@@ -356,25 +377,28 @@ func TestOpenCodeV2CrossPathHistory(t *testing.T) {
 		seed.AddMessage(id, "ses_a", int64(i+1)*1000, int64(i+1)*1000, `{"role":"user"}`)
 		seed.AddPart("prt_"+id, id, "ses_a", int64(i+1)*1000, int64(i+1)*1000, fmt.Sprintf(`{"type":"text","text":%q}`, text))
 	}
-	_, err := writer.Exec(openCodeV2TestSchema)
-	require.NoError(t, err)
-	_, err = writer.Exec(`INSERT INTO session_message VALUES
+	_, err := writer.ExecContext(t.Context(), openCodeV2TestSchema)
+	require.NoError(err)
+	_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES
  ('msg_1','ses_a','user',10,2000,2000,'{"text":"Projected copy"}'),
  ('msg_a','ses_a','assistant',20,2500,2500,'{"content":[{"type":"text","text":"First projected reply"}]}'),
  ('msg_b','ses_a','assistant',30,2400,2500,'{"content":[{"type":"text","text":"Second projected reply"}]}')`)
-	require.NoError(t, err)
+	require.NoError(err)
 	sess, msgs, err := parseOpenCodeDBSession(path, "ses_a", "host-a")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	require.Len(t, msgs, 5)
-	assert.Equal(t, 3, sess.UserMessageCount)
+	require.NoError(err)
+	require.NotNil(sess)
+	require.Len(msgs, 5)
+	assert.Equal(3, sess.UserMessageCount)
 	for i, want := range []string{"Earlier CLI prompt", "Projected copy", "First projected reply", "Second projected reply", "Later CLI prompt"} {
-		assert.Equal(t, want, msgs[i].Content)
-		assert.Equal(t, i, msgs[i].Ordinal)
+		assert.Equal(want, msgs[i].Content)
+		assert.Equal(i, msgs[i].Ordinal)
 	}
 }
 
 func TestOpenCodeV2UpgradeCoexistence(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path, seed, writer := newTestDB(t)
 	seed.AddProject("project-a", "/workspace/project-a")
 	for _, id := range []string{"ses_a", "ses_b"} {
@@ -384,85 +408,88 @@ func TestOpenCodeV2UpgradeCoexistence(t *testing.T) {
 	}
 	// The beta migration leaves session/message/part in place and commits
 	// session_v2 metadata plus all its projections together, one session at a time.
-	_, err := writer.Exec(`CREATE TABLE session_v2 (
+	_, err := writer.ExecContext(t.Context(), `CREATE TABLE session_v2 (
  id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT, title TEXT,
  directory TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL,
  time_idle INTEGER);
  INSERT INTO session_v2 VALUES ('ses_b','project-a',NULL,NULL,'/workspace/project-a',1000,2000,4000),
  ('ses_c','project-a',NULL,NULL,'/workspace/project-a',1000,2000,5000);`)
-	require.NoError(t, err)
-	_, err = writer.Exec(strings.ReplaceAll(openCodeV2TestSchema, "REFERENCES session(id)", "REFERENCES session_v2(id)"))
-	require.NoError(t, err)
-	_, err = writer.Exec(`INSERT INTO session_message VALUES
+	require.NoError(err)
+	_, err = writer.ExecContext(t.Context(), strings.ReplaceAll(openCodeV2TestSchema, "REFERENCES session(id)", "REFERENCES session_v2(id)"))
+	require.NoError(err)
+	_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES
  ('msg_ses_b','ses_b','user',1,1000,1000,'{"text":"Migrated prompt"}'),
  ('msg_ses_c','ses_c','user',1,1000,1000,'{"text":"Beta prompt"}')`)
-	require.NoError(t, err)
+	require.NoError(err)
 	full, err := ListOpenCodeSessionMeta(path)
-	require.NoError(t, err)
+	require.NoError(err)
 	watermarks, err := ListOpenCodeSessionWatermarkMeta(path)
-	require.NoError(t, err)
-	require.Len(t, full, 3)
-	require.Len(t, watermarks, 3)
+	require.NoError(err)
+	require.Len(full, 3)
+	require.Len(watermarks, 3)
 	for i, tc := range []struct {
 		id, text string
 		ended    int64
 	}{
 		{"ses_a", "Legacy prompt", 2000}, {"ses_b", "Migrated prompt", 4000}, {"ses_c", "Beta prompt", 5000},
 	} {
-		assert.Equal(t, tc.id, full[i].SessionID)
-		assert.Equal(t, tc.id, watermarks[i].SessionID)
-		assert.True(t, OpenCodeSQLiteSessionExists(path, tc.id))
-		mtime, digest, composite, err := openCodeSessionCompositeMtime(writer, path, tc.id)
-		require.NoError(t, err)
-		assert.True(t, composite)
-		assert.Equal(t, full[i].FileMtime, mtime*1_000_000)
-		assert.Equal(t, full[i].ChildDigest, digest)
+		assert.Equal(tc.id, full[i].SessionID)
+		assert.Equal(tc.id, watermarks[i].SessionID)
+		assert.True(OpenCodeSQLiteSessionExists(t.Context(), path, tc.id))
+		mtime, digest, composite, err := openCodeSessionCompositeMtime(t.Context(), writer, path, tc.id)
+		require.NoError(err)
+		assert.True(composite)
+		assert.Equal(full[i].FileMtime, mtime*1_000_000)
+		assert.Equal(full[i].ChildDigest, digest)
 		sess, msgs, err := parseOpenCodeDBSession(path, tc.id, "host-a")
-		require.NoError(t, err)
-		require.NotNil(t, sess)
-		require.Len(t, msgs, 1)
-		assert.Equal(t, tc.text, msgs[0].Content)
-		assert.True(t, time.UnixMilli(tc.ended).Equal(sess.EndedAt))
+		require.NoError(err)
+		require.NotNil(sess)
+		require.Len(msgs, 1)
+		assert.Equal(tc.text, msgs[0].Content)
+		assert.True(time.UnixMilli(tc.ended).Equal(sess.EndedAt))
 	}
 	// Execution completion alone must advance both passive and active freshness.
-	_, err = writer.Exec("UPDATE session_v2 SET time_idle = 6000 WHERE id = 'ses_c'")
-	require.NoError(t, err)
+	_, err = writer.ExecContext(t.Context(), "UPDATE session_v2 SET time_idle = 6000 WHERE id = 'ses_c'")
+	require.NoError(err)
 	next, err := ListOpenCodeSessionWatermarkMeta(path)
-	require.NoError(t, err)
-	require.Len(t, next, 3)
-	assert.Equal(t, int64(6000_000_000), next[2].FileMtime)
-	mtime, err := OpenCodeSourceMtime(path + "#ses_c")
-	require.NoError(t, err)
-	assert.Equal(t, int64(6000_000_000), mtime)
+	require.NoError(err)
+	require.Len(next, 3)
+	assert.Equal(int64(6000_000_000), next[2].FileMtime)
+	mtime, err := OpenCodeSourceMtime(t.Context(), path+"#ses_c")
+	require.NoError(err)
+	assert.Equal(int64(6000_000_000), mtime)
 	// The producer keeps v1 rows after migration, including after v2 deletion.
 	// Its descending cursor excludes copied IDs while older IDs remain visible.
-	_, err = writer.Exec(`CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+	_, err = writer.ExecContext(t.Context(), `CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
  INSERT INTO kv VALUES ('migration.v1-v2', '{"phase":"sessions","cursor":"ses_b"}');
  DELETE FROM session_v2 WHERE id = 'ses_b'`)
-	require.NoError(t, err)
+	require.NoError(err)
 	full, err = ListOpenCodeSessionMeta(path)
-	require.NoError(t, err)
-	require.Len(t, full, 2)
-	assert.Equal(t, "ses_a", full[0].SessionID)
-	assert.Equal(t, "ses_c", full[1].SessionID)
-	assert.False(t, OpenCodeSQLiteSessionExists(path, "ses_b"))
+	require.NoError(err)
+	require.Len(full, 2)
+	assert.Equal("ses_a", full[0].SessionID)
+	assert.Equal("ses_c", full[1].SessionID)
+	assert.False(OpenCodeSQLiteSessionExists(t.Context(), path, "ses_b"))
 	_, _, found, err := openCodeSQLiteSessionWatermarkOnly(t.Context(), path, "ses_b")
-	require.NoError(t, err)
-	assert.False(t, found)
-	_, err = writer.Exec(`UPDATE kv SET value = '{"phase":"completed"}' WHERE key = 'migration.v1-v2'`)
-	require.NoError(t, err)
+	require.NoError(err)
+	assert.False(found)
+	_, err = writer.ExecContext(t.Context(), `UPDATE kv SET value = '{"phase":"completed"}' WHERE key = 'migration.v1-v2'`)
+	require.NoError(err)
 	watermarks, err = ListOpenCodeSessionWatermarkMeta(path)
-	require.NoError(t, err)
-	require.Len(t, watermarks, 1)
-	assert.Equal(t, "ses_c", watermarks[0].SessionID)
-	assert.False(t, OpenCodeSQLiteSessionExists(path, "ses_a"))
+	require.NoError(err)
+	require.Len(watermarks, 1)
+	assert.Equal("ses_c", watermarks[0].SessionID)
+	assert.False(OpenCodeSQLiteSessionExists(t.Context(), path, "ses_a"))
 }
 
 func TestOpenCodeV2CapturedAttachmentCompaction(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	// Captured from beta 19381's prompt and compact APIs. The request had no
 	// prompt text and carried input.txt as an inline text attachment.
 	raw, err := os.ReadFile("testdata/opencode_v2/attachment_compaction.json")
-	require.NoError(t, err)
+	require.NoError(err)
 	var rows []struct {
 		ID      string         `json:"id"`
 		Type    string         `json:"type"`
@@ -471,25 +498,25 @@ func TestOpenCodeV2CapturedAttachmentCompaction(t *testing.T) {
 		Updated int64          `json:"time_updated"`
 		Data    jsontext.Value `json:"data"`
 	}
-	require.NoError(t, json.Unmarshal(raw, &rows))
+	require.NoError(json.Unmarshal(raw, &rows))
 	path, seed, writer := newTestDB(t)
 	seed.AddProject("project-a", "/workspace/project-a")
 	seed.AddSession("ses_a", "project-a", "", "", 1788977900000, 1788977920000)
-	_, err = writer.Exec(openCodeV2TestSchema)
-	require.NoError(t, err)
+	_, err = writer.ExecContext(t.Context(), openCodeV2TestSchema)
+	require.NoError(err)
 	for _, row := range rows {
-		_, err = writer.Exec(`INSERT INTO session_message VALUES (?, 'ses_a', ?, ?, ?, ?, ?)`, row.ID, row.Type, row.Seq, row.Created, row.Updated, string(row.Data))
-		require.NoError(t, err)
+		_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES (?, 'ses_a', ?, ?, ?, ?, ?)`, row.ID, row.Type, row.Seq, row.Created, row.Updated, string(row.Data))
+		require.NoError(err)
 	}
 	sess, msgs, err := parseOpenCodeDBSession(path, "ses_a", "host-a")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	require.Len(t, msgs, 4)
-	assert.Equal(t, 1, sess.UserMessageCount)
-	assert.Equal(t, "[Attachment: input.txt]\nalpha\nbeta\ngamma\n", msgs[0].Content)
-	assert.True(t, msgs[3].IsSystem)
-	assert.True(t, msgs[3].IsCompactBoundary)
-	assert.Contains(t, msgs[3].Content, "The user shared a file `input.txt` containing three lines")
+	require.NoError(err)
+	require.NotNil(sess)
+	require.Len(msgs, 4)
+	assert.Equal(1, sess.UserMessageCount)
+	assert.Equal("[Attachment: input.txt]\nalpha\nbeta\ngamma\n", msgs[0].Content)
+	assert.True(msgs[3].IsSystem)
+	assert.True(msgs[3].IsCompactBoundary)
+	assert.Contains(msgs[3].Content, "The user shared a file `input.txt` containing three lines")
 }
 
 func TestOpenCodeV2ToolFiles(t *testing.T) {
@@ -506,43 +533,46 @@ func TestOpenCodeV2ToolFiles(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &source))
 	for _, status := range []string{"completed", "error"} {
 		t.Run(status, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			path, seed, writer := newTestDB(t)
 			seed.AddProject("project-a", "/workspace/project-a")
 			seed.AddSession("ses_files", "project-a", "", "Files", 1700000000000, 1700000002000)
-			_, err := writer.Exec(openCodeV2TestSchema)
-			require.NoError(t, err)
+			_, err := writer.ExecContext(t.Context(), openCodeV2TestSchema)
+			require.NoError(err)
 			data := string(raw)
 			if status == "error" {
 				data = strings.ReplaceAll(data, `"status": "completed"`, `"status": "error", "error": {"message": "Read failed"}`)
 			}
-			_, err = writer.Exec(`INSERT INTO session_message VALUES ('msg_files', 'ses_files', 'assistant', 1, 1700000000000, 1700000002000, ?)`, data)
-			require.NoError(t, err)
+			_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES ('msg_files', 'ses_files', 'assistant', 1, 1700000000000, 1700000002000, ?)`, data)
+			require.NoError(err)
 			_, messages, err := parseOpenCodeDBSession(path, "ses_files", "host-a")
-			require.NoError(t, err)
-			require.Len(t, messages, 1)
-			require.Len(t, messages[0].ToolCalls, 2)
+			require.NoError(err)
+			require.Len(messages, 1)
+			require.Len(messages[0].ToolCalls, 2)
 			for i, call := range messages[0].ToolCalls {
-				require.Len(t, call.ResultEvents, 1)
+				require.Len(call.ResultEvents, 1)
 				var blocks []map[string]string
-				require.NoError(t, json.Unmarshal([]byte(call.ResultEvents[0].Content), &blocks))
+				require.NoError(json.Unmarshal([]byte(call.ResultEvents[0].Content), &blocks))
 				want := source.Content[i].State.Content
 				if status == "error" {
-					require.Len(t, blocks, len(want)+1)
-					assert.Equal(t, map[string]string{"type": "text", "text": "Read failed"}, blocks[len(want)])
-					assert.Equal(t, "errored", call.ResultEvents[0].Status)
+					require.Len(blocks, len(want)+1)
+					assert.Equal(map[string]string{"type": "text", "text": "Read failed"}, blocks[len(want)])
+					assert.Equal("errored", call.ResultEvents[0].Status)
 				} else {
-					require.Len(t, blocks, len(want))
-					assert.Equal(t, "completed", call.ResultEvents[0].Status)
+					require.Len(blocks, len(want))
+					assert.Equal("completed", call.ResultEvents[0].Status)
 				}
 				if i == 0 {
-					assert.Equal(t, want[0], blocks[0])
-					assert.Equal(t, "input_image", blocks[1]["type"])
-					assert.Equal(t, want[1]["uri"], blocks[1]["image_url"])
-					assert.Equal(t, "plot.png", blocks[1]["name"])
-					assert.NotContains(t, blocks[1], "uri", "image policy must own the only payload copy")
-					assert.Equal(t, want[2], blocks[2])
+					assert.Equal(want[0], blocks[0])
+					assert.Equal("input_image", blocks[1]["type"])
+					assert.Equal(want[1]["uri"], blocks[1]["image_url"])
+					assert.Equal("plot.png", blocks[1]["name"])
+					assert.NotContains(blocks[1], "uri", "image policy must own the only payload copy")
+					assert.Equal(want[2], blocks[2])
 				} else {
-					assert.Equal(t, want, blocks[:len(want)], "PDF, text payload, and external reference survive unchanged")
+					assert.Equal(want, blocks[:len(want)], "PDF, text payload, and external reference survive unchanged")
 				}
 			}
 		})

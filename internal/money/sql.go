@@ -2,6 +2,7 @@ package money
 
 import (
 	"database/sql/driver"
+	"errors"
 	"fmt"
 	"strconv"
 )
@@ -15,7 +16,7 @@ func (m Money) Value() (driver.Value, error) {
 // are rejected so a stale schema cannot silently reintroduce rounding.
 func (m *Money) Scan(src any) error {
 	if m == nil {
-		return fmt.Errorf("scanning money into nil destination")
+		return errors.New("scanning money into nil destination")
 	}
 	switch value := src.(type) {
 	case int64:

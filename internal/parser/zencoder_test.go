@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,7 +32,7 @@ func parseZencoderTestSession(
 	})
 	require.True(t, ok)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: SourceRef{
 			Provider:       AgentZencoder,
 			Key:            path,
@@ -54,6 +53,9 @@ func parseZencoderTestSession(
 }
 
 func TestZencoderProviderParsesBasic(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	header := `{"id":"abc-123","chatId":"chat-1","modelId":"model-1","parentId":"","creationReason":"newChat","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z","version":"1"}`
 	system := `{"role":"system","content":"You are an AI assistant.\n\n# Environment\n\nWorking directory: /home/user/myproject\n\nOS: linux"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Fix the bug.","tag":"user-input"}]}`
@@ -65,18 +67,18 @@ func TestZencoderProviderParsesBasic(t *testing.T) {
 	}, "\n")
 
 	sess, msgs, err := runZencoderParserTest(t, content)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
+	require.NoError(err)
+	require.NotNil(sess)
 
 	assertSessionMeta(t, sess,
 		"zencoder:abc-123",
 		"myproject", AgentZencoder,
 	)
 
-	assert.Equal(t, "Fix the bug.", sess.FirstMessage)
+	assert.Equal("Fix the bug.", sess.FirstMessage)
 	// System message + user + assistant + finish = 4
 	assertMessageCount(t, sess.MessageCount, 4)
-	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(1, sess.UserMessageCount)
 
 	wantStart := mustParseTime(t, "2024-01-01T00:00:00Z")
 	assertTimestamp(t, sess.StartedAt, wantStart)
@@ -84,27 +86,30 @@ func TestZencoderProviderParsesBasic(t *testing.T) {
 	wantEnd := mustParseTime(t, "2024-01-01T00:01:00Z")
 	assertTimestamp(t, sess.EndedAt, wantEnd)
 
-	require.Equal(t, 4, len(msgs))
+	require.Equal(4, len(msgs))
 	// msg[0]: system message (IsSystem=true)
-	assert.True(t, msgs[0].IsSystem)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Contains(t, msgs[0].Content, "Working directory")
+	assert.True(msgs[0].IsSystem)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Contains(msgs[0].Content, "Working directory")
 	// msg[1]: user message
 	assertMessage(t, msgs[1], RoleUser, "Fix the bug.")
-	assert.False(t, msgs[1].IsSystem)
+	assert.False(msgs[1].IsSystem)
 	// msg[2]: assistant message
 	assertMessage(t, msgs[2], RoleAssistant, "Sure, I will fix it.")
-	assert.False(t, msgs[2].IsSystem)
+	assert.False(msgs[2].IsSystem)
 	// msg[3]: finish message (IsSystem=true)
-	assert.True(t, msgs[3].IsSystem)
-	assert.Equal(t, "[Turn finished: endTurn]", msgs[3].Content)
+	assert.True(msgs[3].IsSystem)
+	assert.Equal("[Turn finished: endTurn]", msgs[3].Content)
 
 	// No parent -> no relationship.
-	assert.Empty(t, sess.ParentSessionID)
-	assert.Equal(t, RelNone, sess.RelationshipType)
+	assert.Empty(sess.ParentSessionID)
+	assert.Equal(RelNone, sess.RelationshipType)
 }
 
 func TestZencoderProviderParsesToolCallAndReasoning(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	header := `{"id":"tc-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Read the file."}]}`
 	assistant := `{"role":"assistant","content":[` +
@@ -118,28 +123,31 @@ func TestZencoderProviderParsesToolCallAndReasoning(t *testing.T) {
 	}, "\n")
 
 	sess, msgs, err := runZencoderParserTest(t, content)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
+	require.NoError(err)
+	require.NotNil(sess)
 
 	assertMessageCount(t, sess.MessageCount, 2)
-	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(1, sess.UserMessageCount)
 
-	assert.False(t, msgs[0].HasThinking)
-	assert.False(t, msgs[0].HasToolUse)
+	assert.False(msgs[0].HasThinking)
+	assert.False(msgs[0].HasToolUse)
 
-	assert.True(t, msgs[1].HasThinking)
-	assert.True(t, msgs[1].HasToolUse)
-	assert.Contains(t, msgs[1].Content, "[Thinking]")
-	assert.Contains(t, msgs[1].Content, "Let me think about this.")
-	assert.Contains(t, msgs[1].Content, "[Read: main.go]")
+	assert.True(msgs[1].HasThinking)
+	assert.True(msgs[1].HasToolUse)
+	assert.Contains(msgs[1].Content, "[Thinking]")
+	assert.Contains(msgs[1].Content, "Let me think about this.")
+	assert.Contains(msgs[1].Content, "[Read: main.go]")
 
-	require.Equal(t, 1, len(msgs[1].ToolCalls))
-	assert.Equal(t, "Read", msgs[1].ToolCalls[0].ToolName)
-	assert.Equal(t, "Read", msgs[1].ToolCalls[0].Category)
-	assert.Equal(t, "tc1", msgs[1].ToolCalls[0].ToolUseID)
+	require.Equal(1, len(msgs[1].ToolCalls))
+	assert.Equal("Read", msgs[1].ToolCalls[0].ToolName)
+	assert.Equal("Read", msgs[1].ToolCalls[0].Category)
+	assert.Equal("tc1", msgs[1].ToolCalls[0].ToolUseID)
 }
 
 func TestZencoderProviderParsesToolResults(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	header := `{"id":"tr-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Read it."}]}`
 	assistant := `{"role":"assistant","content":[` +
@@ -154,26 +162,29 @@ func TestZencoderProviderParsesToolResults(t *testing.T) {
 	}, "\n")
 
 	sess, msgs, err := runZencoderParserTest(t, content)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
+	require.NoError(err)
+	require.NotNil(sess)
 
 	assertMessageCount(t, sess.MessageCount, 3)
 
 	// Tool result is emitted as RoleUser message.
-	assert.Equal(t, RoleUser, msgs[2].Role)
-	require.Equal(t, 1, len(msgs[2].ToolResults))
-	assert.Equal(t, "tc1", msgs[2].ToolResults[0].ToolUseID)
-	assert.Equal(t, len("package main"),
+	assert.Equal(RoleUser, msgs[2].Role)
+	require.Equal(1, len(msgs[2].ToolResults))
+	assert.Equal("tc1", msgs[2].ToolResults[0].ToolUseID)
+	assert.Equal(len("package main"),
 		msgs[2].ToolResults[0].ContentLength)
 	// ContentRaw must be populated so pairToolResults can
 	// decode tool output for display.
-	assert.NotEmpty(t, msgs[2].ToolResults[0].ContentRaw,
+	assert.NotEmpty(msgs[2].ToolResults[0].ContentRaw,
 		"ContentRaw should contain raw JSON of tool result content")
-	assert.Contains(t, msgs[2].ToolResults[0].ContentRaw,
+	assert.Contains(msgs[2].ToolResults[0].ContentRaw,
 		"package main")
 }
 
 func TestZencoderProviderParsesUserInputTagFiltering(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	header := `{"id":"tag-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[` +
 		`{"type":"text","text":"system instructions","tag":"instructions"},` +
@@ -187,31 +198,34 @@ func TestZencoderProviderParsesUserInputTagFiltering(t *testing.T) {
 	}, "\n")
 
 	sess, msgs, err := runZencoderParserTest(t, content)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
+	require.NoError(err)
+	require.NotNil(sess)
 
 	// User message has only "user-input" tagged content.
-	assert.Equal(t, "actual user input", msgs[0].Content)
-	assert.False(t, msgs[0].IsSystem)
-	assert.NotContains(t, msgs[0].Content, "system instructions")
-	assert.NotContains(t, msgs[0].Content, "todo reminder")
+	assert.Equal("actual user input", msgs[0].Content)
+	assert.False(msgs[0].IsSystem)
+	assert.NotContains(msgs[0].Content, "system instructions")
+	assert.NotContains(msgs[0].Content, "todo reminder")
 
 	// System-tagged content stored as separate system message.
-	assert.True(t, msgs[1].IsSystem)
-	assert.Equal(t, RoleUser, msgs[1].Role)
-	assert.Contains(t, msgs[1].Content, "system instructions")
-	assert.Contains(t, msgs[1].Content, "todo reminder")
+	assert.True(msgs[1].IsSystem)
+	assert.Equal(RoleUser, msgs[1].Role)
+	assert.Contains(msgs[1].Content, "system instructions")
+	assert.Contains(msgs[1].Content, "todo reminder")
 
 	// Assistant message follows.
-	assert.Equal(t, RoleAssistant, msgs[2].Role)
-	assert.False(t, msgs[2].IsSystem)
+	assert.Equal(RoleAssistant, msgs[2].Role)
+	assert.False(msgs[2].IsSystem)
 
 	// UserMessageCount should exclude system messages.
-	assert.Equal(t, 1, sess.UserMessageCount)
-	assert.Equal(t, "actual user input", sess.FirstMessage)
+	assert.Equal(1, sess.UserMessageCount)
+	assert.Equal("actual user input", sess.FirstMessage)
 }
 
 func TestZencoderProviderParsesDirectContinuation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	header := `{"id":"child-123","parentId":"parent-456","creationReason":"directContinuation","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Continue."}]}`
 	assistant := `{"role":"assistant","content":[{"type":"text","text":"Continuing."}]}`
@@ -221,14 +235,17 @@ func TestZencoderProviderParsesDirectContinuation(t *testing.T) {
 	}, "\n")
 
 	sess, _, err := runZencoderParserTest(t, content)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
+	require.NoError(err)
+	require.NotNil(sess)
 
-	assert.Equal(t, "zencoder:parent-456", sess.ParentSessionID)
-	assert.Equal(t, RelContinuation, sess.RelationshipType)
+	assert.Equal("zencoder:parent-456", sess.ParentSessionID)
+	assert.Equal(RelContinuation, sess.RelationshipType)
 }
 
 func TestZencoderProviderParsesSummarizedContinuation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	header := `{"id":"child-789","parentId":"parent-012","creationReason":"summarizedContinuation","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Continue."}]}`
 	assistant := `{"role":"assistant","content":[{"type":"text","text":"OK."}]}`
@@ -238,14 +255,17 @@ func TestZencoderProviderParsesSummarizedContinuation(t *testing.T) {
 	}, "\n")
 
 	sess, _, err := runZencoderParserTest(t, content)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
+	require.NoError(err)
+	require.NotNil(sess)
 
-	assert.Equal(t, "zencoder:parent-012", sess.ParentSessionID)
-	assert.Equal(t, RelContinuation, sess.RelationshipType)
+	assert.Equal("zencoder:parent-012", sess.ParentSessionID)
+	assert.Equal(RelContinuation, sess.RelationshipType)
 }
 
 func TestZencoderProviderParsesProjectExtraction(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	header := `{"id":"proj-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	system := `{"role":"system","content":"You are helpful.\n\nWorking directory: /home/user/workspace/coolproject\n"}`
 	user := `{"role":"user","content":[{"type":"text","text":"hello"}]}`
@@ -255,15 +275,15 @@ func TestZencoderProviderParsesProjectExtraction(t *testing.T) {
 	}, "\n")
 
 	sess, msgs, err := runZencoderParserTest(t, content)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
+	require.NoError(err)
+	require.NotNil(sess)
 
-	assert.Equal(t, "coolproject", sess.Project)
+	assert.Equal("coolproject", sess.Project)
 	// System message stored + user message = 2
-	assert.Equal(t, 2, sess.MessageCount)
-	assert.Equal(t, 1, sess.UserMessageCount)
-	assert.True(t, msgs[0].IsSystem)
-	assert.False(t, msgs[1].IsSystem)
+	assert.Equal(2, sess.MessageCount)
+	assert.Equal(1, sess.UserMessageCount)
+	assert.True(msgs[0].IsSystem)
+	assert.False(msgs[1].IsSystem)
 }
 
 func TestZencoderProviderParsesEmptySession(t *testing.T) {
@@ -277,6 +297,9 @@ func TestZencoderProviderParsesEmptySession(t *testing.T) {
 }
 
 func TestZencoderProviderParsesPermissionSkippedFinishStored(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	header := `{"id":"skip-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Do it."}]}`
 	permission := `{"role":"permission","data":{"allowed":true}}`
@@ -288,18 +311,18 @@ func TestZencoderProviderParsesPermissionSkippedFinishStored(t *testing.T) {
 	}, "\n")
 
 	sess, msgs, err := runZencoderParserTest(t, content)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
+	require.NoError(err)
+	require.NotNil(sess)
 
 	// permission is skipped; finish is stored as system.
 	// user + assistant + finish = 3
 	assertMessageCount(t, sess.MessageCount, 3)
-	require.Equal(t, 3, len(msgs))
-	assert.False(t, msgs[0].IsSystem) // user
-	assert.False(t, msgs[1].IsSystem) // assistant
-	assert.True(t, msgs[2].IsSystem)  // finish
-	assert.Equal(t, "[Turn finished: endTurn]", msgs[2].Content)
-	assert.Equal(t, 1, sess.UserMessageCount)
+	require.Equal(3, len(msgs))
+	assert.False(msgs[0].IsSystem) // user
+	assert.False(msgs[1].IsSystem) // assistant
+	assert.True(msgs[2].IsSystem)  // finish
+	assert.Equal("[Turn finished: endTurn]", msgs[2].Content)
+	assert.Equal(1, sess.UserMessageCount)
 }
 
 func TestZencoderProviderParsesFirstMessageTruncation(t *testing.T) {
@@ -338,6 +361,9 @@ func TestZencoderProviderParsesFallbackSessionID(t *testing.T) {
 }
 
 func TestZencoderProviderDiscoversSessions(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 
 	// Create some session files.
@@ -347,12 +373,12 @@ func TestZencoderProviderDiscoversSessions(t *testing.T) {
 		"not-jsonl.txt",
 	} {
 		f, err := os.Create(filepath.Join(dir, name))
-		require.NoError(t, err)
+		require.NoError(err)
 		f.Close()
 	}
 
 	// Create a subdirectory (should be skipped).
-	require.NoError(t, os.Mkdir(
+	require.NoError(os.Mkdir(
 		filepath.Join(dir, "subdir"), 0o755,
 	))
 
@@ -360,13 +386,13 @@ func TestZencoderProviderDiscoversSessions(t *testing.T) {
 		Roots:   []string{dir},
 		Machine: "local",
 	})
-	require.True(t, ok)
-	files, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	assert.Equal(t, 2, len(files))
+	require.True(ok)
+	files, err := provider.Discover(t.Context())
+	require.NoError(err)
+	assert.Equal(2, len(files))
 	for _, f := range files {
-		assert.Equal(t, AgentZencoder, f.Provider)
-		assert.True(t, strings.HasSuffix(f.DisplayPath, ".jsonl"))
+		assert.Equal(AgentZencoder, f.Provider)
+		assert.True(strings.HasSuffix(f.DisplayPath, ".jsonl"))
 	}
 }
 
@@ -376,51 +402,54 @@ func TestZencoderProviderDiscoversEmptyDir(t *testing.T) {
 		Machine: "local",
 	})
 	require.True(t, ok)
-	files, err := provider.Discover(context.Background())
+	files, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, files)
 }
 
 func TestZencoderProviderFindsSourceFile(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	name := "abc-def-123.jsonl"
 	f, err := os.Create(filepath.Join(dir, name))
-	require.NoError(t, err)
+	require.NoError(err)
 	f.Close()
 
 	provider, ok := NewProvider(AgentZencoder, ProviderConfig{
 		Roots:   []string{dir},
 		Machine: "local",
 	})
-	require.True(t, ok)
+	require.True(ok)
 	found, ok, err := provider.FindSource(
-		context.Background(),
+		t.Context(),
 		FindSourceRequest{RawSessionID: "abc-def-123"},
 	)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, filepath.Join(dir, name), found.DisplayPath)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(filepath.Join(dir, name), found.DisplayPath)
 
 	// Non-existent ID.
 	_, ok, err = provider.FindSource(
-		context.Background(),
+		t.Context(),
 		FindSourceRequest{RawSessionID: "nonexistent"},
 	)
-	require.NoError(t, err)
-	assert.False(t, ok)
+	require.NoError(err)
+	assert.False(ok)
 
 	// Empty dir.
 	emptyProvider, ok := NewProvider(AgentZencoder, ProviderConfig{
 		Roots:   []string{""},
 		Machine: "local",
 	})
-	require.True(t, ok)
+	require.True(ok)
 	_, ok, err = emptyProvider.FindSource(
-		context.Background(),
+		t.Context(),
 		FindSourceRequest{RawSessionID: "abc-def-123"},
 	)
-	require.NoError(t, err)
-	assert.False(t, ok)
+	require.NoError(err)
+	assert.False(ok)
 }
 
 func TestZencoderProviderParsesUserContentWithoutTag(t *testing.T) {
@@ -441,21 +470,26 @@ func TestZencoderProviderParsesUserContentWithoutTag(t *testing.T) {
 }
 
 func TestZencoderProviderParsesNewChatNoRelationship(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	header := `{"id":"new-123","parentId":"some-parent","creationReason":"newChat","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"hello"}]}`
 
 	content := strings.Join([]string{header, user}, "\n")
 
 	sess, _, err := runZencoderParserTest(t, content)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
+	require.NoError(err)
+	require.NotNil(sess)
 
 	// newChat even with parentId -> no relationship.
-	assert.Empty(t, sess.ParentSessionID)
-	assert.Equal(t, RelNone, sess.RelationshipType)
+	assert.Empty(sess.ParentSessionID)
+	assert.Equal(RelNone, sess.RelationshipType)
 }
 
 func TestZencoderProviderParsesSubagentSessionID(t *testing.T) {
+	require := require.New(t)
+
 	header := `{"id":"parent-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Use subagent."}]}`
 	assistant := `{"role":"assistant","content":[` +
@@ -470,12 +504,12 @@ func TestZencoderProviderParsesSubagentSessionID(t *testing.T) {
 	}, "\n")
 
 	_, msgs, err := runZencoderParserTest(t, content)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// The assistant message should have the tool call with
 	// SubagentSessionID set from the tool-result's <session-id>.
-	require.Equal(t, 3, len(msgs))
-	require.Equal(t, 1, len(msgs[1].ToolCalls))
+	require.Equal(3, len(msgs))
+	require.Equal(1, len(msgs[1].ToolCalls))
 	assert.Equal(t,
 		"zencoder:child-abc-123",
 		msgs[1].ToolCalls[0].SubagentSessionID,
@@ -483,6 +517,9 @@ func TestZencoderProviderParsesSubagentSessionID(t *testing.T) {
 }
 
 func TestZencoderProviderParsesSubagentMultiple(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	header := `{"id":"parent-456","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Use subagents."}]}`
 	assistant := `{"role":"assistant","content":[` +
@@ -501,15 +538,13 @@ func TestZencoderProviderParsesSubagentMultiple(t *testing.T) {
 	}, "\n")
 
 	_, msgs, err := runZencoderParserTest(t, content)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.Equal(t, 2, len(msgs[1].ToolCalls))
-	assert.Equal(t,
-		"zencoder:child-aaa",
+	require.Equal(2, len(msgs[1].ToolCalls))
+	assert.Equal("zencoder:child-aaa",
 		msgs[1].ToolCalls[0].SubagentSessionID,
 	)
-	assert.Equal(t,
-		"zencoder:child-bbb",
+	assert.Equal("zencoder:child-bbb",
 		msgs[1].ToolCalls[1].SubagentSessionID,
 	)
 }
@@ -537,6 +572,9 @@ func TestZencoderProviderParsesNoSessionIDTag(t *testing.T) {
 }
 
 func TestZencoderProviderParsesSkillBlocks(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	header := `{"id":"skill-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[` +
 		`{"type":"text","text":"Do the thing.","tag":"user-input"},` +
@@ -550,29 +588,32 @@ func TestZencoderProviderParsesSkillBlocks(t *testing.T) {
 	}, "\n")
 
 	sess, msgs, err := runZencoderParserTest(t, content)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
+	require.NoError(err)
+	require.NotNil(sess)
 
 	// msg[0]: user message (only user-input text)
-	assert.Equal(t, "Do the thing.", msgs[0].Content)
-	assert.False(t, msgs[0].IsSystem)
+	assert.Equal("Do the thing.", msgs[0].Content)
+	assert.False(msgs[0].IsSystem)
 
 	// msg[1]: system message (instructions + skill)
-	assert.True(t, msgs[1].IsSystem)
-	assert.Equal(t, RoleUser, msgs[1].Role)
-	assert.Contains(t, msgs[1].Content, "system instructions here")
-	assert.Contains(t, msgs[1].Content, "[Skill: init]")
-	assert.Contains(t, msgs[1].Content, "skill body content")
-	assert.Contains(t, msgs[1].Content, "[/Skill]")
+	assert.True(msgs[1].IsSystem)
+	assert.Equal(RoleUser, msgs[1].Role)
+	assert.Contains(msgs[1].Content, "system instructions here")
+	assert.Contains(msgs[1].Content, "[Skill: init]")
+	assert.Contains(msgs[1].Content, "skill body content")
+	assert.Contains(msgs[1].Content, "[/Skill]")
 
 	// msg[2]: assistant
-	assert.Equal(t, RoleAssistant, msgs[2].Role)
+	assert.Equal(RoleAssistant, msgs[2].Role)
 
-	assert.Equal(t, 1, sess.UserMessageCount)
-	assert.Equal(t, "Do the thing.", sess.FirstMessage)
+	assert.Equal(1, sess.UserMessageCount)
+	assert.Equal("Do the thing.", sess.FirstMessage)
 }
 
 func TestZencoderProviderParsesToolResultSystemTags(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	header := `{"id":"trsys-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Run it."}]}`
 	assistant := `{"role":"assistant","content":[` +
@@ -591,25 +632,25 @@ func TestZencoderProviderParsesToolResultSystemTags(t *testing.T) {
 	}, "\n")
 
 	sess, msgs, err := runZencoderParserTest(t, content)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
+	require.NoError(err)
+	require.NotNil(sess)
 
 	// msg[0]: user, msg[1]: assistant, msg[2]: tool result,
 	// msg[3]: system message from tool-result tags
-	require.Equal(t, 4, len(msgs))
+	require.Equal(4, len(msgs))
 
 	// Tool result message is unaffected.
-	assert.Equal(t, RoleUser, msgs[2].Role)
-	assert.False(t, msgs[2].IsSystem)
-	require.Equal(t, 1, len(msgs[2].ToolResults))
-	assert.Equal(t, "tc1", msgs[2].ToolResults[0].ToolUseID)
+	assert.Equal(RoleUser, msgs[2].Role)
+	assert.False(msgs[2].IsSystem)
+	require.Equal(1, len(msgs[2].ToolResults))
+	assert.Equal("tc1", msgs[2].ToolResults[0].ToolUseID)
 
 	// System message from tool-result tags.
-	assert.True(t, msgs[3].IsSystem)
-	assert.Equal(t, RoleUser, msgs[3].Role)
-	assert.Contains(t, msgs[3].Content, "Remember your tasks")
-	assert.Contains(t, msgs[3].Content, "Extra context")
-	assert.Equal(t, SourceSubtypeToolResult, msgs[3].SourceSubtype,
+	assert.True(msgs[3].IsSystem)
+	assert.Equal(RoleUser, msgs[3].Role)
+	assert.Contains(msgs[3].Content, "Remember your tasks")
+	assert.Contains(msgs[3].Content, "Extra context")
+	assert.Equal(SourceSubtypeToolResult, msgs[3].SourceSubtype,
 		"text lifted out of a tool result is still tool output")
 }
 
@@ -668,6 +709,9 @@ func TestZencoderProviderParsesToolResultTaggedBlocksFilteredFromContentRaw(t *t
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			header := `{"id":"filt-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 			user := `{"role":"user","content":[{"type":"text","text":"Run it."}]}`
 			assistant := `{"role":"assistant","content":[` +
@@ -684,28 +728,28 @@ func TestZencoderProviderParsesToolResultTaggedBlocksFilteredFromContentRaw(t *t
 			}, "\n")
 
 			sess, msgs, err := runZencoderParserTest(t, content)
-			require.NoError(t, err)
-			require.NotNil(t, sess)
-			require.Equal(t, tt.wantMsgCount, len(msgs))
+			require.NoError(err)
+			require.NotNil(sess)
+			require.Equal(tt.wantMsgCount, len(msgs))
 
 			// Tool result message is always at index 2.
 			toolMsg := msgs[2]
-			require.Equal(t, 1, len(toolMsg.ToolResults))
+			require.Equal(1, len(toolMsg.ToolResults))
 			tr := toolMsg.ToolResults[0]
 
 			// Verify ContentLength matches filtered content.
-			assert.Equal(t, tt.wantContentLen, tr.ContentLength,
+			assert.Equal(tt.wantContentLen, tr.ContentLength,
 				"ContentLength should reflect filtered content")
 
 			// Verify expected substrings are present in ContentRaw.
 			for _, s := range tt.wantInRaw {
-				assert.Contains(t, tr.ContentRaw, s,
+				assert.Contains(tr.ContentRaw, s,
 					"ContentRaw should contain %q", s)
 			}
 
 			// Verify tagged text is NOT in ContentRaw.
 			for _, s := range tt.wantNotInRaw {
-				assert.NotContains(t, tr.ContentRaw, s,
+				assert.NotContains(tr.ContentRaw, s,
 					"ContentRaw should not contain tagged text %q", s)
 			}
 
@@ -713,18 +757,18 @@ func TestZencoderProviderParsesToolResultTaggedBlocksFilteredFromContentRaw(t *t
 			// does not include tagged text.
 			decoded := DecodeContent(tr.ContentRaw)
 			for _, s := range tt.wantNotInRaw {
-				assert.NotContains(t, decoded, s,
+				assert.NotContains(decoded, s,
 					"DecodeContent should not return tagged text %q", s)
 			}
 
 			if tt.wantSystemMsg {
 				// System message is the last message.
 				sysMsg := msgs[len(msgs)-1]
-				assert.True(t, sysMsg.IsSystem,
+				assert.True(sysMsg.IsSystem,
 					"last message should be a system message")
-				assert.Equal(t, RoleUser, sysMsg.Role)
+				assert.Equal(RoleUser, sysMsg.Role)
 				for _, s := range tt.wantSystemParts {
-					assert.Contains(t, sysMsg.Content, s,
+					assert.Contains(sysMsg.Content, s,
 						"system message should contain %q", s)
 				}
 			}
@@ -808,6 +852,9 @@ func TestZencoderProviderParsesTimestampBoundsStaleHeader(t *testing.T) {
 }
 
 func TestZencoderProviderParsesMessageTimestamps(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	header := `{"id":"ts-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:05:00Z"}`
 	system := `{"role":"system","content":"You are an AI.\n\nWorking directory: /home/user/proj","createdAt":"2024-01-01T00:00:01Z"}`
 	user := `{"role":"user","content":[{"type":"text","text":"Hello."}],"createdAt":"2024-01-01T00:00:02Z"}`
@@ -822,31 +869,34 @@ func TestZencoderProviderParsesMessageTimestamps(t *testing.T) {
 	}, "\n")
 
 	_, msgs, err := runZencoderParserTest(t, content)
-	require.NoError(t, err)
-	require.Equal(t, 5, len(msgs))
+	require.NoError(err)
+	require.Equal(5, len(msgs))
 
 	// System message.
 	wantSys := mustParseTime(t, "2024-01-01T00:00:01Z")
-	assert.Equal(t, wantSys, msgs[0].Timestamp)
+	assert.Equal(wantSys, msgs[0].Timestamp)
 
 	// User message.
 	wantUser := mustParseTime(t, "2024-01-01T00:00:02Z")
-	assert.Equal(t, wantUser, msgs[1].Timestamp)
+	assert.Equal(wantUser, msgs[1].Timestamp)
 
 	// Assistant message.
 	wantAssistant := mustParseTime(t, "2024-01-01T00:00:03Z")
-	assert.Equal(t, wantAssistant, msgs[2].Timestamp)
+	assert.Equal(wantAssistant, msgs[2].Timestamp)
 
 	// Tool result message.
 	wantTool := mustParseTime(t, "2024-01-01T00:00:04Z")
-	assert.Equal(t, wantTool, msgs[3].Timestamp)
+	assert.Equal(wantTool, msgs[3].Timestamp)
 
 	// Finish message.
 	wantFinish := mustParseTime(t, "2024-01-01T00:00:05Z")
-	assert.Equal(t, wantFinish, msgs[4].Timestamp)
+	assert.Equal(wantFinish, msgs[4].Timestamp)
 }
 
 func TestZencoderProviderParsesMessageTimestamps_Missing(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	header := `{"id":"ts-miss-123","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:01:00Z"}`
 	// Lines without createdAt field.
 	user := `{"role":"user","content":[{"type":"text","text":"No timestamp."}]}`
@@ -857,12 +907,12 @@ func TestZencoderProviderParsesMessageTimestamps_Missing(t *testing.T) {
 	}, "\n")
 
 	_, msgs, err := runZencoderParserTest(t, content)
-	require.NoError(t, err)
-	require.Equal(t, 2, len(msgs))
+	require.NoError(err)
+	require.Equal(2, len(msgs))
 
 	// Both messages should have zero time when createdAt is missing.
-	assert.True(t, msgs[0].Timestamp.IsZero())
-	assert.True(t, msgs[1].Timestamp.IsZero())
+	assert.True(msgs[0].Timestamp.IsZero())
+	assert.True(msgs[1].Timestamp.IsZero())
 }
 
 func mustParseTime(t *testing.T, s string) time.Time {

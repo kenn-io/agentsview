@@ -156,6 +156,9 @@ func TestRawSyncWatchCallbackRetainsRetryScope(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			callback := rawSyncWatchCallback(func(
 				context.Context, syncpkg.WatchBatch,
 			) error {
@@ -164,11 +167,11 @@ func TestRawSyncWatchCallbackRetainsRetryScope(t *testing.T) {
 
 			err := callback(t.Context(), tt.batch)
 
-			require.EqualError(t, err, "raw-sync watcher work failed")
-			assert.NotContains(t, err.Error(), sensitivePath)
+			require.EqualError(err, "raw-sync watcher work failed")
+			assert.NotContains(err.Error(), sensitivePath)
 			var retryErr syncpkg.WatchRetryError
-			require.ErrorAs(t, err, &retryErr)
-			assert.Equal(t, tt.want, retryErr.WatchRetryBatch())
+			require.ErrorAs(err, &retryErr)
+			assert.Equal(tt.want, retryErr.WatchRetryBatch())
 		})
 	}
 }
@@ -212,25 +215,31 @@ func TestRawSyncStatusWithoutCheckpointDoesNotCreateState(t *testing.T) {
 }
 
 func TestRawSyncMissingRootIsCountedAndRegisteredAfterCreation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	rootPath := filepath.Join(t.TempDir(), "later")
 	roots := []syncpkg.WatchRoot{{Path: rootPath, Recursive: true, Exists: false}}
 	registrar := &recordingRawSyncRootRegistrar{}
 
 	pending, uncovered := registerRawSyncRoots(registrar, roots)
 
-	assert.Equal(t, 1, uncovered)
-	require.Len(t, pending, 1)
-	require.Len(t, registrar.roots, 1)
-	assert.False(t, registrar.roots[0].Exists)
-	require.NoError(t, os.Mkdir(rootPath, 0o700))
+	assert.Equal(1, uncovered)
+	require.Len(pending, 1)
+	require.Len(registrar.roots, 1)
+	assert.False(registrar.roots[0].Exists)
+	require.NoError(os.Mkdir(rootPath, 0o700))
 	pending, err := refreshRawSyncRoots(registrar, pending)
-	require.NoError(t, err)
-	assert.Empty(t, pending)
-	require.Len(t, registrar.roots, 2)
-	assert.True(t, registrar.roots[1].Exists)
+	require.NoError(err)
+	assert.Empty(pending)
+	require.Len(registrar.roots, 2)
+	assert.True(registrar.roots[1].Exists)
 }
 
 func TestRefreshRawSyncRootsKeepsStillMissingRoot(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	rootPath := filepath.Join(t.TempDir(), "still-missing")
 	registrar := &recordingRawSyncRootRegistrar{}
 
@@ -238,16 +247,19 @@ func TestRefreshRawSyncRootsKeepsStillMissingRoot(t *testing.T) {
 		Path: rootPath, Recursive: true,
 	}})
 
-	require.NoError(t, err)
-	require.Len(t, pending, 1)
-	assert.Empty(t, registrar.roots)
+	require.NoError(err)
+	require.Len(pending, 1)
+	assert.Empty(registrar.roots)
 	_, statErr := os.Stat(rootPath)
-	assert.True(t, errors.Is(statErr, os.ErrNotExist))
+	assert.ErrorIs(statErr, os.ErrNotExist)
 }
 
 func TestRawSyncProvidersExcludeS3Roots(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	localRoot := t.TempDir()
-	assert.Equal(t, []string{localRoot}, rawSyncFilesystemRoots([]string{
+	assert.Equal([]string{localRoot}, rawSyncFilesystemRoots([]string{
 		"", localRoot, "s3://example-bucket/raw/claude",
 	}))
 	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
@@ -256,54 +268,59 @@ func TestRawSyncProvidersExcludeS3Roots(t *testing.T) {
 
 	providers, roots, err := rawSyncProvidersAndRoots(t.Context(), cfg)
 
-	require.NoError(t, err)
-	require.Len(t, providers, 1)
-	require.Len(t, roots, 1)
-	assert.Equal(t, localRoot, roots[0].Path)
+	require.NoError(err)
+	require.Len(providers, 1)
+	require.Len(roots, 1)
+	assert.Equal(localRoot, roots[0].Path)
 }
 
 func TestRawSyncProvidersNormalizeRelativeRootsForCapture(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	base := t.TempDir()
 	t.Chdir(base)
 	absoluteRoot := filepath.Join(base, "sessions")
 	sessionPath := filepath.Join(absoluteRoot, "project", "session.jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o700))
-	require.NoError(t, os.WriteFile(sessionPath, []byte("{}\n"), 0o600))
+	require.NoError(os.MkdirAll(filepath.Dir(sessionPath), 0o700))
+	require.NoError(os.WriteFile(sessionPath, []byte("{}\n"), 0o600))
 	relativeRoot := "sessions"
-	require.False(t, filepath.IsAbs(relativeRoot))
+	require.False(filepath.IsAbs(relativeRoot))
 	cfg := config.Config{AgentDirs: map[parser.AgentType][]string{
 		parser.AgentClaude: {relativeRoot},
 	}}
 
 	providers, roots, err := rawSyncProvidersAndRoots(t.Context(), cfg)
-	require.NoError(t, err)
-	require.Len(t, providers, 1)
-	require.Len(t, roots, 1)
-	assert.True(t, filepath.IsAbs(roots[0].Path))
+	require.NoError(err)
+	require.Len(providers, 1)
+	require.Len(roots, 1)
+	assert.True(filepath.IsAbs(roots[0].Path))
 	discovery, err := parser.DiscoverRawCaptureSources(t.Context(), providers[0])
-	require.NoError(t, err)
-	require.True(t, discovery.Complete)
-	require.Len(t, discovery.Sources, 1)
+	require.NoError(err)
+	require.True(discovery.Complete)
+	require.Len(discovery.Sources, 1)
 	plan, supported, err := parser.ResolveRawCapturePlan(
 		t.Context(), providers[0], discovery.Sources[0],
 	)
-	require.NoError(t, err)
-	require.True(t, supported)
-	assert.True(t, filepath.IsAbs(plan.ConfiguredRoot))
+	require.NoError(err)
+	require.True(supported)
+	assert.True(filepath.IsAbs(plan.ConfiguredRoot))
 	watchedRoot, err := os.Stat(roots[0].Path)
-	require.NoError(t, err)
+	require.NoError(err)
 	plannedRoot, err := os.Stat(plan.ConfiguredRoot)
-	require.NoError(t, err)
-	assert.True(t, os.SameFile(watchedRoot, plannedRoot),
+	require.NoError(err)
+	assert.True(os.SameFile(watchedRoot, plannedRoot),
 		"capture plan must retain the normalized watched root")
 }
 
 func TestRawSyncProvidersWatchAliasHomeIndexes(t *testing.T) {
+	require := require.New(t)
+
 	base := t.TempDir()
 	primary := filepath.Join(base, "codex")
 	alias := filepath.Join(base, "codex-alt")
-	require.NoError(t, os.MkdirAll(filepath.Join(primary, "sessions"), 0o700))
-	require.NoError(t, os.MkdirAll(alias, 0o700))
+	require.NoError(os.MkdirAll(filepath.Join(primary, "sessions"), 0o700))
+	require.NoError(os.MkdirAll(alias, 0o700))
 	cfg := config.Config{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {filepath.Join(primary, "sessions")},
@@ -316,7 +333,7 @@ func TestRawSyncProvidersWatchAliasHomeIndexes(t *testing.T) {
 	}
 
 	_, roots, err := rawSyncProvidersAndRoots(t.Context(), cfg)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	paths := make([]string, 0, len(roots))
 	for _, root := range roots {

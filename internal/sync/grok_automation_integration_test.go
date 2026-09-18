@@ -14,10 +14,13 @@ import (
 )
 
 func TestGrokPromptContextAutomationSurvivesResyncAndAudit(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "cwd-key", "sess-1")
-	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(sessionDir, 0o755))
+	require.NoError(os.WriteFile(
 		filepath.Join(sessionDir, "summary.json"),
 		[]byte(`{
 			"summary":"Inspect a function",
@@ -26,7 +29,7 @@ func TestGrokPromptContextAutomationSurvivesResyncAndAudit(t *testing.T) {
 		}`),
 		0o644,
 	))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(sessionDir, "prompt_context.json"),
 		[]byte(`{"is_non_interactive":false}`),
 		0o644,
@@ -39,29 +42,29 @@ func TestGrokPromptContextAutomationSurvivesResyncAndAudit(t *testing.T) {
 	})
 
 	stats := engine.SyncAll(t.Context(), nil)
-	require.Equal(t, 1, stats.Synced)
+	require.Equal(1, stats.Synced)
 	before, err := database.GetSession(t.Context(), "grok:sess-1")
-	require.NoError(t, err)
-	require.NotNil(t, before)
-	require.False(t, before.IsAutomated)
+	require.NoError(err)
+	require.NotNil(before)
+	require.False(before.IsAutomated)
 
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(sessionDir, "prompt_context.json"),
 		[]byte(`{"is_non_interactive":true}`),
 		0o644,
 	))
 	stats = engine.SyncAll(t.Context(), nil)
-	require.Equal(t, 1, stats.Synced)
+	require.Equal(1, stats.Synced)
 
 	after, err := database.GetSession(t.Context(), "grok:sess-1")
-	require.NoError(t, err)
-	require.NotNil(t, after)
-	assert.Equal(t, "non-interactive", after.SessionKind)
-	require.True(t, after.IsAutomated)
+	require.NoError(err)
+	require.NotNil(after)
+	assert.Equal("non-interactive", after.SessionKind)
+	require.True(after.IsAutomated)
 
-	require.NoError(t, database.ForceBackfillIsAutomated())
+	require.NoError(database.ForceBackfillIsAutomated())
 	afterAudit, err := database.GetSession(t.Context(), "grok:sess-1")
-	require.NoError(t, err)
-	require.NotNil(t, afterAudit)
-	assert.True(t, afterAudit.IsAutomated)
+	require.NoError(err)
+	require.NotNil(afterAudit)
+	assert.True(afterAudit.IsAutomated)
 }

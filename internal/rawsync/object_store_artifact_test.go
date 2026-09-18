@@ -18,84 +18,89 @@ import (
 )
 
 func TestArtifactObjectStoreContract(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	repository, err := artifact.OpenRepository(t.Context(), t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, repository.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(repository.Close()) })
 	store, err := NewArtifactObjectStore(repository.Content())
-	require.NoError(t, err)
+	require.NoError(err)
 	identity, err := NewAuthIdentity("tenant-a", "device-a")
-	require.NoError(t, err)
+	require.NoError(err)
 	body := []byte("raw bytes")
 	ref := objectRefForBytes(t, body)
 
 	created, err := store.PutObject(t.Context(), identity.TenantID, ref, bytes.NewReader(body))
-	require.NoError(t, err)
-	assert.True(t, created.Created)
-	assert.Equal(t, ref, created.Info.Ref)
+	require.NoError(err)
+	assert.True(created.Created)
+	assert.Equal(ref, created.Info.Ref)
 	retried, err := store.PutObject(t.Context(), identity.TenantID, ref, bytes.NewReader(body))
-	require.NoError(t, err)
-	assert.False(t, retried.Created)
+	require.NoError(err)
+	assert.False(retried.Created)
 
 	stat, err := store.StatObject(t.Context(), identity.TenantID, ref)
-	require.NoError(t, err)
-	assert.Equal(t, ref, stat.Ref)
+	require.NoError(err)
+	assert.Equal(ref, stat.Ref)
 	info, reader, err := store.OpenObject(t.Context(), identity.TenantID, ref)
-	require.NoError(t, err)
+	require.NoError(err)
 	got, err := io.ReadAll(reader)
-	require.NoError(t, err)
-	require.NoError(t, reader.Verify())
-	require.NoError(t, reader.Close())
-	assert.Equal(t, body, got)
-	assert.Equal(t, ref, info.Ref)
+	require.NoError(err)
+	require.NoError(reader.Verify())
+	require.NoError(reader.Close())
+	assert.Equal(body, got)
+	assert.Equal(ref, info.Ref)
 	var copied bytes.Buffer
 	copyInfo, err := store.CopyObject(t.Context(), identity.TenantID, ref, &copied)
-	require.NoError(t, err)
-	assert.Equal(t, ref, copyInfo.Ref)
-	assert.Equal(t, body, copied.Bytes())
+	require.NoError(err)
+	assert.Equal(ref, copyInfo.Ref)
+	assert.Equal(body, copied.Bytes())
 	wrongLength := ObjectRef{SHA256: ref.SHA256, Length: ref.Length + 1}
 	_, err = store.StatObject(t.Context(), identity.TenantID, wrongLength)
-	assert.ErrorIs(t, err, ErrConflict)
+	assert.ErrorIs(err, ErrConflict)
 	_, wrongReader, err := store.OpenObject(t.Context(), identity.TenantID, wrongLength)
-	assert.ErrorIs(t, err, ErrConflict)
-	assert.Nil(t, wrongReader)
+	assert.ErrorIs(err, ErrConflict)
+	assert.Nil(wrongReader)
 	if wrongReader != nil {
 		_ = wrongReader.Close()
 	}
 	_, err = store.MissingObjects(
 		t.Context(), identity.TenantID, []ObjectRef{wrongLength},
 	)
-	assert.ErrorIs(t, err, ErrConflict)
+	assert.ErrorIs(err, ErrConflict)
 
 	missing, err := store.MissingObjects(t.Context(), identity.TenantID, []ObjectRef{
 		ref,
 		{SHA256: strings.Repeat("c", 64), Length: 7},
 		{SHA256: strings.Repeat("c", 64), Length: 7},
 	})
-	require.NoError(t, err)
-	assert.Equal(t, []ObjectRef{{SHA256: strings.Repeat("c", 64), Length: 7}}, missing)
+	require.NoError(err)
+	assert.Equal([]ObjectRef{{SHA256: strings.Repeat("c", 64), Length: 7}}, missing)
 
 	otherTenantMissing, err := store.MissingObjects(t.Context(), "tenant-b", []ObjectRef{ref})
-	require.NoError(t, err)
-	assert.Equal(t, []ObjectRef{ref}, otherTenantMissing)
+	require.NoError(err)
+	assert.Equal([]ObjectRef{ref}, otherTenantMissing)
 	_, _, err = store.OpenObject(t.Context(), "tenant-b", ref)
-	assert.ErrorIs(t, err, ErrNotFound)
+	assert.ErrorIs(err, ErrNotFound)
 }
 
 func TestArtifactObjectStoreCopyCancellationNeverClosesDuringRead(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 	body := []byte("raw bytes")
 	ref := objectRefForBytes(t, body)
 	artifactRef, artifactIdentity, err := rawArtifactCoordinates("tenant-a", ref)
-	require.NoError(t, err)
+	require.NoError(err)
 	reader := &cancelAwareArtifactReader{started: make(chan struct{})}
 	content := &copyArtifactStore{
 		entry:  artifact.Entry{Ref: artifactRef, Identity: artifactIdentity},
 		reader: reader,
 	}
 	store, err := NewArtifactObjectStore(content)
-	require.NoError(t, err)
+	require.NoError(err)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	done := make(chan error, 1)
@@ -112,7 +117,7 @@ func TestArtifactObjectStoreCopyCancellationNeverClosesDuringRead(t *testing.T) 
 
 	select {
 	case err := <-done:
-		require.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(err, context.Canceled)
 		assert.False(t, reader.concurrentClose.Load(),
 			"the adapter must close only after the context-aware read returns")
 	case <-time.After(5 * time.Second):
@@ -165,90 +170,98 @@ func (r *cancelAwareArtifactReader) Close() error {
 }
 
 func TestArtifactObjectStoreRejectsInvalidWritesAndRequests(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	repository, err := artifact.OpenRepository(t.Context(), t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, repository.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(repository.Close()) })
 	store, err := NewArtifactObjectStore(repository.Content())
-	require.NoError(t, err)
+	require.NoError(err)
 	ref := objectRefForBytes(t, []byte("expected"))
 
 	_, err = store.PutObject(t.Context(), "tenant-a", ref, bytes.NewReader([]byte("corrupt")))
-	assert.ErrorIs(t, err, ErrConflict)
+	assert.ErrorIs(err, ErrConflict)
 	_, err = store.PutObject(t.Context(), "tenant-a", ref, bytes.NewReader([]byte("EXPected")))
-	assert.ErrorIs(t, err, ErrConflict)
+	assert.ErrorIs(err, ErrConflict)
 	_, err = store.PutObject(t.Context(), "bad/tenant", ref, bytes.NewReader([]byte("expected")))
-	assert.ErrorIs(t, err, ErrInvalid)
+	assert.ErrorIs(err, ErrInvalid)
 	_, err = store.MissingObjects(t.Context(), "tenant-a", []ObjectRef{
 		ref,
 		{SHA256: ref.SHA256, Length: ref.Length + 1},
 	})
-	assert.ErrorIs(t, err, ErrConflict)
+	assert.ErrorIs(err, ErrConflict)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, err = store.PutObject(ctx, "tenant-a", ref, bytes.NewReader([]byte("expected")))
-	assert.ErrorIs(t, err, context.Canceled)
+	assert.ErrorIs(err, context.Canceled)
 	_, err = NewArtifactObjectStore(nil)
-	assert.ErrorIs(t, err, ErrInvalid)
+	assert.ErrorIs(err, ErrInvalid)
 }
 
 func TestArtifactObjectStoreRetainsCanonicalManifestEnvelope(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	repository, err := artifact.OpenRepository(t.Context(), t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, repository.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(repository.Close()) })
 	store, err := NewArtifactObjectStore(repository.Content())
-	require.NoError(t, err)
+	require.NoError(err)
 	identity, err := NewAuthIdentity("tenant-a", "device-a")
-	require.NoError(t, err)
+	require.NoError(err)
 	manifest, err := ValidateAndCanonicalize(identity, validManifest(), DefaultManifestLimits())
-	require.NoError(t, err)
+	require.NoError(err)
 
 	created, err := store.PutManifest(t.Context(), manifest)
-	require.NoError(t, err)
-	assert.True(t, created.Created)
-	assert.Equal(t, ObjectRef{SHA256: manifest.ManifestID, Length: int64(len(manifest.CanonicalJSON))}, created.Info.Ref)
+	require.NoError(err)
+	assert.True(created.Created)
+	assert.Equal(ObjectRef{SHA256: manifest.ManifestID, Length: int64(len(manifest.CanonicalJSON))}, created.Info.Ref)
 	retried, err := store.PutManifest(t.Context(), manifest)
-	require.NoError(t, err)
-	assert.False(t, retried.Created)
+	require.NoError(err)
+	assert.False(retried.Created)
 
 	info, reader, err := store.OpenManifest(t.Context(), identity, manifest.ManifestID)
-	require.NoError(t, err)
+	require.NoError(err)
 	got, err := io.ReadAll(reader)
-	require.NoError(t, err)
-	require.NoError(t, reader.Verify())
-	require.NoError(t, reader.Close())
-	assert.Equal(t, manifest.CanonicalJSON, got)
-	assert.Equal(t, created.Info.Ref, info.Ref)
+	require.NoError(err)
+	require.NoError(reader.Verify())
+	require.NoError(reader.Close())
+	assert.Equal(manifest.CanonicalJSON, got)
+	assert.Equal(created.Info.Ref, info.Ref)
 
 	other, err := NewAuthIdentity("tenant-b", "device-a")
-	require.NoError(t, err)
+	require.NoError(err)
 	_, _, err = store.OpenManifest(t.Context(), other, manifest.ManifestID)
-	assert.ErrorIs(t, err, ErrNotFound)
+	assert.ErrorIs(err, ErrNotFound)
 }
 
 func TestArtifactObjectStoreAcceptsCanonicalManifestBeyondDefaultPolicy(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 
 	repository, err := artifact.OpenRepository(t.Context(), t.TempDir())
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, repository.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(repository.Close()) })
 	store, err := NewArtifactObjectStore(repository.Content())
-	require.NoError(t, err)
+	require.NoError(err)
 	identity, err := NewAuthIdentity("tenant-a", "device-a")
-	require.NoError(t, err)
+	require.NoError(err)
 	manifest := validManifest()
 	manifest.Entries[0].Path = strings.Repeat("p", DefaultManifestLimits().MaxPathBytes+1)
 	limits := DefaultManifestLimits()
 	limits.MaxPathBytes++
 	canonical, err := ValidateAndCanonicalize(identity, manifest, limits)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	result, err := store.PutManifest(t.Context(), canonical)
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.True(t, result.Created)
 }
 

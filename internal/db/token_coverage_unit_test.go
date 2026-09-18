@@ -56,13 +56,15 @@ func TestComputeSessionCoverageUpdates(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			got := ComputeSessionCoverageUpdates(tc.candidates, tc.msgCoverage)
 
 			require.Len(t, got, len(tc.want), "len mismatch; got = %v", got)
 			for i, w := range tc.want {
-				assert.Equal(t, w.ID, got[i].ID, "[%d] ID", i)
-				assert.Equal(t, w.HasTotal, got[i].HasTotal, "[%d] HasTotal", i)
-				assert.Equal(t, w.HasPeak, got[i].HasPeak, "[%d] HasPeak", i)
+				assert.Equal(w.ID, got[i].ID, "[%d] ID", i)
+				assert.Equal(w.HasTotal, got[i].HasTotal, "[%d] HasTotal", i)
+				assert.Equal(w.HasPeak, got[i].HasPeak, "[%d] HasPeak", i)
 			}
 		})
 	}

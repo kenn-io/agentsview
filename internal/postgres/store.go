@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"time"
 
@@ -263,7 +264,7 @@ func (s *Store) ListInsights(
 		 FROM insights
 		 WHERE `+where+`
 		 ORDER BY created_at DESC, id DESC
-		 LIMIT `+fmt.Sprintf("%d", maxPGInsights),
+		 LIMIT `+strconv.Itoa(maxPGInsights),
 		pb.args...,
 	)
 	if err != nil {
@@ -395,7 +396,7 @@ func (s *Store) RenameSession(
 		id, displayName,
 	)
 	if err != nil {
-		return mapPGWriteError(fmt.Sprintf("renaming session %s", id), err)
+		return mapPGWriteError("renaming session "+id, err)
 	}
 	return nil
 }
@@ -412,7 +413,7 @@ func (s *Store) SoftDeleteSession(id string) error {
 	)
 	if err != nil {
 		return mapPGWriteError(
-			fmt.Sprintf("soft deleting session %s", id), err,
+			"soft deleting session "+id, err,
 		)
 	}
 	return nil
@@ -467,7 +468,7 @@ func (s *Store) RestoreSession(id string) (int64, error) {
 	)
 	if err != nil {
 		return 0, mapPGWriteError(
-			fmt.Sprintf("restoring session %s", id), err,
+			"restoring session "+id, err,
 		)
 	}
 	n, err := res.RowsAffected()
@@ -485,7 +486,7 @@ func (s *Store) DeleteSessionIfTrashed(
 	tx, err := s.pg.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, mapPGWriteError(
-			fmt.Sprintf("begin delete-if-trashed tx for %s", id),
+			"begin delete-if-trashed tx for "+id,
 			err,
 		)
 	}
@@ -498,7 +499,7 @@ func (s *Store) DeleteSessionIfTrashed(
 	)
 	if err != nil {
 		return 0, mapPGWriteError(
-			fmt.Sprintf("locking trashed session %s", id),
+			"locking trashed session "+id,
 			err,
 		)
 	}
@@ -508,7 +509,7 @@ func (s *Store) DeleteSessionIfTrashed(
 
 	if err := insertPGExcludedSessionIDs(ctx, tx, excludedIDs); err != nil {
 		return 0, mapPGWriteError(
-			fmt.Sprintf("recording excluded trashed session %s", id),
+			"recording excluded trashed session "+id,
 			err,
 		)
 	}
@@ -516,17 +517,17 @@ func (s *Store) DeleteSessionIfTrashed(
 	n, err := deletePGTrashedSessionRows(ctx, tx, sessionIDs)
 	if err != nil {
 		return 0, mapPGWriteError(
-			fmt.Sprintf("deleting trashed session %s", id), err,
+			"deleting trashed session "+id, err,
 		)
 	}
 	if err := deletePGExcludedSessionRows(ctx, tx, excludedIDs); err != nil {
 		return 0, mapPGWriteError(
-			fmt.Sprintf("purging excluded session aliases for %s", id), err,
+			"purging excluded session aliases for "+id, err,
 		)
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, mapPGWriteError(
-			fmt.Sprintf("commit delete-if-trashed %s", id),
+			"commit delete-if-trashed "+id,
 			err,
 		)
 	}

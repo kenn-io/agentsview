@@ -27,7 +27,7 @@ var (
 const schemaCJKFTSPendingSessions = `
 CREATE TABLE IF NOT EXISTS messages_cjk_fts_pending_sessions (
     session_id TEXT PRIMARY KEY,
-    generation INTEGER NOT NULL CHECK (generation > 0)
+    generation INTEGER NOT NULL
 );
 
 DROP TRIGGER IF EXISTS sessions_cjk_pending_bi;

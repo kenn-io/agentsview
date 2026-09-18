@@ -185,16 +185,19 @@ func TestCandidateRules(t *testing.T) {
 // reports definite vendor formats and skips the FP-prone candidate heuristics
 // (high-entropy assignments, JWTs, basic-auth URLs) entirely.
 func TestScanDefiniteReturnsOnlyDefinite(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	// One definite AWS key and one candidate high-entropy assignment.
 	text := "aws AKIA7QHWN2DKR4FYPLJM and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6"
 	full := Scan(text)
-	require.Len(t, full, 2,
+	require.Len(full, 2,
 		"precondition: Scan should report 2 matches (1 definite, 1 candidate)")
 	got := ScanDefinite(text)
-	require.Len(t, got, 1)
-	assert.Equal(t, "aws-access-key", got[0].Rule)
+	require.Len(got, 1)
+	assert.Equal("aws-access-key", got[0].Rule)
 	for _, m := range got {
-		assert.Equal(t, ConfidenceDefinite, m.Confidence,
+		assert.Equal(ConfidenceDefinite, m.Confidence,
 			"ScanDefinite returned non-definite match: %+v", m)
 	}
 }
@@ -203,6 +206,8 @@ func TestScanDefiniteReturnsOnlyDefinite(t *testing.T) {
 // same spans (rule, offsets, redaction) that Scan reports for definite rules,
 // so findings stored by the inline path and the full scan stay consistent.
 func TestScanDefiniteMatchesScanDefiniteSubset(t *testing.T) {
+	assert := assert.New(t)
+
 	text := "key AKIA7QHWN2DKR4FYPLJM tok ghp_8Hk3Wn7Dz4Rp2Vx9Mb6Tj0Qc5Lm1Yp8Bv4Hg" +
 		" SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6"
 	var wantDef []Match
@@ -215,10 +220,10 @@ func TestScanDefiniteMatchesScanDefiniteSubset(t *testing.T) {
 	require.Len(t, got, len(wantDef),
 		"ScanDefinite count vs Scan definite count (%+v vs %+v)", got, wantDef)
 	for i := range got {
-		assert.Equal(t, wantDef[i].Rule, got[i].Rule, "match %d rule differs", i)
-		assert.Equal(t, wantDef[i].Start, got[i].Start, "match %d start differs", i)
-		assert.Equal(t, wantDef[i].End, got[i].End, "match %d end differs", i)
-		assert.Equal(t, wantDef[i].Redacted, got[i].Redacted, "match %d redacted differs", i)
+		assert.Equal(wantDef[i].Rule, got[i].Rule, "match %d rule differs", i)
+		assert.Equal(wantDef[i].Start, got[i].Start, "match %d start differs", i)
+		assert.Equal(wantDef[i].End, got[i].End, "match %d end differs", i)
+		assert.Equal(wantDef[i].Redacted, got[i].Redacted, "match %d redacted differs", i)
 	}
 }
 
@@ -227,16 +232,19 @@ func TestScanDefiniteMatchesScanDefiniteSubset(t *testing.T) {
 // ruleset version, so secrets scan --backfill (which treats RulesVersion as
 // current) re-scans inline-only sessions to pick up candidate findings.
 func TestDefiniteRulesVersionDistinctFromFull(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	def := DefiniteRulesVersion()
 	full := RulesVersion()
-	require.NotEqual(t, full, def,
+	require.NotEqual(full, def,
 		"DefiniteRulesVersion must differ from RulesVersion (both %q)", def)
-	require.NotEmpty(t, def, "versions must be non-empty")
-	require.NotEmpty(t, full, "versions must be non-empty")
-	assert.Equal(t, def, DefiniteRulesVersion(), "DefiniteRulesVersion not stable across calls")
-	assert.Len(t, def, 64, "DefiniteRulesVersion length: %q", def)
+	require.NotEmpty(def, "versions must be non-empty")
+	require.NotEmpty(full, "versions must be non-empty")
+	assert.Equal(def, DefiniteRulesVersion(), "DefiniteRulesVersion not stable across calls")
+	assert.Len(def, 64, "DefiniteRulesVersion length: %q", def)
 	for _, c := range def {
-		require.True(t, isLowerHex(c),
+		require.True(isLowerHex(c),
 			"DefiniteRulesVersion has non-hex char %q in %q", c, def)
 	}
 }
@@ -253,24 +261,26 @@ func TestRulesVersionStableAndHex(t *testing.T) {
 }
 
 func TestVerify(t *testing.T) {
+	assert := assert.New(t)
+
 	// Non-grouped rule: the stored span is the full regex match.
 	awsSrc := "export KEY=AKIA7QHWN2DKR4FYPLJM done"
 	s := strings.Index(awsSrc, "AKIA")
 	e := s + len("AKIA7QHWN2DKR4FYPLJM")
-	assert.True(t, Verify("aws-access-key", awsSrc, s, e),
+	assert.True(Verify("aws-access-key", awsSrc, s, e),
 		"Verify should accept a valid AWS key at its coordinates")
-	assert.False(t, Verify("aws-access-key", awsSrc, 0, 6),
+	assert.False(Verify("aws-access-key", awsSrc, 0, 6),
 		"Verify should reject coordinates that are not the key")
-	assert.False(t, Verify("nonexistent-rule", awsSrc, s, e),
+	assert.False(Verify("nonexistent-rule", awsSrc, s, e),
 		"Verify should reject an unknown rule")
-	assert.False(t, Verify("aws-access-key", awsSrc, s, len(awsSrc)+10),
+	assert.False(Verify("aws-access-key", awsSrc, s, len(awsSrc)+10),
 		"Verify should reject out-of-bounds coordinates")
 	// Grouped rule: the stored span is the captured group (the password),
 	// not the full URL match. Verify must still accept it.
 	urlSrc := "db=postgres://user:s3cretP4ss@host:5432/db"
 	ps := strings.Index(urlSrc, "s3cretP4ss")
 	pe := ps + len("s3cretP4ss")
-	assert.True(t, Verify("basic-auth-url", urlSrc, ps, pe),
+	assert.True(Verify("basic-auth-url", urlSrc, ps, pe),
 		"Verify should accept a grouped finding at its group coordinates")
 }
 

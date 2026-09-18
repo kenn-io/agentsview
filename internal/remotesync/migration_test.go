@@ -30,6 +30,9 @@ const vsCopilotRemoteSkipTracePath = "/remote/agent/foo_VSGitHubCopilot_traces.j
 func TestMigrateVisualStudioCopilotRemoteSkipsRemovesStaleTracePaths(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := newRemoteSkipTestDB(t)
 	const host = "remote-host"
 	virtualPath := parser.VisualStudioCopilotVirtualPath(
@@ -43,22 +46,22 @@ func TestMigrateVisualStudioCopilotRemoteSkipsRemovesStaleTracePaths(
 		unrelated:                    333,
 	}
 	require.NoError(
-		t, database.ReplaceRemoteSkippedFiles(host, seed),
+		database.ReplaceRemoteSkippedFiles(host, seed),
 	)
 
 	cleaned := migrateVisualStudioCopilotRemoteSkips(
 		database, host, seed,
 	)
 
-	assert.NotContains(t, cleaned, vsCopilotRemoteSkipTracePath)
-	assert.NotContains(t, cleaned, virtualPath)
-	assert.Contains(t, cleaned, unrelated)
+	assert.NotContains(cleaned, vsCopilotRemoteSkipTracePath)
+	assert.NotContains(cleaned, virtualPath)
+	assert.Contains(cleaned, unrelated)
 
 	persisted, err := database.LoadRemoteSkippedFiles(host)
-	require.NoError(t, err)
-	assert.NotContains(t, persisted, vsCopilotRemoteSkipTracePath)
-	assert.NotContains(t, persisted, virtualPath)
-	assert.Contains(t, persisted, unrelated)
+	require.NoError(err)
+	assert.NotContains(persisted, vsCopilotRemoteSkipTracePath)
+	assert.NotContains(persisted, virtualPath)
+	assert.Contains(persisted, unrelated)
 }
 
 // TestMigrateVisualStudioCopilotRemoteSkipsIsOneTimePerHost
@@ -68,25 +71,28 @@ func TestMigrateVisualStudioCopilotRemoteSkipsRemovesStaleTracePaths(
 func TestMigrateVisualStudioCopilotRemoteSkipsIsOneTimePerHost(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := newRemoteSkipTestDB(t)
 	const host = "remote-host"
 
-	require.NoError(t, database.ReplaceRemoteSkippedFiles(
+	require.NoError(database.ReplaceRemoteSkippedFiles(
 		host, map[string]int64{vsCopilotRemoteSkipTracePath: 111},
 	))
 
 	first := migrateVisualStudioCopilotRemoteSkips(
 		database, host, map[string]int64{vsCopilotRemoteSkipTracePath: 111},
 	)
-	assert.NotContains(t, first, vsCopilotRemoteSkipTracePath)
+	assert.NotContains(first, vsCopilotRemoteSkipTracePath)
 
 	fresh := map[string]int64{vsCopilotRemoteSkipTracePath: 222}
 	require.NoError(
-		t, database.ReplaceRemoteSkippedFiles(host, fresh),
+		database.ReplaceRemoteSkippedFiles(host, fresh),
 	)
 	second := migrateVisualStudioCopilotRemoteSkips(database, host, fresh)
 	assert.Contains(
-		t, second, vsCopilotRemoteSkipTracePath,
+		second, vsCopilotRemoteSkipTracePath,
 		"migration must not re-scrub after the one-time pass",
 	)
 }
@@ -97,11 +103,14 @@ func TestMigrateVisualStudioCopilotRemoteSkipsIsOneTimePerHost(
 func TestMigrateVisualStudioCopilotRemoteSkipsPerHost(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := newRemoteSkipTestDB(t)
-	require.NoError(t, database.ReplaceRemoteSkippedFiles(
+	require.NoError(database.ReplaceRemoteSkippedFiles(
 		"host-a", map[string]int64{vsCopilotRemoteSkipTracePath: 1},
 	))
-	require.NoError(t, database.ReplaceRemoteSkippedFiles(
+	require.NoError(database.ReplaceRemoteSkippedFiles(
 		"host-b", map[string]int64{vsCopilotRemoteSkipTracePath: 2},
 	))
 
@@ -114,9 +123,9 @@ func TestMigrateVisualStudioCopilotRemoteSkipsPerHost(
 		database, "host-b",
 		map[string]int64{vsCopilotRemoteSkipTracePath: 2},
 	)
-	assert.NotContains(t, cleanedB, vsCopilotRemoteSkipTracePath)
+	assert.NotContains(cleanedB, vsCopilotRemoteSkipTracePath)
 
 	persistedB, err := database.LoadRemoteSkippedFiles("host-b")
-	require.NoError(t, err)
-	assert.NotContains(t, persistedB, vsCopilotRemoteSkipTracePath)
+	require.NoError(err)
+	assert.NotContains(persistedB, vsCopilotRemoteSkipTracePath)
 }

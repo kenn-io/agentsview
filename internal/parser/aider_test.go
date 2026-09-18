@@ -25,45 +25,45 @@ func fixtureAider() string {
 // its own StartedAt and FirstMessage. The header-only trailing run
 // contributes no session.
 func TestParseAiderRunsPerRun(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	results, err := parseAiderRuns(fixtureAider(), "testmachine")
-	require.NoError(t, err)
+	require.NoError(err)
 	// Three runs in the file, but the trailing header-only run has no
 	// turns, so only two sessions are emitted.
-	require.Len(t, results, 2, "one session per content-bearing run")
+	require.Len(results, 2, "one session per content-bearing run")
 
 	r0, r1 := results[0], results[1]
 
 	// Both runs share project/machine/agent but are distinct sessions.
 	for _, r := range results {
-		assert.Equal(t, AgentAider, r.Session.Agent)
-		assert.Equal(t, "testmachine", r.Session.Machine)
-		assert.Equal(t, "myrepo", r.Session.Project)
-		assert.Contains(t, r.Session.ID, "aider:")
+		assert.Equal(AgentAider, r.Session.Agent)
+		assert.Equal("testmachine", r.Session.Machine)
+		assert.Equal("myrepo", r.Session.Project)
+		assert.Contains(r.Session.ID, "aider:")
 	}
-	assert.NotEqual(t, r0.Session.ID, r1.Session.ID,
+	assert.NotEqual(r0.Session.ID, r1.Session.ID,
 		"distinct runs get distinct session IDs")
 
 	// Run 0: header 14:01:00, first prompt "add a retry to the webhook",
 	// two user prompts ("add a retry..." and "Step 1").
-	assert.Equal(t,
-		time.Date(2026, 6, 9, 14, 1, 0, 0, time.UTC), r0.Session.StartedAt)
-	assert.Equal(t, r0.Session.StartedAt, r0.Session.EndedAt,
+	assert.Equal(time.Date(2026, 6, 9, 14, 1, 0, 0, time.UTC), r0.Session.StartedAt)
+	assert.Equal(r0.Session.StartedAt, r0.Session.EndedAt,
 		"a run has no separate end time")
-	assert.Contains(t, r0.Session.FirstMessage, "add a retry to the webhook")
-	assert.Equal(t, 2, r0.Session.UserMessageCount)
+	assert.Contains(r0.Session.FirstMessage, "add a retry to the webhook")
+	assert.Equal(2, r0.Session.UserMessageCount)
 
 	// Run 1: header 15:30:00, its own first prompt and message stream.
-	assert.Equal(t,
-		time.Date(2026, 6, 9, 15, 30, 0, 0, time.UTC), r1.Session.StartedAt)
-	assert.Contains(t,
-		r1.Session.FirstMessage, "make the timeout configurable")
-	assert.Equal(t, 1, r1.Session.UserMessageCount)
+	assert.Equal(time.Date(2026, 6, 9, 15, 30, 0, 0, time.UTC), r1.Session.StartedAt)
+	assert.Contains(r1.Session.FirstMessage, "make the timeout configurable")
+	assert.Equal(1, r1.Session.UserMessageCount)
 
 	// The message streams are per-run, not flattened: run 1 must not carry
 	// run 0's prompt.
-	require.NotEmpty(t, r1.Messages)
+	require.NotEmpty(r1.Messages)
 	for _, m := range r1.Messages {
-		assert.NotContains(t, m.Content, "add a retry to the webhook")
+		assert.NotContains(m.Content, "add a retry to the webhook")
 	}
 
 	// Run 0 roles, in order. "#### Step 1" is an aider USER prompt (a fresh
@@ -74,45 +74,47 @@ func TestParseAiderRunsPerRun(t *testing.T) {
 	for i, m := range r0.Messages {
 		roles[i] = m.Role
 	}
-	assert.Equal(t, []RoleType{
+	assert.Equal([]RoleType{
 		RoleUser,      // add a retry to the webhook
 		RoleAssistant, // I'll add exponential backoff ... Here is the plan:
 		RoleUser,      // Step 1
 		RoleAssistant, // Wrap the call in a loop.
 		RoleAssistant, // > Applied edit ... (tool block, surfaced as assistant)
 	}, roles)
-	assert.Equal(t, "add a retry to the webhook", r0.Messages[0].Content)
-	assert.Contains(t, r0.Messages[1].Content, "exponential backoff")
-	assert.Contains(t, r0.Messages[1].Content, "Here is the plan:")
+	assert.Equal("add a retry to the webhook", r0.Messages[0].Content)
+	assert.Contains(r0.Messages[1].Content, "exponential backoff")
+	assert.Contains(r0.Messages[1].Content, "Here is the plan:")
 
 	// No per-message timestamps in aider's markdown format.
 	for _, r := range results {
 		for _, m := range r.Messages {
-			assert.True(t, m.Timestamp.IsZero())
+			assert.True(m.Timestamp.IsZero())
 		}
 	}
 }
 
 // TestParseAiderRunSingle parses one run out of a file by index.
 func TestParseAiderRunSingle(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	sess, msgs, err := parseAiderRun(fixtureAider(), 1, "m")
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	require.NotEmpty(t, msgs)
-	assert.Contains(t, sess.FirstMessage, "make the timeout configurable")
-	assert.Equal(t,
-		time.Date(2026, 6, 9, 15, 30, 0, 0, time.UTC), sess.StartedAt)
+	require.NoError(err)
+	require.NotNil(sess)
+	require.NotEmpty(msgs)
+	assert.Contains(sess.FirstMessage, "make the timeout configurable")
+	assert.Equal(time.Date(2026, 6, 9, 15, 30, 0, 0, time.UTC), sess.StartedAt)
 
 	// The trailing header-only run (index 2) yields no session.
 	sess2, msgs2, err := parseAiderRun(fixtureAider(), 2, "m")
-	require.NoError(t, err)
-	assert.Nil(t, sess2)
-	assert.Empty(t, msgs2)
+	require.NoError(err)
+	assert.Nil(sess2)
+	assert.Empty(msgs2)
 
 	// Out-of-range indices are tolerated, not errors.
 	sess3, _, err := parseAiderRun(fixtureAider(), 99, "m")
-	require.NoError(t, err)
-	assert.Nil(t, sess3)
+	require.NoError(err)
+	assert.Nil(sess3)
 }
 
 // TestAiderSessionIDStableOnAppend is the core regression test for
@@ -121,66 +123,71 @@ func TestParseAiderRunSingle(t *testing.T) {
 // later runs when an early run is removed; hashing the header plus an
 // equal-header ordinal keeps each ID pinned to its own run.
 func TestAiderSessionIDStableOnAppend(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	repo := filepath.Join(dir, "myrepo")
-	require.NoError(t, os.MkdirAll(repo, 0o755))
+	require.NoError(os.MkdirAll(repo, 0o755))
 	path := filepath.Join(repo, ".aider.chat.history.md")
 
 	base := "# aider chat started at 2026-06-09 14:01:00\n" +
 		"#### first prompt\nanswer one\n" +
 		"# aider chat started at 2026-06-09 15:30:00\n" +
 		"#### second prompt\nanswer two\n"
-	require.NoError(t, os.WriteFile(path, []byte(base), 0o644))
+	require.NoError(os.WriteFile(path, []byte(base), 0o644))
 
 	before, err := parseAiderRuns(path, "m")
-	require.NoError(t, err)
-	require.Len(t, before, 2)
+	require.NoError(err)
+	require.Len(before, 2)
 	id0, id1 := before[0].Session.ID, before[1].Session.ID
 
 	// Append a third run with a fresh timestamp.
 	appended := base +
 		"# aider chat started at 2026-06-09 16:45:00\n" +
 		"#### third prompt\nanswer three\n"
-	require.NoError(t, os.WriteFile(path, []byte(appended), 0o644))
+	require.NoError(os.WriteFile(path, []byte(appended), 0o644))
 
 	after, err := parseAiderRuns(path, "m")
-	require.NoError(t, err)
-	require.Len(t, after, 3)
+	require.NoError(err)
+	require.Len(after, 3)
 
-	assert.Equal(t, id0, after[0].Session.ID,
+	assert.Equal(id0, after[0].Session.ID,
 		"appending a run must not re-key the first run")
-	assert.Equal(t, id1, after[1].Session.ID,
+	assert.Equal(id1, after[1].Session.ID,
 		"appending a run must not re-key the second run")
-	assert.NotEqual(t, id0, after[2].Session.ID)
-	assert.NotEqual(t, id1, after[2].Session.ID)
+	assert.NotEqual(id0, after[2].Session.ID)
+	assert.NotEqual(id1, after[2].Session.ID)
 }
 
 // TestAiderSessionIDStableOnEarlyRemoval asserts that removing an early
 // run does not re-key the runs that follow it (the bare-positional-index
 // failure mode).
 func TestAiderSessionIDStableOnEarlyRemoval(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	repo := filepath.Join(dir, "myrepo")
-	require.NoError(t, os.MkdirAll(repo, 0o755))
+	require.NoError(os.MkdirAll(repo, 0o755))
 	path := filepath.Join(repo, ".aider.chat.history.md")
 
 	run0 := "# aider chat started at 2026-06-09 14:01:00\n" +
 		"#### first prompt\nanswer one\n"
 	run1 := "# aider chat started at 2026-06-09 15:30:00\n" +
 		"#### second prompt\nanswer two\n"
-	require.NoError(t, os.WriteFile(path, []byte(run0+run1), 0o644))
+	require.NoError(os.WriteFile(path, []byte(run0+run1), 0o644))
 
 	before, err := parseAiderRuns(path, "m")
-	require.NoError(t, err)
-	require.Len(t, before, 2)
+	require.NoError(err)
+	require.Len(before, 2)
 	secondID := before[1].Session.ID
 
 	// Remove the first run; the second run is now positionally index 0 but
 	// must keep its original ID.
-	require.NoError(t, os.WriteFile(path, []byte(run1), 0o644))
+	require.NoError(os.WriteFile(path, []byte(run1), 0o644))
 	after, err := parseAiderRuns(path, "m")
-	require.NoError(t, err)
-	require.Len(t, after, 1)
+	require.NoError(err)
+	require.Len(after, 1)
 	assert.Equal(t, secondID, after[0].Session.ID,
 		"removing an earlier run must not re-key a later run")
 }
@@ -189,29 +196,32 @@ func TestAiderSessionIDStableOnEarlyRemoval(t *testing.T) {
 // runs with identical header timestamps: they must get distinct, stable
 // IDs disambiguated by their ordinal among equal-header runs.
 func TestAiderEqualHeaderRunsGetStableDistinctIDs(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	repo := filepath.Join(dir, "myrepo")
-	require.NoError(t, os.MkdirAll(repo, 0o755))
+	require.NoError(os.MkdirAll(repo, 0o755))
 	path := filepath.Join(repo, ".aider.chat.history.md")
 
 	content := "# aider chat started at 2026-06-09 14:01:00\n" +
 		"#### prompt a\nanswer a\n" +
 		"# aider chat started at 2026-06-09 14:01:00\n" +
 		"#### prompt b\nanswer b\n"
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(os.WriteFile(path, []byte(content), 0o644))
 
 	r1, err := parseAiderRuns(path, "m")
-	require.NoError(t, err)
-	require.Len(t, r1, 2)
-	assert.NotEqual(t, r1[0].Session.ID, r1[1].Session.ID,
+	require.NoError(err)
+	require.Len(r1, 2)
+	assert.NotEqual(r1[0].Session.ID, r1[1].Session.ID,
 		"equal-header runs disambiguate by ordinal")
 
 	// Stable across re-parse.
 	r2, err := parseAiderRuns(path, "m")
-	require.NoError(t, err)
-	require.Len(t, r2, 2)
-	assert.Equal(t, r1[0].Session.ID, r2[0].Session.ID)
-	assert.Equal(t, r1[1].Session.ID, r2[1].Session.ID)
+	require.NoError(err)
+	require.Len(r2, 2)
+	assert.Equal(r1[0].Session.ID, r2[0].Session.ID)
+	assert.Equal(r1[1].Session.ID, r2[1].Session.ID)
 }
 
 // TestAiderSessionIDStableAcrossExtractionDirs is the MEDIUM-1 regression
@@ -222,6 +232,9 @@ func TestAiderEqualHeaderRunsGetStableDistinctIDs(t *testing.T) {
 // file physically lives, while the plain on-disk parse (local behavior)
 // produces DIFFERENT IDs for the two locations.
 func TestAiderSessionIDStableAcrossExtractionDirs(t *testing.T) {
+	assert := assert.New(t)
+	parentRequire := require.New(t)
+
 	content := "# aider chat started at 2026-06-09 14:01:00\n" +
 		"#### first prompt\nanswer one\n" +
 		"# aider chat started at 2026-06-09 15:30:00\n" +
@@ -239,22 +252,22 @@ func TestAiderSessionIDStableAcrossExtractionDirs(t *testing.T) {
 	}
 	pathA := writeAt(t)
 	pathB := writeAt(t)
-	require.NotEqual(t, pathA, pathB, "the two extraction paths must differ")
+	parentRequire.NotEqual(pathA, pathB, "the two extraction paths must differ")
 
 	// The canonical identity is the remote physical path, the same for both
 	// syncs regardless of the temp extraction dir.
 	const identity = "host:/home/wes/myrepo/.aider.chat.history.md"
 
 	withIDa, err := parseAiderRunsWithID(pathA, identity, "m")
-	require.NoError(t, err)
-	require.Len(t, withIDa, 2)
+	parentRequire.NoError(err)
+	parentRequire.Len(withIDa, 2)
 	withIDb, err := parseAiderRunsWithID(pathB, identity, "m")
-	require.NoError(t, err)
-	require.Len(t, withIDb, 2)
+	parentRequire.NoError(err)
+	parentRequire.Len(withIDb, 2)
 
-	assert.Equal(t, withIDa[0].Session.ID, withIDb[0].Session.ID,
+	assert.Equal(withIDa[0].Session.ID, withIDb[0].Session.ID,
 		"identical identity path must yield a stable ID across temp dirs")
-	assert.Equal(t, withIDa[1].Session.ID, withIDb[1].Session.ID,
+	assert.Equal(withIDa[1].Session.ID, withIDb[1].Session.ID,
 		"identical identity path must yield a stable ID across temp dirs")
 
 	// Sanity: the ID is derived from the identity path, not the temp path.
@@ -262,21 +275,21 @@ func TestAiderSessionIDStableAcrossExtractionDirs(t *testing.T) {
 	// produce DIFFERENT IDs -- exactly the instability the identity path
 	// fixes. parseAiderRuns is the empty-identity passthrough.
 	localA, err := parseAiderRuns(pathA, "m")
-	require.NoError(t, err)
-	require.Len(t, localA, 2)
+	parentRequire.NoError(err)
+	parentRequire.Len(localA, 2)
 	localB, err := parseAiderRuns(pathB, "m")
-	require.NoError(t, err)
-	require.Len(t, localB, 2)
-	assert.NotEqual(t, localA[0].Session.ID, localB[0].Session.ID,
+	parentRequire.NoError(err)
+	parentRequire.Len(localB, 2)
+	assert.NotEqual(localA[0].Session.ID, localB[0].Session.ID,
 		"without an identity path the temp path leaks into the ID")
-	assert.NotEqual(t, withIDa[0].Session.ID, localA[0].Session.ID,
+	assert.NotEqual(withIDa[0].Session.ID, localA[0].Session.ID,
 		"identity-path ID differs from on-disk-path ID")
 
 	// parseAiderRunWithID (single-run) must agree with the fan-out variant.
 	single, _, err := parseAiderRunWithID(pathB, identity, 0, "m")
-	require.NoError(t, err)
-	require.NotNil(t, single)
-	assert.Equal(t, withIDa[0].Session.ID, single.ID,
+	parentRequire.NoError(err)
+	parentRequire.NotNil(single)
+	assert.Equal(withIDa[0].Session.ID, single.ID,
 		"single-run identity ID must match the fan-out identity ID")
 }
 
@@ -287,28 +300,30 @@ func TestAiderSessionIDStableAcrossExtractionDirs(t *testing.T) {
 // IDs. A same-second collision in one repo is rare; this test exists so the
 // behavior is explicit and any future change to the scheme is a conscious one.
 func TestAiderSameHeaderEarlyRemovalRekeysSiblings(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	repo := filepath.Join(dir, "myrepo")
-	require.NoError(t, os.MkdirAll(repo, 0o755))
+	require.NoError(os.MkdirAll(repo, 0o755))
 	path := filepath.Join(repo, ".aider.chat.history.md")
 
 	hdr := "# aider chat started at 2026-06-09 14:01:00\n"
 	runA := hdr + "#### prompt a\nanswer a\n"
 	runB := hdr + "#### prompt b\nanswer b\n"
 	runC := hdr + "#### prompt c\nanswer c\n"
-	require.NoError(t, os.WriteFile(path, []byte(runA+runB+runC), 0o644))
+	require.NoError(os.WriteFile(path, []byte(runA+runB+runC), 0o644))
 
 	before, err := parseAiderRuns(path, "m")
-	require.NoError(t, err)
-	require.Len(t, before, 3)
+	require.NoError(err)
+	require.Len(before, 3)
 	idB := before[1].Session.ID
 
 	// Remove the first same-header run; runs b and c each shift down one
 	// equal-header ordinal.
-	require.NoError(t, os.WriteFile(path, []byte(runB+runC), 0o644))
+	require.NoError(os.WriteFile(path, []byte(runB+runC), 0o644))
 	after, err := parseAiderRuns(path, "m")
-	require.NoError(t, err)
-	require.Len(t, after, 2)
+	require.NoError(err)
+	require.Len(after, 2)
 
 	// Documented residual: run b, now ordinal 0, takes the former ordinal-0
 	// ID, so its ID changes. A unique-header run keeps its ID instead
@@ -322,24 +337,27 @@ func TestAiderSameHeaderEarlyRemovalRekeysSiblings(t *testing.T) {
 // the root must be discovered, while one a level deeper must not. A `>=`
 // test skipped the max-depth directory before its files were seen.
 func TestDiscoverAiderFindsFilesAtMaxDepth(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	atCap := filepath.Join(root, "a", "b", "c", "d")        // parent depth 4
 	tooDeep := filepath.Join(root, "a", "b", "c", "d", "e") // parent depth 5
-	require.NoError(t, os.MkdirAll(atCap, 0o755))
-	require.NoError(t, os.MkdirAll(tooDeep, 0o755))
+	require.NoError(os.MkdirAll(atCap, 0o755))
+	require.NoError(os.MkdirAll(tooDeep, 0o755))
 	hist := "# aider chat started at 2026-06-09 14:01:00\n#### p\nans\n"
 	atCapFile := filepath.Join(atCap, ".aider.chat.history.md")
 	tooDeepFile := filepath.Join(tooDeep, ".aider.chat.history.md")
-	require.NoError(t, os.WriteFile(atCapFile, []byte(hist), 0o644))
-	require.NoError(t, os.WriteFile(tooDeepFile, []byte(hist), 0o644))
+	require.NoError(os.WriteFile(atCapFile, []byte(hist), 0o644))
+	require.NoError(os.WriteFile(tooDeepFile, []byte(hist), 0o644))
 
 	var paths []string
 	for _, f := range discoverAiderSessions(root) {
 		paths = append(paths, f.Path)
 	}
-	assert.Contains(t, paths, atCapFile,
+	assert.Contains(paths, atCapFile,
 		"a history file at the max walk depth must be discovered")
-	assert.NotContains(t, paths, tooDeepFile,
+	assert.NotContains(paths, tooDeepFile,
 		"a history file below the max walk depth must not be discovered")
 }
 
@@ -349,30 +367,33 @@ func TestDiscoverAiderFindsFilesAtMaxDepth(t *testing.T) {
 // re-resolves to the run's new index by raw ID (the engine fast-path
 // correctness fix).
 func TestAiderRawIDAtDetectsShiftedIndex(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	repo := filepath.Join(dir, "myrepo")
-	require.NoError(t, os.MkdirAll(repo, 0o755))
+	require.NoError(os.MkdirAll(repo, 0o755))
 	path := filepath.Join(repo, ".aider.chat.history.md")
 
 	run0 := "# aider chat started at 2026-06-09 14:01:00\n#### first\nans1\n"
 	run1 := "# aider chat started at 2026-06-09 15:30:00\n#### second\nans2\n"
-	require.NoError(t, os.WriteFile(path, []byte(run0+run1), 0o644))
+	require.NoError(os.WriteFile(path, []byte(run0+run1), 0o644))
 
 	// run1's raw ID, as stored under the virtual path "<path>#1".
 	id1, ok := AiderRawIDAt(path, 1)
-	require.True(t, ok)
+	require.True(ok)
 	_, ok = AiderRawIDAt(path, 5)
-	assert.False(t, ok, "out-of-range index returns false")
+	assert.False(ok, "out-of-range index returns false")
 
 	// Remove the first run; index 1 is now out of range, so the stored
 	// positional path can no longer be trusted by recomputed ID.
-	require.NoError(t, os.WriteFile(path, []byte(run1), 0o644))
+	require.NoError(os.WriteFile(path, []byte(run1), 0o644))
 	_, ok = AiderRawIDAt(path, 1)
-	assert.False(t, ok, "stale index 1 no longer recomputes to a run")
+	assert.False(ok, "stale index 1 no longer recomputes to a run")
 
 	// Re-resolution by raw ID finds run1 at its new index 0.
 	resolved := findAiderSourceFile(dir, id1)
-	assert.Equal(t, AiderVirtualPath(path, 0), resolved,
+	assert.Equal(AiderVirtualPath(path, 0), resolved,
 		"re-resolving by raw ID locates the run at its shifted index")
 }
 
@@ -404,6 +425,9 @@ func TestParseAiderTimestamp(t *testing.T) {
 }
 
 func TestSplitAiderRuns(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	content := "junk before any header\n" +
 		"# aider chat started at 2026-06-09 14:01:00\n" +
 		"#### hi\n" +
@@ -413,22 +437,24 @@ func TestSplitAiderRuns(t *testing.T) {
 		"#### again\n"
 
 	runs := splitAiderRuns(content)
-	require.Len(t, runs, 3, "empty middle run keeps its slot")
+	require.Len(runs, 3, "empty middle run keeps its slot")
 
 	first, ok := parseAiderTimestamp("2026-06-09 14:01:00")
-	require.True(t, ok)
-	assert.Equal(t, first, runs[0].started)
-	assert.Equal(t, "2026-06-09 14:01:00", runs[0].rawHeader)
-	assert.Contains(t, runs[0].body, "#### hi")
-	assert.Empty(t, runs[1].body, "header-only run has empty body")
+	require.True(ok)
+	assert.Equal(first, runs[0].started)
+	assert.Equal("2026-06-09 14:01:00", runs[0].rawHeader)
+	assert.Contains(runs[0].body, "#### hi")
+	assert.Empty(runs[1].body, "header-only run has empty body")
 
 	// Bytes before the first header are dropped.
 	for _, r := range runs {
-		assert.NotContains(t, r.body, "junk before any header")
+		assert.NotContains(r.body, "junk before any header")
 	}
 }
 
 func TestParseAiderTurnsToolAndEditedFiles(t *testing.T) {
+	assert := assert.New(t)
+
 	body := "#### fix the bug\n" +
 		"Here is the fix.\n" +
 		"Some prose.\n" +
@@ -445,34 +471,35 @@ func TestParseAiderTurnsToolAndEditedFiles(t *testing.T) {
 		roles[i] = m.Role
 	}
 	// user, assistant prose, then the tool block surfaced as assistant.
-	assert.Equal(t,
-		[]RoleType{RoleUser, RoleAssistant, RoleAssistant}, roles)
-	assert.Equal(t, "fix the bug", msgs[0].Content)
-	assert.Contains(t, msgs[1].Content, "Here is the fix.")
-	assert.Empty(t, msgs[1].SourceSubtype)
-	assert.Contains(t, msgs[2].Content, "Applied edit to src/a.py")
-	assert.Equal(t, SourceSubtypeToolResult, msgs[2].SourceSubtype,
+	assert.Equal([]RoleType{RoleUser, RoleAssistant, RoleAssistant}, roles)
+	assert.Equal("fix the bug", msgs[0].Content)
+	assert.Contains(msgs[1].Content, "Here is the fix.")
+	assert.Empty(msgs[1].SourceSubtype)
+	assert.Contains(msgs[2].Content, "Applied edit to src/a.py")
+	assert.Equal(SourceSubtypeToolResult, msgs[2].SourceSubtype,
 		"the tool block is tool output even though it is surfaced as assistant text")
 
 	// Dedup; dry-run and skip lines contribute nothing.
-	assert.Equal(t, []string{"src/a.py", "src/b.py"}, touched)
+	assert.Equal([]string{"src/a.py", "src/b.py"}, touched)
 
 	for _, m := range msgs {
-		assert.True(t, m.Timestamp.IsZero())
+		assert.True(m.Timestamp.IsZero())
 	}
 }
 
 func TestParseAiderTurnsBlankLinesDoNotSplit(t *testing.T) {
+	assert := assert.New(t)
+
 	body := "#### q\n" +
 		"para one\n" +
 		"\n" +
 		"para two\n"
 	msgs, _ := parseAiderTurns(body)
 	require.Len(t, msgs, 2)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.Contains(t, msgs[1].Content, "para one")
-	assert.Contains(t, msgs[1].Content, "para two")
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal(RoleAssistant, msgs[1].Role)
+	assert.Contains(msgs[1].Content, "para one")
+	assert.Contains(msgs[1].Content, "para two")
 }
 
 func TestParseAiderRunsEmptyAndGarbage(t *testing.T) {
@@ -500,28 +527,31 @@ func TestParseAiderRunsEmptyAndGarbage(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			require := require.New(t)
+
 			repo := filepath.Join(dir, c.name)
-			require.NoError(t, os.MkdirAll(repo, 0o755))
+			require.NoError(os.MkdirAll(repo, 0o755))
 			path := filepath.Join(repo, ".aider.chat.history.md")
-			require.NoError(t,
-				os.WriteFile(path, []byte(c.content), 0o644))
+			require.NoError(os.WriteFile(path, []byte(c.content), 0o644))
 
 			results, err := parseAiderRuns(path, "m")
-			require.NoError(t, err) // never panics, never hard-errors
+			require.NoError(err) // never panics, never hard-errors
 			assert.Len(t, results, c.wantCount)
 		})
 	}
 }
 
 func TestAiderVirtualPathRoundTrip(t *testing.T) {
+	assert := assert.New(t)
+
 	hist := filepath.Join("repo", ".aider.chat.history.md")
 	vp := AiderVirtualPath(hist, 3)
-	assert.Equal(t, hist+"#3", vp)
+	assert.Equal(hist+"#3", vp)
 
 	gotPath, gotIdx, ok := ParseAiderVirtualPath(vp)
 	require.True(t, ok)
-	assert.Equal(t, hist, gotPath)
-	assert.Equal(t, 3, gotIdx)
+	assert.Equal(hist, gotPath)
+	assert.Equal(3, gotIdx)
 
 	// Non-virtual / invalid inputs are rejected.
 	cases := []string{
@@ -534,7 +564,7 @@ func TestAiderVirtualPathRoundTrip(t *testing.T) {
 	}
 	for _, in := range cases {
 		_, _, ok := ParseAiderVirtualPath(in)
-		assert.False(t, ok, "should reject %q", in)
+		assert.False(ok, "should reject %q", in)
 	}
 }
 
@@ -544,55 +574,61 @@ func TestAiderVirtualPathRoundTrip(t *testing.T) {
 // in with AIDER_DIR or aider_dirs. ShallowWatch must stay true so a configured
 // broad root is watched only at the root, relying on the periodic sync.
 func TestAiderRegistryOptInDiscovery(t *testing.T) {
+	assert := assert.New(t)
+
 	def, ok := AgentByType(AgentAider)
 	require.True(t, ok, "AgentAider missing from Registry")
-	assert.Empty(t, def.DefaultDirs,
+	assert.Empty(def.DefaultDirs,
 		"aider must not be discovered by default; opt in via AIDER_DIR/aider_dirs")
-	assert.True(t, def.ShallowWatch,
+	assert.True(def.ShallowWatch,
 		"aider must watch an opt-in broad root shallowly, not recurse all of it")
 	// The shallow-watch contract relies on no static subdir or custom
 	// watch-roots wiring overriding it.
-	assert.Empty(t, def.WatchSubdirs)
-	assert.Nil(t, def.WatchRootsFunc)
+	assert.Empty(def.WatchSubdirs)
+	assert.Nil(def.WatchRootsFunc)
 }
 
 func TestDiscoverAiderSessions(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 
 	// A repo with a history file at its root.
 	repo := filepath.Join(root, "proj")
-	require.NoError(t, os.MkdirAll(repo, 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(repo, 0o755))
+	require.NoError(os.WriteFile(
 		filepath.Join(repo, ".aider.chat.history.md"),
 		[]byte("# aider chat started at 2026-06-09 14:01:00\n"), 0o644))
 	// A sibling non-matching file must never be picked up.
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(repo, "README.md"), []byte("x\n"), 0o644))
 
 	// A history file buried in a skipped dir must be ignored.
 	skip := filepath.Join(repo, "node_modules", "dep")
-	require.NoError(t, os.MkdirAll(skip, 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(skip, 0o755))
+	require.NoError(os.WriteFile(
 		filepath.Join(skip, ".aider.chat.history.md"),
 		[]byte("# aider chat started at 2026-06-09 14:01:00\n"), 0o644))
 
 	files := discoverAiderSessions(root)
-	require.Len(t, files, 1, "found repo file, skipped node_modules")
-	assert.Equal(t, AgentAider, files[0].Agent)
-	assert.Equal(t, aiderHistoryFile, filepath.Base(files[0].Path))
+	require.Len(files, 1, "found repo file, skipped node_modules")
+	assert.Equal(AgentAider, files[0].Agent)
+	assert.Equal(aiderHistoryFile, filepath.Base(files[0].Path))
 
 	// Empty root is tolerated.
-	assert.Empty(t, discoverAiderSessions(""))
+	assert.Empty(discoverAiderSessions(""))
 }
 
 func TestAiderShouldSkipProtectedHomeDirsOnlyOnDarwinHomeRoot(t *testing.T) {
+	assert := assert.New(t)
+
 	home := filepath.Join(string(os.PathSeparator), "home", "user")
 
-	assert.True(t, aiderShouldSkipProtectedHomeDirs(home, home, "darwin"))
-	assert.False(t, aiderShouldSkipProtectedHomeDirs(home, home, "linux"))
-	assert.False(t, aiderShouldSkipProtectedHomeDirs(home, home, "windows"))
-	assert.False(t,
-		aiderShouldSkipProtectedHomeDirs(filepath.Join(home, "Documents"), home, "darwin"),
+	assert.True(aiderShouldSkipProtectedHomeDirs(home, home, "darwin"))
+	assert.False(aiderShouldSkipProtectedHomeDirs(home, home, "linux"))
+	assert.False(aiderShouldSkipProtectedHomeDirs(home, home, "windows"))
+	assert.False(aiderShouldSkipProtectedHomeDirs(filepath.Join(home, "Documents"), home, "darwin"),
 		"explicit protected roots are user-scoped opt-ins")
 }
 
@@ -612,6 +648,8 @@ func TestAiderProtectedHomeDirsCoversMacOSTCCPrompts(t *testing.T) {
 }
 
 func TestAiderBroadHomeWalkRootsExcludeMacOSProtectedDirs(t *testing.T) {
+	assert := assert.New(t)
+
 	home := t.TempDir()
 	for _, name := range []string{"Code", "Documents", "Downloads"} {
 		require.NoError(t, os.Mkdir(filepath.Join(home, name), 0o755))
@@ -619,11 +657,11 @@ func TestAiderBroadHomeWalkRootsExcludeMacOSProtectedDirs(t *testing.T) {
 
 	roots := aiderDiscoveryWalkRoots(home, home, "darwin")
 
-	assert.Contains(t, roots, filepath.Join(home, "Code"))
-	assert.NotContains(t, roots, home,
+	assert.Contains(roots, filepath.Join(home, "Code"))
+	assert.NotContains(roots, home,
 		"broad Aider home discovery must not recursively walk $HOME on macOS")
-	assert.NotContains(t, roots, filepath.Join(home, "Documents"))
-	assert.NotContains(t, roots, filepath.Join(home, "Downloads"))
+	assert.NotContains(roots, filepath.Join(home, "Documents"))
+	assert.NotContains(roots, filepath.Join(home, "Downloads"))
 }
 
 func TestDiscoverAiderSessionsSkipsMacOSProtectedDirs(t *testing.T) {
@@ -653,17 +691,19 @@ func TestDiscoverAiderSessionsSkipsMacOSProtectedDirs(t *testing.T) {
 }
 
 func TestDiscoverAiderSessionsAllowsExplicitProtectedRoot(t *testing.T) {
+	require := require.New(t)
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	documentsRoot := filepath.Join(home, "Documents")
 	repo := filepath.Join(documentsRoot, "proj")
-	require.NoError(t, os.MkdirAll(repo, 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(repo, 0o755))
+	require.NoError(os.WriteFile(
 		filepath.Join(repo, ".aider.chat.history.md"),
 		[]byte("# aider chat started at 2026-06-09 14:01:00\n"), 0o644))
 
 	files := discoverAiderSessions(documentsRoot)
-	require.Len(t, files, 1, "explicit Aider roots should still be scanned")
+	require.Len(files, 1, "explicit Aider roots should still be scanned")
 	assert.Equal(t, filepath.Join(repo, ".aider.chat.history.md"), files[0].Path)
 }
 
@@ -672,14 +712,17 @@ func TestDiscoverAiderSessionsAllowsExplicitProtectedRoot(t *testing.T) {
 // discovery walk completes well within it. The budget is checked inside
 // the WalkDir callback and returns filepath.SkipAll once exceeded.
 func TestAiderWalkBudget(t *testing.T) {
-	assert.Equal(t, 2*time.Second, aiderWalkBudget,
+	assert := assert.New(t)
+	require := require.New(t)
+
+	assert.Equal(2*time.Second, aiderWalkBudget,
 		"budget mirrors the Rust adapter's WALK_BUDGET_SECS")
 
 	root := t.TempDir()
 	// A small but multi-level tree with one history file.
 	deep := filepath.Join(root, "a", "b", "c")
-	require.NoError(t, os.MkdirAll(deep, 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(deep, 0o755))
+	require.NoError(os.WriteFile(
 		filepath.Join(deep, ".aider.chat.history.md"),
 		[]byte("# aider chat started at 2026-06-09 14:01:00\n#### hi\nok\n"),
 		0o644))
@@ -687,39 +730,42 @@ func TestAiderWalkBudget(t *testing.T) {
 	start := time.Now()
 	files := discoverAiderSessions(root)
 	elapsed := time.Since(start)
-	assert.Less(t, elapsed, aiderWalkBudget,
+	assert.Less(elapsed, aiderWalkBudget,
 		"a normal walk finishes well under budget")
-	require.Len(t, files, 1)
+	require.Len(files, 1)
 }
 
 func TestFindAiderSourceFile(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	repo := filepath.Join(root, "myrepo")
-	require.NoError(t, os.MkdirAll(repo, 0o755))
+	require.NoError(os.MkdirAll(repo, 0o755))
 	hist := filepath.Join(repo, ".aider.chat.history.md")
 	content := "# aider chat started at 2026-06-09 14:01:00\n" +
 		"#### first\nanswer one\n" +
 		"# aider chat started at 2026-06-09 15:30:00\n" +
 		"#### second\nanswer two\n"
-	require.NoError(t, os.WriteFile(hist, []byte(content), 0o644))
+	require.NoError(os.WriteFile(hist, []byte(content), 0o644))
 
 	// Parse the runs to learn the real per-run raw IDs.
 	results, err := parseAiderRuns(hist, "m")
-	require.NoError(t, err)
-	require.Len(t, results, 2)
+	require.NoError(err)
+	require.Len(results, 2)
 
 	for i, r := range results {
 		rawID := r.Session.ID[len(aiderIDPrefix):]
 		found := findAiderSourceFile(root, rawID)
-		require.NotEmpty(t, found, "run %d should resolve", i)
+		require.NotEmpty(found, "run %d should resolve", i)
 		gotPath, gotIdx, ok := ParseAiderVirtualPath(found)
-		require.True(t, ok)
-		assert.Equal(t, aiderHistoryFile, filepath.Base(gotPath))
-		assert.Equal(t, i, gotIdx, "run %d resolves to run index %d", i, i)
+		require.True(ok)
+		assert.Equal(aiderHistoryFile, filepath.Base(gotPath))
+		assert.Equal(i, gotIdx, "run %d resolves to run index %d", i, i)
 	}
 
-	assert.Empty(t, findAiderSourceFile(root, "nonexistent-id"))
-	assert.Empty(t, findAiderSourceFile("", "anything"))
+	assert.Empty(findAiderSourceFile(root, "nonexistent-id"))
+	assert.Empty(findAiderSourceFile("", "anything"))
 }
 
 // A run header with trailing whitespace must resolve to one identity
@@ -728,40 +774,43 @@ func TestFindAiderSourceFile(t *testing.T) {
 // same run gets a second session ID and the original is tombstoned
 // during reconciliation.
 func TestAiderTrailingWhitespaceHeaderKeepsOneIdentity(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "project", ".aider.chat.history.md")
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
 	content := "# aider chat started at 2024-01-02 03:04:05 \n" +
 		"\n#### first prompt\nfirst answer\n" +
 		"# aider chat started at 2024-01-02 03:04:05 \n" +
 		"\n#### second prompt\nsecond answer\n"
-	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	require.NoError(os.WriteFile(path, []byte(content), 0o644))
 
 	full, err := parseAiderRuns(path, "local")
-	require.NoError(t, err)
-	require.Len(t, full, 2)
+	require.NoError(err)
+	require.Len(full, 2)
 
 	for idx, want := range full {
 		sess, _, err := parseAiderRun(path, idx, "local")
-		require.NoError(t, err)
-		require.NotNil(t, sess)
-		assert.Equal(t, want.Session.ID, sess.ID,
+		require.NoError(err)
+		require.NotNil(sess)
+		assert.Equal(want.Session.ID, sess.ID,
 			"single-run scan must derive the same identity as the full split")
 	}
 
 	var streamed []string
-	require.NoError(t, streamAiderRunIndexes(
+	require.NoError(streamAiderRunIndexes(
 		t.Context(), path, "",
 		func(_ int, rawID string) error {
 			streamed = append(streamed, rawID)
 			return nil
 		},
 	))
-	require.Len(t, streamed, 2)
+	require.Len(streamed, 2)
 	for idx, want := range full {
-		assert.Equal(t, want.Session.ID, aiderIDPrefix+streamed[idx],
+		assert.Equal(want.Session.ID, aiderIDPrefix+streamed[idx],
 			"streamed discovery must derive the same identity as the full split")
 	}
 }

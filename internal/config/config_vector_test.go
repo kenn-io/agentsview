@@ -247,60 +247,65 @@ func TestVectorConfigValidate(t *testing.T) {
 }
 
 func TestVectorEmbeddingsServerResolution(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	c := validVectorConfig().Embeddings
 
 	name, server, err := c.Server("")
-	require.NoError(t, err)
-	assert.Equal(t, "local", name, "empty name resolves to default_server")
-	assert.Equal(t, "http://localhost:11434/v1", server.Endpoint)
+	require.NoError(err)
+	assert.Equal("local", name, "empty name resolves to default_server")
+	assert.Equal("http://localhost:11434/v1", server.Endpoint)
 
 	name, server, err = c.Server("remote")
-	require.NoError(t, err)
-	assert.Equal(t, "remote", name)
-	assert.Equal(t, "http://build-box:30000/v1", server.Endpoint)
+	require.NoError(err)
+	assert.Equal("remote", name)
+	assert.Equal("http://build-box:30000/v1", server.Endpoint)
 
 	_, _, err = c.Server("nope")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `no server named "nope"`)
-	assert.Contains(t, err.Error(), "local, remote", "error lists the defined servers")
+	require.Error(err)
+	assert.Contains(err.Error(), `no server named "nope"`)
+	assert.Contains(err.Error(), "local, remote", "error lists the defined servers")
 
 	c.DefaultServer = ""
 	delete(c.Servers, "remote")
 	name, _, err = c.Server("")
-	require.NoError(t, err)
-	assert.Equal(t, "local", name, "a single server is the implicit default")
+	require.NoError(err)
+	assert.Equal("local", name, "a single server is the implicit default")
 }
 
 func TestVectorConfigDefaults(t *testing.T) {
+	assert := assert.New(t)
+
 	cfg, err := Default()
 	require.NoError(t, err)
 
-	assert.Equal(t, 8192, cfg.Vector.Embeddings.MaxInputChars)
-	assert.Empty(t, cfg.Vector.Embeddings.Servers)
-	assert.True(t, cfg.Vector.Embed.RunAfterSyncEnabled(),
+	assert.Equal(8192, cfg.Vector.Embeddings.MaxInputChars)
+	assert.Empty(cfg.Vector.Embeddings.Servers)
+	assert.True(cfg.Vector.Embed.RunAfterSyncEnabled(),
 		"run_after_sync defaults to true when unset")
-	assert.False(t, cfg.Vector.Embed.Recall,
+	assert.False(cfg.Vector.Embed.Recall,
 		"automatic Recall embedding requires explicit opt-in")
 
 	disabled := false
 	cfg.Vector.Embed.RunAfterSync = &disabled
-	assert.False(t, cfg.Vector.Embed.RunAfterSyncEnabled(),
+	assert.False(cfg.Vector.Embed.RunAfterSyncEnabled(),
 		"explicit false overrides the default")
 
-	assert.Equal(t, filepath.Join(cfg.DataDir, "vectors.db"),
+	assert.Equal(filepath.Join(cfg.DataDir, "vectors.db"),
 		cfg.Vector.ResolvedDBPath(cfg.DataDir), "falls back to <dataDir>/vectors.db")
 
 	cfg.Vector.DBPath = "/custom/path/vec.db"
-	assert.Equal(t, "/custom/path/vec.db", cfg.Vector.ResolvedDBPath(cfg.DataDir),
+	assert.Equal("/custom/path/vec.db", cfg.Vector.ResolvedDBPath(cfg.DataDir),
 		"explicit db_path overrides the fallback")
 }
 
 func TestVectorConfigAPIKeyEnv(t *testing.T) {
 	server := VectorEmbeddingsServerConfig{}
-	assert.Equal(t, "", server.APIKey(), "no env var configured")
+	assert.Empty(t, server.APIKey(), "no env var configured")
 
 	server.APIKeyEnv = "AGENTSVIEW_TEST_VECTOR_API_KEY"
-	assert.Equal(t, "", server.APIKey(), "configured env var not set in environment")
+	assert.Empty(t, server.APIKey(), "configured env var not set in environment")
 
 	t.Setenv("AGENTSVIEW_TEST_VECTOR_API_KEY", "secret-123")
 	assert.Equal(t, "secret-123", server.APIKey())
@@ -322,6 +327,8 @@ func minimalServers() map[string]any {
 // explicitly override a zero-value field like max_retries.
 func TestVectorConfigTOMLLoad(t *testing.T) {
 	t.Run("unset server fields keep defaults, explicit zero overrides", func(t *testing.T) {
+		assert := assert.New(t)
+
 		cfg := loadMinimalWithConfig(t, map[string]any{
 			"vector": map[string]any{
 				"enabled": true,
@@ -341,21 +348,21 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 		})
 		require.True(t, cfg.Vector.Enabled)
 		server := cfg.Vector.Embeddings.Servers["local"]
-		assert.Equal(t, "http://localhost:11434/v1", server.Endpoint)
-		assert.Equal(t, 32, server.BatchSize, "unset batch_size keeps default")
-		assert.Equal(t, 4, server.Concurrency, "unset concurrency keeps default")
-		assert.Equal(t, "30s", server.Timeout, "unset timeout keeps default")
-		assert.Equal(t, 0, server.MaxRetries, "explicit max_retries=0 overrides default")
-		assert.Equal(t, 120000, server.MaxBatchTokens)
-		assert.Equal(t, 8192, cfg.Vector.Embeddings.MaxInputChars, "unset max_input_chars keeps default")
-		assert.Equal(t, 32000, cfg.Vector.Embeddings.ModelContextTokens)
-		assert.Equal(t, "24h", cfg.Vector.Embed.BackstopInterval, "unset backstop_interval keeps default")
-		assert.False(t, cfg.Vector.IncludeAutomated, "unset include_automated keeps the false default")
-		assert.Empty(t, cfg.Vector.Embeddings.QueryPrefix, "unset query_prefix defaults to empty")
-		assert.Empty(t, cfg.Vector.Embeddings.DocumentPrefix,
+		assert.Equal("http://localhost:11434/v1", server.Endpoint)
+		assert.Equal(32, server.BatchSize, "unset batch_size keeps default")
+		assert.Equal(4, server.Concurrency, "unset concurrency keeps default")
+		assert.Equal("30s", server.Timeout, "unset timeout keeps default")
+		assert.Equal(0, server.MaxRetries, "explicit max_retries=0 overrides default")
+		assert.Equal(120000, server.MaxBatchTokens)
+		assert.Equal(8192, cfg.Vector.Embeddings.MaxInputChars, "unset max_input_chars keeps default")
+		assert.Equal(32000, cfg.Vector.Embeddings.ModelContextTokens)
+		assert.Equal("24h", cfg.Vector.Embed.BackstopInterval, "unset backstop_interval keeps default")
+		assert.False(cfg.Vector.IncludeAutomated, "unset include_automated keeps the false default")
+		assert.Empty(cfg.Vector.Embeddings.QueryPrefix, "unset query_prefix defaults to empty")
+		assert.Empty(cfg.Vector.Embeddings.DocumentPrefix,
 			"unset document_prefix defaults to empty")
-		assert.Empty(t, cfg.Vector.Embeddings.InputSuffix, "unset input_suffix defaults to empty")
-		assert.False(t, cfg.Vector.Embeddings.RequestDimensions,
+		assert.Empty(cfg.Vector.Embeddings.InputSuffix, "unset input_suffix defaults to empty")
+		assert.False(cfg.Vector.Embeddings.RequestDimensions,
 			"unset request_dimensions keeps the false default")
 	})
 
@@ -414,6 +421,9 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 	})
 
 	t.Run("named servers with default_server load and resolve", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		cfg := loadMinimalWithConfig(t, map[string]any{
 			"vector": map[string]any{
 				"enabled": true,
@@ -435,19 +445,19 @@ func TestVectorConfigTOMLLoad(t *testing.T) {
 				},
 			},
 		})
-		assert.Equal(t, "<|endoftext|>", cfg.Vector.Embeddings.InputSuffix)
-		assert.Equal(t, "local", cfg.Vector.Embeddings.DefaultServer)
+		assert.Equal("<|endoftext|>", cfg.Vector.Embeddings.InputSuffix)
+		assert.Equal("local", cfg.Vector.Embeddings.DefaultServer)
 
 		name, server, err := cfg.Vector.Embeddings.Server("")
-		require.NoError(t, err)
-		assert.Equal(t, "local", name)
-		assert.Equal(t, "http://127.0.0.1:30000/v1", server.Endpoint)
+		require.NoError(err)
+		assert.Equal("local", name)
+		assert.Equal("http://127.0.0.1:30000/v1", server.Endpoint)
 
 		_, remote, err := cfg.Vector.Embeddings.Server("remote")
-		require.NoError(t, err)
-		assert.Equal(t, "300s", remote.Timeout, "per-server timeout override")
-		assert.Equal(t, 6, remote.Concurrency, "per-server concurrency override")
-		assert.Equal(t, 32, remote.BatchSize, "unset per-server batch_size keeps default")
+		require.NoError(err)
+		assert.Equal("300s", remote.Timeout, "per-server timeout override")
+		assert.Equal(6, remote.Concurrency, "per-server concurrency override")
+		assert.Equal(32, remote.BatchSize, "unset per-server batch_size keeps default")
 	})
 
 	t.Run("include_automated true is loaded", func(t *testing.T) {

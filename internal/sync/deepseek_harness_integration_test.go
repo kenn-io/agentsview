@@ -20,13 +20,16 @@ import (
 )
 
 func TestDeepSeekHarnessSyncReplacesPartialResponseAndDeduplicatesSeedUsage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
 
 	root := t.TempDir()
 	database := dbtest.OpenTestDB(t)
-	require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{
+	require.NoError(database.UpsertModelPricing([]db.ModelPricing{
 		{
 			ModelPattern:  "deepseek-chat",
 			InputPerMTok:  money.MustParseDollars("1"),
@@ -66,12 +69,12 @@ func TestDeepSeekHarnessSyncReplacesPartialResponseAndDeduplicatesSeedUsage(t *t
 
 	parentID := "deepseek-harness:parent"
 	messages, err := database.GetMessages(t.Context(), parentID, 0, 20, true)
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	assert.Equal(t, "draft reply", messages[1].Content)
+	require.NoError(err)
+	require.Len(messages, 2)
+	assert.Equal("draft reply", messages[1].Content)
 	untouched, err := database.GetSession(t.Context(), "deepseek-harness:untouched")
-	require.NoError(t, err)
-	assert.Nil(t, untouched, "single-path sync must not scan a sibling session")
+	require.NoError(err)
+	assert.Nil(untouched, "single-path sync must not scan a sibling session")
 
 	finalEvents := []any{
 		harnessSyncEvent(6, "assistant/message", harnessSyncAssistant(
@@ -98,27 +101,27 @@ func TestDeepSeekHarnessSyncReplacesPartialResponseAndDeduplicatesSeedUsage(t *t
 	engine.SyncPaths([]string{parentPath})
 
 	messages, err = database.GetMessages(t.Context(), parentID, 0, 20, true)
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	assert.Equal(t, "final reply", messages[1].Content)
-	assert.NotContains(t, messages[1].Content, "draft")
-	assert.Empty(t, messages[1].TokenUsage,
+	require.NoError(err)
+	require.Len(messages, 2)
+	assert.Equal("final reply", messages[1].Content)
+	assert.NotContains(messages[1].Content, "draft")
+	assert.Empty(messages[1].TokenUsage,
 		"the usage event must be the only persisted analytics row")
-	assert.Equal(t, 5, messages[1].OutputTokens)
+	assert.Equal(5, messages[1].OutputTokens)
 	daily, err := database.GetDailyUsage(t.Context(), db.UsageFilter{
 		From: "2023-11-14", To: "2023-11-14",
 		Agent: "deepseek-harness", Timezone: "UTC",
 	})
-	require.NoError(t, err)
-	require.NotNil(t, daily.Pricing)
-	require.Contains(t, daily.Pricing.Models, "deepseek-chat")
+	require.NoError(err)
+	require.NotNil(daily.Pricing)
+	require.Contains(daily.Pricing.Models, "deepseek-chat")
 	chatPricing := daily.Pricing.Models["deepseek-chat"]
-	require.Len(t, chatPricing.Resolutions, 1)
-	assert.Equal(t, 1,
+	require.Len(chatPricing.Resolutions, 1)
+	assert.Equal(1,
 		chatPricing.Resolutions[0].Application.BaseRequestCount,
 		"one model response must produce one priced request")
-	assert.Equal(t, 30, daily.Totals.InputTokens)
-	assert.Equal(t, 8, daily.Totals.OutputTokens)
+	assert.Equal(30, daily.Totals.InputTokens)
+	assert.Equal(8, daily.Totals.OutputTokens)
 
 	childEvents := append([]any(nil), parentEvents...)
 	childEvents = append(childEvents,
@@ -140,26 +143,29 @@ func TestDeepSeekHarnessSyncReplacesPartialResponseAndDeduplicatesSeedUsage(t *t
 	engine.SyncPaths([]string{childPath})
 
 	parentUsage, err := database.GetSessionUsage(t.Context(), parentID, true)
-	require.NoError(t, err)
-	require.NotNil(t, parentUsage)
-	assert.Equal(t, 8, parentUsage.TotalOutputTokens)
+	require.NoError(err)
+	require.NotNil(parentUsage)
+	assert.Equal(8, parentUsage.TotalOutputTokens)
 	childUsage, err := database.GetSessionUsage(
 		t.Context(), "deepseek-harness:child", true,
 	)
-	require.NoError(t, err)
-	require.NotNil(t, childUsage)
-	assert.Equal(t, 2, childUsage.TotalOutputTokens)
+	require.NoError(err)
+	require.NotNil(childUsage)
+	assert.Equal(2, childUsage.TotalOutputTokens)
 
-	require.NoError(t, os.Remove(parentPath))
+	require.NoError(os.Remove(parentPath))
 	engine.SyncPaths([]string{parentPath})
 	removed, err := database.GetSession(t.Context(), parentID)
-	require.NoError(t, err)
-	assert.NotNil(t, removed)
+	require.NoError(err)
+	assert.NotNil(removed)
 
-	require.NoError(t, os.Remove(siblingPath))
+	require.NoError(os.Remove(siblingPath))
 }
 
 func TestDeepSeekHarnessSyncRetainsMixedEncodingSessionAndSwitchesAfterDeletion(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -180,9 +186,9 @@ func TestDeepSeekHarnessSyncRetainsMixedEncodingSessionAndSwitchesAfterDeletion(
 
 	const sessionID = "deepseek-harness:encoding-switch"
 	messages, err := database.GetMessages(t.Context(), sessionID, 0, 20, true)
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	assert.Equal(t, "zstd transcript", messages[1].Content)
+	require.NoError(err)
+	require.Len(messages, 2)
+	assert.Equal("zstd transcript", messages[1].Content)
 
 	plainPath := harnessSyncWriteLogEncoding(
 		t, root, "encoding-switch", "plain", nil,
@@ -190,18 +196,18 @@ func TestDeepSeekHarnessSyncRetainsMixedEncodingSessionAndSwitchesAfterDeletion(
 	)
 	engine.SyncPaths([]string{plainPath})
 	messages, err = database.GetMessages(t.Context(), sessionID, 0, 20, true)
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	assert.Equal(t, "zstd transcript", messages[1].Content,
+	require.NoError(err)
+	require.Len(messages, 2)
+	assert.Equal("zstd transcript", messages[1].Content,
 		"a mixed-encoding directory must retain the last valid parse")
 
-	require.NoError(t, os.Remove(zstdPath))
+	require.NoError(os.Remove(zstdPath))
 	engine.SyncPaths([]string{zstdPath})
 	messages, err = database.GetMessages(t.Context(), sessionID, 0, 20, true)
-	require.NoError(t, err)
-	require.Len(t, messages, 2)
-	assert.Equal(t, "plain transcript", messages[1].Content)
-	assert.Equal(t, plainPath, database.GetSessionFilePath(sessionID))
+	require.NoError(err)
+	require.Len(messages, 2)
+	assert.Equal("plain transcript", messages[1].Content)
+	assert.Equal(plainPath, database.GetSessionFilePath(sessionID))
 }
 
 func harnessSyncWriteLog(

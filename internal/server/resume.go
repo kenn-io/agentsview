@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -448,7 +449,7 @@ func detectTerminalDarwin(
 		)
 		return "osascript", []string{"-e", appleScript}, "Terminal", nil
 	}
-	return "", nil, "", fmt.Errorf("osascript not found on macOS")
+	return "", nil, "", errors.New("osascript not found on macOS")
 }
 
 // readSessionCwd reads the first few lines of a session JSONL file
@@ -724,9 +725,8 @@ func detectTerminalLinux(cmd string) (string, []string, string, error) {
 		return path, buildTerminalArgs(c.bin, cmd), c.bin, nil
 	}
 
-	return "", nil, "", fmt.Errorf(
-		"no terminal emulator found; install kitty, alacritty, " +
-			"gnome-terminal, or set $TERMINAL",
+	return "", nil, "", errors.New("no terminal emulator found; install kitty, alacritty, " +
+		"gnome-terminal, or set $TERMINAL",
 	)
 }
 

@@ -19,6 +19,8 @@ func fakeClock(start time.Time) (now func() time.Time, step func(time.Duration))
 }
 
 func TestStartupStateRoundTrip(t *testing.T) {
+	assert := assert.New(t)
+
 	setTestVersion(t, "v1.2.3-test")
 	dir := t.TempDir()
 	base := time.Date(2026, 7, 2, 22, 0, 0, 0, time.UTC)
@@ -29,17 +31,20 @@ func TestStartupStateRoundTrip(t *testing.T) {
 
 	st := readStartupState(dir)
 	require.NotNil(t, st, "state must be readable after SetPhase")
-	assert.Equal(t, os.Getpid(), st.PID)
-	assert.Equal(t, "v1.2.3-test", st.Version)
-	assert.NotEmpty(t, st.CreateTime)
-	assert.True(t, processCreateTimeMatches(st.PID, st.CreateTime))
-	assert.Equal(t, "opening database", st.Phase)
-	assert.Empty(t, st.Detail)
-	assert.True(t, st.StartedAt.Equal(base), "started_at = %v", st.StartedAt)
-	assert.True(t, st.UpdatedAt.Equal(base), "updated_at = %v", st.UpdatedAt)
+	assert.Equal(os.Getpid(), st.PID)
+	assert.Equal("v1.2.3-test", st.Version)
+	assert.NotEmpty(st.CreateTime)
+	assert.True(processCreateTimeMatches(st.PID, st.CreateTime))
+	assert.Equal("opening database", st.Phase)
+	assert.Empty(st.Detail)
+	assert.True(st.StartedAt.Equal(base), "started_at = %v", st.StartedAt)
+	assert.True(st.UpdatedAt.Equal(base), "updated_at = %v", st.UpdatedAt)
 }
 
 func TestStartupStateDetailThrottle(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	now, step := fakeClock(time.Date(2026, 7, 2, 22, 0, 0, 0, time.UTC))
 
@@ -50,43 +55,45 @@ func TestStartupStateDetailThrottle(t *testing.T) {
 	// though the phase snapshot was just written.
 	w.SetDetail("1/100 sessions")
 	st := readStartupState(dir)
-	require.NotNil(t, st)
-	assert.Equal(t, "1/100 sessions", st.Detail)
+	require.NotNil(st)
+	assert.Equal("1/100 sessions", st.Detail)
 
 	// Repeating a phase must not clear its detail or bypass the throttle for a
 	// counter-only update.
 	w.SetPhase("full resync")
 	w.SetDetail("2/100 sessions")
 	st = readStartupState(dir)
-	require.NotNil(t, st)
-	assert.Equal(t, "1/100 sessions", st.Detail)
+	require.NotNil(st)
+	assert.Equal("1/100 sessions", st.Detail)
 
 	// Past the window the next detail persists.
 	step(startupDetailThrottle)
 	w.SetDetail("50/100 sessions")
 	st = readStartupState(dir)
-	require.NotNil(t, st)
-	assert.Equal(t, "50/100 sessions", st.Detail)
+	require.NotNil(st)
+	assert.Equal("50/100 sessions", st.Detail)
 
 	// A phase change bypasses the throttle and clears the detail.
 	w.SetDetail("60/100 sessions")
 	w.SetPhase("starting HTTP server")
 	st = readStartupState(dir)
-	require.NotNil(t, st)
-	assert.Equal(t, "starting HTTP server", st.Phase)
-	assert.Empty(t, st.Detail)
+	require.NotNil(st)
+	assert.Equal("starting HTTP server", st.Phase)
+	assert.Empty(st.Detail)
 }
 
 func TestStartupStatePublishesManagedCaddyIdentity(t *testing.T) {
+	assert := assert.New(t)
+
 	dir := t.TempDir()
 	w := newStartupStateWriter(dir, time.Now)
 	w.SetCaddyProcess(os.Getpid())
 
 	st := readStartupState(dir)
 	require.NotNil(t, st)
-	assert.Equal(t, os.Getpid(), st.CaddyPID)
-	assert.NotEmpty(t, st.CaddyCreateTime)
-	assert.True(t, processCreateTimeMatches(st.CaddyPID, st.CaddyCreateTime))
+	assert.Equal(os.Getpid(), st.CaddyPID)
+	assert.NotEmpty(st.CaddyCreateTime)
+	assert.True(processCreateTimeMatches(st.CaddyPID, st.CaddyCreateTime))
 }
 
 func TestReadStartupStateMissingOrCorrupt(t *testing.T) {

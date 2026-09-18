@@ -32,7 +32,7 @@ func TestWithTimeout(t *testing.T) {
 			operation: "GET /test",
 			timeout:   10 * time.Millisecond,
 			handler: func(w http.ResponseWriter, r *http.Request) {
-				time.Sleep(50 * time.Millisecond)
+				<-r.Context().Done()
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte("too slow"))
 			},
@@ -75,7 +75,7 @@ func TestWithTimeout(t *testing.T) {
 				// A timeout returns before the handler finishes; join it while time can still advance.
 				defer func() { <-handlerDone }()
 
-				req := httptest.NewRequest(http.MethodGet, "/", nil)
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 				w := httptest.NewRecorder()
 				wrapped.ServeHTTP(w, req)
 
@@ -104,6 +104,8 @@ func TestWithTimeout(t *testing.T) {
 }
 
 func TestTimeoutBodyParity(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Parallel()
 
 	operation := "GET /api/v1/sessions"
@@ -113,8 +115,8 @@ func TestTimeoutBodyParity(t *testing.T) {
 
 	var je jsonError
 	require.NoError(t, json.Unmarshal([]byte(msg), &je))
-	assert.Equal(t, "request timed out", je.Error)
-	assert.Contains(t, je.Detail, operation)
-	assert.Contains(t, je.Detail, "30s")
-	assert.Contains(t, je.Detail, "--write-timeout")
+	assert.Equal("request timed out", je.Error)
+	assert.Contains(je.Detail, operation)
+	assert.Contains(je.Detail, "30s")
+	assert.Contains(je.Detail, "--write-timeout")
 }

@@ -26,6 +26,8 @@ func startTestScheduler(t *testing.T, jobs ...Job) *Scheduler {
 
 func TestBackoffCapsAndRecovers(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		assert := assert.New(t)
+
 		base := time.Now()
 		var calls atomic.Int32
 		s := startTestScheduler(t, Job{
@@ -48,19 +50,21 @@ func TestBackoffCapsAndRecovers(t *testing.T) {
 		} {
 			time.Sleep(time.Until(base.Add(time.Duration(step.at) * time.Minute)))
 			synctest.Wait()
-			assert.Equal(t, int32(i+1), calls.Load())
+			assert.Equal(int32(i+1), calls.Load())
 			status := s.Status()[0]
-			assert.Equal(t, step.failures, status.ConsecutiveFailures)
-			assert.Equal(t, base.Add(time.Duration(step.at)*time.Minute), status.LastAttempt)
-			assert.Equal(t, base.Add(time.Duration(step.next)*time.Minute), status.NextRun)
+			assert.Equal(step.failures, status.ConsecutiveFailures)
+			assert.Equal(base.Add(time.Duration(step.at)*time.Minute), status.LastAttempt)
+			assert.Equal(base.Add(time.Duration(step.next)*time.Minute), status.NextRun)
 		}
-		assert.Empty(t, s.Status()[0].LastError)
-		assert.Equal(t, base.Add(47*time.Minute), s.Status()[0].LastSuccess)
+		assert.Empty(s.Status()[0].LastError)
+		assert.Equal(base.Add(47*time.Minute), s.Status()[0].LastSuccess)
 	})
 }
 
 func TestCooldownAndManualOverride(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		assert := assert.New(t)
+
 		base := time.Now()
 		var calls atomic.Int32
 		s := startTestScheduler(t, Job{
@@ -76,22 +80,24 @@ func TestCooldownAndManualOverride(t *testing.T) {
 		synctest.Wait()
 		time.Sleep(9 * time.Minute)
 		synctest.Wait()
-		assert.Equal(t, int32(1), calls.Load(), "failed attempts still start cooldown")
-		assert.Equal(t, base.Add(10*time.Minute), s.Status()[0].NextRun)
+		assert.Equal(int32(1), calls.Load(), "failed attempts still start cooldown")
+		assert.Equal(base.Add(10*time.Minute), s.Status()[0].NextRun)
 
 		require.NoError(t, s.TriggerNow("catalog"))
-		assert.Equal(t, int32(2), calls.Load())
+		assert.Equal(int32(2), calls.Load())
 		time.Sleep(9 * time.Minute)
 		synctest.Wait()
-		assert.Equal(t, int32(2), calls.Load(), "successful manual attempts also start cooldown")
+		assert.Equal(int32(2), calls.Load(), "successful manual attempts also start cooldown")
 		time.Sleep(time.Minute)
 		synctest.Wait()
-		assert.Equal(t, int32(3), calls.Load())
+		assert.Equal(int32(3), calls.Load())
 	})
 }
 
 func TestRetryAfterOverridesBackoffAndJitter(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		assert := assert.New(t)
+
 		base := time.Now()
 		var calls atomic.Int32
 		retry := &RetryAfterError{RetryAfter: 3 * time.Minute, Err: errors.New("rate limited")}
@@ -103,18 +109,21 @@ func TestRetryAfterOverridesBackoffAndJitter(t *testing.T) {
 			},
 		})
 		require.ErrorIs(t, s.TriggerNow("vendor"), retry)
-		assert.Equal(t, base.Add(3*time.Minute), s.Status()[0].NextRun)
+		assert.Equal(base.Add(3*time.Minute), s.Status()[0].NextRun)
 		time.Sleep(3*time.Minute - time.Nanosecond)
 		synctest.Wait()
-		assert.Equal(t, int32(1), calls.Load())
+		assert.Equal(int32(1), calls.Load())
 		time.Sleep(time.Nanosecond)
 		synctest.Wait()
-		assert.Equal(t, int32(2), calls.Load())
+		assert.Equal(int32(2), calls.Load())
 	})
 }
 
 func TestJitterAndIndependentJobs(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		base := time.Now()
 		var scheduledCalls atomic.Int32
 		s := startTestScheduler(t,
@@ -127,28 +136,31 @@ func TestJitterAndIndependentJobs(t *testing.T) {
 		)
 		synctest.Wait()
 		statuses := s.Status()
-		require.Len(t, statuses, 2)
-		assert.Equal(t, "scheduled", statuses[0].Name)
-		assert.Equal(t, "manual", statuses[1].Name)
+		require.Len(statuses, 2)
+		assert.Equal("scheduled", statuses[0].Name)
+		assert.Equal("manual", statuses[1].Name)
 		next := statuses[0].NextRun
-		assert.GreaterOrEqual(t, next.Sub(base), time.Hour)
-		assert.Less(t, next.Sub(base), time.Hour+30*time.Second)
-		require.NoError(t, s.TriggerNow("manual"))
-		assert.Equal(t, base, s.Status()[1].LastSuccess)
-		assert.Zero(t, scheduledCalls.Load())
+		assert.GreaterOrEqual(next.Sub(base), time.Hour)
+		assert.Less(next.Sub(base), time.Hour+30*time.Second)
+		require.NoError(s.TriggerNow("manual"))
+		assert.Equal(base, s.Status()[1].LastSuccess)
+		assert.Zero(scheduledCalls.Load())
 
 		time.Sleep(time.Until(next))
 		synctest.Wait()
-		assert.Equal(t, int32(1), scheduledCalls.Load())
-		assert.Equal(t, next, s.Status()[0].LastSuccess)
+		assert.Equal(int32(1), scheduledCalls.Load())
+		assert.Equal(next, s.Status()[0].LastSuccess)
 		delay := s.Status()[0].NextRun.Sub(next)
-		assert.GreaterOrEqual(t, delay, time.Hour)
-		assert.Less(t, delay, time.Hour+30*time.Second)
+		assert.GreaterOrEqual(delay, time.Hour)
+		assert.Less(delay, time.Hour+30*time.Second)
 	})
 }
 
 func TestTriggersSerializeAndStop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		ctx, cancel := context.WithCancel(t.Context())
 		release := make(chan struct{})
 		var calls atomic.Int32
@@ -173,24 +185,24 @@ func TestTriggersSerializeAndStop(t *testing.T) {
 			go func() { results <- s.TriggerNow("vendor") }()
 			synctest.Wait()
 		}
-		assert.Equal(t, time.Now(), s.Status()[0].LastAttempt)
-		assert.Equal(t, int32(1), calls.Load(), "pending trigger must not overlap Run")
-		require.ErrorContains(t, s.TriggerNow("vendor"), "trigger pending")
-		require.ErrorIs(t, s.TriggerNow("missing"), ErrUnknownJob)
+		assert.Equal(time.Now(), s.Status()[0].LastAttempt)
+		assert.Equal(int32(1), calls.Load(), "pending trigger must not overlap Run")
+		require.ErrorContains(s.TriggerNow("vendor"), "trigger pending")
+		require.ErrorIs(s.TriggerNow("missing"), ErrUnknownJob)
 
 		release <- struct{}{}
 		synctest.Wait()
-		require.NoError(t, <-results)
-		assert.Equal(t, int32(2), calls.Load(), "queued call starts after the active call finishes")
+		require.NoError(<-results)
+		assert.Equal(int32(2), calls.Load(), "queued call starts after the active call finishes")
 		go func() { results <- s.TriggerNow("vendor") }()
 		synctest.Wait()
 		cancel()
 		synctest.Wait()
 		for range 2 {
-			require.ErrorIs(t, <-results, context.Canceled)
+			require.ErrorIs(<-results, context.Canceled)
 		}
 		s.Wait()
-		assert.Equal(t, int32(2), calls.Load(), "shutdown must not start the queued call")
-		assert.ErrorIs(t, s.TriggerNow("vendor"), context.Canceled)
+		assert.Equal(int32(2), calls.Load(), "shutdown must not start the queued call")
+		assert.ErrorIs(s.TriggerNow("vendor"), context.Canceled)
 	})
 }

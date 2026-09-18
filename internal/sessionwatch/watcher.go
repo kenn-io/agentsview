@@ -108,7 +108,7 @@ func (w *Watcher) Events(
 		var lastFileMtime int64
 		var fileMtimeChangedAt time.Time
 		if sourcePath != "" {
-			lastFileMtime = w.engine.SourceMtime(sessionID)
+			lastFileMtime = w.engine.SourceMtime(ctx, sessionID)
 		}
 
 		ticker := time.NewTicker(pollInterval())
@@ -119,7 +119,7 @@ func (w *Watcher) Events(
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				changed := w.checkDBForChanges(
+				changed := w.checkDBForChanges(ctx,
 					sessionID,
 					&lastCount,
 					&lastDBVersion,
@@ -172,7 +172,7 @@ func (w *Watcher) pollDBOnly(
 // checkDBForChanges polls the database for a session version change.
 // As a fallback, it monitors source file mtime and triggers a direct
 // sync when the watcher hasn't updated the DB.
-func (w *Watcher) checkDBForChanges(
+func (w *Watcher) checkDBForChanges(ctx context.Context,
 	sessionID string,
 	lastCount *int,
 	lastDBVersion *int64,
@@ -199,14 +199,14 @@ func (w *Watcher) checkDBForChanges(
 		if *sourcePath == "" {
 			return false
 		}
-		*lastFileMtime = w.engine.SourceMtime(sessionID)
+		*lastFileMtime = w.engine.SourceMtime(ctx, sessionID)
 		// Source file (re-)resolved — trigger fallback sync
 		// immediately since content likely differs from DB.
 		past := time.Now().Add(-syncFallbackDelay())
 		*fileMtimeChangedAt = past
 	}
 
-	mtime := w.engine.SourceMtime(sessionID)
+	mtime := w.engine.SourceMtime(ctx, sessionID)
 	if mtime == 0 {
 		// File disappeared; try to re-resolve later.
 		*sourcePath = ""

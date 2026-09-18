@@ -1065,7 +1065,7 @@ func (b *httpBackend) QueryRecallEntries(
 		return nil, err
 	}
 	if req.StrictRecording {
-		return nil, fmt.Errorf("strict recall recording requires a direct backend")
+		return nil, errors.New("strict recall recording requires a direct backend")
 	}
 	mode := db.NormalizeRecallQuery(db.RecallQuery{Mode: req.Mode}).Mode
 	httpClient := b.client

@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -59,6 +58,8 @@ func TestSyncPathsCommandCode(t *testing.T) {
 }
 
 func TestSyncPathsCommandCodeMetaArrivalTriggersResync(t *testing.T) {
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -76,8 +77,8 @@ func TestSyncPathsCommandCodeMetaArrivalTriggersResync(t *testing.T) {
 	projectDir := filepath.Join(commandCodeDir, "users-alice-code-sample-project")
 	jsonlPath := filepath.Join(projectDir, sessionID+".jsonl")
 	metaPath := filepath.Join(projectDir, sessionID+".meta.json")
-	require.NoError(t, os.MkdirAll(projectDir, 0o755), "MkdirAll(%q)", projectDir)
-	require.NoError(t, os.WriteFile(jsonlPath, []byte(
+	require.NoError(os.MkdirAll(projectDir, 0o755), "MkdirAll(%q)", projectDir)
+	require.NoError(os.WriteFile(jsonlPath, []byte(
 		`{"id":"m1","timestamp":"2026-06-01T10:00:00Z","sessionId":"adc026b4-c620-43e4-8cc4-295593889d18","role":"user","content":[{"type":"text","text":"Inspect server logs"}],"gitBranch":"feature/command-code","metadata":{"version":2}}
 {"id":"m2","timestamp":"2026-06-01T10:00:01Z","sessionId":"adc026b4-c620-43e4-8cc4-295593889d18","role":"assistant","content":[{"type":"text","text":"The error is in startup."}],"gitBranch":"feature/command-code","metadata":{"version":2}}
 `), 0o644), "WriteFile(%q)", jsonlPath)
@@ -90,12 +91,12 @@ func TestSyncPathsCommandCodeMetaArrivalTriggersResync(t *testing.T) {
 
 	// Ensure the later meta file is included in the effective snapshot and
 	// reparses the unchanged transcript to fill fallback cwd/project metadata.
-	require.NoError(t, os.WriteFile(metaPath, []byte(`{"title":"Startup investigation","cwd":"/Users/alice/code/sample-project"}`), 0o644), "WriteFile(meta)")
-	require.NoError(t, os.Chtimes(metaPath, time.Now().Add(2*time.Second), time.Now().Add(2*time.Second)))
+	require.NoError(os.WriteFile(metaPath, []byte(`{"title":"Startup investigation","cwd":"/Users/alice/code/sample-project"}`), 0o644), "WriteFile(meta)")
+	require.NoError(os.Chtimes(metaPath, time.Now().Add(2*time.Second), time.Now().Add(2*time.Second)))
 
 	engine.SyncPaths([]string{metaPath})
 	assertSessionState(t, testDB, "commandcode:"+sessionID, func(sess *db.Session) {
-		require.NotNil(t, sess.DisplayName)
+		require.NotNil(sess.DisplayName)
 		assert.Equal(t, "Startup investigation", *sess.DisplayName)
 		assert.Equal(t, "sample_project", sess.Project)
 		assert.Equal(t, "/Users/alice/code/sample-project", sess.Cwd)
@@ -103,6 +104,8 @@ func TestSyncPathsCommandCodeMetaArrivalTriggersResync(t *testing.T) {
 }
 
 func TestSyncAllSinceCommandCodeMetaArrivalTriggersResync(t *testing.T) {
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -120,8 +123,8 @@ func TestSyncAllSinceCommandCodeMetaArrivalTriggersResync(t *testing.T) {
 	projectDir := filepath.Join(commandCodeDir, "users-alice-code-sample-project")
 	jsonlPath := filepath.Join(projectDir, sessionID+".jsonl")
 	metaPath := filepath.Join(projectDir, sessionID+".meta.json")
-	require.NoError(t, os.MkdirAll(projectDir, 0o755), "MkdirAll(%q)", projectDir)
-	require.NoError(t, os.WriteFile(jsonlPath, []byte(
+	require.NoError(os.MkdirAll(projectDir, 0o755), "MkdirAll(%q)", projectDir)
+	require.NoError(os.WriteFile(jsonlPath, []byte(
 		`{"id":"m1","timestamp":"2026-06-01T10:00:00Z","sessionId":"adc026b4-c620-43e4-8cc4-295593889d18","role":"user","content":[{"type":"text","text":"Inspect server logs"}],"gitBranch":"feature/command-code","metadata":{"version":2}}
 {"id":"m2","timestamp":"2026-06-01T10:00:01Z","sessionId":"adc026b4-c620-43e4-8cc4-295593889d18","role":"assistant","content":[{"type":"text","text":"The error is in startup."}],"gitBranch":"feature/command-code","metadata":{"version":2}}
 `), 0o644), "WriteFile(%q)", jsonlPath)
@@ -134,14 +137,14 @@ func TestSyncAllSinceCommandCodeMetaArrivalTriggersResync(t *testing.T) {
 
 	cutoff := time.Now()
 	time.Sleep(10 * time.Millisecond)
-	require.NoError(t, os.WriteFile(metaPath, []byte(`{"title":"Startup investigation","cwd":"/Users/alice/code/sample-project"}`), 0o644), "WriteFile(meta)")
-	require.NoError(t, os.Chtimes(metaPath, time.Now().Add(2*time.Second), time.Now().Add(2*time.Second)))
+	require.NoError(os.WriteFile(metaPath, []byte(`{"title":"Startup investigation","cwd":"/Users/alice/code/sample-project"}`), 0o644), "WriteFile(meta)")
+	require.NoError(os.Chtimes(metaPath, time.Now().Add(2*time.Second), time.Now().Add(2*time.Second)))
 
-	stats := engine.SyncAllSince(context.Background(), cutoff, nil)
-	require.Equal(t, 1, stats.Synced, "synced = %d, want 1", stats.Synced)
+	stats := engine.SyncAllSince(t.Context(), cutoff, nil)
+	require.Equal(1, stats.Synced, "synced = %d, want 1", stats.Synced)
 
 	assertSessionState(t, testDB, "commandcode:"+sessionID, func(sess *db.Session) {
-		require.NotNil(t, sess.DisplayName)
+		require.NotNil(sess.DisplayName)
 		assert.Equal(t, "Startup investigation", *sess.DisplayName)
 		assert.Equal(t, "sample_project", sess.Project)
 		assert.Equal(t, "/Users/alice/code/sample-project", sess.Cwd)
@@ -149,6 +152,8 @@ func TestSyncAllSinceCommandCodeMetaArrivalTriggersResync(t *testing.T) {
 }
 
 func TestSourceMtimeCommandCodeIncludesMetaMtime(t *testing.T) {
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -166,18 +171,18 @@ func TestSourceMtimeCommandCodeIncludesMetaMtime(t *testing.T) {
 	projectDir := filepath.Join(commandCodeDir, "users-alice-code-sample-project")
 	jsonlPath := filepath.Join(projectDir, sessionID+".jsonl")
 	metaPath := filepath.Join(projectDir, sessionID+".meta.json")
-	require.NoError(t, os.MkdirAll(projectDir, 0o755), "MkdirAll(%q)", projectDir)
-	require.NoError(t, os.WriteFile(jsonlPath, []byte(
+	require.NoError(os.MkdirAll(projectDir, 0o755), "MkdirAll(%q)", projectDir)
+	require.NoError(os.WriteFile(jsonlPath, []byte(
 		`{"id":"m1","timestamp":"2026-06-01T10:00:00Z","sessionId":"adc026b4-c620-43e4-8cc4-295593889d18","role":"user","content":[{"type":"text","text":"Inspect server logs"}],"metadata":{"version":2}}
 `), 0o644), "WriteFile(%q)", jsonlPath)
-	require.NoError(t, os.WriteFile(metaPath, []byte(`{"title":"Startup investigation"}`), 0o644), "WriteFile(meta)")
+	require.NoError(os.WriteFile(metaPath, []byte(`{"title":"Startup investigation"}`), 0o644), "WriteFile(meta)")
 
 	jsonlTime := time.Unix(1_717_238_800, 0)
 	metaTime := jsonlTime.Add(5 * time.Second)
-	require.NoError(t, os.Chtimes(jsonlPath, jsonlTime, jsonlTime))
-	require.NoError(t, os.Chtimes(metaPath, metaTime, metaTime))
+	require.NoError(os.Chtimes(jsonlPath, jsonlTime, jsonlTime))
+	require.NoError(os.Chtimes(metaPath, metaTime, metaTime))
 
 	engine.SyncPaths([]string{jsonlPath})
 	assert.Equal(t, metaTime.UnixNano(),
-		engine.SourceMtime("commandcode:"+sessionID))
+		engine.SourceMtime(t.Context(), "commandcode:"+sessionID))
 }

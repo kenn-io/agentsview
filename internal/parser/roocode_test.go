@@ -22,9 +22,12 @@ func jsonNumberPtr(value string) *jsontext.Value {
 }
 
 func TestParseRooCodeSession(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-123")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	// Create history_item.json
 	historyItem := rooCodeHistoryItem{
@@ -40,10 +43,10 @@ func TestParseRooCodeSession(t *testing.T) {
 		Status:    "completed",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Create ui_messages.json matching real RooCode format:
@@ -78,48 +81,51 @@ func TestParseRooCodeSession(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	// Parse
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// Assertions
-	assert.Contains(t, sess.ID, "roocode:test-task-123")
-	assert.Equal(t, AgentRooCode, sess.Agent)
+	assert.Contains(sess.ID, "roocode:test-task-123")
+	assert.Equal(AgentRooCode, sess.Agent)
 
 	// Messages: user task (1) + assistant text (1) + assistant tool call (1) + assistant text (1) = 4
-	assert.Equal(t, 4, sess.MessageCount)
+	assert.Equal(4, sess.MessageCount)
 
 	// User messages: only the initial task (message [0])
 	// tool calls and command_output are NOT user messages
-	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(1, sess.UserMessageCount)
 
 	// Verify roles
-	assert.Equal(t, RoleUser, msgs[0].Role, "message [0] should be user (initial task)")
-	assert.Equal(t, RoleAssistant, msgs[1].Role, "message [1] should be assistant")
-	assert.Equal(t, RoleAssistant, msgs[2].Role, "message [2] should be assistant (tool call)")
-	assert.True(t, msgs[2].HasToolUse, "message [2] should have tool use")
+	assert.Equal(RoleUser, msgs[0].Role, "message [0] should be user (initial task)")
+	assert.Equal(RoleAssistant, msgs[1].Role, "message [1] should be assistant")
+	assert.Equal(RoleAssistant, msgs[2].Role, "message [2] should be assistant (tool call)")
+	assert.True(msgs[2].HasToolUse, "message [2] should have tool use")
 
-	assert.Equal(t, "/Users/test/project", sess.Cwd)
-	assert.Equal(t, "Test task description", sess.SessionName)
+	assert.Equal("/Users/test/project", sess.Cwd)
+	assert.Equal("Test task description", sess.SessionName)
 	// PeakContextTokens is derived from api_req_started entries,
 	// not from the cumulative tokensIn in history_item.json.
 	// This test has no api_req_started messages, so peak is 0.
-	assert.Equal(t, 0, sess.PeakContextTokens)
-	assert.False(t, sess.HasPeakContextTokens)
-	assert.Equal(t, 200, sess.TotalOutputTokens)
-	assert.True(t, sess.HasTotalOutputTokens)
+	assert.Equal(0, sess.PeakContextTokens)
+	assert.False(sess.HasPeakContextTokens)
+	assert.Equal(200, sess.TotalOutputTokens)
+	assert.True(sess.HasTotalOutputTokens)
 }
 
 func TestParseRooCodeSessionWithPartialMessages(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-456")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	// Create history_item.json
 	historyItem := rooCodeHistoryItem{
@@ -133,10 +139,10 @@ func TestParseRooCodeSessionWithPartialMessages(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Create ui_messages.json with partial messages
@@ -162,27 +168,30 @@ func TestParseRooCodeSessionWithPartialMessages(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	// Parse
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// Partial message should be skipped: user task + complete = 2
-	assert.Equal(t, 2, sess.MessageCount)
-	assert.Equal(t, 1, sess.UserMessageCount)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Equal(2, sess.MessageCount)
+	assert.Equal(1, sess.UserMessageCount)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal(RoleAssistant, msgs[1].Role)
 }
 
 func TestParseRooCodeSessionWithReasoning(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-789")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-789",
@@ -194,10 +203,10 @@ func TestParseRooCodeSessionWithReasoning(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Message with reasoning text.
@@ -217,28 +226,31 @@ func TestParseRooCodeSessionWithReasoning(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// User task + thinking message + assistant answer = 3
-	assert.Equal(t, 3, sess.MessageCount)
-	assert.Equal(t, 1, sess.UserMessageCount)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.True(t, msgs[1].HasThinking, "message [1] should be thinking")
-	assert.Contains(t, msgs[1].Content, "I need to think about this...")
-	assert.Equal(t, RoleAssistant, msgs[2].Role)
+	assert.Equal(3, sess.MessageCount)
+	assert.Equal(1, sess.UserMessageCount)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.True(msgs[1].HasThinking, "message [1] should be thinking")
+	assert.Contains(msgs[1].Content, "I need to think about this...")
+	assert.Equal(RoleAssistant, msgs[2].Role)
 }
 
 func TestParseRooCodeSessionWithAPIConfigModel(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-model")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:            "test-task-model",
@@ -254,10 +266,10 @@ func TestParseRooCodeSessionWithAPIConfigModel(t *testing.T) {
 		APIConfigName: "anthropic/claude-sonnet-4",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -275,29 +287,29 @@ func TestParseRooCodeSessionWithAPIConfigModel(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// Usage event should have the model, tokens, and cost.
-	require.Len(t, sess.UsageEvents, 1)
-	assert.Equal(t, "anthropic/claude-sonnet-4", sess.UsageEvents[0].Model)
-	assert.Equal(t, "session", sess.UsageEvents[0].Source)
-	assert.Equal(t, 100, sess.UsageEvents[0].InputTokens)
-	assert.Equal(t, 200, sess.UsageEvents[0].OutputTokens)
-	assert.Equal(t, 50, sess.UsageEvents[0].CacheReadInputTokens)
-	assert.Equal(t, 30, sess.UsageEvents[0].CacheCreationInputTokens)
-	require.NotNil(t, sess.UsageEvents[0].Cost)
-	assert.Equal(t, money.Money{Microdollars: 50_000}, *sess.UsageEvents[0].Cost)
+	require.Len(sess.UsageEvents, 1)
+	assert.Equal("anthropic/claude-sonnet-4", sess.UsageEvents[0].Model)
+	assert.Equal("session", sess.UsageEvents[0].Source)
+	assert.Equal(100, sess.UsageEvents[0].InputTokens)
+	assert.Equal(200, sess.UsageEvents[0].OutputTokens)
+	assert.Equal(50, sess.UsageEvents[0].CacheReadInputTokens)
+	assert.Equal(30, sess.UsageEvents[0].CacheCreationInputTokens)
+	require.NotNil(sess.UsageEvents[0].Cost)
+	assert.Equal(money.Money{Microdollars: 50_000}, *sess.UsageEvents[0].Cost)
 
 	// Model should be set on every parsed message.
 	for _, msg := range msgs {
-		assert.Equal(t, "anthropic/claude-sonnet-4", msg.Model,
+		assert.Equal("anthropic/claude-sonnet-4", msg.Model,
 			"every message should have the model set")
 	}
 }
@@ -335,9 +347,12 @@ func TestParseRooCodeSessionCostPresence(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			tmpDir := t.TempDir()
 			taskDir := filepath.Join(tmpDir, "tasks", "test-cost")
-			require.NoError(t, os.MkdirAll(taskDir, 0755))
+			require.NoError(os.MkdirAll(taskDir, 0o755))
 
 			historyItem := rooCodeHistoryItem{
 				ID:            "test-cost",
@@ -351,10 +366,10 @@ func TestParseRooCodeSessionCostPresence(t *testing.T) {
 				APIConfigName: "local/llama",
 			}
 			historyJSON, err := json.Marshal(historyItem)
-			require.NoError(t, err)
-			require.NoError(t, os.WriteFile(
+			require.NoError(err)
+			require.NoError(os.WriteFile(
 				filepath.Join(taskDir, "history_item.json"),
-				historyJSON, 0644,
+				historyJSON, 0o644,
 			))
 
 			messages := []rooCodeMessage{
@@ -372,27 +387,27 @@ func TestParseRooCodeSessionCostPresence(t *testing.T) {
 				},
 			}
 			messagesJSON, err := json.Marshal(messages)
-			require.NoError(t, err)
-			require.NoError(t, os.WriteFile(
+			require.NoError(err)
+			require.NoError(os.WriteFile(
 				filepath.Join(taskDir, "ui_messages.json"),
-				messagesJSON, 0644,
+				messagesJSON, 0o644,
 			))
 
 			sess, _, err := parseRooCodeSession(taskDir, "", "")
 			if tt.wantErr != nil {
-				require.ErrorIs(t, err, tt.wantErr)
+				require.ErrorIs(err, tt.wantErr)
 				return
 			}
-			require.NoError(t, err)
+			require.NoError(err)
 
 			// Token-bearing session always emits a usage event.
-			require.Len(t, sess.UsageEvents, 1)
+			require.Len(sess.UsageEvents, 1)
 			if tt.hasCost {
-				require.NotNil(t, sess.UsageEvents[0].Cost,
+				require.NotNil(sess.UsageEvents[0].Cost,
 					"present totalCost must set Cost, including zero")
-				assert.Equal(t, tt.wantCost, *sess.UsageEvents[0].Cost)
+				assert.Equal(tt.wantCost, *sess.UsageEvents[0].Cost)
 			} else {
-				assert.Nil(t, sess.UsageEvents[0].Cost,
+				assert.Nil(sess.UsageEvents[0].Cost,
 					"absent totalCost must leave Cost nil")
 			}
 		})
@@ -400,9 +415,12 @@ func TestParseRooCodeSessionCostPresence(t *testing.T) {
 }
 
 func TestParseRooCodeSessionWithoutAPIConfigName(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-no-config")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-no-config",
@@ -414,10 +432,10 @@ func TestParseRooCodeSessionWithoutAPIConfigName(t *testing.T) {
 		TotalCost: jsonNumberPtr("0.02"),
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -435,28 +453,30 @@ func TestParseRooCodeSessionWithoutAPIConfigName(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, _, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.Len(t, sess.UsageEvents, 1)
-	assert.Equal(t, "", sess.UsageEvents[0].Model)
-	assert.Equal(t, "session", sess.UsageEvents[0].Source)
-	assert.Equal(t, 500, sess.UsageEvents[0].InputTokens)
-	assert.Equal(t, 150, sess.UsageEvents[0].OutputTokens)
-	require.NotNil(t, sess.UsageEvents[0].Cost)
-	assert.Equal(t, money.Money{Microdollars: 20_000}, *sess.UsageEvents[0].Cost)
+	require.Len(sess.UsageEvents, 1)
+	assert.Empty(sess.UsageEvents[0].Model)
+	assert.Equal("session", sess.UsageEvents[0].Source)
+	assert.Equal(500, sess.UsageEvents[0].InputTokens)
+	assert.Equal(150, sess.UsageEvents[0].OutputTokens)
+	require.NotNil(sess.UsageEvents[0].Cost)
+	assert.Equal(money.Money{Microdollars: 20_000}, *sess.UsageEvents[0].Cost)
 }
 
 func TestParseRooCodeSessionWithProjectExtraction(t *testing.T) {
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-proj")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	// Workspace points to a real git repo-like path.
 	historyItem := rooCodeHistoryItem{
@@ -469,10 +489,10 @@ func TestParseRooCodeSessionWithProjectExtraction(t *testing.T) {
 		Workspace: "/Users/test/my-awesome-project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -484,23 +504,26 @@ func TestParseRooCodeSessionWithProjectExtraction(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, _, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// Project should be derived from workspace.
 	assert.Equal(t, "my_awesome_project", sess.Project)
 }
 
 func TestParseRooCodeSessionWithoutMessages(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-empty")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-empty",
@@ -513,25 +536,28 @@ func TestParseRooCodeSessionWithoutMessages(t *testing.T) {
 		Status:    "active",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// No ui_messages.json - should still parse successfully.
 	sess, _, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.Equal(t, 0, sess.MessageCount)
-	assert.Equal(t, "roocode:test-task-empty", sess.ID)
-	assert.Equal(t, "Empty session", sess.SessionName)
+	assert.Equal(0, sess.MessageCount)
+	assert.Equal("roocode:test-task-empty", sess.ID)
+	assert.Equal("Empty session", sess.SessionName)
 }
 
 func TestParseRooCodeSessionSkipsMetadataMessages(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-meta")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-meta",
@@ -543,10 +569,10 @@ func TestParseRooCodeSessionSkipsMetadataMessages(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Include api_req_started and checkpoint_saved which should be skipped.
@@ -577,26 +603,29 @@ func TestParseRooCodeSessionSkipsMetadataMessages(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// Metadata messages should be skipped: user task + assistant = 2
-	assert.Equal(t, 2, sess.MessageCount)
-	assert.Equal(t, 1, sess.UserMessageCount)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Equal(2, sess.MessageCount)
+	assert.Equal(1, sess.UserMessageCount)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal(RoleAssistant, msgs[1].Role)
 }
 
 func TestParseRooCodeSessionToolCalls(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-tools")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:            "test-task-tools",
@@ -609,10 +638,10 @@ func TestParseRooCodeSessionToolCalls(t *testing.T) {
 		APIConfigName: "anthropic/claude-sonnet-4",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Realistic RooCode interaction with tool calls.
@@ -649,39 +678,41 @@ func TestParseRooCodeSessionToolCalls(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// User task (1) + assistant text (1) + readFile tool call (1) +
 	// assistant text (1) + appliedDiff tool call (1) = 5
-	assert.Equal(t, 5, sess.MessageCount)
-	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(5, sess.MessageCount)
+	assert.Equal(1, sess.UserMessageCount)
 
 	// Verify tool calls.
-	assert.Equal(t, RoleAssistant, msgs[2].Role)
-	assert.True(t, msgs[2].HasToolUse)
-	require.Len(t, msgs[2].ToolCalls, 1)
-	assert.Equal(t, "readFile", msgs[2].ToolCalls[0].ToolName)
+	assert.Equal(RoleAssistant, msgs[2].Role)
+	assert.True(msgs[2].HasToolUse)
+	require.Len(msgs[2].ToolCalls, 1)
+	assert.Equal("readFile", msgs[2].ToolCalls[0].ToolName)
 
-	assert.Equal(t, RoleAssistant, msgs[4].Role)
-	assert.True(t, msgs[4].HasToolUse)
-	require.Len(t, msgs[4].ToolCalls, 1)
-	assert.Equal(t, "appliedDiff", msgs[4].ToolCalls[0].ToolName)
+	assert.Equal(RoleAssistant, msgs[4].Role)
+	assert.True(msgs[4].HasToolUse)
+	require.Len(msgs[4].ToolCalls, 1)
+	assert.Equal("appliedDiff", msgs[4].ToolCalls[0].ToolName)
 
 	// Model should be set on tool call messages too.
-	assert.Equal(t, "anthropic/claude-sonnet-4", msgs[2].Model)
+	assert.Equal("anthropic/claude-sonnet-4", msgs[2].Model)
 }
 
 func TestParseRooCodeSessionRepeatedToolUseIDsUnique(t *testing.T) {
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-repeat")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:            "test-task-repeat",
@@ -695,10 +726,10 @@ func TestParseRooCodeSessionRepeatedToolUseIDsUnique(t *testing.T) {
 		APIConfigName: "anthropic/claude-sonnet-4",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Repeated readFile calls interleaved with other tools. Each
@@ -742,14 +773,14 @@ func TestParseRooCodeSessionRepeatedToolUseIDsUnique(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	var toolCallMsgs []ParsedMessage
 	for _, m := range msgs {
@@ -757,11 +788,11 @@ func TestParseRooCodeSessionRepeatedToolUseIDsUnique(t *testing.T) {
 			toolCallMsgs = append(toolCallMsgs, m)
 		}
 	}
-	require.Len(t, toolCallMsgs, 5)
+	require.Len(toolCallMsgs, 5)
 
 	ids := make([]string, 0, len(toolCallMsgs))
 	for _, m := range toolCallMsgs {
-		require.Len(t, m.ToolCalls, 1)
+		require.Len(m.ToolCalls, 1)
 		ids = append(ids, m.ToolCalls[0].ToolUseID)
 	}
 
@@ -776,9 +807,12 @@ func TestParseRooCodeSessionRepeatedToolUseIDsUnique(t *testing.T) {
 }
 
 func TestParseRooCodeSessionCommandOutput(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-cmd")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-cmd",
@@ -790,10 +824,10 @@ func TestParseRooCodeSessionCommandOutput(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -811,37 +845,40 @@ func TestParseRooCodeSessionCommandOutput(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// User task + command output (user/system with tool result) = 2
-	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(2, sess.MessageCount)
 	// command_output has IsSystem=true, so only the initial task counts
 	// as a user message.
-	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(1, sess.UserMessageCount)
 
 	// Command output should be a user message with tool results.
-	assert.Equal(t, RoleUser, msgs[1].Role)
-	assert.Equal(t, SourceSubtypeToolResult, msgs[1].SourceSubtype,
+	assert.Equal(RoleUser, msgs[1].Role)
+	assert.Equal(SourceSubtypeToolResult, msgs[1].SourceSubtype,
 		"an unpaired command_output row carries tool output as its text")
-	assert.True(t, msgs[1].IsSystem)
-	require.Len(t, msgs[1].ToolResults, 1)
-	assert.Equal(t, len("test output: all tests passed"),
+	assert.True(msgs[1].IsSystem)
+	require.Len(msgs[1].ToolResults, 1)
+	assert.Equal(len("test output: all tests passed"),
 		msgs[1].ToolResults[0].ContentLength)
-	assert.Equal(t, "test output: all tests passed",
+	assert.Equal("test output: all tests passed",
 		msgs[1].ToolResults[0].ContentRaw)
 }
 
 func TestParseRooCodeSessionEmptyCommandOutputCompletes(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-emptycmd")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-emptycmd",
@@ -851,10 +888,10 @@ func TestParseRooCodeSessionEmptyCommandOutputCompletes(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -878,29 +915,32 @@ func TestParseRooCodeSessionEmptyCommandOutputCompletes(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// The execute_command tool call must pair with the empty
 	// command_output and be marked completed (not left pending).
-	require.Len(t, msgs, 2)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	require.Len(t, msgs[1].ToolCalls, 1)
-	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
-	assert.Equal(t, "completed", msgs[1].ToolCalls[0].ResultEvents[0].Status)
-	assert.Equal(t, "", msgs[1].ToolCalls[0].ResultEvents[0].Content)
+	require.Len(msgs, 2)
+	assert.Equal(RoleAssistant, msgs[1].Role)
+	require.Len(msgs[1].ToolCalls, 1)
+	require.Len(msgs[1].ToolCalls[0].ResultEvents, 1)
+	assert.Equal("completed", msgs[1].ToolCalls[0].ResultEvents[0].Status)
+	assert.Empty(msgs[1].ToolCalls[0].ResultEvents[0].Content)
 }
 
 func TestParseRooCodeSessionResultTimestampExtendsEndedAt(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-rests")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-rests",
@@ -910,10 +950,10 @@ func TestParseRooCodeSessionResultTimestampExtendsEndedAt(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	const toolTs = 1688836860000
@@ -939,34 +979,36 @@ func TestParseRooCodeSessionResultTimestampExtendsEndedAt(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// The paired result timestamp must be recorded on the event.
-	require.Len(t, msgs, 2)
-	require.Len(t, msgs[1].ToolCalls, 1)
-	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
-	assert.Equal(t,
-		time.UnixMilli(resultTs),
+	require.Len(msgs, 2)
+	require.Len(msgs[1].ToolCalls, 1)
+	require.Len(msgs[1].ToolCalls[0].ResultEvents, 1)
+	assert.Equal(time.UnixMilli(resultTs),
 		msgs[1].ToolCalls[0].ResultEvents[0].Timestamp,
 	)
 
 	// EndedAt must reflect the result time, not the tool invocation
 	// time, so session duration is not underreported.
-	assert.Equal(t, time.UnixMilli(resultTs), sess.EndedAt)
-	assert.True(t, sess.EndedAt.After(time.UnixMilli(toolTs)))
+	assert.Equal(time.UnixMilli(resultTs), sess.EndedAt)
+	assert.True(sess.EndedAt.After(time.UnixMilli(toolTs)))
 }
 
 func TestParseRooCodeSessionEmptyReadFileResult(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-emptyread")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-emptyread",
@@ -976,10 +1018,10 @@ func TestParseRooCodeSessionEmptyReadFileResult(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -997,29 +1039,32 @@ func TestParseRooCodeSessionEmptyReadFileResult(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// readFile with an explicit empty "content" must still produce a
 	// completed result event rather than leaving the call pending.
-	require.Len(t, msgs, 2)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	require.Len(t, msgs[1].ToolCalls, 1)
-	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
-	assert.Equal(t, "completed", msgs[1].ToolCalls[0].ResultEvents[0].Status)
-	assert.Equal(t, "", msgs[1].ToolCalls[0].ResultEvents[0].Content)
+	require.Len(msgs, 2)
+	assert.Equal(RoleAssistant, msgs[1].Role)
+	require.Len(msgs[1].ToolCalls, 1)
+	require.Len(msgs[1].ToolCalls[0].ResultEvents, 1)
+	assert.Equal("completed", msgs[1].ToolCalls[0].ResultEvents[0].Status)
+	assert.Empty(msgs[1].ToolCalls[0].ResultEvents[0].Content)
 }
 
 func TestParseRooCodeSessionWithCommandAsk(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-askcmd")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-askcmd",
@@ -1031,10 +1076,10 @@ func TestParseRooCodeSessionWithCommandAsk(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1052,32 +1097,35 @@ func TestParseRooCodeSessionWithCommandAsk(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// User task + command tool call = 2
-	assert.Equal(t, 2, sess.MessageCount)
-	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(2, sess.MessageCount)
+	assert.Equal(1, sess.UserMessageCount)
 
 	// Command should be an assistant tool call.
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.True(t, msgs[1].HasToolUse)
-	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, "execute_command", msgs[1].ToolCalls[0].ToolName)
-	assert.Equal(t, "Bash", msgs[1].ToolCalls[0].Category)
-	assert.Equal(t, `{"command":"npm test"}`, msgs[1].ToolCalls[0].InputJSON)
+	assert.Equal(RoleAssistant, msgs[1].Role)
+	assert.True(msgs[1].HasToolUse)
+	require.Len(msgs[1].ToolCalls, 1)
+	assert.Equal("execute_command", msgs[1].ToolCalls[0].ToolName)
+	assert.Equal("Bash", msgs[1].ToolCalls[0].Category)
+	assert.JSONEq(`{"command":"npm test"}`, msgs[1].ToolCalls[0].InputJSON)
 }
 
 func TestParseRooCodeSessionReasoningSay(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-reasoning-say")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:            "test-task-reasoning-say",
@@ -1090,10 +1138,10 @@ func TestParseRooCodeSessionReasoningSay(t *testing.T) {
 		APIConfigName: "openai/gpt-5",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Real RooCode pattern: reasoning text is in the text field
@@ -1119,33 +1167,36 @@ func TestParseRooCodeSessionReasoningSay(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// User task + thinking message + assistant text = 3
-	assert.Equal(t, 3, sess.MessageCount)
-	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(3, sess.MessageCount)
+	assert.Equal(1, sess.UserMessageCount)
 
 	// say="reasoning" should produce a thinking block.
-	assert.True(t, msgs[1].HasThinking,
+	assert.True(msgs[1].HasThinking,
 		"say=reasoning message should be treated as thinking")
-	assert.Contains(t, msgs[1].Content,
+	assert.Contains(msgs[1].Content,
 		"I need to understand the code structure first.")
 
 	// Model should be set on the thinking message.
-	assert.Equal(t, "openai/gpt-5", msgs[1].Model)
+	assert.Equal("openai/gpt-5", msgs[1].Model)
 }
 
 func TestParseRooCodeSessionSubtaskTree(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-child")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:           "test-task-child",
@@ -1159,10 +1210,10 @@ func TestParseRooCodeSessionSubtaskTree(t *testing.T) {
 		Workspace:    "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1174,24 +1225,27 @@ func TestParseRooCodeSessionSubtaskTree(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, _, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// Should be wired as a subagent of the parent task.
-	assert.Equal(t, "roocode:parent-task-uuid-1234", sess.ParentSessionID)
-	assert.Equal(t, RelSubagent, sess.RelationshipType)
+	assert.Equal("roocode:parent-task-uuid-1234", sess.ParentSessionID)
+	assert.Equal(RelSubagent, sess.RelationshipType)
 }
 
 func TestParseRooCodeSessionWithoutParentTask(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-root")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-root",
@@ -1203,10 +1257,10 @@ func TestParseRooCodeSessionWithoutParentTask(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1218,24 +1272,27 @@ func TestParseRooCodeSessionWithoutParentTask(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, _, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// No parent — should not have a relationship.
-	assert.Equal(t, "", sess.ParentSessionID)
-	assert.Equal(t, RelNone, sess.RelationshipType)
+	assert.Empty(sess.ParentSessionID)
+	assert.Equal(RelNone, sess.RelationshipType)
 }
 
 func TestParseRooCodeSessionNewSayTypes(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-new-says")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-new-says",
@@ -1247,10 +1304,10 @@ func TestParseRooCodeSessionNewSayTypes(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1286,34 +1343,37 @@ func TestParseRooCodeSessionNewSayTypes(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// user task + error (system) + subtask_result (system) +
 	// condense_context (system) + assistant text = 5
-	assert.Equal(t, 5, sess.MessageCount)
-	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(5, sess.MessageCount)
+	assert.Equal(1, sess.UserMessageCount)
 
 	// Verify error is a system message with content preserved.
-	assert.Equal(t, RoleSystem, msgs[1].Role)
-	assert.True(t, msgs[1].IsSystem)
-	assert.Equal(t, "Something went wrong", msgs[1].Content,
+	assert.Equal(RoleSystem, msgs[1].Role)
+	assert.True(msgs[1].IsSystem)
+	assert.Equal("Something went wrong", msgs[1].Content,
 		"error message content should be preserved")
-	assert.Equal(t, RoleSystem, msgs[2].Role)
-	assert.Equal(t, RoleSystem, msgs[3].Role)
-	assert.Equal(t, RoleAssistant, msgs[4].Role)
+	assert.Equal(RoleSystem, msgs[2].Role)
+	assert.Equal(RoleSystem, msgs[3].Role)
+	assert.Equal(RoleAssistant, msgs[4].Role)
 }
 
 func TestParseRooCodeSessionSkillTool(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-skill")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-skill",
@@ -1325,10 +1385,10 @@ func TestParseRooCodeSessionSkillTool(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1346,30 +1406,32 @@ func TestParseRooCodeSessionSkillTool(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.Equal(t, 2, sess.MessageCount)
-	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(2, sess.MessageCount)
+	assert.Equal(1, sess.UserMessageCount)
 
 	// Verify skill tool call with SkillName extracted.
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.True(t, msgs[1].HasToolUse)
-	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, "skill", msgs[1].ToolCalls[0].ToolName)
-	assert.Equal(t, "obsidian", msgs[1].ToolCalls[0].SkillName)
+	assert.Equal(RoleAssistant, msgs[1].Role)
+	assert.True(msgs[1].HasToolUse)
+	require.Len(msgs[1].ToolCalls, 1)
+	assert.Equal("skill", msgs[1].ToolCalls[0].ToolName)
+	assert.Equal("obsidian", msgs[1].ToolCalls[0].SkillName)
 }
 
 func TestParseRooCodeSessionSkillToolFallbackName(t *testing.T) {
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-skill-name")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-skill-name",
@@ -1381,10 +1443,10 @@ func TestParseRooCodeSessionSkillToolFallbackName(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Uses "name" field instead of "skill".
@@ -1403,23 +1465,26 @@ func TestParseRooCodeSessionSkillToolFallbackName(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(msgs[1].ToolCalls, 1)
 	assert.Equal(t, "frontend-design", msgs[1].ToolCalls[0].SkillName)
 }
 
 func TestParseRooCodeSessionSkillFromReadFile(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-skill-read")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-skill-read",
@@ -1431,10 +1496,10 @@ func TestParseRooCodeSessionSkillFromReadFile(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1452,27 +1517,30 @@ func TestParseRooCodeSessionSkillFromReadFile(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// readFile to SKILL.md should be detected as a skill via
 	// inferToolSkillName → isCursorSkillReadTool (matches readFile).
-	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, "readFile", msgs[1].ToolCalls[0].ToolName)
-	assert.NotEmpty(t, msgs[1].ToolCalls[0].SkillName,
+	require.Len(msgs[1].ToolCalls, 1)
+	assert.Equal("readFile", msgs[1].ToolCalls[0].ToolName)
+	assert.NotEmpty(msgs[1].ToolCalls[0].SkillName,
 		"readFile to SKILL.md should infer skill name")
 }
 
 func TestParseRooCodeSessionMCPServerTool(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-mcp")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-mcp",
@@ -1484,10 +1552,10 @@ func TestParseRooCodeSessionMCPServerTool(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1505,31 +1573,34 @@ func TestParseRooCodeSessionMCPServerTool(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// user task + MCP tool call = 2
-	assert.Equal(t, 2, sess.MessageCount)
-	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(2, sess.MessageCount)
+	assert.Equal(1, sess.UserMessageCount)
 
 	// Verify MCP tool call.
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.True(t, msgs[1].HasToolUse)
-	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, "search", msgs[1].ToolCalls[0].ToolName)
-	assert.Equal(t, "MCP", msgs[1].ToolCalls[0].Category)
+	assert.Equal(RoleAssistant, msgs[1].Role)
+	assert.True(msgs[1].HasToolUse)
+	require.Len(msgs[1].ToolCalls, 1)
+	assert.Equal("search", msgs[1].ToolCalls[0].ToolName)
+	assert.Equal("MCP", msgs[1].ToolCalls[0].Category)
 }
 
 func TestParseRooCodeSessionNewTaskSubagentLink(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-parent")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	childID1 := "child-task-uuid-1111"
 	childID2 := "child-task-uuid-2222"
@@ -1545,10 +1616,10 @@ func TestParseRooCodeSessionNewTaskSubagentLink(t *testing.T) {
 		ChildIDs:  []string{childID1, childID2},
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Messages: user task, assistant text, newTask tool call 1,
@@ -1599,17 +1670,17 @@ func TestParseRooCodeSessionNewTaskSubagentLink(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// No parent — this is the orchestrator.
-	assert.Equal(t, "", sess.ParentSessionID)
+	assert.Empty(sess.ParentSessionID)
 
 	// Find the two newTask tool call messages.
 	var newTaskCalls []ParsedToolCall
@@ -1620,33 +1691,34 @@ func TestParseRooCodeSessionNewTaskSubagentLink(t *testing.T) {
 			}
 		}
 	}
-	require.Len(t, newTaskCalls, 2, "should have two newTask tool calls")
+	require.Len(newTaskCalls, 2, "should have two newTask tool calls")
 
 	// Both newTask calls should have Category="Task" so the
 	// frontend renders SubagentInline.
-	assert.Equal(t, "Task", newTaskCalls[0].Category,
+	assert.Equal("Task", newTaskCalls[0].Category,
 		"newTask should have Category=Task")
-	assert.Equal(t, "Task", newTaskCalls[1].Category,
+	assert.Equal("Task", newTaskCalls[1].Category,
 		"newTask should have Category=Task")
 
 	// First newTask should link to first child.
-	assert.Equal(t,
-		"roocode:"+childID1,
+	assert.Equal("roocode:"+childID1,
 		newTaskCalls[0].SubagentSessionID,
 		"first newTask should link to first childId",
 	)
 	// Second newTask should link to second child.
-	assert.Equal(t,
-		"roocode:"+childID2,
+	assert.Equal("roocode:"+childID2,
 		newTaskCalls[1].SubagentSessionID,
 		"second newTask should link to second childId",
 	)
 }
 
 func TestParseRooCodeSessionSubtaskResultResolvesNewTask(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-subtask-end")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	childID := "child-task-uuid-9999"
 	historyItem := rooCodeHistoryItem{
@@ -1661,10 +1733,10 @@ func TestParseRooCodeSessionSubtaskResultResolvesNewTask(t *testing.T) {
 		Status:    "completed",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// The session ends immediately after the child completes:
@@ -1690,14 +1762,14 @@ func TestParseRooCodeSessionSubtaskResultResolvesNewTask(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// The subtask_result must resolve the newTask call as completed,
 	// not be emitted as a trailing standalone system message.
@@ -1709,29 +1781,32 @@ func TestParseRooCodeSessionSubtaskResultResolvesNewTask(t *testing.T) {
 			}
 		}
 	}
-	require.NotNil(t, newTask, "newTask tool call should exist")
-	require.Len(t, newTask.ResultEvents, 1,
+	require.NotNil(newTask, "newTask tool call should exist")
+	require.Len(newTask.ResultEvents, 1,
 		"subtask_result must pair as a completed result on newTask")
-	assert.Equal(t, "completed", newTask.ResultEvents[0].Status)
-	assert.Equal(t, "Child finished the work",
+	assert.Equal("completed", newTask.ResultEvents[0].Status)
+	assert.Equal("Child finished the work",
 		newTask.ResultEvents[0].Content)
 
 	// A completed parent ending on child completion must not be
 	// misreported as tool_call_pending.
-	assert.NotEqual(t, TerminationToolCallPending, sess.TerminationStatus,
+	assert.NotEqual(TerminationToolCallPending, sess.TerminationStatus,
 		"resolved newTask must not leave the session tool_call_pending")
-	assert.Equal(t, TerminationClean, sess.TerminationStatus)
+	assert.Equal(TerminationClean, sess.TerminationStatus)
 
 	// EndedAt must include the subtask_result timestamp even though it
 	// is consumed during pairing and not emitted as a message.
-	assert.Equal(t, time.UnixMilli(1688836870000).UTC(),
+	assert.Equal(time.UnixMilli(1688836870000).UTC(),
 		sess.EndedAt.UTC())
 }
 
 func TestParseRooCodeSessionCompletedByChildResolvesNewTask(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-completedby")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	childID := "child-task-uuid-8888"
 	historyItem := rooCodeHistoryItem{
@@ -1747,10 +1822,10 @@ func TestParseRooCodeSessionCompletedByChildResolvesNewTask(t *testing.T) {
 		Status:             "completed",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// No subtask_result message; completion is recorded only via
@@ -1770,14 +1845,14 @@ func TestParseRooCodeSessionCompletedByChildResolvesNewTask(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	var newTask *ParsedToolCall
 	for mi := range msgs {
@@ -1787,19 +1862,21 @@ func TestParseRooCodeSessionCompletedByChildResolvesNewTask(t *testing.T) {
 			}
 		}
 	}
-	require.NotNil(t, newTask, "newTask tool call should exist")
-	require.Len(t, newTask.ResultEvents, 1,
+	require.NotNil(newTask, "newTask tool call should exist")
+	require.Len(newTask.ResultEvents, 1,
 		"CompletedByChildID must resolve the newTask as completed")
-	assert.Equal(t, "completed", newTask.ResultEvents[0].Status)
+	assert.Equal("completed", newTask.ResultEvents[0].Status)
 
-	assert.NotEqual(t, TerminationToolCallPending, sess.TerminationStatus,
+	assert.NotEqual(TerminationToolCallPending, sess.TerminationStatus,
 		"child-completed delegation must not be tool_call_pending")
 }
 
 func TestParseRooCodeSessionNewTaskNoChildren(t *testing.T) {
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-no-children")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-no-children",
@@ -1812,10 +1889,10 @@ func TestParseRooCodeSessionNewTaskNoChildren(t *testing.T) {
 		// No ChildIDs — older session or no delegation completed.
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1833,20 +1910,20 @@ func TestParseRooCodeSessionNewTaskNoChildren(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// newTask call should exist but have no SubagentSessionID.
 	for _, msg := range msgs {
 		for _, tc := range msg.ToolCalls {
 			if tc.ToolName == "newTask" {
-				assert.Equal(t, "", tc.SubagentSessionID,
+				assert.Empty(t, tc.SubagentSessionID,
 					"no childIds means no subagent link")
 			}
 		}
@@ -1854,9 +1931,12 @@ func TestParseRooCodeSessionNewTaskNoChildren(t *testing.T) {
 }
 
 func TestParseRooCodeSessionNewTaskBoundsCheck(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-bounds")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	// Only one childId but two newTask calls — second should not crash.
 	historyItem := rooCodeHistoryItem{
@@ -1870,10 +1950,10 @@ func TestParseRooCodeSessionNewTaskBoundsCheck(t *testing.T) {
 		ChildIDs:  []string{"only-child"},
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1897,14 +1977,14 @@ func TestParseRooCodeSessionNewTaskBoundsCheck(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// First newTask should link; second should not crash and have empty link.
 	var newTaskCalls []ParsedToolCall
@@ -1915,16 +1995,19 @@ func TestParseRooCodeSessionNewTaskBoundsCheck(t *testing.T) {
 			}
 		}
 	}
-	require.Len(t, newTaskCalls, 2)
-	assert.Equal(t, "roocode:only-child", newTaskCalls[0].SubagentSessionID)
-	assert.Equal(t, "", newTaskCalls[1].SubagentSessionID,
+	require.Len(newTaskCalls, 2)
+	assert.Equal("roocode:only-child", newTaskCalls[0].SubagentSessionID)
+	assert.Empty(newTaskCalls[1].SubagentSessionID,
 		"second newTask with no remaining childIds should have empty link")
 }
 
 func TestParseRooCodeSessionPeakContextFromApiReqStarted(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-peakctx")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	// history_item has cumulative tokensIn (sum across all requests).
 	historyItem := rooCodeHistoryItem{
@@ -1938,10 +2021,10 @@ func TestParseRooCodeSessionPeakContextFromApiReqStarted(t *testing.T) {
 		APIConfigName: "Z.ai glm-4.7",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// ui_messages.json with api_req_started entries that have
@@ -1985,32 +2068,35 @@ func TestParseRooCodeSessionPeakContextFromApiReqStarted(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, _, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// PeakContextTokens should be the max of tokensIn + cacheReads
 	// across api_req_started entries, NOT the cumulative history_item
 	// tokensIn. The three entries sum to 22997, 98000, 157569.
-	assert.Equal(t, 157569, sess.PeakContextTokens,
+	assert.Equal(157569, sess.PeakContextTokens,
 		"peak context should be tokensIn + cacheReads from api_req_started")
-	assert.True(t, sess.HasPeakContextTokens)
+	assert.True(sess.HasPeakContextTokens)
 
 	// Cumulative tokensIn still goes to usage event for cost.
-	require.Len(t, sess.UsageEvents, 1)
-	assert.Equal(t, 3130608, sess.UsageEvents[0].InputTokens,
+	require.Len(sess.UsageEvents, 1)
+	assert.Equal(3130608, sess.UsageEvents[0].InputTokens,
 		"usage event should carry cumulative tokensIn")
 }
 
 func TestParseRooCodeSessionPeakContextNoApiReqs(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-noapi")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-noapi",
@@ -2022,10 +2108,10 @@ func TestParseRooCodeSessionPeakContextNoApiReqs(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// No api_req_started messages at all.
@@ -2038,24 +2124,27 @@ func TestParseRooCodeSessionPeakContextNoApiReqs(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, _, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// No api_req_started = no peak context data available.
-	assert.Equal(t, 0, sess.PeakContextTokens)
-	assert.False(t, sess.HasPeakContextTokens)
+	assert.Equal(0, sess.PeakContextTokens)
+	assert.False(sess.HasPeakContextTokens)
 }
 
 func TestParseRooCodeSessionPeakContextIncludesCacheWrites(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-cachewrites")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-cachewrites",
@@ -2066,10 +2155,10 @@ func TestParseRooCodeSessionPeakContextIncludesCacheWrites(t *testing.T) {
 		TokensOut: 500,
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2087,25 +2176,28 @@ func TestParseRooCodeSessionPeakContextIncludesCacheWrites(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, _, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// Peak context = tokensIn + cacheReads + cacheWrites = 5000 + 3000 + 2000.
-	assert.Equal(t, 10000, sess.PeakContextTokens,
+	assert.Equal(10000, sess.PeakContextTokens,
 		"peak context should include cache reads and writes")
-	assert.True(t, sess.HasPeakContextTokens)
+	assert.True(sess.HasPeakContextTokens)
 }
 
 func TestParseRooCodeSessionCommandOutputPairing(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-cmdpair")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-cmdpair",
@@ -2117,10 +2209,10 @@ func TestParseRooCodeSessionCommandOutputPairing(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2150,32 +2242,35 @@ func TestParseRooCodeSessionCommandOutputPairing(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// user task + execute_command tool call = 2 (command_output
 	// is paired into the tool call, not emitted separately).
-	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(2, sess.MessageCount)
 
 	// Verify the tool call has a ResultEvent with the output.
-	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(msgs[1].ToolCalls, 1)
 	tc := msgs[1].ToolCalls[0]
-	assert.Equal(t, "execute_command", tc.ToolName)
-	require.Len(t, tc.ResultEvents, 1)
-	assert.Equal(t, "completed", tc.ResultEvents[0].Status)
-	assert.Equal(t, "All tests passed.", tc.ResultEvents[0].Content)
+	assert.Equal("execute_command", tc.ToolName)
+	require.Len(tc.ResultEvents, 1)
+	assert.Equal("completed", tc.ResultEvents[0].Status)
+	assert.Equal("All tests passed.", tc.ResultEvents[0].Content)
 }
 
 func TestParseRooCodeSessionCommandOutputError(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-cmderr")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-cmderr",
@@ -2187,10 +2282,10 @@ func TestParseRooCodeSessionCommandOutputError(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2214,33 +2309,36 @@ func TestParseRooCodeSessionCommandOutputError(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(2, sess.MessageCount)
 
 	// Error output should set status to "errored".
-	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(msgs[1].ToolCalls, 1)
 	tc := msgs[1].ToolCalls[0]
-	assert.Equal(t, "Bash", tc.Category,
+	assert.Equal("Bash", tc.Category,
 		"execute_command should be categorized as Bash")
-	assert.Equal(t, `{"command":"npm test"}`, tc.InputJSON,
+	assert.JSONEq(`{"command":"npm test"}`, tc.InputJSON,
 		"command should be encoded as JSON")
-	require.Len(t, tc.ResultEvents, 1)
-	assert.Equal(t, "errored", tc.ResultEvents[0].Status)
-	assert.Contains(t, tc.ResultEvents[0].Content, "exit code 1")
+	require.Len(tc.ResultEvents, 1)
+	assert.Equal("errored", tc.ResultEvents[0].Status)
+	assert.Contains(tc.ResultEvents[0].Content, "exit code 1")
 }
 
 func TestParseRooCodeSessionMultiPartCommandOutput(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-cmdmulti")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-cmdmulti",
@@ -2252,10 +2350,10 @@ func TestParseRooCodeSessionMultiPartCommandOutput(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2303,43 +2401,46 @@ func TestParseRooCodeSessionMultiPartCommandOutput(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// user task + execute_command + readFile + standalone late
 	// chunk = 4: both streamed chunks pair into the tool call.
-	assert.Equal(t, 4, sess.MessageCount)
+	assert.Equal(4, sess.MessageCount)
 
-	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(msgs[1].ToolCalls, 1)
 	tc := msgs[1].ToolCalls[0]
-	assert.Equal(t, "execute_command", tc.ToolName)
-	require.Len(t, tc.ResultEvents, 2)
-	assert.Equal(t, "running", tc.ResultEvents[0].Status,
+	assert.Equal("execute_command", tc.ToolName)
+	require.Len(tc.ResultEvents, 2)
+	assert.Equal("running", tc.ResultEvents[0].Status,
 		"an intermediate chunk must not resolve the command early")
-	assert.Equal(t, "Running suite A... ok", tc.ResultEvents[0].Content)
-	assert.Equal(t, "errored", tc.ResultEvents[1].Status,
+	assert.Equal("Running suite A... ok", tc.ResultEvents[0].Content)
+	assert.Equal("errored", tc.ResultEvents[1].Status,
 		"a failing final chunk must mark the command errored")
-	assert.Contains(t, tc.ResultEvents[1].Content, "exit code 1")
+	assert.Contains(tc.ResultEvents[1].Content, "exit code 1")
 
 	// The readFile call absorbed nothing from the command stream.
-	require.Len(t, msgs[2].ToolCalls, 1)
-	assert.Empty(t, msgs[2].ToolCalls[0].ResultEvents)
+	require.Len(msgs[2].ToolCalls, 1)
+	assert.Empty(msgs[2].ToolCalls[0].ResultEvents)
 
 	// The post-stream chunk fell back to a standalone message.
-	assert.Equal(t, "stray late chunk", msgs[3].Content)
-	assert.True(t, msgs[3].IsSystem)
+	assert.Equal("stray late chunk", msgs[3].Content)
+	assert.True(msgs[3].IsSystem)
 }
 
 func TestParseRooCodeSessionCommandOutputErrorSticky(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-cmdsticky")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-cmdsticky",
@@ -2351,10 +2452,10 @@ func TestParseRooCodeSessionCommandOutputErrorSticky(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2386,31 +2487,34 @@ func TestParseRooCodeSessionCommandOutputErrorSticky(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.Len(t, msgs, 2)
-	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(msgs, 2)
+	require.Len(msgs[1].ToolCalls, 1)
 	tc := msgs[1].ToolCalls[0]
-	require.Len(t, tc.ResultEvents, 2)
-	assert.Equal(t, "running", tc.ResultEvents[0].Status)
+	require.Len(tc.ResultEvents, 2)
+	assert.Equal("running", tc.ResultEvents[0].Status)
 	// Tool health reads the latest event's status, so the final status
 	// must stay errored even though the last chunk looked normal.
-	assert.Equal(t, "errored", tc.ResultEvents[1].Status,
+	assert.Equal("errored", tc.ResultEvents[1].Status,
 		"a normal chunk after an error must not mark the command successful")
-	assert.Equal(t, "Test run finished.", tc.ResultEvents[1].Content)
+	assert.Equal("Test run finished.", tc.ResultEvents[1].Content)
 }
 
 func TestParseRooCodeSessionFileToolResult(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-fileresult")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-fileresult",
@@ -2422,10 +2526,10 @@ func TestParseRooCodeSessionFileToolResult(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2443,28 +2547,28 @@ func TestParseRooCodeSessionFileToolResult(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// readFile should have ResultEvents with the embedded content.
-	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(msgs[1].ToolCalls, 1)
 	tc := msgs[1].ToolCalls[0]
-	assert.Equal(t, "readFile", tc.ToolName)
-	require.Len(t, tc.ResultEvents, 1)
-	assert.Equal(t, "completed", tc.ResultEvents[0].Status)
-	assert.Equal(t, "package main\nfunc main() {}", tc.ResultEvents[0].Content)
+	assert.Equal("readFile", tc.ToolName)
+	require.Len(tc.ResultEvents, 1)
+	assert.Equal("completed", tc.ResultEvents[0].Status)
+	assert.Equal("package main\nfunc main() {}", tc.ResultEvents[0].Content)
 	// The result-only "content" field must not be retained in InputJSON.
-	assert.NotContains(t, tc.InputJSON, "package main",
+	assert.NotContains(tc.InputJSON, "package main",
 		"readFile content is a result and must be stripped from InputJSON")
-	assert.NotContains(t, tc.InputJSON, `"content"`,
+	assert.NotContains(tc.InputJSON, `"content"`,
 		"readFile content key must be stripped from InputJSON")
-	assert.Contains(t, tc.InputJSON, `"path"`,
+	assert.Contains(tc.InputJSON, `"path"`,
 		"readFile path is an argument and must remain in InputJSON")
 }
 
@@ -2500,9 +2604,12 @@ func TestParseRooCodeSessionResultBearingReadToolsComplete(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			tmpDir := t.TempDir()
 			taskDir := filepath.Join(tmpDir, "tasks", "test-"+tt.name)
-			require.NoError(t, os.MkdirAll(taskDir, 0755))
+			require.NoError(os.MkdirAll(taskDir, 0o755))
 
 			historyItem := rooCodeHistoryItem{
 				ID:        "test-" + tt.name,
@@ -2512,10 +2619,10 @@ func TestParseRooCodeSessionResultBearingReadToolsComplete(t *testing.T) {
 				Workspace: "/Users/test/project",
 			}
 			historyJSON, err := json.Marshal(historyItem)
-			require.NoError(t, err)
-			require.NoError(t, os.WriteFile(
+			require.NoError(err)
+			require.NoError(os.WriteFile(
 				filepath.Join(taskDir, "history_item.json"),
-				historyJSON, 0644,
+				historyJSON, 0o644,
 			))
 
 			messages := []rooCodeMessage{
@@ -2533,37 +2640,40 @@ func TestParseRooCodeSessionResultBearingReadToolsComplete(t *testing.T) {
 				},
 			}
 			messagesJSON, err := json.Marshal(messages)
-			require.NoError(t, err)
-			require.NoError(t, os.WriteFile(
+			require.NoError(err)
+			require.NoError(os.WriteFile(
 				filepath.Join(taskDir, "ui_messages.json"),
-				messagesJSON, 0644,
+				messagesJSON, 0o644,
 			))
 
 			_, msgs, err := parseRooCodeSession(taskDir, "", "")
-			require.NoError(t, err)
+			require.NoError(err)
 
-			require.Len(t, msgs[1].ToolCalls, 1)
+			require.Len(msgs[1].ToolCalls, 1)
 			tc := msgs[1].ToolCalls[0]
-			assert.Equal(t, tt.toolName, tc.ToolName)
-			require.Len(t, tc.ResultEvents, 1,
+			assert.Equal(tt.toolName, tc.ToolName)
+			require.Len(tc.ResultEvents, 1,
 				"result-bearing read tool must emit a completed result event")
-			assert.Equal(t, "completed", tc.ResultEvents[0].Status)
-			assert.Equal(t, tt.wantResult, tc.ResultEvents[0].Content)
+			assert.Equal("completed", tc.ResultEvents[0].Status)
+			assert.Equal(tt.wantResult, tc.ResultEvents[0].Content)
 			// Result content stripped from InputJSON; args retained.
-			assert.NotContains(t, tc.InputJSON, `"content"`,
+			assert.NotContains(tc.InputJSON, `"content"`,
 				"result content key must be stripped from InputJSON")
-			assert.NotContains(t, tc.InputJSON, tt.wantResult,
+			assert.NotContains(tc.InputJSON, tt.wantResult,
 				"result content value must be stripped from InputJSON")
-			assert.Contains(t, tc.InputJSON, `"path"`,
+			assert.Contains(tc.InputJSON, `"path"`,
 				"path argument must remain in InputJSON")
 		})
 	}
 }
 
 func TestParseRooCodeSessionWriteToolContentNotResult(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-writenoresult")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-writenoresult",
@@ -2575,10 +2685,10 @@ func TestParseRooCodeSessionWriteToolContentNotResult(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2596,32 +2706,35 @@ func TestParseRooCodeSessionWriteToolContentNotResult(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// writeToFile content is input, not a result — no ResultEvents.
-	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(msgs[1].ToolCalls, 1)
 	tc := msgs[1].ToolCalls[0]
-	assert.Equal(t, "writeToFile", tc.ToolName)
-	assert.Empty(t, tc.ResultEvents,
+	assert.Equal("writeToFile", tc.ToolName)
+	assert.Empty(tc.ResultEvents,
 		"writeToFile content should not be treated as a completed result")
 	// writeToFile "content" is an input argument and must be preserved.
-	assert.Contains(t, tc.InputJSON, `"content"`,
+	assert.Contains(tc.InputJSON, `"content"`,
 		"writeToFile content is an input and must remain in InputJSON")
-	assert.Contains(t, tc.InputJSON, "package main",
+	assert.Contains(tc.InputJSON, "package main",
 		"writeToFile content value must remain in InputJSON")
 }
 
 func TestParseRooCodeSessionNewTaskContentNotResult(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-newtask-noresult")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-newtask-noresult",
@@ -2633,10 +2746,10 @@ func TestParseRooCodeSessionNewTaskContentNotResult(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2654,20 +2767,20 @@ func TestParseRooCodeSessionNewTaskContentNotResult(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// newTask should NOT have ResultEvents (content is task prompt,
 	// not a tool result).
-	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, "newTask", msgs[1].ToolCalls[0].ToolName)
-	assert.Empty(t, msgs[1].ToolCalls[0].ResultEvents,
+	require.Len(msgs[1].ToolCalls, 1)
+	assert.Equal("newTask", msgs[1].ToolCalls[0].ToolName)
+	assert.Empty(msgs[1].ToolCalls[0].ResultEvents,
 		"newTask content is a task prompt, not a result")
 }
 
@@ -2695,8 +2808,10 @@ func TestRooCommandOutputIsError(t *testing.T) {
 		{"exit code colon 1", "exit code: 1", true},
 		{"exit status colon 2", "Exit Status: 2", true},
 		{"parens exit status colon", "(exit status: 1)", true},
-		{"multiline exit status colon",
-			"Building project...\nError in src/main.ts\n(exit status: 1)", true},
+		{
+			"multiline exit status colon",
+			"Building project...\nError in src/main.ts\n(exit status: 1)", true,
+		},
 
 		// Prefix patterns (first line).
 		{"error colon", "Error: file not found", true},
@@ -2706,14 +2821,20 @@ func TestRooCommandOutputIsError(t *testing.T) {
 
 		// Anywhere patterns (npm ERR! in multi-line output).
 		{"npm ERR basic", "npm ERR! code ELIFECYCLE", true},
-		{"npm ERR multiline",
-			"> todoseq@0.10.0 test\n> jest\n\nnpm ERR! code ELIFECYCLE", true},
+		{
+			"npm ERR multiline",
+			"> todoseq@0.10.0 test\n> jest\n\nnpm ERR! code ELIFECYCLE", true,
+		},
 
 		// Error at start of line in multi-line output.
-		{"error colon multiline",
-			"Compiling project...\nError: Cannot find module 'foo'\nBuild failed.", true},
-		{"fatal multiline",
-			"Running setup...\nFatal: unable to access repo", true},
+		{
+			"error colon multiline",
+			"Compiling project...\nError: Cannot find module 'foo'\nBuild failed.", true,
+		},
+		{
+			"fatal multiline",
+			"Running setup...\nFatal: unable to access repo", true,
+		},
 	}
 	for _, tt := range tests {
 		got := rooCommandOutputIsError(tt.output)
@@ -2724,9 +2845,12 @@ func TestRooCommandOutputIsError(t *testing.T) {
 }
 
 func TestParseRooCodeSessionErrorTypes(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-errors")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-errors",
@@ -2738,10 +2862,10 @@ func TestParseRooCodeSessionErrorTypes(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2783,18 +2907,18 @@ func TestParseRooCodeSessionErrorTypes(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// user task + 4 error/warning system messages + assistant text = 6
-	assert.Equal(t, 6, sess.MessageCount)
-	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal(6, sess.MessageCount)
+	assert.Equal(1, sess.UserMessageCount)
 
 	// All error types should be system messages with content preserved.
 	errorMsgs := []struct {
@@ -2808,14 +2932,14 @@ func TestParseRooCodeSessionErrorTypes(t *testing.T) {
 	}
 	for i, want := range errorMsgs {
 		idx := i + 1 // offset past user task
-		assert.Equal(t, RoleSystem, msgs[idx].Role,
+		assert.Equal(RoleSystem, msgs[idx].Role,
 			"%s should be RoleSystem", want.say)
-		assert.True(t, msgs[idx].IsSystem,
+		assert.True(msgs[idx].IsSystem,
 			"%s should be IsSystem", want.say)
-		assert.Equal(t, want.content, msgs[idx].Content,
+		assert.Equal(want.content, msgs[idx].Content,
 			"%s content should be preserved", want.say)
 	}
-	assert.Equal(t, RoleAssistant, msgs[5].Role)
+	assert.Equal(RoleAssistant, msgs[5].Role)
 }
 
 func TestParseRooCodeSessionToolSpecificErrorPairing(t *testing.T) {
@@ -2847,9 +2971,12 @@ func TestParseRooCodeSessionToolSpecificErrorPairing(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			tmpDir := t.TempDir()
 			taskDir := filepath.Join(tmpDir, "tasks", "test-toolerr")
-			require.NoError(t, os.MkdirAll(taskDir, 0755))
+			require.NoError(os.MkdirAll(taskDir, 0o755))
 
 			historyItem := rooCodeHistoryItem{
 				ID:        "test-toolerr",
@@ -2860,10 +2987,10 @@ func TestParseRooCodeSessionToolSpecificErrorPairing(t *testing.T) {
 				Status:    "completed",
 			}
 			historyJSON, err := json.Marshal(historyItem)
-			require.NoError(t, err)
-			require.NoError(t, os.WriteFile(
+			require.NoError(err)
+			require.NoError(os.WriteFile(
 				filepath.Join(taskDir, "history_item.json"),
-				historyJSON, 0644,
+				historyJSON, 0o644,
 			))
 
 			messages := []rooCodeMessage{
@@ -2887,14 +3014,14 @@ func TestParseRooCodeSessionToolSpecificErrorPairing(t *testing.T) {
 				},
 			}
 			messagesJSON, err := json.Marshal(messages)
-			require.NoError(t, err)
-			require.NoError(t, os.WriteFile(
+			require.NoError(err)
+			require.NoError(os.WriteFile(
 				filepath.Join(taskDir, "ui_messages.json"),
-				messagesJSON, 0644,
+				messagesJSON, 0o644,
 			))
 
 			sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-			require.NoError(t, err)
+			require.NoError(err)
 
 			// The tool-specific error must be paired onto the preceding
 			// tool call as an errored result, not emitted standalone.
@@ -2906,7 +3033,7 @@ func TestParseRooCodeSessionToolSpecificErrorPairing(t *testing.T) {
 					}
 				}
 			}
-			require.NotNil(t, tc, "tool call %q should exist", tt.toolName)
+			require.NotNil(tc, "tool call %q should exist", tt.toolName)
 
 			var errored *ParsedToolResultEvent
 			for i := range tc.ResultEvents {
@@ -2914,12 +3041,12 @@ func TestParseRooCodeSessionToolSpecificErrorPairing(t *testing.T) {
 					errored = &tc.ResultEvents[i]
 				}
 			}
-			require.NotNil(t, errored,
+			require.NotNil(errored,
 				"%s must pair as an errored result on %s",
 				tt.errSay, tt.toolName)
-			assert.Equal(t, tt.errText, errored.Content)
+			assert.Equal(tt.errText, errored.Content)
 			// The error timestamp must be preserved on the event.
-			assert.Equal(t, time.UnixMilli(tt.errTimestamp).UTC(),
+			assert.Equal(time.UnixMilli(tt.errTimestamp).UTC(),
 				errored.Timestamp.UTC(),
 				"error result must preserve the error timestamp")
 
@@ -2927,14 +3054,14 @@ func TestParseRooCodeSessionToolSpecificErrorPairing(t *testing.T) {
 			// message.
 			for _, m := range msgs {
 				if m.IsSystem {
-					assert.NotEqual(t, tt.errText, m.Content,
+					assert.NotEqual(tt.errText, m.Content,
 						"paired error must not be emitted standalone")
 				}
 			}
 
 			// A resolved (errored) tool call must not be reported as a
 			// pending tool call.
-			assert.NotEqual(t, TerminationToolCallPending,
+			assert.NotEqual(TerminationToolCallPending,
 				sess.TerminationStatus,
 				"errored tool call must not be tool_call_pending")
 		})
@@ -2942,9 +3069,12 @@ func TestParseRooCodeSessionToolSpecificErrorPairing(t *testing.T) {
 }
 
 func TestParseRooCodeSessionUserFeedbackIsUserRole(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-feedback")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-feedback",
@@ -2953,10 +3083,10 @@ func TestParseRooCodeSessionUserFeedbackIsUserRole(t *testing.T) {
 		Task:      "Feedback test",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2986,28 +3116,31 @@ func TestParseRooCodeSessionUserFeedbackIsUserRole(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.Equal(t, 4, sess.MessageCount)
+	assert.Equal(4, sess.MessageCount)
 	// user_feedback should be classified as user, not system.
-	assert.Equal(t, RoleUser, msgs[2].Role,
+	assert.Equal(RoleUser, msgs[2].Role,
 		"user_feedback should be a user message")
-	assert.False(t, msgs[2].IsSystem,
+	assert.False(msgs[2].IsSystem,
 		"user_feedback should not be marked as system")
-	assert.Equal(t, "Please also handle edge cases", msgs[2].Content)
+	assert.Equal("Please also handle edge cases", msgs[2].Content)
 }
 
 func TestParseRooCodeSessionCompletionResultAskIsAssistant(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-completion-ask")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-completion-ask",
@@ -3016,10 +3149,10 @@ func TestParseRooCodeSessionCompletionResultAskIsAssistant(t *testing.T) {
 		Task:      "Completion ask test",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -3037,27 +3170,30 @@ func TestParseRooCodeSessionCompletionResultAskIsAssistant(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(2, sess.MessageCount)
 	// ask=completion_result should be assistant, not system.
-	assert.Equal(t, RoleAssistant, msgs[1].Role,
+	assert.Equal(RoleAssistant, msgs[1].Role,
 		"completion_result ask should be an assistant message")
-	assert.False(t, msgs[1].IsSystem,
+	assert.False(msgs[1].IsSystem,
 		"completion_result ask should not be marked as system")
 }
 
 func TestParseRooCodeSessionErrorSayTypePairing(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-errsay")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-errsay",
@@ -3069,10 +3205,10 @@ func TestParseRooCodeSessionErrorSayTypePairing(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Sequence: user task, command ask, error say (no command_output).
@@ -3098,34 +3234,37 @@ func TestParseRooCodeSessionErrorSayTypePairing(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// user task + execute_command tool call = 2
 	// (error is paired as ResultEvent, not emitted standalone)
-	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(2, sess.MessageCount)
 
 	// Verify the error was paired with the execute_command as an
 	// errored ResultEvent (not emitted as a standalone message).
-	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(msgs[1].ToolCalls, 1)
 	tc := msgs[1].ToolCalls[0]
-	assert.Equal(t, "execute_command", tc.ToolName)
-	require.Len(t, tc.ResultEvents, 1)
-	assert.Equal(t, "errored", tc.ResultEvents[0].Status)
-	assert.Equal(t, "Build failed: missing dependency",
+	assert.Equal("execute_command", tc.ToolName)
+	require.Len(tc.ResultEvents, 1)
+	assert.Equal("errored", tc.ResultEvents[0].Status)
+	assert.Equal("Build failed: missing dependency",
 		tc.ResultEvents[0].Content)
 }
 
 func TestParseRooCodeSessionErrorSayTypeNoPendingCommand(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-errsay-nopending")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-errsay-nopending",
@@ -3137,10 +3276,10 @@ func TestParseRooCodeSessionErrorSayTypeNoPendingCommand(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Error arrives with no preceding command — should be a
@@ -3160,30 +3299,33 @@ func TestParseRooCodeSessionErrorSayTypeNoPendingCommand(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// user task + error system msg = 2
-	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(2, sess.MessageCount)
 
 	// Error should be a standalone system message, no tool calls.
-	assert.Equal(t, RoleSystem, msgs[1].Role)
-	assert.True(t, msgs[1].IsSystem)
-	assert.Equal(t, "Internal error occurred", msgs[1].Content)
+	assert.Equal(RoleSystem, msgs[1].Role)
+	assert.True(msgs[1].IsSystem)
+	assert.Equal("Internal error occurred", msgs[1].Content)
 }
 
 func TestParseRooCodeSessionErrorEmptyText(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	// shell_integration_warning with empty text should be skipped
 	// (no content, no tool calls/results → filtered out).
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-err-empty")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-err-empty",
@@ -3195,10 +3337,10 @@ func TestParseRooCodeSessionErrorEmptyText(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -3222,19 +3364,19 @@ func TestParseRooCodeSessionErrorEmptyText(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// Empty error should be filtered: user task + assistant = 2
-	assert.Equal(t, 2, sess.MessageCount)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	assert.Equal(2, sess.MessageCount)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal(RoleAssistant, msgs[1].Role)
 }
 
 func TestClassifyRooCodeTermination(t *testing.T) {
@@ -3433,9 +3575,12 @@ func TestRooCodeIsMetadataSay(t *testing.T) {
 }
 
 func TestParseRooCodeSessionImageOnlyMessages(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-images")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-images",
@@ -3445,10 +3590,10 @@ func TestParseRooCodeSessionImageOnlyMessages(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// The initial prompt and a feedback message carry only images
@@ -3480,35 +3625,38 @@ func TestParseRooCodeSessionImageOnlyMessages(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.Len(t, msgs, 3)
+	require.Len(msgs, 3)
 
 	// Initial image-only prompt becomes a user message with a
 	// placeholder, not a dropped message.
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, "[image]", msgs[0].Content)
-	assert.Equal(t, "[image]", sess.FirstMessage)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal("[image]", msgs[0].Content)
+	assert.Equal("[image]", sess.FirstMessage)
 
 	// Image-only feedback keeps one placeholder per image.
-	assert.Equal(t, RoleUser, msgs[2].Role)
-	assert.Equal(t, "[image] [image]", msgs[2].Content)
+	assert.Equal(RoleUser, msgs[2].Role)
+	assert.Equal("[image] [image]", msgs[2].Content)
 
 	// Both image-only messages count as user messages.
-	assert.Equal(t, 2, sess.UserMessageCount)
+	assert.Equal(2, sess.UserMessageCount)
 }
 
 func TestParseRooCodeSessionEmptySubtaskResultResolvesNewTask(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-emptysubtask")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	// No CompletedByChildID: pairing must work from the transcript
 	// alone.
@@ -3521,10 +3669,10 @@ func TestParseRooCodeSessionEmptySubtaskResultResolvesNewTask(t *testing.T) {
 		Status:    "completed",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// A child task that reports completion with no result text must
@@ -3550,28 +3698,28 @@ func TestParseRooCodeSessionEmptySubtaskResultResolvesNewTask(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// user task + newTask call = 2; no standalone message for the
 	// empty result.
-	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(2, sess.MessageCount)
 
-	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(msgs[1].ToolCalls, 1)
 	tc := msgs[1].ToolCalls[0]
-	assert.Equal(t, "newTask", tc.ToolName)
-	require.Len(t, tc.ResultEvents, 1)
-	assert.Equal(t, "completed", tc.ResultEvents[0].Status)
-	assert.Equal(t, "", tc.ResultEvents[0].Content)
+	assert.Equal("newTask", tc.ToolName)
+	require.Len(tc.ResultEvents, 1)
+	assert.Equal("completed", tc.ResultEvents[0].Status)
+	assert.Empty(tc.ResultEvents[0].Content)
 
 	// The resolved delegation must not read as orphaned.
-	assert.Equal(t, TerminationClean, sess.TerminationStatus)
+	assert.Equal(TerminationClean, sess.TerminationStatus)
 }
 
 func TestParseRooCodeSessionMultibyteSessionName(t *testing.T) {
@@ -3598,9 +3746,12 @@ func TestParseRooCodeSessionMultibyteSessionName(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			tmpDir := t.TempDir()
 			taskDir := filepath.Join(tmpDir, "tasks", "test-task-utf8name")
-			require.NoError(t, os.MkdirAll(taskDir, 0755))
+			require.NoError(os.MkdirAll(taskDir, 0o755))
 
 			historyItem := rooCodeHistoryItem{
 				ID:        "test-task-utf8name",
@@ -3610,26 +3761,29 @@ func TestParseRooCodeSessionMultibyteSessionName(t *testing.T) {
 				Workspace: "/Users/test/project",
 			}
 			historyJSON, err := json.Marshal(historyItem)
-			require.NoError(t, err)
-			require.NoError(t, os.WriteFile(
+			require.NoError(err)
+			require.NoError(os.WriteFile(
 				filepath.Join(taskDir, "history_item.json"),
-				historyJSON, 0644,
+				historyJSON, 0o644,
 			))
 
 			sess, _, err := parseRooCodeSession(taskDir, "", "")
-			require.NoError(t, err)
+			require.NoError(err)
 
-			assert.Equal(t, tt.want, sess.SessionName)
-			assert.True(t, utf8.ValidString(sess.SessionName),
+			assert.Equal(tt.want, sess.SessionName)
+			assert.True(utf8.ValidString(sess.SessionName),
 				"session name must remain valid UTF-8")
 		})
 	}
 }
 
 func TestParseRooCodeSessionSubtaskResultNotPairedToFailedNewTask(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-failed-newtask")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-failed-newtask",
@@ -3639,10 +3793,10 @@ func TestParseRooCodeSessionSubtaskResultNotPairedToFailedNewTask(t *testing.T) 
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// The delegation fails; a stray subtask_result arriving later
@@ -3674,32 +3828,35 @@ func TestParseRooCodeSessionSubtaskResultNotPairedToFailedNewTask(t *testing.T) 
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// The newTask keeps only its errored event.
-	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(msgs[1].ToolCalls, 1)
 	tc := msgs[1].ToolCalls[0]
-	assert.Equal(t, "newTask", tc.ToolName)
-	require.Len(t, tc.ResultEvents, 1)
-	assert.Equal(t, "errored", tc.ResultEvents[0].Status)
+	assert.Equal("newTask", tc.ToolName)
+	require.Len(tc.ResultEvents, 1)
+	assert.Equal("errored", tc.ResultEvents[0].Status)
 
 	// The subtask_result falls back to a standalone system message.
 	last := msgs[len(msgs)-1]
-	assert.Equal(t, RoleSystem, last.Role)
-	assert.Equal(t, "Child finished the work", last.Content)
+	assert.Equal(RoleSystem, last.Role)
+	assert.Equal("Child finished the work", last.Content)
 }
 
 func TestParseRooCodeSessionChildIDsSkipFailedNewTask(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-childskip")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	// Only one child exists: the first delegation failed before
 	// spawning, so the single child ID belongs to the second call.
@@ -3712,10 +3869,10 @@ func TestParseRooCodeSessionChildIDsSkipFailedNewTask(t *testing.T) {
 		ChildIDs:  []string{"child-b"},
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -3751,14 +3908,14 @@ func TestParseRooCodeSessionChildIDsSkipFailedNewTask(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	var newTasks []*ParsedToolCall
 	for mi := range msgs {
@@ -3768,58 +3925,66 @@ func TestParseRooCodeSessionChildIDsSkipFailedNewTask(t *testing.T) {
 			}
 		}
 	}
-	require.Len(t, newTasks, 2)
+	require.Len(newTasks, 2)
 
 	// The failed first delegation gets no child link; the second
 	// call receives the only child ID.
-	assert.Equal(t, "", newTasks[0].SubagentSessionID)
-	assert.Equal(t, "roocode:child-b", newTasks[1].SubagentSessionID)
+	assert.Empty(newTasks[0].SubagentSessionID)
+	assert.Equal("roocode:child-b", newTasks[1].SubagentSessionID)
 }
 
 func TestParseRooCodeSessionEmptyHistoryIDFallsBackToDirName(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-noid")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	// Legacy or incomplete history items can omit the id entirely.
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		[]byte(`{"ts":1688836851000,"task":"No ID recorded"}`), 0644,
+		[]byte(`{"ts":1688836851000,"task":"No ID recorded"}`), 0o644,
 	))
 
 	sess, _, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// The directory name (the on-disk task ID) keeps the session
 	// distinct instead of colliding on "roocode:".
-	assert.Equal(t, "roocode:test-task-noid", sess.ID)
-	assert.Equal(t, "test-task-noid", sess.SourceSessionID)
+	assert.Equal("roocode:test-task-noid", sess.ID)
+	assert.Equal("test-task-noid", sess.SourceSessionID)
 }
 
 func TestParseRooCodeSessionMarksSearchResultsAsToolOutput(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	taskDir := t.TempDir()
 	historyJSON, err := json.Marshal(rooCodeHistoryItem{
 		ID: "task-search", Task: "find callers", Timestamp: 1688836851000,
 	})
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
-		filepath.Join(taskDir, "history_item.json"), historyJSON, 0644,
+	require.NoError(err)
+	require.NoError(os.WriteFile(
+		filepath.Join(taskDir, "history_item.json"), historyJSON, 0o644,
 	))
 	messages := []rooCodeMessage{
 		{Timestamp: 1688836851000, Type: "say", Say: "text", Text: "find callers"},
-		{Timestamp: 1688836852000, Type: "say", Say: "codebase_search_result",
-			Text: `{"query":"callers","results":[{"path":"secret.go"}]}`},
+		{
+			Timestamp: 1688836852000, Type: "say", Say: "codebase_search_result",
+			Text: `{"query":"callers","results":[{"path":"secret.go"}]}`,
+		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
-		filepath.Join(taskDir, "ui_messages.json"), messagesJSON, 0644,
+	require.NoError(err)
+	require.NoError(os.WriteFile(
+		filepath.Join(taskDir, "ui_messages.json"), messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
-	require.Len(t, msgs, 2)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.Equal(t, SourceSubtypeToolResult, msgs[1].SourceSubtype,
+	require.NoError(err)
+	require.Len(msgs, 2)
+	assert.Equal(RoleAssistant, msgs[1].Role)
+	assert.Equal(SourceSubtypeToolResult, msgs[1].SourceSubtype,
 		"a search result is tool output even though it is stored as assistant text")
 }

@@ -2,6 +2,7 @@ package sync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -52,9 +53,7 @@ func (p *verifiedSourceCountingProvider) Parse(
 	context.Context,
 	parser.ParseRequest,
 ) (parser.ParseOutcome, error) {
-	return parser.ParseOutcome{}, fmt.Errorf(
-		"unexpected parse after seeding stored source state",
-	)
+	return parser.ParseOutcome{}, errors.New("unexpected parse after seeding stored source state")
 }
 
 type verifiedSourceCountingFactory struct {
@@ -220,7 +219,7 @@ func runVerifiedSourcePass(
 	t.Helper()
 	pass := engine.beginVerifiedSourcePass()
 	for _, file := range files {
-		res := engine.processFile(context.Background(), file)
+		res := engine.processFile(t.Context(), file)
 		require.NoError(t, res.err)
 		assert.True(t, res.skip)
 	}
@@ -280,7 +279,7 @@ func TestVerifiedSourceGateWarmTrustDoesNotMaskDatabaseRepair(t *testing.T) {
 			mutate: func(t *testing.T, database *db.DB) {
 				t.Helper()
 				session, err := database.GetSessionFull(
-					context.Background(), sessionID,
+					t.Context(), sessionID,
 				)
 				require.NoError(t, err)
 				require.NotNil(t, session)
@@ -310,7 +309,7 @@ func TestVerifiedSourceGateWarmTrustDoesNotMaskDatabaseRepair(t *testing.T) {
 				"checkpointed sources skip both passes")
 
 			tt.mutate(t, engine.db)
-			res := engine.processFile(context.Background(), files[0])
+			res := engine.processFile(t.Context(), files[0])
 
 			require.ErrorContains(t, res.err,
 				"unexpected parse after seeding stored source state")
@@ -321,14 +320,16 @@ func TestVerifiedSourceGateWarmTrustDoesNotMaskDatabaseRepair(t *testing.T) {
 }
 
 func TestVerifiedSourceGateDoesNotBorrowRepairState(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	path := filepath.Join(
 		root,
 		"rollout-2026-07-11T00-00-00-00000000-0000-0000-0000-000000000001.jsonl",
 	)
-	require.NoError(t, os.WriteFile(path, []byte("session\n"), 0o600))
+	require.NoError(os.WriteFile(path, []byte("session\n"), 0o600))
 	fingerprint, err := verifiedSourceFingerprint(path)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	newProvider := func(agent parser.AgentType) *verifiedSourceCountingProvider {
 		return &verifiedSourceCountingProvider{
@@ -363,13 +364,13 @@ func TestVerifiedSourceGateDoesNotBorrowRepairState(t *testing.T) {
 		parser.AgentCodex, parser.AgentTraeX,
 	} {
 		id := string(agent) + ":shared"
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(database.UpsertSession(db.Session{
 			ID: id, Project: "project", Machine: "host",
 			Agent: string(agent), FilePath: &filePath,
 			FileSize: &fileSize, FileMtime: &fileMtime,
 			FileHash: &fileHash,
 		}))
-		require.NoError(t, database.SetSessionDataVersion(
+		require.NoError(database.SetSessionDataVersion(
 			id, db.CurrentDataVersion(),
 		))
 	}
@@ -414,59 +415,62 @@ func TestVerifiedSourceGateDoesNotBorrowRepairState(t *testing.T) {
 	runVerifiedSourcePass(t, engine, []parser.DiscoveredFile{
 		fileFor(parser.AgentTraeX),
 	})
-	require.NoError(t, database.DeleteSession("traex:shared"))
+	require.NoError(database.DeleteSession("traex:shared"))
 
 	res := engine.processFile(t.Context(), fileFor(parser.AgentTraeX))
-	require.ErrorContains(t, res.err,
+	require.ErrorContains(res.err,
 		"unexpected parse after seeding stored source state")
 	assert.Zero(t, traexProvider.fingerprintCalls,
 		"the checkpointed pass must not fingerprint; the missing TraeX row declines and reverifies")
 }
 
 func TestVerifiedSourceGateRechecksAfterStatAndWatcherInvalidation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	engine, provider, files := newVerifiedSourceArchive(t, 1)
 	file := files[0]
 	runVerifiedSourcePass(t, engine, files)
 	runVerifiedSourcePass(t, engine, files)
-	require.Zero(t, provider.fingerprintCalls,
+	require.Zero(provider.fingerprintCalls,
 		"checkpointed sources skip both passes")
 
 	info, err := os.Stat(file.Path)
-	require.NoError(t, err)
+	require.NoError(err)
 	baselineChangeTime, ok := fileChangeTime(file.Path, info)
-	require.True(t, ok, "native change time unavailable")
+	require.True(ok, "native change time unavailable")
 	changeTime := baselineChangeTime
 	deadline := time.Now().Add(2 * time.Second)
 	for changeTime == baselineChangeTime && time.Now().Before(deadline) {
-		require.NoError(t, os.WriteFile(file.Path, []byte("changed\n"), 0o600))
-		require.NoError(t, os.Chtimes(file.Path, info.ModTime(), info.ModTime()))
+		require.NoError(os.WriteFile(file.Path, []byte("changed\n"), 0o600))
+		require.NoError(os.Chtimes(file.Path, info.ModTime(), info.ModTime()))
 		changedInfo, statErr := os.Stat(file.Path)
-		require.NoError(t, statErr)
+		require.NoError(statErr)
 		changeTime, ok = fileChangeTime(file.Path, changedInfo)
-		require.True(t, ok, "native change time unavailable after rewrite")
+		require.True(ok, "native change time unavailable after rewrite")
 		if changeTime == baselineChangeTime {
 			time.Sleep(time.Millisecond)
 		}
 	}
-	require.NotEqual(t, baselineChangeTime, changeTime,
+	require.NotEqual(baselineChangeTime, changeTime,
 		"fixture must cross a native change-time tick")
 	runVerifiedSourcePass(t, engine, files)
-	assert.Equal(t, 1, provider.fingerprintCalls,
+	assert.Equal(1, provider.fingerprintCalls,
 		"same-size rewrite with restored mtime must deep-verify")
 
 	classified := requireClassifyPaths(t, engine, []string{file.Path})
-	require.Len(t, classified, 1)
-	res := engine.processFile(context.Background(), classified[0])
-	require.NoError(t, res.err)
-	assert.True(t, res.skip)
-	assert.Equal(t, 2, provider.fingerprintCalls,
+	require.Len(classified, 1)
+	res := engine.processFile(t.Context(), classified[0])
+	require.NoError(res.err)
+	assert.True(res.skip)
+	assert.Equal(2, provider.fingerprintCalls,
 		"a watcher-classified source must invalidate warm trust")
 
 	engine.clearWatcherOverflowCaches()
-	res = engine.processFile(context.Background(), file)
-	require.NoError(t, res.err)
-	assert.True(t, res.skip)
-	assert.Equal(t, 3, provider.fingerprintCalls,
+	res = engine.processFile(t.Context(), file)
+	require.NoError(res.err)
+	assert.True(res.skip)
+	assert.Equal(3, provider.fingerprintCalls,
 		"watcher overflow must clear every verified-source trust record")
 }
 
@@ -484,21 +488,24 @@ func TestVerifiedSourceGateBypassesPathRewrittenSources(t *testing.T) {
 }
 
 func TestVerifiedSourceGateLegacyClaudeRowMustEstablishFingerprint(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	path := filepath.Join(root, "legacy-session.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte("session\n"), 0o600))
+	require.NoError(os.WriteFile(path, []byte("session\n"), 0o600))
 	info, err := os.Stat(path)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	database := openTestDB(t)
 	fileSize := info.Size()
 	fileMtime := info.ModTime().UnixNano()
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: "claude:legacy-session", Project: "project", Machine: "host",
 		Agent: string(parser.AgentClaude), FilePath: &path,
 		FileSize: &fileSize, FileMtime: &fileMtime,
 	}))
-	require.NoError(t, database.SetSessionDataVersion(
+	require.NoError(database.SetSessionDataVersion(
 		"claude:legacy-session", db.CurrentDataVersion(),
 	))
 
@@ -535,19 +542,19 @@ func TestVerifiedSourceGateLegacyClaudeRowMustEstablishFingerprint(t *testing.T)
 		DisplayPath: path, FingerprintKey: path,
 		ProjectHint: "project",
 	}
-	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+	res := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path: path, Agent: parser.AgentClaude,
 		ProviderSource: &source, ProviderProcess: true,
 	})
 
-	require.ErrorContains(t, res.err,
+	require.ErrorContains(res.err,
 		"unexpected parse after seeding stored source state")
-	assert.Equal(t, 1, provider.fingerprintCalls,
+	assert.Equal(1, provider.fingerprintCalls,
 		"a legacy row without file_hash must not keep taking the stat-only skip")
 	record, ok := engine.verifiedSources[verifiedSourceKey{
 		agent: parser.AgentClaude, path: path,
 	}]
-	require.True(t, ok)
-	assert.False(t, record.trusted,
+	require.True(ok)
+	assert.False(record.trusted,
 		"failed parsing must not promote source trust")
 }

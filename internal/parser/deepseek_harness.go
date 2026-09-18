@@ -733,7 +733,7 @@ func deepSeekHarnessOpenNumber(value int64, present bool) string {
 	if !present {
 		return "none"
 	}
-	return fmt.Sprintf("%d", value)
+	return strconv.FormatInt(value, 10)
 }
 
 func eventError(event deepSeekHarnessEvent, err error) error {

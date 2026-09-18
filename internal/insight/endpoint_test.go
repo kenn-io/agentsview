@@ -25,6 +25,8 @@ func TestMain(m *testing.M) {
 }
 
 func TestGenerateStreamWithOptions_OpenAIEndpoint(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Setenv("PATH", t.TempDir())
 	var got struct {
 		Model    string `json:"model"`
@@ -35,29 +37,29 @@ func TestGenerateStreamWithOptions_OpenAIEndpoint(t *testing.T) {
 		Stream bool `json:"stream"`
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, http.MethodPost, r.Method)
-		require.Equal(t, "/v1/chat/completions", r.URL.Path)
-		require.Equal(t, "tenant=local", r.URL.RawQuery)
-		require.Equal(t, "application/json", r.Header.Get("Content-Type"))
-		require.Equal(t, "Bearer test-key", r.Header.Get("Authorization"))
-		require.NoError(t, json.UnmarshalRead(r.Body, &got))
+		assert.Equal(http.MethodPost, r.Method)
+		assert.Equal("/v1/chat/completions", r.URL.Path)
+		assert.Equal("tenant=local", r.URL.RawQuery)
+		assert.Equal("application/json", r.Header.Get("Content-Type"))
+		assert.Equal("Bearer test-key", r.Header.Get("Authorization"))
+		assert.NoError(json.UnmarshalRead(r.Body, &got))
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"model":"served-model","choices":[{"message":{"role":"assistant","content":"answer"}}]}`))
 	}))
 	defer server.Close()
 
-	result, err := GenerateStreamWithOptions(context.Background(), "claude", "exact prompt", nil, GenerateOptions{
+	result, err := GenerateStreamWithOptions(t.Context(), "claude", "exact prompt", nil, GenerateOptions{
 		Endpoint: &EndpointConfig{Endpoint: server.URL + "/v1?tenant=local", Model: "configured-model", APIKey: "test-key"},
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "configured-model", got.Model)
-	assert.Len(t, got.Messages, 1)
-	assert.Equal(t, "user", got.Messages[0].Role)
-	assert.Equal(t, "exact prompt", got.Messages[0].Content)
-	assert.False(t, got.Stream)
-	assert.Equal(t, "answer", result.Content)
-	assert.Equal(t, "openai", result.Agent)
-	assert.Equal(t, "served-model", result.Model)
+	assert.Equal("configured-model", got.Model)
+	assert.Len(got.Messages, 1)
+	assert.Equal("user", got.Messages[0].Role)
+	assert.Equal("exact prompt", got.Messages[0].Content)
+	assert.False(got.Stream)
+	assert.Equal("answer", result.Content)
+	assert.Equal("openai", result.Agent)
+	assert.Equal("served-model", result.Model)
 }
 
 func TestOpenAIEndpoint_BearerAuth(t *testing.T) {
@@ -66,7 +68,7 @@ func TestOpenAIEndpoint_BearerAuth(t *testing.T) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
 	}))
 	defer server.Close()
-	_, err := generateEndpoint(context.Background(), EndpointConfig{Endpoint: server.URL, Model: "m", APIKey: "secret"}, "p")
+	_, err := generateEndpoint(t.Context(), EndpointConfig{Endpoint: server.URL, Model: "m", APIKey: "secret"}, "p")
 	require.NoError(t, err)
 }
 
@@ -76,7 +78,7 @@ func TestOpenAIEndpoint_AnonymousRequestOmitsBearer(t *testing.T) {
 		_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"}}]}`))
 	}))
 	defer server.Close()
-	_, err := generateEndpoint(context.Background(), EndpointConfig{Endpoint: server.URL, Model: "m"}, "p")
+	_, err := generateEndpoint(t.Context(), EndpointConfig{Endpoint: server.URL, Model: "m"}, "p")
 	require.NoError(t, err)
 }
 
@@ -97,7 +99,7 @@ func TestOpenAIEndpoint_HonorsCancellation(t *testing.T) {
 		server.Close()
 	}()
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	errs := make(chan error, 1)
 	go func() {
@@ -118,9 +120,9 @@ func TestOpenAIEndpoint_HonorsCancellation(t *testing.T) {
 }
 
 func TestOpenAIEndpoint_RejectsUnsafeTransport(t *testing.T) {
-	_, err := generateEndpoint(context.Background(), EndpointConfig{Endpoint: "ftp://models.example/v1", Model: "m"}, "p")
+	_, err := generateEndpoint(t.Context(), EndpointConfig{Endpoint: "ftp://models.example/v1", Model: "m"}, "p")
 	require.Error(t, err)
-	_, err = generateEndpoint(context.Background(), EndpointConfig{Endpoint: "http://models.example/v1", Model: "m"}, "p")
+	_, err = generateEndpoint(t.Context(), EndpointConfig{Endpoint: "http://models.example/v1", Model: "m"}, "p")
 	require.Error(t, err)
 }
 
@@ -148,7 +150,7 @@ func TestOpenAIEndpoint_ResponseContract(t *testing.T) {
 				_, _ = w.Write([]byte(tt.body))
 			}))
 			defer server.Close()
-			_, err := generateEndpoint(context.Background(), EndpointConfig{Endpoint: server.URL, Model: "m"}, "p")
+			_, err := generateEndpoint(t.Context(), EndpointConfig{Endpoint: server.URL, Model: "m"}, "p")
 			if tt.bad {
 				require.Error(t, err)
 			} else {
@@ -166,7 +168,7 @@ func TestOpenAIEndpoint_RefusesRedirect(t *testing.T) {
 		http.Redirect(w, r, target.URL, http.StatusFound)
 	}))
 	defer redirect.Close()
-	_, err := generateEndpoint(context.Background(), EndpointConfig{Endpoint: redirect.URL, Model: "m"}, "prompt")
+	_, err := generateEndpoint(t.Context(), EndpointConfig{Endpoint: redirect.URL, Model: "m"}, "prompt")
 	require.Error(t, err)
 	assert.False(t, called)
 }
@@ -177,7 +179,7 @@ func TestOpenAIEndpoint_RedactsErrors(t *testing.T) {
 		_, _ = w.Write([]byte("prompt and secret-key"))
 	}))
 	defer server.Close()
-	_, err := generateEndpoint(context.Background(), EndpointConfig{Endpoint: server.URL, Model: "m", APIKey: "secret-key"}, "prompt")
+	_, err := generateEndpoint(t.Context(), EndpointConfig{Endpoint: server.URL, Model: "m", APIKey: "secret-key"}, "prompt")
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), "prompt")
 	assert.NotContains(t, err.Error(), "secret-key")
@@ -188,7 +190,7 @@ func TestOpenAIEndpoint_RejectsOversizedResponse(t *testing.T) {
 		_, _ = w.Write([]byte(strings.Repeat("x", int(maxEndpointResponseBytes)+1)))
 	}))
 	defer server.Close()
-	_, err := generateEndpoint(context.Background(), EndpointConfig{Endpoint: server.URL, Model: "m"}, "p")
+	_, err := generateEndpoint(t.Context(), EndpointConfig{Endpoint: server.URL, Model: "m"}, "p")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "too large")
 }
@@ -198,7 +200,7 @@ func TestGenerateStreamWithOptions_EndpointFailureDoesNotFallbackToCLI(t *testin
 	t.Setenv("AGENTSVIEW_TEST_CLI_MARKER", marker)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
 	defer server.Close()
-	_, err := GenerateStreamWithOptions(context.Background(), "claude", "prompt", nil, GenerateOptions{
+	_, err := GenerateStreamWithOptions(t.Context(), "claude", "prompt", nil, GenerateOptions{
 		Agents:   map[string]AgentConfig{"claude": {Binary: os.Args[0]}},
 		Endpoint: &EndpointConfig{Endpoint: server.URL, Model: "m"},
 	})
@@ -208,7 +210,7 @@ func TestGenerateStreamWithOptions_EndpointFailureDoesNotFallbackToCLI(t *testin
 }
 
 func TestGenerateStreamWithOptions_EndpointUnsetUsesCLI(t *testing.T) {
-	_, err := GenerateStreamWithOptions(context.Background(), "claude", "prompt", nil, GenerateOptions{
+	_, err := GenerateStreamWithOptions(t.Context(), "claude", "prompt", nil, GenerateOptions{
 		Agents: map[string]AgentConfig{"claude": {Binary: "missing-cli-for-endpoint-unset-test"}},
 	})
 	require.Error(t, err)

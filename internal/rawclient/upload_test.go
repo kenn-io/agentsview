@@ -40,15 +40,18 @@ func withTokenRoute(next http.Handler) http.Handler {
 }
 
 func TestMissingObjectsRoundTrip(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	digest := "aa00000000000000000000000000000000000000000000000000000000000000"
 	mux := withTokenRoute(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Handler goroutines use assert, never require/FailNow.
-		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "/api/v1/raw-sync/objects/missing", r.URL.Path)
+		assert.Equal(http.MethodPost, r.Method)
+		assert.Equal("/api/v1/raw-sync/objects/missing", r.URL.Path)
 		body, err := io.ReadAll(r.Body)
-		if assert.NoError(t, err) {
-			assert.JSONEq(t, `{"provider":"claude","objects":[`+
+		if assert.NoError(err) {
+			assert.JSONEq(`{"provider":"claude","objects":[`+
 				`{"sha256":"`+digest+`","length":3}]}`, string(body))
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -61,10 +64,10 @@ func TestMissingObjectsRoundTrip(t *testing.T) {
 	object := rawsync.ObjectRef{SHA256: digest, Length: 3}
 	missing, err := client.MissingObjects(t.Context(), parser.AgentClaude,
 		[]rawsync.ObjectRef{object, object})
-	require.NoError(t, err)
-	require.Len(t, missing, 1)
-	assert.Equal(t, digest, missing[0].SHA256)
-	assert.Equal(t, int64(3), missing[0].Length)
+	require.NoError(err)
+	require.Len(missing, 1)
+	assert.Equal(digest, missing[0].SHA256)
+	assert.Equal(int64(3), missing[0].Length)
 }
 
 func TestMissingObjectsRejectsResponseOutsideRequestedOrderedSubset(t *testing.T) {
@@ -368,6 +371,9 @@ func TestUploadObjectRejectsMalformedPatchResponse(t *testing.T) {
 }
 
 func TestUploadObjectRejectsPatchOffsetBeyondChunk(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	body := []byte("hello")
 	object := newUploadObject(t, body)
@@ -379,7 +385,7 @@ func TestUploadObjectRejectsPatchOffsetBeyondChunk(t *testing.T) {
 			io.WriteString(w, uploadResponseJSON("up_1", object, 0, false))
 		case http.MethodPatch:
 			chunk, err := io.ReadAll(r.Body)
-			if !assert.NoError(t, err) {
+			if !assert.NoError(err) {
 				http.Error(w, "read chunk", http.StatusInternalServerError)
 				return
 			}
@@ -399,13 +405,13 @@ func TestUploadObjectRejectsPatchOffsetBeyondChunk(t *testing.T) {
 		BaseURL: server.URL, DeviceID: "dev_test", Credential: "avdc_test",
 		TokenMargin: time.Minute, ChunkBytes: 2,
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	err = client.UploadObject(t.Context(), parser.AgentClaude,
 		object, bytes.NewReader(body))
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "expected offset 2")
-	assert.EqualValues(t, 2, patchedBytes.Load(),
+	require.Error(err)
+	assert.ErrorContains(err, "expected offset 2")
+	assert.EqualValues(2, patchedBytes.Load(),
 		"client must reject completion after only the first chunk")
 }
 
@@ -483,6 +489,9 @@ func TestUploadObjectAdoptsConcurrentDuplicateCompletion(t *testing.T) {
 }
 
 func TestUploadObjectChecksumMismatchIsTerminal(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	body := []byte("terminal")
 	script := &uploadScript{length: int64(len(body)), failFirst: "checksum_mismatch"}
@@ -493,16 +502,19 @@ func TestUploadObjectChecksumMismatchIsTerminal(t *testing.T) {
 	err := client.UploadObject(t.Context(),
 		parser.AgentClaude, newUploadObject(t, body), bytes.NewReader(body))
 	var apiErr *APIError
-	require.ErrorAs(t, err, &apiErr)
-	assert.Equal(t, http.StatusConflict, apiErr.Status)
-	assert.Equal(t, CodeChecksumMismatch, apiErr.Code)
-	require.NotNil(t, apiErr.CurrentUploadOffset)
-	assert.EqualValues(t, 0, *apiErr.CurrentUploadOffset)
+	require.ErrorAs(err, &apiErr)
+	assert.Equal(http.StatusConflict, apiErr.Status)
+	assert.Equal(CodeChecksumMismatch, apiErr.Code)
+	require.NotNil(apiErr.CurrentUploadOffset)
+	assert.EqualValues(0, *apiErr.CurrentUploadOffset)
 	// No successful PATCH and no retry: the mismatch was terminal.
-	assert.Empty(t, script.patchBytes)
+	assert.Empty(script.patchBytes)
 }
 
 func TestUploadObjectRejectsOversizedChunk(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	body := []byte("0123456789abcdefghij")
 	script := &uploadScript{length: int64(len(body))}
@@ -512,18 +524,18 @@ func TestUploadObjectRejectsOversizedChunk(t *testing.T) {
 		BaseURL: server.URL, DeviceID: "dev_test",
 		Credential: "avdc_test", TokenMargin: time.Minute, ChunkBytes: 8,
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.NoError(t, client.UploadObject(t.Context(),
+	require.NoError(client.UploadObject(t.Context(),
 		parser.AgentClaude, newUploadObject(t, body), bytes.NewReader(body)))
 	// 20 bytes at ChunkBytes 8 → PATCHes of 8, 8, 4 — never more than 8.
-	require.Len(t, script.patchBytes, 3)
+	require.Len(script.patchBytes, 3)
 	var got []byte
 	for _, chunk := range script.patchBytes {
-		assert.LessOrEqual(t, len(chunk), 8)
+		assert.LessOrEqual(len(chunk), 8)
 		got = append(got, chunk...)
 	}
-	assert.Equal(t, body, got)
+	assert.Equal(body, got)
 
 	// The configured ceiling never exceeds the transport's hard cap.
 	capped, err := NewClient(Config{
@@ -531,8 +543,8 @@ func TestUploadObjectRejectsOversizedChunk(t *testing.T) {
 		Credential: "avdc_test",
 		ChunkBytes: rawsync.DefaultUploadChunkBytes + 1,
 	})
-	require.NoError(t, err)
-	assert.Equal(t, rawsync.DefaultUploadChunkBytes, capped.chunkBytes)
+	require.NoError(err)
+	assert.Equal(rawsync.DefaultUploadChunkBytes, capped.chunkBytes)
 }
 
 func TestUploadObjectZeroLengthSkipsPatch(t *testing.T) {
@@ -566,6 +578,9 @@ func TestUploadObjectFinalizesFullOffsetSession(t *testing.T) {
 }
 
 func TestUploadObjectFinalizesAfterDeferredCompletion(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	body := []byte("deferred")
 	script := &uploadScript{length: int64(len(body)), deferComplete: true}
@@ -573,16 +588,19 @@ func TestUploadObjectFinalizesAfterDeferredCompletion(t *testing.T) {
 	t.Cleanup(server.Close)
 	client := newTestClient(t, server.URL, time.Minute)
 
-	require.NoError(t, client.UploadObject(t.Context(),
+	require.NoError(client.UploadObject(t.Context(),
 		parser.AgentClaude, newUploadObject(t, body), bytes.NewReader(body)))
 	// The data PATCH reported the full offset without completion; the empty
 	// finalization PATCH then confirmed it.
-	require.Len(t, script.patchBytes, 2)
-	assert.Equal(t, body, script.patchBytes[0])
-	assert.Empty(t, script.patchBytes[1])
+	require.Len(script.patchBytes, 2)
+	assert.Equal(body, script.patchBytes[0])
+	assert.Empty(script.patchBytes[1])
 }
 
 func TestUploadObjectErrorsWhenFinalizationStaysIncomplete(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	body := []byte("never")
 	script := &uploadScript{
@@ -595,10 +613,10 @@ func TestUploadObjectErrorsWhenFinalizationStaysIncomplete(t *testing.T) {
 
 	err := client.UploadObject(t.Context(),
 		parser.AgentClaude, newUploadObject(t, body), bytes.NewReader(body))
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "not finalized")
+	require.Error(err)
+	assert.ErrorContains(err, "not finalized")
 	// Exactly one finalization attempt: the client never spins on a session
 	// the server refuses to complete.
-	require.Len(t, script.patchBytes, 1)
-	assert.Empty(t, script.patchBytes[0])
+	require.Len(script.patchBytes, 1)
+	assert.Empty(script.patchBytes[0])
 }

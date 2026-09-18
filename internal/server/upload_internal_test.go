@@ -70,6 +70,8 @@ func TestSessionBatchWriteFromParsedPreservesClaudeProvenance(t *testing.T) {
 }
 
 func TestSessionBatchWriteFromParsedPreservesMessageIdentity(t *testing.T) {
+	assert := assert.New(t)
+
 	sess := parser.ParsedSession{ID: "test-message-identity"}
 	msgs := []parser.ParsedMessage{{
 		Ordinal:          1,
@@ -86,12 +88,12 @@ func TestSessionBatchWriteFromParsedPreservesMessageIdentity(t *testing.T) {
 	result := sessionBatchWriteFromParsed(sess, msgs)
 
 	require.Len(t, result.Messages, 1)
-	assert.True(t, result.Messages[0].IsSystem)
-	assert.Equal(t, "system", result.Messages[0].SourceType)
-	assert.Equal(t, "ide_opened_file", result.Messages[0].SourceSubtype)
-	assert.Equal(t, "entry-1:ide-context", result.Messages[0].SourceUUID)
-	assert.Equal(t, "parent-1", result.Messages[0].SourceParentUUID)
-	assert.True(t, result.Messages[0].IsSidechain)
+	assert.True(result.Messages[0].IsSystem)
+	assert.Equal("system", result.Messages[0].SourceType)
+	assert.Equal("ide_opened_file", result.Messages[0].SourceSubtype)
+	assert.Equal("entry-1:ide-context", result.Messages[0].SourceUUID)
+	assert.Equal("parent-1", result.Messages[0].SourceParentUUID)
+	assert.True(result.Messages[0].IsSidechain)
 }
 
 func TestSessionBatchWriteFromParsedPreservesCompactBoundary(t *testing.T) {

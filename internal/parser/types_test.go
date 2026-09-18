@@ -444,6 +444,8 @@ func TestAgentByPrefix(t *testing.T) {
 }
 
 func TestRegistryCompleteness(t *testing.T) {
+	assert := assert.New(t)
+
 	// allTypes is the canonical list of every supported agent. It must match
 	// Registry exactly in both directions: the assertions below fail if an
 	// agent is registered without being listed here (or vice versa), so a new
@@ -525,25 +527,25 @@ func TestRegistryCompleteness(t *testing.T) {
 
 	expected := make(map[AgentType]bool, len(allTypes))
 	for _, at := range allTypes {
-		assert.Falsef(t, expected[at], "AgentType %q listed more than once in allTypes", at)
+		assert.Falsef(expected[at], "AgentType %q listed more than once in allTypes", at)
 		expected[at] = true
 	}
 
 	registered := make(map[AgentType]bool, len(Registry))
 	for _, def := range Registry {
-		assert.Falsef(t, registered[def.Type],
+		assert.Falsef(registered[def.Type],
 			"AgentType %q registered more than once in Registry", def.Type)
 		registered[def.Type] = true
 	}
 
 	// Every listed agent must be registered.
 	for at := range expected {
-		assert.Truef(t, registered[at], "AgentType %q missing from Registry", at)
+		assert.Truef(registered[at], "AgentType %q missing from Registry", at)
 	}
 	// Every registered agent must be listed, so additions to Registry cannot
 	// silently skip this completeness check.
 	for at := range registered {
-		assert.Truef(t, expected[at],
+		assert.Truef(expected[at],
 			"AgentType %q registered but not listed in allTypes (add it to TestRegistryCompleteness)", at)
 	}
 }
@@ -638,42 +640,54 @@ func TestInferRelationshipTypes(t *testing.T) {
 }
 
 func TestZedRegistryEntry(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	def, ok := AgentByType(AgentZed)
-	require.True(t, ok, "AgentZed missing from Registry")
-	require.True(t, def.FileBased, "Zed FileBased")
-	assert.Equal(t, "ZED_DIR", def.EnvVar)
-	assert.Equal(t, "zed_dirs", def.ConfigKey)
-	assert.Equal(t, "zed:", def.IDPrefix)
+	require.True(ok, "AgentZed missing from Registry")
+	require.True(def.FileBased, "Zed FileBased")
+	assert.Equal("ZED_DIR", def.EnvVar)
+	assert.Equal("zed_dirs", def.ConfigKey)
+	assert.Equal("zed:", def.IDPrefix)
 }
 
 func TestZCodeRegistryEntry(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	def, ok := AgentByType(AgentZCode)
-	require.True(t, ok, "AgentZCode missing from Registry")
-	require.False(t, def.FileBased, "ZCode FileBased")
-	assert.Equal(t, "ZCODE_DIR", def.EnvVar)
-	assert.Equal(t, "zcode_dirs", def.ConfigKey)
-	assert.Equal(t, []string{".zcode/cli/db", ".zcode/cli"}, def.DefaultDirs)
-	assert.Equal(t, "zcode:", def.IDPrefix)
-	assert.True(t, def.Usage.NoPerMessageTokenData)
+	require.True(ok, "AgentZCode missing from Registry")
+	require.False(def.FileBased, "ZCode FileBased")
+	assert.Equal("ZCODE_DIR", def.EnvVar)
+	assert.Equal("zcode_dirs", def.ConfigKey)
+	assert.Equal([]string{".zcode/cli/db", ".zcode/cli"}, def.DefaultDirs)
+	assert.Equal("zcode:", def.IDPrefix)
+	assert.True(def.Usage.NoPerMessageTokenData)
 }
 
 func TestShelleyRegistryEntry(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	def, ok := AgentByType(AgentShelley)
-	require.True(t, ok, "AgentShelley missing from Registry")
-	require.True(t, def.FileBased, "Shelley FileBased")
-	assert.Equal(t, "SHELLEY_DIR", def.EnvVar)
-	assert.Equal(t, "shelley_dirs", def.ConfigKey)
-	assert.Equal(t, "shelley:", def.IDPrefix)
+	require.True(ok, "AgentShelley missing from Registry")
+	require.True(def.FileBased, "Shelley FileBased")
+	assert.Equal("SHELLEY_DIR", def.EnvVar)
+	assert.Equal("shelley_dirs", def.ConfigKey)
+	assert.Equal("shelley:", def.IDPrefix)
 }
 
 func TestOmnigentRegistryEntry(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	def, ok := AgentByType(AgentOmnigent)
-	require.True(t, ok, "AgentOmnigent missing from Registry")
-	require.True(t, def.FileBased, "Omnigent FileBased")
-	assert.Equal(t, "OMNIGENT_DIR", def.EnvVar)
-	assert.Equal(t, "omnigent_dirs", def.ConfigKey)
-	assert.Equal(t, "omnigent:", def.IDPrefix)
-	require.Equal(t, []string{".omnigent"}, def.DefaultDirs)
+	require.True(ok, "AgentOmnigent missing from Registry")
+	require.True(def.FileBased, "Omnigent FileBased")
+	assert.Equal("OMNIGENT_DIR", def.EnvVar)
+	assert.Equal("omnigent_dirs", def.ConfigKey)
+	assert.Equal("omnigent:", def.IDPrefix)
+	require.Equal([]string{".omnigent"}, def.DefaultDirs)
 }
 
 func TestOpenCodeRegistryEntry(t *testing.T) {
@@ -690,88 +704,103 @@ func TestOpenCodeRegistryEntry(t *testing.T) {
 }
 
 func TestOpenCodeReviewRegistryEntry(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	def, ok := AgentByType(AgentOpenCodeReview)
-	require.True(t, ok, "AgentOpenCodeReview missing from Registry")
-	require.True(t, def.FileBased, "Open Code Review FileBased")
-	assert.Equal(t, "Open Code Review", def.DisplayName)
-	assert.Equal(t, "OPENCODEREVIEW_DIR", def.EnvVar)
-	assert.Equal(t, "opencodereview_dirs", def.ConfigKey)
-	assert.Equal(t, []string{".opencodereview/sessions"}, def.DefaultDirs)
-	assert.Equal(t, "opencodereview:", def.IDPrefix)
+	require.True(ok, "AgentOpenCodeReview missing from Registry")
+	require.True(def.FileBased, "Open Code Review FileBased")
+	assert.Equal("Open Code Review", def.DisplayName)
+	assert.Equal("OPENCODEREVIEW_DIR", def.EnvVar)
+	assert.Equal("opencodereview_dirs", def.ConfigKey)
+	assert.Equal([]string{".opencodereview/sessions"}, def.DefaultDirs)
+	assert.Equal("opencodereview:", def.IDPrefix)
 }
 
 func TestOpenClaudeRegistryEntry(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	def, ok := AgentByType(AgentOpenClaude)
-	require.True(t, ok, "AgentOpenClaude missing from Registry")
-	require.True(t, def.FileBased, "OpenClaude FileBased")
-	assert.Equal(t, "OPENCLAUDE_PROJECTS_DIR", def.EnvVar)
-	assert.Equal(t, "openclaude_project_dirs", def.ConfigKey)
-	assert.Equal(t, []string{".openclaude/projects"}, def.DefaultDirs)
-	assert.Equal(t, "openclaude:", def.IDPrefix)
+	require.True(ok, "AgentOpenClaude missing from Registry")
+	require.True(def.FileBased, "OpenClaude FileBased")
+	assert.Equal("OPENCLAUDE_PROJECTS_DIR", def.EnvVar)
+	assert.Equal("openclaude_project_dirs", def.ConfigKey)
+	assert.Equal([]string{".openclaude/projects"}, def.DefaultDirs)
+	assert.Equal("openclaude:", def.IDPrefix)
 }
 
 func TestCoworkRegistryEntry(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	def, ok := AgentByType(AgentCowork)
-	require.True(t, ok, "AgentCowork missing from Registry")
-	require.True(t, def.FileBased, "Cowork FileBased")
-	assert.Equal(t, "COWORK_DIR", def.EnvVar)
-	assert.Equal(t, "cowork_dirs", def.ConfigKey)
-	assert.Equal(t, "cowork:", def.IDPrefix)
-	assert.Equal(t, coworkDefaultDirs(), def.DefaultDirs)
-	assert.True(t, def.ShallowWatch,
+	require.True(ok, "AgentCowork missing from Registry")
+	require.True(def.FileBased, "Cowork FileBased")
+	assert.Equal("COWORK_DIR", def.EnvVar)
+	assert.Equal("cowork_dirs", def.ConfigKey)
+	assert.Equal("cowork:", def.IDPrefix)
+	assert.Equal(coworkDefaultDirs(), def.DefaultDirs)
+	assert.True(def.ShallowWatch,
 		"Cowork root contains large local_* working trees that discovery skips")
 }
 
 func TestPeriodicReconcileCapability(t *testing.T) {
+	assert := assert.New(t)
+
 	optedIn := map[AgentType]bool{}
 	for _, def := range Registry {
 		optedIn[def.Type] = def.PeriodicReconcile
 	}
 	// Shallow-watched providers rely on scheduled reconciliation because
 	// subdirectory changes are invisible to their shallow watch coverage.
-	assert.True(t, optedIn[AgentOpenHands])
-	assert.True(t, optedIn[AgentAider])
+	assert.True(optedIn[AgentOpenHands])
+	assert.True(optedIn[AgentAider])
 	// Omnigent's watcher scans only members at or past the stored
 	// updated_at floor, so metadata-only edits and deletions rely on the
 	// scheduled fingerprint-gated container reparse.
-	assert.True(t, optedIn[AgentOmnigent])
+	assert.True(optedIn[AgentOmnigent])
 	// Codebuff's recursive per-project watch covers existing projects;
 	// scheduled reconciliation picks up newly created project
 	// directories under the root (see codebuffWatchRoots).
-	assert.True(t, optedIn[AgentCodebuff])
+	assert.True(optedIn[AgentCodebuff])
 	// Cowork's provider WatchPlan registers its root recursively
 	// (coworkWatchRoots Recursive:true overrides legacy ShallowWatch), so
 	// scheduled reconciliation would redundantly rescan the whole archive.
-	assert.False(t, optedIn[AgentCowork])
+	assert.False(optedIn[AgentCowork])
 	// Recursive session roots must NOT opt in: their shallow roots are
 	// supplemental (codex_provider.go WatchPlan registers Recursive:true),
 	// so scheduled reconciliation would rescan the whole session tree.
-	assert.False(t, optedIn[AgentCodex])
-	assert.False(t, optedIn[AgentHermes])
-	assert.False(t, optedIn[AgentClaude])
-	assert.False(t, optedIn[AgentGemini])
+	assert.False(optedIn[AgentCodex])
+	assert.False(optedIn[AgentHermes])
+	assert.False(optedIn[AgentClaude])
+	assert.False(optedIn[AgentGemini])
 }
 
 func TestRemoteSyncExcludedCapability(t *testing.T) {
+	assert := assert.New(t)
+
 	excluded := map[AgentType]bool{}
 	for _, def := range Registry {
 		excluded[def.Type] = def.RemoteSyncExcluded
 	}
 	// Trae's modern layout stores sessions as encrypted state that a remote
 	// machine cannot read, so it opts out of every remote sync artifact.
-	assert.True(t, excluded[AgentTrae])
+	assert.True(excluded[AgentTrae])
 	// Omnigent's chat.db co-locates transcripts with authentication
 	// secrets, so its source tree never leaves the machine.
-	assert.True(t, excluded[AgentOmnigent])
-	assert.False(t, excluded[AgentClaude])
-	assert.False(t, excluded[AgentCodex])
+	assert.True(excluded[AgentOmnigent])
+	assert.False(excluded[AgentClaude])
+	assert.False(excluded[AgentCodex])
 }
 
 func TestRemoteSyncExcludedAgent(t *testing.T) {
-	assert.True(t, RemoteSyncExcludedAgent(AgentTrae))
-	assert.True(t, RemoteSyncExcludedAgent(AgentOmnigent))
-	assert.False(t, RemoteSyncExcludedAgent(AgentClaude))
-	assert.False(t, RemoteSyncExcludedAgent(AgentType("unknown-agent")))
+	assert := assert.New(t)
+
+	assert.True(RemoteSyncExcludedAgent(AgentTrae))
+	assert.True(RemoteSyncExcludedAgent(AgentOmnigent))
+	assert.False(RemoteSyncExcludedAgent(AgentClaude))
+	assert.False(RemoteSyncExcludedAgent(AgentType("unknown-agent")))
 }
 
 func TestAgentByPrefixCowork(t *testing.T) {
@@ -781,175 +810,204 @@ func TestAgentByPrefixCowork(t *testing.T) {
 }
 
 func TestMiMoCodeRegistryEntry(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	def, ok := AgentByType(AgentMiMoCode)
-	require.True(t, ok, "AgentMiMoCode missing from Registry")
-	require.True(t, def.FileBased, "MiMoCode FileBased")
-	assert.Equal(t, "MIMOCODE_DIR", def.EnvVar)
-	assert.Equal(t, "mimocode_dirs", def.ConfigKey)
-	assert.Equal(t, []string{".local/share/mimocode"}, def.DefaultDirs)
-	assert.Equal(t, "mimocode:", def.IDPrefix)
+	require.True(ok, "AgentMiMoCode missing from Registry")
+	require.True(def.FileBased, "MiMoCode FileBased")
+	assert.Equal("MIMOCODE_DIR", def.EnvVar)
+	assert.Equal("mimocode_dirs", def.ConfigKey)
+	assert.Equal([]string{".local/share/mimocode"}, def.DefaultDirs)
+	assert.Equal("mimocode:", def.IDPrefix)
 	want := []string{
 		"storage/session_diff",
 		"storage/message",
 		"storage/part",
 	}
-	require.Truef(t, slices.Equal(def.WatchSubdirs, want),
+	require.Truef(slices.Equal(def.WatchSubdirs, want),
 		"MiMoCode WatchSubdirs = %v, want %v", def.WatchSubdirs, want)
 }
 
 func TestCommandCodeRegistryEntry(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	def, ok := AgentByType(AgentCommandCode)
-	require.True(t, ok, "AgentCommandCode missing from Registry")
-	require.True(t, def.FileBased, "Command Code FileBased")
-	assert.Equal(t, []string{".commandcode/projects"}, def.DefaultDirs)
-	assert.Equal(t, "commandcode:", def.IDPrefix)
+	require.True(ok, "AgentCommandCode missing from Registry")
+	require.True(def.FileBased, "Command Code FileBased")
+	assert.Equal([]string{".commandcode/projects"}, def.DefaultDirs)
+	assert.Equal("commandcode:", def.IDPrefix)
 }
 
 func TestDevinRegistryEntry(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	def, ok := AgentByType(AgentDevin)
-	require.True(t, ok, "AgentDevin missing from Registry")
-	require.False(t, def.FileBased, "Devin FileBased")
-	assert.Equal(t, "Devin", def.DisplayName)
-	assert.Equal(t, "DEVIN_DIR", def.EnvVar)
-	assert.Equal(t, "devin_dirs", def.ConfigKey)
-	assert.Equal(t, []string{
+	require.True(ok, "AgentDevin missing from Registry")
+	require.False(def.FileBased, "Devin FileBased")
+	assert.Equal("Devin", def.DisplayName)
+	assert.Equal("DEVIN_DIR", def.EnvVar)
+	assert.Equal("devin_dirs", def.ConfigKey)
+	assert.Equal([]string{
 		"Library/Application Support/devin",
 		".local/share/devin",
 	}, def.DefaultDirs)
-	assert.Equal(t, "devin:", def.IDPrefix)
+	assert.Equal("devin:", def.IDPrefix)
 }
 
 func TestDeepSeekTUIRegistryEntry(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	def, ok := AgentByType(AgentDeepSeekTUI)
-	require.True(t, ok, "AgentDeepSeekTUI missing from Registry")
-	require.True(t, def.FileBased, "DeepSeek TUI FileBased")
-	assert.Equal(t, "DeepSeek TUI", def.DisplayName)
-	assert.Equal(t, "DEEPSEEK_TUI_SESSIONS_DIR", def.EnvVar)
-	assert.Equal(t, "deepseek_tui_sessions_dirs", def.ConfigKey)
-	assert.Equal(t, []string{".codewhale/sessions", ".deepseek/sessions"}, def.DefaultDirs)
-	assert.Equal(t, "deepseek-tui:", def.IDPrefix)
+	require.True(ok, "AgentDeepSeekTUI missing from Registry")
+	require.True(def.FileBased, "DeepSeek TUI FileBased")
+	assert.Equal("DeepSeek TUI", def.DisplayName)
+	assert.Equal("DEEPSEEK_TUI_SESSIONS_DIR", def.EnvVar)
+	assert.Equal("deepseek_tui_sessions_dirs", def.ConfigKey)
+	assert.Equal([]string{".codewhale/sessions", ".deepseek/sessions"}, def.DefaultDirs)
+	assert.Equal("deepseek-tui:", def.IDPrefix)
 }
 
 func TestDeepSeekHarnessRegistryEntry(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	def, ok := AgentByType(AgentDeepSeekHarness)
-	require.True(t, ok, "AgentDeepSeekHarness missing from Registry")
-	require.True(t, def.FileBased, "DeepSeek Harness FileBased")
-	assert.Equal(t, "DeepSeek Harness", def.DisplayName)
-	assert.Equal(t, "DEEPSEEK_HARNESS_SESSIONS_DIR", def.EnvVar)
-	assert.Equal(t, "DSH_HOME", def.DefaultRootEnvVar)
-	assert.Equal(t, "deepseek_harness_sessions_dirs", def.ConfigKey)
-	assert.Equal(t, []string{".dsh/sessions"}, def.DefaultDirs)
-	assert.Equal(t, "deepseek-harness:", def.IDPrefix)
+	require.True(ok, "AgentDeepSeekHarness missing from Registry")
+	require.True(def.FileBased, "DeepSeek Harness FileBased")
+	assert.Equal("DeepSeek Harness", def.DisplayName)
+	assert.Equal("DEEPSEEK_HARNESS_SESSIONS_DIR", def.EnvVar)
+	assert.Equal("DSH_HOME", def.DefaultRootEnvVar)
+	assert.Equal("deepseek_harness_sessions_dirs", def.ConfigKey)
+	assert.Equal([]string{".dsh/sessions"}, def.DefaultDirs)
+	assert.Equal("deepseek-harness:", def.IDPrefix)
 }
 
 func TestResolveOpenCodeSourcePrefersStorage(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "storage", "session", "global")
-	require.NoError(t, os.MkdirAll(sessionDir, 0o755), "mkdir session dir")
+	require.NoError(os.MkdirAll(sessionDir, 0o755), "mkdir session dir")
 	dbPath := filepath.Join(root, "opencode.db")
-	require.NoError(t, os.WriteFile(dbPath, []byte("x"), 0o644), "write db marker")
+	require.NoError(os.WriteFile(dbPath, []byte("x"), 0o644), "write db marker")
 
 	got := ResolveOpenCodeSource(root)
-	require.Equal(t, OpenCodeSourceStorage, got.Mode, "Mode")
-	require.Equal(t, filepath.Join(root, "storage", "session"), got.SessionRoot, "SessionRoot")
+	require.Equal(OpenCodeSourceStorage, got.Mode, "Mode")
+	require.Equal(filepath.Join(root, "storage", "session"), got.SessionRoot, "SessionRoot")
 }
 
 func TestResolveMiMoCodeSourcePrefersStorage(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	dir := filepath.Join(root, "storage", "session_diff", "global")
-	require.NoError(t, os.MkdirAll(dir, 0o755), "mkdir")
+	require.NoError(os.MkdirAll(dir, 0o755), "mkdir")
 	dbPath := filepath.Join(root, "mimocode.db")
-	require.NoError(t, os.WriteFile(dbPath, []byte("x"), 0o644), "write db marker")
+	require.NoError(os.WriteFile(dbPath, []byte("x"), 0o644), "write db marker")
 
 	src := ResolveMiMoCodeSource(root)
-	require.Equal(t, OpenCodeSourceStorage, src.Mode, "Mode")
-	require.Equal(t, filepath.Join(root, "storage", "session_diff"), src.SessionRoot)
+	require.Equal(OpenCodeSourceStorage, src.Mode, "Mode")
+	require.Equal(filepath.Join(root, "storage", "session_diff"), src.SessionRoot)
 
 	path := filepath.Join(dir, "ses_test.json")
-	require.NoError(t, os.WriteFile(path,
+	require.NoError(os.WriteFile(path,
 		[]byte(`{"id":"ses_test","directory":"/home/user/code/my-app"}`),
 		0o644))
 
 	discovered := discoverOpenCodeFormatSessions(mimoFmt, root)
-	require.Len(t, discovered, 1)
-	require.Equal(t, AgentMiMoCode, discovered[0].Agent)
+	require.Len(discovered, 1)
+	require.Equal(AgentMiMoCode, discovered[0].Agent)
 
-	require.Equal(t, path, findOpenCodeFormatSourceFile(mimoFmt, root, "ses_test"))
+	require.Equal(path, findOpenCodeFormatSourceFile(t.Context(), mimoFmt, root, "ses_test"))
 }
 
 func TestResolveOpenCodeSourceFallsBackToSQLiteOnBrokenStoragePath(
 	t *testing.T,
 ) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	storagePath := filepath.Join(root, "storage")
-	require.NoError(t, os.WriteFile(storagePath, []byte("x"), 0o644), "write storage marker")
+	require.NoError(os.WriteFile(storagePath, []byte("x"), 0o644), "write storage marker")
 	dbPath := filepath.Join(root, "opencode.db")
-	require.NoError(t, os.WriteFile(dbPath, []byte("x"), 0o644), "write db marker")
+	require.NoError(os.WriteFile(dbPath, []byte("x"), 0o644), "write db marker")
 
 	got := ResolveOpenCodeSource(root)
-	require.Equal(t, OpenCodeSourceSQLite, got.Mode, "Mode")
-	require.Equal(t, dbPath, got.DBPath, "DBPath")
+	require.Equal(OpenCodeSourceSQLite, got.Mode, "Mode")
+	require.Equal(dbPath, got.DBPath, "DBPath")
 }
 
 func TestResolveOpenCodeSourceKeepsStorageAuthoritativeWhenUnreadable(
 	t *testing.T,
 ) {
+	require := require.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("permission semantics differ on Windows")
 	}
 	root := t.TempDir()
 	sessionDir := filepath.Join(root, "storage", "session", "global")
-	require.NoError(t, os.MkdirAll(sessionDir, 0o755), "mkdir session dir")
+	require.NoError(os.MkdirAll(sessionDir, 0o755), "mkdir session dir")
 	storageRoot := filepath.Join(root, "storage")
-	require.NoError(t, os.Chmod(storageRoot, 0o000), "chmod storage root")
+	require.NoError(os.Chmod(storageRoot, 0o000), "chmod storage root")
 	defer func() {
 		_ = os.Chmod(storageRoot, 0o755)
 	}()
 	dbPath := filepath.Join(root, "opencode.db")
-	require.NoError(t, os.WriteFile(dbPath, []byte("x"), 0o644), "write db marker")
+	require.NoError(os.WriteFile(dbPath, []byte("x"), 0o644), "write db marker")
 
 	got := ResolveOpenCodeSource(root)
-	require.Equal(t, OpenCodeSourceStorage, got.Mode, "Mode")
-	require.Equal(t, filepath.Join(root, "storage", "session"), got.SessionRoot, "SessionRoot")
+	require.Equal(OpenCodeSourceStorage, got.Mode, "Mode")
+	require.Equal(filepath.Join(root, "storage", "session"), got.SessionRoot, "SessionRoot")
 }
 
 func TestDiscoverOpenCodeSessions(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	dir := filepath.Join(root, "storage", "session", "global")
-	require.NoError(t, os.MkdirAll(dir, 0o755), "mkdir")
+	require.NoError(os.MkdirAll(dir, 0o755), "mkdir")
 	path := filepath.Join(dir, "ses_test.json")
 	data := []byte(`{"id":"ses_test","directory":"/home/user/code/my-app"}`)
-	require.NoError(t, os.WriteFile(path, data, 0o644), "write session")
+	require.NoError(os.WriteFile(path, data, 0o644), "write session")
 
 	got := discoverOpenCodeFormatSessions(openCodeFmt, root)
-	require.Len(t, got, 1, "len")
-	require.Equal(t, path, got[0].Path, "Path")
-	require.Equal(t, "my_app", got[0].Project, "Project")
-	require.Equal(t, AgentOpenCode, got[0].Agent, "Agent")
+	require.Len(got, 1, "len")
+	require.Equal(path, got[0].Path, "Path")
+	require.Equal("my_app", got[0].Project, "Project")
+	require.Equal(AgentOpenCode, got[0].Agent, "Agent")
 }
 
 func TestDiscoverOpenCodeSessionsIgnoresNestedJSON(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	dir := filepath.Join(root, "storage", "session", "global")
-	require.NoError(t, os.MkdirAll(filepath.Join(dir, "nested"), 0o755), "mkdir")
+	require.NoError(os.MkdirAll(filepath.Join(dir, "nested"), 0o755), "mkdir")
 	path := filepath.Join(dir, "ses_test.json")
-	require.NoError(t, os.WriteFile(path, []byte(`{"id":"ses_test"}`), 0o644), "write session")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "nested", "meta.json"), []byte(`{"id":"meta"}`), 0o644), "write nested json")
+	require.NoError(os.WriteFile(path, []byte(`{"id":"ses_test"}`), 0o644), "write session")
+	require.NoError(os.WriteFile(filepath.Join(dir, "nested", "meta.json"), []byte(`{"id":"meta"}`), 0o644), "write nested json")
 
 	got := discoverOpenCodeFormatSessions(openCodeFmt, root)
-	require.Len(t, got, 1, "len")
-	require.Equal(t, path, got[0].Path, "Path")
+	require.Len(got, 1, "len")
+	require.Equal(path, got[0].Path, "Path")
 }
 
 func TestFindOpenCodeSourceFilePrefersStorage(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	path := filepath.Join(root, "storage", "session", "global", "ses_123.json")
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755), "mkdir")
-	require.NoError(t, os.WriteFile(path, []byte(`{"id":"ses_123"}`), 0o644), "write session")
-	require.NoError(t, os.WriteFile(filepath.Join(root, "opencode.db"), []byte("x"), 0o644), "write db marker")
+	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755), "mkdir")
+	require.NoError(os.WriteFile(path, []byte(`{"id":"ses_123"}`), 0o644), "write session")
+	require.NoError(os.WriteFile(filepath.Join(root, "opencode.db"), []byte("x"), 0o644), "write db marker")
 
-	got := findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_123")
-	require.Equal(t, path, got, "FindOpenCodeSourceFile()")
+	got := findOpenCodeFormatSourceFile(t.Context(), openCodeFmt, root, "ses_123")
+	require.Equal(path, got, "FindOpenCodeSourceFile()")
 }
 
 func TestFindOpenCodeSourceFileFallsBackToSQLiteInHybridRoot(t *testing.T) {
@@ -961,7 +1019,7 @@ func TestFindOpenCodeSourceFileFallsBackToSQLiteInHybridRoot(t *testing.T) {
 	dbPath := filepath.Join(root, "opencode.db")
 	seedHybridSQLiteDB(t, dbPath, "ses_456")
 
-	got := findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_456")
+	got := findOpenCodeFormatSourceFile(t.Context(), openCodeFmt, root, "ses_456")
 	want := OpenCodeSQLiteVirtualPath(dbPath, "ses_456")
 	require.Equal(t, want, got, "FindOpenCodeSourceFile()")
 }
@@ -980,7 +1038,7 @@ func TestFindOpenCodeSourceFileReturnsEmptyWhenSessionMissing(t *testing.T) {
 	dbPath := filepath.Join(root, "opencode.db")
 	seedHybridSQLiteDB(t, dbPath, "ses_unrelated")
 
-	got := findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_missing")
+	got := findOpenCodeFormatSourceFile(t.Context(), openCodeFmt, root, "ses_missing")
 	assert.Empty(t, got, "FindOpenCodeSourceFile()")
 }
 
@@ -989,11 +1047,11 @@ func TestFindOpenCodeSourceFilePureSQLiteOnlyForExistingSession(t *testing.T) {
 	dbPath := filepath.Join(root, "opencode.db")
 	seedHybridSQLiteDB(t, dbPath, "ses_present")
 
-	got := findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_present")
+	got := findOpenCodeFormatSourceFile(t.Context(), openCodeFmt, root, "ses_present")
 	assert.Equal(t,
 		OpenCodeSQLiteVirtualPath(dbPath, "ses_present"),
 		got, "FindOpenCodeSourceFile(present)")
-	got = findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_absent")
+	got = findOpenCodeFormatSourceFile(t.Context(), openCodeFmt, root, "ses_absent")
 	assert.Empty(t, got, "FindOpenCodeSourceFile(absent)")
 }
 
@@ -1127,23 +1185,26 @@ func TestResolveOpenCodeWatchRootsMissingRoot(t *testing.T) {
 }
 
 func TestParseOpenCodeSQLiteVirtualPath(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dbPath := filepath.Join("/tmp", "opencode.db")
 	virtual := OpenCodeSQLiteVirtualPath(dbPath, "ses_123")
 	gotDB, gotSessionID, ok := parseOpenCodeFormatVirtualPath(openCodeFmt.dbName, virtual)
-	require.True(t, ok, "expected virtual path to parse")
-	assert.Equal(t, dbPath, gotDB, "db path")
-	assert.Equal(t, "ses_123", gotSessionID, "session ID")
+	require.True(ok, "expected virtual path to parse")
+	assert.Equal(dbPath, gotDB, "db path")
+	assert.Equal("ses_123", gotSessionID, "session ID")
 	hashDBPath := filepath.Join("/tmp", "opencode#dev", "opencode.db")
 	hashVirtual := OpenCodeSQLiteVirtualPath(hashDBPath, "ses_456")
 	gotDB, gotSessionID, ok = parseOpenCodeFormatVirtualPath(openCodeFmt.dbName, hashVirtual)
-	require.True(t, ok, "expected virtual path with # in db path to parse")
-	assert.Equal(t, hashDBPath, gotDB, "db path with #")
-	assert.Equal(t, "ses_456", gotSessionID, "session ID with #")
+	require.True(ok, "expected virtual path with # in db path to parse")
+	assert.Equal(hashDBPath, gotDB, "db path with #")
+	assert.Equal("ses_456", gotSessionID, "session ID with #")
 	_, _, ok = parseOpenCodeFormatVirtualPath(
 		openCodeFmt.dbName,
 		"/tmp/project#dir/storage/session/global/ses_123.json",
 	)
-	assert.False(t, ok, "expected real storage path with # to be rejected")
+	assert.False(ok, "expected real storage path with # to be rejected")
 }
 
 func TestStripHostPrefix(t *testing.T) {
@@ -1304,15 +1365,18 @@ func TestVSCodeCopilotDefaultDirs(t *testing.T) {
 }
 
 func TestWindsurfRegistryEntry(t *testing.T) {
-	def, ok := AgentByType(AgentWindsurf)
-	require.True(t, ok, "AgentWindsurf not in Registry")
+	assert := assert.New(t)
+	require := require.New(t)
 
-	assert.Equal(t, "Windsurf", def.DisplayName)
-	assert.Equal(t, "WINDSURF_DIR", def.EnvVar)
-	assert.Equal(t, "windsurf_dirs", def.ConfigKey)
-	assert.Equal(t, "windsurf:", def.IDPrefix)
-	assert.True(t, def.FileBased)
-	assert.Contains(t, def.WatchSubdirs, "workspaceStorage")
+	def, ok := AgentByType(AgentWindsurf)
+	require.True(ok, "AgentWindsurf not in Registry")
+
+	assert.Equal("Windsurf", def.DisplayName)
+	assert.Equal("WINDSURF_DIR", def.EnvVar)
+	assert.Equal("windsurf_dirs", def.ConfigKey)
+	assert.Equal("windsurf:", def.IDPrefix)
+	assert.True(def.FileBased)
+	assert.Contains(def.WatchSubdirs, "workspaceStorage")
 
 	required := []string{
 		"AppData/Roaming/Windsurf/User",
@@ -1323,16 +1387,18 @@ func TestWindsurfRegistryEntry(t *testing.T) {
 		".config/Windsurf - Next/User",
 	}
 	for _, path := range required {
-		assert.Truef(t, slices.Contains(def.DefaultDirs, path),
+		assert.Truef(slices.Contains(def.DefaultDirs, path),
 			"missing default dir: %s", path)
 	}
 
 	byPrefix, ok := AgentByPrefix("windsurf:session-a")
-	require.True(t, ok)
-	assert.Equal(t, AgentWindsurf, byPrefix.Type)
+	require.True(ok)
+	assert.Equal(AgentWindsurf, byPrefix.Type)
 }
 
 func TestApplyUsageEventTokenTotals(t *testing.T) {
+	assert := assert.New(t)
+
 	// Verify that applyUsageEventTokenTotals computes PeakContextTokens
 	// correctly including cache-creation and cache-read tokens.
 	sess := &ParsedSession{}
@@ -1353,17 +1419,19 @@ func TestApplyUsageEventTokenTotals(t *testing.T) {
 
 	applyUsageEventTokenTotals(sess, events)
 
-	assert.True(t, sess.HasTotalOutputTokens)
-	assert.Equal(t, 350, sess.TotalOutputTokens)
+	assert.True(sess.HasTotalOutputTokens)
+	assert.Equal(350, sess.TotalOutputTokens)
 
-	assert.True(t, sess.HasPeakContextTokens)
+	assert.True(sess.HasPeakContextTokens)
 	// Peak context should be max of context window (InputTokens + CacheRead + CacheCreation)
 	// Event 1 context = 1000 + 500 + 300 = 1800
 	// Event 2 context = 800 + 1200 + 100 = 2100
-	assert.Equal(t, 2100, sess.PeakContextTokens)
+	assert.Equal(2100, sess.PeakContextTokens)
 }
 
 func TestReasonixRegistryEntry(t *testing.T) {
+	assert := assert.New(t)
+
 	// Find Reasonix in the registry
 	var reasonixDef *AgentDef
 	for _, def := range Registry {
@@ -1375,19 +1443,19 @@ func TestReasonixRegistryEntry(t *testing.T) {
 	require.NotNil(t, reasonixDef, "AgentReasonix must be in Registry")
 
 	// Verify basic properties
-	assert.Equal(t, AgentReasonix, reasonixDef.Type)
-	assert.Equal(t, "Reasonix", reasonixDef.DisplayName)
-	assert.Equal(t, "REASONIX_DIR", reasonixDef.EnvVar)
-	assert.Equal(t, "reasonix_dirs", reasonixDef.ConfigKey)
-	assert.Equal(t, "reasonix:", reasonixDef.IDPrefix)
-	assert.True(t, reasonixDef.FileBased)
+	assert.Equal(AgentReasonix, reasonixDef.Type)
+	assert.Equal("Reasonix", reasonixDef.DisplayName)
+	assert.Equal("REASONIX_DIR", reasonixDef.EnvVar)
+	assert.Equal("reasonix_dirs", reasonixDef.ConfigKey)
+	assert.Equal("reasonix:", reasonixDef.IDPrefix)
+	assert.True(reasonixDef.FileBased)
 
 	// Verify watch subdirs
-	assert.Contains(t, reasonixDef.WatchSubdirs, "sessions")
-	assert.Contains(t, reasonixDef.WatchSubdirs, "archive")
+	assert.Contains(reasonixDef.WatchSubdirs, "sessions")
+	assert.Contains(reasonixDef.WatchSubdirs, "archive")
 
 	// Verify default dirs contain .reasonix and Windows path
-	assert.True(t, len(reasonixDef.DefaultDirs) > 0)
+	assert.True(len(reasonixDef.DefaultDirs) > 0)
 	hasUnix := false
 	hasWindows := false
 	for _, dir := range reasonixDef.DefaultDirs {
@@ -1398,8 +1466,8 @@ func TestReasonixRegistryEntry(t *testing.T) {
 			hasWindows = true
 		}
 	}
-	assert.True(t, hasUnix, "DefaultDirs should contain .reasonix")
-	assert.True(t, hasWindows, "DefaultDirs should contain AppData/Roaming/reasonix")
+	assert.True(hasUnix, "DefaultDirs should contain .reasonix")
+	assert.True(hasWindows, "DefaultDirs should contain AppData/Roaming/reasonix")
 }
 
 func TestFreebuffNotRegistered(t *testing.T) {

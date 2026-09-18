@@ -36,43 +36,51 @@ func TestOpenFolderTransportInitializesMissingAndEmptyTargets(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			t.Parallel()
 
 			target := filepath.Join(t.TempDir(), "share")
 			if tt.create {
-				require.NoError(t, os.Mkdir(target, 0o755))
+				require.NoError(os.Mkdir(target, 0o755))
 			}
 
 			transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, transport.Close()) })
+			require.NoError(err)
+			t.Cleanup(func() { require.NoError(transport.Close()) })
 
 			body, err := os.ReadFile(filepath.Join(target, ".agentsview-artifacts.json"))
-			require.NoError(t, err)
+			require.NoError(err)
 			var marker folderMarker
-			require.NoError(t, json.Unmarshal(body, &marker))
-			assert.Equal(t, folderFormatName, marker.Format)
-			assert.Equal(t, folderFormatVersion, marker.Version)
-			assert.Len(t, marker.NamespaceID, 32)
+			require.NoError(json.Unmarshal(body, &marker))
+			assert.Equal(folderFormatName, marker.Format)
+			assert.Equal(folderFormatVersion, marker.Version)
+			assert.Len(marker.NamespaceID, 32)
 		})
 	}
 }
 
 func TestOpenFolderTransportReopensMarkedTarget(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	initialized, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	require.NoError(t, initialized.Close())
+	require.NoError(err)
+	require.NoError(initialized.Close())
 
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
-	require.NoError(t, transport.Prepare(t.Context(), nil))
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
+	require.NoError(transport.Prepare(t.Context(), nil))
 }
 
 func TestOpenFolderTransportRecoversInterruptedMarkerTemporary(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
@@ -80,19 +88,21 @@ func TestOpenFolderTransportRecoversInterruptedMarkerTemporary(t *testing.T) {
 		target,
 		folderMarkerTempPrefix+"0123456789abcdef",
 	)
-	require.NoError(t, os.WriteFile(temporary, []byte(`{"format":`), 0o600))
+	require.NoError(os.WriteFile(temporary, []byte(`{"format":`), 0o600))
 
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
-	assert.NoFileExists(t, temporary)
+	assert.NoFileExists(temporary)
 	marker, err := os.ReadFile(filepath.Join(target, folderMarkerName))
-	require.NoError(t, err)
-	assert.Contains(t, string(marker), folderFormatName)
+	require.NoError(err)
+	assert.Contains(string(marker), folderFormatName)
 }
 
 func TestOpenFolderTransportRecoversPartialFinalWithCompleteTemporary(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
@@ -105,40 +115,43 @@ func TestOpenFolderTransportRecoversPartialFinalWithCompleteTemporary(t *testing
 		NamespaceID: "0123456789abcdef0123456789abcdef",
 		Version:     folderFormatVersion,
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	body = append(body, '\n')
-	require.NoError(t, os.WriteFile(temporary, body, 0o600))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(temporary, body, 0o600))
+	require.NoError(os.WriteFile(
 		filepath.Join(target, folderMarkerName),
 		[]byte(`{"format":`),
 		0o600,
 	))
 
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	assert.NoFileExists(t, temporary)
 	root, err := os.OpenRoot(target)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = readFolderMarker(root)
-	require.NoError(t, err)
-	require.NoError(t, root.Close())
+	require.NoError(err)
+	require.NoError(root.Close())
 }
 
 func TestOpenFolderTransportRejectsMarkerTempLookalike(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	lookalike := filepath.Join(target, folderMarkerTempPrefix+"not-generated")
-	require.NoError(t, os.WriteFile(lookalike, []byte("keep"), 0o600))
+	require.NoError(os.WriteFile(lookalike, []byte("keep"), 0o600))
 
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.Error(t, err)
-	assert.Nil(t, transport)
-	assert.ErrorContains(t, err, "not an agentsview artifact target")
-	assert.FileExists(t, lookalike)
-	assert.NoFileExists(t, filepath.Join(target, folderMarkerName))
+	require.Error(err)
+	assert.Nil(transport)
+	assert.ErrorContains(err, "not an agentsview artifact target")
+	assert.FileExists(lookalike)
+	assert.NoFileExists(filepath.Join(target, folderMarkerName))
 }
 
 func TestCreateFolderMarkerExclusiveRemovesPartialFinal(t *testing.T) {
@@ -166,18 +179,21 @@ func TestCreateFolderMarkerExclusiveRemovesPartialFinal(t *testing.T) {
 }
 
 func TestOpenFolderTransportRefusesUnmarkedNonemptyTarget(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	unrelated := filepath.Join(target, "keep.txt")
-	require.NoError(t, os.WriteFile(unrelated, []byte("keep"), 0o600))
+	require.NoError(os.WriteFile(unrelated, []byte("keep"), 0o600))
 
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.Error(t, err)
-	assert.Nil(t, transport)
-	assert.ErrorContains(t, err, "not an agentsview artifact target")
-	assert.FileExists(t, unrelated)
-	assert.NoFileExists(t, filepath.Join(target, ".agentsview-artifacts.json"))
+	require.Error(err)
+	assert.Nil(transport)
+	assert.ErrorContains(err, "not an agentsview artifact target")
+	assert.FileExists(unrelated)
+	assert.NoFileExists(filepath.Join(target, ".agentsview-artifacts.json"))
 }
 
 func TestOpenFolderTransportRejectsInvalidMarker(t *testing.T) {
@@ -195,19 +211,22 @@ func TestOpenFolderTransportRejectsInvalidMarker(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			t.Parallel()
 
 			target := t.TempDir()
-			require.NoError(t, os.WriteFile(
+			require.NoError(os.WriteFile(
 				filepath.Join(target, ".agentsview-artifacts.json"),
 				[]byte(tt.body),
 				0o600,
 			))
 
 			transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-			require.Error(t, err)
-			assert.Nil(t, transport)
-			assert.ErrorContains(t, err, "invalid agentsview artifact target marker")
+			require.Error(err)
+			assert.Nil(transport)
+			assert.ErrorContains(err, "invalid agentsview artifact target marker")
 		})
 	}
 }
@@ -238,21 +257,24 @@ func TestOpenFolderTransportRejectsProtectedRootOverlap(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			t.Parallel()
 
 			root := t.TempDir()
 			target := tt.target(root)
 			protected := tt.protected(root)
-			require.NoError(t, os.MkdirAll(target, 0o755))
-			require.NoError(t, os.MkdirAll(protected, 0o755))
+			require.NoError(os.MkdirAll(target, 0o755))
+			require.NoError(os.MkdirAll(protected, 0o755))
 
 			transport, err := OpenFolderTransport(target, FolderTransportOptions{
 				ForbiddenRoots: []string{protected},
 			})
-			require.Error(t, err)
-			assert.Nil(t, transport)
-			assert.ErrorContains(t, err, "overlaps a protected root")
-			assert.NoFileExists(t, filepath.Join(target, ".agentsview-artifacts.json"))
+			require.Error(err)
+			assert.Nil(transport)
+			assert.ErrorContains(err, "overlaps a protected root")
+			assert.NoFileExists(filepath.Join(target, ".agentsview-artifacts.json"))
 		})
 	}
 }
@@ -260,23 +282,25 @@ func TestOpenFolderTransportRejectsProtectedRootOverlap(t *testing.T) {
 func TestOpenFolderTransportRejectsMixedRelativeAndAbsoluteOverlap(
 	t *testing.T,
 ) {
+	parentRequire := require.New(t)
+
 	t.Parallel()
 
 	workingDirectory, err := os.Getwd()
-	require.NoError(t, err)
+	parentRequire.NoError(err)
 	root, err := os.MkdirTemp(
 		workingDirectory,
 		".artifact-overlap-",
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(root)) })
+	parentRequire.NoError(err)
+	t.Cleanup(func() { parentRequire.NoError(os.RemoveAll(root)) })
 	protected := filepath.Join(root, "provider")
 	target := filepath.Join(protected, "share")
-	require.NoError(t, os.MkdirAll(target, 0o755))
+	parentRequire.NoError(os.MkdirAll(target, 0o755))
 	relativeTarget, err := filepath.Rel(workingDirectory, target)
-	require.NoError(t, err)
+	parentRequire.NoError(err)
 	relativeProtected, err := filepath.Rel(workingDirectory, protected)
-	require.NoError(t, err)
+	parentRequire.NoError(err)
 
 	tests := []struct {
 		name      string
@@ -324,19 +348,22 @@ func TestPathsOverlapRejectsCaseAliasesOnEveryPlatform(t *testing.T) {
 }
 
 func TestOpenFolderTransportRejectsCaseAliasOverlap(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	root := t.TempDir()
 	protected := filepath.Join(root, "Protected")
 	target := filepath.Join(protected, "share")
-	require.NoError(t, os.MkdirAll(target, 0o755))
+	require.NoError(os.MkdirAll(target, 0o755))
 	alias := filepath.Join(root, strings.ToLower(filepath.Base(protected)))
 	aliasInfo, err := os.Stat(alias)
 	if err != nil {
 		t.Skip("test filesystem is case-sensitive")
 	}
 	protectedInfo, err := os.Stat(protected)
-	require.NoError(t, err)
+	require.NoError(err)
 	if !os.SameFile(aliasInfo, protectedInfo) {
 		t.Skip("test filesystem does not resolve case aliases")
 	}
@@ -344,62 +371,69 @@ func TestOpenFolderTransportRejectsCaseAliasOverlap(t *testing.T) {
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{
 		ForbiddenRoots: []string{alias},
 	})
-	require.Error(t, err)
-	assert.Nil(t, transport)
-	assert.ErrorContains(t, err, "overlaps a protected root")
-	assert.NoFileExists(t, filepath.Join(target, folderMarkerName))
+	require.Error(err)
+	assert.Nil(transport)
+	assert.ErrorContains(err, "overlaps a protected root")
+	assert.NoFileExists(filepath.Join(target, folderMarkerName))
 }
 
 func TestOpenFolderTransportResolvesFinalSymlink(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 
 	root := t.TempDir()
 	target := filepath.Join(root, "actual")
-	require.NoError(t, os.Mkdir(target, 0o755))
+	require.NoError(os.Mkdir(target, 0o755))
 	alias := filepath.Join(root, "alias")
-	require.NoError(t, os.Symlink(target, alias))
+	require.NoError(os.Symlink(target, alias))
 
 	transport, err := OpenFolderTransport(alias, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	assert.FileExists(t, filepath.Join(target, ".agentsview-artifacts.json"))
 }
 
 func TestFolderTransportPrepareRejectsSwappedTarget(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 
 	root := t.TempDir()
 	target := filepath.Join(root, "share")
-	require.NoError(t, os.Mkdir(target, 0o755))
+	require.NoError(os.Mkdir(target, 0o755))
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows prevents replacing a directory held open by os.Root")
 	}
 
 	moved := filepath.Join(root, "moved")
-	require.NoError(t, os.Rename(target, moved))
-	require.NoError(t, os.Mkdir(target, 0o755))
+	require.NoError(os.Rename(target, moved))
+	require.NoError(os.Mkdir(target, 0o755))
 	markerBody, err := os.ReadFile(filepath.Join(moved, folderMarkerName))
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(target, folderMarkerName), markerBody, 0o600,
 	))
 
 	err = transport.Prepare(t.Context(), nil)
-	require.Error(t, err)
+	require.Error(err)
 	assert.ErrorContains(t, err, "changed while open")
 }
 
 func TestFolderTransportPullsDependenciesBeforeCheckpoint(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	origin := "peer-a1b2c3"
 	segmentBody := []byte("{\"content\":\"hello\"}\n")
@@ -408,7 +442,7 @@ func TestFolderTransportPullsDependenciesBeforeCheckpoint(t *testing.T) {
 	segment := testContentRef(t, origin, KindSegments, segmentBody, ".ndjson")
 	manifest := testContentRef(t, origin, KindManifests, manifestBody, ".json")
 	checkpoint, err := NewRef(origin, KindCheckpoints, "cp-0000000001.json")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	writeFolderWire(t, target, segment, segmentBody)
 	writeFolderWire(t, target, manifest, manifestBody)
@@ -420,10 +454,10 @@ func TestFolderTransportPullsDependenciesBeforeCheckpoint(t *testing.T) {
 		store,
 		testFolderPublishOrigin,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{Received: 3}, result)
-	require.Len(t, store.changed, 3)
-	assert.Equal(t, []Kind{
+	require.NoError(err)
+	assert.Equal(ExchangeResult{Received: 3}, result)
+	require.Len(store.changed, 3)
+	assert.Equal([]Kind{
 		KindSegments,
 		KindManifests,
 		KindCheckpoints,
@@ -442,18 +476,21 @@ func TestFolderTransportPullsDependenciesBeforeCheckpoint(t *testing.T) {
 		store,
 		testFolderPublishOrigin,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{}, replay)
-	require.Len(t, store.changed, 3)
+	require.NoError(err)
+	assert.Equal(ExchangeResult{}, replay)
+	require.Len(store.changed, 3)
 }
 
 func TestFolderTransportPullsOnlyNormalizedSessionKinds(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	origin := "peer-a1b2c3"
 	segmentBody := []byte("{\"content\":\"normalized session\"}\n")
@@ -483,22 +520,25 @@ func TestFolderTransportPullsOnlyNormalizedSessionKinds(t *testing.T) {
 		testFolderPublishOrigin,
 	)
 
-	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{Received: 1}, result)
+	require.NoError(err)
+	assert.Equal(ExchangeResult{Received: 1}, result)
 	assertArtifactBody(t, store, segmentRef, segmentBody)
 	for _, ref := range []Ref{rawRef, metadataRef} {
 		_, err := store.Stat(t.Context(), ref)
-		assert.ErrorIs(t, err, ErrArtifactNotFound)
+		assert.ErrorIs(err, ErrArtifactNotFound)
 	}
 }
 
 func TestFolderTransportPublishesOnlyNormalizedSessionKinds(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	origin := testFolderPublishOrigin
 	segmentBody := []byte("{\"content\":\"normalized session\"}\n")
@@ -524,13 +564,13 @@ func TestFolderTransportPublishesOnlyNormalizedSessionKinds(t *testing.T) {
 
 	result, err := transport.Exchange(t.Context(), store, origin)
 
-	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{Published: 1}, result)
+	require.NoError(err)
+	assert.Equal(ExchangeResult{Published: 1}, result)
 	assertFolderWireBody(t, target, segmentRef, segmentBody)
 	for _, ref := range []Ref{rawRef, metadataRef} {
 		wire, err := ToWireRef(ref)
-		require.NoError(t, err)
-		assert.NoFileExists(t, filepath.Join(
+		require.NoError(err)
+		assert.NoFileExists(filepath.Join(
 			target,
 			wire.Origin,
 			string(wire.Kind),
@@ -540,12 +580,15 @@ func TestFolderTransportPublishesOnlyNormalizedSessionKinds(t *testing.T) {
 }
 
 func TestFolderTransportQuarantinesCompleteCorruptWireAndContinues(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	origin := "peer-a1b2c3"
 	corruptRef := testContentRef(
@@ -556,11 +599,11 @@ func TestFolderTransportQuarantinesCompleteCorruptWireAndContinues(t *testing.T)
 		".json",
 	)
 	corruptWire, err := ToWireRef(corruptRef)
-	require.NoError(t, err)
+	require.NoError(err)
 	wireDirectory := filepath.Join(target, origin, string(KindManifests))
-	require.NoError(t, os.MkdirAll(wireDirectory, 0o755))
+	require.NoError(os.MkdirAll(wireDirectory, 0o755))
 	corruptPath := filepath.Join(wireDirectory, corruptWire.Name)
-	require.NoError(t, os.WriteFile(corruptPath, []byte("not zstd"), 0o600))
+	require.NoError(os.WriteFile(corruptPath, []byte("not zstd"), 0o600))
 	appendFolderJournalTestEntry(t, target, Entry{
 		Ref:      corruptRef,
 		Identity: identityForBytes(t, []byte(`{"v":2}`)),
@@ -576,45 +619,48 @@ func TestFolderTransportQuarantinesCompleteCorruptWireAndContinues(t *testing.T)
 		store,
 		testFolderPublishOrigin,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{Received: 1, Quarantined: 1}, result)
-	assert.NoFileExists(t, corruptPath)
+	require.NoError(err)
+	assert.Equal(ExchangeResult{Received: 1, Quarantined: 1}, result)
+	assert.NoFileExists(corruptPath)
 	quarantined, err := filepath.Glob(corruptPath + folderCorruptSeparator + "*")
-	require.NoError(t, err)
-	require.Len(t, quarantined, 1)
+	require.NoError(err)
+	require.Len(quarantined, 1)
 	assertArtifactBody(t, store, validRef, validBody)
 
-	require.NoError(t, transport.Close())
+	require.NoError(transport.Close())
 	reopened, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(reopened.Close()) })
 	replayStore := &transportRecordingStore{ArtifactStore: newTestArtifactStore(t)}
 	replay, err := reopened.Exchange(
 		t.Context(), replayStore, testFolderPublishOrigin,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{Received: 1}, replay)
+	require.NoError(err)
+	assert.Equal(ExchangeResult{Received: 1}, replay)
 	assertArtifactBody(t, replayStore, validRef, validBody)
 }
 
 func TestFolderTransportQuarantineLetsFreshConsumerAdvanceWhenArtifactExistsLocally(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	origin := "peer-a1b2c3"
 	localBody := []byte(`{"v":2}`)
 	ref := testContentRef(t, origin, KindManifests, localBody, ".json")
 	wire, err := ToWireRef(ref)
-	require.NoError(t, err)
+	require.NoError(err)
 	directory := filepath.Join(target, origin, string(KindManifests))
-	require.NoError(t, os.MkdirAll(directory, 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(directory, 0o755))
+	require.NoError(os.WriteFile(
 		filepath.Join(directory, wire.Name), []byte("not zstd"), 0o600,
 	))
 	appendFolderJournalTestEntry(t, target, Entry{
@@ -631,41 +677,44 @@ func TestFolderTransportQuarantineLetsFreshConsumerAdvanceWhenArtifactExistsLoca
 	result, err := transport.Exchange(
 		t.Context(), store, testFolderPublishOrigin,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{Received: 1, Quarantined: 1}, result)
+	require.NoError(err)
+	assert.Equal(ExchangeResult{Received: 1, Quarantined: 1}, result)
 	assertArtifactBody(t, store, ref, localBody)
-	require.NoError(t, transport.Close())
+	require.NoError(transport.Close())
 
 	reopened, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(reopened.Close()) })
 	replayStore := &transportRecordingStore{ArtifactStore: newTestArtifactStore(t)}
 	replay, err := reopened.Exchange(
 		t.Context(), replayStore, testFolderPublishOrigin,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{Received: 1}, replay)
+	require.NoError(err)
+	assert.Equal(ExchangeResult{Received: 1}, replay)
 	assertArtifactBody(t, replayStore, laterRef, laterBody)
 }
 
 func TestFolderTransportWritesRejectionBeforeQuarantiningWire(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	opened, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
+	require.NoError(err)
 	transport := opened.(*folderTransport)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	origin := "peer-a1b2c3"
 	expectedBody := []byte(`{"v":2}`)
 	ref := testContentRef(t, origin, KindManifests, expectedBody, ".json")
 	wire, err := ToWireRef(ref)
-	require.NoError(t, err)
+	require.NoError(err)
 	directory := filepath.Join(target, origin, string(KindManifests))
-	require.NoError(t, os.MkdirAll(directory, 0o755))
+	require.NoError(os.MkdirAll(directory, 0o755))
 	wirePath := filepath.Join(directory, wire.Name)
-	require.NoError(t, os.WriteFile(wirePath, []byte("not zstd"), 0o600))
+	require.NoError(os.WriteFile(wirePath, []byte("not zstd"), 0o600))
 	identity := identityForBytes(t, expectedBody)
 	appendFolderJournalTestEntry(t, target, Entry{
 		Ref:      ref,
@@ -678,37 +727,40 @@ func TestFolderTransportWritesRejectionBeforeQuarantiningWire(t *testing.T) {
 	}
 	store := &transportRecordingStore{ArtifactStore: newTestArtifactStore(t)}
 	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, interrupted)
-	assert.FileExists(t, wirePath)
+	require.Error(err)
+	assert.ErrorIs(err, interrupted)
+	assert.FileExists(wirePath)
 	kindRoot, err := os.OpenRoot(directory)
-	require.NoError(t, err)
-	require.NoError(t, validateFolderJournalRejection(
+	require.NoError(err)
+	require.NoError(validateFolderJournalRejection(
 		kindRoot,
 		wire.Name,
 		identity,
 	))
-	require.NoError(t, kindRoot.Close())
+	require.NoError(kindRoot.Close())
 
 	transport.quarantineEntry = nil
 	result, err := transport.Exchange(t.Context(), store, testFolderPublishOrigin)
-	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{Quarantined: 1}, result)
-	assert.NoFileExists(t, wirePath)
+	require.NoError(err)
+	assert.Equal(ExchangeResult{Quarantined: 1}, result)
+	assert.NoFileExists(wirePath)
 	quarantined, err := filepath.Glob(wirePath + folderCorruptSeparator + "*")
-	require.NoError(t, err)
-	require.Len(t, quarantined, 1)
+	require.NoError(err)
+	require.Len(quarantined, 1)
 }
 
 func TestFolderTransportRequiresChangeRecorderBeforeAcceptingArtifact(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 	body := []byte("unrecorded")
 	ref := testContentRef(
 		t,
@@ -725,26 +777,28 @@ func TestFolderTransportRequiresChangeRecorderBeforeAcceptingArtifact(
 		store,
 		testFolderPublishOrigin,
 	)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "change recorder is required")
+	require.Error(err)
+	assert.ErrorContains(err, "change recorder is required")
 	_, err = store.Stat(t.Context(), ref)
-	assert.ErrorIs(t, err, ErrArtifactNotFound)
+	assert.ErrorIs(err, ErrArtifactNotFound)
 }
 
 func TestFolderTransportRejectsCheckpointIdentityConflict(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	ref, err := NewRef(
 		"peer-a1b2c3",
 		KindCheckpoints,
 		"cp-0000000001.json",
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	localBody := []byte(`{"origin":"peer-a1b2c3","sessions":{},"v":1}`)
 	remoteBody := []byte(`{"origin":"peer-a1b2c3","sessions":{"x":"y"},"v":1}`)
 	store := newTestArtifactStore(t)
@@ -755,7 +809,7 @@ func TestFolderTransportRejectsCheckpointIdentityConflict(t *testing.T) {
 		canonicalArtifactMediaType(ref.Kind),
 		bytes.NewReader(localBody),
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	writeFolderWire(t, target, ref, remoteBody)
 
 	_, err = transport.Exchange(
@@ -763,7 +817,7 @@ func TestFolderTransportRejectsCheckpointIdentityConflict(t *testing.T) {
 		store,
 		testFolderPublishOrigin,
 	)
-	require.Error(t, err)
+	require.Error(err)
 	assert.ErrorIs(t, err, ErrArtifactConflict)
 	assertArtifactBody(t, store, ref, localBody)
 }
@@ -771,19 +825,22 @@ func TestFolderTransportRejectsCheckpointIdentityConflict(t *testing.T) {
 func TestFolderTransportValidatesJournalIdentityBeforeCheckpointPersistence(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	ref, err := NewRef(
 		"peer-a1b2c3",
 		KindCheckpoints,
 		"cp-0000000001.json",
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	expectedBody := []byte(`{"origin":"peer-a1b2c3","sessions":{},"v":1}`)
 	unexpectedBody := []byte(
 		`{"origin":"peer-a1b2c3","sessions":{"peer-a1b2c3~other":"` +
@@ -797,26 +854,28 @@ func TestFolderTransportValidatesJournalIdentityBeforeCheckpointPersistence(
 	store := &transportRecordingStore{ArtifactStore: newTestArtifactStore(t)}
 
 	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrArtifactConflict)
+	require.Error(err)
+	assert.ErrorIs(err, ErrArtifactConflict)
 	_, statErr := store.Stat(t.Context(), ref)
-	assert.ErrorIs(t, statErr, ErrArtifactNotFound)
-	assert.Empty(t, store.changed)
+	assert.ErrorIs(statErr, ErrArtifactNotFound)
+	assert.Empty(store.changed)
 
 	writeFolderWireFile(t, target, ref, expectedBody)
 	result, err := transport.Exchange(t.Context(), store, testFolderPublishOrigin)
-	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{Received: 1}, result)
+	require.NoError(err)
+	assert.Equal(ExchangeResult{Received: 1}, result)
 	assertArtifactBody(t, store, ref, expectedBody)
 }
 
 func TestFolderTransportRejectsSymlinkedWireEntry(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	body := []byte("segment body")
 	ref := testContentRef(
@@ -827,16 +886,16 @@ func TestFolderTransportRejectsSymlinkedWireEntry(t *testing.T) {
 		".ndjson",
 	)
 	wire, err := ToWireRef(ref)
-	require.NoError(t, err)
+	require.NoError(err)
 	directory := filepath.Join(target, wire.Origin, string(wire.Kind))
-	require.NoError(t, os.MkdirAll(directory, 0o755))
+	require.NoError(os.MkdirAll(directory, 0o755))
 	sourceDirectory := t.TempDir()
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(sourceDirectory, "source"),
 		body,
 		0o600,
 	))
-	require.NoError(t, os.Symlink(
+	require.NoError(os.Symlink(
 		filepath.Join(sourceDirectory, "source"),
 		filepath.Join(directory, wire.Name),
 	))
@@ -850,18 +909,21 @@ func TestFolderTransportRejectsSymlinkedWireEntry(t *testing.T) {
 		newTestArtifactStore(t),
 		testFolderPublishOrigin,
 	)
-	require.Error(t, err)
+	require.Error(err)
 	assert.ErrorContains(t, err, "not a regular file")
 }
 
 func TestFolderTransportPullExchangeWorkStaysBounded(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	opened, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
+	require.NoError(err)
 	transport := opened.(*folderTransport)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	const objectCount = folderExchangeMaxObjects + 1
 	origin := "peer-a1b2c3"
@@ -878,19 +940,22 @@ func TestFolderTransportPullExchangeWorkStaysBounded(t *testing.T) {
 		result, exchangeErr := transport.Exchange(
 			t.Context(), store, testFolderPublishOrigin,
 		)
-		require.NoError(t, exchangeErr)
-		assert.LessOrEqual(t, result.Received, folderExchangeMaxObjects)
+		require.NoError(exchangeErr)
+		assert.LessOrEqual(result.Received, folderExchangeMaxObjects)
 		received += result.Received
 		rounds++
 		if !result.More {
 			break
 		}
 	}
-	assert.Equal(t, objectCount, received)
-	assert.Greater(t, rounds, 1)
+	assert.Equal(objectCount, received)
+	assert.Greater(rounds, 1)
 }
 
 func TestFolderTransportPullResumesWithinObjectBudget(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
@@ -900,8 +965,8 @@ func TestFolderTransportPullResumesWithinObjectBudget(t *testing.T) {
 		MaxBytes:   1 << 20,
 		StateStore: state,
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	origin := "peer-a1b2c3"
 	refs := make([]Ref, 0, 5)
@@ -919,21 +984,21 @@ func TestFolderTransportPullResumesWithinObjectBudget(t *testing.T) {
 		result, exchangeErr := transport.Exchange(
 			t.Context(), store, testFolderPublishOrigin,
 		)
-		require.NoError(t, exchangeErr)
-		assert.LessOrEqual(t, result.Received, 2)
+		require.NoError(exchangeErr)
+		assert.LessOrEqual(result.Received, 2)
 		received += result.Received
 		rounds++
 		if !result.More {
 			break
 		}
-		require.Less(t, rounds, 10)
+		require.Less(rounds, 10)
 	}
 
-	assert.Equal(t, 5, received)
-	assert.Equal(t, 3, rounds)
+	assert.Equal(5, received)
+	assert.Equal(3, rounds)
 	for _, ref := range refs {
 		_, statErr := store.Stat(t.Context(), ref)
-		assert.NoError(t, statErr)
+		assert.NoError(statErr)
 	}
 }
 
@@ -980,12 +1045,15 @@ func TestFolderTransportUsesLstatForUnknownOriginEntryType(t *testing.T) {
 func TestFolderTransportPushesWireObjectsBeforeCheckpointAndRetriesUnchanged(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	store := newTestArtifactStore(t)
 	origin := "local-a1b2c3"
@@ -995,20 +1063,20 @@ func TestFolderTransportPushesWireObjectsBeforeCheckpointAndRetriesUnchanged(
 	segment := testContentRef(t, origin, KindSegments, segmentBody, ".ndjson")
 	manifest := testContentRef(t, origin, KindManifests, manifestBody, ".json")
 	checkpoint, err := NewRef(origin, KindCheckpoints, "cp-0000000001.json")
-	require.NoError(t, err)
+	require.NoError(err)
 	createTestStoreArtifact(t, store, checkpoint, checkpointBody)
 	createTestStoreArtifact(t, store, manifest, manifestBody)
 	createTestStoreArtifact(t, store, segment, segmentBody)
 
 	result, err := transport.Exchange(t.Context(), store, origin)
-	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{Published: 3}, result)
+	require.NoError(err)
+	assert.Equal(ExchangeResult{Published: 3}, result)
 	assertFolderWireBody(t, target, segment, segmentBody)
 	assertFolderWireBody(t, target, manifest, manifestBody)
 	assertFolderWireBody(t, target, checkpoint, checkpointBody)
 
 	manifestWire, err := ToWireRef(manifest)
-	require.NoError(t, err)
+	require.NoError(err)
 	manifestPath := filepath.Join(
 		target,
 		manifestWire.Origin,
@@ -1016,20 +1084,20 @@ func TestFolderTransportPushesWireObjectsBeforeCheckpointAndRetriesUnchanged(
 		manifestWire.Name,
 	)
 	before, err := os.Stat(manifestPath)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	replay, err := transport.Exchange(t.Context(), store, origin)
-	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{}, replay)
+	require.NoError(err)
+	assert.Equal(ExchangeResult{}, replay)
 	after, err := os.Stat(manifestPath)
-	require.NoError(t, err)
-	assert.Equal(t, before.ModTime(), after.ModTime())
+	require.NoError(err)
+	assert.Equal(before.ModTime(), after.ModTime())
 
 	temps, err := filepath.Glob(
 		filepath.Join(target, "*", "*", ".agentsview-artifact-publish-*"),
 	)
-	require.NoError(t, err)
-	assert.Empty(t, temps)
+	require.NoError(err)
+	assert.Empty(temps)
 }
 
 func TestFolderTransportDirectorySyncFailureStopsPublicationAuthority(
@@ -1092,15 +1160,18 @@ func TestFolderTransportDirectorySyncFailureStopsPublicationAuthority(
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			target := t.TempDir()
 			opened, openErr := OpenFolderTransport(
 				target,
 				FolderTransportOptions{},
 			)
-			require.NoError(t, openErr)
+			require.NoError(openErr)
 			transport := opened.(*folderTransport)
-			t.Cleanup(func() { require.NoError(t, transport.Close()) })
-			require.NoError(t, os.MkdirAll(
+			t.Cleanup(func() { require.NoError(transport.Close()) })
+			require.NoError(os.MkdirAll(
 				filepath.Join(
 					target,
 					testFolderPublishOrigin,
@@ -1108,7 +1179,7 @@ func TestFolderTransportDirectorySyncFailureStopsPublicationAuthority(
 				),
 				0o755,
 			))
-			require.NoError(t, os.MkdirAll(
+			require.NoError(os.MkdirAll(
 				filepath.Join(target, folderJournalDirectory),
 				0o755,
 			))
@@ -1130,49 +1201,52 @@ func TestFolderTransportDirectorySyncFailureStopsPublicationAuthority(
 				store,
 				testFolderPublishOrigin,
 			)
-			require.Error(t, exchangeErr)
-			assert.ErrorIs(t, exchangeErr, interrupted)
-			assert.Equal(t, tt.failCall, calls)
+			require.Error(exchangeErr)
+			assert.ErrorIs(exchangeErr, interrupted)
+			assert.Equal(tt.failCall, calls)
 			headPath := filepath.Join(
 				target,
 				folderJournalDirectory,
 				folderJournalHeadName,
 			)
 			if tt.wantHead {
-				assert.FileExists(t, headPath)
+				assert.FileExists(headPath)
 			} else {
-				assert.NoFileExists(t, headPath)
+				assert.NoFileExists(headPath)
 			}
 
-			require.NoError(t, os.Remove(tt.lostEntry(target)))
+			require.NoError(os.Remove(tt.lostEntry(target)))
 			transport.syncDirectory = nil
 			_, exchangeErr = transport.Exchange(
 				t.Context(),
 				store,
 				testFolderPublishOrigin,
 			)
-			require.NoError(t, exchangeErr)
+			require.NoError(exchangeErr)
 			assertFolderWireBody(t, target, ref, body)
 			journal, journalErr := os.OpenRoot(
 				filepath.Join(target, folderJournalDirectory),
 			)
-			require.NoError(t, journalErr)
+			require.NoError(journalErr)
 			head, headErr := readFolderJournalHead(journal)
-			require.NoError(t, headErr)
-			require.NoError(t, journal.Close())
-			assert.Equal(t, int64(1), head.Sequence)
+			require.NoError(headErr)
+			require.NoError(journal.Close())
+			assert.Equal(int64(1), head.Sequence)
 		})
 	}
 }
 
 func TestFolderTransportRetrySyncsVisibleObjectBeforeJournal(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	opened, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
+	require.NoError(err)
 	transport := opened.(*folderTransport)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	body := []byte("visible-but-not-yet-durable")
 	ref := testContentRef(
@@ -1183,7 +1257,7 @@ func TestFolderTransportRetrySyncsVisibleObjectBeforeJournal(t *testing.T) {
 		".ndjson",
 	)
 	wire, err := ToWireRef(ref)
-	require.NoError(t, err)
+	require.NoError(err)
 	store := newTestArtifactStore(t)
 	createTestStoreArtifact(t, store, ref, body)
 	objectSyncInterrupted := errors.New("object directory sync interrupted")
@@ -1199,10 +1273,10 @@ func TestFolderTransportRetrySyncsVisibleObjectBeforeJournal(t *testing.T) {
 	}
 
 	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
-	require.ErrorIs(t, err, objectSyncInterrupted)
-	assert.True(t, failedObjectSync)
+	require.ErrorIs(err, objectSyncInterrupted)
+	assert.True(failedObjectSync)
 	assertFolderWireBody(t, target, ref, body)
-	assert.NoFileExists(t, filepath.Join(
+	assert.NoFileExists(filepath.Join(
 		target,
 		folderJournalDirectory,
 		folderJournalHeadName,
@@ -1216,8 +1290,8 @@ func TestFolderTransportRetrySyncsVisibleObjectBeforeJournal(t *testing.T) {
 		return syncFolderDirectory(root)
 	}
 	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
-	require.ErrorIs(t, err, retrySyncInterrupted)
-	assert.NoFileExists(t, filepath.Join(
+	require.ErrorIs(err, retrySyncInterrupted)
+	assert.NoFileExists(filepath.Join(
 		target,
 		folderJournalDirectory,
 		folderJournalHeadName,
@@ -1225,23 +1299,26 @@ func TestFolderTransportRetrySyncsVisibleObjectBeforeJournal(t *testing.T) {
 
 	transport.syncDirectory = nil
 	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
-	require.NoError(t, err)
+	require.NoError(err)
 	journal, err := os.OpenRoot(filepath.Join(target, folderJournalDirectory))
-	require.NoError(t, err)
+	require.NoError(err)
 	head, err := readFolderJournalHead(journal)
-	require.NoError(t, err)
-	require.NoError(t, journal.Close())
-	assert.Equal(t, int64(1), head.Sequence)
+	require.NoError(err)
+	require.NoError(journal.Close())
+	assert.Equal(int64(1), head.Sequence)
 }
 
 func TestFolderTransportDirectorySyncFailureStopsSubdirectoryUse(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	opened, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
+	require.NoError(err)
 	transport := opened.(*folderTransport)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	body := []byte("subdirectory-sync-segment")
 	ref := testContentRef(
@@ -1259,23 +1336,23 @@ func TestFolderTransportDirectorySyncFailureStopsSubdirectoryUse(t *testing.T) {
 	}
 
 	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, interrupted)
-	assert.NoDirExists(t, filepath.Join(
+	require.Error(err)
+	assert.ErrorIs(err, interrupted)
+	assert.NoDirExists(filepath.Join(
 		target,
 		testFolderPublishOrigin,
 		string(KindSegments),
 	))
-	assert.NoFileExists(t, filepath.Join(
+	assert.NoFileExists(filepath.Join(
 		target,
 		folderJournalDirectory,
 		folderJournalHeadName,
 	))
 
 	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, interrupted)
-	assert.NoDirExists(t, filepath.Join(
+	require.Error(err)
+	assert.ErrorIs(err, interrupted)
+	assert.NoDirExists(filepath.Join(
 		target,
 		testFolderPublishOrigin,
 		string(KindSegments),
@@ -1283,18 +1360,21 @@ func TestFolderTransportDirectorySyncFailureStopsSubdirectoryUse(t *testing.T) {
 
 	transport.syncDirectory = nil
 	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
-	require.NoError(t, err)
+	require.NoError(err)
 	assertFolderWireBody(t, target, ref, body)
 }
 
 func TestFolderTransportPushFallsBackWithoutHardLinks(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	opened, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
+	require.NoError(err)
 	transport := opened.(*folderTransport)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 	transport.publishLink = func(*os.Root, string, string) error {
 		return errors.New("hard links unsupported")
 	}
@@ -1315,8 +1395,8 @@ func TestFolderTransportPushFallsBackWithoutHardLinks(t *testing.T) {
 		store,
 		testFolderPublishOrigin,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{Published: 1}, result)
+	require.NoError(err)
+	assert.Equal(ExchangeResult{Published: 1}, result)
 	assertFolderWireBody(t, target, ref, body)
 
 	replay, err := transport.Exchange(
@@ -1324,29 +1404,32 @@ func TestFolderTransportPushFallsBackWithoutHardLinks(t *testing.T) {
 		store,
 		testFolderPublishOrigin,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{}, replay)
+	require.NoError(err)
+	assert.Equal(ExchangeResult{}, replay)
 }
 
 func TestFolderTransportRemovesAbandonedPublishTemp(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	directory := filepath.Join(
 		target,
 		testFolderPublishOrigin,
 		string(KindSegments),
 	)
-	require.NoError(t, os.MkdirAll(directory, 0o755))
+	require.NoError(os.MkdirAll(directory, 0o755))
 	abandoned := filepath.Join(
 		directory,
 		".agentsview-artifact-publish-crash",
 	)
-	require.NoError(t, os.WriteFile(abandoned, []byte("partial"), 0o600))
+	require.NoError(os.WriteFile(abandoned, []byte("partial"), 0o600))
 
 	body := []byte("complete")
 	ref := testContentRef(
@@ -1364,32 +1447,35 @@ func TestFolderTransportRemovesAbandonedPublishTemp(t *testing.T) {
 		store,
 		testFolderPublishOrigin,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{Published: 1}, result)
-	assert.NoFileExists(t, abandoned)
+	require.NoError(err)
+	assert.Equal(ExchangeResult{Published: 1}, result)
+	assert.NoFileExists(abandoned)
 	assertFolderWireBody(t, target, ref, body)
 }
 
 func TestFolderTransportExchangeLockProtectsActivePublishTemp(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 	directory := filepath.Join(
 		target,
 		testFolderPublishOrigin,
 		string(KindSegments),
 	)
-	require.NoError(t, os.MkdirAll(directory, 0o755))
+	require.NoError(os.MkdirAll(directory, 0o755))
 	active := filepath.Join(directory, folderPublishTempPrefix+"active")
-	require.NoError(t, os.WriteFile(active, []byte("in progress"), 0o600))
+	require.NoError(os.WriteFile(active, []byte("in progress"), 0o600))
 	held := flock.New(filepath.Join(target, folderExchangeLockName))
 	locked, err := held.TryLock()
-	require.NoError(t, err)
-	require.True(t, locked)
-	t.Cleanup(func() { require.NoError(t, held.Unlock()) })
+	require.NoError(err)
+	require.True(locked)
+	t.Cleanup(func() { require.NoError(held.Unlock()) })
 
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
@@ -1398,18 +1484,21 @@ func TestFolderTransportExchangeLockProtectsActivePublishTemp(t *testing.T) {
 		&transportRecordingStore{ArtifactStore: newTestArtifactStore(t)},
 		testFolderPublishOrigin,
 	)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.FileExists(t, active)
+	require.Error(err)
+	assert.ErrorIs(err, context.DeadlineExceeded)
+	assert.FileExists(active)
 }
 
 func TestFolderTransportExchangeLockRejectsSymlinkEscape(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	escaped := filepath.Join(t.TempDir(), "escaped.lock")
 	lockPath := filepath.Join(target, folderExchangeLockName)
@@ -1422,20 +1511,23 @@ func TestFolderTransportExchangeLockRejectsSymlinkEscape(t *testing.T) {
 		&transportRecordingStore{ArtifactStore: newTestArtifactStore(t)},
 		testFolderPublishOrigin,
 	)
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "exchange lock is not a regular file")
-	assert.NoFileExists(t, escaped)
+	require.Error(err)
+	assert.ErrorContains(err, "exchange lock is not a regular file")
+	assert.NoFileExists(escaped)
 }
 
 func TestFolderTransportRejectsOversizedStoreEntryBeforePublication(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 	body := bytes.Repeat([]byte("x"), int(manifestDecodedLimit+1))
 	ref := testContentRef(t, "local-a1b2c3", KindManifests, body, ".json")
 	store := newTestArtifactStore(t)
@@ -1446,12 +1538,12 @@ func TestFolderTransportRejectsOversizedStoreEntryBeforePublication(
 		store,
 		testFolderPublishOrigin,
 	)
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrArtifactInvalid)
-	assert.ErrorContains(t, err, "decoded size limit")
+	require.Error(err)
+	assert.ErrorIs(err, ErrArtifactInvalid)
+	assert.ErrorContains(err, "decoded size limit")
 	wire, err := ToWireRef(ref)
-	require.NoError(t, err)
-	assert.NoFileExists(t, filepath.Join(
+	require.NoError(err)
+	assert.NoFileExists(filepath.Join(
 		target,
 		wire.Origin,
 		string(wire.Kind),
@@ -1462,19 +1554,21 @@ func TestFolderTransportRejectsOversizedStoreEntryBeforePublication(
 func TestFolderTransportQuarantinePreservesDifferentReplacementIdentity(
 	t *testing.T,
 ) {
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	opened, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
+	require.NoError(err)
 	transport := opened.(*folderTransport)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 	ref, err := NewRef(
 		"peer-a1b2c3",
 		KindCheckpoints,
 		"cp-0000000001.json",
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	invalidBody := []byte(`{"v":1}`)
 	replacementBody := []byte(
 		`{"origin":"peer-a1b2c3","seq":1,"sessions":{},"v":1}`,
@@ -1486,19 +1580,22 @@ func TestFolderTransportQuarantinePreservesDifferentReplacementIdentity(
 		ref,
 		identityForBytes(t, invalidBody),
 	)
-	require.Error(t, err)
+	require.Error(err)
 	assert.ErrorIs(t, err, ErrArtifactConflict)
 	assertFolderWireBody(t, target, ref, replacementBody)
 }
 
 func TestFolderTransportPushExchangeWorkStaysBounded(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	opened, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
+	require.NoError(err)
 	transport := opened.(*folderTransport)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	var pageSizes []int
 	transport.observeStorePage = func(size int) {
@@ -1517,19 +1614,19 @@ func TestFolderTransportPushExchangeWorkStaysBounded(t *testing.T) {
 	var rounds int
 	for {
 		result, exchangeErr := transport.Exchange(t.Context(), store, origin)
-		require.NoError(t, exchangeErr)
-		assert.LessOrEqual(t, result.Published, folderExchangeMaxObjects)
+		require.NoError(exchangeErr)
+		assert.LessOrEqual(result.Published, folderExchangeMaxObjects)
 		published += result.Published
 		rounds++
 		if !result.More {
 			break
 		}
 	}
-	assert.Equal(t, objectCount, published)
-	assert.Greater(t, rounds, 1)
-	require.NotEmpty(t, pageSizes)
-	assert.LessOrEqual(t, maxInt(pageSizes), transportStorePageSize)
-	assert.GreaterOrEqual(t, len(pageSizes), 2,
+	assert.Equal(objectCount, published)
+	assert.Greater(rounds, 1)
+	require.NotEmpty(pageSizes)
+	assert.LessOrEqual(maxInt(pageSizes), transportStorePageSize)
+	assert.GreaterOrEqual(len(pageSizes), 2,
 		"the two object-store pages must be observed")
 }
 
@@ -1547,14 +1644,17 @@ func TestFolderTransportPushSharesLimitsAcrossKinds(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			target := t.TempDir()
 			origin := "local-a1b2c3"
 			transport, err := OpenFolderTransport(target, FolderTransportOptions{
 				MaxObjects: tt.maxObjects,
 				MaxBytes:   tt.maxBytes,
 			})
-			require.NoError(t, err)
-			t.Cleanup(func() { require.NoError(t, transport.Close()) })
+			require.NoError(err)
+			t.Cleanup(func() { require.NoError(transport.Close()) })
 
 			store := newTestArtifactStore(t)
 			segmentRef := testContentRef(t, origin, KindSegments, segmentBody, ".ndjson")
@@ -1564,35 +1664,38 @@ func TestFolderTransportPushSharesLimitsAcrossKinds(t *testing.T) {
 				Origin:   origin,
 				Segments: []string{},
 			})
-			require.NoError(t, err)
+			require.NoError(err)
 			manifestRef := testContentRef(t, origin, KindManifests, manifestBody, ".json")
 			createTestStoreArtifact(t, store, manifestRef, manifestBody)
 
 			first, err := transport.Exchange(t.Context(), store, origin)
-			require.NoError(t, err)
-			assert.Equal(t, 1, first.Published)
-			assert.True(t, first.More)
+			require.NoError(err)
+			assert.Equal(1, first.Published)
+			assert.True(first.More)
 			assertFolderWireBody(t, target, segmentRef, segmentBody)
 			_, err = os.Stat(filepath.Join(
 				target, origin, string(KindManifests), manifestRef.Name,
 			))
-			assert.ErrorIs(t, err, fs.ErrNotExist)
+			assert.ErrorIs(err, fs.ErrNotExist)
 
 			second, err := transport.Exchange(t.Context(), store, origin)
-			require.NoError(t, err)
-			assert.Equal(t, 1, second.Published)
+			require.NoError(err)
+			assert.Equal(1, second.Published)
 			assertFolderWireBody(t, target, manifestRef, manifestBody)
 			if second.More {
 				settled, settleErr := transport.Exchange(t.Context(), store, origin)
-				require.NoError(t, settleErr)
-				assert.Zero(t, settled.Published)
-				assert.False(t, settled.More)
+				require.NoError(settleErr)
+				assert.Zero(settled.Published)
+				assert.False(settled.More)
 			}
 		})
 	}
 }
 
 func TestFolderTransportExchangeResumesWithinObjectBudget(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
@@ -1600,8 +1703,8 @@ func TestFolderTransportExchangeResumesWithinObjectBudget(t *testing.T) {
 		MaxObjects: 2,
 		MaxBytes:   1 << 20,
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	origin := "local-a1b2c3"
 	store := newTestArtifactStore(t)
@@ -1617,30 +1720,33 @@ func TestFolderTransportExchangeResumesWithinObjectBudget(t *testing.T) {
 	var rounds int
 	for {
 		result, exchangeErr := transport.Exchange(t.Context(), store, origin)
-		require.NoError(t, exchangeErr)
-		assert.LessOrEqual(t, result.Published, 2)
+		require.NoError(exchangeErr)
+		assert.LessOrEqual(result.Published, 2)
 		published += result.Published
 		rounds++
 		if !result.More {
 			break
 		}
-		require.Less(t, rounds, 10)
+		require.Less(rounds, 10)
 	}
 
-	assert.Equal(t, 5, published)
-	assert.Equal(t, 3, rounds)
+	assert.Equal(5, published)
+	assert.Equal(3, rounds)
 	for _, ref := range refs {
 		entry, reader, openErr := store.Open(t.Context(), ref)
-		require.NoError(t, openErr)
+		require.NoError(openErr)
 		body, readErr := io.ReadAll(reader)
-		require.NoError(t, readErr)
-		require.NoError(t, reader.Verify())
-		require.NoError(t, reader.Close())
+		require.NoError(readErr)
+		require.NoError(reader.Verify())
+		require.NoError(reader.Close())
 		assertFolderWireBody(t, target, entry.Ref, body)
 	}
 }
 
 func TestFolderTransportExchangeCursorSurvivesReopen(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
@@ -1659,44 +1765,47 @@ func TestFolderTransportExchangeCursorSurvivesReopen(t *testing.T) {
 	}
 
 	first, err := OpenFolderTransport(target, options)
-	require.NoError(t, err)
+	require.NoError(err)
 	firstResult, err := first.Exchange(t.Context(), store, origin)
-	require.NoError(t, err)
-	assert.Equal(t, 2, firstResult.Published)
-	assert.True(t, firstResult.More)
-	require.NoError(t, first.Close())
+	require.NoError(err)
+	assert.Equal(2, firstResult.Published)
+	assert.True(firstResult.More)
+	require.NoError(first.Close())
 
 	second, err := OpenFolderTransport(target, options)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, second.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(second.Close()) })
 	secondResult, err := second.Exchange(t.Context(), store, origin)
-	require.NoError(t, err)
-	assert.Equal(t, 2, secondResult.Published)
-	assert.True(t, secondResult.More)
+	require.NoError(err)
+	assert.Equal(2, secondResult.Published)
+	assert.True(secondResult.More)
 }
 
 func TestFolderTransportRecoversJournalEventBeforeHeadAdvance(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	origin := "local-a1b2c3"
 	body := []byte("crash-window-segment")
 	ref := testContentRef(t, origin, KindSegments, body, ".ndjson")
 	wire, err := ToWireRef(ref)
-	require.NoError(t, err)
+	require.NoError(err)
 	directory := filepath.Join(target, origin, string(KindSegments))
-	require.NoError(t, os.MkdirAll(directory, 0o755))
+	require.NoError(os.MkdirAll(directory, 0o755))
 	var encoded bytes.Buffer
-	require.NoError(t, EncodeWire(t.Context(), ref, bytes.NewReader(body), &encoded))
-	require.NoError(t, os.WriteFile(
+	require.NoError(EncodeWire(t.Context(), ref, bytes.NewReader(body), &encoded))
+	require.NoError(os.WriteFile(
 		filepath.Join(directory, wire.Name), encoded.Bytes(), 0o600,
 	))
 	journalDirectory := filepath.Join(target, folderJournalDirectory)
-	require.NoError(t, os.MkdirAll(journalDirectory, 0o755))
+	require.NoError(os.MkdirAll(journalDirectory, 0o755))
 	eventBody, err := json.Marshal(folderJournalEvent{
 		Kind:     KindSegments,
 		Name:     wire.Name,
@@ -1705,9 +1814,9 @@ func TestFolderTransportRecoversJournalEventBeforeHeadAdvance(t *testing.T) {
 		SHA256:   identityForBytes(t, body).SHA256,
 		Size:     int64(len(body)),
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	eventBody = append(eventBody, '\n')
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(journalDirectory, folderJournalEventName(1)),
 		eventBody,
 		0o600,
@@ -1716,29 +1825,32 @@ func TestFolderTransportRecoversJournalEventBeforeHeadAdvance(t *testing.T) {
 	createTestStoreArtifact(t, store, ref, body)
 
 	result, err := transport.Exchange(t.Context(), store, origin)
-	require.NoError(t, err)
-	assert.Zero(t, result.Published)
+	require.NoError(err)
+	assert.Zero(result.Published)
 	root, err := os.OpenRoot(journalDirectory)
-	require.NoError(t, err)
+	require.NoError(err)
 	head, err := readFolderJournalHead(root)
-	require.NoError(t, err)
-	require.NoError(t, root.Close())
-	assert.Equal(t, int64(1), head.Sequence)
+	require.NoError(err)
+	require.NoError(root.Close())
+	assert.Equal(int64(1), head.Sequence)
 }
 
 func TestFolderTransportRecoversTruncatedUncommittedJournalEvent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	opened, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
+	require.NoError(err)
 	transport := opened.(*folderTransport)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	journalDirectory := filepath.Join(target, folderJournalDirectory)
-	require.NoError(t, os.MkdirAll(journalDirectory, 0o755))
+	require.NoError(os.MkdirAll(journalDirectory, 0o755))
 	eventPath := filepath.Join(journalDirectory, folderJournalEventName(1))
-	require.NoError(t, os.WriteFile(eventPath, []byte(`{"kind":`), 0o600))
+	require.NoError(os.WriteFile(eventPath, []byte(`{"kind":`), 0o600))
 
 	body := []byte("recovered-segment")
 	ref := testContentRef(
@@ -1749,16 +1861,16 @@ func TestFolderTransportRecoversTruncatedUncommittedJournalEvent(t *testing.T) {
 		".ndjson",
 	)
 	entry := Entry{Ref: ref, Identity: identityForBytes(t, body)}
-	require.NoError(t, transport.appendFolderJournalLocked(t.Context(), entry))
+	require.NoError(transport.appendFolderJournalLocked(t.Context(), entry))
 
 	journal, err := os.OpenRoot(journalDirectory)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, journal.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(journal.Close()) })
 	event, err := readFolderJournalEvent(journal, 1)
-	require.NoError(t, err)
+	require.NoError(err)
 	wire, err := ToWireRef(ref)
-	require.NoError(t, err)
-	assert.Equal(t, folderJournalEvent{
+	require.NoError(err)
+	assert.Equal(folderJournalEvent{
 		Kind:     KindSegments,
 		Name:     wire.Name,
 		Origin:   testFolderPublishOrigin,
@@ -1767,23 +1879,26 @@ func TestFolderTransportRecoversTruncatedUncommittedJournalEvent(t *testing.T) {
 		Size:     entry.Identity.Size,
 	}, event)
 	head, err := readFolderJournalHead(journal)
-	require.NoError(t, err)
-	assert.Equal(t, int64(1), head.Sequence)
+	require.NoError(err)
+	assert.Equal(int64(1), head.Sequence)
 	quarantined, err := filepath.Glob(eventPath + folderCorruptSeparator + "*")
-	require.NoError(t, err)
-	require.Len(t, quarantined, 1)
+	require.NoError(err)
+	require.Len(quarantined, 1)
 	partial, err := os.ReadFile(quarantined[0])
-	require.NoError(t, err)
-	assert.Equal(t, []byte(`{"kind":`), partial)
+	require.NoError(err)
+	assert.Equal([]byte(`{"kind":`), partial)
 }
 
 func TestFolderTransportRecoversTruncatedJournalRejection(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	target := t.TempDir()
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, transport.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(transport.Close()) })
 
 	body := []byte("rejected-segment")
 	ref := testContentRef(
@@ -1794,19 +1909,19 @@ func TestFolderTransportRecoversTruncatedJournalRejection(t *testing.T) {
 		".ndjson",
 	)
 	wire, err := ToWireRef(ref)
-	require.NoError(t, err)
+	require.NoError(err)
 	identity := identityForBytes(t, body)
 	appendFolderJournalTestEntry(t, target, Entry{
 		Ref:      ref,
 		Identity: identity,
 	})
 	directory := filepath.Join(target, ref.Origin, string(ref.Kind))
-	require.NoError(t, os.MkdirAll(directory, 0o755))
+	require.NoError(os.MkdirAll(directory, 0o755))
 	rejectionPath := filepath.Join(
 		directory,
 		folderJournalRejectionName(wire.Name),
 	)
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		rejectionPath,
 		[]byte(`{"sha256":`),
 		0o600,
@@ -1817,22 +1932,22 @@ func TestFolderTransportRecoversTruncatedJournalRejection(t *testing.T) {
 		&transportRecordingStore{ArtifactStore: newTestArtifactStore(t)},
 		testFolderPublishOrigin,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, ExchangeResult{}, result)
+	require.NoError(err)
+	assert.Equal(ExchangeResult{}, result)
 	kindRoot, err := os.OpenRoot(directory)
-	require.NoError(t, err)
-	require.NoError(t, validateFolderJournalRejection(
+	require.NoError(err)
+	require.NoError(validateFolderJournalRejection(
 		kindRoot,
 		wire.Name,
 		identity,
 	))
-	require.NoError(t, kindRoot.Close())
+	require.NoError(kindRoot.Close())
 	quarantined, err := filepath.Glob(rejectionPath + folderCorruptSeparator + "*")
-	require.NoError(t, err)
-	require.Len(t, quarantined, 1)
+	require.NoError(err)
+	require.Len(quarantined, 1)
 	partial, err := os.ReadFile(quarantined[0])
-	require.NoError(t, err)
-	assert.Equal(t, []byte(`{"sha256":`), partial)
+	require.NoError(err)
+	assert.Equal([]byte(`{"sha256":`), partial)
 }
 
 type testFolderTransportStateStore struct {

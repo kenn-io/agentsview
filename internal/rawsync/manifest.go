@@ -160,7 +160,7 @@ func ParseCanonicalManifest(
 	}
 	var envelope canonicalEnvelope
 	if err := json.Unmarshal(canonicalJSON, &envelope); err != nil {
-		return CanonicalManifest{}, fmt.Errorf("%w: decoding canonical raw manifest: %v", ErrInvalid, err)
+		return CanonicalManifest{}, fmt.Errorf("%w: decoding canonical raw manifest: %w", ErrInvalid, err)
 	}
 	if envelope.TenantID != identity.TenantID || envelope.DeviceID != identity.DeviceID {
 		return CanonicalManifest{}, fmt.Errorf("%w: canonical manifest identity does not match authentication", ErrInvalid)
@@ -452,7 +452,7 @@ func validateEntries(manifest Manifest, limits ManifestLimits) ([]ObjectRef, err
 
 func validateEntryPath(value string, maxBytes int) error {
 	if err := rawpath.Validate(value, maxBytes); err != nil {
-		return fmt.Errorf("%w: entry path: %v", ErrInvalid, err)
+		return fmt.Errorf("%w: entry path: %w", ErrInvalid, err)
 	}
 	return nil
 }

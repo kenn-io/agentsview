@@ -1,7 +1,6 @@
 package config
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -28,6 +27,9 @@ func TestPiHomesAddSessionRoots(t *testing.T) {
 		{name: "PI_DIR", env: map[string]string{"PI_DIR": "~/override"}, wantBase: "override"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			dir := setupTestEnv(t)
 			home := canonicalTempDir(t)
 			setTestHome(t, home)
@@ -40,7 +42,7 @@ func TestPiHomesAddSessionRoots(t *testing.T) {
 			}
 			writeConfig(t, dir, map[string]any{"agents": map[string]any{"pi": entry}})
 			cfg, err := LoadMinimal()
-			require.NoError(t, err)
+			require.NoError(err)
 			wantRoots := []string{}
 			if tt.wantBase != "" {
 				wantRoots = append(wantRoots, filepath.Join(home, filepath.FromSlash(tt.wantBase)))
@@ -48,23 +50,23 @@ func TestPiHomesAddSessionRoots(t *testing.T) {
 			wantRoots = append(wantRoots,
 				filepath.Join(home, "pi-work", "agent", "sessions"),
 				filepath.Join(home, "pi-personal", "agent", "sessions"))
-			assert.Equal(t, wantRoots, cfg.ResolveDirs(parser.AgentPi))
-			assert.True(t, cfg.IsUserConfigured(parser.AgentPi))
+			assert.Equal(wantRoots, cfg.ResolveDirs(parser.AgentPi))
+			assert.True(cfg.IsUserConfigured(parser.AgentPi))
 
 			// Both configured homes contribute real sessions; duplicate home
 			// spellings must not register or discover a second copy.
 			workSession := filepath.Join(home, "pi-work", "agent", "sessions", "--project-a--", "work.jsonl")
 			personalSession := filepath.Join(home, "pi-personal", "agent", "sessions", "--project-b--", "personal.jsonl")
 			for _, path := range []string{workSession, personalSession} {
-				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-				require.NoError(t, os.WriteFile(path, []byte(`{"type":"session","version":3,"cwd":"/project-a"}`+"\n"), 0o600))
+				require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
+				require.NoError(os.WriteFile(path, []byte(`{"type":"session","version":3,"cwd":"/project-a"}`+"\n"), 0o600))
 			}
 			provider, ok := parser.NewProvider(parser.AgentPi, parser.ProviderConfig{Roots: cfg.ResolveDirs(parser.AgentPi)})
-			require.True(t, ok)
-			sources, err := provider.Discover(context.Background())
-			require.NoError(t, err)
-			require.Len(t, sources, 2)
-			assert.ElementsMatch(t, []string{workSession, personalSession}, []string{sources[0].DisplayPath, sources[1].DisplayPath})
+			require.True(ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(err)
+			require.Len(sources, 2)
+			assert.ElementsMatch([]string{workSession, personalSession}, []string{sources[0].DisplayPath, sources[1].DisplayPath})
 		})
 	}
 }
@@ -72,6 +74,9 @@ func TestPiHomesAddSessionRoots(t *testing.T) {
 func TestAgentTableMigration(t *testing.T) {
 	for _, readOnly := range []bool{false, true} {
 		t.Run(map[bool]string{false: "startup", true: "read only"}[readOnly], func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			dir := setupTestEnv(t)
 			home := canonicalTempDir(t)
 			setTestHome(t, home)
@@ -91,30 +96,30 @@ homes = ["~/pi-work/agent"]
 [terminal]
 mode = "auto"
 `
-			require.NoError(t, os.WriteFile(path, []byte(original), 0o600))
+			require.NoError(os.WriteFile(path, []byte(original), 0o600))
 			if !readOnly && runtime.GOOS != "windows" {
-				require.NoError(t, os.Chmod(path, 0o644))
+				require.NoError(os.Chmod(path, 0o644))
 			}
 			load := LoadMinimal
 			if readOnly {
 				load = LoadReadOnly
 			}
 			cfg, err := load()
-			require.NoError(t, err)
-			assert.Equal(t, []string{filepath.Join(home, "claude-work", "projects")}, cfg.ResolveDirs(parser.AgentClaude))
-			assert.Equal(t, []string{filepath.Join(home, "codex-sessions"), filepath.Join(home, "codex-work", "sessions"), filepath.Join(home, "codex-work", "archived_sessions")}, cfg.ResolveDirs(parser.AgentCodex))
-			assert.Equal(t, []string{filepath.Join(home, "pi-sessions"), filepath.Join(home, "pi-work", "agent", "sessions")}, cfg.ResolveDirs(parser.AgentPi))
-			assert.Equal(t, []string{filepath.Join(home, "gemini-a"), filepath.Join(home, "gemini-b")}, cfg.ResolveDirs(parser.AgentGemini))
+			require.NoError(err)
+			assert.Equal([]string{filepath.Join(home, "claude-work", "projects")}, cfg.ResolveDirs(parser.AgentClaude))
+			assert.Equal([]string{filepath.Join(home, "codex-sessions"), filepath.Join(home, "codex-work", "sessions"), filepath.Join(home, "codex-work", "archived_sessions")}, cfg.ResolveDirs(parser.AgentCodex))
+			assert.Equal([]string{filepath.Join(home, "pi-sessions"), filepath.Join(home, "pi-work", "agent", "sessions")}, cfg.ResolveDirs(parser.AgentPi))
+			assert.Equal([]string{filepath.Join(home, "gemini-a"), filepath.Join(home, "gemini-b")}, cfg.ResolveDirs(parser.AgentGemini))
 			after, err := os.ReadFile(path)
-			require.NoError(t, err)
+			require.NoError(err)
 			if readOnly {
-				assert.Equal(t, original, string(after))
+				assert.Equal(original, string(after))
 				return
 			}
 			if runtime.GOOS != "windows" {
 				info, err := os.Stat(path)
-				require.NoError(t, err)
-				assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+				require.NoError(err)
+				assert.Equal(os.FileMode(0o600), info.Mode().Perm())
 			}
 			var saved struct {
 				Port     int                             `toml:"port"`
@@ -122,31 +127,33 @@ mode = "auto"
 				Terminal TerminalConfig                  `toml:"terminal"`
 			}
 			_, err = toml.Decode(string(after), &saved)
-			require.NoError(t, err)
-			assert.Equal(t, []string{}, saved.Agents["claude"].Dirs)
-			assert.Equal(t, []string{"~/claude-work"}, saved.Agents["claude"].Homes)
-			assert.Equal(t, []string{"~/codex-work"}, saved.Agents["codex"].Homes)
-			assert.Equal(t, []string{"~/pi-sessions"}, saved.Agents["pi"].Dirs)
-			assert.Equal(t, 9191, saved.Port)
-			assert.Equal(t, "auto", saved.Terminal.Mode)
+			require.NoError(err)
+			assert.Equal([]string{}, saved.Agents["claude"].Dirs)
+			assert.Equal([]string{"~/claude-work"}, saved.Agents["claude"].Homes)
+			assert.Equal([]string{"~/codex-work"}, saved.Agents["codex"].Homes)
+			assert.Equal([]string{"~/pi-sessions"}, saved.Agents["pi"].Dirs)
+			assert.Equal(9191, saved.Port)
+			assert.Equal("auto", saved.Terminal.Mode)
 			_, err = load()
-			require.NoError(t, err)
+			require.NoError(err)
 			again, err := os.ReadFile(path)
-			require.NoError(t, err)
-			assert.Equal(t, string(after), string(again), "a second load must leave the migrated file unchanged")
+			require.NoError(err)
+			assert.Equal(string(after), string(again), "a second load must leave the migrated file unchanged")
 		})
 	}
 }
 
 func TestAgentTableMigrationConflictPreservesFile(t *testing.T) {
+	require := require.New(t)
+
 	dir := setupTestEnv(t)
 	original := "codex_homes = [\"~/old\"]\n[agents.codex]\nhomes = [\"~/new\"]\n"
 	path := filepath.Join(dir, "config.toml")
-	require.NoError(t, os.WriteFile(path, []byte(original), 0o600))
+	require.NoError(os.WriteFile(path, []byte(original), 0o600))
 	_, err := LoadMinimal()
-	require.ErrorContains(t, err, "both codex_homes and agents.codex.homes")
+	require.ErrorContains(err, "both codex_homes and agents.codex.homes")
 	after, err := os.ReadFile(path)
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Equal(t, original, string(after))
 }
 

@@ -13,6 +13,8 @@ import (
 )
 
 func TestPricingBlockJSONShape(t *testing.T) {
+	assert := assert.New(t)
+
 	latestRowUpdatedAt := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
 	matchedPattern := "claude-*"
 	block := export.PricingBlock{
@@ -60,7 +62,7 @@ func TestPricingBlockJSONShape(t *testing.T) {
 
 	got := mustMarshalJSON(t, block)
 	t.Log("public pricing JSON shape matches the contract")
-	assert.JSONEq(t, `{
+	assert.JSONEq(`{
 		"source": "custom+embedded",
 		"table_version": "2026-07-03",
 		"latest_row_updated_at": "2026-07-03T12:00:00Z",
@@ -101,9 +103,9 @@ func TestPricingBlockJSONShape(t *testing.T) {
 			}
 		}
 	}`, got)
-	assert.Contains(t, got, `"models"`)
-	assert.NotContains(t, got, `"effective_model_rates"`)
-	assert.Contains(t, got, `"cost_source":"mixed"`)
+	assert.Contains(got, `"models"`)
+	assert.NotContains(got, `"effective_model_rates"`)
+	assert.Contains(got, `"cost_source":"mixed"`)
 }
 
 func TestCostSourceEnumJSONShape(t *testing.T) {

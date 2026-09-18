@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"errors"
 	"os"
@@ -528,6 +527,8 @@ func TestCompareSessionFields(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			stored := pdBaseSession()
 			prepared := pdBaseSession()
 			if tt.stored != nil {
@@ -539,11 +540,11 @@ func TestCompareSessionFields(t *testing.T) {
 			diffs := compareSessionFields(&stored, prepared)
 			require.Len(t, diffs, len(tt.want))
 			for i, w := range tt.want {
-				assert.Equal(t, w.field, diffs[i].Field)
-				assert.Equal(t, w.stored, diffs[i].Stored)
-				assert.Equal(t, w.parsed, diffs[i].Parsed)
+				assert.Equal(w.field, diffs[i].Field)
+				assert.Equal(w.stored, diffs[i].Stored)
+				assert.Equal(w.parsed, diffs[i].Parsed)
 				assert.Equal(
-					t, w.informational, diffs[i].Informational,
+					w.informational, diffs[i].Informational,
 				)
 			}
 		})
@@ -551,6 +552,8 @@ func TestCompareSessionFields(t *testing.T) {
 }
 
 func TestCompareSessionFieldsTruncatesLongValues(t *testing.T) {
+	assert := assert.New(t)
+
 	long := strings.Repeat("x", 200)
 	stored := pdBaseSession()
 	prepared := pdBaseSession()
@@ -558,12 +561,12 @@ func TestCompareSessionFieldsTruncatesLongValues(t *testing.T) {
 
 	diffs := compareSessionFields(&stored, prepared)
 	require.Len(t, diffs, 1)
-	assert.Equal(t, FieldFirstMessage, diffs[0].Field)
+	assert.Equal(FieldFirstMessage, diffs[0].Field)
 	assert.Equal(
-		t, strings.Repeat("x", maxRenderedValueRunes)+"...",
+		strings.Repeat("x", maxRenderedValueRunes)+"...",
 		diffs[0].Parsed,
 	)
-	assert.Contains(t, diffs[0].Detail, "parsed 200 runes")
+	assert.Contains(diffs[0].Detail, "parsed 200 runes")
 }
 
 func TestCompareSessionFieldsInformationalTerminationDetail(t *testing.T) {
@@ -601,6 +604,8 @@ func TestCompareMessageMetadata(t *testing.T) {
 	})
 
 	t.Run("model drift reports count and first ordinal", func(t *testing.T) {
+		assert := assert.New(t)
+
 		stored := []db.Message{
 			pdMsg(0, "model-a", 0, 0),
 			pdMsg(1, "model-a", 0, 0),
@@ -613,35 +618,38 @@ func TestCompareMessageMetadata(t *testing.T) {
 		}
 		diffs := compareMessageMetadata(stored, parsed, true, false, false)
 		require.Len(t, diffs, 1)
-		assert.Equal(t, FieldModels, diffs[0].Field)
-		assert.Equal(t, "model-a", diffs[0].Stored)
-		assert.Equal(t, "model-a, model-b", diffs[0].Parsed)
+		assert.Equal(FieldModels, diffs[0].Field)
+		assert.Equal("model-a", diffs[0].Stored)
+		assert.Equal("model-a, model-b", diffs[0].Parsed)
 		assert.Equal(
-			t,
 			"2/3 messages differ; first at ordinal 1: model-a -> model-b",
 			diffs[0].Detail,
 		)
 	})
 
 	t.Run("token value drift reports message tokens", func(t *testing.T) {
+		assert := assert.New(t)
+
 		stored := []db.Message{pdMsg(0, "m", 100, 5)}
 		parsed := []db.Message{pdMsg(0, "m", 110, 5)}
 		diffs := compareMessageMetadata(stored, parsed, true, false, false)
 		require.Len(t, diffs, 1)
-		assert.Equal(t, FieldMessageTokens, diffs[0].Field)
+		assert.Equal(FieldMessageTokens, diffs[0].Field)
 		assert.Equal(
-			t, "context=100 output=5 usage_bytes=0", diffs[0].Stored,
+			"context=100 output=5 usage_bytes=0", diffs[0].Stored,
 		)
 		assert.Equal(
-			t, "context=110 output=5 usage_bytes=0", diffs[0].Parsed,
+			"context=110 output=5 usage_bytes=0", diffs[0].Parsed,
 		)
 		assert.Equal(
-			t, "1/1 messages differ; first at ordinal 0",
+			"1/1 messages differ; first at ordinal 0",
 			diffs[0].Detail,
 		)
 	})
 
 	t.Run("presence-flag-only flip is a token diff", func(t *testing.T) {
+		assert := assert.New(t)
+
 		stored := []db.Message{{
 			Ordinal: 0, Role: "assistant",
 			OutputTokens: 0, HasOutputTokens: true,
@@ -652,9 +660,9 @@ func TestCompareMessageMetadata(t *testing.T) {
 		}}
 		diffs := compareMessageMetadata(stored, parsed, true, false, false)
 		require.Len(t, diffs, 1)
-		assert.Equal(t, FieldMessageTokens, diffs[0].Field)
-		assert.Contains(t, diffs[0].Stored, "output=0")
-		assert.Contains(t, diffs[0].Parsed, "output=absent")
+		assert.Equal(FieldMessageTokens, diffs[0].Field)
+		assert.Contains(diffs[0].Stored, "output=0")
+		assert.Contains(diffs[0].Parsed, "output=absent")
 	})
 
 	t.Run("token_usage payload drift is a token diff", func(t *testing.T) {
@@ -758,6 +766,8 @@ func TestCompareMessageMetadata(t *testing.T) {
 	})
 
 	t.Run("tool_name drift is a tool_calls diff", func(t *testing.T) {
+		assert := assert.New(t)
+
 		stored := []db.Message{{
 			Ordinal: 0, Role: "assistant", HasToolUse: true,
 			ToolCalls: []db.ToolCall{
@@ -772,9 +782,9 @@ func TestCompareMessageMetadata(t *testing.T) {
 		}}
 		diffs := compareMessageMetadata(stored, parsed, false, false, true)
 		require.Len(t, diffs, 1)
-		assert.Equal(t, FieldToolCalls, diffs[0].Field)
-		assert.Contains(t, diffs[0].Detail, `tool_name "Read" -> "Bash"`)
-		assert.Contains(t, diffs[0].Detail, "first at ordinal 0")
+		assert.Equal(FieldToolCalls, diffs[0].Field)
+		assert.Contains(diffs[0].Detail, `tool_name "Read" -> "Bash"`)
+		assert.Contains(diffs[0].Detail, "first at ordinal 0")
 	})
 
 	t.Run("tool_call sub-field drift attributes to tool_calls",
@@ -789,17 +799,27 @@ func TestCompareMessageMetadata(t *testing.T) {
 				mutate func(*db.ToolCall)
 				detail string
 			}{
-				{"category", func(tc *db.ToolCall) { tc.Category = "Bash" },
-					`category "Read" -> "Bash"`},
-				{"tool_use_id", func(tc *db.ToolCall) { tc.ToolUseID = "tu2" },
-					"tool_use_id differs"},
-				{"input_json", func(tc *db.ToolCall) { tc.InputJSON = `{"file":"b"}` },
-					"input_json differs"},
-				{"skill_name", func(tc *db.ToolCall) { tc.SkillName = "s2" },
-					`skill_name "s1" -> "s2"`},
-				{"subagent_session_id",
+				{
+					"category", func(tc *db.ToolCall) { tc.Category = "Bash" },
+					`category "Read" -> "Bash"`,
+				},
+				{
+					"tool_use_id", func(tc *db.ToolCall) { tc.ToolUseID = "tu2" },
+					"tool_use_id differs",
+				},
+				{
+					"input_json", func(tc *db.ToolCall) { tc.InputJSON = `{"file":"b"}` },
+					"input_json differs",
+				},
+				{
+					"skill_name", func(tc *db.ToolCall) { tc.SkillName = "s2" },
+					`skill_name "s1" -> "s2"`,
+				},
+				{
+					"subagent_session_id",
 					func(tc *db.ToolCall) { tc.SubagentSessionID = "agent-2" },
-					"subagent_session_id differs"},
+					"subagent_session_id differs",
+				},
 			}
 			for _, sc := range subCases {
 				t.Run(sc.name, func(t *testing.T) {
@@ -862,6 +882,8 @@ func TestCompareMessageMetadata(t *testing.T) {
 
 	t.Run("tool fingerprint differs but overlap matches yields fallback",
 		func(t *testing.T) {
+			assert := assert.New(t)
+
 			// No aligned-ordinal tool diff (e.g. an ordinal-set shift),
 			// but the tool fingerprint asserted inequality: the session
 			// must not report identical.
@@ -869,9 +891,9 @@ func TestCompareMessageMetadata(t *testing.T) {
 			parsed := []db.Message{{Ordinal: 0, Role: "assistant"}}
 			diffs := compareMessageMetadata(stored, parsed, false, false, true)
 			require.Len(t, diffs, 1)
-			assert.Equal(t, FieldToolCalls, diffs[0].Field)
-			assert.Equal(t, "fingerprint", diffs[0].Stored)
-			assert.Contains(t, diffs[0].Detail, "tool-call fingerprint differs")
+			assert.Equal(FieldToolCalls, diffs[0].Field)
+			assert.Equal("fingerprint", diffs[0].Stored)
+			assert.Contains(diffs[0].Detail, "tool-call fingerprint differs")
 		})
 }
 
@@ -905,20 +927,24 @@ func TestCompareUsageEvents(t *testing.T) {
 	})
 
 	t.Run("removed event reports count and totals", func(t *testing.T) {
+		assert := assert.New(t)
+
 		a := pdEvent("api", "m1", 10, 2, "2026-01-01T00:00:00Z", "", nil)
 		b := pdEvent("api", "m2", 20, 4, "2026-01-01T00:01:00Z", "", nil)
 		diffs := compareUsageEvents(
 			[]db.UsageEvent{a, b}, []db.UsageEvent{a},
 		)
 		require.Len(t, diffs, 2)
-		assert.Equal(t, FieldUsageEventCount, diffs[0].Field)
-		assert.Equal(t, "2", diffs[0].Stored)
-		assert.Equal(t, "1", diffs[0].Parsed)
-		assert.Equal(t, FieldUsageEventTotals, diffs[1].Field)
-		assert.Equal(t, "input 30 -> 10; output 6 -> 2", diffs[1].Detail)
+		assert.Equal(FieldUsageEventCount, diffs[0].Field)
+		assert.Equal("2", diffs[0].Stored)
+		assert.Equal("1", diffs[0].Parsed)
+		assert.Equal(FieldUsageEventTotals, diffs[1].Field)
+		assert.Equal("input 30 -> 10; output 6 -> 2", diffs[1].Detail)
 	})
 
 	t.Run("total drift with equal count reports totals only", func(t *testing.T) {
+		assert := assert.New(t)
+
 		stored := []db.UsageEvent{
 			pdEvent("api", "m1", 10, 2, "2026-01-01T00:00:00Z", "", nil),
 		}
@@ -927,10 +953,10 @@ func TestCompareUsageEvents(t *testing.T) {
 		}
 		diffs := compareUsageEvents(stored, parsed)
 		require.Len(t, diffs, 1)
-		assert.Equal(t, FieldUsageEventTotals, diffs[0].Field)
-		assert.Equal(t, "output 2 -> 3", diffs[0].Detail)
-		assert.Contains(t, diffs[0].Stored, "output=2")
-		assert.Contains(t, diffs[0].Parsed, "output=3")
+		assert.Equal(FieldUsageEventTotals, diffs[0].Field)
+		assert.Equal("output 2 -> 3", diffs[0].Detail)
+		assert.Contains(diffs[0].Stored, "output=2")
+		assert.Contains(diffs[0].Parsed, "output=3")
 	})
 
 	t.Run("matching dedup keys override tuple drift", func(t *testing.T) {
@@ -946,6 +972,8 @@ func TestCompareUsageEvents(t *testing.T) {
 	})
 
 	t.Run("dedup key drift with equal totals reports composition", func(t *testing.T) {
+		assert := assert.New(t)
+
 		stored := []db.UsageEvent{
 			pdEvent("api", "m1", 10, 2, "2026-01-01T00:00:00Z", "k1", nil),
 		}
@@ -954,9 +982,9 @@ func TestCompareUsageEvents(t *testing.T) {
 		}
 		diffs := compareUsageEvents(stored, parsed)
 		require.Len(t, diffs, 1)
-		assert.Equal(t, FieldUsageEventTotals, diffs[0].Field)
-		assert.Contains(t, diffs[0].Detail, "event composition differs")
-		assert.Contains(t, diffs[0].Detail, "dedup|k1")
+		assert.Equal(FieldUsageEventTotals, diffs[0].Field)
+		assert.Contains(diffs[0].Detail, "event composition differs")
+		assert.Contains(diffs[0].Detail, "dedup|k1")
 	})
 
 	t.Run("model drift under stable dedup key surfaces", func(t *testing.T) {
@@ -975,6 +1003,8 @@ func TestCompareUsageEvents(t *testing.T) {
 	})
 
 	t.Run("dedup keyed token redistribution surfaces", func(t *testing.T) {
+		assert := assert.New(t)
+
 		// Equal event count, equal aggregate totals, and stable
 		// dedup keys, but the per-event token payload changed.
 		// --fail-on-change must not pass over that data drift.
@@ -1002,11 +1032,11 @@ func TestCompareUsageEvents(t *testing.T) {
 		diffs := compareUsageEvents(stored, parsed)
 
 		require.Len(t, diffs, 1)
-		assert.Equal(t, FieldUsageEventTotals, diffs[0].Field)
-		assert.Equal(t, sumUsageTokenTotals(stored).render(), diffs[0].Stored)
-		assert.Equal(t, sumUsageTokenTotals(parsed).render(), diffs[0].Parsed)
-		assert.Contains(t, diffs[0].Detail, "event composition differs")
-		assert.Contains(t, diffs[0].Detail, "dedup|k1")
+		assert.Equal(FieldUsageEventTotals, diffs[0].Field)
+		assert.Equal(sumUsageTokenTotals(stored).render(), diffs[0].Stored)
+		assert.Equal(sumUsageTokenTotals(parsed).render(), diffs[0].Parsed)
+		assert.Contains(diffs[0].Detail, "event composition differs")
+		assert.Contains(diffs[0].Detail, "dedup|k1")
 	})
 
 	t.Run("tuple fallback detects occurred_at drift", func(t *testing.T) {
@@ -1057,6 +1087,9 @@ func TestCompareUsageEvents(t *testing.T) {
 // real bulk sync pipeline. Twin drift silently breaks the tier-1 fast
 // path, so this parity is the design's top risk.
 func TestFingerprintTwinMatchesDB(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := openTestDB(t)
 	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
 
@@ -1123,37 +1156,37 @@ func TestFingerprintTwinMatchesDB(t *testing.T) {
 	written, _, failed, _ := e.writeBatch(
 		[]pendingWrite{pw}, syncWriteBulk, false,
 	)
-	require.Equal(t, 1, written, "session must be written")
-	require.Zero(t, failed)
+	require.Equal(1, written, "session must be written")
+	require.Zero(failed)
 
 	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
-	require.Equal(t, sessionWriteOK, verdict)
-	require.NotEmpty(t, msgs)
+	require.Equal(sessionWriteOK, verdict)
+	require.NotEmpty(msgs)
 
 	storedFP, err := d.MessageTokenFingerprint(prepared.ID)
-	require.NoError(t, err)
-	require.NotEmpty(t, storedFP)
+	require.NoError(err)
+	require.NotEmpty(storedFP)
 
 	assert.Equal(
-		t, storedFP, messageTokenFingerprintTwin(msgs),
+		storedFP, messageTokenFingerprintTwin(msgs),
 		"in-memory twin must match db.MessageTokenFingerprint exactly",
 	)
 
 	storedRoleTimeFP, err := d.MessageRoleTimeFingerprint(prepared.ID)
-	require.NoError(t, err)
-	require.NotEmpty(t, storedRoleTimeFP)
+	require.NoError(err)
+	require.NotEmpty(storedRoleTimeFP)
 
 	assert.Equal(
-		t, storedRoleTimeFP, messageRoleTimeFingerprintTwin(msgs),
+		storedRoleTimeFP, messageRoleTimeFingerprintTwin(msgs),
 		"in-memory twin must match db.MessageRoleTimeFingerprint exactly",
 	)
 
 	storedContentFP, err := d.MessageContentHashFingerprint(prepared.ID)
-	require.NoError(t, err)
-	require.NotEmpty(t, storedContentFP)
+	require.NoError(err)
+	require.NotEmpty(storedContentFP)
 
 	assert.Equal(
-		t, storedContentFP, messageContentHashFingerprintTwin(msgs),
+		storedContentFP, messageContentHashFingerprintTwin(msgs),
 		"in-memory twin must match db.MessageContentHashFingerprint exactly",
 	)
 }
@@ -1162,6 +1195,8 @@ func TestFingerprintTwinMatchesDB(t *testing.T) {
 // through the real pipeline compares as identical against itself,
 // covering the session row, message metadata, and usage events.
 func TestCompareStoredSessionRoundTrip(t *testing.T) {
+	require := require.New(t)
+
 	d := openTestDB(t)
 	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
 
@@ -1225,24 +1260,27 @@ func TestCompareStoredSessionRoundTrip(t *testing.T) {
 	written, _, failed, _ := e.writeBatch(
 		[]pendingWrite{pw}, syncWriteBulk, false,
 	)
-	require.Equal(t, 1, written)
-	require.Zero(t, failed)
+	require.Equal(1, written)
+	require.Zero(failed)
 
 	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
-	require.Equal(t, sessionWriteOK, verdict)
+	require.Equal(sessionWriteOK, verdict)
 	events, _ := toDBUsageEvents(prepared.ID, pw.usageEvents)
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
-		context.Background(), stored, prepared, msgs, events,
+		t.Context(), stored, prepared, msgs, events,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Empty(t, diffs, "self-written session must be identical")
 }
 
 // TestCompareStoredSessionDetectsDrift mutates one stored column and
 // expects the comparator to attribute it through the database path.
 func TestCompareStoredSessionDetectsDrift(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := openTestDB(t)
 	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
 
@@ -1277,24 +1315,24 @@ func TestCompareStoredSessionDetectsDrift(t *testing.T) {
 	written, _, failed, _ := e.writeBatch(
 		[]pendingWrite{pw}, syncWriteBulk, false,
 	)
-	require.Equal(t, 1, written)
-	require.Zero(t, failed)
+	require.Equal(1, written)
+	require.Zero(failed)
 
 	// Simulate parser drift: the new parse reports a different model.
 	pw.msgs[0].Model = "claude-haiku"
 	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
-	require.Equal(t, sessionWriteOK, verdict)
+	require.Equal(sessionWriteOK, verdict)
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
-		context.Background(), stored, prepared, msgs, nil,
+		t.Context(), stored, prepared, msgs, nil,
 	)
-	require.NoError(t, err)
-	require.Len(t, diffs, 1)
-	assert.Equal(t, FieldModels, diffs[0].Field)
-	assert.Equal(t, "claude-sonnet", diffs[0].Stored)
-	assert.Equal(t, "claude-haiku", diffs[0].Parsed)
-	assert.Contains(t, diffs[0].Detail, "first at ordinal 0")
+	require.NoError(err)
+	require.Len(diffs, 1)
+	assert.Equal(FieldModels, diffs[0].Field)
+	assert.Equal("claude-sonnet", diffs[0].Stored)
+	assert.Equal("claude-haiku", diffs[0].Parsed)
+	assert.Contains(diffs[0].Detail, "first at ordinal 0")
 }
 
 // pdWriteSingleMessageSession writes a one-message session through the
@@ -1329,6 +1367,9 @@ func pdWriteSingleMessageSession(
 // catches a message-body change the token fingerprint cannot see: only
 // the content length moves, model and tokens are unchanged.
 func TestCompareStoredSessionDetectsContentDrift(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	e, d, pw := pdWriteSingleMessageSession(t, "pd-content", parser.ParsedMessage{
 		Ordinal: 0, Role: parser.RoleAssistant,
@@ -1340,22 +1381,25 @@ func TestCompareStoredSessionDetectsContentDrift(t *testing.T) {
 	pw.msgs[0].Content = "a much longer reply body"
 	pw.msgs[0].ContentLength = len(pw.msgs[0].Content)
 	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
-	require.Equal(t, sessionWriteOK, verdict)
+	require.Equal(sessionWriteOK, verdict)
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
-		context.Background(), stored, prepared, msgs, nil,
+		t.Context(), stored, prepared, msgs, nil,
 	)
-	require.NoError(t, err)
-	require.Len(t, diffs, 1)
-	assert.Equal(t, FieldMessageContent, diffs[0].Field)
-	assert.Contains(t, diffs[0].Detail, "first at ordinal 0")
+	require.NoError(err)
+	require.Len(diffs, 1)
+	assert.Equal(FieldMessageContent, diffs[0].Field)
+	assert.Contains(diffs[0].Detail, "first at ordinal 0")
 }
 
 // TestCompareStoredSessionDetectsMetadataDrift proves a fingerprint
 // mismatch confined to a non-model/token field (is_sidechain) is
 // surfaced as message_metadata rather than silently reported identical.
 func TestCompareStoredSessionDetectsMetadataDrift(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	e, d, pw := pdWriteSingleMessageSession(t, "pd-meta", parser.ParsedMessage{
 		Ordinal: 0, Role: parser.RoleAssistant,
@@ -1366,16 +1410,16 @@ func TestCompareStoredSessionDetectsMetadataDrift(t *testing.T) {
 	// New parse flips only is_sidechain: same model, tokens, content.
 	pw.msgs[0].IsSidechain = true
 	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
-	require.Equal(t, sessionWriteOK, verdict)
+	require.Equal(sessionWriteOK, verdict)
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
-		context.Background(), stored, prepared, msgs, nil,
+		t.Context(), stored, prepared, msgs, nil,
 	)
-	require.NoError(t, err)
-	require.Len(t, diffs, 1)
-	assert.Equal(t, FieldMessageMetadata, diffs[0].Field)
-	assert.Contains(t, diffs[0].Detail, "is_sidechain")
+	require.NoError(err)
+	require.Len(diffs, 1)
+	assert.Equal(FieldMessageMetadata, diffs[0].Field)
+	assert.Contains(diffs[0].Detail, "is_sidechain")
 }
 
 // pdToolSession builds a Claude pendingWrite that exercises the
@@ -1451,20 +1495,23 @@ func pdWriteToolSession(
 // twins against their DB queries through the real write pipeline, the
 // way TestFingerprintTwinMatchesDB does for the message fingerprints.
 func TestToolCallAndFlagsFingerprintTwinsMatchDB(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	e, d, pw := pdWriteToolSession(t, "pd-tool-twin")
 	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
-	require.Equal(t, sessionWriteOK, verdict)
+	require.Equal(sessionWriteOK, verdict)
 
 	storedFlagsFP, err := d.MessageFlagsFingerprint(prepared.ID)
-	require.NoError(t, err)
-	require.NotEmpty(t, storedFlagsFP)
-	assert.Equal(t, storedFlagsFP, messageFlagsFingerprintTwin(msgs),
+	require.NoError(err)
+	require.NotEmpty(storedFlagsFP)
+	assert.Equal(storedFlagsFP, messageFlagsFingerprintTwin(msgs),
 		"flags twin must match db.MessageFlagsFingerprint exactly")
 
 	storedToolFP, err := d.ToolCallParseDiffFingerprint(prepared.ID)
-	require.NoError(t, err)
-	require.NotEmpty(t, storedToolFP)
-	assert.Equal(t, storedToolFP, toolCallParseDiffFingerprintTwin(msgs),
+	require.NoError(err)
+	require.NotEmpty(storedToolFP)
+	assert.Equal(storedToolFP, toolCallParseDiffFingerprintTwin(msgs),
 		"tool-call twin must match db.ToolCallParseDiffFingerprint exactly")
 }
 
@@ -1491,7 +1538,7 @@ func TestCompareStoredSessionRoundTripToolCalls(t *testing.T) {
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
-		context.Background(), stored, prepared, msgs, nil,
+		t.Context(), stored, prepared, msgs, nil,
 	)
 	require.NoError(t, err)
 	assert.Empty(t, diffs,
@@ -1503,44 +1550,50 @@ func TestCompareStoredSessionRoundTripToolCalls(t *testing.T) {
 // token/role/content/flags fingerprints move, so it surfaces only if the
 // tool-call fingerprint triggers the tier-2 comparison.
 func TestCompareStoredSessionDetectsToolCallDrift(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	e, d, pw := pdWriteToolSession(t, "pd-tool-drift")
 	pw.msgs[1].ToolCalls[0].ToolName = "Grep"
 	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
-	require.Equal(t, sessionWriteOK, verdict)
+	require.Equal(sessionWriteOK, verdict)
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
-		context.Background(), stored, prepared, msgs, nil,
+		t.Context(), stored, prepared, msgs, nil,
 	)
-	require.NoError(t, err)
-	require.Len(t, diffs, 1)
-	assert.Equal(t, FieldToolCalls, diffs[0].Field)
-	assert.Contains(t, diffs[0].Detail, `tool_name "Read" -> "Grep"`)
+	require.NoError(err)
+	require.Len(diffs, 1)
+	assert.Equal(FieldToolCalls, diffs[0].Field)
+	assert.Contains(diffs[0].Detail, `tool_name "Read" -> "Grep"`)
 }
 
 // TestCompareStoredSessionDetectsFlagDrift proves a change confined to a
 // per-message flag (has_thinking) is caught only via the flags
 // fingerprint triggering the tier-2 comparison.
 func TestCompareStoredSessionDetectsFlagDrift(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	e, d, pw := pdWriteToolSession(t, "pd-flag-drift")
 	pw.msgs[1].HasThinking = false
 	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
-	require.Equal(t, sessionWriteOK, verdict)
+	require.Equal(sessionWriteOK, verdict)
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
-		context.Background(), stored, prepared, msgs, nil,
+		t.Context(), stored, prepared, msgs, nil,
 	)
-	require.NoError(t, err)
-	require.Len(t, diffs, 1)
-	assert.Equal(t, FieldMessageMetadata, diffs[0].Field)
-	assert.Contains(t, diffs[0].Detail, "has_thinking true -> false")
+	require.NoError(err)
+	require.Len(diffs, 1)
+	assert.Equal(FieldMessageMetadata, diffs[0].Field)
+	assert.Contains(diffs[0].Detail, "has_thinking true -> false")
 }
 
 func pdFetchStored(t *testing.T, d *db.DB, id string) *db.Session {
 	t.Helper()
 	sessions, err := d.ListSessionsModifiedBetween(
-		context.Background(), "", "", nil, nil,
+		t.Context(), "", "", nil, nil,
 	)
 	require.NoError(t, err)
 	for i := range sessions {
@@ -1797,36 +1850,39 @@ func TestParseDiffSourceRaced(t *testing.T) {
 // shared by every Codex session, so an unrelated title/index write is not a
 // per-session signal that transcript-derived diffs raced with live content.
 func TestParseDiffLiveMtimeIgnoresCodexIndex(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	sessionsDir := filepath.Join(root, "sessions", "2024", "01", "01")
-	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
+	require.NoError(os.MkdirAll(sessionsDir, 0o755))
 	rollout := filepath.Join(sessionsDir, "rollout-x.jsonl")
-	require.NoError(t, os.WriteFile(rollout, []byte("{}\n"), 0o644))
+	require.NoError(os.WriteFile(rollout, []byte("{}\n"), 0o644))
 	indexPath := filepath.Join(root, "session_index.jsonl")
-	require.NoError(t, os.WriteFile(indexPath, []byte("{}\n"), 0o644))
+	require.NoError(os.WriteFile(indexPath, []byte("{}\n"), 0o644))
 
 	// Index not newer than the rollout: raced mtime is the rollout's.
 	base := time.Now().Add(-2 * time.Hour)
-	require.NoError(t, os.Chtimes(rollout, base, base), "chtimes rollout")
-	require.NoError(t, os.Chtimes(indexPath, base, base), "chtimes index")
+	require.NoError(os.Chtimes(rollout, base, base), "chtimes rollout")
+	require.NoError(os.Chtimes(indexPath, base, base), "chtimes index")
 
-	m1, err := parseDiffLiveMtime(parser.AgentCodex, rollout)
-	require.NoError(t, err)
+	m1, err := parseDiffLiveMtime(t.Context(), parser.AgentCodex, rollout)
+	require.NoError(err)
 	rollInfo, err := os.Stat(rollout)
-	require.NoError(t, err)
-	assert.Equal(t, rollInfo.ModTime().UnixNano(), m1,
+	require.NoError(err)
+	assert.Equal(rollInfo.ModTime().UnixNano(), m1,
 		"codex raced mtime is the rollout's when the index is not newer")
 
 	// A sibling write advances the global index past the rollout AFTER the
 	// first resolution; the Codex raced resolver must keep reporting the
 	// transcript mtime.
 	future := time.Now().Add(time.Hour)
-	require.NoError(t, os.Chtimes(indexPath, future, future), "advance index")
-	m2, err := parseDiffLiveMtime(parser.AgentCodex, rollout)
-	require.NoError(t, err)
-	assert.Equal(t, rollInfo.ModTime().UnixNano(), m2,
+	require.NoError(os.Chtimes(indexPath, future, future), "advance index")
+	m2, err := parseDiffLiveMtime(t.Context(), parser.AgentCodex, rollout)
+	require.NoError(err)
+	assert.Equal(rollInfo.ModTime().UnixNano(), m2,
 		"codex raced mtime ignores the advanced session_index.jsonl")
-	assert.Equal(t, m1, m2, "the global index write is not observed")
+	assert.Equal(m1, m2, "the global index write is not observed")
 }
 
 func TestParseDiffCodexTranscriptChangedRecomputesConsumedSize(t *testing.T) {
@@ -1943,6 +1999,9 @@ func TestParseDiffSourceReliableForRaced(t *testing.T) {
 }
 
 func TestParseDiffPresenceSweepKeepsMixedProviderRetryCoverage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	sourcePath := "/tmp/provider-source.jsonl"
 	filePath := sourcePath
 	current := &db.Session{
@@ -2009,7 +2068,7 @@ func TestParseDiffPresenceSweepKeepsMixedProviderRetryCoverage(t *testing.T) {
 	var presencePaths []string
 
 	err := engine.parseDiffCollectFile(
-		context.Background(),
+		t.Context(),
 		report,
 		job,
 		map[string]parser.AgentType{sourcePath: parser.AgentClaude},
@@ -2019,7 +2078,7 @@ func TestParseDiffPresenceSweepKeepsMixedProviderRetryCoverage(t *testing.T) {
 		engine.loadWorktreeProjectResolver(),
 		&presencePaths,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	engine.parseDiffPresenceSweep(
 		report,
 		presencePaths,
@@ -2027,16 +2086,16 @@ func TestParseDiffPresenceSweepKeepsMixedProviderRetryCoverage(t *testing.T) {
 		visited,
 	)
 
-	assert.Equal(t, 1, report.Totals.NeedsRetry)
-	assert.Equal(t, 1, report.Totals.Changed)
+	assert.Equal(1, report.Totals.NeedsRetry)
+	assert.Equal(1, report.Totals.Changed)
 	byID := map[string]SessionDiff{}
 	for _, session := range report.Sessions {
 		byID[session.SessionID] = session
 	}
-	assert.Equal(t, DiffNeedsRetry, byID[retry.ID].Class)
-	assert.Equal(t, DiffChanged, byID[missing.ID].Class)
-	require.NotEmpty(t, byID[missing.ID].Fields)
-	assert.Equal(t, FieldPresence, byID[missing.ID].Fields[0].Field)
+	assert.Equal(DiffNeedsRetry, byID[retry.ID].Class)
+	assert.Equal(DiffChanged, byID[missing.ID].Class)
+	require.NotEmpty(byID[missing.ID].Fields)
+	assert.Equal(FieldPresence, byID[missing.ID].Fields[0].Field)
 }
 
 func TestParseDiffPresenceSweepSkipsIncompleteProviderResults(t *testing.T) {
@@ -2063,7 +2122,7 @@ func TestParseDiffPresenceSweepSkipsIncompleteProviderResults(t *testing.T) {
 	var presencePaths []string
 
 	err := engine.parseDiffCollectFile(
-		context.Background(),
+		t.Context(),
 		report,
 		job,
 		map[string]parser.AgentType{sourcePath: parser.AgentClaude},
@@ -2086,6 +2145,9 @@ func TestParseDiffPresenceSweepSkipsIncompleteProviderResults(t *testing.T) {
 }
 
 func TestParseDiffProviderVirtualSQLiteErrorUsesExactSource(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dbPath := "/tmp/opencode.db"
 	firstPath := parser.OpenCodeSQLiteVirtualPath(dbPath, "ses_one")
 	secondPath := parser.OpenCodeSQLiteVirtualPath(dbPath, "ses_two")
@@ -2119,7 +2181,7 @@ func TestParseDiffProviderVirtualSQLiteErrorUsesExactSource(t *testing.T) {
 	var presencePaths []string
 
 	err := engine.parseDiffCollectFile(
-		context.Background(),
+		t.Context(),
 		report,
 		job,
 		map[string]parser.AgentType{firstPath: parser.AgentOpenCode},
@@ -2132,18 +2194,21 @@ func TestParseDiffProviderVirtualSQLiteErrorUsesExactSource(t *testing.T) {
 		engine.loadWorktreeProjectResolver(),
 		&presencePaths,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.Len(t, report.Sessions, 1)
-	assert.Equal(t, first.ID, report.Sessions[0].SessionID)
-	assert.Equal(t, DiffParseError, report.Sessions[0].Class)
-	assert.True(t, visited[first.ID])
-	assert.False(t, visited[second.ID])
-	assert.Empty(t, presencePaths)
-	assert.Equal(t, ParseDiffTotals{ParseErrors: 1}, report.Totals)
+	require.Len(report.Sessions, 1)
+	assert.Equal(first.ID, report.Sessions[0].SessionID)
+	assert.Equal(DiffParseError, report.Sessions[0].Class)
+	assert.True(visited[first.ID])
+	assert.False(visited[second.ID])
+	assert.Empty(presencePaths)
+	assert.Equal(ParseDiffTotals{ParseErrors: 1}, report.Totals)
 }
 
 func TestParseDiffProviderVirtualSQLitePresenceUsesExactSource(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dbPath := "/tmp/opencode.db"
 	firstPath := parser.OpenCodeSQLiteVirtualPath(dbPath, "ses_one")
 	secondPath := parser.OpenCodeSQLiteVirtualPath(dbPath, "ses_two")
@@ -2174,7 +2239,7 @@ func TestParseDiffProviderVirtualSQLitePresenceUsesExactSource(t *testing.T) {
 	var presencePaths []string
 
 	err := engine.parseDiffCollectFile(
-		context.Background(),
+		t.Context(),
 		report,
 		job,
 		map[string]parser.AgentType{firstPath: parser.AgentOpenCode},
@@ -2187,7 +2252,7 @@ func TestParseDiffProviderVirtualSQLitePresenceUsesExactSource(t *testing.T) {
 		engine.loadWorktreeProjectResolver(),
 		&presencePaths,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	engine.parseDiffPresenceSweep(
 		report,
 		presencePaths,
@@ -2195,19 +2260,21 @@ func TestParseDiffProviderVirtualSQLitePresenceUsesExactSource(t *testing.T) {
 		visited,
 	)
 
-	require.Len(t, report.Sessions, 1)
-	assert.Equal(t, first.ID, report.Sessions[0].SessionID)
-	assert.Equal(t, DiffChanged, report.Sessions[0].Class)
-	assert.True(t, visited[first.ID])
-	assert.False(t, visited[second.ID])
-	assert.Equal(t, ParseDiffTotals{Changed: 1}, report.Totals)
+	require.Len(report.Sessions, 1)
+	assert.Equal(first.ID, report.Sessions[0].SessionID)
+	assert.Equal(DiffChanged, report.Sessions[0].Class)
+	assert.True(visited[first.ID])
+	assert.False(visited[second.ID])
+	assert.Equal(ParseDiffTotals{Changed: 1}, report.Totals)
 }
 
 func TestParseDiffProviderVirtualSQLiteLimitUsesExactSource(t *testing.T) {
+	assert := assert.New(t)
+
 	dbPath := "/tmp/opencode.db"
 	firstPath := parser.OpenCodeSQLiteVirtualPath(dbPath, "ses_one")
 	secondPath := parser.OpenCodeSQLiteVirtualPath(dbPath, "ses_two")
-	_, cutPaths, limited := sortAndLimitParseDiffFiles(
+	_, cutPaths, limited := sortAndLimitParseDiffFiles(t.Context(),
 		[]parser.DiscoveredFile{
 			{Path: firstPath, Agent: parser.AgentOpenCode},
 			{Path: secondPath, Agent: parser.AgentOpenCode},
@@ -2216,11 +2283,10 @@ func TestParseDiffProviderVirtualSQLiteLimitUsesExactSource(t *testing.T) {
 	)
 
 	require.True(t, limited)
-	assert.Len(t, cutPaths, 1)
-	assert.False(t, cutPaths[dbPath])
+	assert.Len(cutPaths, 1)
+	assert.False(cutPaths[dbPath])
 	for path := range cutPaths {
-		assert.True(t,
-			path == firstPath || path == secondPath,
+		assert.True(path == firstPath || path == secondPath,
 			"cut path %q must be one exact virtual source", path,
 		)
 	}
@@ -2237,10 +2303,12 @@ func TestParseDiffSourceKeyStateVSCDBIsAgentAware(t *testing.T) {
 }
 
 func TestParseDiffDevinVirtualSQLiteLimitUsesExactSource(t *testing.T) {
+	assert := assert.New(t)
+
 	dbPath := filepath.Join("/tmp", "devin", "cli", "sessions.db")
 	firstPath := parser.VirtualSourcePath(dbPath, "ses_one")
 	secondPath := parser.VirtualSourcePath(dbPath, "ses_two")
-	_, cutPaths, limited := sortAndLimitParseDiffFiles(
+	_, cutPaths, limited := sortAndLimitParseDiffFiles(t.Context(),
 		[]parser.DiscoveredFile{
 			{Path: firstPath, Agent: parser.AgentDevin},
 			{Path: secondPath, Agent: parser.AgentDevin},
@@ -2249,11 +2317,10 @@ func TestParseDiffDevinVirtualSQLiteLimitUsesExactSource(t *testing.T) {
 	)
 
 	require.True(t, limited)
-	assert.Len(t, cutPaths, 1)
-	assert.False(t, cutPaths[dbPath])
+	assert.Len(cutPaths, 1)
+	assert.False(cutPaths[dbPath])
 	for path := range cutPaths {
-		assert.True(t,
-			path == firstPath || path == secondPath,
+		assert.True(path == firstPath || path == secondPath,
 			"cut path %q must be one exact Devin virtual source", path,
 		)
 	}
@@ -2266,6 +2333,9 @@ func TestParseDiffDevinVirtualSQLiteLimitUsesExactSource(t *testing.T) {
 // session; the sorter must instead honor SourceRef.DiscoveryMTimeNS and keep the
 // newer one.
 func TestParseDiffDBBackedLimitOrdersByDiscoveryMtime(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dbPath := "/tmp/.forge.db"
 	// "a-older" sorts before "z-newer" as a path but carries the older mtime.
 	olderPath := dbPath + "#a-older"
@@ -2273,7 +2343,7 @@ func TestParseDiffDBBackedLimitOrdersByDiscoveryMtime(t *testing.T) {
 	older := parser.SourceRef{Provider: parser.AgentForge, DiscoveryMTimeNS: 100}
 	newer := parser.SourceRef{Provider: parser.AgentForge, DiscoveryMTimeNS: 200}
 
-	kept, cutPaths, limited := sortAndLimitParseDiffFiles(
+	kept, cutPaths, limited := sortAndLimitParseDiffFiles(t.Context(),
 		[]parser.DiscoveredFile{
 			{Path: olderPath, Agent: parser.AgentForge, ProviderSource: &older},
 			{Path: newerPath, Agent: parser.AgentForge, ProviderSource: &newer},
@@ -2281,12 +2351,12 @@ func TestParseDiffDBBackedLimitOrdersByDiscoveryMtime(t *testing.T) {
 		1,
 	)
 
-	require.True(t, limited)
-	require.Len(t, kept, 1)
-	assert.Equal(t, newerPath, kept[0].Path,
+	require.True(limited)
+	require.Len(kept, 1)
+	assert.Equal(newerPath, kept[0].Path,
 		"newer per-session mtime must be sampled even though its path sorts later")
-	assert.Len(t, cutPaths, 1)
-	assert.True(t, cutPaths[olderPath],
+	assert.Len(cutPaths, 1)
+	assert.True(cutPaths[olderPath],
 		"the older session must be the one cut by --limit")
 }
 
@@ -2298,6 +2368,9 @@ func TestParseDiffDBBackedLimitOrdersByDiscoveryMtime(t *testing.T) {
 // pre-fix discoveredFileMtime (which only stat'd chat-messages.json) —
 // kept the older session instead of the companion-bumped one.
 func TestParseDiffCodebuffCompanionOnlyChangeAdvancesOrderingMtime(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	// Two Codebuff sessions with identical chat-messages.json mtimes.
 	// Session A (older): chat-messages.json and run-state.json share
 	// the same base mtime. Session B (newer): chat-messages.json has
@@ -2310,17 +2383,17 @@ func TestParseDiffCodebuffCompanionOnlyChangeAdvancesOrderingMtime(t *testing.T)
 
 	// Create minimal Codebuff session directories with companion files.
 	for _, dir := range []string{dirA, dirB} {
-		require.NoError(t, os.WriteFile(
+		require.NoError(os.WriteFile(
 			filepath.Join(dir, "chat-messages.json"),
 			[]byte(`[{"id":"u-1","variant":"user","content":"hello","timestamp":"03:04 PM"}]`),
 			0o644,
 		))
-		require.NoError(t, os.WriteFile(
+		require.NoError(os.WriteFile(
 			filepath.Join(dir, "run-state.json"),
 			[]byte(`{"sessionState":{"mainAgentState":{"agentType":"base2-free-deepseek"}}}`),
 			0o644,
 		))
-		require.NoError(t, os.WriteFile(
+		require.NoError(os.WriteFile(
 			filepath.Join(dir, "chat-meta.json"),
 			[]byte(`{"messageCount":1,"firstPrompt":"hello","messagesSize":50}`),
 			0o644,
@@ -2337,24 +2410,24 @@ func TestParseDiffCodebuffCompanionOnlyChangeAdvancesOrderingMtime(t *testing.T)
 	// Pin both chat-messages.json files to the same mtime.
 	chatA := filepath.Join(dirA, "chat-messages.json")
 	chatB := filepath.Join(dirB, "chat-messages.json")
-	require.NoError(t, os.Chtimes(chatA, baseTime, baseTime))
-	require.NoError(t, os.Chtimes(chatB, baseTime, baseTime))
+	require.NoError(os.Chtimes(chatA, baseTime, baseTime))
+	require.NoError(os.Chtimes(chatB, baseTime, baseTime))
 
 	// Pin both chat-meta.json files to base time.
 	metaA := filepath.Join(dirA, "chat-meta.json")
 	metaB := filepath.Join(dirB, "chat-meta.json")
-	require.NoError(t, os.Chtimes(metaA, baseTime, baseTime))
-	require.NoError(t, os.Chtimes(metaB, baseTime, baseTime))
+	require.NoError(os.Chtimes(metaA, baseTime, baseTime))
+	require.NoError(os.Chtimes(metaB, baseTime, baseTime))
 
 	// Session A: run-state.json at base time (no companion change).
 	runStateA := filepath.Join(dirA, "run-state.json")
-	require.NoError(t, os.Chtimes(runStateA, baseTime, baseTime))
+	require.NoError(os.Chtimes(runStateA, baseTime, baseTime))
 
 	// Session B: run-state.json bumped (companion-only change).
 	runStateB := filepath.Join(dirB, "run-state.json")
-	require.NoError(t, os.Chtimes(runStateB, newerTime, newerTime))
+	require.NoError(os.Chtimes(runStateB, newerTime, newerTime))
 
-	kept, cutPaths, limited := sortAndLimitParseDiffFiles(
+	kept, cutPaths, limited := sortAndLimitParseDiffFiles(t.Context(),
 		[]parser.DiscoveredFile{
 			{Path: chatA, Agent: parser.AgentCodebuff},
 			{Path: chatB, Agent: parser.AgentCodebuff},
@@ -2362,19 +2435,22 @@ func TestParseDiffCodebuffCompanionOnlyChangeAdvancesOrderingMtime(t *testing.T)
 		1,
 	)
 
-	require.True(t, limited)
-	require.Len(t, kept, 1)
-	assert.Equal(t, chatB, kept[0].Path,
+	require.True(limited)
+	require.Len(kept, 1)
+	assert.Equal(chatB, kept[0].Path,
 		"newer run-state.json must advance the composite freshness mtime "+
 			"even though chat-messages.json mtimes are identical; a zero here "+
 			"means parseDiffDiscoveryMtime or discoveredFileMtime dropped "+
 			"the companion stat and ordered by primary mtime alone")
-	assert.Len(t, cutPaths, 1)
-	assert.True(t, cutPaths[chatA],
+	assert.Len(cutPaths, 1)
+	assert.True(cutPaths[chatA],
 		"the session with older run-state.json must be the one cut by --limit")
 }
 
 func TestParseDiffFreebuffCompanionOnlyChangeAdvancesOrderingMtime(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	// Freebuff variant of the Codebuff companion-only test. Freebuff
 	// shares the Codebuff provider and routes through codebuffCompositeMtime,
 	// so companion-only changes must advance the ordering mtime the same way.
@@ -2384,17 +2460,17 @@ func TestParseDiffFreebuffCompanionOnlyChangeAdvancesOrderingMtime(t *testing.T)
 
 	// Create minimal session directories with companion files.
 	for _, dir := range []string{dirA, dirB} {
-		require.NoError(t, os.WriteFile(
+		require.NoError(os.WriteFile(
 			filepath.Join(dir, "chat-messages.json"),
 			[]byte(`[{"id":"u-1","variant":"user","content":"hello","timestamp":"03:04 PM"}]`),
 			0o644,
 		))
-		require.NoError(t, os.WriteFile(
+		require.NoError(os.WriteFile(
 			filepath.Join(dir, "run-state.json"),
 			[]byte(`{"sessionState":{"mainAgentState":{"agentType":"base2-free-deepseek"}}}`),
 			0o644,
 		))
-		require.NoError(t, os.WriteFile(
+		require.NoError(os.WriteFile(
 			filepath.Join(dir, "chat-meta.json"),
 			[]byte(`{"messageCount":1,"firstPrompt":"hello","messagesSize":50}`),
 			0o644,
@@ -2411,24 +2487,24 @@ func TestParseDiffFreebuffCompanionOnlyChangeAdvancesOrderingMtime(t *testing.T)
 	// Pin both chat-messages.json files to the same mtime.
 	chatA := filepath.Join(dirA, "chat-messages.json")
 	chatB := filepath.Join(dirB, "chat-messages.json")
-	require.NoError(t, os.Chtimes(chatA, baseTime, baseTime))
-	require.NoError(t, os.Chtimes(chatB, baseTime, baseTime))
+	require.NoError(os.Chtimes(chatA, baseTime, baseTime))
+	require.NoError(os.Chtimes(chatB, baseTime, baseTime))
 
 	// Pin both chat-meta.json files to base time.
 	metaA := filepath.Join(dirA, "chat-meta.json")
 	metaB := filepath.Join(dirB, "chat-meta.json")
-	require.NoError(t, os.Chtimes(metaA, baseTime, baseTime))
-	require.NoError(t, os.Chtimes(metaB, baseTime, baseTime))
+	require.NoError(os.Chtimes(metaA, baseTime, baseTime))
+	require.NoError(os.Chtimes(metaB, baseTime, baseTime))
 
 	// Session A: run-state.json at base time (no companion change).
 	runStateA := filepath.Join(dirA, "run-state.json")
-	require.NoError(t, os.Chtimes(runStateA, baseTime, baseTime))
+	require.NoError(os.Chtimes(runStateA, baseTime, baseTime))
 
 	// Session B: run-state.json bumped (companion-only change).
 	runStateB := filepath.Join(dirB, "run-state.json")
-	require.NoError(t, os.Chtimes(runStateB, newerTime, newerTime))
+	require.NoError(os.Chtimes(runStateB, newerTime, newerTime))
 
-	kept, cutPaths, limited := sortAndLimitParseDiffFiles(
+	kept, cutPaths, limited := sortAndLimitParseDiffFiles(t.Context(),
 		[]parser.DiscoveredFile{
 			{Path: chatA, Agent: parser.AgentFreebuff},
 			{Path: chatB, Agent: parser.AgentFreebuff},
@@ -2436,15 +2512,15 @@ func TestParseDiffFreebuffCompanionOnlyChangeAdvancesOrderingMtime(t *testing.T)
 		1,
 	)
 
-	require.True(t, limited)
-	require.Len(t, kept, 1)
-	assert.Equal(t, chatB, kept[0].Path,
+	require.True(limited)
+	require.Len(kept, 1)
+	assert.Equal(chatB, kept[0].Path,
 		"Freebuff: newer run-state.json must advance the composite freshness "+
 			"even though chat-messages.json mtimes are identical; a zero here "+
 			"means discoveredFileMtime did not route AgentFreebuff through "+
 			"codebuffCompositeMtime")
-	assert.Len(t, cutPaths, 1)
-	assert.True(t, cutPaths[chatA],
+	assert.Len(cutPaths, 1)
+	assert.True(cutPaths[chatA],
 		"the session with older run-state.json must be the one cut by --limit")
 }
 

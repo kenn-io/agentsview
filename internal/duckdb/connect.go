@@ -44,7 +44,7 @@ func resolveAttachTimeout(configured time.Duration) time.Duration {
 // Serve and probe paths use OpenReadOnly instead.
 func Open(path string) (*sql.DB, error) {
 	if path == "" {
-		return nil, fmt.Errorf("duckdb path is required")
+		return nil, errors.New("duckdb path is required")
 	}
 	db, err := openDuckDB(path)
 	if err != nil {
@@ -59,7 +59,7 @@ func Open(path string) (*sql.DB, error) {
 // exclusive write lock on the mirror and never create a missing file.
 func OpenReadOnly(path string) (*sql.DB, error) {
 	if path == "" {
-		return nil, fmt.Errorf("duckdb path is required")
+		return nil, errors.New("duckdb path is required")
 	}
 	db, err := openDuckDB(path + "?access_mode=read_only")
 	if err != nil {
@@ -113,7 +113,7 @@ func ReadStatusFromConfig(
 	cfg config.DuckDBConfig,
 ) (SyncStatus, error) {
 	if cfg.MachineName == "" {
-		return SyncStatus{}, fmt.Errorf("machine name must not be empty")
+		return SyncStatus{}, errors.New("machine name must not be empty")
 	}
 	if cfg.URL == "" {
 		return readLocalMirrorStatus(ctx, cfg)
@@ -135,7 +135,7 @@ func readLocalMirrorStatus(
 	ctx context.Context, cfg config.DuckDBConfig,
 ) (SyncStatus, error) {
 	if cfg.Path == "" {
-		return SyncStatus{}, fmt.Errorf("duckdb path is required")
+		return SyncStatus{}, errors.New("duckdb path is required")
 	}
 	if _, err := os.Stat(cfg.Path); os.IsNotExist(err) {
 		return SyncStatus{Machine: cfg.MachineName, MirrorMissing: true}, nil
@@ -291,7 +291,7 @@ func NewStoreFromConfig(cfg config.DuckDBConfig) (*Store, error) {
 // locally; expose it read-only with `agentsview duckdb quack serve`.
 func ValidatePushTarget(cfg config.DuckDBConfig) error {
 	if cfg.URL != "" {
-		return fmt.Errorf("duckdb push writes the local mirror file and cannot " +
+		return errors.New("duckdb push writes the local mirror file and cannot " +
 			"push to a remote Quack endpoint; unset [duckdb].url / " +
 			"AGENTSVIEW_DUCKDB_URL for pushes and serve the mirror with " +
 			"'agentsview duckdb quack serve'")
@@ -737,15 +737,13 @@ func duckDBThreadCount() int {
 // extension sees any token-bearing attach string.
 func ValidateQuackClientURL(rawURL, token string, allowInsecure bool) error {
 	if rawURL == "" {
-		return fmt.Errorf("duckdb url is required")
+		return errors.New("duckdb url is required")
 	}
 	if !strings.HasPrefix(rawURL, "quack:") {
-		return fmt.Errorf("duckdb url must start with quack")
+		return errors.New("duckdb url must start with quack")
 	}
 	if token == "" {
-		return fmt.Errorf(
-			"duckdb quack token is required; set AGENTSVIEW_DUCKDB_TOKEN or [duckdb].token",
-		)
+		return errors.New("duckdb quack token is required; set AGENTSVIEW_DUCKDB_TOKEN or [duckdb].token")
 	}
 	transport := strings.TrimPrefix(rawURL, "quack:")
 	if strings.HasPrefix(transport, "http://") ||
@@ -754,10 +752,9 @@ func ValidateQuackClientURL(rawURL, token string, allowInsecure bool) error {
 		// HOST:PORT authority and rejects URL-scheme forms at ATTACH time
 		// with "Invalid Port". Reject them here with an actionable message
 		// instead of surfacing the cryptic extension error.
-		return fmt.Errorf(
-			"duckdb quack url must use the native form quack:HOST:PORT; " +
-				"the Quack extension does not accept http:// or https:// " +
-				"client urls",
+		return errors.New("duckdb quack url must use the native form quack:HOST:PORT; " +
+			"the Quack extension does not accept http:// or https:// " +
+			"client urls",
 		)
 	}
 	host, err := quackURIHost(rawURL)
@@ -765,9 +762,7 @@ func ValidateQuackClientURL(rawURL, token string, allowInsecure bool) error {
 		return err
 	}
 	if !allowInsecure && !isLoopbackHost(host) {
-		return fmt.Errorf(
-			"duckdb native quack url host must be loopback unless allow_insecure is set",
-		)
+		return errors.New("duckdb native quack url host must be loopback unless allow_insecure is set")
 	}
 	return nil
 }
@@ -833,19 +828,17 @@ func redactNativeQuackTransport(transport string) string {
 // connection, so loopback binding is the safe default.
 func ValidateQuackServeURI(uri string, allowOtherHostname bool) error {
 	if uri == "" {
-		return fmt.Errorf("duckdb quack bind uri is required")
+		return errors.New("duckdb quack bind uri is required")
 	}
 	if !strings.HasPrefix(uri, "quack:") {
-		return fmt.Errorf("duckdb quack bind uri must start with quack")
+		return errors.New("duckdb quack bind uri must start with quack")
 	}
 	host, err := quackURIHost(uri)
 	if err != nil {
 		return err
 	}
 	if !allowOtherHostname && !isLoopbackHost(host) {
-		return fmt.Errorf(
-			"duckdb quack bind host must be loopback unless allow_insecure is set",
-		)
+		return errors.New("duckdb quack bind host must be loopback unless allow_insecure is set")
 	}
 	return nil
 }
@@ -861,14 +854,14 @@ func quackURIHost(uri string) (string, error) {
 			return "", fmt.Errorf("parsing duckdb quack bind uri: %w", err)
 		}
 		if u.Hostname() == "" {
-			return "", fmt.Errorf("duckdb quack bind uri host is required")
+			return "", errors.New("duckdb quack bind uri host is required")
 		}
 		return u.Hostname(), nil
 	}
 	if strings.HasPrefix(raw, "[") {
 		end := strings.Index(raw, "]")
 		if end < 0 {
-			return "", fmt.Errorf("duckdb quack bind uri has invalid IPv6 host")
+			return "", errors.New("duckdb quack bind uri has invalid IPv6 host")
 		}
 		return raw[1:end], nil
 	}
@@ -877,7 +870,7 @@ func quackURIHost(uri string) (string, error) {
 		host = raw[:i]
 	}
 	if host == "" {
-		return "", fmt.Errorf("duckdb quack bind uri host is required")
+		return "", errors.New("duckdb quack bind uri host is required")
 	}
 	return host, nil
 }

@@ -118,13 +118,11 @@ func ImportClaudeAI(
 		parser.AgentClaudeAI, parser.ProviderConfig{},
 	)
 	if !ok {
-		return stats, fmt.Errorf("claude.ai provider unavailable")
+		return stats, errors.New("claude.ai provider unavailable")
 	}
 	exporter, ok := provider.(parser.ClaudeAIExportParser)
 	if !ok {
-		return stats, fmt.Errorf(
-			"claude.ai provider does not support exports",
-		)
+		return stats, errors.New("claude.ai provider does not support exports")
 	}
 
 	err := exporter.ParseClaudeAIExport(r, func(
@@ -310,13 +308,11 @@ func ImportChatGPT(
 		parser.AgentChatGPT, parser.ProviderConfig{},
 	)
 	if !ok {
-		return stats, fmt.Errorf("chatgpt provider unavailable")
+		return stats, errors.New("chatgpt provider unavailable")
 	}
 	exporter, ok := provider.(parser.ChatGPTExportParser)
 	if !ok {
-		return stats, fmt.Errorf(
-			"chatgpt provider does not support exports",
-		)
+		return stats, errors.New("chatgpt provider does not support exports")
 	}
 
 	err := exporter.ParseChatGPTExport(dir, resolver,

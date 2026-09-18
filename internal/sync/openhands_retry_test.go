@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -13,12 +12,14 @@ import (
 )
 
 func TestProcessFileOpenHandsUsesSnapshotMtimeForRetryCache(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	sessionDir := filepath.Join(
 		root, "086c7ecf6cb746b69fbcb900358d1247",
 	)
 	eventsDir := filepath.Join(sessionDir, "events")
-	require.NoError(t, os.MkdirAll(eventsDir, 0o755))
+	require.NoError(os.MkdirAll(eventsDir, 0o755))
 
 	baseStatePath := filepath.Join(sessionDir, "base_state.json")
 	eventPath := filepath.Join(eventsDir, "event-00000-user.json")
@@ -35,7 +36,7 @@ func TestProcessFileOpenHandsUsesSnapshotMtimeForRetryCache(t *testing.T) {
 	}`))
 
 	dirInfo, err := os.Stat(sessionDir)
-	require.NoError(t, err)
+	require.NoError(err)
 	oldDirMtime := dirInfo.ModTime()
 
 	engine := &Engine{
@@ -59,18 +60,18 @@ func TestProcessFileOpenHandsUsesSnapshotMtimeForRetryCache(t *testing.T) {
 		"llm_message":{"role":"user","content":[{"type":"text","text":"Updated version"}]},
 		"kind":"MessageEvent"
 	}`))
-	require.NoError(t, os.Chtimes(sessionDir, oldDirMtime, oldDirMtime))
+	require.NoError(os.Chtimes(sessionDir, oldDirMtime, oldDirMtime))
 
 	snapshot, err := parser.OpenHandsSnapshot(sessionDir)
-	require.NoError(t, err)
-	require.NotEqual(t, oldDirMtime.UnixNano(), snapshot.Mtime)
+	require.NoError(err)
+	require.NotEqual(oldDirMtime.UnixNano(), snapshot.Mtime)
 
-	res := engine.processFile(context.Background(), parser.DiscoveredFile{
+	res := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  sessionDir,
 		Agent: parser.AgentOpenHands,
 	})
-	require.False(t, res.skip)
-	require.NoError(t, res.err)
-	require.Len(t, res.results, 1)
-	require.Equal(t, snapshot.Mtime, res.mtime)
+	require.False(res.skip)
+	require.NoError(res.err)
+	require.Len(res.results, 1)
+	require.Equal(snapshot.Mtime, res.mtime)
 }

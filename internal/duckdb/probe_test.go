@@ -7,11 +7,14 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+
+	duckdbdriver "github.com/duckdb/duckdb-go/v2"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -20,7 +23,7 @@ import (
 func TestProbeMirrorMissingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "none.duckdb")
 
-	p, err := ProbeMirror(context.Background(), path)
+	p, err := ProbeMirror(t.Context(), path)
 
 	require.NoError(t, err)
 	assert.False(t, p.FileExists)
@@ -30,37 +33,41 @@ func TestProbeMirrorMissingFile(t *testing.T) {
 }
 
 func TestProbeMirrorReadsMetadataAndFlagsShapeIssues(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "m.duckdb")
 	conn, err := Open(path)
-	require.NoError(t, err)
-	require.NoError(t, createSchema(context.Background(), conn))
-	require.NoError(t, writeMirrorMetadata(context.Background(), conn, mirrorMetadata{
+	require.NoError(err)
+	require.NoError(createSchema(t.Context(), conn))
+	require.NoError(writeMirrorMetadata(t.Context(), conn, mirrorMetadata{
 		SchemaVersion: SchemaVersion, DataVersion: 68,
 		SourceDatabaseID: "database-1", SourceArchiveID: "archive-1", Scope: "",
-		LastPushCutoff: "2026-07-18T00:00:00.000Z", LastPushMachine: "machine-a"}))
-	require.NoError(t, conn.Close())
+		LastPushCutoff: "2026-07-18T00:00:00.000Z", LastPushMachine: "machine-a",
+	}))
+	require.NoError(conn.Close())
 
-	p, err := ProbeMirror(context.Background(), path)
-	require.NoError(t, err)
-	assert.True(t, p.FileExists)
-	assert.True(t, p.ShapeOK)
-	assert.Equal(t, SchemaVersion, p.SchemaVersion)
-	assert.Equal(t, 68, p.DataVersion)
-	assert.Equal(t, "database-1", p.SourceDatabaseID)
-	assert.Equal(t, "archive-1", p.SourceArchiveID)
-	assert.Equal(t, "2026-07-18T00:00:00.000Z", p.LastPushCutoff)
-	assert.Equal(t, "machine-a", p.LastPushMachine)
+	p, err := ProbeMirror(t.Context(), path)
+	require.NoError(err)
+	assert.True(p.FileExists)
+	assert.True(p.ShapeOK)
+	assert.Equal(SchemaVersion, p.SchemaVersion)
+	assert.Equal(68, p.DataVersion)
+	assert.Equal("database-1", p.SourceDatabaseID)
+	assert.Equal("archive-1", p.SourceArchiveID)
+	assert.Equal("2026-07-18T00:00:00.000Z", p.LastPushCutoff)
+	assert.Equal("machine-a", p.LastPushMachine)
 
 	// NeedsRebuild triggers: version drift either direction, scope drift.
-	assert.False(t, p.NeedsRebuild("", 68))
-	assert.True(t, p.NeedsRebuild("", 69))
-	assert.True(t, p.NeedsRebuild(canonicalPushScope([]string{"p"}, nil), 68))
+	assert.False(p.NeedsRebuild("", 68))
+	assert.True(p.NeedsRebuild("", 69))
+	assert.True(p.NeedsRebuild(canonicalPushScope([]string{"p"}, nil), 68))
 	older := p
 	older.SchemaVersion = SchemaVersion - 1
-	assert.True(t, older.NeedsRebuild("", 68))
+	assert.True(older.NeedsRebuild("", 68))
 	newer := p
 	newer.SchemaVersion = SchemaVersion + 1
-	assert.True(t, newer.NeedsRebuild("", 68))
+	assert.True(newer.NeedsRebuild("", 68))
 }
 
 // TestProbeMirrorFlagsDroppedMetadataTableAsShapeIssue verifies that a
@@ -68,21 +75,24 @@ func TestProbeMirrorReadsMetadataAndFlagsShapeIssues(t *testing.T) {
 // merely holding a stale or absent key) is flagged as a shape issue by the
 // table/column shape check, not silently probed as schema/data version 0.
 func TestProbeMirrorFlagsDroppedMetadataTableAsShapeIssue(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "dropped-metadata.duckdb")
 	conn, err := Open(path)
-	require.NoError(t, err)
-	require.NoError(t, createSchema(context.Background(), conn))
-	_, err = conn.ExecContext(context.Background(), `DROP TABLE sync_metadata`)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	require.NoError(err)
+	require.NoError(createSchema(t.Context(), conn))
+	_, err = conn.ExecContext(t.Context(), `DROP TABLE sync_metadata`)
+	require.NoError(err)
+	require.NoError(conn.Close())
 
-	p, err := ProbeMirror(context.Background(), path)
+	p, err := ProbeMirror(t.Context(), path)
 
-	require.NoError(t, err)
-	assert.True(t, p.FileExists)
-	assert.False(t, p.ShapeOK)
-	assert.NotEmpty(t, p.ShapeIssue)
-	assert.True(t, p.NeedsRebuild("", 68))
+	require.NoError(err)
+	assert.True(p.FileExists)
+	assert.False(p.ShapeOK)
+	assert.NotEmpty(p.ShapeIssue)
+	assert.True(p.NeedsRebuild("", 68))
 }
 
 // TestProbeMirrorFlagsMalformedMetadataIntAsShapeIssue verifies that a
@@ -90,25 +100,28 @@ func TestProbeMirrorFlagsDroppedMetadataTableAsShapeIssue(t *testing.T) {
 // missing key, which readMirrorMetadata tolerates as a zero value) is
 // reported as a shape issue rather than a hard error.
 func TestProbeMirrorFlagsMalformedMetadataIntAsShapeIssue(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "malformed-int.duckdb")
 	conn, err := Open(path)
-	require.NoError(t, err)
-	require.NoError(t, createSchema(context.Background(), conn))
-	_, err = conn.ExecContext(context.Background(), `
+	require.NoError(err)
+	require.NoError(createSchema(t.Context(), conn))
+	_, err = conn.ExecContext(t.Context(), `
 		INSERT INTO sync_metadata (key, value) VALUES (?, 'not-an-int')
 		ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 		dataVersionMetadataKey,
 	)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	require.NoError(err)
+	require.NoError(conn.Close())
 
-	p, err := ProbeMirror(context.Background(), path)
+	p, err := ProbeMirror(t.Context(), path)
 
-	require.NoError(t, err)
-	assert.True(t, p.FileExists)
-	assert.False(t, p.ShapeOK)
-	assert.NotEmpty(t, p.ShapeIssue)
-	assert.True(t, p.NeedsRebuild("", 68))
+	require.NoError(err)
+	assert.True(p.FileExists)
+	assert.False(p.ShapeOK)
+	assert.NotEmpty(p.ShapeIssue)
+	assert.True(p.NeedsRebuild("", 68))
 }
 
 // TestProbeMirrorToleratesMissingMetadataKeysAsZeroValues verifies that a
@@ -117,23 +130,26 @@ func TestProbeMirrorFlagsMalformedMetadataIntAsShapeIssue(t *testing.T) {
 // readMirrorMetadata's documented tolerance for missing (as opposed to
 // malformed) keys.
 func TestProbeMirrorToleratesMissingMetadataKeysAsZeroValues(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "no-push-yet.duckdb")
 	conn, err := Open(path)
-	require.NoError(t, err)
-	require.NoError(t, createSchema(context.Background(), conn))
-	_, err = conn.ExecContext(context.Background(),
+	require.NoError(err)
+	require.NoError(createSchema(t.Context(), conn))
+	_, err = conn.ExecContext(t.Context(),
 		`DELETE FROM sync_metadata WHERE key = ?`, dataVersionMetadataKey,
 	)
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	require.NoError(err)
+	require.NoError(conn.Close())
 
-	p, err := ProbeMirror(context.Background(), path)
+	p, err := ProbeMirror(t.Context(), path)
 
-	require.NoError(t, err)
-	assert.True(t, p.FileExists)
-	assert.True(t, p.ShapeOK)
-	assert.Equal(t, 0, p.DataVersion)
-	assert.True(t, p.NeedsRebuild("", 68), "zero data version must not match a real source version")
+	require.NoError(err)
+	assert.True(p.FileExists)
+	assert.True(p.ShapeOK)
+	assert.Equal(0, p.DataVersion)
+	assert.True(p.NeedsRebuild("", 68), "zero data version must not match a real source version")
 }
 
 // TestProbeMirrorRecognitionRequiresSentinel pins RecognizedMirror to the
@@ -144,7 +160,7 @@ func TestProbeMirrorToleratesMissingMetadataKeysAsZeroValues(t *testing.T) {
 // (see ensureReplaceableMirror). A real mirror keeps its sentinel — and its
 // recognition — even when its shape is otherwise incompatible.
 func TestProbeMirrorRecognitionRequiresSentinel(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	tests := []struct {
 		name           string
 		setup          func(t *testing.T, conn *sql.DB)
@@ -203,36 +219,39 @@ func TestProbeMirrorRecognitionRequiresSentinel(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			path := filepath.Join(t.TempDir(), "recognition.duckdb")
 			conn, err := Open(path)
-			require.NoError(t, err)
+			require.NoError(err)
 			tt.setup(t, conn)
-			require.NoError(t, conn.Close())
+			require.NoError(conn.Close())
 
 			p, err := ProbeMirror(ctx, path)
 
-			require.NoError(t, err)
-			assert.True(t, p.FileExists)
-			assert.Equal(t, tt.wantRecognized, p.RecognizedMirror)
+			require.NoError(err)
+			assert.True(p.FileExists)
+			assert.Equal(tt.wantRecognized, p.RecognizedMirror)
 		})
 	}
 }
 
 func TestCanonicalPushScopeIsDeterministicAndSorted(t *testing.T) {
-	assert.Equal(t, "", canonicalPushScope(nil, nil))
-	assert.Equal(t, "", canonicalPushScope([]string{}, []string{}))
+	assert := assert.New(t)
+
+	assert.Empty(canonicalPushScope(nil, nil))
+	assert.Empty(canonicalPushScope([]string{}, []string{}))
 
 	forward := canonicalPushScope([]string{"b", "a"}, []string{"y", "x"})
 	reordered := canonicalPushScope([]string{"a", "b"}, []string{"x", "y"})
-	assert.Equal(t, forward, reordered)
-	assert.NotEmpty(t, forward)
+	assert.Equal(forward, reordered)
+	assert.NotEmpty(forward)
 
-	assert.NotEqual(t,
-		canonicalPushScope([]string{"a"}, nil),
+	assert.NotEqual(canonicalPushScope([]string{"a"}, nil),
 		canonicalPushScope([]string{"a", "b"}, nil),
 	)
-	assert.NotEqual(t,
-		canonicalPushScope([]string{"a"}, nil),
+	assert.NotEqual(canonicalPushScope([]string{"a"}, nil),
 		canonicalPushScope(nil, []string{"a"}),
 	)
 }
@@ -281,34 +300,38 @@ func TestIsMirrorLockConflictErrorClassifiesLockMessages(t *testing.T) {
 // same-DSN instance sharing (both opens use the identical read-only DSN);
 // across processes DuckDB's read-only locks coexist the same way.
 func TestProbeMirrorSucceedsWhileMirrorHeldReadOnly(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "held.duckdb")
 	conn, err := Open(path)
-	require.NoError(t, err)
-	require.NoError(t, createSchema(ctx, conn))
-	require.NoError(t, writeMirrorMetadata(ctx, conn, mirrorMetadata{
+	require.NoError(err)
+	require.NoError(createSchema(ctx, conn))
+	require.NoError(writeMirrorMetadata(ctx, conn, mirrorMetadata{
 		SchemaVersion: SchemaVersion, DataVersion: 68,
 		SourceDatabaseID: "database-1", SourceArchiveID: "archive-1",
-		LastPushCutoff: "2026-07-18T00:00:00.000Z", LastPushMachine: "machine-a"}))
-	require.NoError(t, conn.Close())
+		LastPushCutoff: "2026-07-18T00:00:00.000Z", LastPushMachine: "machine-a",
+	}))
+	require.NoError(conn.Close())
 
 	held, err := OpenReadOnly(path)
-	require.NoError(t, err)
-	defer func() { require.NoError(t, held.Close()) }()
+	require.NoError(err)
+	defer func() { require.NoError(held.Close()) }()
 	var one int
-	require.NoError(t, held.QueryRowContext(ctx, "SELECT 1").Scan(&one),
+	require.NoError(held.QueryRowContext(ctx, "SELECT 1").Scan(&one),
 		"the holding handle must be materialized, not just lazily opened")
 
 	p, err := ProbeMirror(ctx, path)
 
-	require.NoError(t, err)
-	assert.True(t, p.ShapeOK, "probe must inspect a read-only-held mirror: %s", p.ShapeIssue)
-	assert.True(t, p.RecognizedMirror)
-	assert.False(t, p.LockConflict)
-	assert.Equal(t, 68, p.DataVersion)
-	assert.Equal(t, "database-1", p.SourceDatabaseID)
-	assert.Equal(t, "archive-1", p.SourceArchiveID)
-	assert.Equal(t, "machine-a", p.LastPushMachine)
+	require.NoError(err)
+	assert.True(p.ShapeOK, "probe must inspect a read-only-held mirror: %s", p.ShapeIssue)
+	assert.True(p.RecognizedMirror)
+	assert.False(p.LockConflict)
+	assert.Equal(68, p.DataVersion)
+	assert.Equal("database-1", p.SourceDatabaseID)
+	assert.Equal("archive-1", p.SourceArchiveID)
+	assert.Equal("machine-a", p.LastPushMachine)
 }
 
 func TestRebuildReasonReportsEachTrigger(t *testing.T) {
@@ -463,20 +486,22 @@ func TestRebuildReasonReportsEachTrigger(t *testing.T) {
 }
 
 func TestProbeMirrorOpensReadOnlyAndNeverMutates(t *testing.T) {
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "readonly.duckdb")
 	conn, err := Open(path)
-	require.NoError(t, err)
-	require.NoError(t, createSchema(context.Background(), conn))
-	require.NoError(t, conn.Close())
+	require.NoError(err)
+	require.NoError(createSchema(t.Context(), conn))
+	require.NoError(conn.Close())
 
 	before, err := os.Stat(path)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	_, err = ProbeMirror(context.Background(), path)
-	require.NoError(t, err)
+	_, err = ProbeMirror(t.Context(), path)
+	require.NoError(err)
 
 	after, err := os.Stat(path)
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Equal(t, before.Size(), after.Size(),
 		"probing a mirror must not write to it")
 }
@@ -510,11 +535,8 @@ func TestClassifyProbeErrorClassifiesLockConflicts(t *testing.T) {
 		},
 		{
 			name: "same-process double-open rejection",
-			err: errors.New(
-				"Can't open a connection to same database file with a " +
-					"different configuration than existing connections",
-			),
-			wantShapeIssue: "Can't open a connection to same database file " +
+			err:  fmt.Errorf("open mirror: %w", &duckdbdriver.Error{Msg: "Connection Error: Can't open a connection to same database file with a different configuration than existing connections"}),
+			wantShapeIssue: "open mirror: Connection Error: Can't open a connection to same database file " +
 				"with a different configuration than existing connections",
 			wantLockConflict: true,
 		},
@@ -577,6 +599,8 @@ func (lockConflictProbeConn) QueryContext(
 // LockConflict from the open error path, so a lock conflict surfacing here
 // would silently degrade to a generic, unclassified shape issue instead.
 func TestProbeMirrorRoutesLazyOpenLockConflictThroughClassifier(t *testing.T) {
+	assert := assert.New(t)
+
 	lockConflictProbeRegisterOnce.Do(func() {
 		sql.Register("agentsview_lock_conflict_probe", lockConflictProbeDriver{})
 	})
@@ -584,14 +608,14 @@ func TestProbeMirrorRoutesLazyOpenLockConflictThroughClassifier(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, conn.Close()) })
 
-	probe := probeOpenMirror(context.Background(), conn)
+	probe := probeOpenMirror(t.Context(), conn)
 
-	assert.True(t, probe.FileExists)
-	assert.False(t, probe.ShapeOK)
-	assert.True(t, probe.LockConflict,
+	assert.True(probe.FileExists)
+	assert.False(probe.ShapeOK)
+	assert.True(probe.LockConflict,
 		"a lock conflict surfacing from the first lazy query must still be classified")
-	assert.Contains(t, probe.ShapeIssue, "Could not set lock")
-	assert.False(t, probe.RecognizedMirror)
+	assert.Contains(probe.ShapeIssue, "Could not set lock")
+	assert.False(probe.RecognizedMirror)
 }
 
 // TestEnsureReplaceableMirrorRejectsUnrecognizedFile pins the fail-closed
@@ -599,15 +623,18 @@ func TestProbeMirrorRoutesLazyOpenLockConflictThroughClassifier(t *testing.T) {
 // but not recognize (no agentsview sentinel) must never be replaced by a
 // rebuild, while a missing file and a recognized mirror both pass.
 func TestEnsureReplaceableMirrorRejectsUnrecognizedFile(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 
-	require.NoError(t, ensureReplaceableMirror(path, MirrorProbe{}))
-	require.NoError(t, ensureReplaceableMirror(path, MirrorProbe{
+	require.NoError(ensureReplaceableMirror(path, MirrorProbe{}))
+	require.NoError(ensureReplaceableMirror(path, MirrorProbe{
 		FileExists: true, RecognizedMirror: true,
 	}))
 
 	err := ensureReplaceableMirror(path, MirrorProbe{FileExists: true})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not an agentsview duckdb mirror")
-	assert.Contains(t, err.Error(), path)
+	require.Error(err)
+	assert.Contains(err.Error(), "not an agentsview duckdb mirror")
+	assert.Contains(err.Error(), path)
 }

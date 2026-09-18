@@ -12,9 +12,12 @@ import (
 )
 
 func TestParseRooCodeSessionMCPResponsePairing(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-mcp-pair")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-mcp-pair",
@@ -26,10 +29,10 @@ func TestParseRooCodeSessionMCPResponsePairing(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Sequence: user task, MCP tool call, mcp_server_response
@@ -60,34 +63,37 @@ func TestParseRooCodeSessionMCPResponsePairing(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// user task + MCP tool call = 2 (mcp_server_response is paired,
 	// mcp_server_request_started is metadata/skipped)
-	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(2, sess.MessageCount)
 
 	// Verify the MCP tool call has a ResultEvent with the response.
-	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(msgs[1].ToolCalls, 1)
 	tc := msgs[1].ToolCalls[0]
-	assert.Equal(t, "brave-search", tc.ToolName)
-	assert.Equal(t, "MCP", tc.Category)
-	require.Len(t, tc.ResultEvents, 1)
-	assert.Equal(t, "completed", tc.ResultEvents[0].Status)
-	assert.Equal(t, "Found React documentation at react.dev",
+	assert.Equal("brave-search", tc.ToolName)
+	assert.Equal("MCP", tc.Category)
+	require.Len(tc.ResultEvents, 1)
+	assert.Equal("completed", tc.ResultEvents[0].Status)
+	assert.Equal("Found React documentation at react.dev",
 		tc.ResultEvents[0].Content)
 }
 
 func TestParseRooCodeSessionMCPResponseNoPending(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-mcp-nopending")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-mcp-nopending",
@@ -99,10 +105,10 @@ func TestParseRooCodeSessionMCPResponseNoPending(t *testing.T) {
 		Workspace: "/Users/test/project",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// MCP response with no preceding MCP tool call — should be
@@ -122,28 +128,31 @@ func TestParseRooCodeSessionMCPResponseNoPending(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// user task + MCP response system msg = 2
-	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(2, sess.MessageCount)
 
 	// Response should be a standalone system message.
-	assert.Equal(t, RoleSystem, msgs[1].Role)
-	assert.True(t, msgs[1].IsSystem)
-	assert.Equal(t, "Orphaned MCP response", msgs[1].Content)
+	assert.Equal(RoleSystem, msgs[1].Role)
+	assert.True(msgs[1].IsSystem)
+	assert.Equal("Orphaned MCP response", msgs[1].Content)
 }
 
 func TestParseRooCodeSessionEmptyMCPResponsePairsCompleted(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-mcp-empty")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-mcp-empty",
@@ -154,10 +163,10 @@ func TestParseRooCodeSessionEmptyMCPResponsePairsCompleted(t *testing.T) {
 		Status:    "completed",
 	}
 	historyJSON, err := json.Marshal(historyItem)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// An MCP tool whose response body is empty must still resolve
@@ -183,30 +192,29 @@ func TestParseRooCodeSessionEmptyMCPResponsePairsCompleted(t *testing.T) {
 		},
 	}
 	messagesJSON, err := json.Marshal(messages)
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(
+	require.NoError(err)
+	require.NoError(os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// user task + MCP tool call = 2; no standalone message for the
 	// empty response.
-	assert.Equal(t, 2, sess.MessageCount)
+	assert.Equal(2, sess.MessageCount)
 
-	require.Len(t, msgs[1].ToolCalls, 1)
+	require.Len(msgs[1].ToolCalls, 1)
 	tc := msgs[1].ToolCalls[0]
-	require.Len(t, tc.ResultEvents, 1)
-	assert.Equal(t, "completed", tc.ResultEvents[0].Status)
-	assert.Equal(t, "", tc.ResultEvents[0].Content)
-	assert.True(t,
-		tc.ResultEvents[0].Timestamp.Equal(time.UnixMilli(1688836870000)),
+	require.Len(tc.ResultEvents, 1)
+	assert.Equal("completed", tc.ResultEvents[0].Status)
+	assert.Empty(tc.ResultEvents[0].Content)
+	assert.True(tc.ResultEvents[0].Timestamp.Equal(time.UnixMilli(1688836870000)),
 		"result event should carry the mcp_server_response timestamp")
 
 	// The resolved tool call must not read as orphaned.
-	assert.Equal(t, TerminationClean, sess.TerminationStatus)
+	assert.Equal(TerminationClean, sess.TerminationStatus)
 }
 
 func TestRooCodeIsMetadataSayIncludesMCP(t *testing.T) {
@@ -236,9 +244,12 @@ func TestParseRooCodeSessionCanonicalMCPPayloads(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			tmpDir := t.TempDir()
 			taskDir := filepath.Join(tmpDir, "tasks", "test-task-mcp-canonical")
-			require.NoError(t, os.MkdirAll(taskDir, 0755))
+			require.NoError(os.MkdirAll(taskDir, 0o755))
 
 			historyItem := rooCodeHistoryItem{
 				ID:        "test-task-mcp-canonical",
@@ -248,10 +259,10 @@ func TestParseRooCodeSessionCanonicalMCPPayloads(t *testing.T) {
 				Workspace: "/Users/test/project",
 			}
 			historyJSON, err := json.Marshal(historyItem)
-			require.NoError(t, err)
-			require.NoError(t, os.WriteFile(
+			require.NoError(err)
+			require.NoError(os.WriteFile(
 				filepath.Join(taskDir, "history_item.json"),
-				historyJSON, 0644,
+				historyJSON, 0o644,
 			))
 
 			// Canonical Roo/Cline use_mcp_server payloads carry a
@@ -278,26 +289,26 @@ func TestParseRooCodeSessionCanonicalMCPPayloads(t *testing.T) {
 				},
 			}
 			messagesJSON, err := json.Marshal(messages)
-			require.NoError(t, err)
-			require.NoError(t, os.WriteFile(
+			require.NoError(err)
+			require.NoError(os.WriteFile(
 				filepath.Join(taskDir, "ui_messages.json"),
-				messagesJSON, 0644,
+				messagesJSON, 0o644,
 			))
 
 			sess, msgs, err := parseRooCodeSession(taskDir, "", "")
-			require.NoError(t, err)
+			require.NoError(err)
 
 			// user task + MCP tool call = 2 (response is paired).
-			assert.Equal(t, 2, sess.MessageCount)
+			assert.Equal(2, sess.MessageCount)
 
-			require.Len(t, msgs[1].ToolCalls, 1)
+			require.Len(msgs[1].ToolCalls, 1)
 			tc := msgs[1].ToolCalls[0]
-			assert.Equal(t, tt.wantToolName, tc.ToolName)
-			assert.Equal(t, "MCP", tc.Category)
-			assert.Contains(t, tc.InputJSON, `"serverName"`)
-			require.Len(t, tc.ResultEvents, 1)
-			assert.Equal(t, "completed", tc.ResultEvents[0].Status)
-			assert.Equal(t, "server says hello", tc.ResultEvents[0].Content)
+			assert.Equal(tt.wantToolName, tc.ToolName)
+			assert.Equal("MCP", tc.Category)
+			assert.Contains(tc.InputJSON, `"serverName"`)
+			require.Len(tc.ResultEvents, 1)
+			assert.Equal("completed", tc.ResultEvents[0].Status)
+			assert.Equal("server says hello", tc.ResultEvents[0].Content)
 		})
 	}
 }

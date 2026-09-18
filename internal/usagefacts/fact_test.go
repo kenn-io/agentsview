@@ -30,17 +30,20 @@ func TestParseJSONStringMatchesEncodingJSON(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			got, next, ok := parseJSONString(tc.input, 0)
-			assert.Equal(t, tc.ok, ok, "ok")
-			assert.Equal(t, tc.next, next, "next")
-			assert.Equal(t, tc.want, got, "value")
+			assert.Equal(tc.ok, ok, "ok")
+			assert.Equal(tc.next, next, "next")
+			assert.Equal(tc.want, got, "value")
 			var want string
 			if !tc.ok {
-				require.Error(t, json.Unmarshal([]byte(tc.input), &want))
+				require.Error(json.Unmarshal([]byte(tc.input), &want))
 				return
 			}
-			require.NoError(t, json.Unmarshal([]byte(tc.input[:tc.next]), &want))
-			assert.Equal(t, want, got, "json.Unmarshal parity")
+			require.NoError(json.Unmarshal([]byte(tc.input[:tc.next]), &want))
+			assert.Equal(want, got, "json.Unmarshal parity")
 		})
 	}
 }
@@ -163,6 +166,9 @@ func TestParseTokenUsage(t *testing.T) {
 }
 
 func TestFromMessage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	fact, ok := FromMessage(MessageInput{
 		Ordinal: 4, Role: "assistant", Timestamp: "2024-01-01T00:00:00Z",
 		Model: "claude-test", TokenUsage: `{"input_tokens":10,"reasoning_tokens":2,` +
@@ -170,11 +176,11 @@ func TestFromMessage(t *testing.T) {
 			`"cache_creation":{"ephemeral_1h_input_tokens":12}}`,
 		ClaudeMessageID: "msg-1", ClaudeRequestID: "req-1", SourceUUID: "source-1",
 	})
-	require.True(t, ok)
+	require.True(ok)
 	ordinal := 4
 	millis := int64(1704067200000)
 	nanos := int64(0)
-	assert.Equal(t, Fact{
+	assert.Equal(Fact{
 		Source: "message", MessageOrdinal: &ordinal,
 		TimestampMillis: &millis, TimestampNanos: &nanos,
 		RawTimestamp: "2024-01-01T00:00:00Z",
@@ -189,9 +195,9 @@ func TestFromMessage(t *testing.T) {
 	activity, ok := FromMessage(MessageInput{
 		Ordinal: 7, Role: "assistant", Timestamp: "", Model: "",
 	})
-	require.True(t, ok)
+	require.True(ok)
 	ordinal = 7
-	assert.Equal(t, Fact{
+	assert.Equal(Fact{
 		Source: "message", MessageOrdinal: &ordinal,
 		UsesSessionStart: true, RequestScoped: true, ActivityEligible: true,
 	}, activity)
@@ -199,20 +205,23 @@ func TestFromMessage(t *testing.T) {
 	malformed, ok := FromMessage(MessageInput{
 		Ordinal: 8, Role: "assistant", Timestamp: "not-a-time",
 	})
-	require.True(t, ok)
-	assert.Nil(t, malformed.TimestampMillis)
-	assert.Equal(t, "not-a-time", malformed.RawTimestamp)
-	assert.False(t, malformed.UsesSessionStart)
+	require.True(ok)
+	assert.Nil(malformed.TimestampMillis)
+	assert.Equal("not-a-time", malformed.RawTimestamp)
+	assert.False(malformed.UsesSessionStart)
 
 	_, ok = FromMessage(MessageInput{Role: "user"})
-	assert.False(t, ok)
+	assert.False(ok)
 	_, ok = FromMessage(MessageInput{
 		Role: "assistant", Model: "<synthetic>", TokenUsage: `{"input_tokens":1}`,
 	})
-	assert.False(t, ok)
+	assert.False(ok)
 }
 
 func TestFromEvent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ordinal := 3
 	reportedCost := int64(123456)
 	fact, ok := FromEvent(EventInput{
@@ -223,8 +232,8 @@ func TestFromEvent(t *testing.T) {
 		ReasoningTokens: 4, CacheCreationTokens: 5, CacheReadTokens: 6,
 		ReportedCostMicrodollars: &reportedCost,
 	})
-	require.True(t, ok)
-	assert.Equal(t, Fact{
+	require.True(ok)
+	assert.Equal(Fact{
 		Source: "goose-request", MessageOrdinal: &ordinal,
 		UsesSessionStart: true, Model: "model-x",
 		OutputTokens: MaxPlausibleTokens, ReasoningTokens: 4,
@@ -239,39 +248,42 @@ func TestFromEvent(t *testing.T) {
 		Source: "session", Model: "model-x", InputTokens: 3_000_000,
 		OutputTokens: -2,
 	})
-	require.True(t, ok)
-	assert.Equal(t, int64(3_000_000), session.InputTokens,
+	require.True(ok)
+	assert.Equal(int64(3_000_000), session.InputTokens,
 		"authoritative session totals may exceed the per-request clamp")
-	assert.Zero(t, session.OutputTokens)
-	assert.False(t, session.RequestScoped)
-	assert.Equal(t, "session-1:session:key",
+	assert.Zero(session.OutputTokens)
+	assert.False(session.RequestScoped)
+	assert.Equal("session-1:session:key",
 		EventDedupKey("session-1", "session", "key", 10))
-	assert.Equal(t, "session-1:session:id:10",
+	assert.Equal("session-1:session:id:10",
 		EventDedupKey("session-1", "session", "", 10))
 
 	_, ok = FromEvent(EventInput{Source: "session"})
-	assert.False(t, ok)
+	assert.False(ok)
 }
 
 func TestParseTimestamp(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	millis, raw, fallback := ParseTimestamp("2024-01-01T00:00:00.123456Z")
-	require.NotNil(t, millis)
-	assert.Equal(t, int64(1704067200123), *millis)
-	assert.Equal(t, "2024-01-01T00:00:00.123456Z", raw)
-	require.NotNil(t, ParseTimestampNanos("2024-01-01T00:00:00.123456Z"))
-	assert.Equal(t, int64(456000),
+	require.NotNil(millis)
+	assert.Equal(int64(1704067200123), *millis)
+	assert.Equal("2024-01-01T00:00:00.123456Z", raw)
+	require.NotNil(ParseTimestampNanos("2024-01-01T00:00:00.123456Z"))
+	assert.Equal(int64(456000),
 		*ParseTimestampNanos("2024-01-01T00:00:00.123456Z"))
-	assert.Equal(t, int64(999999),
+	assert.Equal(int64(999999),
 		*ParseTimestampNanos("2500-01-01T00:00:00.123999999Z"))
-	assert.False(t, fallback)
+	assert.False(fallback)
 
 	millis, raw, fallback = ParseTimestamp("")
-	assert.Nil(t, millis)
-	assert.Empty(t, raw)
-	assert.True(t, fallback)
+	assert.Nil(millis)
+	assert.Empty(raw)
+	assert.True(fallback)
 
 	millis, raw, fallback = ParseTimestamp("not-a-time")
-	assert.Nil(t, millis)
-	assert.Equal(t, "not-a-time", raw)
-	assert.False(t, fallback)
+	assert.Nil(millis)
+	assert.Equal("not-a-time", raw)
+	assert.False(fallback)
 }

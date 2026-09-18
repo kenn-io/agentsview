@@ -15,11 +15,14 @@ import (
 )
 
 func TestDiscoverVisualStudioCopilotSessions(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	tracesDir := filepath.Join(
 		root, "VSGitHubCopilotLogs", "traces",
 	)
-	require.NoError(t, os.MkdirAll(tracesDir, 0o755))
+	require.NoError(os.MkdirAll(tracesDir, 0o755))
 	tracePath := filepath.Join(
 		tracesDir,
 		"20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl",
@@ -31,18 +34,18 @@ func TestDiscoverVisualStudioCopilotSessions(t *testing.T) {
 			"gen_ai.operation.name": "chat",
 			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Update the XAML."}]}]`,
 		}) + "\n"
-	require.NoError(t, os.WriteFile(tracePath, []byte(data), 0o644))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(tracePath, []byte(data), 0o644))
+	require.NoError(os.WriteFile(
 		filepath.Join(tracesDir, "not-copilot.jsonl"),
 		[]byte("{}\n"), 0o644,
 	))
 
 	files := discoverVisualStudioCopilotTestSessions(t, tracesDir)
 
-	require.Len(t, files, 1)
-	assert.Equal(t, tracePath+"#"+conversationID, files[0].Path)
-	assert.Equal(t, "visualstudio", files[0].Project)
-	assert.Equal(t, AgentVSCopilot, files[0].Agent)
+	require.Len(files, 1)
+	assert.Equal(tracePath+"#"+conversationID, files[0].Path)
+	assert.Equal("visualstudio", files[0].Project)
+	assert.Equal(AgentVSCopilot, files[0].Agent)
 }
 
 func TestDiscoverVisualStudioCopilot2026Sessions_SupportedRootLayouts(t *testing.T) {
@@ -75,16 +78,17 @@ func TestDiscoverVisualStudioCopilot2026Sessions_SupportedRootLayouts(t *testing
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			files := discoverVisualStudioCopilotTestSessions(t, tc.root)
 
 			require.Len(t, files, 1)
 			assert.Equal(
-				t,
 				VisualStudioCopilotVirtualPath(sessionPath, conversationID),
 				files[0].Path,
 			)
-			assert.Equal(t, "visualstudio", files[0].Project)
-			assert.Equal(t, AgentVSCopilot, files[0].Agent)
+			assert.Equal("visualstudio", files[0].Project)
+			assert.Equal(AgentVSCopilot, files[0].Agent)
 		})
 	}
 }
@@ -106,6 +110,8 @@ func TestDiscoverVisualStudioCopilotSessions_IgnoresParentDirs(t *testing.T) {
 }
 
 func TestDiscoverVisualStudioCopilotSessions_DeduplicatesConversationTraceFiles(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
 	oldTrace := filepath.Join(
@@ -122,16 +128,19 @@ func TestDiscoverVisualStudioCopilotSessions_DeduplicatesConversationTraceFiles(
 			"gen_ai.operation.name": "chat",
 			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Update the XAML."}]}]`,
 		}) + "\n"
-	require.NoError(t, os.WriteFile(oldTrace, []byte(data), 0o644))
-	require.NoError(t, os.WriteFile(newTrace, []byte(data), 0o644))
+	require.NoError(os.WriteFile(oldTrace, []byte(data), 0o644))
+	require.NoError(os.WriteFile(newTrace, []byte(data), 0o644))
 
 	files := discoverVisualStudioCopilotTestSessions(t, root)
 
-	require.Len(t, files, 1)
+	require.Len(files, 1)
 	assert.Equal(t, newTrace+"#"+conversationID, files[0].Path)
 }
 
 func TestVisualStudioCopilotLookupMatchesDiscoveryWhenMtimeAndPathDisagree(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
 	// The lexicographically greater filename ("zzzz") is the OLDER file, so a
@@ -150,20 +159,20 @@ func TestVisualStudioCopilotLookupMatchesDiscoveryWhenMtimeAndPathDisagree(t *te
 			"gen_ai.operation.name": "chat",
 			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Update the XAML."}]}]`,
 		}) + "\n"
-	require.NoError(t, os.WriteFile(newerLowerPath, []byte(data), 0o644))
-	require.NoError(t, os.WriteFile(olderHigherPath, []byte(data), 0o644))
+	require.NoError(os.WriteFile(newerLowerPath, []byte(data), 0o644))
+	require.NoError(os.WriteFile(olderHigherPath, []byte(data), 0o644))
 
 	older := time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC)
 	newer := time.Date(2026, 6, 12, 0, 0, 0, 0, time.UTC)
-	require.NoError(t, os.Chtimes(olderHigherPath, older, older))
-	require.NoError(t, os.Chtimes(newerLowerPath, newer, newer))
+	require.NoError(os.Chtimes(olderHigherPath, older, older))
+	require.NoError(os.Chtimes(newerLowerPath, newer, newer))
 
 	files := discoverVisualStudioCopilotTestSessions(t, root)
-	require.Len(t, files, 1)
-	assert.Equal(t, newerLowerPath+"#"+conversationID, files[0].Path)
+	require.Len(files, 1)
+	assert.Equal(newerLowerPath+"#"+conversationID, files[0].Path)
 
 	found := findVisualStudioCopilotTraceSourceFile(root, conversationID)
-	assert.Equal(t, files[0].Path, found,
+	assert.Equal(files[0].Path, found,
 		"lookup must resolve to the same canonical trace as discovery")
 }
 
@@ -207,6 +216,9 @@ func TestFindVisualStudioCopilotSourceFile_2026SupportedRootLayouts(t *testing.T
 }
 
 func TestParseVisualStudioCopilotSession_MalformedTraceLineReturnsError(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(
 		t.TempDir(),
 		"20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl",
@@ -218,19 +230,22 @@ func TestParseVisualStudioCopilotSession_MalformedTraceLineReturnsError(t *testi
 			"gen_ai.operation.name": "chat",
 			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Update the XAML."}]}]`,
 		}) + "\n" + `{"resourceSpans":[` + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
+	require.NoError(os.WriteFile(path, []byte(data), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "decode")
-	assert.Nil(t, sess)
-	assert.Nil(t, msgs)
+	require.Error(err)
+	assert.Contains(err.Error(), "decode")
+	assert.Nil(sess)
+	assert.Nil(msgs)
 }
 
 func TestDiscoverVisualStudioCopilotSessions_EmitsWorkItemPerConversation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	dominant := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
 	secondary := "c0aca2e3-d1f2-4d28-bd5e-5dab29e2be28"
@@ -276,21 +291,21 @@ func TestDiscoverVisualStudioCopilotSessions_EmitsWorkItemPerConversation(t *tes
 			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Ship it."}]}]`,
 		}) + "\n"
 
-	require.NoError(t, os.WriteFile(oldTrace, []byte(oldData), 0o644))
-	require.NoError(t, os.WriteFile(newTrace, []byte(newData), 0o644))
+	require.NoError(os.WriteFile(oldTrace, []byte(oldData), 0o644))
+	require.NoError(os.WriteFile(newTrace, []byte(newData), 0o644))
 
 	files := discoverVisualStudioCopilotTestSessions(t, dir)
 
 	got := map[string]string{}
 	for _, f := range files {
-		assert.Equal(t, AgentVSCopilot, f.Agent)
-		assert.Equal(t, "visualstudio", f.Project)
+		assert.Equal(AgentVSCopilot, f.Agent)
+		assert.Equal("visualstudio", f.Project)
 		got[vsConversationIDFromPath(t, f.Path)] = f.Path
 	}
-	require.Len(t, files, 2)
-	assert.Equal(t, newTrace+"#"+dominant, got[dominant],
+	require.Len(files, 2)
+	assert.Equal(newTrace+"#"+dominant, got[dominant],
 		"dominant conversation should point at its latest trace file")
-	assert.Equal(t, oldTrace+"#"+secondary, got[secondary],
+	assert.Equal(oldTrace+"#"+secondary, got[secondary],
 		"secondary conversation must not be dropped")
 }
 
@@ -323,6 +338,8 @@ func TestDiscoverVisualStudioCopilotSessions_SampleFixturesEnumerateBothConversa
 // written as a complete session even though sibling discovery failed, defeating
 // the partial-transcript guard.
 func TestParseVisualStudioCopilotConversation_PropagatesSiblingDirReadError(t *testing.T) {
+	require := require.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permission semantics differ on Windows")
 	}
@@ -330,7 +347,7 @@ func TestParseVisualStudioCopilotConversation_PropagatesSiblingDirReadError(t *t
 		t.Skip("root bypasses directory read permissions")
 	}
 	dir := filepath.Join(t.TempDir(), "traces")
-	require.NoError(t, os.Mkdir(dir, 0o755))
+	require.NoError(os.Mkdir(dir, 0o755))
 	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
 	tracePath := filepath.Join(
 		dir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
@@ -341,17 +358,17 @@ func TestParseVisualStudioCopilotConversation_PropagatesSiblingDirReadError(t *t
 			"gen_ai.operation.name": "chat",
 			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Hello."}]}]`,
 		}) + "\n"
-	require.NoError(t, os.WriteFile(tracePath, []byte(data), 0o644))
+	require.NoError(os.WriteFile(tracePath, []byte(data), 0o644))
 
 	// Make the directory traversable but not readable: the known trace file can
 	// still be opened, but enumerating siblings via ReadDir fails.
-	require.NoError(t, os.Chmod(dir, 0o100))
+	require.NoError(os.Chmod(dir, 0o100))
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 
 	_, _, err := parseVisualStudioCopilotTestConversation(t,
 		tracePath, conversationID, "visualstudio", "local",
 	)
-	require.Error(t, err,
+	require.Error(err,
 		"a sibling directory read error must propagate, not be swallowed")
 }
 
@@ -361,6 +378,9 @@ func TestParseVisualStudioCopilotConversation_PropagatesSiblingDirReadError(t *t
 // skip checks rely on the strict variant so a ReadDir failure is retried rather
 // than mistaken for an unchanged fingerprint in a single-trace directory.
 func TestVisualStudioCopilotTraceFingerprintStrictPropagatesDirError(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("directory permission semantics differ on Windows")
 	}
@@ -368,36 +388,36 @@ func TestVisualStudioCopilotTraceFingerprintStrictPropagatesDirError(t *testing.
 		t.Skip("root bypasses directory read permissions")
 	}
 	dir := filepath.Join(t.TempDir(), "traces")
-	require.NoError(t, os.Mkdir(dir, 0o755))
+	require.NoError(os.Mkdir(dir, 0o755))
 	tracePath := filepath.Join(
 		dir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(t, os.WriteFile(tracePath, []byte("{}\n"), 0o644))
+	require.NoError(os.WriteFile(tracePath, []byte("{}\n"), 0o644))
 
 	// Readable directory: both variants agree on the composite fingerprint.
 	wantSize, wantMtime, err := VisualStudioCopilotTraceFingerprintStrict(
 		tracePath,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	lenientSize, lenientMtime := VisualStudioCopilotTraceFingerprint(tracePath)
-	assert.Equal(t, wantSize, lenientSize)
-	assert.Equal(t, wantMtime, lenientMtime)
+	assert.Equal(wantSize, lenientSize)
+	assert.Equal(wantMtime, lenientMtime)
 
 	// Traversable but not readable: ReadDir fails. The strict variant must
 	// return the error; the best-effort variant falls back to the file's stat.
-	require.NoError(t, os.Chmod(dir, 0o100))
+	require.NoError(os.Chmod(dir, 0o100))
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 
 	_, _, err = VisualStudioCopilotTraceFingerprintStrict(tracePath)
-	require.Error(t, err,
+	require.Error(err,
 		"strict fingerprint must surface the directory read error")
 
 	fallbackSize, fallbackMtime := VisualStudioCopilotTraceFingerprint(tracePath)
 	info, statErr := os.Stat(tracePath)
-	require.NoError(t, statErr)
-	assert.Equal(t, info.Size(), fallbackSize,
+	require.NoError(statErr)
+	assert.Equal(info.Size(), fallbackSize,
 		"best-effort fingerprint falls back to the representative file stat")
-	assert.Equal(t, info.ModTime().UnixNano(), fallbackMtime)
+	assert.Equal(info.ModTime().UnixNano(), fallbackMtime)
 }
 
 // TestVisualStudioCopilotTraceFingerprintStrictPropagatesSiblingStatError
@@ -409,6 +429,8 @@ func TestVisualStudioCopilotTraceFingerprintStrictPropagatesDirError(t *testing.
 func TestVisualStudioCopilotTraceFingerprintStrictPropagatesSiblingStatError(
 	t *testing.T,
 ) {
+	require := require.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on Windows")
 	}
@@ -416,26 +438,29 @@ func TestVisualStudioCopilotTraceFingerprintStrictPropagatesSiblingStatError(
 	tracePath := filepath.Join(
 		dir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(t, os.WriteFile(tracePath, []byte("{}\n"), 0o644))
+	require.NoError(os.WriteFile(tracePath, []byte("{}\n"), 0o644))
 	// A sibling that appears in the listing but cannot be stat'd: a symlink to a
 	// missing target resolves to ENOENT on stat.
 	broken := filepath.Join(
 		dir, "20260612T145205_bbbb2222_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(t, os.Symlink(filepath.Join(dir, "missing-target"), broken))
+	require.NoError(os.Symlink(filepath.Join(dir, "missing-target"), broken))
 
 	_, _, err := VisualStudioCopilotTraceFingerprintStrict(tracePath)
-	require.Error(t, err,
+	require.Error(err,
 		"strict fingerprint must surface a sibling stat failure")
 
 	size, _ := VisualStudioCopilotTraceFingerprint(tracePath)
 	info, statErr := os.Stat(tracePath)
-	require.NoError(t, statErr)
+	require.NoError(statErr)
 	assert.Equal(t, info.Size(), size,
 		"best-effort fingerprint counts only the statable trace files")
 }
 
 func TestParseVisualStudioCopilotConversation_PropagatesReadError(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	// A directory named like a trace file exists but cannot be scanned as
 	// JSONL, so the read fails. The error must propagate rather than be
 	// swallowed into an empty (cacheable) "no sessions" result.
@@ -443,18 +468,21 @@ func TestParseVisualStudioCopilotConversation_PropagatesReadError(t *testing.T) 
 		t.TempDir(),
 		"20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(t, os.Mkdir(dir, 0o755))
+	require.NoError(os.Mkdir(dir, 0o755))
 
 	sess, msgs, err := parseVisualStudioCopilotTestConversation(t,
 		dir, "4a8f63f6-7626-4416-a874-fc7bd2c3f005", "visualstudio", "local",
 	)
 
-	require.Error(t, err)
-	assert.Nil(t, sess)
-	assert.Nil(t, msgs)
+	require.Error(err)
+	assert.Nil(sess)
+	assert.Nil(msgs)
 }
 
 func TestDiscoverVisualStudioCopilotSessions_EnqueuesUnreadableTraceFile(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on Windows")
 	}
@@ -463,21 +491,23 @@ func TestDiscoverVisualStudioCopilotSessions_EnqueuesUnreadableTraceFile(t *test
 	// rather than silently dropping every conversation it might contain.
 	root := t.TempDir()
 	target := filepath.Join(root, "target-dir")
-	require.NoError(t, os.Mkdir(target, 0o755))
+	require.NoError(os.Mkdir(target, 0o755))
 	link := filepath.Join(
 		root, "20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(t, os.Symlink(target, link))
+	require.NoError(os.Symlink(target, link))
 
 	files := discoverVisualStudioCopilotTestSessions(t, root)
 
-	require.Len(t, files, 1)
-	assert.Equal(t, link, files[0].Path,
+	require.Len(files, 1)
+	assert.Equal(link, files[0].Path,
 		"unreadable trace file should be enqueued by its physical path")
-	assert.Equal(t, AgentVSCopilot, files[0].Agent)
+	assert.Equal(AgentVSCopilot, files[0].Agent)
 }
 
 func TestResolveSourceFilePath(t *testing.T) {
+	assert := assert.New(t)
+
 	trace := "/logs/20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl"
 	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
 	sessionPath := filepath.Join(
@@ -485,26 +515,26 @@ func TestResolveSourceFilePath(t *testing.T) {
 		conversationID,
 	)
 
-	assert.Equal(t, trace,
+	assert.Equal(trace,
 		ResolveSourceFilePath(VisualStudioCopilotVirtualPath(trace, conversationID)),
 		"virtual path should resolve to its physical trace file")
-	assert.Equal(t, sessionPath,
+	assert.Equal(sessionPath,
 		ResolveSourceFilePath(
 			VisualStudioCopilotVirtualPath(sessionPath, conversationID),
 		),
 		"VS 2026 session virtual path should resolve to its physical session file")
-	assert.Equal(t, "/profile/User/workspaceStorage/hash/state.vscdb",
+	assert.Equal("/profile/User/workspaceStorage/hash/state.vscdb",
 		ResolveSourceFilePath(
 			"/profile/User/workspaceStorage/hash/state.vscdb#windsurf-session",
 		),
 		"Windsurf virtual path should resolve to its physical workspace DB")
-	assert.Equal(t, "/logs/session#draft.jsonl",
+	assert.Equal("/logs/session#draft.jsonl",
 		ResolveSourceFilePath("/logs/session#draft.jsonl"),
 		"non-Windsurf paths containing # should be returned unchanged")
-	assert.Equal(t, "/logs/session.jsonl",
+	assert.Equal("/logs/session.jsonl",
 		ResolveSourceFilePath("/logs/session.jsonl"),
 		"a plain source path should be returned unchanged")
-	assert.Equal(t, "", ResolveSourceFilePath(""))
+	assert.Empty(ResolveSourceFilePath(""))
 }
 
 // vsConversationIDFromPath extracts the conversation ID from a
@@ -512,12 +542,15 @@ func TestResolveSourceFilePath(t *testing.T) {
 func vsConversationIDFromPath(t *testing.T, path string) string {
 	t.Helper()
 	idx := strings.LastIndex(path, "#")
-	require.Greater(t, idx, 0,
+	require.Positive(t, idx,
 		"expected virtual path with #conversationID, got %q", path)
 	return path[idx+1:]
 }
 
 func TestParseVisualStudioCopilotSession_IgnoresNonTraceFiles(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "sess.json")
 	data := `{
 		"version": 3,
@@ -529,18 +562,21 @@ func TestParseVisualStudioCopilotSession_IgnoresNonTraceFiles(t *testing.T) {
 			"timestamp": 1755347728047
 		}]
 	}`
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
+	require.NoError(os.WriteFile(path, []byte(data), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	assert.Nil(t, sess)
-	assert.Nil(t, msgs)
+	require.NoError(err)
+	assert.Nil(sess)
+	assert.Nil(msgs)
 }
 
 func TestParseVisualStudioCopilotTraceSession(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(
 		t.TempDir(),
 		"20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl",
@@ -566,39 +602,42 @@ func TestParseVisualStudioCopilotTraceSession(t *testing.T) {
 				"copilot_chat.turn_count": "1",
 			}),
 	}, "\n") + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
+	require.NoError(os.WriteFile(path, []byte(data), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, AgentVSCopilot, sess.Agent)
-	assert.Equal(t, "visualstudio-copilot:"+conversationID, sess.ID)
-	assert.Equal(t, "Run command: go test ./...", sess.FirstMessage)
-	require.Len(t, msgs, 1)
-	assert.True(t, msgs[0].HasToolUse)
-	assert.Contains(t, msgs[0].Content, "$ go test ./...")
-	require.Len(t, msgs[0].ToolCalls, 1)
-	assert.Equal(t, "run_command_in_terminal",
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal(AgentVSCopilot, sess.Agent)
+	assert.Equal("visualstudio-copilot:"+conversationID, sess.ID)
+	assert.Equal("Run command: go test ./...", sess.FirstMessage)
+	require.Len(msgs, 1)
+	assert.True(msgs[0].HasToolUse)
+	assert.Contains(msgs[0].Content, "$ go test ./...")
+	require.Len(msgs[0].ToolCalls, 1)
+	assert.Equal("run_command_in_terminal",
 		msgs[0].ToolCalls[0].ToolName)
-	assert.Equal(t, "Bash", msgs[0].ToolCalls[0].Category)
-	assert.Contains(t, msgs[0].ToolCalls[0].InputJSON,
+	assert.Equal("Bash", msgs[0].ToolCalls[0].Category)
+	assert.Contains(msgs[0].ToolCalls[0].InputJSON,
 		"go test ./...")
-	assert.JSONEq(t, `{"command":"go test ./..."}`,
+	assert.JSONEq(`{"command":"go test ./..."}`,
 		msgs[0].ToolCalls[0].InputJSON)
-	assert.Equal(t, "[Bash: run_command_in_terminal]\n$ go test ./...",
+	assert.Equal("[Bash: run_command_in_terminal]\n$ go test ./...",
 		msgs[0].ToolCalls[0].Rendering,
 		"the returned call must carry the text that landed in the message")
-	assert.Contains(t, msgs[0].Content, msgs[0].ToolCalls[0].Rendering)
-	require.Len(t, msgs[0].ToolCalls[0].ResultEvents, 1)
-	assert.Equal(t, "completed",
+	assert.Contains(msgs[0].Content, msgs[0].ToolCalls[0].Rendering)
+	require.Len(msgs[0].ToolCalls[0].ResultEvents, 1)
+	assert.Equal("completed",
 		msgs[0].ToolCalls[0].ResultEvents[0].Status)
-	assert.Equal(t, "ok", msgs[0].ToolCalls[0].ResultEvents[0].Content)
+	assert.Equal("ok", msgs[0].ToolCalls[0].ResultEvents[0].Content)
 }
 
 func TestParseVisualStudioCopilotTraceSession_GetFileResult(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(
 		t.TempDir(),
 		"20260611T145205_d9b231f1_VSGitHubCopilot_traces.jsonl",
@@ -614,32 +653,35 @@ func TestParseVisualStudioCopilotTraceSession_GetFileResult(t *testing.T) {
 			"gen_ai.tool.call.arguments": `{"filename":"Views\\MainWindow.xaml","startLine":1,"endLine":400,"includeLineNumbers":true}`,
 			"gen_ai.tool.call.result":    result,
 		}) + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
+	require.NoError(os.WriteFile(path, []byte(data), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, "Read file: Views\\MainWindow.xaml", sess.FirstMessage)
-	require.Len(t, msgs, 1)
-	assert.Contains(t, msgs[0].Content, "[Read: get_file]")
-	assert.Contains(t, msgs[0].Content, "Views\\MainWindow.xaml")
-	require.Len(t, msgs[0].ToolCalls, 1)
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal("Read file: Views\\MainWindow.xaml", sess.FirstMessage)
+	require.Len(msgs, 1)
+	assert.Contains(msgs[0].Content, "[Read: get_file]")
+	assert.Contains(msgs[0].Content, "Views\\MainWindow.xaml")
+	require.Len(msgs[0].ToolCalls, 1)
 	call := msgs[0].ToolCalls[0]
-	assert.Equal(t, "get_file", call.ToolName)
-	assert.Equal(t, "Read", call.Category)
-	assert.Contains(t, call.InputJSON, `"file_path":"Views\\MainWindow.xaml"`)
-	assert.NotContains(t, call.InputJSON, `"arguments"`)
-	require.Len(t, call.ResultEvents, 1)
-	assert.Equal(t, "visualstudio-copilot", call.ResultEvents[0].Source)
-	assert.Equal(t, "completed", call.ResultEvents[0].Status)
-	assert.Contains(t, call.ResultEvents[0].Content, "<Page>")
-	assert.Contains(t, call.ResultEvents[0].Content, "TextBlock")
+	assert.Equal("get_file", call.ToolName)
+	assert.Equal("Read", call.Category)
+	assert.Contains(call.InputJSON, `"file_path":"Views\\MainWindow.xaml"`)
+	assert.NotContains(call.InputJSON, `"arguments"`)
+	require.Len(call.ResultEvents, 1)
+	assert.Equal("visualstudio-copilot", call.ResultEvents[0].Source)
+	assert.Equal("completed", call.ResultEvents[0].Status)
+	assert.Contains(call.ResultEvents[0].Content, "<Page>")
+	assert.Contains(call.ResultEvents[0].Content, "TextBlock")
 }
 
 func TestParseVisualStudioCopilotTraceSession_InvokeOnlyFirstMessage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(
 		t.TempDir(),
 		"20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl",
@@ -660,22 +702,24 @@ func TestParseVisualStudioCopilotTraceSession_InvokeOnlyFirstMessage(t *testing.
 			"gen_ai.operation.name":        "invoke_agent",
 			"gen_ai.provider.name":         "other",
 		}) + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
+	require.NoError(os.WriteFile(path, []byte(data), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t,
-		"Visual Studio Copilot Agent | HelpWindow | gpt-5.5 | de788686",
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal("Visual Studio Copilot Agent | HelpWindow | gpt-5.5 | de788686",
 		sess.FirstMessage)
-	require.Len(t, msgs, 1)
-	assert.Contains(t, msgs[0].Content, "model: gpt-5.5")
+	require.Len(msgs, 1)
+	assert.Contains(msgs[0].Content, "model: gpt-5.5")
 }
 
 func TestParseVisualStudioCopilotTraceSession_ChatPromptFirstMessage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(
 		t.TempDir(),
 		"20260611T145205_d9b231f1_VSGitHubCopilot_traces.jsonl",
@@ -692,26 +736,27 @@ func TestParseVisualStudioCopilotTraceSession_ChatPromptFirstMessage(t *testing.
 			"copilot_chat.client_id":       "Microsoft.Modernization.Agent",
 			"copilot_chat.root_request_id": "398c5816-cfb4-4f51-a195-16e7f03edc69",
 		}) + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
+	require.NoError(os.WriteFile(path, []byte(data), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t,
-		"Remove the Details button and replace the expander with tabs.",
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal("Remove the Details button and replace the expander with tabs.",
 		sess.FirstMessage)
-	assert.Equal(t, 1, sess.UserMessageCount)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t,
-		"Remove the Details button and replace the expander with tabs.",
+	assert.Equal(1, sess.UserMessageCount)
+	require.Len(msgs, 1)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal("Remove the Details button and replace the expander with tabs.",
 		msgs[0].Content)
 }
 
 func TestParseVisualStudioCopilotTraceSession_PreservesPromptMarkdown(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(
 		t.TempDir(),
 		"20260611T145205_d9b231f1_VSGitHubCopilot_traces.jsonl",
@@ -732,25 +777,27 @@ func TestParseVisualStudioCopilotTraceSession_PreservesPromptMarkdown(t *testing
 			"gen_ai.operation.name": "chat",
 			"gen_ai.input.messages": string(inputMessages),
 		}) + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
+	require.NoError(os.WriteFile(path, []byte(data), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t,
-		"Use this safer version: ```powershell git branch saved/real-self-service-v2-local-work git reset --hard origin/real-self-service-v2 ``` That does two things.",
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal("Use this safer version: ```powershell git branch saved/real-self-service-v2-local-work git reset --hard origin/real-self-service-v2 ``` That does two things.",
 		sess.FirstMessage)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, prompt, msgs[0].Content)
-	assert.Contains(t, msgs[0].Content, "```powershell\n")
-	assert.Contains(t, msgs[0].Content,
+	require.Len(msgs, 1)
+	assert.Equal(prompt, msgs[0].Content)
+	assert.Contains(msgs[0].Content, "```powershell\n")
+	assert.Contains(msgs[0].Content,
 		"git reset --hard origin/real-self-service-v2")
 }
 
 func TestParseVisualStudioCopilotTraceSession_CombinesConversationTraceFiles(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	path := filepath.Join(
 		dir,
@@ -775,20 +822,20 @@ func TestParseVisualStudioCopilotTraceSession_CombinesConversationTraceFiles(t *
 			"gen_ai.operation.name": "chat",
 			"gen_ai.input.messages": secondInput,
 		}) + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(firstData), 0o644))
-	require.NoError(t, os.WriteFile(sibling, []byte(secondData), 0o644))
+	require.NoError(os.WriteFile(path, []byte(firstData), 0o644))
+	require.NoError(os.WriteFile(sibling, []byte(secondData), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, "Update the XAML.", sess.FirstMessage)
-	assert.Equal(t, 2, sess.UserMessageCount)
-	require.Len(t, msgs, 2)
-	assert.Equal(t, "Update the XAML.", msgs[0].Content)
-	assert.Equal(t, "Now run the build.", msgs[1].Content)
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal("Update the XAML.", sess.FirstMessage)
+	assert.Equal(2, sess.UserMessageCount)
+	require.Len(msgs, 2)
+	assert.Equal("Update the XAML.", msgs[0].Content)
+	assert.Equal("Now run the build.", msgs[1].Content)
 }
 
 // TestParseVisualStudioCopilotTraceSession_PropagatesSiblingReadError verifies
@@ -799,6 +846,8 @@ func TestParseVisualStudioCopilotTraceSession_CombinesConversationTraceFiles(t *
 // previously indexed messages with a partial transcript. A transient sibling
 // read error must surface so the sync is retried instead.
 func TestParseVisualStudioCopilotTraceSession_PropagatesSiblingReadError(t *testing.T) {
+	require := require.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink semantics differ on Windows")
 	}
@@ -814,24 +863,24 @@ func TestParseVisualStudioCopilotTraceSession_PropagatesSiblingReadError(t *test
 			"gen_ai.operation.name": "chat",
 			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Update the XAML."}]}]`,
 		}) + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
+	require.NoError(os.WriteFile(path, []byte(data), 0o644))
 
 	// An unreadable sibling that still exists: a symlink to a directory opens
 	// but cannot be scanned as JSONL, mimicking a transiently locked or
 	// permission-denied trace file. It must not be silently skipped, because
 	// the conversation may have spans in it.
 	target := filepath.Join(t.TempDir(), "dir")
-	require.NoError(t, os.Mkdir(target, 0o755))
+	require.NoError(os.Mkdir(target, 0o755))
 	sibling := filepath.Join(
 		dir,
 		"20260612T145205_bbbb2222_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(t, os.Symlink(target, sibling))
+	require.NoError(os.Symlink(target, sibling))
 
 	_, _, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
-	require.Error(t, err,
+	require.Error(err,
 		"an unreadable sibling must fail the parse instead of yielding a "+
 			"partial transcript")
 }
@@ -861,6 +910,9 @@ func TestParseVisualStudioCopilotTraceSession_MalformedTraceLineErrors(t *testin
 }
 
 func TestParseVisualStudioCopilotTraceSession_DeduplicatesChatOutputAcrossFiles(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	path := filepath.Join(
 		dir,
@@ -884,23 +936,23 @@ func TestParseVisualStudioCopilotTraceSession_DeduplicatesChatOutputAcrossFiles(
 			"gen_ai.usage.output_tokens": "20",
 		}) + "\n"
 	// The same chat span is flushed to both trace files for the conversation.
-	require.NoError(t, os.WriteFile(path, []byte(chatSpan), 0o644))
-	require.NoError(t, os.WriteFile(sibling, []byte(chatSpan), 0o644))
+	require.NoError(os.WriteFile(path, []byte(chatSpan), 0o644))
+	require.NoError(os.WriteFile(sibling, []byte(chatSpan), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	require.Len(t, msgs, 2)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, "Run the tests.", msgs[0].Content)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.Equal(t, "The tests passed.", msgs[1].Content)
+	require.NoError(err)
+	require.NotNil(sess)
+	require.Len(msgs, 2)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal("Run the tests.", msgs[0].Content)
+	assert.Equal(RoleAssistant, msgs[1].Role)
+	assert.Equal("The tests passed.", msgs[1].Content)
 	// Usage from the duplicated span is counted once, not doubled.
-	assert.Equal(t, 20, sess.TotalOutputTokens)
-	assert.Equal(t, 100, sess.PeakContextTokens)
+	assert.Equal(20, sess.TotalOutputTokens)
+	assert.Equal(100, sess.PeakContextTokens)
 }
 
 // TestParseVisualStudioCopilotTraceSession_PrefersCompleteChatOutputAcrossFiles
@@ -911,6 +963,9 @@ func TestParseVisualStudioCopilotTraceSession_DeduplicatesChatOutputAcrossFiles(
 // rather than identity-plus-content collapses these to the richest copy instead
 // of emitting both and double-counting usage.
 func TestParseVisualStudioCopilotTraceSession_PrefersCompleteChatOutputAcrossFiles(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	path := filepath.Join(
 		dir,
@@ -943,23 +998,23 @@ func TestParseVisualStudioCopilotTraceSession_PrefersCompleteChatOutputAcrossFil
 			"gen_ai.usage.output_tokens": "20",
 		}) + "\n"
 	// The same span is flushed partially to one file and completely to another.
-	require.NoError(t, os.WriteFile(path, []byte(partial), 0o644))
-	require.NoError(t, os.WriteFile(sibling, []byte(complete), 0o644))
+	require.NoError(os.WriteFile(path, []byte(partial), 0o644))
+	require.NoError(os.WriteFile(sibling, []byte(complete), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	require.Len(t, msgs, 2)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.Equal(t, "The tests passed.", msgs[1].Content,
+	require.NoError(err)
+	require.NotNil(sess)
+	require.Len(msgs, 2)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal(RoleAssistant, msgs[1].Role)
+	assert.Equal("The tests passed.", msgs[1].Content,
 		"the complete chat output payload must win")
 	// Usage is counted once, from the complete copy, not summed across flushes.
-	assert.Equal(t, 20, sess.TotalOutputTokens)
-	assert.Equal(t, 100, sess.PeakContextTokens)
+	assert.Equal(20, sess.TotalOutputTokens)
+	assert.Equal(100, sess.PeakContextTokens)
 }
 
 // TestParseVisualStudioCopilotTraceSession_PrefersCompleteChatUsageForVisibleOutput
@@ -969,6 +1024,9 @@ func TestParseVisualStudioCopilotTraceSession_PrefersCompleteChatOutputAcrossFil
 // less complete copy. Choosing the latest flush alone would apply the leaner
 // usage and undercount the turn's tokens.
 func TestParseVisualStudioCopilotTraceSession_PrefersCompleteChatUsageForVisibleOutput(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	path := filepath.Join(
 		dir,
@@ -1003,24 +1061,27 @@ func TestParseVisualStudioCopilotTraceSession_PrefersCompleteChatUsageForVisible
 			"gen_ai.usage.input_tokens":  "100",
 			"gen_ai.usage.output_tokens": "10",
 		}) + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(richEarlier), 0o644))
-	require.NoError(t, os.WriteFile(sibling, []byte(leanerLater), 0o644))
+	require.NoError(os.WriteFile(path, []byte(richEarlier), 0o644))
+	require.NoError(os.WriteFile(sibling, []byte(leanerLater), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	require.Len(t, msgs, 2)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.Equal(t, 20, msgs[1].OutputTokens,
+	require.NoError(err)
+	require.NotNil(sess)
+	require.Len(msgs, 2)
+	assert.Equal(RoleAssistant, msgs[1].Role)
+	assert.Equal(20, msgs[1].OutputTokens,
 		"the copy with more complete usage must win the tie")
-	assert.Equal(t, 20, sess.TotalOutputTokens)
-	assert.Equal(t, 100, sess.PeakContextTokens)
+	assert.Equal(20, sess.TotalOutputTokens)
+	assert.Equal(100, sess.PeakContextTokens)
 }
 
 func TestParseVisualStudioCopilotTraceSession_DeduplicatesToolSpanAcrossFiles(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	path := filepath.Join(
 		dir,
@@ -1051,26 +1112,29 @@ func TestParseVisualStudioCopilotTraceSession_DeduplicatesToolSpanAcrossFiles(t 
 			"gen_ai.tool.call.arguments": `{"command":"go test ./..."}`,
 			"gen_ai.tool.call.result":    `{"Value":"ok"}`,
 		}) + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(partial), 0o644))
-	require.NoError(t, os.WriteFile(sibling, []byte(complete), 0o644))
+	require.NoError(os.WriteFile(path, []byte(partial), 0o644))
+	require.NoError(os.WriteFile(sibling, []byte(complete), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
+	require.NoError(err)
+	require.NotNil(sess)
 	// The duplicate execute_tool span collapses to a single message...
-	require.Len(t, msgs, 1)
-	assert.True(t, msgs[0].HasToolUse)
-	require.Len(t, msgs[0].ToolCalls, 1)
-	assert.Equal(t, "run_command_in_terminal", msgs[0].ToolCalls[0].ToolName)
+	require.Len(msgs, 1)
+	assert.True(msgs[0].HasToolUse)
+	require.Len(msgs[0].ToolCalls, 1)
+	assert.Equal("run_command_in_terminal", msgs[0].ToolCalls[0].ToolName)
 	// ...and the surviving copy is the completed one carrying the result.
-	require.Len(t, msgs[0].ToolCalls[0].ResultEvents, 1)
-	assert.Equal(t, "ok", msgs[0].ToolCalls[0].ResultEvents[0].Content)
+	require.Len(msgs[0].ToolCalls[0].ResultEvents, 1)
+	assert.Equal("ok", msgs[0].ToolCalls[0].ResultEvents[0].Content)
 }
 
 func TestParseVisualStudioCopilotTraceSession_PreservesOrderWhenDedupingToolSpans(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(
 		t.TempDir(),
 		"20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
@@ -1109,30 +1173,33 @@ func TestParseVisualStudioCopilotTraceSession_PreservesOrderWhenDedupingToolSpan
 	data := strings.Join(
 		[]string{partial, intervening, complete}, "\n",
 	) + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
+	require.NoError(os.WriteFile(path, []byte(data), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
+	require.NoError(err)
+	require.NotNil(sess)
 	// call_1 collapses to one message; call_2 stays distinct.
-	require.Len(t, msgs, 2)
+	require.Len(msgs, 2)
 	// Messages stay in non-decreasing timestamp order after dedup.
-	assert.False(t, msgs[1].Timestamp.Before(msgs[0].Timestamp),
+	assert.False(msgs[1].Timestamp.Before(msgs[0].Timestamp),
 		"deduped tool message must not jump ahead of a later message")
 	// The surviving call_1 message keeps the completed result...
-	require.Len(t, msgs[0].ToolCalls, 1)
-	assert.Equal(t, "run_command_in_terminal", msgs[0].ToolCalls[0].ToolName)
-	require.Len(t, msgs[0].ToolCalls[0].ResultEvents, 1)
-	assert.Equal(t, "build ok", msgs[0].ToolCalls[0].ResultEvents[0].Content)
+	require.Len(msgs[0].ToolCalls, 1)
+	assert.Equal("run_command_in_terminal", msgs[0].ToolCalls[0].ToolName)
+	require.Len(msgs[0].ToolCalls[0].ResultEvents, 1)
+	assert.Equal("build ok", msgs[0].ToolCalls[0].ResultEvents[0].Content)
 	// ...and the intervening call_2 follows it.
-	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, "get_file", msgs[1].ToolCalls[0].ToolName)
+	require.Len(msgs[1].ToolCalls, 1)
+	assert.Equal("get_file", msgs[1].ToolCalls[0].ToolName)
 }
 
 func TestParseVisualStudioCopilotTraceSession_ChatOutputMessages(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(
 		t.TempDir(),
 		"20260611T145205_d9b231f1_VSGitHubCopilot_traces.jsonl",
@@ -1149,29 +1216,29 @@ func TestParseVisualStudioCopilotTraceSession_ChatOutputMessages(t *testing.T) {
 			"gen_ai.input.messages":  inputMessages,
 			"gen_ai.output.messages": outputMessages,
 		}) + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
+	require.NoError(os.WriteFile(path, []byte(data), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, "Inspect the project and run tests.", sess.FirstMessage)
-	require.Len(t, msgs, 2)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, "Inspect the project and run tests.", msgs[0].Content)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.True(t, msgs[1].HasToolUse)
-	assert.Contains(t, msgs[1].Content, "$ go test ./...")
-	assert.Contains(t, msgs[1].Content,
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal("Inspect the project and run tests.", sess.FirstMessage)
+	require.Len(msgs, 2)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal("Inspect the project and run tests.", msgs[0].Content)
+	assert.Equal(RoleAssistant, msgs[1].Role)
+	assert.True(msgs[1].HasToolUse)
+	assert.Contains(msgs[1].Content, "$ go test ./...")
+	assert.Contains(msgs[1].Content,
 		"I'll inspect the project and run the tests.")
-	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(t, "run_command_in_terminal",
+	require.Len(msgs[1].ToolCalls, 1)
+	assert.Equal("run_command_in_terminal",
 		msgs[1].ToolCalls[0].ToolName)
-	assert.Contains(t, msgs[1].ToolCalls[0].InputJSON,
+	assert.Contains(msgs[1].ToolCalls[0].InputJSON,
 		"go test ./...")
-	assert.JSONEq(t, `{"command":"go test ./..."}`,
+	assert.JSONEq(`{"command":"go test ./..."}`,
 		msgs[1].ToolCalls[0].InputJSON)
 }
 
@@ -1182,6 +1249,9 @@ func TestParseVisualStudioCopilotTraceSession_ChatOutputMessages(t *testing.T) {
 // shows it with a result, so without dedicated handling the turn - and its
 // tokens - would be dropped from the transcript and usage totals.
 func TestParseVisualStudioCopilotTraceSession_CountsUsageForToolOnlyChatTurn(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(
 		t.TempDir(),
 		"20260611T145205_d9b231f1_VSGitHubCopilot_traces.jsonl",
@@ -1210,21 +1280,21 @@ func TestParseVisualStudioCopilotTraceSession_CountsUsageForToolOnlyChatTurn(t *
 			"gen_ai.tool.call.id":     "call_build",
 			"gen_ai.tool.call.result": "Build succeeded.",
 		}) + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(chatSpan+toolSpan), 0o644))
+	require.NoError(os.WriteFile(path, []byte(chatSpan+toolSpan), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
+	require.NoError(err)
+	require.NotNil(sess)
 	// The tool-calling turn's tokens are counted even though its only output
 	// is the executed tool call.
-	assert.Equal(t, 42, sess.TotalOutputTokens)
-	assert.Equal(t, 500, sess.PeakContextTokens)
+	assert.Equal(42, sess.TotalOutputTokens)
+	assert.Equal(500, sess.PeakContextTokens)
 	// The user prompt and the executed tool are both still present.
-	require.NotEmpty(t, msgs)
-	assert.Equal(t, "Fix the build.", msgs[0].Content)
+	require.NotEmpty(msgs)
+	assert.Equal("Fix the build.", msgs[0].Content)
 	var sawTool bool
 	for _, m := range msgs {
 		for _, call := range m.ToolCalls {
@@ -1233,7 +1303,7 @@ func TestParseVisualStudioCopilotTraceSession_CountsUsageForToolOnlyChatTurn(t *
 			}
 		}
 	}
-	assert.True(t, sawTool, "the executed tool must still be shown")
+	assert.True(sawTool, "the executed tool must still be shown")
 }
 
 // TestParseVisualStudioCopilotTraceSession_DoesNotDoubleCountTextPlusToolUsage
@@ -1241,6 +1311,9 @@ func TestParseVisualStudioCopilotTraceSession_CountsUsageForToolOnlyChatTurn(t *
 // call counts its token usage exactly once. The text message carries the usage;
 // the separate execute_tool span (no usage of its own) must not add it again.
 func TestParseVisualStudioCopilotTraceSession_DoesNotDoubleCountTextPlusToolUsage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(
 		t.TempDir(),
 		"20260611T145205_d9b231f1_VSGitHubCopilot_traces.jsonl",
@@ -1269,23 +1342,26 @@ func TestParseVisualStudioCopilotTraceSession_DoesNotDoubleCountTextPlusToolUsag
 			"gen_ai.tool.call.id":     "call_build",
 			"gen_ai.tool.call.result": "Build succeeded.",
 		}) + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(chatSpan+toolSpan), 0o644))
+	require.NoError(os.WriteFile(path, []byte(chatSpan+toolSpan), 0o644))
 
 	sess, _, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, 42, sess.TotalOutputTokens,
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal(42, sess.TotalOutputTokens,
 		"the turn's output tokens must be counted once")
-	assert.Equal(t, 500, sess.PeakContextTokens)
+	assert.Equal(500, sess.PeakContextTokens)
 }
 
 // TestParseVisualStudioCopilotTraceSession_PrefersCompleteToolOnlyChatUsage
 // verifies that a tool-only chat turn flushed to sibling files with growing
 // token counts records the most complete usage, not the first-seen partial copy.
 func TestParseVisualStudioCopilotTraceSession_PrefersCompleteToolOnlyChatUsage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	path := filepath.Join(
 		dir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
@@ -1319,21 +1395,24 @@ func TestParseVisualStudioCopilotTraceSession_PrefersCompleteToolOnlyChatUsage(t
 		}) + "\n"
 	// The primary file carries the partial flush; the sibling carries the
 	// complete one with higher token counts.
-	require.NoError(t, os.WriteFile(path, []byte(chatSpan("200", "10")), 0o644))
-	require.NoError(t, os.WriteFile(sibling, []byte(chatSpan("500", "42")+toolSpan), 0o644))
+	require.NoError(os.WriteFile(path, []byte(chatSpan("200", "10")), 0o644))
+	require.NoError(os.WriteFile(sibling, []byte(chatSpan("500", "42")+toolSpan), 0o644))
 
 	sess, _, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, 42, sess.TotalOutputTokens,
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal(42, sess.TotalOutputTokens,
 		"the most complete usage copy must win")
-	assert.Equal(t, 500, sess.PeakContextTokens)
+	assert.Equal(500, sess.PeakContextTokens)
 }
 
 func TestParseVisualStudioCopilotTraceSession_ChatUsage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(
 		t.TempDir(),
 		"20260611T145205_d9b231f1_VSGitHubCopilot_traces.jsonl",
@@ -1353,31 +1432,33 @@ func TestParseVisualStudioCopilotTraceSession_ChatUsage(t *testing.T) {
 			"gen_ai.usage.input_tokens":  "11294",
 			"gen_ai.usage.output_tokens": "241",
 		}) + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
+	require.NoError(os.WriteFile(path, []byte(data), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	require.Len(t, msgs, 2)
-	assert.Equal(t, "gpt-5.4-2026-03-05", msgs[1].Model)
-	assert.JSONEq(t,
-		`{"input_tokens":11294,"output_tokens":241}`,
+	require.NoError(err)
+	require.NotNil(sess)
+	require.Len(msgs, 2)
+	assert.Equal("gpt-5.4-2026-03-05", msgs[1].Model)
+	assert.JSONEq(`{"input_tokens":11294,"output_tokens":241}`,
 		string(msgs[1].TokenUsage),
 	)
-	assert.Equal(t, 11294, msgs[1].ContextTokens)
-	assert.Equal(t, 241, msgs[1].OutputTokens)
-	assert.True(t, msgs[1].HasContextTokens)
-	assert.True(t, msgs[1].HasOutputTokens)
-	assert.Equal(t, 241, sess.TotalOutputTokens)
-	assert.Equal(t, 11294, sess.PeakContextTokens)
-	assert.True(t, sess.HasTotalOutputTokens)
-	assert.True(t, sess.HasPeakContextTokens)
+	assert.Equal(11294, msgs[1].ContextTokens)
+	assert.Equal(241, msgs[1].OutputTokens)
+	assert.True(msgs[1].HasContextTokens)
+	assert.True(msgs[1].HasOutputTokens)
+	assert.Equal(241, sess.TotalOutputTokens)
+	assert.Equal(11294, sess.PeakContextTokens)
+	assert.True(sess.HasTotalOutputTokens)
+	assert.True(sess.HasPeakContextTokens)
 }
 
 func TestParseVisualStudioCopilotTraceSession_StandardToolInputs(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(
 		t.TempDir(),
 		"20260611T145205_d9b231f1_VSGitHubCopilot_traces.jsonl",
@@ -1401,28 +1482,31 @@ func TestParseVisualStudioCopilotTraceSession_StandardToolInputs(t *testing.T) {
 				"gen_ai.tool.call.arguments": `{"patch":"*** Begin Patch\n*** Update File: app.go\n@@\n-old\n+new\n*** End Patch"}`,
 			}),
 	}, "\n") + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
+	require.NoError(os.WriteFile(path, []byte(data), 0o644))
 
 	_, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.Len(t, msgs, 2)
+	require.NoError(err)
+	require.Len(msgs, 2)
 	searchCall := msgs[0].ToolCalls[0]
-	assert.Equal(t, "Grep", searchCall.Category)
-	assert.JSONEq(t, `{"message":"ToolBlock, displayToolName","pattern":"ToolBlock, displayToolName","queries":["ToolBlock","displayToolName"]}`,
+	assert.Equal("Grep", searchCall.Category)
+	assert.JSONEq(`{"message":"ToolBlock, displayToolName","pattern":"ToolBlock, displayToolName","queries":["ToolBlock","displayToolName"]}`,
 		searchCall.InputJSON)
-	assert.NotContains(t, searchCall.InputJSON, `"arguments"`)
+	assert.NotContains(searchCall.InputJSON, `"arguments"`)
 
 	editCall := msgs[1].ToolCalls[0]
-	assert.Equal(t, "Edit", editCall.Category)
-	assert.JSONEq(t, `{"patch":"*** Begin Patch\n*** Update File: app.go\n@@\n-old\n+new\n*** End Patch","file_path":"app.go","diff":"--- a/app.go\n+++ b/app.go\n@@\n-old\n+new"}`,
+	assert.Equal("Edit", editCall.Category)
+	assert.JSONEq(`{"patch":"*** Begin Patch\n*** Update File: app.go\n@@\n-old\n+new\n*** End Patch","file_path":"app.go","diff":"--- a/app.go\n+++ b/app.go\n@@\n-old\n+new"}`,
 		editCall.InputJSON)
-	assert.NotContains(t, editCall.InputJSON, `"arguments"`)
+	assert.NotContains(editCall.InputJSON, `"arguments"`)
 }
 
 func TestParseVisualStudioCopilotTraceSession_UsesSiblingPromptSpan(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	path := filepath.Join(
 		dir,
@@ -1451,28 +1535,29 @@ func TestParseVisualStudioCopilotTraceSession_UsesSiblingPromptSpan(t *testing.T
 			"gen_ai.input.messages":  inputMessages,
 			"copilot_chat.client_id": "Microsoft.Modernization.Agent",
 		}) + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(primaryData), 0o644))
-	require.NoError(t, os.WriteFile(sibling, []byte(siblingData), 0o644))
+	require.NoError(os.WriteFile(path, []byte(primaryData), 0o644))
+	require.NoError(os.WriteFile(sibling, []byte(siblingData), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, "visualstudio-copilot:"+conversationID, sess.ID)
-	assert.Equal(t,
-		"Remove the Details button and replace the expander with tabs.",
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal("visualstudio-copilot:"+conversationID, sess.ID)
+	assert.Equal("Remove the Details button and replace the expander with tabs.",
 		sess.FirstMessage)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t,
-		"Remove the Details button and replace the expander with tabs.",
+	require.Len(msgs, 1)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal("Remove the Details button and replace the expander with tabs.",
 		msgs[0].Content)
-	assert.Equal(t, path+"#"+conversationID, sess.File.Path)
+	assert.Equal(path+"#"+conversationID, sess.File.Path)
 }
 
 func TestParseVisualStudioCopilotTraceSession_DeduplicatesPromptAndToolSpans(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(
 		t.TempDir(),
 		"20260611T145205_d9b231f1_VSGitHubCopilot_traces.jsonl",
@@ -1525,35 +1610,38 @@ func TestParseVisualStudioCopilotTraceSession_DeduplicatesPromptAndToolSpans(t *
 				"gen_ai.tool.call.result":    `{"Value":"Build successful"}`,
 			}),
 	}, "\n") + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
+	require.NoError(os.WriteFile(path, []byte(data), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, 1, sess.UserMessageCount)
-	require.Len(t, msgs, 5)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, "Inline this into the XAML.", msgs[0].Content)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.False(t, msgs[1].HasToolUse)
-	assert.Equal(t, "I’ll update the XAML.", msgs[1].Content)
-	assert.Equal(t, RoleAssistant, msgs[2].Role)
-	assert.True(t, msgs[2].HasToolUse)
-	assert.Equal(t, "call_patch", msgs[2].ToolCalls[0].ToolUseID)
-	assert.Equal(t, RoleAssistant, msgs[3].Role)
-	assert.False(t, msgs[3].HasToolUse)
-	assert.Equal(t, "I’ll build it now.", msgs[3].Content)
-	assert.Equal(t, RoleAssistant, msgs[4].Role)
-	assert.True(t, msgs[4].HasToolUse)
-	assert.Equal(t, "call_build", msgs[4].ToolCalls[0].ToolUseID)
-	require.Len(t, msgs[4].ToolCalls[0].ResultEvents, 1)
-	assert.Equal(t, "Build successful", msgs[4].ToolCalls[0].ResultEvents[0].Content)
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal(1, sess.UserMessageCount)
+	require.Len(msgs, 5)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal("Inline this into the XAML.", msgs[0].Content)
+	assert.Equal(RoleAssistant, msgs[1].Role)
+	assert.False(msgs[1].HasToolUse)
+	assert.Equal("I’ll update the XAML.", msgs[1].Content)
+	assert.Equal(RoleAssistant, msgs[2].Role)
+	assert.True(msgs[2].HasToolUse)
+	assert.Equal("call_patch", msgs[2].ToolCalls[0].ToolUseID)
+	assert.Equal(RoleAssistant, msgs[3].Role)
+	assert.False(msgs[3].HasToolUse)
+	assert.Equal("I’ll build it now.", msgs[3].Content)
+	assert.Equal(RoleAssistant, msgs[4].Role)
+	assert.True(msgs[4].HasToolUse)
+	assert.Equal("call_build", msgs[4].ToolCalls[0].ToolUseID)
+	require.Len(msgs[4].ToolCalls[0].ResultEvents, 1)
+	assert.Equal("Build successful", msgs[4].ToolCalls[0].ResultEvents[0].Content)
 }
 
 func TestParseVisualStudioCopilotTraceSession_ChatSummaryFallback(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(
 		t.TempDir(),
 		"20260611T145207_d9b231f1_VSGitHubCopilot_traces.jsonl",
@@ -1569,22 +1657,24 @@ func TestParseVisualStudioCopilotTraceSession_ChatSummaryFallback(t *testing.T) 
 			"copilot_chat.client_id":       "Microsoft.Modernization.Agent",
 			"copilot_chat.root_request_id": "398c5816-cfb4-4f51-a195-16e7f03edc69",
 		}) + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
+	require.NoError(os.WriteFile(path, []byte(data), 0o644))
 
 	sess, msgs, err := parseVisualStudioCopilotTestSession(t,
 		path, "visualstudio", "local",
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t,
-		"Visual Studio Copilot chat | Agent | gpt-5.5 | 398c5816",
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal("Visual Studio Copilot chat | Agent | gpt-5.5 | 398c5816",
 		sess.FirstMessage)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, sess.FirstMessage, msgs[0].Content)
+	require.Len(msgs, 1)
+	assert.Equal(sess.FirstMessage, msgs[0].Content)
 }
 
 func TestParseVisualStudioCopilotConversation_ParsesEachConversationIndependently(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(
 		t.TempDir(),
 		"20260611T145207_d9b231f1_VSGitHubCopilot_traces.jsonl",
@@ -1611,18 +1701,17 @@ func TestParseVisualStudioCopilotConversation_ParsesEachConversationIndependentl
 				"copilot_chat.client_id": "Microsoft.Modernization.Agent",
 			}),
 	}, "\n") + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
+	require.NoError(os.WriteFile(path, []byte(data), 0o644))
 
 	// The prompt conversation parses with its user message.
 	promptSess, _, err := parseVisualStudioCopilotTestConversation(t,
 		path, promptID, "visualstudio", "local",
 	)
-	require.NoError(t, err)
-	require.NotNil(t, promptSess)
-	assert.Equal(t, "visualstudio-copilot:"+promptID, promptSess.ID)
-	assert.Equal(t, path+"#"+promptID, promptSess.File.Path)
-	assert.Equal(t,
-		"Make the update screen calmer and easier to scan.",
+	require.NoError(err)
+	require.NotNil(promptSess)
+	assert.Equal("visualstudio-copilot:"+promptID, promptSess.ID)
+	assert.Equal(path+"#"+promptID, promptSess.File.Path)
+	assert.Equal("Make the update screen calmer and easier to scan.",
 		promptSess.FirstMessage)
 
 	// The ambient conversation in the same file is not dropped; it
@@ -1630,18 +1719,21 @@ func TestParseVisualStudioCopilotConversation_ParsesEachConversationIndependentl
 	ambientSess, ambientMsgs, err := parseVisualStudioCopilotTestConversation(t,
 		path, ambientID, "visualstudio", "local",
 	)
-	require.NoError(t, err)
-	require.NotNil(t, ambientSess)
-	assert.Equal(t, "visualstudio-copilot:"+ambientID, ambientSess.ID)
-	assert.Equal(t, path+"#"+ambientID, ambientSess.File.Path)
-	require.NotEmpty(t, ambientMsgs)
+	require.NoError(err)
+	require.NotNil(ambientSess)
+	assert.Equal("visualstudio-copilot:"+ambientID, ambientSess.ID)
+	assert.Equal(path+"#"+ambientID, ambientSess.File.Path)
+	require.NotEmpty(ambientMsgs)
 }
 
 func TestFindVisualStudioCopilotSourceFile(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	uuid := "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 	tracesDir := filepath.Join(dir, "VSGitHubCopilotLogs", "traces")
-	require.NoError(t, os.MkdirAll(tracesDir, 0o755))
+	require.NoError(os.MkdirAll(tracesDir, 0o755))
 	oldTrace := filepath.Join(
 		tracesDir,
 		"20260612T194439_257709a3_VSGitHubCopilot_traces.jsonl",
@@ -1652,25 +1744,26 @@ func TestFindVisualStudioCopilotSourceFile(t *testing.T) {
 	)
 	traceLine := vsCopilotTraceLineJSON(uuid,
 		"invoke_agent GitHub Copilot", "1", "2", nil)
-	require.NoError(t, os.WriteFile(oldTrace,
+	require.NoError(os.WriteFile(oldTrace,
 		[]byte(traceLine+"\n"), 0o644))
-	require.NoError(t, os.WriteFile(newTrace,
+	require.NoError(os.WriteFile(newTrace,
 		[]byte(traceLine+"\n"), 0o644))
 
-	assert.Equal(t, VisualStudioCopilotVirtualPath(newTrace, uuid),
+	assert.Equal(VisualStudioCopilotVirtualPath(newTrace, uuid),
 		findVisualStudioCopilotTestSourceFile(t, tracesDir, uuid),
 		"source lookup must return a conversation-scoped virtual path so a "+
 			"single-session resync does not reparse the whole trace file")
-	assert.Equal(t, "",
-		findVisualStudioCopilotTestSourceFile(t, dir, uuid))
-	assert.Equal(t, "",
-		findVisualStudioCopilotTestSourceFile(t, tracesDir, "../etc/passwd"))
+	assert.Empty(findVisualStudioCopilotTestSourceFile(t, dir, uuid))
+	assert.Empty(findVisualStudioCopilotTestSourceFile(t, tracesDir, "../etc/passwd"))
 }
 
 // TestWriteVisualStudioCopilotConversationJSONL verifies that exporting one
 // conversation from a shared trace file emits only that conversation's lines and
 // never discloses spans belonging to another conversation in the same file.
 func TestWriteVisualStudioCopilotConversationJSONL(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	path := filepath.Join(
 		dir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
@@ -1690,22 +1783,22 @@ func TestWriteVisualStudioCopilotConversationJSONL(t *testing.T) {
 			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Other conversation secret B."}]}]`,
 		})
 	data := lineA + "\n" + lineB + "\n"
-	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
+	require.NoError(os.WriteFile(path, []byte(data), 0o644))
 
 	var buf bytes.Buffer
 	require.NoError(
-		t, WriteVisualStudioCopilotConversationJSONL(&buf, path, convA),
+		WriteVisualStudioCopilotConversationJSONL(&buf, path, convA),
 	)
 
 	out := buf.String()
-	assert.Contains(t, out, "Conversation A prompt.")
-	assert.NotContains(t, out, convB,
+	assert.Contains(out, "Conversation A prompt.")
+	assert.NotContains(out, convB,
 		"another conversation's id must not be exported")
-	assert.NotContains(t, out, "Other conversation secret B.",
+	assert.NotContains(out, "Other conversation secret B.",
 		"another conversation's content must not be exported")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	require.Len(t, lines, 1, "only the requested conversation's line is emitted")
-	assert.JSONEq(t, lineA, lines[0],
+	require.Len(lines, 1, "only the requested conversation's line is emitted")
+	assert.JSONEq(lineA, lines[0],
 		"the matching line is emitted verbatim")
 }
 
@@ -1766,6 +1859,9 @@ func vsCopilotSpanJSONLine(conversationID, spanID, marker string) string {
 func TestWriteVisualStudioCopilotConversationJSONLFiltersSpansWithinLine(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	path := filepath.Join(
 		dir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
@@ -1777,24 +1873,24 @@ func TestWriteVisualStudioCopilotConversationJSONLFiltersSpansWithinLine(
 		vsCopilotSpanJSON(convB, "b1", "Other conversation secret.") + "," +
 		vsCopilotSpanJSON("", "n1", "Id-less span data.") +
 		`]}]}]}`
-	require.NoError(t, os.WriteFile(path, []byte(line+"\n"), 0o644))
+	require.NoError(os.WriteFile(path, []byte(line+"\n"), 0o644))
 
 	var buf bytes.Buffer
 	require.NoError(
-		t, WriteVisualStudioCopilotConversationJSONL(&buf, path, convA),
+		WriteVisualStudioCopilotConversationJSONL(&buf, path, convA),
 	)
 	out := strings.TrimSpace(buf.String())
 
-	assert.Contains(t, out, "Wanted A content.",
+	assert.Contains(out, "Wanted A content.",
 		"the requested span must be kept even when batched with others")
-	assert.NotContains(t, out, "Other conversation secret.",
+	assert.NotContains(out, "Other conversation secret.",
 		"another conversation's span must not be disclosed")
-	assert.NotContains(t, out, "Id-less span data.",
+	assert.NotContains(out, "Id-less span data.",
 		"a span with no conversation id must not be disclosed")
-	assert.NotContains(t, out, convB)
-	require.NotEmpty(t, out)
+	assert.NotContains(out, convB)
+	require.NotEmpty(out)
 	var parsed map[string]any
-	require.NoError(t, json.Unmarshal([]byte(out), &parsed),
+	require.NoError(json.Unmarshal([]byte(out), &parsed),
 		"the re-encoded line must be valid JSON")
 }
 
@@ -1804,6 +1900,9 @@ func TestWriteVisualStudioCopilotConversationJSONLFiltersSpansWithinLine(
 func TestWriteVisualStudioCopilotConversationJSONLTraversesSiblings(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	conv := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
 	other := "c0aca2e3-d1f2-4d28-bd5e-5dab29e2be28"
@@ -1813,14 +1912,14 @@ func TestWriteVisualStudioCopilotConversationJSONLTraversesSiblings(
 	sibling := filepath.Join(
 		dir, "20260612T145205_bbbb2222_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(t, os.WriteFile(primary, []byte(
+	require.NoError(os.WriteFile(primary, []byte(
 		vsCopilotTraceLineJSONWithSpanID(conv, "a1", "chat gpt-5.5",
 			"1781293600000000000", "1781293610000000000",
 			map[string]string{
 				"gen_ai.operation.name": "chat",
 				"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"First half."}]}]`,
 			})+"\n"), 0o644))
-	require.NoError(t, os.WriteFile(sibling, []byte(strings.Join([]string{
+	require.NoError(os.WriteFile(sibling, []byte(strings.Join([]string{
 		vsCopilotTraceLineJSONWithSpanID(conv, "a2", "chat gpt-5.5",
 			"1781293620000000000", "1781293630000000000",
 			map[string]string{
@@ -1837,27 +1936,30 @@ func TestWriteVisualStudioCopilotConversationJSONLTraversesSiblings(
 
 	var buf bytes.Buffer
 	require.NoError(
-		t, WriteVisualStudioCopilotConversationJSONL(&buf, primary, conv),
+		WriteVisualStudioCopilotConversationJSONL(&buf, primary, conv),
 	)
 	out := buf.String()
 
-	assert.Contains(t, out, "First half.")
-	assert.Contains(t, out, "Second half.",
+	assert.Contains(out, "First half.")
+	assert.Contains(out, "Second half.",
 		"spans from sibling trace files must be exported")
-	assert.NotContains(t, out, "Unrelated conversation.")
-	assert.NotContains(t, out, other)
+	assert.NotContains(out, "Unrelated conversation.")
+	assert.NotContains(out, other)
 }
 
 func TestWriteVisualStudioCopilotConversationJSONLReadsVS2026SessionFile(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	convA := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
 	convB := "c0aca2e3-d1f2-4d28-bd5e-5dab29e2be28"
 	path := filepath.Join(
 		dir, ".vs", "SampleApp", "copilot-chat", "thread", "sessions", convA,
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
 	lineA := vsCopilotTraceLineJSONWithSpanID(convA, "a1", "chat gpt-5.5",
 		"1781293600000000000", "1781293610000000000",
 		map[string]string{
@@ -1870,20 +1972,20 @@ func TestWriteVisualStudioCopilotConversationJSONLReadsVS2026SessionFile(
 			"gen_ai.operation.name": "chat",
 			"gen_ai.input.messages": `[{"role":"user","parts":[{"type":"text","content":"Other conversation secret B."}]}]`,
 		})
-	require.NoError(t, os.WriteFile(path, []byte(lineA+"\n"+lineB+"\n"), 0o644))
+	require.NoError(os.WriteFile(path, []byte(lineA+"\n"+lineB+"\n"), 0o644))
 
 	var buf bytes.Buffer
 	require.NoError(
-		t, WriteVisualStudioCopilotConversationJSONL(&buf, path, convA),
+		WriteVisualStudioCopilotConversationJSONL(&buf, path, convA),
 	)
 
 	out := buf.String()
-	assert.Contains(t, out, "Conversation A prompt.")
-	assert.NotContains(t, out, convB)
-	assert.NotContains(t, out, "Other conversation secret B.")
+	assert.Contains(out, "Conversation A prompt.")
+	assert.NotContains(out, convB)
+	assert.NotContains(out, "Other conversation secret B.")
 	lines := strings.Split(strings.TrimSpace(out), "\n")
-	require.Len(t, lines, 1)
-	assert.JSONEq(t, lineA, lines[0])
+	require.Len(lines, 1)
+	assert.JSONEq(lineA, lines[0])
 }
 
 func vsCopilotTraceLineJSON(
@@ -1930,27 +2032,30 @@ func mustJSON(t *testing.T, value any) []byte {
 // count. The memo proves reuse by ignoring filesystem changes after
 // the first computation.
 func TestVSCopilotRootCompositeComputesOnce(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	dir := t.TempDir()
 	first := filepath.Join(dir, "a_VSGitHubCopilot_traces.jsonl")
 	second := filepath.Join(dir, "b_VSGitHubCopilot_traces.jsonl")
-	require.NoError(t, os.WriteFile(first, []byte("one"), 0o644))
-	require.NoError(t, os.WriteFile(second, []byte("two"), 0o644))
+	require.NoError(os.WriteFile(first, []byte("one"), 0o644))
+	require.NoError(os.WriteFile(second, []byte("two"), 0o644))
 
 	var composite vsCopilotRootComposite
 	size, mtime, err := composite.fingerprint(first)
-	require.NoError(t, err)
-	assert.Equal(t, int64(len("one")+len("two")), size)
+	require.NoError(err)
+	assert.Equal(int64(len("one")+len("two")), size)
 
 	// A sibling appearing mid-pass must not change the memoized value.
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(dir, "c_VSGitHubCopilot_traces.jsonl"),
 		[]byte("three"), 0o644,
 	))
 	sizeAgain, mtimeAgain, err := composite.fingerprint(second)
-	require.NoError(t, err)
-	assert.Equal(t, size, sizeAgain,
+	require.NoError(err)
+	assert.Equal(size, sizeAgain,
 		"second lookup must reuse the per-pass composite, not re-enumerate")
-	assert.Equal(t, mtime, mtimeAgain)
+	assert.Equal(mtime, mtimeAgain)
 }

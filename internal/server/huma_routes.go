@@ -622,3 +622,12 @@ func writeHumaJSON(ctx huma.Context, status int, value any) {
 func sjson(w io.Writer, value any) error {
 	return json.MarshalEncode(jsontext.NewEncoder(w), value)
 }
+
+// handleHTTP registers handlers that own streaming and response serialization
+// through the same Huma adapter as the typed API operations.
+func (s *Server) handleHTTP(op *huma.Operation, handler http.HandlerFunc) {
+	s.api.Adapter().Handle(op, func(ctx huma.Context) {
+		r, w := humago.Unwrap(ctx)
+		handler(w, r)
+	})
+}

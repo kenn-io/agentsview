@@ -67,6 +67,9 @@ func seedFTSSession(t *testing.T, d *db.DB, id, project, content, endedAt string
 }
 
 func TestSearchSessions_ReturnsHitsWithOrdinal(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	if !d.HasFTS() {
 		t.Skip("FTS not available")
@@ -76,17 +79,19 @@ func TestSearchSessions_ReturnsHitsWithOrdinal(t *testing.T) {
 	seedFTSSession(t, d, "s2", "proj-b",
 		"lazy dogs", "2024-06-15T10:00:00Z")
 
-	_, out, err := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+	_, out, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{
 		Query: "fox",
 	})
-	require.NoError(t, err)
-	require.Len(t, out.Results, 1)
-	assert.Equal(t, "s1", out.Results[0].SessionID)
-	assert.Equal(t, "proj-a", out.Results[0].Project)
-	assert.Zero(t, out.ExcludedActive)
+	require.NoError(err)
+	require.Len(out.Results, 1)
+	assert.Equal("s1", out.Results[0].SessionID)
+	assert.Equal("proj-a", out.Results[0].Project)
+	assert.Zero(out.ExcludedActive)
 }
 
 func TestSearchSessions_SessionIDLookup(t *testing.T) {
+	parentRequire := require.New(t)
+
 	ts, d := newTestToolset(t)
 	active := fixedNow.Add(-time.Minute).Format(time.RFC3339)
 	dbtest.SeedSession(t, d, "full_session_id", "exact-project", func(s *db.Session) {
@@ -116,7 +121,7 @@ func TestSearchSessions_SessionIDLookup(t *testing.T) {
 	dbtest.SeedSession(t, d, "host~trashed", "trash-project", func(s *db.Session) {
 		s.EndedAt = new("2024-06-08T10:00:00Z")
 	})
-	require.NoError(t, d.SoftDeleteSession("host~trashed"))
+	parentRequire.NoError(d.SoftDeleteSession("host~trashed"))
 
 	tests := []struct {
 		name        string
@@ -164,39 +169,42 @@ func TestSearchSessions_SessionIDLookup(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, out, err := ts.searchSessions(context.Background(), nil, tc.input)
-			require.NoError(t, err)
-			require.Len(t, out.Results, 1)
-			assert.Equal(t, tc.wantID, out.Results[0].SessionID)
-			assert.Equal(t, tc.wantProject, out.Results[0].Project)
-			assert.Equal(t, tc.wantEnded, out.Results[0].EndedAt)
-			assert.Equal(t, tc.wantName, out.Results[0].Name)
-			assert.Empty(t, out.Results[0].Snippet)
-			assert.Zero(t, out.Results[0].MatchOrdinal)
-			assert.Nil(t, out.NextCursor)
+			assert := assert.New(t)
+			require := require.New(t)
+
+			_, out, err := ts.searchSessions(t.Context(), nil, tc.input)
+			require.NoError(err)
+			require.Len(out.Results, 1)
+			assert.Equal(tc.wantID, out.Results[0].SessionID)
+			assert.Equal(tc.wantProject, out.Results[0].Project)
+			assert.Equal(tc.wantEnded, out.Results[0].EndedAt)
+			assert.Equal(tc.wantName, out.Results[0].Name)
+			assert.Empty(out.Results[0].Snippet)
+			assert.Zero(out.Results[0].MatchOrdinal)
+			assert.Nil(out.NextCursor)
 			t.Logf("head: lookup=%s project=%s ended=%s", out.Results[0].SessionID, out.Results[0].Project, out.Results[0].EndedAt)
 		})
 	}
 
-	_, _, ambiguityErr := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+	_, _, ambiguityErr := ts.searchSessions(t.Context(), nil, searchSessionsIn{
 		SessionID: "ambiguous",
 	})
-	require.ErrorContains(t, ambiguityErr, "ambiguous session UUID")
+	parentRequire.ErrorContains(ambiguityErr, "ambiguous session UUID")
 
-	_, _, trashedErr := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+	_, _, trashedErr := ts.searchSessions(t.Context(), nil, searchSessionsIn{
 		SessionID: "trashed",
 	})
-	require.ErrorContains(t, trashedErr, "session not found")
+	parentRequire.ErrorContains(trashedErr, "session not found")
 
-	_, _, missingErr := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+	_, _, missingErr := ts.searchSessions(t.Context(), nil, searchSessionsIn{
 		SessionID: "missing",
 	})
-	require.ErrorContains(t, missingErr, "session not found")
+	parentRequire.ErrorContains(missingErr, "session not found")
 
-	_, _, entryErr := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+	_, _, entryErr := ts.searchSessions(t.Context(), nil, searchSessionsIn{
 		SessionID: "E",
 	})
-	require.ErrorContains(t, entryErr, "session not found")
+	parentRequire.ErrorContains(entryErr, "session not found")
 	t.Logf("head: ambiguity_error=%q trashed_error=%q missing_error=%q entry_error=%q", ambiguityErr, trashedErr, missingErr, entryErr)
 
 }
@@ -263,27 +271,32 @@ func TestSearchSessions_SessionIDRouting(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			svc := &sessionIDRoutingService{
 				details: tc.details,
 				rawIDs:  tc.rawIDs,
 			}
 			ts := &toolset{svc: svc}
-			_, out, err := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+			_, out, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{
 				SessionID: tc.requested,
 			})
-			require.NoError(t, err)
-			require.Len(t, out.Results, 1)
-			assert.Equal(t, tc.wantID, out.Results[0].SessionID)
-			assert.Equal(t, tc.details[tc.wantID].WebURL, out.Results[0].WebURL)
-			assert.Equal(t, tc.wantGets, svc.getCalls)
-			assert.Equal(t, tc.wantRaw, svc.rawCalls)
-			assert.Zero(t, svc.searchCalls)
+			require.NoError(err)
+			require.Len(out.Results, 1)
+			assert.Equal(tc.wantID, out.Results[0].SessionID)
+			assert.Equal(tc.details[tc.wantID].WebURL, out.Results[0].WebURL)
+			assert.Equal(tc.wantGets, svc.getCalls)
+			assert.Equal(tc.wantRaw, svc.rawCalls)
+			assert.Zero(svc.searchCalls)
 			t.Logf("head: gets=%v raw_suffix=%v search_calls=%d web_url=%s", svc.getCalls, svc.rawCalls, svc.searchCalls, out.Results[0].WebURL)
 		})
 	}
 }
 
 func TestSearchSessions_ChineseSegmentation(t *testing.T) {
+	assert := assert.New(t)
+
 	ts, d := newTestToolset(t)
 	if !d.HasCJKFTS() {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
@@ -293,12 +306,12 @@ func TestSearchSessions_ChineseSegmentation(t *testing.T) {
 
 	out := mustSearch(t, ts, searchSessionsIn{Query: "全文搜索"})
 	require.Len(t, out.Results, 1)
-	assert.Equal(t, "chinese", out.Results[0].SessionID)
-	assert.Contains(t, out.Results[0].Snippet, "<mark>全文</mark>")
-	assert.Contains(t, out.Results[0].Snippet, "<mark>搜索</mark>")
+	assert.Equal("chinese", out.Results[0].SessionID)
+	assert.Contains(out.Results[0].Snippet, "<mark>全文</mark>")
+	assert.Contains(out.Results[0].Snippet, "<mark>搜索</mark>")
 
 	phrase := mustSearch(t, ts, searchSessionsIn{Query: `"全文搜索"`})
-	assert.Empty(t, phrase.Results, "explicit phrases must retain word adjacency")
+	assert.Empty(phrase.Results, "explicit phrases must retain word adjacency")
 }
 
 func TestSearchSessions_JapaneseAndKoreanTerms(t *testing.T) {
@@ -350,6 +363,8 @@ func TestSearchSessions_QuerySyntax(t *testing.T) {
 }
 
 func TestSearchSessions_ExcludesRecentlyActive(t *testing.T) {
+	assert := assert.New(t)
+
 	ts, d := newTestToolset(t)
 	if !d.HasFTS() {
 		t.Skip("FTS not available")
@@ -360,18 +375,18 @@ func TestSearchSessions_ExcludesRecentlyActive(t *testing.T) {
 
 	out := mustSearch(t, ts, searchSessionsIn{Query: "alpha"})
 	require.Len(t, out.Results, 1)
-	assert.Equal(t, "s1", out.Results[0].SessionID)
-	assert.Equal(t, 1, out.ExcludedActive)
+	assert.Equal("s1", out.Results[0].SessionID)
+	assert.Equal(1, out.ExcludedActive)
 
 	// With include_active, the recent one is returned too.
 	withActive := mustSearch(t, ts, searchSessionsIn{Query: "alpha", IncludeActive: true})
-	assert.Len(t, withActive.Results, 2)
-	assert.Zero(t, withActive.ExcludedActive)
+	assert.Len(withActive.Results, 2)
+	assert.Zero(withActive.ExcludedActive)
 }
 
 func mustSearch(t *testing.T, ts *toolset, in searchSessionsIn) searchSessionsOut {
 	t.Helper()
-	_, out, err := ts.searchSessions(context.Background(), nil, in)
+	_, out, err := ts.searchSessions(t.Context(), nil, in)
 	require.NoError(t, err)
 	return out
 }
@@ -380,6 +395,8 @@ func mustSearch(t *testing.T, ts *toolset, in searchSessionsIn) searchSessionsOu
 // page sets next_cursor, and feeding it back returns the following,
 // non-overlapping page.
 func TestSearchSessions_Pagination(t *testing.T) {
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	if !d.HasFTS() {
 		t.Skip("FTS not available")
@@ -393,13 +410,13 @@ func TestSearchSessions_Pagination(t *testing.T) {
 	}
 
 	page1 := mustSearch(t, ts, searchSessionsIn{Query: "pageterm", Sort: "recency", Limit: 2})
-	require.Len(t, page1.Results, 2)
-	require.NotNil(t, page1.NextCursor, "first page should set next_cursor")
+	require.Len(page1.Results, 2)
+	require.NotNil(page1.NextCursor, "first page should set next_cursor")
 
 	page2 := mustSearch(t, ts, searchSessionsIn{
 		Query: "pageterm", Sort: "recency", Limit: 2, Cursor: *page1.NextCursor,
 	})
-	require.Len(t, page2.Results, 2)
+	require.Len(page2.Results, 2)
 
 	seen := map[string]bool{}
 	for _, r := range page1.Results {
@@ -412,6 +429,9 @@ func TestSearchSessions_Pagination(t *testing.T) {
 }
 
 func TestListSessions_ReturnsRows(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "a-1", "proj-a", func(s *db.Session) {
 		s.MessageCount = 4
@@ -422,16 +442,19 @@ func TestListSessions_ReturnsRows(t *testing.T) {
 		s.UserMessageCount = 2
 	})
 
-	_, out, err := ts.listSessions(context.Background(), nil, listSessionsIn{
+	_, out, err := ts.listSessions(t.Context(), nil, listSessionsIn{
 		Project: "proj-a",
 	})
-	require.NoError(t, err)
-	require.Len(t, out.Sessions, 1)
-	assert.Equal(t, "a-1", out.Sessions[0].SessionID)
-	assert.Equal(t, "proj-a", out.Sessions[0].Project)
+	require.NoError(err)
+	require.Len(out.Sessions, 1)
+	assert.Equal("a-1", out.Sessions[0].SessionID)
+	assert.Equal("proj-a", out.Sessions[0].Project)
 }
 
 func TestQueryRecall_ThreadsVectorModeAndReturnsDistilledEntries(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "s1", "agentsview")
 	_, err := d.InsertRecallEntry(db.RecallEntry{
@@ -439,29 +462,32 @@ func TestQueryRecall_ThreadsVectorModeAndReturnsDistilledEntries(t *testing.T) {
 		Title: "Connection reuse", Body: "Keep idle resources available.",
 		Project: "agentsview", SourceSessionID: "s1",
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	d.SetRecallVectorSearcher(&fakeMCPRecallVectorSearcher{hits: []db.RecallVectorHit{{
 		EntryID: "semantic-entry", Score: 0.75,
 	}}})
 
 	_, out, err := ts.queryRecall(
-		context.Background(), nil,
+		t.Context(), nil,
 		queryRecallIn{
 			Query: "database pool", Mode: db.RecallQueryModeVector,
 			Project: "agentsview", Limit: 5,
 		},
 	)
 
-	require.NoError(t, err)
-	assert.Equal(t, db.RecallQueryModeVector, out.Mode)
-	assert.Empty(t, out.QueryID,
+	require.NoError(err)
+	assert.Equal(db.RecallQueryModeVector, out.Mode)
+	assert.Empty(out.QueryID,
 		"a read-only MCP query must not append recall measurement rows")
-	require.Len(t, out.Entries, 1)
-	assert.Equal(t, "semantic-entry", out.Entries[0].ID)
-	assert.Equal(t, []string{"semantic"}, out.Entries[0].MatchReasons)
+	require.Len(out.Entries, 1)
+	assert.Equal("semantic-entry", out.Entries[0].ID)
+	assert.Equal([]string{"semantic"}, out.Entries[0].MatchReasons)
 }
 
 func TestGetSessionOverview_ChronologicalTail(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	cwd := "/home/u/proj"
 	first := "open the door"
@@ -471,32 +497,32 @@ func TestGetSessionOverview_ChronologicalTail(t *testing.T) {
 		s.Cwd = cwd
 		s.FirstMessage = &first
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("s1", 0, "open the door"),
 		dbtest.AsstMsg("s1", 1, "opening"),
 		dbtest.UserMsg("s1", 2, "now close it"),
 		dbtest.AsstMsg("s1", 3, "closed"),
 	}))
 
-	_, out, err := ts.sessionOverview(context.Background(), nil, sessionOverviewIn{
+	_, out, err := ts.sessionOverview(t.Context(), nil, sessionOverviewIn{
 		SessionID: "s1",
 	})
-	require.NoError(t, err)
-	assert.Equal(t, "s1", out.Session.SessionID)
-	assert.Equal(t, cwd, out.CWD)
-	assert.Equal(t, "open the door", out.FirstMessage)
-	require.NotEmpty(t, out.LastMessages)
+	require.NoError(err)
+	assert.Equal("s1", out.Session.SessionID)
+	assert.Equal(cwd, out.CWD)
+	assert.Equal("open the door", out.FirstMessage)
+	require.NotEmpty(out.LastMessages)
 	// Tail is restored to chronological (ascending) ordinal order.
 	for i := 1; i < len(out.LastMessages); i++ {
-		assert.Less(t, out.LastMessages[i-1].Ordinal, out.LastMessages[i].Ordinal)
+		assert.Less(out.LastMessages[i-1].Ordinal, out.LastMessages[i].Ordinal)
 	}
 	// The very last message is surfaced.
-	assert.Equal(t, "closed", out.LastMessages[len(out.LastMessages)-1].Content)
+	assert.Equal("closed", out.LastMessages[len(out.LastMessages)-1].Content)
 }
 
 func TestGetSessionOverview_NotFound(t *testing.T) {
 	ts, _ := newTestToolset(t)
-	_, _, err := ts.sessionOverview(context.Background(), nil, sessionOverviewIn{
+	_, _, err := ts.sessionOverview(t.Context(), nil, sessionOverviewIn{
 		SessionID: "nope",
 	})
 	require.Error(t, err)
@@ -504,6 +530,9 @@ func TestGetSessionOverview_NotFound(t *testing.T) {
 }
 
 func TestGetMessages_RoleFilterAndTruncation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
 		s.MessageCount = 3
@@ -517,25 +546,25 @@ func TestGetMessages_RoleFilterAndTruncation(t *testing.T) {
 		SessionID: "s1", Ordinal: 1, Role: "system",
 		Content: "system noise", IsSystem: true, ContentLength: len("system noise"),
 	}
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("s1", 0, string(long)),
 		sysMsg,
 		dbtest.AsstMsg("s1", 2, "short reply"),
 	}))
 
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID:          "s1",
 		MaxCharsPerMessage: 10,
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	// system message filtered out; user+assistant kept.
-	require.Len(t, out.Messages, 2)
-	assert.Equal(t, 1, out.Filtered, "the system message is filtered")
+	require.Len(out.Messages, 2)
+	assert.Equal(1, out.Filtered, "the system message is filtered")
 	// The 50-char user message is truncated to 10 with FullLength set.
 	first := out.Messages[0]
-	assert.True(t, first.Truncated)
-	assert.Equal(t, 50, first.FullLength)
-	assert.Len(t, first.Content, 10)
+	assert.True(first.Truncated)
+	assert.Equal(50, first.FullLength)
+	assert.Len(first.Content, 10)
 }
 
 // Even when a caller explicitly allow-lists the "system" role, get_messages
@@ -546,12 +575,15 @@ func TestGetMessages_RoleFilterAndTruncation(t *testing.T) {
 // security-relevant ordering against a future change that let an explicit
 // roles request surface system content.
 func TestGetMessages_ExplicitSystemRoleStillFiltered(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
 		s.MessageCount = 3
 		s.UserMessageCount = 1
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("s1", 0, "hello"),
 		{
 			SessionID: "s1", Ordinal: 1, Role: "system",
@@ -560,23 +592,25 @@ func TestGetMessages_ExplicitSystemRoleStillFiltered(t *testing.T) {
 		dbtest.AsstMsg("s1", 2, "short reply"),
 	}))
 
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1",
 		Roles:     []string{"system", "assistant"},
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	// The allow-listed assistant message is returned; the system message is
 	// not, even though "system" was also allow-listed. The user message is
 	// filtered because its role is not in the allowlist.
-	require.Len(t, out.Messages, 1)
-	assert.Equal(t, "assistant", out.Messages[0].Role)
+	require.Len(out.Messages, 1)
+	assert.Equal("assistant", out.Messages[0].Role)
 	for _, m := range out.Messages {
-		assert.NotEqual(t, "system", m.Role, "system messages must never be returned")
+		assert.NotEqual("system", m.Role, "system messages must never be returned")
 	}
-	assert.Equal(t, 2, out.Filtered)
+	assert.Equal(2, out.Filtered)
 }
 
 func TestSearchContent_SubstringMatch(t *testing.T) {
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	// Not a one-shot: content search excludes one-shot sessions by default.
 	// An explicit old ended_at keeps it out of the active-session guard.
@@ -586,17 +620,17 @@ func TestSearchContent_SubstringMatch(t *testing.T) {
 		ended := "2024-06-15T10:00:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("s1", 0, "error code DEADBEEF here"),
 		dbtest.AsstMsg("s1", 1, "looking into it"),
 	}))
 
-	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "DEADBEEF",
 		Mode:    "substring",
 	})
-	require.NoError(t, err)
-	require.Len(t, out.Matches, 1)
+	require.NoError(err)
+	require.Len(out.Matches, 1)
 	assert.Equal(t, "s1", out.Matches[0].SessionID)
 }
 
@@ -606,6 +640,8 @@ func TestSearchContent_SubstringMatch(t *testing.T) {
 // transport inherits directBackend's context redaction: MCP has no reveal
 // opt-in, so this path must always come out redacted.
 func TestSearchContent_ContextRedactsSecretByDefault(t *testing.T) {
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
 		s.MessageCount = 3
@@ -613,18 +649,18 @@ func TestSearchContent_ContextRedactsSecretByDefault(t *testing.T) {
 		ended := "2024-06-15T10:00:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("s1", 0, "my key is AKIA7QHWN2DKR4FYPLJM ok"),
 		dbtest.AsstMsg("s1", 1, "noted"),
 		dbtest.UserMsg("s1", 2, "DEADBEEF marks the match"),
 	}))
 
-	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "DEADBEEF", Mode: "substring", Context: 2,
 	})
-	require.NoError(t, err)
-	require.Len(t, out.Matches, 1)
-	require.Len(t, out.Matches[0].ContextBefore, 2)
+	require.NoError(err)
+	require.Len(out.Matches, 1)
+	require.Len(out.Matches[0].ContextBefore, 2)
 	for _, cm := range out.Matches[0].ContextBefore {
 		assert.NotContains(t, cm.Content, "AKIA7QHWN2DKR4FYPLJM",
 			"MCP has no reveal opt-in, so context must always come back redacted: %q", cm.Content)
@@ -637,6 +673,9 @@ func TestSearchContent_ContextRedactsSecretByDefault(t *testing.T) {
 // match timestamp alone would leak it. Exclusion is by session activity,
 // like search_sessions.
 func TestSearchContent_ExcludesActiveSessionWithOldMatch(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	// Active session: ended one minute before now, but its matching message
 	// is two hours old.
@@ -646,7 +685,7 @@ func TestSearchContent_ExcludesActiveSessionWithOldMatch(t *testing.T) {
 		ended := "2024-06-15T11:59:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{{
+	require.NoError(d.InsertMessages([]db.Message{{
 		SessionID: "active", Ordinal: 0, Role: "user",
 		Content: "old needle here", ContentLength: len("old needle here"),
 		Timestamp: "2024-06-15T10:00:00Z",
@@ -658,7 +697,7 @@ func TestSearchContent_ExcludesActiveSessionWithOldMatch(t *testing.T) {
 		ended := "2024-06-15T10:00:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{{
+	require.NoError(d.InsertMessages([]db.Message{{
 		SessionID: "idle", Ordinal: 0, Role: "user",
 		Content: "idle needle here", ContentLength: len("idle needle here"),
 		Timestamp: "2024-06-15T10:00:00Z",
@@ -666,21 +705,21 @@ func TestSearchContent_ExcludesActiveSessionWithOldMatch(t *testing.T) {
 
 	// Default (include_active=false): the active session is excluded despite
 	// its old match; only the idle session is returned.
-	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "needle", Mode: "substring",
 	})
-	require.NoError(t, err)
-	require.Len(t, out.Matches, 1)
-	assert.Equal(t, "idle", out.Matches[0].SessionID)
-	assert.Equal(t, 1, out.ExcludedActive)
+	require.NoError(err)
+	require.Len(out.Matches, 1)
+	assert.Equal("idle", out.Matches[0].SessionID)
+	assert.Equal(1, out.ExcludedActive)
 
 	// include_active=true returns both, excluding nothing.
-	_, all, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, all, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "needle", Mode: "substring", IncludeActive: true,
 	})
-	require.NoError(t, err)
-	assert.Len(t, all.Matches, 2)
-	assert.Equal(t, 0, all.ExcludedActive)
+	require.NoError(err)
+	assert.Len(all.Matches, 2)
+	assert.Equal(0, all.ExcludedActive)
 }
 
 // A freshly created/synced session can have no parsed ended_at or started_at
@@ -689,6 +728,9 @@ func TestSearchContent_ExcludesActiveSessionWithOldMatch(t *testing.T) {
 // rather than resolving to an empty timestamp and leaking through. Uses a
 // real clock because created_at is set to now by the DB at insert.
 func TestSearchContent_TimestamplessSessionExcludedByCreatedAt(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := dbtest.OpenTestDB(t)
 	ts := &toolset{svc: service.NewDirectBackend(d, nil), now: time.Now}
 	// StartedAt and EndedAt are left nil on purpose; created_at defaults to
@@ -697,35 +739,38 @@ func TestSearchContent_TimestamplessSessionExcludedByCreatedAt(t *testing.T) {
 		s.MessageCount = 3
 		s.UserMessageCount = 2
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("fresh", 0, "needle in a fresh session"),
 	}))
 
 	// Default guard excludes the still-active session despite no start/end.
-	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "needle", Mode: "substring",
 	})
-	require.NoError(t, err)
-	assert.Empty(t, out.Matches)
-	assert.Equal(t, 1, out.ExcludedActive)
+	require.NoError(err)
+	assert.Empty(out.Matches)
+	assert.Equal(1, out.ExcludedActive)
 
 	// include_active=true surfaces it.
-	_, all, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, all, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "needle", Mode: "substring", IncludeActive: true,
 	})
-	require.NoError(t, err)
-	assert.Len(t, all.Matches, 1)
+	require.NoError(err)
+	assert.Len(all.Matches, 1)
 }
 
 func TestUsageSummary_EmptyRange(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, _ := newTestToolset(t)
-	_, out, err := ts.usageSummary(context.Background(), nil, usageSummaryIn{
+	_, out, err := ts.usageSummary(t.Context(), nil, usageSummaryIn{
 		From: "2024-06-01", To: "2024-06-03",
 	})
-	require.NoError(t, err)
-	require.NotNil(t, out)
-	assert.Equal(t, "2024-06-01", out.From)
-	assert.Equal(t, "2024-06-03", out.To)
+	require.NoError(err)
+	require.NotNil(out)
+	assert.Equal("2024-06-01", out.From)
+	assert.Equal("2024-06-03", out.To)
 }
 
 // recordingService captures the request a tool builds, so MCP-layer
@@ -747,29 +792,33 @@ func (r *recordingService) UsageSummary(
 // get_usage_summary must request one-shot sessions (matching the REST
 // /usage/summary default), since cost analysis wants every session.
 func TestUsageSummary_RequestsOneShotSessions(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Parallel()
 	rec := &recordingService{}
 	ts := &toolset{svc: rec, now: func() time.Time { return fixedNow }}
-	_, _, err := ts.usageSummary(context.Background(), nil, usageSummaryIn{
+	_, _, err := ts.usageSummary(t.Context(), nil, usageSummaryIn{
 		From: "2024-06-01", To: "2024-06-02", Project: "p", Agent: "claude",
 	})
 	require.NoError(t, err)
-	assert.True(t, rec.lastUsage.IncludeOneShot,
+	assert.True(rec.lastUsage.IncludeOneShot,
 		"usage summary should include one-shot sessions")
-	assert.Equal(t, "p", rec.lastUsage.Project)
-	assert.Equal(t, "claude", rec.lastUsage.Agent)
+	assert.Equal("p", rec.lastUsage.Project)
+	assert.Equal("claude", rec.lastUsage.Agent)
 }
 
 // search_content excludes one-shot and automated sessions by default, matching
 // the standalone/REST behavior. The opt-in behavior is covered separately.
 func TestSearchContent_ExcludesOneShotByDefault(t *testing.T) {
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	// One-shot (UserMessageCount=1) with the marker.
 	dbtest.SeedSession(t, d, "one", "proj", func(s *db.Session) {
 		s.MessageCount = 1
 		s.UserMessageCount = 1
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("one", 0, "marker ZEBRA42"),
 	}))
 	// Multi-turn with the same marker; old ended_at keeps it inactive.
@@ -779,16 +828,16 @@ func TestSearchContent_ExcludesOneShotByDefault(t *testing.T) {
 		ended := "2024-06-15T10:00:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("multi", 0, "marker ZEBRA42"),
 		dbtest.AsstMsg("multi", 1, "ok"),
 	}))
 
-	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "ZEBRA42", Mode: "substring",
 	})
-	require.NoError(t, err)
-	require.Len(t, out.Matches, 1, "one-shot session should be excluded")
+	require.NoError(err)
+	require.Len(out.Matches, 1, "one-shot session should be excluded")
 	assert.Equal(t, "multi", out.Matches[0].SessionID)
 }
 
@@ -875,6 +924,9 @@ func TestSearchContent_OneShotOptInKeepsActiveGuard(t *testing.T) {
 // and none of the subordinate/lineage fields set, matching the plumbing
 // pinned at the db layer in TestSearchContentSubstringDerivedRunRange.
 func TestSearchContent_OrdinalRangeSpansRun(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "run1", "proj", func(s *db.Session) {
 		s.MessageCount = 4
@@ -882,25 +934,25 @@ func TestSearchContent_OrdinalRangeSpansRun(t *testing.T) {
 		ended := "2024-06-15T10:00:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("run1", 0, "the question"),
 		dbtest.AsstMsg("run1", 1, "RUNHIT step one"),
 		dbtest.AsstMsg("run1", 2, "RUNHIT step two"),
 		dbtest.UserMsg("run1", 3, "next question"),
 	}))
 
-	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "RUNHIT", Mode: "substring",
 	})
-	require.NoError(t, err)
-	require.Len(t, out.Matches, 2)
+	require.NoError(err)
+	require.Len(out.Matches, 2)
 	for _, m := range out.Matches {
-		assert.Equal(t, [2]int{1, 2}, m.OrdinalRange,
+		assert.Equal([2]int{1, 2}, m.OrdinalRange,
 			"match at ordinal %d should carry the run's full range", m.Ordinal)
-		assert.False(t, m.Subordinate, "top-level run member")
-		assert.False(t, m.Sidechain, "non-sidechain run member")
-		assert.Empty(t, m.Relationship, "top-level relationship")
-		assert.Empty(t, m.ParentSessionID, "top-level parent")
+		assert.False(m.Subordinate, "top-level run member")
+		assert.False(m.Sidechain, "non-sidechain run member")
+		assert.Empty(m.Relationship, "top-level relationship")
+		assert.Empty(m.ParentSessionID, "top-level parent")
 	}
 }
 
@@ -908,6 +960,9 @@ func TestSearchContent_OrdinalRangeSpansRun(t *testing.T) {
 // true, with ordinal_range spanning the sidechain run rather than the
 // individual anchor ordinal.
 func TestSearchContent_SidechainSubordinateRoundTrip(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "side1", "proj", func(s *db.Session) {
 		s.MessageCount = 3
@@ -915,7 +970,7 @@ func TestSearchContent_SidechainSubordinateRoundTrip(t *testing.T) {
 		ended := "2024-06-15T10:00:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("side1", 0, "the question"),
 		{
 			SessionID: "side1", Ordinal: 1, Role: "assistant",
@@ -929,16 +984,16 @@ func TestSearchContent_SidechainSubordinateRoundTrip(t *testing.T) {
 		},
 	}))
 
-	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "SIDEHIT", Mode: "substring",
 	})
-	require.NoError(t, err)
-	require.Len(t, out.Matches, 2)
+	require.NoError(err)
+	require.Len(out.Matches, 2)
 	for _, m := range out.Matches {
-		assert.Equal(t, [2]int{1, 2}, m.OrdinalRange, "sidechain run range")
-		assert.True(t, m.Subordinate, "sidechain run is subordinate")
-		assert.True(t, m.Sidechain, "anchor sidechain flag")
-		assert.Empty(t, m.Relationship, "no session lineage on a same-session sidechain")
+		assert.Equal([2]int{1, 2}, m.OrdinalRange, "sidechain run range")
+		assert.True(m.Subordinate, "sidechain run is subordinate")
+		assert.True(m.Sidechain, "anchor sidechain flag")
+		assert.Empty(m.Relationship, "no session lineage on a same-session sidechain")
 	}
 }
 
@@ -946,6 +1001,9 @@ func TestSearchContent_SidechainSubordinateRoundTrip(t *testing.T) {
 // ordinal_range == [o, o], and the omitempty subordinate/lineage fields must
 // be entirely absent from the marshaled JSON rather than present as false/"".
 func TestSearchContent_SingleMessageOrdinalRangeAndOmittedFields(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "solo1", "proj", func(s *db.Session) {
 		s.MessageCount = 2
@@ -953,44 +1011,47 @@ func TestSearchContent_SingleMessageOrdinalRangeAndOmittedFields(t *testing.T) {
 		ended := "2024-06-15T10:00:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("solo1", 0, "SOLOHIT alone"),
 		dbtest.UserMsg("solo1", 1, "an unrelated follow-up"),
 	}))
 
-	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "SOLOHIT", Mode: "substring",
 	})
-	require.NoError(t, err)
-	require.Len(t, out.Matches, 1)
+	require.NoError(err)
+	require.Len(out.Matches, 1)
 	m := out.Matches[0]
-	assert.Equal(t, 0, m.Ordinal)
-	assert.Equal(t, [2]int{0, 0}, m.OrdinalRange, "single-message unit is its own range")
-	assert.False(t, m.Subordinate)
-	assert.False(t, m.Sidechain)
-	assert.Empty(t, m.Relationship)
-	assert.Empty(t, m.ParentSessionID)
+	assert.Equal(0, m.Ordinal)
+	assert.Equal([2]int{0, 0}, m.OrdinalRange, "single-message unit is its own range")
+	assert.False(m.Subordinate)
+	assert.False(m.Sidechain)
+	assert.Empty(m.Relationship)
+	assert.Empty(m.ParentSessionID)
 
 	data, err := json.Marshal(m)
-	require.NoError(t, err)
+	require.NoError(err)
 	var raw map[string]any
-	require.NoError(t, json.Unmarshal(data, &raw))
-	assert.Contains(t, raw, "ordinal_range", "ordinal_range is always present")
+	require.NoError(json.Unmarshal(data, &raw))
+	assert.Contains(raw, "ordinal_range", "ordinal_range is always present")
 	for _, key := range []string{
 		"subordinate", "relationship", "parent_session_id", "is_sidechain",
 	} {
-		assert.NotContains(t, raw, key,
+		assert.NotContains(raw, key,
 			"zero-valued omitempty field %q must be absent from the wire shape", key)
 	}
 }
 
 func TestGetMessages_DescAndFromAnchor(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
 		s.MessageCount = 5
 		s.UserMessageCount = 3
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("s1", 0, "m0"),
 		dbtest.AsstMsg("s1", 1, "m1"),
 		dbtest.UserMsg("s1", 2, "m2"),
@@ -999,23 +1060,23 @@ func TestGetMessages_DescAndFromAnchor(t *testing.T) {
 	}))
 
 	// desc with no anchor -> newest first.
-	_, desc, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, desc, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Direction: "desc",
 	})
-	require.NoError(t, err)
-	require.NotEmpty(t, desc.Messages)
-	assert.Equal(t, 4, desc.Messages[0].Ordinal, "desc returns newest first")
+	require.NoError(err)
+	require.NotEmpty(desc.Messages)
+	assert.Equal(4, desc.Messages[0].Ordinal, "desc returns newest first")
 
 	// asc anchored at ordinal 2 -> starts at 2, ascending.
 	from := 2
-	_, asc, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, asc, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Direction: "asc", From: &from,
 	})
-	require.NoError(t, err)
-	require.NotEmpty(t, asc.Messages)
-	assert.Equal(t, 2, asc.Messages[0].Ordinal, "asc honors the from anchor")
+	require.NoError(err)
+	require.NotEmpty(asc.Messages)
+	assert.Equal(2, asc.Messages[0].Ordinal, "asc honors the from anchor")
 	for i := 1; i < len(asc.Messages); i++ {
-		assert.Less(t, asc.Messages[i-1].Ordinal, asc.Messages[i].Ordinal)
+		assert.Less(asc.Messages[i-1].Ordinal, asc.Messages[i].Ordinal)
 	}
 }
 
@@ -1024,23 +1085,25 @@ func TestGetMessages_DescAndFromAnchor(t *testing.T) {
 // at ordinal 0 -- returning only that message -- rather than falling back to
 // newest-first.
 func TestGetMessages_FromZeroAnchors(t *testing.T) {
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
 		s.MessageCount = 3
 		s.UserMessageCount = 2
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("s1", 0, "m0"),
 		dbtest.AsstMsg("s1", 1, "m1"),
 		dbtest.UserMsg("s1", 2, "m2"),
 	}))
 
 	zero := 0
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Direction: "desc", From: &zero,
 	})
-	require.NoError(t, err)
-	require.Len(t, out.Messages, 1)
+	require.NoError(err)
+	require.Len(out.Messages, 1)
 	assert.Equal(t, 0, out.Messages[0].Ordinal,
 		"from:0 anchors at ordinal 0, not newest-first")
 }
@@ -1050,12 +1113,15 @@ func TestGetMessages_FromZeroAnchors(t *testing.T) {
 // is_system flag, identified only by a content prefix; those must be
 // excluded too, not just is_system rows.
 func TestGetMessages_ExcludesSystemPrefixedUserMessage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
 		s.MessageCount = 2
 		s.UserMessageCount = 1
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("s1", 0, "real question"),
 		// User role, is_system not set, but a system content prefix.
 		{
@@ -1065,13 +1131,13 @@ func TestGetMessages_ExcludesSystemPrefixedUserMessage(t *testing.T) {
 		},
 	}))
 
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1",
 	})
-	require.NoError(t, err)
-	require.Len(t, out.Messages, 1)
-	assert.Equal(t, "real question", out.Messages[0].Content)
-	assert.Equal(t, 1, out.Filtered, "the system-prefixed user message is filtered")
+	require.NoError(err)
+	require.Len(out.Messages, 1)
+	assert.Equal("real question", out.Messages[0].Content)
+	assert.Equal(1, out.Filtered, "the system-prefixed user message is filtered")
 }
 
 // get_messages returns next_from when a full page may have more rows, so a
@@ -1079,6 +1145,9 @@ func TestGetMessages_ExcludesSystemPrefixedUserMessage(t *testing.T) {
 // is anchored on the last scanned ordinal, and the final partial page omits
 // it.
 func TestGetMessages_NextFromCursor(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
 		s.MessageCount = 5
@@ -1086,7 +1155,7 @@ func TestGetMessages_NextFromCursor(t *testing.T) {
 		ended := "2024-06-15T10:00:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("s1", 0, "m0"),
 		dbtest.AsstMsg("s1", 1, "m1"),
 		dbtest.UserMsg("s1", 2, "m2"),
@@ -1095,43 +1164,43 @@ func TestGetMessages_NextFromCursor(t *testing.T) {
 	}))
 
 	// asc page 1: ordinals 0,1 -> next_from 2.
-	_, p1, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, p1, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Direction: "asc", Limit: 2,
 	})
-	require.NoError(t, err)
-	require.Len(t, p1.Messages, 2)
-	assert.Equal(t, 0, p1.Messages[0].Ordinal)
-	require.NotNil(t, p1.NextFrom)
-	assert.Equal(t, 2, *p1.NextFrom)
+	require.NoError(err)
+	require.Len(p1.Messages, 2)
+	assert.Equal(0, p1.Messages[0].Ordinal)
+	require.NotNil(p1.NextFrom)
+	assert.Equal(2, *p1.NextFrom)
 
 	// asc page 2 from the cursor: ordinals 2,3 -> next_from 4.
-	_, p2, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, p2, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Direction: "asc", Limit: 2, From: p1.NextFrom,
 	})
-	require.NoError(t, err)
-	require.Len(t, p2.Messages, 2)
-	assert.Equal(t, 2, p2.Messages[0].Ordinal)
-	require.NotNil(t, p2.NextFrom)
-	assert.Equal(t, 4, *p2.NextFrom)
+	require.NoError(err)
+	require.Len(p2.Messages, 2)
+	assert.Equal(2, p2.Messages[0].Ordinal)
+	require.NotNil(p2.NextFrom)
+	assert.Equal(4, *p2.NextFrom)
 
 	// asc final page: ordinal 4 only; partial page has no next cursor.
-	_, p3, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, p3, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Direction: "asc", Limit: 2, From: p2.NextFrom,
 	})
-	require.NoError(t, err)
-	require.Len(t, p3.Messages, 1)
-	assert.Equal(t, 4, p3.Messages[0].Ordinal)
-	assert.Nil(t, p3.NextFrom, "final partial page omits next_from")
+	require.NoError(err)
+	require.Len(p3.Messages, 1)
+	assert.Equal(4, p3.Messages[0].Ordinal)
+	assert.Nil(p3.NextFrom, "final partial page omits next_from")
 
 	// desc page 1 from newest: ordinals 4,3 -> next_from 2 (anchor moves down).
-	_, dpage, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, dpage, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Direction: "desc", Limit: 2,
 	})
-	require.NoError(t, err)
-	require.Len(t, dpage.Messages, 2)
-	assert.Equal(t, 4, dpage.Messages[0].Ordinal)
-	require.NotNil(t, dpage.NextFrom)
-	assert.Equal(t, 2, *dpage.NextFrom)
+	require.NoError(err)
+	require.Len(dpage.Messages, 2)
+	assert.Equal(4, dpage.Messages[0].Ordinal)
+	require.NotNil(dpage.NextFrom)
+	assert.Equal(2, *dpage.NextFrom)
 }
 
 // next_from must advance past the last SCANNED ordinal, not the last visible
@@ -1139,6 +1208,9 @@ func TestGetMessages_NextFromCursor(t *testing.T) {
 // next page. The raw page fills the limit but a system message is filtered,
 // making the visible page shorter than the limit.
 func TestGetMessages_NextFromUsesScannedNotVisible(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
 		s.MessageCount = 3
@@ -1146,7 +1218,7 @@ func TestGetMessages_NextFromUsesScannedNotVisible(t *testing.T) {
 		ended := "2024-06-15T10:00:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("s1", 0, "v0"),
 		{
 			SessionID: "s1", Ordinal: 1, Role: "system",
@@ -1156,15 +1228,15 @@ func TestGetMessages_NextFromUsesScannedNotVisible(t *testing.T) {
 	}))
 
 	// asc, limit 2: raw page = ordinals 0,1; ordinal 1 (system) is filtered.
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Direction: "asc", Limit: 2,
 	})
-	require.NoError(t, err)
-	require.Len(t, out.Messages, 1, "filtered system message shortens the page")
-	assert.Equal(t, 0, out.Messages[0].Ordinal)
-	assert.Equal(t, 1, out.Filtered)
-	require.NotNil(t, out.NextFrom)
-	assert.Equal(t, 2, *out.NextFrom,
+	require.NoError(err)
+	require.Len(out.Messages, 1, "filtered system message shortens the page")
+	assert.Equal(0, out.Messages[0].Ordinal)
+	assert.Equal(1, out.Filtered)
+	require.NotNil(out.NextFrom)
+	assert.Equal(2, *out.NextFrom,
 		"next_from advances past scanned ordinal 1, not visible ordinal 0")
 }
 
@@ -1202,7 +1274,7 @@ func TestGetMessages_FilteredReconcilesWithMessageCount(t *testing.T) {
 	dbtest.SeedSessionWithMessages(t, d, "s1", "proj", msgs,
 		dbtest.WithMessageCounts(len(msgs), 3))
 
-	_, ov, err := ts.sessionOverview(context.Background(), nil,
+	_, ov, err := ts.sessionOverview(t.Context(), nil,
 		sessionOverviewIn{SessionID: "s1"})
 	require.NoError(t, err)
 	require.Equal(t, len(msgs), ov.Session.MessageCount)
@@ -1220,7 +1292,7 @@ func TestGetMessages_FilteredReconcilesWithMessageCount(t *testing.T) {
 			returned, filtered := 0, 0
 			var from *int
 			for range len(msgs) + 1 { // bounded: a sweep never needs more pages
-				_, out, err := ts.getMessages(context.Background(), nil,
+				_, out, err := ts.getMessages(t.Context(), nil,
 					getMessagesIn{
 						SessionID: "s1", Direction: "asc",
 						Limit: 3, From: from, Roles: tt.roles,
@@ -1244,6 +1316,9 @@ func TestGetMessages_FilteredReconcilesWithMessageCount(t *testing.T) {
 // back to created_at like search_content -- mirroring the canonical
 // activity expression.
 func TestSearchSessions_TimestamplessExcludedByCreatedAt(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := dbtest.OpenTestDB(t)
 	if !d.HasFTS() {
 		t.Skip("FTS not available")
@@ -1254,28 +1329,31 @@ func TestSearchSessions_TimestamplessExcludedByCreatedAt(t *testing.T) {
 		s.MessageCount = 2
 		s.UserMessageCount = 1
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("fresh", 0, "uniquesearchmarker here"),
 	}))
 
-	_, out, err := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+	_, out, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{
 		Query: "uniquesearchmarker",
 	})
-	require.NoError(t, err)
-	assert.Empty(t, out.Results)
-	assert.Equal(t, 1, out.ExcludedActive)
+	require.NoError(err)
+	assert.Empty(out.Results)
+	assert.Equal(1, out.ExcludedActive)
 
-	_, all, err := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+	_, all, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{
 		Query: "uniquesearchmarker", IncludeActive: true,
 	})
-	require.NoError(t, err)
-	assert.Len(t, all.Results, 1)
+	require.NoError(err)
+	assert.Len(all.Results, 1)
 }
 
 // TestServer_EndToEnd connects a real MCP client to the server over an
 // in-memory transport and calls a tool, validating registration, schema
 // inference, and the structured-output round-trip through the SDK.
 func TestServer_EndToEnd(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := dbtest.OpenTestDB(t)
 	if !d.HasFTS() {
 		t.Skip("FTS not available")
@@ -1287,16 +1365,16 @@ func TestServer_EndToEnd(t *testing.T) {
 		Now:     func() time.Time { return fixedNow },
 	})
 
-	ctx := context.Background()
+	ctx := t.Context()
 	st, ct := newInMemoryPair(t, srv)
 
 	tools, err := ct.ListTools(ctx, nil)
-	require.NoError(t, err)
+	require.NoError(err)
 	names := make([]string, 0, len(tools.Tools))
 	for _, tl := range tools.Tools {
 		names = append(names, tl.Name)
 	}
-	assert.ElementsMatch(t, []string{
+	assert.ElementsMatch([]string{
 		ToolSearchSessions, ToolQueryRecall, ToolListSessions, ToolGetSessionOverview,
 		ToolGetMessages, ToolSearchContent, ToolGetUsageSummary,
 	}, names)
@@ -1304,18 +1382,18 @@ func TestServer_EndToEnd(t *testing.T) {
 	res, err := ct.CallTool(ctx, callParams("search_sessions", map[string]any{
 		"query": "marker",
 	}))
-	require.NoError(t, err)
-	require.False(t, res.IsError, "tool returned error")
+	require.NoError(err)
+	require.False(res.IsError, "tool returned error")
 
 	var out searchSessionsOut
 	raw, err := json.Marshal(res.StructuredContent)
-	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(raw, &out))
-	require.Len(t, out.Results, 1)
-	assert.Equal(t, "s1", out.Results[0].SessionID)
+	require.NoError(err)
+	require.NoError(json.Unmarshal(raw, &out))
+	require.Len(out.Results, 1)
+	assert.Equal("s1", out.Results[0].SessionID)
 
-	require.NoError(t, ct.Close())
-	require.NoError(t, st.Wait())
+	require.NoError(ct.Close())
+	require.NoError(st.Wait())
 }
 
 func TestServer_SearchContentIncludeOneShot(t *testing.T) {
@@ -1436,16 +1514,18 @@ func (f *fakeContentSearchService) SearchContent(
 // sentence from db.ErrSemanticUnavailable ("...run 'agentsview embeddings
 // build'"), not a generic failure.
 func TestSearchContent_SemanticUnavailableMapsToRemediationError(t *testing.T) {
+	assert := assert.New(t)
+
 	fake := &fakeContentSearchService{err: service.ErrSemanticUnavailable}
 	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 
-	_, _, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "how do I configure retries", Mode: "semantic", IncludeActive: true,
 	})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, service.ErrSemanticUnavailable)
-	assert.Contains(t, err.Error(), "embeddings build")
-	assert.Equal(t, "semantic", fake.lastReq.Mode)
+	require.ErrorIs(t, err, service.ErrSemanticUnavailable)
+	assert.Contains(err.Error(), "embeddings build")
+	assert.Equal("semantic", fake.lastReq.Mode)
 }
 
 // search_content must reject scope outside semantic/hybrid with the same
@@ -1458,7 +1538,7 @@ func TestSearchContent_ScopeRejectedOnLexicalModes(t *testing.T) {
 
 	for _, mode := range []string{"", "substring", "regex", "fts"} {
 		t.Run("mode="+mode, func(t *testing.T) {
-			_, _, err := ts.searchContent(context.Background(), nil, searchContentIn{
+			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
 				Pattern: "needle", Mode: mode, Scope: "top", IncludeActive: true,
 			})
 			require.Error(t, err)
@@ -1479,7 +1559,7 @@ func TestSearchContent_ScopeForwardedForSemanticModes(t *testing.T) {
 			fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
 			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 
-			_, _, err := ts.searchContent(context.Background(), nil, searchContentIn{
+			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
 				Pattern: "retries", Mode: mode, Scope: "subordinate", IncludeActive: true,
 			})
 			require.NoError(t, err)
@@ -1494,6 +1574,9 @@ func TestSearchContent_ScopeForwardedForSemanticModes(t *testing.T) {
 // match's ContextBefore/ContextAfter (full service-level db.Message) must
 // map to the MCP layer's truncated contextMessage shape, along with Score.
 func TestSearchContent_ContextThreading(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	score := 0.83
 	long := strings.Repeat("y", 600)
 	fake := &fakeContentSearchService{
@@ -1514,23 +1597,23 @@ func TestSearchContent_ContextThreading(t *testing.T) {
 	}
 	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 
-	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "hit", Context: 5, IncludeActive: true,
 	})
-	require.NoError(t, err)
-	assert.Equal(t, 5, fake.lastReq.Context, "context param must reach the service")
-	require.Len(t, out.Matches, 1)
+	require.NoError(err)
+	assert.Equal(5, fake.lastReq.Context, "context param must reach the service")
+	require.Len(out.Matches, 1)
 	m := out.Matches[0]
-	require.NotNil(t, m.Score)
-	assert.InDelta(t, score, *m.Score, 0.0001)
-	require.Len(t, m.ContextBefore, 2)
-	assert.Equal(t, 8, m.ContextBefore[0].Ordinal)
-	assert.Equal(t, "user", m.ContextBefore[0].Role)
-	assert.Equal(t, "before msg", m.ContextBefore[0].Content)
-	assert.Len(t, m.ContextBefore[1].Content, 500, "context content is truncated to 500 chars")
-	require.Len(t, m.ContextAfter, 1)
-	assert.Equal(t, 11, m.ContextAfter[0].Ordinal)
-	assert.Equal(t, "after msg", m.ContextAfter[0].Content)
+	require.NotNil(m.Score)
+	assert.InDelta(score, *m.Score, 0.0001)
+	require.Len(m.ContextBefore, 2)
+	assert.Equal(8, m.ContextBefore[0].Ordinal)
+	assert.Equal("user", m.ContextBefore[0].Role)
+	assert.Equal("before msg", m.ContextBefore[0].Content)
+	assert.Len(m.ContextBefore[1].Content, 500, "context content is truncated to 500 chars")
+	require.Len(m.ContextAfter, 1)
+	assert.Equal(11, m.ContextAfter[0].Ordinal)
+	assert.Equal("after msg", m.ContextAfter[0].Content)
 }
 
 // get_messages's around/before/after form a symmetric window that is
@@ -1573,7 +1656,7 @@ func TestGetMessages_AroundValidation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, err := ts.getMessages(context.Background(), nil, tt.in)
+			_, _, err := ts.getMessages(t.Context(), nil, tt.in)
 			require.Error(t, err)
 			assert.Equal(t, tt.wantErr, err.Error())
 		})
@@ -1584,12 +1667,15 @@ func TestGetMessages_AroundValidation(t *testing.T) {
 // scan-direction offset like the linear path (there is no scan direction in
 // a symmetric window).
 func TestGetMessages_AroundNextFromIsLastPlusOne(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
 		s.MessageCount = 5
 		s.UserMessageCount = 3
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("s1", 0, "m0"),
 		dbtest.AsstMsg("s1", 1, "m1"),
 		dbtest.UserMsg("s1", 2, "m2"),
@@ -1598,15 +1684,15 @@ func TestGetMessages_AroundNextFromIsLastPlusOne(t *testing.T) {
 	}))
 
 	anchor, before, after := 2, 1, 1
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Around: &anchor, Before: &before, After: &after,
 	})
-	require.NoError(t, err)
-	require.Len(t, out.Messages, 3)
+	require.NoError(err)
+	require.Len(out.Messages, 3)
 	last := out.Messages[len(out.Messages)-1].Ordinal
-	require.NotNil(t, out.NextFrom)
-	assert.Equal(t, last+1, *out.NextFrom)
-	assert.Equal(t, 4, *out.NextFrom)
+	require.NotNil(out.NextFrom)
+	assert.Equal(last+1, *out.NextFrom)
+	assert.Equal(4, *out.NextFrom)
 }
 
 // An empty Roles on the around path must be translated to the MCP default
@@ -1618,12 +1704,15 @@ func TestGetMessages_AroundNextFromIsLastPlusOne(t *testing.T) {
 // are dropped before the MCP layer ever sees them -- Filtered stays 0; the
 // anchor-bypass case is covered separately below.
 func TestGetMessages_AroundDefaultRolesExcludesTool(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
 		s.MessageCount = 5
 		s.UserMessageCount = 2
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("s1", 0, "m0"),
 		{SessionID: "s1", Ordinal: 1, Role: "tool", Content: "tool dump", ContentLength: 9},
 		dbtest.AsstMsg("s1", 2, "m2"),
@@ -1632,15 +1721,15 @@ func TestGetMessages_AroundDefaultRolesExcludesTool(t *testing.T) {
 	}))
 
 	anchor := 2
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Around: &anchor,
 	})
-	require.NoError(t, err)
-	require.Len(t, out.Messages, 3, "ordinals 0, 2, 4 survive; the two tool rows never reach this page")
+	require.NoError(err)
+	require.Len(out.Messages, 3, "ordinals 0, 2, 4 survive; the two tool rows never reach this page")
 	for _, m := range out.Messages {
-		assert.NotEqual(t, "tool", m.Role)
+		assert.NotEqual("tool", m.Role)
 	}
-	assert.Equal(t, 0, out.Filtered)
+	assert.Equal(0, out.Filtered)
 }
 
 // The around path always includes the anchor row server-side regardless of
@@ -1648,12 +1737,15 @@ func TestGetMessages_AroundDefaultRolesExcludesTool(t *testing.T) {
 // other message, suppressing a system anchor and counting it in Filtered
 // rather than hardcoding Filtered to 0.
 func TestGetMessages_AroundSuppressesSystemAnchor(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
 		s.MessageCount = 3
 		s.UserMessageCount = 2
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("s1", 0, "m0"),
 		{
 			SessionID: "s1", Ordinal: 1, Role: "system",
@@ -1663,15 +1755,15 @@ func TestGetMessages_AroundSuppressesSystemAnchor(t *testing.T) {
 	}))
 
 	anchor, before, after := 1, 1, 1
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Around: &anchor, Before: &before, After: &after,
 	})
-	require.NoError(t, err)
-	require.Len(t, out.Messages, 2)
+	require.NoError(err)
+	require.Len(out.Messages, 2)
 	for _, m := range out.Messages {
-		assert.NotEqual(t, 1, m.Ordinal, "the system anchor must be suppressed")
+		assert.NotEqual(1, m.Ordinal, "the system anchor must be suppressed")
 	}
-	assert.Equal(t, 1, out.Filtered, "the suppressed anchor is counted in Filtered")
+	assert.Equal(1, out.Filtered, "the suppressed anchor is counted in Filtered")
 }
 
 // The anchor query has no role predicate, so a tool-role anchor is returned
@@ -1679,27 +1771,30 @@ func TestGetMessages_AroundSuppressesSystemAnchor(t *testing.T) {
 // MCP layer's post-filter must suppress it too and count it in Filtered,
 // exactly like the system-anchor case above.
 func TestGetMessages_AroundSuppressesToolRoleAnchor(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
 		s.MessageCount = 3
 		s.UserMessageCount = 2
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(d.InsertMessages([]db.Message{
 		dbtest.UserMsg("s1", 0, "m0"),
 		{SessionID: "s1", Ordinal: 1, Role: "tool", Content: "tool dump", ContentLength: 9},
 		dbtest.AsstMsg("s1", 2, "m2"),
 	}))
 
 	anchor, before, after := 1, 1, 1
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Around: &anchor, Before: &before, After: &after,
 	})
-	require.NoError(t, err)
-	require.Len(t, out.Messages, 2)
+	require.NoError(err)
+	require.Len(out.Messages, 2)
 	for _, m := range out.Messages {
-		assert.NotEqual(t, 1, m.Ordinal, "the tool-role anchor must be suppressed")
+		assert.NotEqual(1, m.Ordinal, "the tool-role anchor must be suppressed")
 	}
-	assert.Equal(t, 1, out.Filtered, "the suppressed anchor is counted in Filtered")
+	assert.Equal(1, out.Filtered, "the suppressed anchor is counted in Filtered")
 }
 
 // TestGetMessages_AroundClampsOversizedWindow verifies that an oversized
@@ -1709,23 +1804,26 @@ func TestGetMessages_AroundSuppressesToolRoleAnchor(t *testing.T) {
 // messages come back even though more than that many exist on both sides
 // of the anchor.
 func TestGetMessages_AroundClampsOversizedWindow(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts, d := newTestToolset(t)
 	const total = db.MaxMessageLimit + 50
 	dbtest.SeedSession(t, d, "s1", "proj", func(s *db.Session) {
 		s.MessageCount = total
 		s.UserMessageCount = total
 	})
-	require.NoError(t, d.InsertMessages(dbtest.UserMessagesf("s1", total, "m%d")))
+	require.NoError(d.InsertMessages(dbtest.UserMessagesf("s1", total, "m%d")))
 
 	anchor, huge := total/2, 1_000_000_000
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Around: &anchor, Before: &huge, After: &huge,
 		Roles: []string{"user"},
 	})
-	require.NoError(t, err)
-	assert.LessOrEqual(t, len(out.Messages), db.MaxMessageLimit,
+	require.NoError(err)
+	assert.LessOrEqual(len(out.Messages), db.MaxMessageLimit,
 		"an oversized around window must be capped at db.MaxMessageLimit")
-	assert.Less(t, len(out.Messages), total,
+	assert.Less(len(out.Messages), total,
 		"the oversized request must actually be capped below what an "+
 			"unclamped window would have returned")
 }
@@ -1761,6 +1859,8 @@ func TestSearchSessions_DateRange(t *testing.T) {
 		{"no matches", "2024-06-04", "2024-06-04", []string{}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			require := require.New(t)
+
 			for _, query := range []string{"message", "name"} {
 				args := map[string]any{"query": query, "project": "project-a", "limit": 1}
 				if tc.from != "" {
@@ -1771,13 +1871,13 @@ func TestSearchSessions_DateRange(t *testing.T) {
 				}
 				var ids []string
 				for range len(fixtures) + 1 {
-					res, err := ct.CallTool(context.Background(), callParams(ToolSearchSessions, args))
-					require.NoError(t, err)
-					require.False(t, res.IsError, "%+v", res.Content)
+					res, err := ct.CallTool(t.Context(), callParams(ToolSearchSessions, args))
+					require.NoError(err)
+					require.False(res.IsError, "%+v", res.Content)
 					raw, err := json.Marshal(res.StructuredContent)
-					require.NoError(t, err)
+					require.NoError(err)
 					var out searchSessionsOut
-					require.NoError(t, json.Unmarshal(raw, &out))
+					require.NoError(json.Unmarshal(raw, &out))
 					for _, hit := range out.Results {
 						ids = append(ids, hit.SessionID)
 					}
@@ -1802,7 +1902,7 @@ func TestSearchSessions_RejectsInvalidDateRange(t *testing.T) {
 		{"malformed to", "", "2024-02-30", "invalid date format: use YYYY-MM-DD"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+			_, _, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{
 				Query: "hello", DateFrom: tc.from, DateTo: tc.to,
 			})
 			var inputErr *db.SearchInputError

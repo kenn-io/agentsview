@@ -94,23 +94,23 @@ func pgUsageBenchmarkSchema(t testing.TB) string {
 
 func openPGUsageBenchmarkFixture(t testing.TB) *pgUsageBenchmarkFixture {
 	t.Helper()
-	req := require.New(t)
+	require := require.New(t)
 	pgURL := testPGURL(t)
 	schema := pgUsageBenchmarkSchema(t)
 	admin, err := sql.Open("pgx", pgURL)
-	req.NoError(err)
+	require.NoError(err)
 	_, err = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
-	req.NoError(err)
-	req.NoError(admin.Close())
+	require.NoError(err)
+	require.NoError(admin.Close())
 
 	local, err := db.Open(t.TempDir() + "/usage-bench.db")
-	req.NoError(err)
+	require.NoError(err)
 	seedUsageParityFixture(t, local)
 	syncer, err := New(pgURL, schema, local, "bench-machine", true, SyncOptions{})
-	req.NoError(err)
-	req.NoError(EnsureSchema(t.Context(), syncer.pg, schema))
+	require.NoError(err)
+	require.NoError(EnsureSchema(t.Context(), syncer.pg, schema))
 	remote, err := NewStore(pgURL, schema, true)
-	req.NoError(err)
+	require.NoError(err)
 	t.Cleanup(func() {
 		_ = remote.Close()
 		_ = syncer.Close()
@@ -121,7 +121,7 @@ func openPGUsageBenchmarkFixture(t testing.TB) *pgUsageBenchmarkFixture {
 	})
 
 	var version string
-	req.NoError(remote.DB().QueryRowContext(t.Context(), "SHOW server_version").Scan(&version))
+	require.NoError(remote.DB().QueryRowContext(t.Context(), "SHOW server_version").Scan(&version))
 	t.Logf("pg_version=%s fixture_baseline_sessions=%d fixture_baseline_messages=%d fixture_usage_events=%d", version, 6, 5, 1)
 	return &pgUsageBenchmarkFixture{
 		pgURL: pgURL, schema: schema,

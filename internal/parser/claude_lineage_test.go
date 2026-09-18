@@ -86,6 +86,9 @@ func lineageForkContent() string {
 }
 
 func TestClaudeBackgroundForkTrimsReplayAndLinksParent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	_, forkPath := writeLineageFixture(t,
 		"orig-1111.jsonl", lineageOriginalContent(),
@@ -96,34 +99,37 @@ func TestClaudeBackgroundForkTrimsReplayAndLinksParent(t *testing.T) {
 		forkPath, "my_app", "local",
 		claudeParseOptions{siblingLineage: true},
 	)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Empty(t, excluded)
+	require.NoError(err)
+	require.Len(results, 1)
+	assert.Empty(excluded)
 
 	sess := results[0].Session
 	msgs := results[0].Messages
-	require.Len(t, msgs, 2)
-	assert.Equal(t, "continued question", msgs[0].Content)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, "continued answer", msgs[1].Content)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
+	require.Len(msgs, 2)
+	assert.Equal("continued question", msgs[0].Content)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal("continued answer", msgs[1].Content)
+	assert.Equal(RoleAssistant, msgs[1].Role)
 
-	assert.Equal(t, "orig-1111", sess.ParentSessionID)
-	assert.Equal(t, RelContinuation, sess.RelationshipType)
-	assert.Equal(t, "fork-2222", sess.ID)
-	assert.Equal(t, "continued question", sess.FirstMessage)
-	assert.Equal(t, 2, sess.MessageCount)
-	assert.Equal(t, 1, sess.UserMessageCount)
+	assert.Equal("orig-1111", sess.ParentSessionID)
+	assert.Equal(RelContinuation, sess.RelationshipType)
+	assert.Equal("fork-2222", sess.ID)
+	assert.Equal("continued question", sess.FirstMessage)
+	assert.Equal(2, sess.MessageCount)
+	assert.Equal(1, sess.UserMessageCount)
 
 	// Session bounds and usage come only from retained records.
 	wantStart := time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC)
 	wantEnd := time.Date(2026, 1, 1, 11, 0, 5, 0, time.UTC)
-	assert.True(t, sess.StartedAt.Equal(wantStart), "StartedAt = %v", sess.StartedAt)
-	assert.True(t, sess.EndedAt.Equal(wantEnd), "EndedAt = %v", sess.EndedAt)
-	assert.Equal(t, 7, sess.TotalOutputTokens)
+	assert.True(sess.StartedAt.Equal(wantStart), "StartedAt = %v", sess.StartedAt)
+	assert.True(sess.EndedAt.Equal(wantEnd), "EndedAt = %v", sess.EndedAt)
+	assert.Equal(7, sess.TotalOutputTokens)
 }
 
 func TestClaudeBackgroundForkPrefersInteractiveOriginalOverTiedBackgroundSibling(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	origPath, forkPath := writeLineageFixture(t,
 		"orig-1111.jsonl", lineageOriginalContent(),
@@ -132,17 +138,20 @@ func TestClaudeBackgroundForkPrefersInteractiveOriginalOverTiedBackgroundSibling
 	sibling := strings.ReplaceAll(lineageForkContent(), "fork-2222", "sibling-3333")
 	sibling = strings.ReplaceAll(sibling, `"u2"`, `"u3"`)
 	sibling = strings.ReplaceAll(sibling, `"a2"`, `"a3"`)
-	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(origPath), "sibling-3333.jsonl"), []byte(sibling), 0o600))
+	require.NoError(os.WriteFile(filepath.Join(filepath.Dir(origPath), "sibling-3333.jsonl"), []byte(sibling), 0o600))
 
 	results, _, err := claudeParseFile(forkPath, "demo", "local", claudeParseOptions{siblingLineage: true})
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Equal(t, "orig-1111", results[0].Session.ParentSessionID)
-	require.Len(t, results[0].Messages, 2)
-	assert.Equal(t, "continued question", results[0].Messages[0].Content)
+	require.NoError(err)
+	require.Len(results, 1)
+	assert.Equal("orig-1111", results[0].Session.ParentSessionID)
+	require.Len(results[0].Messages, 2)
+	assert.Equal("continued question", results[0].Messages[0].Content)
 }
 
 func TestClaudeOriginalUnaffectedBySiblingFork(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	origPath, _ := writeLineageFixture(t,
 		"orig-1111.jsonl", lineageOriginalContent(),
@@ -153,16 +162,16 @@ func TestClaudeOriginalUnaffectedBySiblingFork(t *testing.T) {
 		origPath, "my_app", "local",
 		claudeParseOptions{siblingLineage: true},
 	)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Empty(t, excluded)
+	require.NoError(err)
+	require.Len(results, 1)
+	assert.Empty(excluded)
 
 	sess := results[0].Session
-	require.Len(t, results[0].Messages, 2)
-	assert.Equal(t, "first question", results[0].Messages[0].Content)
-	assert.Empty(t, sess.ParentSessionID)
-	assert.Equal(t, RelNone, sess.RelationshipType)
-	assert.Equal(t, 2, sess.MessageCount)
+	require.Len(results[0].Messages, 2)
+	assert.Equal("first question", results[0].Messages[0].Content)
+	assert.Empty(sess.ParentSessionID)
+	assert.Equal(RelNone, sess.RelationshipType)
+	assert.Equal(2, sess.MessageCount)
 }
 
 func TestClaudeBackgroundForkPureReplayExcluded(t *testing.T) {
@@ -189,6 +198,9 @@ func TestClaudeBackgroundForkPureReplayExcluded(t *testing.T) {
 }
 
 func TestClaudeBackgroundForkChainTrimsAgainstNearestBgAncestor(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	// Chained backgrounding: A (interactive) -> B (bg fork of A with
 	// its own turns) -> C (bg fork of B with its own turns). C must
@@ -211,34 +223,37 @@ func TestClaudeBackgroundForkChainTrimsAgainstNearestBgAncestor(t *testing.T) {
 	}, "\n") + "\n"
 
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "orig-1111.jsonl"), []byte(aContent), 0o644))
+	require.NoError(os.WriteFile(filepath.Join(dir, "orig-1111.jsonl"), []byte(aContent), 0o644))
 	bPath := filepath.Join(dir, "bbbb-2222.jsonl")
-	require.NoError(t, os.WriteFile(bPath, []byte(bContent), 0o644))
+	require.NoError(os.WriteFile(bPath, []byte(bContent), 0o644))
 	cPath := filepath.Join(dir, "cccc-3333.jsonl")
-	require.NoError(t, os.WriteFile(cPath, []byte(cContent), 0o644))
+	require.NoError(os.WriteFile(cPath, []byte(cContent), 0o644))
 
 	cResults, _, err := claudeParseFile(
 		cPath, "my_app", "local",
 		claudeParseOptions{siblingLineage: true},
 	)
-	require.NoError(t, err)
-	require.Len(t, cResults, 1)
-	require.Len(t, cResults[0].Messages, 2)
-	assert.Equal(t, "third question", cResults[0].Messages[0].Content)
-	assert.Equal(t, "bbbb-2222", cResults[0].Session.ParentSessionID)
+	require.NoError(err)
+	require.Len(cResults, 1)
+	require.Len(cResults[0].Messages, 2)
+	assert.Equal("third question", cResults[0].Messages[0].Content)
+	assert.Equal("bbbb-2222", cResults[0].Session.ParentSessionID)
 
 	bResults, _, err := claudeParseFile(
 		bPath, "my_app", "local",
 		claudeParseOptions{siblingLineage: true},
 	)
-	require.NoError(t, err)
-	require.Len(t, bResults, 1)
-	require.Len(t, bResults[0].Messages, 2)
-	assert.Equal(t, "second question", bResults[0].Messages[0].Content)
-	assert.Equal(t, "orig-1111", bResults[0].Session.ParentSessionID)
+	require.NoError(err)
+	require.Len(bResults, 1)
+	require.Len(bResults[0].Messages, 2)
+	assert.Equal("second question", bResults[0].Messages[0].Content)
+	assert.Equal("orig-1111", bResults[0].Session.ParentSessionID)
 }
 
 func TestClaudeBackgroundForkQueuedOnlyChainTrimsAgainstEqualBgSibling(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	// C replays B fully and holds only a uuid-less queued prompt, so
 	// its uuid content equals B's exactly. Direction between equal
@@ -262,24 +277,27 @@ func TestClaudeBackgroundForkQueuedOnlyChainTrimsAgainstEqualBgSibling(t *testin
 	}, "\n") + "\n"
 
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "orig-1111.jsonl"), []byte(aContent), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "bbbb-2222.jsonl"), []byte(bContent), 0o644))
+	require.NoError(os.WriteFile(filepath.Join(dir, "orig-1111.jsonl"), []byte(aContent), 0o644))
+	require.NoError(os.WriteFile(filepath.Join(dir, "bbbb-2222.jsonl"), []byte(bContent), 0o644))
 	cPath := filepath.Join(dir, "cccc-3333.jsonl")
-	require.NoError(t, os.WriteFile(cPath, []byte(cContent), 0o644))
+	require.NoError(os.WriteFile(cPath, []byte(cContent), 0o644))
 
 	results, excluded, err := claudeParseFile(
 		cPath, "my_app", "local",
 		claudeParseOptions{siblingLineage: true},
 	)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Empty(t, excluded)
-	require.Len(t, results[0].Messages, 1)
-	assert.Equal(t, "queued in c", results[0].Messages[0].Content)
-	assert.Equal(t, "bbbb-2222", results[0].Session.ParentSessionID)
+	require.NoError(err)
+	require.Len(results, 1)
+	assert.Empty(excluded)
+	require.Len(results[0].Messages, 1)
+	assert.Equal("queued in c", results[0].Messages[0].Content)
+	assert.Equal("bbbb-2222", results[0].Session.ParentSessionID)
 }
 
 func TestClaudeBackgroundForkEqualBgTwinsElectKeeperByStem(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	// Reverse stem order: the queued-only fork has the smaller stem,
 	// so it never trims against its equal twin. The larger-stem twin
@@ -302,35 +320,35 @@ func TestClaudeBackgroundForkEqualBgTwinsElectKeeperByStem(t *testing.T) {
 	}, "\n") + "\n"
 
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "orig-1111.jsonl"), []byte(aContent), 0o644))
+	require.NoError(os.WriteFile(filepath.Join(dir, "orig-1111.jsonl"), []byte(aContent), 0o644))
 	smallPath := filepath.Join(dir, "cccc-3333.jsonl")
-	require.NoError(t, os.WriteFile(smallPath, []byte(smallContent), 0o644))
+	require.NoError(os.WriteFile(smallPath, []byte(smallContent), 0o644))
 	largePath := filepath.Join(dir, "dddd-4444.jsonl")
-	require.NoError(t, os.WriteFile(largePath, []byte(largeContent), 0o644))
+	require.NoError(os.WriteFile(largePath, []byte(largeContent), 0o644))
 
 	largeResults, largeExcluded, err := claudeParseFile(
 		largePath, "my_app", "local",
 		claudeParseOptions{siblingLineage: true},
 	)
-	require.NoError(t, err)
-	assert.Empty(t, largeResults)
-	assert.Equal(t, []string{"dddd-4444"}, largeExcluded)
+	require.NoError(err)
+	assert.Empty(largeResults)
+	assert.Equal([]string{"dddd-4444"}, largeExcluded)
 
 	smallResults, smallExcluded, err := claudeParseFile(
 		smallPath, "my_app", "local",
 		claudeParseOptions{siblingLineage: true},
 	)
-	require.NoError(t, err)
-	require.Len(t, smallResults, 1)
-	assert.Empty(t, smallExcluded)
+	require.NoError(err)
+	require.Len(smallResults, 1)
+	assert.Empty(smallExcluded)
 	var contents []string
 	for _, m := range smallResults[0].Messages {
 		contents = append(contents, m.Content)
 	}
-	assert.Contains(t, contents, "second question")
-	assert.Contains(t, contents, "queued in c")
-	assert.NotContains(t, contents, "first question")
-	assert.Equal(t, "orig-1111", smallResults[0].Session.ParentSessionID)
+	assert.Contains(contents, "second question")
+	assert.Contains(contents, "queued in c")
+	assert.NotContains(contents, "first question")
+	assert.Equal("orig-1111", smallResults[0].Session.ParentSessionID)
 }
 
 func TestClaudeBackgroundForkEqualBgCopiesElectKeeperByStem(t *testing.T) {
@@ -343,24 +361,27 @@ func TestClaudeBackgroundForkEqualBgCopiesElectKeeperByStem(t *testing.T) {
 	}
 	for _, stem := range stems {
 		t.Run(stem, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			results, excluded, err := claudeParseFile(
 				filepath.Join(dir, stem+".jsonl"), "demo", "local",
 				claudeParseOptions{siblingLineage: true},
 			)
-			require.NoError(t, err)
+			require.NoError(err)
 			if stem != "aaaa-1111" {
-				assert.Empty(t, results)
-				assert.Equal(t, []string{stem}, excluded)
+				assert.Empty(results)
+				assert.Equal([]string{stem}, excluded)
 				return
 			}
-			require.Len(t, results, 1)
-			assert.Empty(t, excluded)
-			assert.Empty(t, results[0].Session.ParentSessionID)
+			require.Len(results, 1)
+			assert.Empty(excluded)
+			assert.Empty(results[0].Session.ParentSessionID)
 			var contents []string
 			for _, message := range results[0].Messages {
 				contents = append(contents, message.Content)
 			}
-			assert.Equal(t, []string{
+			assert.Equal([]string{
 				"first question", "first answer", "continued question", "continued answer",
 			}, contents)
 		})
@@ -368,6 +389,9 @@ func TestClaudeBackgroundForkEqualBgCopiesElectKeeperByStem(t *testing.T) {
 }
 
 func TestClaudeBackgroundForkBoundaryRetryFailsOpen(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	// Two retained entries parented at the replay leaf (a retry right
 	// after the handoff) cannot be re-rooted without collapsing the
@@ -388,20 +412,23 @@ func TestClaudeBackgroundForkBoundaryRetryFailsOpen(t *testing.T) {
 		forkPath, "my_app", "local",
 		claudeParseOptions{siblingLineage: true},
 	)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Empty(t, excluded)
-	assert.Empty(t, results[0].Session.ParentSessionID)
+	require.NoError(err)
+	require.Len(results, 1)
+	assert.Empty(excluded)
+	assert.Empty(results[0].Session.ParentSessionID)
 	var contents []string
 	for _, m := range results[0].Messages {
 		contents = append(contents, m.Content)
 	}
-	assert.Contains(t, contents, "first question")
-	assert.Contains(t, contents, "final answer")
-	assert.NotContains(t, contents, "abandoned retry")
+	assert.Contains(contents, "first question")
+	assert.Contains(contents, "final answer")
+	assert.NotContains(contents, "abandoned retry")
 }
 
 func TestClaudeBackgroundForkKeepsQueuedCommandWithoutNewChainEntry(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	// A prompt queued at handoff lands as a fork-own uuid-less
 	// queued_command before any new chain entry exists. Even though
@@ -421,14 +448,14 @@ func TestClaudeBackgroundForkKeepsQueuedCommandWithoutNewChainEntry(t *testing.T
 		forkPath, "my_app", "local",
 		claudeParseOptions{siblingLineage: true},
 	)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Empty(t, excluded)
-	require.Len(t, results[0].Messages, 1)
-	assert.Equal(t, "queued at handoff", results[0].Messages[0].Content)
-	assert.Equal(t, "orig-1111", results[0].Session.ParentSessionID)
-	assert.Equal(t, RelContinuation, results[0].Session.RelationshipType)
-	assert.Equal(t, 1, results[0].Session.MessageCount)
+	require.NoError(err)
+	require.Len(results, 1)
+	assert.Empty(excluded)
+	require.Len(results[0].Messages, 1)
+	assert.Equal("queued at handoff", results[0].Messages[0].Content)
+	assert.Equal("orig-1111", results[0].Session.ParentSessionID)
+	assert.Equal(RelContinuation, results[0].Session.RelationshipType)
+	assert.Equal(1, results[0].Session.MessageCount)
 }
 
 func TestClaudeBackgroundForkFailOpen(t *testing.T) {
@@ -481,6 +508,9 @@ func TestClaudeBackgroundForkFailOpen(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			t.Parallel()
 			_, forkPath := writeLineageFixture(t,
 				tt.origName, tt.origContent,
@@ -490,34 +520,37 @@ func TestClaudeBackgroundForkFailOpen(t *testing.T) {
 				forkPath, "my_app", "local",
 				claudeParseOptions{siblingLineage: true},
 			)
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-			assert.Empty(t, excluded)
+			require.NoError(err)
+			require.Len(results, 1)
+			assert.Empty(excluded)
 			sess := results[0].Session
-			assert.Empty(t, sess.ParentSessionID)
-			assert.Equal(t, RelNone, sess.RelationshipType)
+			assert.Empty(sess.ParentSessionID)
+			assert.Equal(RelNone, sess.RelationshipType)
 			// Untrimmed: the replayed head is retained.
-			assert.Equal(t, "first question",
+			assert.Equal("first question",
 				firstMessageContent(results[0].Messages))
 		})
 	}
 }
 
 func TestClaudeBackgroundForkNoSiblingFailsOpen(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	dir := t.TempDir()
 	forkPath := filepath.Join(dir, "fork-2222.jsonl")
-	require.NoError(t, os.WriteFile(forkPath, []byte(lineageForkContent()), 0o644))
+	require.NoError(os.WriteFile(forkPath, []byte(lineageForkContent()), 0o644))
 
 	results, excluded, err := claudeParseFile(
 		forkPath, "my_app", "local",
 		claudeParseOptions{siblingLineage: true},
 	)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Empty(t, excluded)
-	assert.Empty(t, results[0].Session.ParentSessionID)
-	require.Len(t, results[0].Messages, 4)
+	require.NoError(err)
+	require.Len(results, 1)
+	assert.Empty(excluded)
+	assert.Empty(results[0].Session.ParentSessionID)
+	require.Len(results[0].Messages, 4)
 }
 
 // firstNonEmpty returns the first message content, requiring at least
@@ -532,6 +565,9 @@ func firstMessageContent(msgs []ParsedMessage) string {
 }
 
 func TestClaudeBackgroundForkKeepsPostBoundaryCoincidentalMatch(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	// Only the contiguous leading replay region is trimmed. An entry
 	// after the boundary whose uuid also appears in the ancestor must
@@ -556,16 +592,19 @@ func TestClaudeBackgroundForkKeepsPostBoundaryCoincidentalMatch(t *testing.T) {
 		forkPath, "my_app", "local",
 		claudeParseOptions{siblingLineage: true},
 	)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
+	require.NoError(err)
+	require.Len(results, 1)
 	msgs := results[0].Messages
-	require.Len(t, msgs, 2)
-	assert.Equal(t, "own turn", msgs[0].Content)
-	assert.Equal(t, "post boundary reuse", msgs[1].Content)
-	assert.Equal(t, "orig-1111", results[0].Session.ParentSessionID)
+	require.Len(msgs, 2)
+	assert.Equal("own turn", msgs[0].Content)
+	assert.Equal("post boundary reuse", msgs[1].Content)
+	assert.Equal("orig-1111", results[0].Session.ParentSessionID)
 }
 
 func TestClaudeBackgroundForkPicksLongestReplayCandidate(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	// Two interactive transcripts share the same root (a manual
 	// interactive fork). The bg fork replays the longer one; its
@@ -589,20 +628,20 @@ func TestClaudeBackgroundForkPicksLongestReplayCandidate(t *testing.T) {
 	}, "\n") + "\n"
 
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "orig-1111.jsonl"), []byte(shortContent), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "long-3333.jsonl"), []byte(longContent), 0o644))
+	require.NoError(os.WriteFile(filepath.Join(dir, "orig-1111.jsonl"), []byte(shortContent), 0o644))
+	require.NoError(os.WriteFile(filepath.Join(dir, "long-3333.jsonl"), []byte(longContent), 0o644))
 	forkPath := filepath.Join(dir, "fork-2222.jsonl")
-	require.NoError(t, os.WriteFile(forkPath, []byte(forkContent), 0o644))
+	require.NoError(os.WriteFile(forkPath, []byte(forkContent), 0o644))
 
 	results, _, err := claudeParseFile(
 		forkPath, "my_app", "local",
 		claudeParseOptions{siblingLineage: true},
 	)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 1)
-	assert.Equal(t, "fork only turn", results[0].Messages[0].Content)
-	assert.Equal(t, "long-3333", results[0].Session.ParentSessionID)
+	require.NoError(err)
+	require.Len(results, 1)
+	require.Len(results[0].Messages, 1)
+	assert.Equal("fork only turn", results[0].Messages[0].Content)
+	assert.Equal("long-3333", results[0].Session.ParentSessionID)
 }
 
 func TestClaudeBackgroundForkEqualReplayCandidatesFailOpen(t *testing.T) {
@@ -628,35 +667,41 @@ func TestClaudeBackgroundForkEqualReplayCandidatesFailOpen(t *testing.T) {
 
 	for _, kind := range []string{"interactive", "bg"} {
 		t.Run(kind, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			dir := t.TempDir()
 			left, right := leftContent, rightContent
 			if kind == "bg" {
 				left = strings.ReplaceAll(left, `"sessionId":`, `"sessionKind":"bg","sessionId":`)
 				right = strings.ReplaceAll(right, `"sessionId":`, `"sessionKind":"bg","sessionId":`)
 			}
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "left-1111.jsonl"), []byte(left), 0o600))
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "right-2222.jsonl"), []byte(right), 0o600))
+			require.NoError(os.WriteFile(filepath.Join(dir, "left-1111.jsonl"), []byte(left), 0o600))
+			require.NoError(os.WriteFile(filepath.Join(dir, "right-2222.jsonl"), []byte(right), 0o600))
 			// A later copy of the first candidate must not clear the ambiguity.
 			twin := strings.ReplaceAll(left, "left-1111", "twin-4444")
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "twin-4444.jsonl"), []byte(twin), 0o600))
+			require.NoError(os.WriteFile(filepath.Join(dir, "twin-4444.jsonl"), []byte(twin), 0o600))
 			forkPath := filepath.Join(dir, "fork-3333.jsonl")
-			require.NoError(t, os.WriteFile(forkPath, []byte(forkContent), 0o600))
+			require.NoError(os.WriteFile(forkPath, []byte(forkContent), 0o600))
 
 			results, excluded, err := claudeParseFile(
 				forkPath, "my_app", "local",
 				claudeParseOptions{siblingLineage: true},
 			)
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-			assert.Empty(t, excluded)
-			assert.Empty(t, results[0].Session.ParentSessionID)
-			assert.Equal(t, RelNone, results[0].Session.RelationshipType)
-			assert.Equal(t, 3, results[0].Session.MessageCount)
+			require.NoError(err)
+			require.Len(results, 1)
+			assert.Empty(excluded)
+			assert.Empty(results[0].Session.ParentSessionID)
+			assert.Equal(RelNone, results[0].Session.RelationshipType)
+			assert.Equal(3, results[0].Session.MessageCount)
 		})
 	}
 }
 
 func TestClaudeBackgroundForkKeepsOwnUUIDLessRecords(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	// Claude Code never replays uuid-less records into a fork
 	// transcript, so every uuid-less line in a fork is the fork's own:
@@ -688,20 +733,20 @@ func TestClaudeBackgroundForkKeepsOwnUUIDLessRecords(t *testing.T) {
 		forkPath, "my_app", "local",
 		claudeParseOptions{siblingLineage: true},
 	)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
+	require.NoError(err)
+	require.Len(results, 1)
 	var prompts []string
 	for _, m := range results[0].Messages {
 		prompts = append(prompts, m.Content)
 	}
-	assert.Contains(t, prompts, "queued in fork")
-	assert.Contains(t, prompts, "continued question")
-	assert.NotContains(t, prompts, "first question")
-	assert.Equal(t, "orig-1111", results[0].Session.ParentSessionID)
+	assert.Contains(prompts, "queued in fork")
+	assert.Contains(prompts, "continued question")
+	assert.NotContains(prompts, "first question")
+	assert.Equal("orig-1111", results[0].Session.ParentSessionID)
 	// The fork-own enqueue record written before the replayed chain
 	// survives the trim: its spawn timestamp is the session start.
 	wantStart := time.Date(2026, 1, 1, 11, 0, 0, 0, time.UTC)
-	assert.True(t, results[0].Session.StartedAt.Equal(wantStart),
+	assert.True(results[0].Session.StartedAt.Equal(wantStart),
 		"StartedAt = %v", results[0].Session.StartedAt)
 
 	// The original still splices its own queued command.
@@ -710,16 +755,18 @@ func TestClaudeBackgroundForkKeepsOwnUUIDLessRecords(t *testing.T) {
 		"my_app", "local",
 		claudeParseOptions{siblingLineage: true},
 	)
-	require.NoError(t, err)
-	require.Len(t, origResults, 1)
+	require.NoError(err)
+	require.Len(origResults, 1)
 	var origPrompts []string
 	for _, m := range origResults[0].Messages {
 		origPrompts = append(origPrompts, m.Content)
 	}
-	assert.Contains(t, origPrompts, "queued in original")
+	assert.Contains(origPrompts, "queued in original")
 }
 
 func TestClaudeUploadParseIgnoresSiblingLineage(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 	// Uploaded transcripts are parsed under a user-chosen project and
 	// must never trim against whatever directory they landed in.
@@ -729,45 +776,51 @@ func TestClaudeUploadParseIgnoresSiblingLineage(t *testing.T) {
 	)
 
 	results, err := parseClaudeSession(forkPath, "my_app", "local")
-	require.NoError(t, err)
-	require.Len(t, results, 1)
+	require.NoError(err)
+	require.Len(results, 1)
 	assert.Empty(t, results[0].Session.ParentSessionID)
-	require.Len(t, results[0].Messages, 4)
+	require.Len(results[0].Messages, 4)
 }
 
 func TestClaudeProviderParseTrimsBackgroundFork(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	// End-to-end through the local provider: project-level sources
 	// resolve sibling lineage.
 	root := t.TempDir()
 	projDir := filepath.Join(root, "-home-user-proj")
-	require.NoError(t, os.MkdirAll(projDir, 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(projDir, 0o755))
+	require.NoError(os.WriteFile(
 		filepath.Join(projDir, "orig-1111.jsonl"),
 		[]byte(lineageOriginalContent()), 0o644))
 	forkPath := filepath.Join(projDir, "fork-2222.jsonl")
-	require.NoError(t, os.WriteFile(forkPath, []byte(lineageForkContent()), 0o644))
+	require.NoError(os.WriteFile(forkPath, []byte(lineageForkContent()), 0o644))
 
 	provider, ok := NewProvider(AgentClaude, ProviderConfig{
 		Roots:   []string{root},
 		Machine: "local",
 	})
-	require.True(t, ok)
+	require.True(ok)
 
 	sources := newClaudeSourceSet([]string{root})
 	source, ok := sources.sourceRef(root, forkPath)
-	require.True(t, ok)
+	require.True(ok)
 
 	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
+	require.NoError(err)
+	require.Len(outcome.Results, 1)
 	sess := outcome.Results[0].Result.Session
-	assert.Equal(t, "orig-1111", sess.ParentSessionID)
-	assert.Equal(t, RelContinuation, sess.RelationshipType)
-	assert.Equal(t, 2, len(outcome.Results[0].Result.Messages))
+	assert.Equal("orig-1111", sess.ParentSessionID)
+	assert.Equal(RelContinuation, sess.RelationshipType)
+	assert.Len(outcome.Results[0].Result.Messages, 2)
 }
 
 func TestClaudeBackgroundForkIncrementalAppendContinuesFromTrim(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	_, forkPath := writeLineageFixture(t,
 		"orig-1111.jsonl", lineageOriginalContent(),
@@ -778,20 +831,20 @@ func TestClaudeBackgroundForkIncrementalAppendContinuesFromTrim(t *testing.T) {
 		forkPath, "my_app", "local",
 		claudeParseOptions{siblingLineage: true},
 	)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	require.Len(t, results[0].Messages, 2)
+	require.NoError(err)
+	require.Len(results, 1)
+	require.Len(results[0].Messages, 2)
 
 	info, err := os.Stat(forkPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	offset := info.Size()
 
 	appended := lineageUserLine("u9", "a2", "2026-01-01T12:00:00Z", "fork-2222", "bg", "appended turn") + "\n"
 	f, err := os.OpenFile(forkPath, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = f.WriteString(appended)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+	require.NoError(err)
+	require.NoError(f.Close())
 
 	// Stored identity mirrors what the engine persists from the full
 	// parse; without it the identity-fill fallback escalates every
@@ -801,12 +854,12 @@ func TestClaudeBackgroundForkIncrementalAppendContinuesFromTrim(t *testing.T) {
 		lastEntryUUID: "a2",
 		stored:        claudeStoredIdentity{sessionKind: "bg"},
 	})
-	require.NoError(t, err)
-	require.Len(t, msgs, 1)
-	assert.Equal(t, "appended turn", msgs[0].Content)
+	require.NoError(err)
+	require.Len(msgs, 1)
+	assert.Equal("appended turn", msgs[0].Content)
 	// Ordinals continue from the trimmed message count, not the raw
 	// replayed line count.
-	assert.Equal(t, 2, msgs[0].Ordinal)
+	assert.Equal(2, msgs[0].Ordinal)
 }
 
 func TestClaudeLineageSniffCacheInvalidatedBySameSizeRewrite(t *testing.T) {
@@ -859,6 +912,9 @@ func TestClaudeLineageSniffCacheInvalidatedBySameSizeRewrite(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			parentAssert := assert.New(t)
+			parentRequire := require.New(t)
+
 			t.Parallel()
 			origPath, forkPath := writeLineageFixture(t,
 				"orig-1111.jsonl", tt.warmOrig,
@@ -871,25 +927,25 @@ func TestClaudeLineageSniffCacheInvalidatedBySameSizeRewrite(t *testing.T) {
 				forkPath, "my_app", "local",
 				claudeParseOptions{siblingLineage: true},
 			)
-			require.NoError(t, err)
-			require.Len(t, warm, 1)
-			assert.Equal(t, tt.warmParent, warm[0].Session.ParentSessionID)
+			parentRequire.NoError(err)
+			parentRequire.Len(warm, 1)
+			parentAssert.Equal(tt.warmParent, warm[0].Session.ParentSessionID)
 
 			target := origPath
 			if tt.rewrite.target == "fork" {
 				target = forkPath
 			}
 			info, err := os.Stat(target)
-			require.NoError(t, err)
+			parentRequire.NoError(err)
 			beforeChangeTime, changeTimeOK := codexIndexChangeTime(target, info)
-			require.Len(t, tt.rewrite.content, int(info.Size()))
-			require.NoError(t, os.WriteFile(target, []byte(tt.rewrite.content), 0o644))
-			require.NoError(t, os.Chtimes(target, info.ModTime(), info.ModTime()))
+			parentRequire.Len(tt.rewrite.content, int(info.Size()))
+			parentRequire.NoError(os.WriteFile(target, []byte(tt.rewrite.content), 0o644))
+			parentRequire.NoError(os.Chtimes(target, info.ModTime(), info.ModTime()))
 			if changeTimeOK {
 				// Rapid rewrites can share a filesystem timestamp tick.
 				// Establish the changed ctime that invalidates the memo
 				// while keeping size and mtime unchanged.
-				require.EventuallyWithT(t, func(c *assert.CollectT) {
+				parentRequire.EventuallyWithT(func(c *assert.CollectT) {
 					require.NoError(c, os.Chtimes(target, info.ModTime(), info.ModTime()))
 					current, err := os.Stat(target)
 					require.NoError(c, err)
@@ -899,8 +955,8 @@ func TestClaudeLineageSniffCacheInvalidatedBySameSizeRewrite(t *testing.T) {
 				}, 2*time.Second, time.Millisecond)
 			}
 			restored, err := os.Stat(target)
-			require.NoError(t, err)
-			require.Equal(t, info.ModTime().UnixNano(), restored.ModTime().UnixNano())
+			parentRequire.NoError(err)
+			parentRequire.Equal(info.ModTime().UnixNano(), restored.ModTime().UnixNano())
 
 			// The fork's lineage resolution is the observable: it is
 			// what consumes the rewritten head's sniff.
@@ -908,11 +964,11 @@ func TestClaudeLineageSniffCacheInvalidatedBySameSizeRewrite(t *testing.T) {
 				forkPath, "my_app", "local",
 				claudeParseOptions{siblingLineage: true},
 			)
-			require.NoError(t, err)
-			require.Len(t, results, 1)
-			assert.Equal(t, tt.wantParent, results[0].Session.ParentSessionID)
-			require.Len(t, results[0].Messages, tt.wantMsgs)
-			assert.Equal(t, tt.wantFirst, firstMessageContent(results[0].Messages))
+			parentRequire.NoError(err)
+			parentRequire.Len(results, 1)
+			parentAssert.Equal(tt.wantParent, results[0].Session.ParentSessionID)
+			parentRequire.Len(results[0].Messages, tt.wantMsgs)
+			parentAssert.Equal(tt.wantFirst, firstMessageContent(results[0].Messages))
 		})
 	}
 }
@@ -934,6 +990,9 @@ func BenchmarkClaudeLineageSniffCacheHit(b *testing.B) {
 }
 
 func TestClaudeLineageSniffGivesUpAfterBoundedPreamble(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	// A fork whose bg root sits past the sniff bound fails open: the
 	// resolver must not scan unbounded preamble looking for a chain
@@ -958,8 +1017,8 @@ func TestClaudeLineageSniffGivesUpAfterBoundedPreamble(t *testing.T) {
 		forkPath, "my_app", "local",
 		claudeParseOptions{siblingLineage: true},
 	)
-	require.NoError(t, err)
-	require.Len(t, results, 1)
-	assert.Empty(t, results[0].Session.ParentSessionID)
-	assert.Equal(t, "first question", firstMessageContent(results[0].Messages))
+	require.NoError(err)
+	require.Len(results, 1)
+	assert.Empty(results[0].Session.ParentSessionID)
+	assert.Equal("first question", firstMessageContent(results[0].Messages))
 }

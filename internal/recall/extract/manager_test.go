@@ -1,7 +1,6 @@
 package extract
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json/v2"
 	"errors"
@@ -111,7 +110,7 @@ func growSession(t *testing.T, d *db.DB, id string, msgs []db.Message, startOrdi
 	if err := d.InsertMessages(msgs); err != nil {
 		t.Fatalf("growing session %s: %v", id, err)
 	}
-	session, err := d.GetSessionFull(context.Background(), id)
+	session, err := d.GetSessionFull(t.Context(), id)
 	if err != nil || session == nil {
 		t.Fatalf("loading grown session %s: %v", id, err)
 	}
@@ -321,7 +320,7 @@ func newManager(
 
 func TestManagerRunPassExtractsMapsAndActivates(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, func(text string, _ int) (int, string) {
 		content := `{"entries":[{"type":"decision","title":"t",` +
 			`"body":"chose sqlite","entities":["sqlite","storage"]}]}`
@@ -418,7 +417,7 @@ func TestManagerActivatesOverTransientlyIneligibleUnfinishedSession(
 			t.Errorf("closing archive: %v", err)
 		}
 	})
-	ctx := context.Background()
+	ctx := t.Context()
 	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("opening side connection: %v", err)
@@ -442,7 +441,7 @@ func TestManagerActivatesOverTransientlyIneligibleUnfinishedSession(
 	}); err != nil {
 		t.Fatalf("seeding pending row: %v", err)
 	}
-	if _, err := side.Exec(
+	if _, err := side.ExecContext(ctx,
 		"UPDATE sessions SET ended_at = NULL WHERE id = 'sess-b'",
 	); err != nil {
 		t.Fatalf("reopening sess-b: %v", err)
@@ -489,7 +488,7 @@ func TestManagerRefusesUnitStraddlingSecret(t *testing.T) {
 	}, nil)
 	m := newManager(t, d, server.URL, nil)
 
-	result, err := m.RunPass(context.Background(), PassOptions{})
+	result, err := m.RunPass(t.Context(), PassOptions{})
 	if err != nil {
 		t.Fatalf("RunPass: %v", err)
 	}
@@ -502,7 +501,7 @@ func TestManagerRefusesUnitStraddlingSecret(t *testing.T) {
 		t.Fatalf("failed = %d, want 1", result.Failed)
 	}
 	entry, err := d.GetRecallEntry(
-		context.Background(), EntryID(m.Fingerprint(), "sess-1", 1, 0))
+		t.Context(), EntryID(m.Fingerprint(), "sess-1", 1, 0))
 	if err != nil {
 		t.Fatalf("GetRecallEntry: %v", err)
 	}
@@ -535,7 +534,7 @@ func TestManagerRefusesSecretSplitAcrossUnits(t *testing.T) {
 	}, nil)
 	m := newManager(t, d, server.URL, nil)
 
-	result, err := m.RunPass(context.Background(), PassOptions{})
+	result, err := m.RunPass(t.Context(), PassOptions{})
 	if err != nil {
 		t.Fatalf("RunPass: %v", err)
 	}
@@ -567,7 +566,7 @@ func TestManagerRefusesSecretSplitMidTokenAcrossMessages(t *testing.T) {
 	}, nil)
 	m := newManager(t, d, server.URL, nil)
 
-	result, err := m.RunPass(context.Background(), PassOptions{})
+	result, err := m.RunPass(t.Context(), PassOptions{})
 	if err != nil {
 		t.Fatalf("RunPass: %v", err)
 	}
@@ -599,7 +598,7 @@ func TestManagerRefusesSecretSplitAcrossSystemMessage(t *testing.T) {
 	}, nil)
 	m := newManager(t, d, server.URL, nil)
 
-	result, err := m.RunPass(context.Background(), PassOptions{})
+	result, err := m.RunPass(t.Context(), PassOptions{})
 	if err != nil {
 		t.Fatalf("RunPass: %v", err)
 	}
@@ -629,7 +628,7 @@ func TestManagerRefusesSecretSplitAcrossBoundaryWhitespace(t *testing.T) {
 	}, nil)
 	m := newManager(t, d, server.URL, nil)
 
-	result, err := m.RunPass(context.Background(), PassOptions{})
+	result, err := m.RunPass(t.Context(), PassOptions{})
 	if err != nil {
 		t.Fatalf("RunPass: %v", err)
 	}
@@ -666,7 +665,7 @@ func TestManagerExtractsBenignHighEntropyAssistantToken(t *testing.T) {
 	}, nil)
 	m := newManager(t, d, server.URL, nil)
 
-	result, err := m.RunPass(context.Background(), PassOptions{})
+	result, err := m.RunPass(t.Context(), PassOptions{})
 	if err != nil {
 		t.Fatalf("RunPass: %v", err)
 	}
@@ -702,7 +701,7 @@ func TestManagerBoundsOversizedUnitSplitWork(t *testing.T) {
 		cfg.Segmenter = TurnsV1{MaxWindowChars: 400}
 	})
 
-	result, err := m.RunPass(context.Background(), PassOptions{})
+	result, err := m.RunPass(t.Context(), PassOptions{})
 	if err != nil {
 		t.Fatalf("RunPass: %v", err)
 	}
@@ -715,7 +714,7 @@ func TestManagerBoundsOversizedUnitSplitWork(t *testing.T) {
 			"overflow recovery", log.count(), maxUnitDistillCalls)
 	}
 	entry, err := d.GetRecallEntry(
-		context.Background(), EntryID(m.Fingerprint(), "sess-1", 0, 0))
+		t.Context(), EntryID(m.Fingerprint(), "sess-1", 0, 0))
 	if err != nil {
 		t.Fatalf("GetRecallEntry: %v", err)
 	}
@@ -726,7 +725,7 @@ func TestManagerBoundsOversizedUnitSplitWork(t *testing.T) {
 
 func TestManagerRunPassRetriesFailedSessionFromCursor(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	// Units: intent(u0), action(a1), intent(u2), action(a3). Call 3 (unit 2)
 	// fails until the server heals, exhausting the client's attempts.
 	server, log := modelServer(t, func(text string, call int) (int, string) {
@@ -783,7 +782,7 @@ func TestManagerRunPassRetriesFailedSessionFromCursor(t *testing.T) {
 
 func TestManagerSplitsOversizedUnits(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, func(text string, _ int) (int, string) {
 		if utf8.RuneCountInString(text) > 80 {
 			return http.StatusBadRequest,
@@ -827,7 +826,7 @@ func TestManagerSplitsOversizedUnits(t *testing.T) {
 
 func TestManagerRunPassSkipsIneligibleSessions(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-automated", turnMessages("a", "b"),
 		func(s *db.Session) { s.IsAutomated = true })
@@ -856,7 +855,7 @@ func TestManagerRunPassSkipsIneligibleSessions(t *testing.T) {
 
 func TestManagerExplicitSessionBypassesQuietPeriod(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-fresh", turnMessages("a", "b"),
 		func(s *db.Session) {
@@ -884,7 +883,7 @@ func TestManagerExplicitSessionBypassesQuietPeriod(t *testing.T) {
 
 func TestManagerFullPassTopsUpGrownSession(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("ask", "answer"), nil)
 	m := newManager(t, d, server.URL, nil)
@@ -932,7 +931,7 @@ func TestManagerFullPassTopsUpGrownSession(t *testing.T) {
 
 func TestManagerFullPassReplacesEntriesOfChangedUnits(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	// Titles encode the unit text length so re-extraction of changed
 	// content is observable.
 	server, _ := modelServer(t, func(text string, _ int) (int, string) {
@@ -984,7 +983,7 @@ func TestManagerFullPassReplacesEntriesOfChangedUnits(t *testing.T) {
 
 func TestManagerSkipsSessionsWithoutCurrentSecretScan(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	// Seed without the scan stamp: leak count 0 but never scanned.
 	ended := time.Now().Add(-time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
@@ -1024,7 +1023,7 @@ func TestManagerSkipsSessionsWithoutCurrentSecretScan(t *testing.T) {
 
 func TestManagerZeroEntryGenerationNeverActivates(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, func(string, int) (int, string) {
 		return http.StatusOK, completionBody(t, `{"entries":[]}`)
 	})
@@ -1049,7 +1048,7 @@ func TestManagerZeroEntryGenerationNeverActivates(t *testing.T) {
 
 func TestManagerTryPassDropsWhenBusy(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	release := make(chan struct{})
 	inFlight := make(chan struct{}, 1)
 	server, _ := modelServer(t, func(text string, _ int) (int, string) {
@@ -1084,7 +1083,7 @@ func TestManagerTryPassDropsWhenBusy(t *testing.T) {
 
 func TestManagerActivateRefusesEmptyGeneration(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	m := newManager(t, d, server.URL, nil)
 
@@ -1099,7 +1098,7 @@ func TestManagerActivateRefusesEmptyGeneration(t *testing.T) {
 
 func TestManagerStatusReportsCoverage(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("ask", "answer"), nil)
 	seedSession(t, d, "sess-fresh", turnMessages("a", "b"),
@@ -1184,7 +1183,7 @@ func TestNewManagerValidatesConfig(t *testing.T) {
 
 func TestManagerRefusesDefiniteOnlyScan(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	// Only the fast inline sync scan ran: definite rules, no candidate
 	// detection. Candidate-confidence secrets could be present undetected.
@@ -1219,7 +1218,7 @@ func TestManagerRefusesDefiniteOnlyScan(t *testing.T) {
 
 func TestManagerRefusesSessionsWithCandidateFindings(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	// A full scan found a candidate-confidence secret: the leak count stays
 	// zero, but the finding is recorded.
@@ -1348,7 +1347,7 @@ func TestExtractionBracketStable(t *testing.T) {
 
 func TestManagerStagesEntriesUntilActivation(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	seedSession(t, d, "sess-2", turnMessages("c", "d"), nil)
@@ -1407,7 +1406,7 @@ func TestManagerStagesEntriesUntilActivation(t *testing.T) {
 
 func TestManagerSnapshotReadSeesMetadataOnlyWrites(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, "http://unused", nil)
 
@@ -1436,7 +1435,7 @@ func TestManagerSnapshotReadSeesMetadataOnlyWrites(t *testing.T) {
 
 func TestManagerWatermarkLimitsScanDiscovery(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, server.URL, nil)
@@ -1477,7 +1476,7 @@ func TestManagerWatermarkLimitsScanDiscovery(t *testing.T) {
 
 func TestManagerWatermarkAdvancesOnlyOnCompleteScanPasses(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, server.URL, nil)
@@ -1511,7 +1510,7 @@ func TestManagerWatermarkAdvancesOnlyOnCompleteScanPasses(t *testing.T) {
 
 func TestManagerFullWatermarkBoundsDoneRevisits(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("ask", "answer"), nil)
 	m := newManager(t, d, server.URL, nil)
@@ -1570,7 +1569,7 @@ func TestManagerFullWatermarkBoundsDoneRevisits(t *testing.T) {
 
 func TestManagerMarksTranscriptOutOfStepRetryable(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 
@@ -1640,7 +1639,7 @@ func TestManagerMarksTranscriptOutOfStepRetryable(t *testing.T) {
 
 func TestManagerReopensDoneSessionOnCountMismatch(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, server.URL, func(cfg *ManagerConfig) {
@@ -1714,7 +1713,7 @@ func TestManagerReopensDoneSessionOnCountMismatch(t *testing.T) {
 
 func TestManagerRevisitSyncsEntryContext(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, server.URL, nil)
@@ -1772,7 +1771,7 @@ func TestManagerRevisitSyncsEntryContext(t *testing.T) {
 
 func TestManagerDiscardsSessionTrashedMidExtraction(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, func(_ string, call int) (int, string) {
 		if call == 2 {
 			// The session is trashed while its second unit is at the
@@ -1822,7 +1821,7 @@ func TestManagerDiscardsSessionTrashedMidExtraction(t *testing.T) {
 
 func TestManagerStopsWhenSecretFindingAppearsMidExtraction(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, func(_ string, call int) (int, string) {
 		if call == 2 {
 			// A candidate-confidence finding lands mid-extraction under
@@ -1873,7 +1872,7 @@ func TestManagerStopsWhenSecretFindingAppearsMidExtraction(t *testing.T) {
 
 func TestManagerProvenanceSurvivesTranscriptGrowth(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, server.URL, nil)
@@ -1909,7 +1908,7 @@ func TestManagerProvenanceSurvivesTranscriptGrowth(t *testing.T) {
 
 func TestManagerFullPassReconcilesIneligibleSessions(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	seedSession(t, d, "sess-2", turnMessages("c", "d"), nil)
@@ -1951,7 +1950,7 @@ func TestManagerFullPassReconcilesIneligibleSessions(t *testing.T) {
 
 func TestManagerIncrementalPassReconcilesIneligibleSessions(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, server.URL, nil)
@@ -1993,7 +1992,7 @@ func TestManagerRetriesContextSyncWhenItFails(t *testing.T) {
 			t.Errorf("closing archive: %v", err)
 		}
 	})
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, server.URL, nil)
@@ -2021,7 +2020,7 @@ func TestManagerRetriesContextSyncWhenItFails(t *testing.T) {
 		t.Fatalf("opening raw connection: %v", err)
 	}
 	t.Cleanup(func() { _ = raw.Close() })
-	if _, err := raw.Exec(`CREATE TRIGGER block_context_sync
+	if _, err := raw.ExecContext(ctx, `CREATE TRIGGER block_context_sync
 		BEFORE UPDATE OF project ON recall_entries
 		BEGIN SELECT RAISE(ABORT, 'sync blocked'); END`); err != nil {
 		t.Fatalf("installing trigger: %v", err)
@@ -2029,7 +2028,7 @@ func TestManagerRetriesContextSyncWhenItFails(t *testing.T) {
 	if _, err := m.RunPass(ctx, PassOptions{Full: true}); err == nil {
 		t.Fatal("the pass must surface the failed context sync")
 	}
-	if _, err := raw.Exec(
+	if _, err := raw.ExecContext(ctx,
 		"DROP TRIGGER block_context_sync"); err != nil {
 		t.Fatalf("dropping trigger: %v", err)
 	}
@@ -2057,7 +2056,7 @@ func TestManagerRetriesContextSyncWhenItFails(t *testing.T) {
 
 func TestManagerChangedDoneSessionBlocksActivation(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	seedSession(t, d, "sess-2", turnMessages("c", "d"), nil)
@@ -2135,7 +2134,7 @@ func gappedSessionRows(t *testing.T, d *db.DB, id string) {
 // failing the same commit on every pass.
 func TestManagerExtractsAcrossTranscriptOrdinalGap(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	gappedSessionRows(t, d, "sess-1")
 	m := newManager(t, d, server.URL, nil)
@@ -2178,7 +2177,7 @@ func TestManagerBacksOffStableEvidenceFailures(t *testing.T) {
 			t.Errorf("closing archive: %v", err)
 		}
 	})
-	ctx := context.Background()
+	ctx := t.Context()
 	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("opening side connection: %v", err)
@@ -2191,7 +2190,7 @@ func TestManagerBacksOffStableEvidenceFailures(t *testing.T) {
 			// transcript without any session-row write: the commit's
 			// evidence window then fails deterministically while the
 			// session re-reads as unchanged.
-			if _, err := side.Exec("DELETE FROM messages " +
+			if _, err := side.ExecContext(ctx, "DELETE FROM messages "+
 				"WHERE session_id = 'sess-1' AND ordinal = 2"); err != nil {
 				t.Errorf("deleting message row: %v", err)
 			}
@@ -2241,7 +2240,7 @@ func TestManagerBacksOffStableEvidenceFailures(t *testing.T) {
 // report success while marking the whole backlog failed.
 func TestManagerAbortsPassOnEndpointScopedRejection(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, func(_ string, _ int) (int, string) {
 		return http.StatusUnauthorized, `{"error":"bad api key"}`
 	})
@@ -2277,7 +2276,7 @@ func TestManagerAbortsPassOnEndpointScopedRejection(t *testing.T) {
 // about this transcript.
 func TestManagerAbortsPassOnSchemaViolation(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, func(_ string, _ int) (int, string) {
 		return http.StatusOK, completionBody(t, `{"wrong":"shape"}`)
 	})
@@ -2326,8 +2325,11 @@ func TestManagerContinuesAfterClientOnlyResponseLimit(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			d := newTestArchive(t)
-			ctx := context.Background()
+			ctx := t.Context()
 			server, log := modelServer(t, func(text string, _ int) (int, string) {
 				if strings.Contains(text, "oversize") {
 					return http.StatusOK, completionBody(t, tc.oversized)
@@ -2339,34 +2341,34 @@ func TestManagerContinuesAfterClientOnlyResponseLimit(t *testing.T) {
 			m := newManager(t, d, server.URL, nil)
 
 			result, err := m.RunPass(ctx, PassOptions{})
-			require.NoError(t, err)
-			assert.Equal(t, 1, result.Sessions)
-			assert.Equal(t, 1, result.Failed)
-			assert.Equal(t, 2, result.Units)
-			assert.Equal(t, 2, result.Entries)
-			assert.Equal(t, 3, log.count(),
+			require.NoError(err)
+			assert.Equal(1, result.Sessions)
+			assert.Equal(1, result.Failed)
+			assert.Equal(2, result.Units)
+			assert.Equal(2, result.Entries)
+			assert.Equal(3, log.count(),
 				"one rejected call must not prevent both units of the later session")
 
 			failed, found, err := d.ExtractProgress(
 				ctx, "sess-a", m.Fingerprint(),
 			)
-			require.NoError(t, err)
-			require.True(t, found)
-			assert.Equal(t, db.ExtractProgressFailed, failed.State)
-			assert.Contains(t, failed.LastError, tc.wantError)
+			require.NoError(err)
+			require.True(found)
+			assert.Equal(db.ExtractProgressFailed, failed.State)
+			assert.Contains(failed.LastError, tc.wantError)
 
 			done, found, err := d.ExtractProgress(
 				ctx, "sess-b", m.Fingerprint(),
 			)
-			require.NoError(t, err)
-			require.True(t, found)
-			assert.Equal(t, db.ExtractProgressDone, done.State)
+			require.NoError(err)
+			require.True(found)
+			assert.Equal(db.ExtractProgressDone, done.State)
 			entry, err := d.GetRecallEntry(
 				ctx, EntryID(m.Fingerprint(), "sess-b", 0, 0),
 			)
-			require.NoError(t, err)
-			require.NotNil(t, entry)
-			assert.Equal(t, "later", entry.Title)
+			require.NoError(err)
+			require.NotNil(entry)
+			assert.Equal("later", entry.Title)
 		})
 	}
 }
@@ -2395,7 +2397,7 @@ func TestBoundedLastErrorCapsStoredText(t *testing.T) {
 // persistently rejecting endpoint defers retraction indefinitely.
 func TestManagerReconcilesBeforeAbortingOnEndpointRejection(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	var broken atomic.Bool
 	server, _ := modelServer(t, func(_ string, _ int) (int, string) {
 		if broken.Load() {
@@ -2446,7 +2448,7 @@ func TestManagerCountMismatchDoesNotAdvanceCoverageStamp(t *testing.T) {
 			t.Errorf("closing archive: %v", err)
 		}
 	})
-	ctx := context.Background()
+	ctx := t.Context()
 	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("opening side connection: %v", err)
@@ -2463,8 +2465,8 @@ func TestManagerCountMismatchDoesNotAdvanceCoverageStamp(t *testing.T) {
 	readStamp := func() string {
 		t.Helper()
 		var stamp string
-		if err := side.QueryRow(
-			"SELECT content_stamped_at FROM recall_extract_progress " +
+		if err := side.QueryRowContext(ctx,
+			"SELECT content_stamped_at FROM recall_extract_progress "+
 				"WHERE session_id = 'sess-1'").Scan(&stamp); err != nil {
 			t.Fatalf("reading coverage stamp: %v", err)
 		}
@@ -2475,7 +2477,7 @@ func TestManagerCountMismatchDoesNotAdvanceCoverageStamp(t *testing.T) {
 	time.Sleep(2 * time.Millisecond)
 	// The session row claims more messages than the transcript holds; the
 	// digest is unchanged, so the revisit takes the same-digest arm.
-	if _, err := side.Exec(
+	if _, err := side.ExecContext(ctx,
 		"UPDATE sessions SET message_count = 5 WHERE id = 'sess-1'",
 	); err != nil {
 		t.Fatalf("forging count mismatch: %v", err)
@@ -2510,7 +2512,7 @@ func TestManagerCountMismatchDoesNotAdvanceCoverageStamp(t *testing.T) {
 // the rest of the backlog stays untouched and resumable.
 func TestManagerAbortsPassOnExhaustedTransientFailures(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, func(_ string, _ int) (int, string) {
 		return http.StatusInternalServerError, `{"error":"upstream down"}`
 	})
@@ -2559,7 +2561,7 @@ func TestManagerScheduledPassSkipsSessionReendedWithinQuietPeriod(t *testing.T) 
 			t.Errorf("closing archive: %v", err)
 		}
 	})
-	ctx := context.Background()
+	ctx := t.Context()
 	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("opening side connection: %v", err)
@@ -2571,7 +2573,7 @@ func TestManagerScheduledPassSkipsSessionReendedWithinQuietPeriod(t *testing.T) 
 			// selected — ends again just now: fresh activity inside the
 			// quiet period.
 			reended := time.Now().UTC().Format(time.RFC3339Nano)
-			if _, err := side.Exec(
+			if _, err := side.ExecContext(ctx,
 				"UPDATE sessions SET ended_at = ? WHERE id = 'sess-b'",
 				reended,
 			); err != nil {
@@ -2613,7 +2615,7 @@ func TestManagerScheduledPassSkipsSessionReendedWithinQuietPeriod(t *testing.T) 
 // aborting.
 func TestManagerBadRequestStaysSessionScoped(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, func(_ string, call int) (int, string) {
 		if call == 1 {
 			return http.StatusBadRequest, `{"error":"content refused"}`
@@ -2663,7 +2665,7 @@ func TestManagerRepairsFailedZeroUnitSession(t *testing.T) {
 			t.Errorf("closing archive: %v", err)
 		}
 	})
-	ctx := context.Background()
+	ctx := t.Context()
 	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("opening side connection: %v", err)
@@ -2697,7 +2699,7 @@ func TestManagerRepairsFailedZeroUnitSession(t *testing.T) {
 	}
 	setMessageCount := func(count int) {
 		t.Helper()
-		if _, err := side.Exec(
+		if _, err := side.ExecContext(ctx,
 			"UPDATE sessions SET message_count = ? WHERE id = 'sess-1'",
 			count,
 		); err != nil {
@@ -2751,7 +2753,7 @@ func TestManagerScheduledPassSkipsSessionsTrashedAfterSelection(t *testing.T) {
 			t.Errorf("closing archive: %v", err)
 		}
 	})
-	ctx := context.Background()
+	ctx := t.Context()
 	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
 	if err != nil {
 		t.Fatalf("opening side connection: %v", err)
@@ -2763,11 +2765,11 @@ func TestManagerScheduledPassSkipsSessionsTrashedAfterSelection(t *testing.T) {
 			// two candidates — already selected — become ineligible:
 			// sess-b is trashed and sess-c's row vanishes entirely, so
 			// their first snapshots read as ineligible and missing.
-			if _, err := side.Exec("UPDATE sessions SET deleted_at = " +
+			if _, err := side.ExecContext(ctx, "UPDATE sessions SET deleted_at = "+
 				"'2026-01-01T00:00:00.000Z' WHERE id = 'sess-b'"); err != nil {
 				t.Errorf("trashing session: %v", err)
 			}
-			if _, err := side.Exec(
+			if _, err := side.ExecContext(ctx,
 				"DELETE FROM sessions WHERE id = 'sess-c'"); err != nil {
 				t.Errorf("deleting session: %v", err)
 			}
@@ -2805,7 +2807,7 @@ func TestManagerScheduledPassSkipsSessionsTrashedAfterSelection(t *testing.T) {
 // sessions were never extracted.
 func TestManagerExplicitActivateRefusesUncoveredSessions(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	seedSession(t, d, "sess-2", turnMessages("c", "d"), nil)
@@ -2847,7 +2849,7 @@ func TestManagerRevisitRestoresRevokedProvenance(t *testing.T) {
 			t.Errorf("closing archive: %v", err)
 		}
 	})
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, server.URL, nil)
@@ -2860,11 +2862,11 @@ func TestManagerRevisitRestoresRevokedProvenance(t *testing.T) {
 		t.Fatalf("opening side connection: %v", err)
 	}
 	t.Cleanup(func() { _ = side.Close() })
-	if _, err := side.Exec(
+	if _, err := side.ExecContext(ctx,
 		"UPDATE recall_entries SET provenance_ok = 0"); err != nil {
 		t.Fatalf("revoking provenance: %v", err)
 	}
-	if _, err := side.Exec(
+	if _, err := side.ExecContext(ctx,
 		"UPDATE recall_evidence SET content_digest = 'stale'"); err != nil {
 		t.Fatalf("staling evidence: %v", err)
 	}
@@ -2901,8 +2903,11 @@ func TestManagerRevisitRestoresRevokedProvenance(t *testing.T) {
 // deferred rescan crashed before it landed). The stamp is only a claim; the
 // boundary must re-check the content it actually sends.
 func TestManagerRunPassRefusesTranscriptMatchingSecretRules(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	secret := "ghp_" + "9KxT2mQ7Rw4ZpL8sVn3JdY6bF1cH5gAe0UqM"
 	// seedSession stamps a clean current full scan regardless of content —
@@ -2912,18 +2917,18 @@ func TestManagerRunPassRefusesTranscriptMatchingSecretRules(t *testing.T) {
 	m := newManager(t, d, server.URL, nil)
 
 	result, err := m.RunPass(ctx, PassOptions{})
-	require.NoError(t, err)
-	assert.Equal(t, 0, log.count(),
+	require.NoError(err)
+	assert.Equal(0, log.count(),
 		"secret-bearing transcript must never reach the model")
-	assert.Equal(t, 1, result.Failed)
-	assert.Zero(t, result.Sessions)
-	assert.Zero(t, result.Entries)
+	assert.Equal(1, result.Failed)
+	assert.Zero(result.Sessions)
+	assert.Zero(result.Entries)
 
 	progress, found, err := d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, db.ExtractProgressFailed, progress.State)
-	assert.Contains(t, progress.LastError, "secrets scan --backfill")
+	require.NoError(err)
+	require.True(found)
+	assert.Equal(db.ExtractProgressFailed, progress.State)
+	assert.Contains(progress.LastError, "secrets scan --backfill")
 }
 
 // TestManagerRunPassDiscardsEntriesWhenRevisitFindsSecrets grows an already
@@ -2932,44 +2937,47 @@ func TestManagerRunPassRefusesTranscriptMatchingSecretRules(t *testing.T) {
 // pass revisit must drop the session's generated entries and fail it closed
 // instead of topping it up.
 func TestManagerRunPassDiscardsEntriesWhenRevisitFindsSecrets(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("fix the bug", "done"), nil)
 	m := newManager(t, d, server.URL, nil)
 
 	result, err := m.RunPass(ctx, PassOptions{})
-	require.NoError(t, err)
-	require.Equal(t, 1, result.Sessions)
+	require.NoError(err)
+	require.Equal(1, result.Sessions)
 	cleanCalls := log.count()
-	require.Positive(t, cleanCalls)
+	require.Positive(cleanCalls)
 
 	secret := "ghp_" + "Vn3JdY6bF1cH5gAe0UqM9KxT2mQ7Rw4ZpL8s"
 	growSession(t, d, "sess-1",
 		turnMessages("new token is "+secret, "noted"), 2)
 
 	result, err = m.RunPass(ctx, PassOptions{Full: true})
-	require.NoError(t, err)
-	assert.Equal(t, cleanCalls, log.count(),
+	require.NoError(err)
+	assert.Equal(cleanCalls, log.count(),
 		"the grown secret-bearing transcript must not reach the model")
-	assert.Equal(t, 1, result.Failed)
-	assert.Zero(t, result.Entries)
+	assert.Equal(1, result.Failed)
+	assert.Zero(result.Entries)
 
 	entries, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
-	require.NoError(t, err)
-	assert.Empty(t, entries,
+	require.NoError(err)
+	assert.Empty(entries,
 		"entries extracted before the secret appeared must be discarded")
 
 	progress, found, err := d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, db.ExtractProgressFailed, progress.State)
-	assert.Contains(t, progress.LastError, "secrets scan --backfill")
+	require.NoError(err)
+	require.True(found)
+	assert.Equal(db.ExtractProgressFailed, progress.State)
+	assert.Contains(progress.LastError, "secrets scan --backfill")
 }
 
 func TestManagerAllowCandidateFindingsExtractsCandidateOnlySessions(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	// A full scan recorded only a candidate-confidence match (a high-entropy
 	// path, a JWT-shaped identifier): leak count zero. With
@@ -3007,7 +3015,7 @@ func TestManagerAllowCandidateFindingsExtractsCandidateOnlySessions(t *testing.T
 
 func TestManagerAllowCandidateFindingsStillRefusesDefinite(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	// The relaxed policy narrows the gate to definite findings; it must not
 	// open it. A definite finding (leak count 1) keeps the session out.
@@ -3047,7 +3055,7 @@ func TestManagerAllowCandidateFindingsStillRefusesDefinite(t *testing.T) {
 
 func TestManagerAllowCandidateFindingsPreSendScanIgnoresCandidateText(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	// The transcript itself contains candidate-tier material (a high-entropy
 	// assignment) that the pre-send re-scan would normally reject "despite a
@@ -3082,6 +3090,8 @@ func TestManagerArchiveContentBeforeModelCall(t *testing.T) {
 			config.ArchiveContentFull, config.ArchiveContentTranscripts, config.ArchiveContentUsage,
 		} {
 			t.Run(fmt.Sprintf("scheduled=%t/%s", scheduled, policy), func(t *testing.T) {
+				assert := assert.New(t)
+
 				d := newTestArchive(t)
 				seedSession(t, d, "stored-session", turnMessages("fix the test", "pinned the clock"), nil)
 				server, calls := modelServer(t, alwaysEntries(t, "clock decision"))
@@ -3092,19 +3102,19 @@ func TestManagerArchiveContentBeforeModelCall(t *testing.T) {
 				var err error
 				if scheduled {
 					var started bool
-					started, result, err = manager.TryPass(context.Background(), PassOptions{})
-					assert.True(t, started)
+					started, result, err = manager.TryPass(t.Context(), PassOptions{})
+					assert.True(started)
 				} else {
-					result, err = manager.RunPass(context.Background(), PassOptions{SessionID: "stored-session"})
+					result, err = manager.RunPass(t.Context(), PassOptions{SessionID: "stored-session"})
 				}
 				if policy.UsageOnly() {
-					assert.ErrorIs(t, err, db.ErrArchiveContentExcluded)
-					assert.Zero(t, calls.count(), "no stored transcript may reach the model")
-					assert.Zero(t, result.Units)
+					assert.ErrorIs(err, db.ErrArchiveContentExcluded)
+					assert.Zero(calls.count(), "no stored transcript may reach the model")
+					assert.Zero(result.Units)
 				} else {
 					require.NoError(t, err)
-					assert.Equal(t, 2, calls.count())
-					assert.Equal(t, 2, result.Entries)
+					assert.Equal(2, calls.count())
+					assert.Equal(2, result.Entries)
 				}
 			})
 		}

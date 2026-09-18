@@ -45,6 +45,8 @@ func TestBuildServiceSpec_PopulatesFields(t *testing.T) {
 }
 
 func TestBuildServiceSpec_UsesNamedDefaultTarget(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Setenv("AGENTSVIEW_PG_URL", "")
 	restoreUnsetEnv(t, "BROKEN_WORK_TARGET")
 	dataDir := t.TempDir()
@@ -63,12 +65,14 @@ func TestBuildServiceSpec_UsesNamedDefaultTarget(t *testing.T) {
 		},
 	}, pgServiceKind)
 	require.NoError(t, err)
-	assert.Equal(t, dataDir, spec.DataDir)
-	assert.Equal(t, filepath.Join(dataDir, "pg-watch.log"), spec.LogPath)
-	assert.NotEmpty(t, spec.BinPath)
+	assert.Equal(dataDir, spec.DataDir)
+	assert.Equal(filepath.Join(dataDir, "pg-watch.log"), spec.LogPath)
+	assert.NotEmpty(spec.BinPath)
 }
 
 func TestBuildServiceSpec_RejectsEnvPGURL(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Setenv("AGENTSVIEW_PG_URL", "postgres://from-env")
 	_, err := buildServiceSpec(config.Config{
 		DataDir: t.TempDir(),
@@ -78,12 +82,15 @@ func TestBuildServiceSpec_RejectsEnvPGURL(t *testing.T) {
 		},
 	}, pgServiceKind)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "AGENTSVIEW_PG_URL")
-	assert.Contains(t, err.Error(), "literal PostgreSQL URL")
-	assert.Contains(t, err.Error(), "default_pg-selected [pg.NAME].url")
+	assert.Contains(err.Error(), "AGENTSVIEW_PG_URL")
+	assert.Contains(err.Error(), "literal PostgreSQL URL")
+	assert.Contains(err.Error(), "default_pg-selected [pg.NAME].url")
 }
 
 func TestBuildServiceSpec_RejectsExpandedPGURL(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Setenv("AGENTSVIEW_PG_URL", "")
 	t.Setenv("PGURL", "postgres://from-var")
 	_, err := buildServiceSpec(config.Config{
@@ -93,9 +100,9 @@ func TestBuildServiceSpec_RejectsExpandedPGURL(t *testing.T) {
 			MachineName: "box1",
 		},
 	}, pgServiceKind)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "environment variable expansion")
-	assert.Contains(t, err.Error(), "literal PostgreSQL URL")
+	require.Error(err)
+	assert.Contains(err.Error(), "environment variable expansion")
+	assert.Contains(err.Error(), "literal PostgreSQL URL")
 
 	_, err = buildServiceSpec(config.Config{
 		DataDir: t.TempDir(),
@@ -104,9 +111,9 @@ func TestBuildServiceSpec_RejectsExpandedPGURL(t *testing.T) {
 			MachineName: "box1",
 		},
 	}, pgServiceKind)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "environment variable expansion")
-	assert.Contains(t, err.Error(), "default_pg-selected [pg.NAME].url")
+	require.Error(err)
+	assert.Contains(err.Error(), "environment variable expansion")
+	assert.Contains(err.Error(), "default_pg-selected [pg.NAME].url")
 }
 
 func TestValidateServiceSpec_RejectsUnsafeChars(t *testing.T) {
@@ -172,6 +179,8 @@ func TestBuildServiceSpec_RejectsUnsafeDataDir(t *testing.T) {
 }
 
 func TestSetEnvVarsAffectingService(t *testing.T) {
+	assert := assert.New(t)
+
 	// AGENTSVIEW_PG_URL is a hard error elsewhere, not a warning, so it
 	// must never appear here even when set.
 	env := map[string]string{
@@ -188,26 +197,28 @@ func TestSetEnvVarsAffectingService(t *testing.T) {
 		return v, ok
 	}
 	got := setEnvVarsAffectingService(pgServiceKind, lookup)
-	assert.Contains(t, got, "AGENTSVIEW_PG_SCHEMA")
-	assert.Contains(t, got, "CLAUDE_CONFIG_DIR")
-	assert.Contains(t, got, "CLAUDE_PROJECTS_DIR")
-	assert.Contains(t, got, "PI_CODING_AGENT_DIR")
-	assert.Contains(t, got, "PI_CODING_AGENT_SESSION_DIR")
-	assert.NotContains(t, got, "AGENTSVIEW_PG_URL")
-	assert.NotContains(t, got, "AGENTSVIEW_PG_MACHINE",
+	assert.Contains(got, "AGENTSVIEW_PG_SCHEMA")
+	assert.Contains(got, "CLAUDE_CONFIG_DIR")
+	assert.Contains(got, "CLAUDE_PROJECTS_DIR")
+	assert.Contains(got, "PI_CODING_AGENT_DIR")
+	assert.Contains(got, "PI_CODING_AGENT_SESSION_DIR")
+	assert.NotContains(got, "AGENTSVIEW_PG_URL")
+	assert.NotContains(got, "AGENTSVIEW_PG_MACHINE",
 		"set-but-empty env vars should not be reported")
 
 	// Nothing set -> empty result.
 	none := setEnvVarsAffectingService(pgServiceKind, func(string) (string, bool) {
 		return "", false
 	})
-	assert.Empty(t, none)
+	assert.Empty(none)
 }
 
 func TestWarnUninheritedServiceEnv(t *testing.T) {
+	assert := assert.New(t)
+
 	var buf strings.Builder
 	warnUninheritedServiceEnv(&buf, nil)
-	assert.Empty(t, buf.String(), "no warning when nothing is set")
+	assert.Empty(buf.String(), "no warning when nothing is set")
 
 	buf.Reset()
 	warnUninheritedServiceEnv(&buf, []string{
@@ -216,11 +227,11 @@ func TestWarnUninheritedServiceEnv(t *testing.T) {
 		"CLAUDE_PROJECTS_DIR",
 	})
 	out := buf.String()
-	assert.Contains(t, out, "WARNING")
-	assert.Contains(t, out, "AGENTSVIEW_PG_SCHEMA")
-	assert.Contains(t, out, "CLAUDE_CONFIG_DIR")
-	assert.Contains(t, out, "CLAUDE_PROJECTS_DIR")
-	assert.Contains(t, out, "config.toml")
+	assert.Contains(out, "WARNING")
+	assert.Contains(out, "AGENTSVIEW_PG_SCHEMA")
+	assert.Contains(out, "CLAUDE_CONFIG_DIR")
+	assert.Contains(out, "CLAUDE_PROJECTS_DIR")
+	assert.Contains(out, "config.toml")
 }
 
 func TestReadServiceLastPush_ClickHouseRejectsInsecureRemote(t *testing.T) {
@@ -254,9 +265,12 @@ func TestReadServiceLastPush_UsesDefaultTargetScope(t *testing.T) {
 }
 
 func TestReadServiceLastPush_ReadsLegacyDefaultStateWithoutMigration(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	local := dbtest.OpenTestDB(t)
 
-	require.NoError(t, local.SetSyncState(
+	require.NoError(local.SetSyncState(
 		"last_push_at",
 		"2026-03-11T12:34:56.123Z",
 	))
@@ -267,16 +281,16 @@ func TestReadServiceLastPush_ReadsLegacyDefaultStateWithoutMigration(t *testing.
 			"work": {URL: "postgres://work"},
 		},
 	}, local)
-	require.NoError(t, err)
-	assert.Equal(t, "2026-03-11T12:34:56.123Z", lastPush)
+	require.NoError(err)
+	assert.Equal("2026-03-11T12:34:56.123Z", lastPush)
 
 	legacyValue, err := local.GetSyncState("last_push_at")
-	require.NoError(t, err)
-	assert.Equal(t, "2026-03-11T12:34:56.123Z", legacyValue)
+	require.NoError(err)
+	assert.Equal("2026-03-11T12:34:56.123Z", legacyValue)
 
 	scopedValue, err := local.GetSyncState("last_push_at:work")
-	require.NoError(t, err)
-	assert.Empty(t, scopedValue)
+	require.NoError(err)
+	assert.Empty(scopedValue)
 }
 
 func TestWriteServiceStatus_AppendsScopedLastPush(t *testing.T) {
@@ -415,7 +429,7 @@ func TestLaunchdInstall_WritesAndBootstraps(t *testing.T) {
 		DataDir: home,
 		LogPath: filepath.Join(home, "pg-watch.log"),
 	}
-	if err := m.install(context.Background(), spec); err != nil {
+	if err := m.install(t.Context(), spec); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	if _, err := os.Stat(m.unitPath()); err != nil {
@@ -429,7 +443,7 @@ func TestLaunchdInstall_WritesAndBootstraps(t *testing.T) {
 func TestLaunchdStart_BootstrapsAfterBootout(t *testing.T) {
 	rr := &recordingRunner{}
 	m := &launchdManager{kind: pgServiceKind, uid: 501, home: t.TempDir(), run: rr.run}
-	if err := m.start(context.Background()); err != nil {
+	if err := m.start(t.Context()); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	if !rr.sawContains("launchctl bootstrap gui/501 " + m.unitPath()) {
@@ -440,7 +454,7 @@ func TestLaunchdStart_BootstrapsAfterBootout(t *testing.T) {
 func TestLaunchdStop_BootsOut(t *testing.T) {
 	rr := &recordingRunner{}
 	m := &launchdManager{kind: pgServiceKind, uid: 501, home: t.TempDir(), run: rr.run}
-	if err := m.stop(context.Background()); err != nil {
+	if err := m.stop(t.Context()); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
 	if !rr.sawContains("launchctl bootout gui/501/agentsview.pg-watch") {
@@ -457,10 +471,10 @@ func TestLaunchdUninstall_RemovesPlist(t *testing.T) {
 		DataDir: home,
 		LogPath: filepath.Join(home, "pg-watch.log"),
 	}
-	if err := m.install(context.Background(), spec); err != nil {
+	if err := m.install(t.Context(), spec); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	if err := m.uninstall(context.Background()); err != nil {
+	if err := m.uninstall(t.Context()); err != nil {
 		t.Fatalf("uninstall: %v", err)
 	}
 	if _, err := os.Stat(m.unitPath()); !os.IsNotExist(err) {
@@ -516,14 +530,14 @@ func TestSystemdLingerDetection(t *testing.T) {
 		"loginctl show-user me --property=Linger": "Linger=yes\n",
 	}}
 	m := &systemdManager{kind: pgServiceKind, user: "me", home: "/home/me", run: yes.run}
-	if !m.lingerEnabled(context.Background()) {
+	if !m.lingerEnabled(t.Context()) {
 		t.Error("expected linger enabled")
 	}
 	no := &recordingRunner{outputs: map[string]string{
 		"loginctl show-user me --property=Linger": "Linger=no\n",
 	}}
 	m2 := &systemdManager{kind: pgServiceKind, user: "me", home: "/home/me", run: no.run}
-	if m2.lingerEnabled(context.Background()) {
+	if m2.lingerEnabled(t.Context()) {
 		t.Error("expected linger disabled")
 	}
 }
@@ -537,7 +551,7 @@ func TestSystemdInstall_ReloadsAndEnables(t *testing.T) {
 		DataDir: home,
 		LogPath: filepath.Join(home, "pg-watch.log"),
 	}
-	if err := m.install(context.Background(), spec); err != nil {
+	if err := m.install(t.Context(), spec); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	if _, err := os.Stat(m.unitPath()); err != nil {
@@ -554,7 +568,7 @@ func TestSystemdInstall_ReloadsAndEnables(t *testing.T) {
 func TestSystemdStart_CallsStart(t *testing.T) {
 	rr := &recordingRunner{}
 	m := &systemdManager{kind: pgServiceKind, user: "me", home: t.TempDir(), run: rr.run}
-	if err := m.start(context.Background()); err != nil {
+	if err := m.start(t.Context()); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	if !rr.sawContains("systemctl --user start agentsview-pg-watch.service") {
@@ -565,7 +579,7 @@ func TestSystemdStart_CallsStart(t *testing.T) {
 func TestSystemdStop_CallsStop(t *testing.T) {
 	rr := &recordingRunner{}
 	m := &systemdManager{kind: pgServiceKind, user: "me", home: t.TempDir(), run: rr.run}
-	if err := m.stop(context.Background()); err != nil {
+	if err := m.stop(t.Context()); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
 	if !rr.sawContains("systemctl --user stop agentsview-pg-watch.service") {
@@ -582,10 +596,10 @@ func TestSystemdUninstall_DisablesAndRemoves(t *testing.T) {
 		DataDir: home,
 		LogPath: filepath.Join(home, "pg-watch.log"),
 	}
-	if err := m.install(context.Background(), spec); err != nil {
+	if err := m.install(t.Context(), spec); err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	if err := m.uninstall(context.Background()); err != nil {
+	if err := m.uninstall(t.Context()); err != nil {
 		t.Fatalf("uninstall: %v", err)
 	}
 	if _, err := os.Stat(m.unitPath()); !os.IsNotExist(err) {

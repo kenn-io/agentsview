@@ -44,35 +44,40 @@ func TestUsageSummaryWaitsForPreparationBeyondWriteTimeout(t *testing.T) {
 		"/comparison", "/pairwise-comparison",
 	} {
 		t.Run(path, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			s := testServer(t, 10*time.Millisecond)
 			s.db = delayedUsageStore{Store: s.db, delay: 50 * time.Millisecond}
 			s.sessions = service.NewReadOnlyBackend(s.db)
 			ts := httptest.NewServer(s.Handler())
 			t.Cleanup(ts.Close)
 			params := oneDayUsageRange + "&current_microdollars=0&left_dimension=model&left_value=model-a&right_dimension=model&right_value=model-b"
-			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/usage"+path+"?"+params, nil)
-			require.NoError(t, err)
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/usage"+path+"?"+params, nil)
+			require.NoError(err)
 			req.Host = "127.0.0.1:0"
 			resp, err := ts.Client().Do(req)
-			require.NoError(t, err)
+			require.NoError(err)
 			defer resp.Body.Close()
 			body, err := io.ReadAll(resp.Body)
-			require.NoError(t, err)
-			require.Equal(t, http.StatusOK, resp.StatusCode, string(body))
+			require.NoError(err)
+			require.Equal(http.StatusOK, resp.StatusCode, string(body))
 			if path == "/summary" || path == "/summary/stream" {
-				assert.Contains(t, string(body), `"daily":[]`)
+				assert.Contains(string(body), `"daily":[]`)
 			}
 			if path == "/summary/stream" {
-				assert.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
-				assert.Contains(t, string(body), "event: progress\n")
-				assert.Contains(t, string(body), "event: done\n")
-				assert.Contains(t, string(body), "Reading archived sessions for this report")
+				assert.Equal("text/event-stream", resp.Header.Get("Content-Type"))
+				assert.Contains(string(body), "event: progress\n")
+				assert.Contains(string(body), "event: done\n")
+				assert.Contains(string(body), "Reading archived sessions for this report")
 			}
 		})
 	}
 }
 
 func TestUsageSummaryStreamReportsBeforeQueryFinishesAndCancels(t *testing.T) {
+	require := require.New(t)
+
 	s := testServer(t, time.Second)
 	entered := make(chan struct{})
 	canceled := make(chan struct{})
@@ -85,14 +90,14 @@ func TestUsageSummaryStreamReportsBeforeQueryFinishesAndCancels(t *testing.T) {
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
 		ts.URL+"/api/v1/usage/summary/stream?"+oneDayUsageRange, nil)
-	require.NoError(t, err)
+	require.NoError(err)
 	req.Host = "127.0.0.1:0"
 	resp, err := ts.Client().Do(req)
-	require.NoError(t, err)
+	require.NoError(err)
 	defer resp.Body.Close()
 	data := make([]byte, len("event: progress\n"))
 	_, err = io.ReadFull(resp.Body, data)
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Equal(t, "event: progress\n", string(data), "progress must arrive while the query is blocked")
 	select {
 	case <-entered:

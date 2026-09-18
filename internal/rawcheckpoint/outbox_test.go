@@ -23,13 +23,13 @@ func createVersionOneCheckpoint(t *testing.T, path string) {
 	db, err := sql.Open(checkpointDriverName, checkpointDSN(path, false))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	_, err = db.Exec(`CREATE TABLE device_config (
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE device_config (
 		id INTEGER PRIMARY KEY CHECK (id = 1),
 		device_id TEXT NOT NULL,
 		created_at TEXT NOT NULL
 	)`)
 	require.NoError(t, err)
-	_, err = db.Exec(`CREATE TABLE raw_sources (
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE raw_sources (
 		provider TEXT NOT NULL,
 		configured_root_id TEXT NOT NULL,
 		source_key TEXT NOT NULL,
@@ -40,17 +40,17 @@ func createVersionOneCheckpoint(t *testing.T, path string) {
 		PRIMARY KEY (provider, configured_root_id, source_key)
 	)`)
 	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO device_config (id, device_id, created_at)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO device_config (id, device_id, created_at)
 		VALUES (1, 'dev_existing', '2026-08-25T00:00:00Z')`)
 	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO raw_sources
+	_, err = db.ExecContext(t.Context(), `INSERT INTO raw_sources
 		(provider, configured_root_id, source_key, head_manifest_id,
 		 head_receipt, head_generation, updated_at)
 		VALUES ('claude', 'root-existing', 'source-existing',
 		 ?, ?, 1, '2026-08-25T00:00:00Z')`,
 		validCheckpointDigest(2), validCheckpointDigest(3))
 	require.NoError(t, err)
-	_, err = db.Exec(`PRAGMA user_version = 1`)
+	_, err = db.ExecContext(t.Context(), `PRAGMA user_version = 1`)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 }
@@ -65,45 +65,51 @@ func validCheckpointDigest(value byte) string {
 }
 
 func TestOpenWithOptionsMigratesVersionOneAndEnforcesForeignKeys(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "checkpoint.db")
 	createVersionOneCheckpoint(t, path)
 	store, err := OpenWithOptions(t.Context(), path, Options{
 		SpoolDir:       filepath.Join(t.TempDir(), "spool"),
 		MaxOutboxBytes: 1 << 20,
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 
 	deviceID, ok, err := store.Device(t.Context())
-	require.NoError(t, err)
-	assert.True(t, ok)
-	assert.Equal(t, "dev_existing", deviceID)
+	require.NoError(err)
+	assert.True(ok)
+	assert.Equal("dev_existing", deviceID)
 	head, ok, err := store.SourceHead(
 		t.Context(), parser.AgentClaude, "root-existing", "source-existing",
 	)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, int64(1), head.Generation)
-	assert.Equal(t, validCheckpointDigest(2), head.ManifestID)
-	assert.Equal(t, validCheckpointDigest(3), head.Receipt)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(int64(1), head.Generation)
+	assert.Equal(validCheckpointDigest(2), head.ManifestID)
+	assert.Equal(validCheckpointDigest(3), head.Receipt)
 
 	var version, foreignKeys int
-	require.NoError(t, store.db.QueryRow("PRAGMA user_version").Scan(&version))
-	require.NoError(t, store.db.QueryRow("PRAGMA foreign_keys").Scan(&foreignKeys))
-	assert.Equal(t, schemaVersion, version)
-	assert.Equal(t, 1, foreignKeys)
+	require.NoError(store.db.QueryRowContext(t.Context(), "PRAGMA user_version").Scan(&version))
+	require.NoError(store.db.QueryRowContext(t.Context(), "PRAGMA foreign_keys").Scan(&foreignKeys))
+	assert.Equal(schemaVersion, version)
+	assert.Equal(1, foreignKeys)
 
-	_, err = store.db.Exec(`INSERT INTO outbox_entries
+	_, err = store.db.ExecContext(t.Context(), `INSERT INTO outbox_entries
 		(capture_id, entry_ordinal, path, length, mod_time_ns,
 		 file_identity, prefix_sha256, appendable)
 		VALUES ('missing-capture', 0, 'session.jsonl', 1, 0, '', '', 1)`)
-	require.Error(t, err, "foreign keys must reject an orphaned outbox entry")
+	require.Error(err, "foreign keys must reject an orphaned outbox entry")
 }
 
 func TestOpenWithOptionsRequeuesManifestOnlyFinalizedGeneration(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "checkpoint.db")
 	db, err := sql.Open(checkpointDriverName, checkpointDSN(path, false))
-	require.NoError(t, err)
+	require.NoError(err)
 	for _, statements := range [][]string{
 		versionOneSchemaStatements,
 		versionTwoMigrationStatements,
@@ -112,8 +118,8 @@ func TestOpenWithOptionsRequeuesManifestOnlyFinalizedGeneration(t *testing.T) {
 		versionFiveMigrationStatements,
 	} {
 		for _, statement := range statements {
-			_, err = db.Exec(statement)
-			require.NoError(t, err)
+			_, err = db.ExecContext(t.Context(), statement)
+			require.NoError(err)
 		}
 	}
 	const (
@@ -121,82 +127,85 @@ func TestOpenWithOptionsRequeuesManifestOnlyFinalizedGeneration(t *testing.T) {
 		timestamp = "2026-08-25T00:00:00Z"
 	)
 	manifestID := validCheckpointDigest(1)
-	_, err = db.Exec(`INSERT INTO device_config (id, device_id, created_at)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO device_config (id, device_id, created_at)
 		VALUES (1, 'device-a', ?)`, timestamp)
-	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO configured_roots
+	require.NoError(err)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO configured_roots
 		(id, provider, local_root, created_at, updated_at)
 		VALUES ('root-a', 'claude', '/capture', ?, ?)`, timestamp, timestamp)
-	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO raw_sources
+	require.NoError(err)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO raw_sources
 		(provider, configured_root_id, source_key, head_manifest_id,
 		 head_receipt, head_generation, latest_capture_id, updated_at)
 		VALUES ('claude', 'root-a', 'source-a', '', '', 0, ?, ?)`,
 		captureID, timestamp)
-	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO outbox_generations
+	require.NoError(err)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO outbox_generations
 		(capture_id, provider, configured_root_id, source_key, captured_at,
 		 kind, state, manifest_id, metadata_bytes, created_at, updated_at)
 		VALUES (?, 'claude', 'root-a', 'source-a', ?, 'snapshot', 'finalized',
 		 ?, 1024, ?, ?)`, captureID, timestamp, manifestID, timestamp, timestamp)
-	require.NoError(t, err)
-	_, err = db.Exec(`PRAGMA user_version = 5`)
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
+	require.NoError(err)
+	_, err = db.ExecContext(t.Context(), `PRAGMA user_version = 5`)
+	require.NoError(err)
+	require.NoError(db.Close())
 
 	store, err := OpenWithOptions(t.Context(), path, Options{
 		SpoolDir: filepath.Join(t.TempDir(), "spool"), MaxOutboxBytes: 1 << 20,
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 
 	stored, found, err := store.FinalizedCommit(t.Context(), "device-a", captureID)
 
-	require.NoError(t, err)
-	assert.False(t, found)
-	assert.Empty(t, stored.ManifestID)
+	require.NoError(err)
+	assert.False(found)
+	assert.Empty(stored.ManifestID)
 	commit := rawsync.CommitResult{
 		ManifestID: manifestID, Receipt: validCheckpointDigest(2), Generation: 1,
 	}
-	require.NoError(t, store.BindFinalizedCommit(
+	require.NoError(store.BindFinalizedCommit(
 		t.Context(), "device-a", captureID, commit,
 	))
 	stored, found, err = store.FinalizedCommit(t.Context(), "device-a", captureID)
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, commit.ManifestID, stored.ManifestID)
-	assert.Equal(t, commit.Receipt, stored.Receipt)
-	assert.Equal(t, commit.Generation, stored.Generation)
+	require.NoError(err)
+	require.True(found)
+	assert.Equal(commit.ManifestID, stored.ManifestID)
+	assert.Equal(commit.Receipt, stored.Receipt)
+	assert.Equal(commit.Generation, stored.Generation)
 }
 
 func TestOpenWithOptionsCompactsVersionThreeTerminalGenerations(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "checkpoint.db")
 	spoolDir := filepath.Join(t.TempDir(), "spool")
 	db, err := sql.Open(checkpointDriverName, checkpointDSN(path, false))
-	require.NoError(t, err)
+	require.NoError(err)
 	for _, statements := range [][]string{
 		versionOneSchemaStatements,
 		versionTwoMigrationStatements,
 		versionThreeMigrationStatements,
 	} {
 		for _, statement := range statements {
-			_, err = db.Exec(statement)
-			require.NoError(t, err)
+			_, err = db.ExecContext(t.Context(), statement)
+			require.NoError(err)
 		}
 	}
 	const timestamp = "2026-08-25T00:00:00Z"
-	_, err = db.Exec(`INSERT INTO configured_roots
+	_, err = db.ExecContext(t.Context(), `INSERT INTO configured_roots
 		(id, provider, local_root, created_at, updated_at)
 		VALUES ('root-a', 'claude', '/capture', ?, ?)`, timestamp, timestamp)
-	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO raw_sources
+	require.NoError(err)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO raw_sources
 		(provider, configured_root_id, source_key, head_manifest_id,
 		 head_receipt, head_generation, latest_capture_id, updated_at)
 		VALUES ('claude', 'root-a', 'source-a', ?, ?, 1,
 			'capture-invalid-descendant', ?)`,
 		validCheckpointDigest(1), validCheckpointDigest(2), timestamp)
-	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO outbox_generations
+	require.NoError(err)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO outbox_generations
 		(capture_id, provider, configured_root_id, source_key, captured_at,
 		 kind, state, manifest_id, metadata_bytes, created_at, updated_at)
 		VALUES ('capture-invalid', 'claude', 'root-a', 'source-a', ?,
@@ -208,12 +217,12 @@ func TestOpenWithOptionsCompactsVersionThreeTerminalGenerations(t *testing.T) {
 		timestamp, timestamp, timestamp,
 		timestamp, validCheckpointDigest(1), timestamp, timestamp,
 		timestamp, timestamp, timestamp)
-	require.NoError(t, err)
+	require.NoError(err)
 	invalidOnly := validCheckpointDigest(3)
 	acknowledgedOnly := validCheckpointDigest(4)
 	shared := validCheckpointDigest(5)
 	invalidDescendant := validCheckpointDigest(6)
-	_, err = db.Exec(`INSERT INTO outbox_objects
+	_, err = db.ExecContext(t.Context(), `INSERT INTO outbox_objects
 		(sha256, length, spool_name, ref_count, state, created_at)
 		VALUES (?, 5, ?, 1, 'live', ?),
 		       (?, 7, ?, 1, 'live', ?),
@@ -223,16 +232,16 @@ func TestOpenWithOptionsCompactsVersionThreeTerminalGenerations(t *testing.T) {
 		acknowledgedOnly, acknowledgedOnly, timestamp,
 		shared, shared, timestamp,
 		invalidDescendant, invalidDescendant, timestamp)
-	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO outbox_generations
+	require.NoError(err)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO outbox_generations
 		(capture_id, provider, configured_root_id, source_key,
 		 predecessor_capture_id, captured_at, kind, state, metadata_bytes,
 		 created_at, updated_at)
 		VALUES ('capture-invalid-descendant', 'claude', 'root-a', 'source-a',
 		 'capture-invalid', ?, 'snapshot', 'queued', 400, ?, ?)`,
 		timestamp, timestamp, timestamp)
-	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO outbox_entries
+	require.NoError(err)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO outbox_entries
 		(capture_id, entry_ordinal, path, length, mod_time_ns,
 		 file_identity, prefix_sha256, appendable)
 		VALUES ('capture-invalid', 0, 'invalid.jsonl', 16, 0, 'invalid', ?, 1),
@@ -242,8 +251,8 @@ func TestOpenWithOptionsCompactsVersionThreeTerminalGenerations(t *testing.T) {
 		       ('capture-invalid-descendant', 0, 'descendant.jsonl', 13, 0,
 		        'descendant', ?, 1)`,
 		invalidOnly, acknowledgedOnly, shared, invalidDescendant)
-	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO outbox_entry_objects
+	require.NoError(err)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO outbox_entry_objects
 		(capture_id, entry_ordinal, object_ordinal, sha256, length)
 		VALUES ('capture-invalid', 0, 0, ?, 5),
 		       ('capture-invalid', 0, 1, ?, 11),
@@ -251,21 +260,21 @@ func TestOpenWithOptionsCompactsVersionThreeTerminalGenerations(t *testing.T) {
 		       ('capture-queued', 0, 0, ?, 11),
 		       ('capture-invalid-descendant', 0, 0, ?, 13)`,
 		invalidOnly, shared, acknowledgedOnly, shared, invalidDescendant)
-	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO raw_source_base_entries
+	require.NoError(err)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO raw_source_base_entries
 		(provider, configured_root_id, source_key, entry_ordinal, path, length,
 		 mod_time_ns, file_identity, prefix_sha256, appendable)
 		VALUES ('claude', 'root-a', 'source-a', 0, 'acknowledged.jsonl', 7,
 		        0, 'acknowledged', ?, 1)`, acknowledgedOnly)
-	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO raw_source_base_objects
+	require.NoError(err)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO raw_source_base_objects
 		(provider, configured_root_id, source_key, entry_ordinal,
 		 object_ordinal, sha256, length)
 		VALUES ('claude', 'root-a', 'source-a', 0, 0, ?, 7)`, acknowledgedOnly)
-	require.NoError(t, err)
-	_, err = db.Exec(`PRAGMA user_version = 3`)
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
+	require.NoError(err)
+	_, err = db.ExecContext(t.Context(), `PRAGMA user_version = 3`)
+	require.NoError(err)
+	require.NoError(db.Close())
 	for _, object := range []struct {
 		digest string
 		data   string
@@ -276,8 +285,8 @@ func TestOpenWithOptionsCompactsVersionThreeTerminalGenerations(t *testing.T) {
 		{digest: invalidDescendant, data: "1234567890123"},
 	} {
 		objectDir := filepath.Join(spoolDir, "objects", "sha256", object.digest[:2])
-		require.NoError(t, os.MkdirAll(objectDir, 0o700))
-		require.NoError(t, os.WriteFile(
+		require.NoError(os.MkdirAll(objectDir, 0o700))
+		require.NoError(os.WriteFile(
 			filepath.Join(objectDir, object.digest), []byte(object.data), 0o600,
 		))
 	}
@@ -285,72 +294,75 @@ func TestOpenWithOptionsCompactsVersionThreeTerminalGenerations(t *testing.T) {
 	store, err := OpenWithOptions(t.Context(), path, Options{
 		SpoolDir: spoolDir, MaxOutboxBytes: 1 << 20,
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 	base, ok, err := store.CaptureBase(t.Context(), SourceIdentity{
 		Provider: parser.AgentClaude, ConfiguredRootID: "root-a", SourceKey: "source-a",
 	})
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, "capture-acknowledged", base.CaptureID)
-	require.Len(t, base.Entries, 1)
-	assert.Equal(t, "acknowledged.jsonl", base.Entries[0].Path)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal("capture-acknowledged", base.CaptureID)
+	require.Len(base.Entries, 1)
+	assert.Equal("acknowledged.jsonl", base.Entries[0].Path)
 
 	usage, err := store.OutboxUsage(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, int64(311), usage.UsedBytes)
+	require.NoError(err)
+	assert.Equal(int64(311), usage.UsedBytes)
 	var generations int
-	require.NoError(t, store.db.QueryRow(
+	require.NoError(store.db.QueryRowContext(t.Context(),
 		`SELECT count(*) FROM outbox_generations`,
 	).Scan(&generations))
-	assert.Equal(t, 1, generations)
+	assert.Equal(1, generations)
 
 	var sharedReferences int
 	var sharedState string
-	require.NoError(t, store.db.QueryRow(
+	require.NoError(store.db.QueryRowContext(t.Context(),
 		`SELECT ref_count, state FROM outbox_objects WHERE sha256 = ? AND length = 11`,
 		shared,
 	).Scan(&sharedReferences, &sharedState))
-	assert.Equal(t, 1, sharedReferences)
-	assert.Equal(t, "live", sharedState)
+	assert.Equal(1, sharedReferences)
+	assert.Equal("live", sharedState)
 	_, err = os.Stat(store.ObjectPath(rawsync.ObjectRef{SHA256: shared, Length: 11}))
-	assert.NoError(t, err)
+	assert.NoError(err)
 
 	var invalidObjects int
-	require.NoError(t, store.db.QueryRow(
+	require.NoError(store.db.QueryRowContext(t.Context(),
 		`SELECT count(*) FROM outbox_objects WHERE sha256 = ? AND length = 5`,
 		invalidOnly,
 	).Scan(&invalidObjects))
-	assert.Zero(t, invalidObjects)
+	assert.Zero(invalidObjects)
 	_, err = os.Stat(store.ObjectPath(rawsync.ObjectRef{SHA256: invalidOnly, Length: 5}))
-	assert.ErrorIs(t, err, os.ErrNotExist)
+	require.ErrorIs(err, os.ErrNotExist)
 	var descendantObjects int
-	require.NoError(t, store.db.QueryRow(
+	require.NoError(store.db.QueryRowContext(t.Context(),
 		`SELECT count(*) FROM outbox_objects WHERE sha256 = ? AND length = 13`,
 		invalidDescendant,
 	).Scan(&descendantObjects))
-	assert.Zero(t, descendantObjects)
+	assert.Zero(descendantObjects)
 	_, err = os.Stat(store.ObjectPath(rawsync.ObjectRef{
 		SHA256: invalidDescendant, Length: 13,
 	}))
-	assert.ErrorIs(t, err, os.ErrNotExist)
+	require.ErrorIs(err, os.ErrNotExist)
 
 	var acknowledgedReferences int
 	var acknowledgedState string
-	require.NoError(t, store.db.QueryRow(
+	require.NoError(store.db.QueryRowContext(t.Context(),
 		`SELECT ref_count, state FROM outbox_objects WHERE sha256 = ? AND length = 7`,
 		acknowledgedOnly,
 	).Scan(&acknowledgedReferences, &acknowledgedState))
-	assert.Zero(t, acknowledgedReferences)
-	assert.Equal(t, "remote", acknowledgedState)
+	assert.Zero(acknowledgedReferences)
+	assert.Equal("remote", acknowledgedState)
 	_, err = os.Stat(store.ObjectPath(rawsync.ObjectRef{SHA256: acknowledgedOnly, Length: 7}))
-	assert.ErrorIs(t, err, os.ErrNotExist)
+	assert.ErrorIs(err, os.ErrNotExist)
 }
 
 func TestOpenWithOptionsReconcilesVersionFourRootCoverageGap(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "checkpoint.db")
 	db, err := sql.Open(checkpointDriverName, checkpointDSN(path, false))
-	require.NoError(t, err)
+	require.NoError(err)
 	for _, statements := range [][]string{
 		versionOneSchemaStatements,
 		versionTwoMigrationStatements,
@@ -358,125 +370,130 @@ func TestOpenWithOptionsReconcilesVersionFourRootCoverageGap(t *testing.T) {
 		versionFourMigrationStatements,
 	} {
 		for _, statement := range statements {
-			_, err = db.Exec(statement)
-			require.NoError(t, err)
+			_, err = db.ExecContext(t.Context(), statement)
+			require.NoError(err)
 		}
 	}
 	const timestamp = "2026-08-25T00:00:00Z"
-	_, err = db.Exec(`INSERT INTO configured_roots
+	_, err = db.ExecContext(t.Context(), `INSERT INTO configured_roots
 		(id, provider, local_root, created_at, updated_at)
 		VALUES ('root-a', 'claude', '/capture', ?, ?)`, timestamp, timestamp)
-	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO raw_coverage
+	require.NoError(err)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO raw_coverage
 		(provider, configured_root_id, state, reason, degraded_at, updated_at)
 		VALUES ('claude', 'root-a', 'degraded', 'outbox_full', ?, ?)`,
 		timestamp, timestamp)
-	require.NoError(t, err)
-	_, err = db.Exec(`PRAGMA user_version = 4`)
-	require.NoError(t, err)
-	require.NoError(t, db.Close())
+	require.NoError(err)
+	_, err = db.ExecContext(t.Context(), `PRAGMA user_version = 4`)
+	require.NoError(err)
+	require.NoError(db.Close())
 
 	store, err := OpenWithOptions(t.Context(), path, Options{
 		SpoolDir: filepath.Join(t.TempDir(), "spool"), MaxOutboxBytes: 1 << 20,
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 
 	var failures int
-	require.NoError(t, store.db.QueryRow(
+	require.NoError(store.db.QueryRowContext(t.Context(),
 		`SELECT count(*) FROM raw_coverage_failures WHERE source_key = ''`,
 	).Scan(&failures))
-	assert.Equal(t, 1, failures)
+	assert.Equal(1, failures)
 	coverage, ok, err := store.Coverage(
 		t.Context(), parser.AgentClaude, "root-a",
 	)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, CoverageDegraded, coverage.State)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(CoverageDegraded, coverage.State)
 
-	require.NoError(t, store.CompleteRootReconciliation(t.Context(), "root-a"))
+	require.NoError(store.CompleteRootReconciliation(t.Context(), "root-a"))
 	coverage, ok, err = store.Coverage(t.Context(), parser.AgentClaude, "root-a")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, CoverageComplete, coverage.State)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(CoverageComplete, coverage.State)
 
 	source := SourceIdentity{
 		Provider: parser.AgentClaude, ConfiguredRootID: "root-a", SourceKey: "source-a",
 	}
 	_, err = store.ReserveSourceCapture(t.Context(), source, 1<<20+1)
-	require.ErrorIs(t, err, ErrOutboxFull)
-	require.NoError(t, store.CompleteRootReconciliation(t.Context(), "root-a"))
+	require.ErrorIs(err, ErrOutboxFull)
+	require.NoError(store.CompleteRootReconciliation(t.Context(), "root-a"))
 	coverage, ok, err = store.Coverage(t.Context(), parser.AgentClaude, "root-a")
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, CoverageDegraded, coverage.State)
-	assert.Equal(t, "outbox_full", coverage.Reason)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(CoverageDegraded, coverage.State)
+	assert.Equal("outbox_full", coverage.Reason)
 }
 
 func TestOpenWithOptionsHoldsCheckpointAndSpoolProcessLocksUntilClose(t *testing.T) {
+	require := require.New(t)
+
 	base := t.TempDir()
 	checkpointPath := filepath.Join(base, "checkpoint.db")
 	spoolDir := filepath.Join(base, "spool")
 	first, err := OpenWithOptions(t.Context(), checkpointPath, Options{
 		SpoolDir: spoolDir, MaxOutboxBytes: 1 << 20,
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	_, err = OpenWithOptions(t.Context(), checkpointPath, Options{
 		SpoolDir: filepath.Join(base, "other-spool"), MaxOutboxBytes: 1 << 20,
 	})
-	require.ErrorIs(t, err, ErrStoreLocked)
+	require.ErrorIs(err, ErrStoreLocked)
 	_, err = OpenWithOptions(t.Context(), filepath.Join(base, "other.db"), Options{
 		SpoolDir: spoolDir, MaxOutboxBytes: 1 << 20,
 	})
-	require.ErrorIs(t, err, ErrStoreLocked)
-	require.NoError(t, first.Close())
+	require.ErrorIs(err, ErrStoreLocked)
+	require.NoError(first.Close())
 
 	reopened, err := OpenWithOptions(t.Context(), checkpointPath, Options{
 		SpoolDir: spoolDir, MaxOutboxBytes: 1 << 20,
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(reopened.Close()) })
 }
 
 func TestOpenWithOptionsRejectsChangedSpoolBeforeRecovery(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	base := t.TempDir()
 	checkpointPath := filepath.Join(base, "checkpoint.db")
 	spoolDir := filepath.Join(base, "spool")
 	store, err := OpenWithOptions(t.Context(), checkpointPath, Options{
 		SpoolDir: spoolDir, MaxOutboxBytes: 1 << 20,
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	sourceRoot := filepath.Join(base, "sources")
-	require.NoError(t, os.MkdirAll(sourceRoot, 0o755))
+	require.NoError(os.MkdirAll(sourceRoot, 0o755))
 	root, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentClaude, sourceRoot)
-	require.NoError(t, err)
+	require.NoError(err)
 	ref := rawsync.ObjectRef{SHA256: abcObjectSHA256, Length: 3}
 	installOutboxTestObject(t, store, ref, []byte("abc"))
 	reservation, err := store.ReserveCapture(t.Context(), root.ID, 1795)
-	require.NoError(t, err)
+	require.NoError(err)
 	generation := testCapturedGeneration(1, root, "", ref)
-	require.NoError(t, store.CommitCapture(t.Context(), reservation.ID, generation))
-	require.NoError(t, store.Close())
+	require.NoError(store.CommitCapture(t.Context(), reservation.ID, generation))
+	require.NoError(store.Close())
 
 	mismatched, err := OpenWithOptions(t.Context(), checkpointPath, Options{
 		SpoolDir: filepath.Join(base, "other-spool"), MaxOutboxBytes: 1 << 20,
 	})
 	if mismatched != nil {
-		require.NoError(t, mismatched.Close())
+		require.NoError(mismatched.Close())
 	}
-	require.ErrorIs(t, err, ErrSpoolMismatch)
+	require.ErrorIs(err, ErrSpoolMismatch)
 
 	reopened, err := OpenWithOptions(t.Context(), checkpointPath, Options{
 		SpoolDir: spoolDir, MaxOutboxBytes: 1 << 20,
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(reopened.Close()) })
 	queued, ok, err := reopened.NextGeneration(t.Context())
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, generation.CaptureID, queued.CaptureID)
-	assert.FileExists(t, reopened.ObjectPath(ref))
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(generation.CaptureID, queued.CaptureID)
+	assert.FileExists(reopened.ObjectPath(ref))
 }
 
 func TestOpenWithOptionsRejectsCheckpointAndSpoolContentionAcrossProcesses(t *testing.T) {
@@ -508,7 +525,7 @@ func TestOpenWithOptionsRejectsCheckpointAndSpoolContentionAcrossProcesses(t *te
 		{name: "spool", checkpoint: filepath.Join(base, "other.db"), spool: spoolDir},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			command := exec.Command(os.Args[0],
+			command := exec.CommandContext(t.Context(), os.Args[0],
 				"-test.run=^TestOpenWithOptionsRejectsCheckpointAndSpoolContentionAcrossProcesses$",
 			)
 			command.Env = append(os.Environ(),
@@ -523,17 +540,20 @@ func TestOpenWithOptionsRejectsCheckpointAndSpoolContentionAcrossProcesses(t *te
 }
 
 func TestResolveConfiguredRootPersistsCanonicalProviderIdentity(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	base := t.TempDir()
 	realRoot := filepath.Join(base, "real")
 	linkedRoot := filepath.Join(base, "linked")
 	otherRoot := filepath.Join(base, "other")
-	require.NoError(t, os.MkdirAll(realRoot, 0o755))
-	require.NoError(t, os.MkdirAll(otherRoot, 0o755))
+	require.NoError(os.MkdirAll(realRoot, 0o755))
+	require.NoError(os.MkdirAll(otherRoot, 0o755))
 	if err := os.Symlink(realRoot, linkedRoot); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 	canonicalRealRoot, err := filepath.EvalSymlinks(realRoot)
-	require.NoError(t, err)
+	require.NoError(err)
 	dbPath := filepath.Join(base, "checkpoint.db")
 	spoolDir := filepath.Join(base, "spool")
 	now := time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC)
@@ -542,84 +562,87 @@ func TestResolveConfiguredRootPersistsCanonicalProviderIdentity(t *testing.T) {
 		MaxOutboxBytes: 1 << 20,
 		Now:            func() time.Time { return now },
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	first, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentClaude, linkedRoot)
-	require.NoError(t, err)
+	require.NoError(err)
 	viaRealPath, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentClaude, realRoot)
-	require.NoError(t, err)
+	require.NoError(err)
 	other, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentClaude, otherRoot)
-	require.NoError(t, err)
+	require.NoError(err)
 	otherProvider, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentCodex, realRoot)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.Equal(t, first.ID, viaRealPath.ID)
-	assert.Equal(t, canonicalRealRoot, first.LocalPath)
-	assert.Equal(t, parser.AgentClaude, first.Provider)
-	assert.Equal(t, now, first.CreatedAt)
-	assert.Equal(t, now, first.UpdatedAt)
-	assert.NotEqual(t, first.ID, other.ID)
-	assert.NotEqual(t, first.ID, otherProvider.ID)
-	assert.Regexp(t, `^[0-9a-f]{32}$`, first.ID)
-	require.NoError(t, store.Close())
+	assert.Equal(first.ID, viaRealPath.ID)
+	assert.Equal(canonicalRealRoot, first.LocalPath)
+	assert.Equal(parser.AgentClaude, first.Provider)
+	assert.Equal(now, first.CreatedAt)
+	assert.Equal(now, first.UpdatedAt)
+	assert.NotEqual(first.ID, other.ID)
+	assert.NotEqual(first.ID, otherProvider.ID)
+	assert.Regexp(`^[0-9a-f]{32}$`, first.ID)
+	require.NoError(store.Close())
 
 	reopened, err := OpenWithOptions(t.Context(), dbPath, Options{
 		SpoolDir:       spoolDir,
 		MaxOutboxBytes: 1 << 20,
 		Now:            func() time.Time { return now.Add(time.Hour) },
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(reopened.Close()) })
 	persisted, err := reopened.ResolveConfiguredRoot(t.Context(), parser.AgentClaude, realRoot)
-	require.NoError(t, err)
-	assert.Equal(t, first, persisted)
+	require.NoError(err)
+	assert.Equal(first, persisted)
 }
 
 func TestConfiguredRootSourcesPageReturnsBoundedCircularPages(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	base := t.TempDir()
 	store, err := OpenWithOptions(t.Context(), filepath.Join(base, "checkpoint.db"), Options{
 		SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 	rootPath := filepath.Join(base, "sessions")
-	require.NoError(t, os.Mkdir(rootPath, 0o700))
+	require.NoError(os.Mkdir(rootPath, 0o700))
 	root, err := store.ResolveConfiguredRoot(
 		t.Context(), parser.AgentClaude, rootPath,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	for _, key := range []string{"a", "b", "c", "d", "e"} {
 		_, err := store.db.ExecContext(t.Context(), `INSERT INTO raw_sources
 			(provider, configured_root_id, source_key, updated_at)
 			VALUES (?, ?, ?, ?)`, parser.AgentClaude, root.ID, key,
 			checkpointTimestamp(time.Now()))
-		require.NoError(t, err)
+		require.NoError(err)
 	}
 
 	first, err := store.ConfiguredRootSourcesPage(
 		t.Context(), parser.AgentClaude, root.ID, "", 2,
 	)
-	require.NoError(t, err)
-	require.Len(t, first, 2)
-	assert.Equal(t, []string{"a", "b"}, []string{
+	require.NoError(err)
+	require.Len(first, 2)
+	assert.Equal([]string{"a", "b"}, []string{
 		first[0].Source.SourceKey, first[1].Source.SourceKey,
 	})
 
 	second, err := store.ConfiguredRootSourcesPage(
 		t.Context(), parser.AgentClaude, root.ID, first[1].Source.SourceKey, 2,
 	)
-	require.NoError(t, err)
-	require.Len(t, second, 2)
-	assert.Equal(t, []string{"c", "d"}, []string{
+	require.NoError(err)
+	require.Len(second, 2)
+	assert.Equal([]string{"c", "d"}, []string{
 		second[0].Source.SourceKey, second[1].Source.SourceKey,
 	})
 
 	wrapped, err := store.ConfiguredRootSourcesPage(
 		t.Context(), parser.AgentClaude, root.ID, second[1].Source.SourceKey, 2,
 	)
-	require.NoError(t, err)
-	require.Len(t, wrapped, 2)
-	assert.Equal(t, []string{"e", "a"}, []string{
+	require.NoError(err)
+	require.Len(wrapped, 2)
+	assert.Equal([]string{"e", "a"}, []string{
 		wrapped[0].Source.SourceKey, wrapped[1].Source.SourceKey,
 	})
 }
@@ -671,13 +694,16 @@ func installOutboxTestObject(
 }
 
 func TestInsertCapturedObjectsPromotesRemoteRowWhenLocalBytesArePresent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store, _ := openOutboxTestStore(t, 1<<20)
 	ref := rawsync.ObjectRef{SHA256: abcObjectSHA256, Length: 3}
-	_, err := store.db.Exec(`INSERT INTO outbox_objects
+	_, err := store.db.ExecContext(t.Context(), `INSERT INTO outbox_objects
 		(sha256, length, spool_name, ref_count, state, created_at)
 		VALUES (?, ?, 'objects/remote', 0, 'remote', '2026-08-25T00:00:00Z')`,
 		ref.SHA256, ref.Length)
-	require.NoError(t, err)
+	require.NoError(err)
 	installOutboxTestObject(t, store, ref, []byte("abc"))
 
 	err = store.withImmediateWrite(t.Context(), "test promote remote object", func(conn *sql.Conn) error {
@@ -685,24 +711,27 @@ func TestInsertCapturedObjectsPromotesRemoteRowWhenLocalBytesArePresent(t *testi
 			map[string]rawsync.ObjectRef{ref.SHA256: ref}, "2026-08-25T00:00:01Z")
 	})
 
-	require.NoError(t, err)
+	require.NoError(err)
 	var state string
-	require.NoError(t, store.db.QueryRow(`SELECT state FROM outbox_objects
+	require.NoError(store.db.QueryRowContext(t.Context(), `SELECT state FROM outbox_objects
 		WHERE sha256 = ? AND length = ?`, ref.SHA256, ref.Length).Scan(&state))
-	assert.Equal(t, "live", state)
+	assert.Equal("live", state)
 	usage, err := store.OutboxUsage(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, ref.Length, usage.UsedBytes)
+	require.NoError(err)
+	assert.Equal(ref.Length, usage.UsedBytes)
 }
 
 func TestCollectGarbageWaitsForObjectPublication(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store, _ := openOutboxTestStore(t, 1<<20)
 	ref := rawsync.ObjectRef{SHA256: abcObjectSHA256, Length: 3}
-	_, err := store.db.Exec(`INSERT INTO outbox_objects
+	_, err := store.db.ExecContext(t.Context(), `INSERT INTO outbox_objects
 		(sha256, length, spool_name, ref_count, state, created_at)
 		VALUES (?, ?, 'objects/pending', 0, 'garbage_pending', '2026-08-25T00:00:00Z')`,
 		ref.SHA256, ref.Length)
-	require.NoError(t, err)
+	require.NoError(err)
 	finishPublication := store.BeginObjectPublication()
 	installOutboxTestObject(t, store, ref, []byte("abc"))
 	type collectionOutcome struct {
@@ -721,17 +750,17 @@ func TestCollectGarbageWaitsForObjectPublication(t *testing.T) {
 	select {
 	case outcome := <-completed:
 		finishPublication()
-		require.FailNow(t, "garbage collection completed during publication",
+		require.FailNow("garbage collection completed during publication",
 			"report=%+v error=%v", outcome.report, outcome.err)
 	case <-time.After(100 * time.Millisecond):
-		assert.FileExists(t, store.ObjectPath(ref))
+		assert.FileExists(store.ObjectPath(ref))
 	}
 
 	finishPublication()
 	outcome := <-completed
-	require.NoError(t, outcome.err)
-	assert.Equal(t, GarbageCollectionReport{Objects: 1, Bytes: 3}, outcome.report)
-	assert.NoFileExists(t, store.ObjectPath(ref))
+	require.NoError(outcome.err)
+	assert.Equal(GarbageCollectionReport{Objects: 1, Bytes: 3}, outcome.report)
+	assert.NoFileExists(store.ObjectPath(ref))
 }
 
 func testCapturedGeneration(
@@ -764,6 +793,9 @@ func testCapturedGeneration(
 }
 
 func TestReserveCaptureIsAtomicAndMarksOnlyItsRootDegraded(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store, root := openOutboxTestStore(t, 2048)
 
 	start := make(chan struct{})
@@ -793,73 +825,82 @@ func TestReserveCaptureIsAtomicAndMarksOnlyItsRootDegraded(t *testing.T) {
 		case errors.Is(err, ErrOutboxFull):
 			full++
 		default:
-			require.NoError(t, err)
+			require.NoError(err)
 		}
 	}
-	assert.Equal(t, 1, successes)
-	assert.Equal(t, 1, full)
+	assert.Equal(1, successes)
+	assert.Equal(1, full)
 	usage, err := store.OutboxUsage(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, int64(0), usage.UsedBytes)
-	assert.Equal(t, int64(1536), usage.ReservedBytes)
-	assert.Equal(t, int64(2048), usage.LimitBytes)
+	require.NoError(err)
+	assert.Equal(int64(0), usage.UsedBytes)
+	assert.Equal(int64(1536), usage.ReservedBytes)
+	assert.Equal(int64(2048), usage.LimitBytes)
 	coverage, ok, err := store.Coverage(t.Context(), root.Provider, root.ID)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, CoverageDegraded, coverage.State)
-	assert.Equal(t, "outbox_full", coverage.Reason)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(CoverageDegraded, coverage.State)
+	assert.Equal("outbox_full", coverage.Reason)
 
-	require.Len(t, reservations, 1)
-	require.NoError(t, store.ReleaseReservation(t.Context(), reservations[0].ID))
+	require.Len(reservations, 1)
+	require.NoError(store.ReleaseReservation(t.Context(), reservations[0].ID))
 	usage, err = store.OutboxUsage(t.Context())
-	require.NoError(t, err)
-	assert.Zero(t, usage.ReservedBytes)
+	require.NoError(err)
+	assert.Zero(usage.ReservedBytes)
 }
 
 func TestReserveCaptureRejectsMetadataOnlyOverflowWithoutObjects(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store, root := openOutboxTestStore(t, 1791)
 
 	_, err := store.ReserveCapture(t.Context(), root.ID, 1792)
 
-	require.ErrorIs(t, err, ErrOutboxFull)
+	require.ErrorIs(err, ErrOutboxFull)
 	usage, readErr := store.OutboxUsage(t.Context())
-	require.NoError(t, readErr)
-	assert.Zero(t, usage.UsedBytes)
-	assert.Zero(t, usage.ReservedBytes)
+	require.NoError(readErr)
+	assert.Zero(usage.UsedBytes)
+	assert.Zero(usage.ReservedBytes)
 	var generations, objects int
-	require.NoError(t, store.db.QueryRow(`SELECT count(*) FROM outbox_generations`).Scan(&generations))
-	require.NoError(t, store.db.QueryRow(`SELECT count(*) FROM outbox_objects`).Scan(&objects))
-	assert.Zero(t, generations)
-	assert.Zero(t, objects)
+	require.NoError(store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM outbox_generations`).Scan(&generations))
+	require.NoError(store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM outbox_objects`).Scan(&objects))
+	assert.Zero(generations)
+	assert.Zero(objects)
 }
 
 func TestSuccessfulCaptureClearsItsOwnSourceCoverageFailure(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store, root := openOutboxTestStore(t, 2000)
 	source := SourceIdentity{
 		Provider: root.Provider, ConfiguredRootID: root.ID, SourceKey: "source-1",
 	}
 	_, err := store.ReserveSourceCapture(t.Context(), source, 2001)
-	require.ErrorIs(t, err, ErrOutboxFull)
+	require.ErrorIs(err, ErrOutboxFull)
 	coverage, ok, err := store.Coverage(t.Context(), root.Provider, root.ID)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, CoverageDegraded, coverage.State)
+	require.NoError(err)
+	require.True(ok)
+	require.Equal(CoverageDegraded, coverage.State)
 	ref := rawsync.ObjectRef{SHA256: validCheckpointDigest(10), Length: 1}
 	installOutboxTestObject(t, store, ref, []byte{1})
 	reservation, err := store.ReserveSourceCapture(t.Context(), source, 1793)
-	require.NoError(t, err)
+	require.NoError(err)
 	generation := testCapturedGeneration(1, root, "", ref)
-	require.NoError(t, store.CommitCapture(t.Context(), reservation.ID, generation))
+	require.NoError(store.CommitCapture(t.Context(), reservation.ID, generation))
 
 	coverage, ok, err = store.Coverage(t.Context(), root.Provider, root.ID)
 
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, CoverageComplete, coverage.State)
-	assert.NotNil(t, coverage.RecoveredAt)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(CoverageComplete, coverage.State)
+	assert.NotNil(coverage.RecoveredAt)
 }
 
 func TestCompleteUnchangedCaptureRejectsReservationForAnotherSource(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store, root := openOutboxTestStore(t, 2000)
 	sourceA := SourceIdentity{
 		Provider: root.Provider, ConfiguredRootID: root.ID, SourceKey: "source-a",
@@ -868,97 +909,107 @@ func TestCompleteUnchangedCaptureRejectsReservationForAnotherSource(t *testing.T
 		Provider: root.Provider, ConfiguredRootID: root.ID, SourceKey: "source-b",
 	}
 	_, err := store.ReserveSourceCapture(t.Context(), sourceB, 2001)
-	require.ErrorIs(t, err, ErrOutboxFull)
+	require.ErrorIs(err, ErrOutboxFull)
 	reservation, err := store.ReserveSourceCapture(t.Context(), sourceA, 128)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	err = store.CompleteUnchangedCapture(t.Context(), reservation.ID, sourceB, "", 0)
 
-	assert.ErrorIs(t, err, ErrCaptureConflict)
+	assert.ErrorIs(err, ErrCaptureConflict)
 	usage, readErr := store.OutboxUsage(t.Context())
-	require.NoError(t, readErr)
-	assert.Equal(t, int64(128), usage.ReservedBytes)
+	require.NoError(readErr)
+	assert.Equal(int64(128), usage.ReservedBytes)
 	coverage, ok, readErr := store.Coverage(t.Context(), root.Provider, root.ID)
-	require.NoError(t, readErr)
-	require.True(t, ok)
-	assert.Equal(t, CoverageDegraded, coverage.State)
-	assert.Equal(t, "outbox_full", coverage.Reason)
+	require.NoError(readErr)
+	require.True(ok)
+	assert.Equal(CoverageDegraded, coverage.State)
+	assert.Equal("outbox_full", coverage.Reason)
 }
 
 func TestCompleteUnchangedCaptureAcceptsRootScopedReservation(t *testing.T) {
+	require := require.New(t)
+
 	store, root := openOutboxTestStore(t, 2000)
 	reservation, err := store.ReserveCapture(t.Context(), root.ID, 128)
-	require.NoError(t, err)
+	require.NoError(err)
 	source := SourceIdentity{
 		Provider: root.Provider, ConfiguredRootID: root.ID, SourceKey: "source-a",
 	}
 
 	err = store.CompleteUnchangedCapture(t.Context(), reservation.ID, source, "", 0)
 
-	require.NoError(t, err)
+	require.NoError(err)
 	usage, err := store.OutboxUsage(t.Context())
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Zero(t, usage.ReservedBytes)
 }
 
 func TestCommitCaptureQueuesOfflineGenerationsAndChargesDuplicateObjectOnce(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store, root := openOutboxTestStore(t, 1<<20)
 	ref := rawsync.ObjectRef{SHA256: abcObjectSHA256, Length: 3}
 	installOutboxTestObject(t, store, ref, []byte("abc"))
 
 	firstReservation, err := store.ReserveCapture(t.Context(), root.ID, 1795)
-	require.NoError(t, err)
+	require.NoError(err)
 	first := testCapturedGeneration(1, root, "", ref)
-	require.NoError(t, store.CommitCapture(t.Context(), firstReservation.ID, first))
+	require.NoError(store.CommitCapture(t.Context(), firstReservation.ID, first))
 
 	secondReservation, err := store.ReserveCapture(t.Context(), root.ID, 1792)
-	require.NoError(t, err)
+	require.NoError(err)
 	second := testCapturedGeneration(2, root, first.CaptureID, ref)
-	require.NoError(t, store.CommitCapture(t.Context(), secondReservation.ID, second))
+	require.NoError(store.CommitCapture(t.Context(), secondReservation.ID, second))
 
 	usage, err := store.OutboxUsage(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, int64(3587), usage.UsedBytes)
-	assert.Zero(t, usage.ReservedBytes)
+	require.NoError(err)
+	assert.Equal(int64(3587), usage.UsedBytes)
+	assert.Zero(usage.ReservedBytes)
 	var objectRows, refCount int
-	require.NoError(t, store.db.QueryRow(`SELECT count(*), sum(ref_count)
+	require.NoError(store.db.QueryRowContext(t.Context(), `SELECT count(*), sum(ref_count)
 		FROM outbox_objects`).Scan(&objectRows, &refCount))
-	assert.Equal(t, 1, objectRows)
-	assert.Equal(t, 2, refCount)
+	assert.Equal(1, objectRows)
+	assert.Equal(2, refCount)
 
 	base, ok, err := store.CaptureBase(t.Context(), second.Source)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, second.CaptureID, base.CaptureID)
-	require.Len(t, base.Entries, 1)
-	assert.Equal(t, second.Entries[0], base.Entries[0])
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(second.CaptureID, base.CaptureID)
+	require.Len(base.Entries, 1)
+	assert.Equal(second.Entries[0], base.Entries[0])
 
 	next, ok, err := store.NextGeneration(t.Context())
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, first.CaptureID, next.CaptureID)
-	assert.Empty(t, next.PredecessorCaptureID)
-	assert.Equal(t, first.Entries, next.Entries)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(first.CaptureID, next.CaptureID)
+	assert.Empty(next.PredecessorCaptureID)
+	assert.Equal(first.Entries, next.Entries)
 }
 
 func TestCommitCaptureRejectsProviderThatDoesNotOwnReservedRoot(t *testing.T) {
+	require := require.New(t)
+
 	store, root := openOutboxTestStore(t, 1<<20)
 	ref := rawsync.ObjectRef{SHA256: abcObjectSHA256, Length: 3}
 	installOutboxTestObject(t, store, ref, []byte("abc"))
 	reservation, err := store.ReserveCapture(t.Context(), root.ID, 1795)
-	require.NoError(t, err)
+	require.NoError(err)
 	generation := testCapturedGeneration(1, root, "", ref)
 	generation.Source.Provider = parser.AgentCodex
 
 	err = store.CommitCapture(t.Context(), reservation.ID, generation)
 
-	require.ErrorIs(t, err, ErrCaptureConflict)
+	require.ErrorIs(err, ErrCaptureConflict)
 	_, ok, readErr := store.NextGeneration(t.Context())
-	require.NoError(t, readErr)
+	require.NoError(readErr)
 	assert.False(t, ok)
 }
 
 func TestCommitCaptureRejectsReservationForAnotherSource(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store, root := openOutboxTestStore(t, 1<<20)
 	ref := rawsync.ObjectRef{SHA256: abcObjectSHA256, Length: 3}
 	installOutboxTestObject(t, store, ref, []byte("abc"))
@@ -966,22 +1017,25 @@ func TestCommitCaptureRejectsReservationForAnotherSource(t *testing.T) {
 		Provider: root.Provider, ConfiguredRootID: root.ID, SourceKey: "source-a",
 	}
 	reservation, err := store.ReserveSourceCapture(t.Context(), reservationSource, 1795)
-	require.NoError(t, err)
+	require.NoError(err)
 	generation := testCapturedGeneration(1, root, "", ref)
 	generation.Source.SourceKey = "source-b"
 
 	err = store.CommitCapture(t.Context(), reservation.ID, generation)
 
-	assert.ErrorIs(t, err, ErrCaptureConflict)
+	assert.ErrorIs(err, ErrCaptureConflict)
 	usage, readErr := store.OutboxUsage(t.Context())
-	require.NoError(t, readErr)
-	assert.Equal(t, int64(1795), usage.ReservedBytes)
+	require.NoError(readErr)
+	assert.Equal(int64(1795), usage.ReservedBytes)
 	_, ok, readErr := store.NextGeneration(t.Context())
-	require.NoError(t, readErr)
-	assert.False(t, ok)
+	require.NoError(readErr)
+	assert.False(ok)
 }
 
 func TestZeroByteGenerationsConsumeMetadataCapacity(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store, root := openOutboxTestStore(t, 3584)
 	ref := rawsync.ObjectRef{SHA256: emptyObjectSHA256, Length: 0}
 	installOutboxTestObject(t, store, ref, nil)
@@ -989,46 +1043,49 @@ func TestZeroByteGenerationsConsumeMetadataCapacity(t *testing.T) {
 	predecessor := ""
 	for sequence := 1; sequence <= 2; sequence++ {
 		reservation, err := store.ReserveCapture(t.Context(), root.ID, 1792)
-		require.NoError(t, err)
+		require.NoError(err)
 		generation := testCapturedGeneration(sequence, root, predecessor, ref)
-		require.NoError(t, store.CommitCapture(t.Context(), reservation.ID, generation))
+		require.NoError(store.CommitCapture(t.Context(), reservation.ID, generation))
 		predecessor = generation.CaptureID
 	}
 
 	_, err := store.ReserveCapture(t.Context(), root.ID, 1792)
-	require.ErrorIs(t, err, ErrOutboxFull)
+	require.ErrorIs(err, ErrOutboxFull)
 	usage, err := store.OutboxUsage(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, int64(3584), usage.UsedBytes)
+	require.NoError(err)
+	assert.Equal(int64(3584), usage.UsedBytes)
 	var generations int
-	require.NoError(t, store.db.QueryRow(`SELECT count(*) FROM outbox_generations`).Scan(&generations))
-	assert.Equal(t, 2, generations)
+	require.NoError(store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM outbox_generations`).Scan(&generations))
+	assert.Equal(2, generations)
 }
 
 func TestSetDeviceReclaimsQueuedObjectsAndPreservesConfiguredRoots(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store, root := openOutboxTestStore(t, 1<<20)
-	require.NoError(t, store.SetDevice(t.Context(), "dev_1"))
+	require.NoError(store.SetDevice(t.Context(), "dev_1"))
 	ref := rawsync.ObjectRef{SHA256: abcObjectSHA256, Length: 3}
 	installOutboxTestObject(t, store, ref, []byte("abc"))
 	reservation, err := store.ReserveCapture(t.Context(), root.ID, 1795)
-	require.NoError(t, err)
+	require.NoError(err)
 	generation := testCapturedGeneration(1, root, "", ref)
-	require.NoError(t, store.CommitCapture(t.Context(), reservation.ID, generation))
+	require.NoError(store.CommitCapture(t.Context(), reservation.ID, generation))
 
-	require.NoError(t, store.SetDevice(t.Context(), "dev_2"))
+	require.NoError(store.SetDevice(t.Context(), "dev_2"))
 
 	usage, err := store.OutboxUsage(t.Context())
-	require.NoError(t, err)
-	assert.Zero(t, usage.UsedBytes)
-	assert.NoFileExists(t, store.ObjectPath(ref))
+	require.NoError(err)
+	assert.Zero(usage.UsedBytes)
+	assert.NoFileExists(store.ObjectPath(ref))
 	var generations, objects, roots int
-	require.NoError(t, store.db.QueryRow(`SELECT count(*) FROM outbox_generations`).Scan(&generations))
-	require.NoError(t, store.db.QueryRow(`SELECT count(*) FROM outbox_objects`).Scan(&objects))
-	require.NoError(t, store.db.QueryRow(`SELECT count(*) FROM configured_roots`).Scan(&roots))
-	assert.Zero(t, generations)
-	assert.Zero(t, objects)
-	assert.Equal(t, 1, roots)
+	require.NoError(store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM outbox_generations`).Scan(&generations))
+	require.NoError(store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM outbox_objects`).Scan(&objects))
+	require.NoError(store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM configured_roots`).Scan(&roots))
+	assert.Zero(generations)
+	assert.Zero(objects)
+	assert.Equal(1, roots)
 	persisted, err := store.ResolveConfiguredRoot(t.Context(), root.Provider, root.LocalPath)
-	require.NoError(t, err)
-	assert.Equal(t, root.ID, persisted.ID)
+	require.NoError(err)
+	assert.Equal(root.ID, persisted.ID)
 }

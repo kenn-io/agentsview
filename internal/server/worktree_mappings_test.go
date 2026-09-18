@@ -2,7 +2,6 @@ package server_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json/v2"
 	"net/http"
 	"net/http/httptest"
@@ -18,10 +17,13 @@ import (
 )
 
 func TestRemoteMachineWorktreeMappingsAPI(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
-	require.NoError(t, te.db.SetSyncState(db.MachineAliasKeyPrefix+"old-owner", "host-a.example"))
+	require.NoError(te.db.SetSyncState(db.MachineAliasKeyPrefix+"old-owner", "host-a.example"))
 	prefix := filepath.Join(t.TempDir(), "app.worktrees")
-	require.NoError(t, te.db.UpsertSession(db.Session{
+	require.NoError(te.db.UpsertSession(db.Session{
 		ID: "remote-session", Machine: "host-a.example", Agent: "claude",
 		Project: "branch_label", Cwd: filepath.Join(prefix, "feature"),
 	}), "insert remote session")
@@ -32,11 +34,11 @@ func TestRemoteMachineWorktreeMappingsAPI(t *testing.T) {
 		"original_project": "branch_label",
 		"machine":          "host-a.example",
 	})
-	require.Equal(t, "host-a.example", created.Machine)
-	require.Equal(t, db.WorktreeMappingLayoutExplicit, created.Layout)
-	require.Equal(t, "canonical_app", created.Project)
-	require.Equal(t, "branch_label", created.OriginalProject)
-	require.True(t, created.Enabled, "created mapping should default enabled")
+	require.Equal("host-a.example", created.Machine)
+	require.Equal(db.WorktreeMappingLayoutExplicit, created.Layout)
+	require.Equal("canonical_app", created.Project)
+	require.Equal("branch_label", created.OriginalProject)
+	require.True(created.Enabled, "created mapping should default enabled")
 
 	var list struct {
 		Machine      string                      `json:"machine"`
@@ -47,10 +49,10 @@ func TestRemoteMachineWorktreeMappingsAPI(t *testing.T) {
 	w := te.get(t, "/api/v1/settings/worktree-mappings?machine=old-owner")
 	assertStatus(t, w, http.StatusOK)
 	decodeInto(t, w, &list)
-	require.Equal(t, "host-a.example", list.Machine)
-	assert.Equal(t, "test", list.LocalMachine)
-	assert.Equal(t, []string{"host-a.example"}, list.Machines)
-	require.Len(t, list.Mappings, 1)
+	require.Equal("host-a.example", list.Machine)
+	assert.Equal("test", list.LocalMachine)
+	assert.Equal([]string{"host-a.example"}, list.Machines)
+	require.Len(list.Mappings, 1)
 
 	updated := putWorktreeMapping(t, te, created.ID, map[string]any{
 		"path_prefix":      prefix,
@@ -59,12 +61,12 @@ func TestRemoteMachineWorktreeMappingsAPI(t *testing.T) {
 		"machine":          "host-b.example",
 		"enabled":          true,
 	})
-	assert.True(t, updated.Enabled)
-	assert.Equal(t, "host-a.example", updated.Machine,
+	assert.True(updated.Enabled)
+	assert.Equal("host-a.example", updated.Machine,
 		"mapping ID determines the machine on edit")
-	assert.Equal(t, db.WorktreeMappingLayoutExplicit, updated.Layout)
-	assert.Equal(t, "canonical_app_v2", updated.Project)
-	assert.Equal(t, "branch_label", updated.OriginalProject,
+	assert.Equal(db.WorktreeMappingLayoutExplicit, updated.Layout)
+	assert.Equal("canonical_app_v2", updated.Project)
+	assert.Equal("branch_label", updated.OriginalProject,
 		"HTTP edits cannot overwrite original project")
 
 	w = te.post(t, "/api/v1/settings/worktree-mappings/apply", `{
@@ -77,14 +79,14 @@ func TestRemoteMachineWorktreeMappingsAPI(t *testing.T) {
 		UpdatedSessions int    `json:"updated_sessions"`
 	}
 	decodeInto(t, w, &applied)
-	assert.Equal(t, "host-a.example", applied.Machine)
-	assert.Equal(t, 1, applied.MatchedSessions)
-	assert.Equal(t, 1, applied.UpdatedSessions)
-	sess, err := te.db.GetSession(context.Background(), "remote-session")
-	require.NoError(t, err)
-	assert.Equal(t, "canonical_app_v2", sess.Project)
+	assert.Equal("host-a.example", applied.Machine)
+	assert.Equal(1, applied.MatchedSessions)
+	assert.Equal(1, applied.UpdatedSessions)
+	sess, err := te.db.GetSession(t.Context(), "remote-session")
+	require.NoError(err)
+	assert.Equal("canonical_app_v2", sess.Project)
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodDelete,
 		"/api/v1/settings/worktree-mappings/"+
 			strconv.FormatInt(created.ID, 10),
@@ -98,10 +100,13 @@ func TestRemoteMachineWorktreeMappingsAPI(t *testing.T) {
 	w = te.get(t, "/api/v1/settings/worktree-mappings?machine=host-a.example")
 	assertStatus(t, w, http.StatusOK)
 	decodeInto(t, w, &list)
-	assert.Empty(t, list.Mappings, "remote mappings after delete should be empty")
+	assert.Empty(list.Mappings, "remote mappings after delete should be empty")
 }
 
 func TestWorktreeMappingsAPIHandlesLayouts(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 	root := t.TempDir()
 	layoutPrefix := filepath.Join(root, "service")
@@ -111,9 +116,9 @@ func TestWorktreeMappingsAPIHandlesLayouts(t *testing.T) {
 		"path_prefix": layoutPrefix,
 		"layout":      db.WorktreeMappingLayoutRepoDotWorktrees,
 	})
-	require.Equal(t, db.WorktreeMappingLayoutRepoDotWorktrees, created.Layout)
-	require.Empty(t, created.Project)
-	require.True(t, created.Enabled, "created mapping should default enabled")
+	require.Equal(db.WorktreeMappingLayoutRepoDotWorktrees, created.Layout)
+	require.Empty(created.Project)
+	require.True(created.Enabled, "created mapping should default enabled")
 
 	var list struct {
 		Machine  string                      `json:"machine"`
@@ -122,19 +127,19 @@ func TestWorktreeMappingsAPIHandlesLayouts(t *testing.T) {
 	w := te.get(t, "/api/v1/settings/worktree-mappings")
 	assertStatus(t, w, http.StatusOK)
 	decodeInto(t, w, &list)
-	require.Equal(t, "test", list.Machine)
-	require.Len(t, list.Mappings, 1)
-	assert.Equal(t, db.WorktreeMappingLayoutRepoDotWorktrees, list.Mappings[0].Layout)
-	assert.Empty(t, list.Mappings[0].Project)
+	require.Equal("test", list.Machine)
+	require.Len(list.Mappings, 1)
+	assert.Equal(db.WorktreeMappingLayoutRepoDotWorktrees, list.Mappings[0].Layout)
+	assert.Empty(list.Mappings[0].Project)
 
 	updated := putWorktreeMapping(t, te, created.ID, map[string]any{
 		"path_prefix": layoutPrefix,
 		"layout":      db.WorktreeMappingLayoutRepoDotWorktrees,
 		"enabled":     false,
 	})
-	assert.False(t, updated.Enabled, "updated mapping should be disabled")
-	assert.Equal(t, db.WorktreeMappingLayoutRepoDotWorktrees, updated.Layout)
-	assert.Empty(t, updated.Project)
+	assert.False(updated.Enabled, "updated mapping should be disabled")
+	assert.Equal(db.WorktreeMappingLayoutRepoDotWorktrees, updated.Layout)
+	assert.Empty(updated.Project)
 
 	w = postRawWorktreeMapping(t, te, map[string]any{
 		"path_prefix": layoutRoot,
@@ -150,13 +155,16 @@ func TestWorktreeMappingsAPIHandlesLayouts(t *testing.T) {
 }
 
 func TestWorktreeMappingsAPIApply(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
 	prefix := filepath.Join(t.TempDir(), "app.worktrees")
 	_ = postWorktreeMapping(t, te, map[string]any{
 		"path_prefix": prefix,
 		"project":     "canonical-app",
 	})
-	require.NoError(t, te.db.UpsertSession(db.Session{
+	require.NoError(te.db.UpsertSession(db.Session{
 		ID:      "s1",
 		Machine: "test",
 		Agent:   "claude",
@@ -174,15 +182,15 @@ func TestWorktreeMappingsAPIApply(t *testing.T) {
 		UpdatedSessions int    `json:"updated_sessions"`
 	}
 	decodeInto(t, w, &resp)
-	assert.Equal(t, "test", resp.Machine)
-	assert.Equal(t, 1, resp.MatchedSessions)
-	assert.Equal(t, 1, resp.UpdatedSessions)
-	sess, err := te.db.GetSession(context.Background(), "s1")
-	require.NoError(t, err)
-	assert.Equal(t, "canonical_app", sess.Project)
+	assert.Equal("test", resp.Machine)
+	assert.Equal(1, resp.MatchedSessions)
+	assert.Equal(1, resp.UpdatedSessions)
+	sess, err := te.db.GetSession(t.Context(), "s1")
+	require.NoError(err)
+	assert.Equal("canonical_app", sess.Project)
 	select {
 	case event := <-events:
-		assert.Equal(t, "sessions", event.Scope)
+		assert.Equal("sessions", event.Scope)
 	default:
 		t.Fatal("apply mappings did not publish the changed session projects")
 	}
@@ -213,7 +221,7 @@ func TestWorktreeMappingsAPIRejectsRemoteMode(t *testing.T) {
 
 func TestWorktreeMappingsAPIMalformedIDIsNotFound(t *testing.T) {
 	te := setup(t)
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPut,
 		"/api/v1/settings/worktree-mappings/apply",
 		bytes.NewReader([]byte(`{}`)),
@@ -226,6 +234,8 @@ func TestWorktreeMappingsAPIMalformedIDIsNotFound(t *testing.T) {
 }
 
 func TestWorktreePreviewAPIUsesFullArchiveAndBoundsSamples(t *testing.T) {
+	assert := assert.New(t)
+
 	te := setup(t)
 	for i := range 12 {
 		id := "preview-" + strconv.Itoa(i)
@@ -244,12 +254,12 @@ func TestWorktreePreviewAPIUsesFullArchiveAndBoundsSamples(t *testing.T) {
 	}`)
 	assertStatus(t, w, http.StatusOK)
 	preview := decode[db.WorktreeReclassificationPreview](t, w)
-	assert.Equal(t, 12, preview.MatchedSessions)
-	assert.Equal(t, 12, preview.UpdatedSessions)
-	assert.Equal(t, 12, preview.DistinctProjects)
-	assert.Len(t, preview.ProjectSamples, 10)
-	assert.Len(t, preview.SessionSamples, 10)
-	assert.NotEmpty(t, preview.MappingToken)
+	assert.Equal(12, preview.MatchedSessions)
+	assert.Equal(12, preview.UpdatedSessions)
+	assert.Equal(12, preview.DistinctProjects)
+	assert.Len(preview.ProjectSamples, 10)
+	assert.Len(preview.SessionSamples, 10)
+	assert.NotEmpty(preview.MappingToken)
 
 	w = te.post(t, "/api/v1/settings/worktree-mappings/preview", `{
 		"machine": "host-a.example",
@@ -260,8 +270,10 @@ func TestWorktreePreviewAPIUsesFullArchiveAndBoundsSamples(t *testing.T) {
 }
 
 func TestWorktreeReclassificationAPILocalNoSyncMode(t *testing.T) {
+	require := require.New(t)
+
 	te := setupNoSyncMode(t)
-	require.NoError(t, te.db.UpsertSession(db.Session{
+	require.NoError(te.db.UpsertSession(db.Session{
 		ID: "no-sync-session", Machine: "test", Agent: "codex",
 		Project: "branch-label", Cwd: "/srv/worktrees/example/feature",
 	}))
@@ -274,7 +286,7 @@ func TestWorktreeReclassificationAPILocalNoSyncMode(t *testing.T) {
 	}`)
 	assertStatus(t, previewW, http.StatusOK)
 	preview := decode[db.WorktreeReclassificationPreview](t, previewW)
-	require.NotEmpty(t, preview.MappingToken)
+	require.NotEmpty(preview.MappingToken)
 
 	w := te.post(t, "/api/v1/settings/worktree-mappings/reclassify", `{
 		"machine": "test",
@@ -284,14 +296,17 @@ func TestWorktreeReclassificationAPILocalNoSyncMode(t *testing.T) {
 		"mapping_token": "`+preview.MappingToken+`"
 	}`)
 	assertStatus(t, w, http.StatusOK)
-	session, err := te.db.GetSession(context.Background(), "no-sync-session")
-	require.NoError(t, err)
+	session, err := te.db.GetSession(t.Context(), "no-sync-session")
+	require.NoError(err)
 	assert.Equal(t, "canonical_example", session.Project)
 }
 
 func TestSessionProjectAssignmentAPILocalNoSyncMode(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setupNoSyncMode(t)
-	require.NoError(t, te.db.UpsertSession(db.Session{
+	require.NoError(te.db.UpsertSession(db.Session{
 		ID: "temporary-session", Machine: "test", Agent: "codex",
 		Project: "temporary", Cwd: "/tmp/agent-run",
 	}))
@@ -302,26 +317,29 @@ func TestSessionProjectAssignmentAPILocalNoSyncMode(t *testing.T) {
 	)
 	assertStatus(t, w, http.StatusOK)
 	assignment := decode[db.SessionProjectAssignment](t, w)
-	assert.Equal(t, "temporary-session", assignment.SessionID)
-	assert.Equal(t, "real_project", assignment.Project)
+	assert.Equal("temporary-session", assignment.SessionID)
+	assert.Equal("real_project", assignment.Project)
 
-	session, err := te.db.GetSession(context.Background(), "temporary-session")
-	require.NoError(t, err)
-	assert.Equal(t, "real_project", session.Project)
+	session, err := te.db.GetSession(t.Context(), "temporary-session")
+	require.NoError(err)
+	assert.Equal("real_project", session.Project)
 }
 
 func TestClearSessionProjectAssignmentAPILocalNoSyncMode(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setupNoSyncMode(t)
-	require.NoError(t, te.db.UpsertSession(db.Session{
+	require.NoError(te.db.UpsertSession(db.Session{
 		ID: "temporary-session", Machine: "test", Agent: "codex",
 		Project: "temporary", Cwd: "/work/project/run",
 	}))
-	_, err := te.db.CreateWorktreeProjectMapping(context.Background(),
+	_, err := te.db.CreateWorktreeProjectMapping(t.Context(),
 		db.WorktreeProjectMapping{
 			Machine: "test", PathPrefix: "/work/project",
 			Project: "mapped-project", Enabled: true,
 		})
-	require.NoError(t, err)
+	require.NoError(err)
 	w := te.put(t,
 		"/api/v1/settings/session-project-assignments/temporary-session",
 		`{"project":"manual-project"}`,
@@ -334,24 +352,27 @@ func TestClearSessionProjectAssignmentAPILocalNoSyncMode(t *testing.T) {
 		"/api/v1/settings/session-project-assignments/temporary-session")
 	assertStatus(t, w, http.StatusOK)
 	cleared := decode[db.ClearedSessionProjectAssignment](t, w)
-	assert.Equal(t, "temporary-session", cleared.SessionID)
-	assert.Equal(t, "mapped_project", cleared.Project)
-	session, err := te.db.GetSession(context.Background(), "temporary-session")
-	require.NoError(t, err)
-	assert.Equal(t, "mapped_project", session.Project)
-	assert.False(t, session.ProjectAssigned)
+	assert.Equal("temporary-session", cleared.SessionID)
+	assert.Equal("mapped_project", cleared.Project)
+	session, err := te.db.GetSession(t.Context(), "temporary-session")
+	require.NoError(err)
+	assert.Equal("mapped_project", session.Project)
+	assert.False(session.ProjectAssigned)
 
 	select {
 	case event := <-events:
-		assert.Equal(t, "sessions", event.Scope)
+		assert.Equal("sessions", event.Scope)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for sessions event")
 	}
 }
 
 func TestActivityProjectReclassificationAPIRejectsStaleToken(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	te := setup(t)
-	require.NoError(t, te.db.UpsertSession(db.Session{
+	require.NoError(te.db.UpsertSession(db.Session{
 		ID: "stale-session", Machine: "host-a.example", Agent: "codex",
 		Project: "branch-label", Cwd: "/srv/worktrees/example/feature",
 	}))
@@ -401,14 +422,14 @@ func TestActivityProjectReclassificationAPIRejectsStaleToken(t *testing.T) {
 		Result  db.WorktreeReclassificationPreview `json:"result"`
 	}
 	decodeInto(t, w, &applied)
-	assert.Equal(t, "canonical_example", applied.Mapping.Project)
-	assert.Equal(t, 1, applied.Result.UpdatedSessions)
-	session, err := te.db.GetSession(context.Background(), "stale-session")
-	require.NoError(t, err)
-	assert.Equal(t, "canonical_example", session.Project)
+	assert.Equal("canonical_example", applied.Mapping.Project)
+	assert.Equal(1, applied.Result.UpdatedSessions)
+	session, err := te.db.GetSession(t.Context(), "stale-session")
+	require.NoError(err)
+	assert.Equal("canonical_example", session.Project)
 	select {
 	case event := <-events:
-		assert.Equal(t, "sessions", event.Scope)
+		assert.Equal("sessions", event.Scope)
 	default:
 		t.Fatal("reclassification did not publish the changed session projects")
 	}
@@ -454,7 +475,7 @@ func putWorktreeMapping(
 	t.Helper()
 	data, err := json.Marshal(body)
 	require.NoError(t, err)
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPut,
 		"/api/v1/settings/worktree-mappings/"+
 			strconv.FormatInt(id, 10),

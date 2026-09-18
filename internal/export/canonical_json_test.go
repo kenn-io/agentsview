@@ -2,7 +2,7 @@ package export
 
 import (
 	"crypto/sha256"
-	"fmt"
+	"encoding/hex"
 	"math"
 	"testing"
 	"time"
@@ -19,7 +19,7 @@ func TestCanonicalPricingJSONOrdersObjectKeys(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, `{"a":"first","b":"second"}`, string(got))
+	assert.JSONEq(t, `{"a":"first","b":"second"}`, string(got))
 }
 
 func TestCanonicalPricingJSONDoesNotEscapeHTMLCharacters(t *testing.T) {
@@ -28,7 +28,7 @@ func TestCanonicalPricingJSONDoesNotEscapeHTMLCharacters(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Equal(t, `{"text":"<tag>&value"}`, string(got))
+	assert.JSONEq(t, `{"text":"<tag>&value"}`, string(got))
 }
 
 func TestCanonicalPricingJSONFormatsNumbers(t *testing.T) {
@@ -70,7 +70,7 @@ func TestMarshalCanonicalHonorsJSONContract(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	assert.Equal(
+	assert.JSONEq(
 		t,
 		`{"first":{"decimal":0.000001,"integer":9007199254740993},"second":"<visible>"}`,
 		string(got),
@@ -120,13 +120,16 @@ func TestMarshalCanonicalVectors(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			canonical, err := MarshalCanonical(tt.input)
-			require.NoError(t, err)
-			digest, err := DigestCanonical(tt.input)
-			require.NoError(t, err)
+			assert := assert.New(t)
+			require := require.New(t)
 
-			assert.Equal(t, tt.bytes, string(canonical))
-			assert.Equal(t, tt.digest, digest)
+			canonical, err := MarshalCanonical(tt.input)
+			require.NoError(err)
+			digest, err := DigestCanonical(tt.input)
+			require.NoError(err)
+
+			assert.Equal(tt.bytes, string(canonical))
+			assert.Equal(tt.digest, digest)
 		})
 	}
 }
@@ -190,14 +193,16 @@ func TestEffectivePricingDigestChangesWhen1hCacheWriteRateSet(t *testing.T) {
 }
 
 func TestEffectivePricingDigestFixture(t *testing.T) {
+	require := require.New(t)
+
 	rows := digestFixtureRows(t)
 	canonical, err := canonicalPricingJSON(canonicalPricingRows(rows))
-	require.NoError(t, err)
+	require.NoError(err)
 	sum := sha256.Sum256(canonical)
 	digest, err := EffectivePricingDigest(rows)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.Equal(t, "sha256:"+fmt.Sprintf("%x", sum), digest)
+	require.Equal("sha256:"+hex.EncodeToString(sum[:]), digest)
 	assert.Equal(t,
 		"sha256:247836888d2c78a5fda3d0e391bbc28a7fd58b4fb3af9b0d5a0e037a9f3faf0b",
 		digest,

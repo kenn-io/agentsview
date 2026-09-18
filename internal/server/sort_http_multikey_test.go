@@ -68,7 +68,7 @@ func TestListSessions_OrderBy_MultiKeyPagination(t *testing.T) {
 
 	var got []string
 	cursor := ""
-	for i := 0; i < len(want)+1; i++ {
+	for range len(want) + 1 {
 		url := "/api/v1/sessions?order_by=messages:asc,started:desc&limit=1"
 		if cursor != "" {
 			url += "&cursor=" + cursor

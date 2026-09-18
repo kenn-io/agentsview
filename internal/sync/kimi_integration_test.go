@@ -15,6 +15,8 @@ import (
 )
 
 func TestSyncKimiConfigUpdateCwdPrefix(t *testing.T) {
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -30,21 +32,21 @@ func TestSyncKimiConfigUpdateCwdPrefix(t *testing.T) {
 	workdirDir := "wd_kimi-code_057f5c09ee3f"
 	sessionDir := "session_uuid-cwd"
 	wirePath := filepath.Join(kimiDir, workdirDir, sessionDir, "wire.jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(wirePath), 0o755))
+	require.NoError(os.MkdirAll(filepath.Dir(wirePath), 0o755))
 	fixture, err := os.ReadFile(filepath.Join(
 		"..", "parser", "testdata", "kimi-config-update-cwd.jsonl",
 	))
-	require.NoError(t, err)
+	require.NoError(err)
 	content := append(fixture,
 		[]byte(`{"type":"turn.prompt","input":[{"type":"text","text":"cwd"}]}`+"\n")...)
-	require.NoError(t, os.WriteFile(wirePath, content, 0o644))
+	require.NoError(os.WriteFile(wirePath, content, 0o644))
 
 	sessionID := "kimi:" + workdirDir + ":" + sessionDir
 	engine.SyncPaths([]string{wirePath})
 
 	session, err := testDB.GetSession(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, session)
+	require.NoError(err)
+	require.NotNil(session)
 	assert.Equal(t, "/Users/helix/Code/mcp-hub", session.Cwd)
 }
 
@@ -57,6 +59,8 @@ func TestSyncKimiConfigUpdateCwdPrefix(t *testing.T) {
 //   - SyncSingleSession must re-derive the project from the workdir
 //     directory, not the literal "agents" segment two levels up.
 func TestSyncPathsAndSingleSession_KimiNewLayout(t *testing.T) {
+	require := require.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -75,8 +79,8 @@ func TestSyncPathsAndSingleSession_KimiNewLayout(t *testing.T) {
 	wirePath := filepath.Join(
 		kimiDir, workdirDir, sessionDir, "agents", "main", "wire.jsonl",
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(wirePath), 0o755))
-	require.NoError(t, os.WriteFile(wirePath, []byte(
+	require.NoError(os.MkdirAll(filepath.Dir(wirePath), 0o755))
+	require.NoError(os.WriteFile(wirePath, []byte(
 		`{"type": "metadata", "protocol_version": "1.3"}`+"\n"+
 			`{"timestamp": 1704067200.0, "message": {"type": "TurnBegin", "payload": {"user_input": [{"type": "text", "text": "Hello Kimi"}]}}}`+"\n"+
 			`{"timestamp": 1704067202.0, "message": {"type": "TurnEnd", "payload": {}}}`+"\n",
@@ -91,13 +95,13 @@ func TestSyncPathsAndSingleSession_KimiNewLayout(t *testing.T) {
 
 	// Force a single-session resync by clearing file_mtime; the
 	// project must remain the decoded workdir, not "agents".
-	require.NoError(t, testDB.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	require.NoError(testDB.Update(func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET file_mtime = NULL WHERE id = ?",
 			sessionID,
 		)
 		return err
 	}))
-	require.NoError(t, engine.SyncSingleSession(sessionID))
+	require.NoError(engine.SyncSingleSession(sessionID))
 	assertSessionProject(t, testDB, sessionID, "kimi-code")
 }

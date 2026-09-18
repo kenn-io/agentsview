@@ -79,22 +79,25 @@ func (s *readOnlyRecallListStore) QueryRecallEntries(
 func (*readOnlyRecallListStore) ReadOnly() bool { return true }
 
 func TestQueryRecallStoreTrustedOnlyRejectsArchivedStatus(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store := &observingRecallQueryStore{Store: dbtest.OpenTestDB(t)}
 
 	result, err := service.QueryRecallStore(
-		context.Background(), store, service.RecallQuery{
+		t.Context(), store, service.RecallQuery{
 			Query:       "cwd",
 			Status:      corerecall.StatusArchived,
 			TrustedOnly: true,
 		},
 	)
 
-	require.EqualError(t, err,
+	require.EqualError(err,
 		`invalid recall query: trusted_only requires status "accepted"`)
-	require.ErrorIs(t, err, db.ErrInvalidRecallQuery)
-	assert.Nil(t, result)
-	assert.Zero(t, store.queryCalls, "invalid filters must fail before querying")
-	assert.Zero(t, store.recordCalls, "invalid filters must not create a ledger event")
+	require.ErrorIs(err, db.ErrInvalidRecallQuery)
+	assert.Nil(result)
+	assert.Zero(store.queryCalls, "invalid filters must fail before querying")
+	assert.Zero(store.recordCalls, "invalid filters must not create a ledger event")
 }
 
 func TestDirectBackendListRecallTrustedOnlyRejectsArchivedStatusBeforeStore(
@@ -110,11 +113,13 @@ func TestDirectBackendListRecallTrustedOnlyRejectsArchivedStatusBeforeStore(
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			store := &readOnlyRecallListStore{}
 			svc := service.NewReadOnlyBackend(store)
 
 			result, err := svc.ListRecallEntries(
-				context.Background(), service.RecallFilter{
+				t.Context(), service.RecallFilter{
 					Query:       test.query,
 					Status:      corerecall.StatusArchived,
 					TrustedOnly: true,
@@ -122,61 +127,70 @@ func TestDirectBackendListRecallTrustedOnlyRejectsArchivedStatusBeforeStore(
 			)
 
 			require.ErrorIs(t, err, db.ErrInvalidRecallQuery)
-			assert.Nil(t, result)
-			assert.Zero(t, store.listCalls)
-			assert.Zero(t, store.queryCalls)
+			assert.Nil(result)
+			assert.Zero(store.listCalls)
+			assert.Zero(store.queryCalls)
 		})
 	}
 }
 
 func TestDirectBackend_RecallNoResultsRecordsMiss(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := dbtest.OpenTestDB(t)
 	svc := service.NewReadOnlyBackend(d)
 
-	got, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	got, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query:          "term-with-no-recall-result",
 		Surface:        "query",
 		IncludeContext: true,
 		Limit:          5,
 	})
 
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.NotEmpty(t, got.QueryID)
-	assert.Equal(t, "no_results", got.MissReason)
-	event, err := d.GetRecallQueryEvent(context.Background(), got.QueryID)
-	require.NoError(t, err)
-	require.NotNil(t, event)
-	assert.Equal(t, "term-with-no-recall-result", event.Query)
-	assert.Equal(t, "query", event.Surface)
-	assert.Zero(t, event.ResultCount)
-	assert.Zero(t, event.PackedCount)
-	assert.Zero(t, event.TopScore)
-	assert.Equal(t, "no_results", event.MissReason)
-	assert.Empty(t, event.Exposures)
+	require.NoError(err)
+	require.NotNil(got)
+	assert.NotEmpty(got.QueryID)
+	assert.Equal("no_results", got.MissReason)
+	event, err := d.GetRecallQueryEvent(t.Context(), got.QueryID)
+	require.NoError(err)
+	require.NotNil(event)
+	assert.Equal("term-with-no-recall-result", event.Query)
+	assert.Equal("query", event.Surface)
+	assert.Zero(event.ResultCount)
+	assert.Zero(event.PackedCount)
+	assert.Zero(event.TopScore)
+	assert.Equal("no_results", event.MissReason)
+	assert.Empty(event.Exposures)
 }
 
 func TestDirectBackend_RecallNoResultsWithoutContextRecordsMiss(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := dbtest.OpenTestDB(t)
 	svc := service.NewReadOnlyBackend(d)
 
-	got, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	got, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query: "term-with-no-recall-result",
 		Limit: 5,
 	})
 
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.Equal(t, "no_results", got.MissReason)
-	assert.NotEmpty(t, got.QueryID)
-	event, err := d.GetRecallQueryEvent(context.Background(), got.QueryID)
-	require.NoError(t, err)
-	require.NotNil(t, event)
-	assert.Equal(t, "no_results", event.MissReason)
-	assert.Zero(t, event.ResultCount)
+	require.NoError(err)
+	require.NotNil(got)
+	assert.Equal("no_results", got.MissReason)
+	assert.NotEmpty(got.QueryID)
+	event, err := d.GetRecallQueryEvent(t.Context(), got.QueryID)
+	require.NoError(err)
+	require.NotNil(event)
+	assert.Equal("no_results", event.MissReason)
+	assert.Zero(event.ResultCount)
 }
 
 func TestDirectBackend_RecallContextEmptyRecordsMiss(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := dbtest.OpenTestDB(t)
 	seedServiceRecallEntrySession(t, d)
 	seedServiceRecallEntry(t, d, db.RecallEntry{
@@ -189,7 +203,7 @@ func TestDirectBackend_RecallContextEmptyRecordsMiss(t *testing.T) {
 	})
 	svc := service.NewReadOnlyBackend(d)
 
-	got, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	got, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query:           "cwd failed reads",
 		Surface:         "brief",
 		Project:         "agentsview",
@@ -198,21 +212,24 @@ func TestDirectBackend_RecallContextEmptyRecordsMiss(t *testing.T) {
 		Limit:           5,
 	})
 
-	require.NoError(t, err)
-	assert.NotEmpty(t, got.QueryID)
-	assert.Equal(t, "context_empty", got.MissReason)
-	event, err := d.GetRecallQueryEvent(context.Background(), got.QueryID)
-	require.NoError(t, err)
-	require.NotNil(t, event)
-	assert.Equal(t, "brief", event.Surface)
-	assert.Equal(t, 1, event.ResultCount)
-	assert.Zero(t, event.PackedCount)
-	assert.Equal(t, "context_empty", event.MissReason)
-	require.Len(t, event.Exposures, 1)
-	assert.False(t, event.Exposures[0].Packed)
+	require.NoError(err)
+	assert.NotEmpty(got.QueryID)
+	assert.Equal("context_empty", got.MissReason)
+	event, err := d.GetRecallQueryEvent(t.Context(), got.QueryID)
+	require.NoError(err)
+	require.NotNil(event)
+	assert.Equal("brief", event.Surface)
+	assert.Equal(1, event.ResultCount)
+	assert.Zero(event.PackedCount)
+	assert.Equal("context_empty", event.MissReason)
+	require.Len(event.Exposures, 1)
+	assert.False(event.Exposures[0].Packed)
 }
 
 func TestDirectBackend_RecallRecordsEveryRankAndPackedFlag(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := dbtest.OpenTestDB(t)
 	seedServiceRecallEntrySession(t, d)
 	seedServiceRecallEntry(t, d, db.RecallEntry{
@@ -227,38 +244,40 @@ func TestDirectBackend_RecallRecordsEveryRankAndPackedFlag(t *testing.T) {
 	})
 	svc := service.NewReadOnlyBackend(d)
 
-	got, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	got, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query: "needle cwd recall", Project: "agentsview", Agent: "codex",
 		IncludeContext: true, ContextMaxBytes: 340, Limit: 2,
 	})
 
-	require.NoError(t, err)
-	assert.NotEmpty(t, got.QueryID)
-	assert.Empty(t, got.MissReason)
-	event, err := d.GetRecallQueryEvent(context.Background(), got.QueryID)
-	require.NoError(t, err)
-	require.NotNil(t, event)
-	assert.Equal(t, 2, event.ResultCount)
-	assert.Equal(t, 1, event.PackedCount)
-	assert.Equal(t, db.RecallLexicalScorePolicyVersion, event.ScorePolicyVersion)
-	assert.Equal(t,
-		`{"mode":"lexical","project":"agentsview","cwd":"","git_branch":"","agent":"codex","type":"","scope":"","status":"","extractor_method":"","source_session_id":"","source_episode_id":"","source_run_id":"","supersedes_entry_id":"","superseded_by_entry_id":"","limit":2,"include_context":true,"context_max_bytes":340}`,
+	require.NoError(err)
+	assert.NotEmpty(got.QueryID)
+	assert.Empty(got.MissReason)
+	event, err := d.GetRecallQueryEvent(t.Context(), got.QueryID)
+	require.NoError(err)
+	require.NotNil(event)
+	assert.Equal(2, event.ResultCount)
+	assert.Equal(1, event.PackedCount)
+	assert.Equal(db.RecallLexicalScorePolicyVersion, event.ScorePolicyVersion)
+	assert.JSONEq(`{"mode":"lexical","project":"agentsview","cwd":"","git_branch":"","agent":"codex","type":"","scope":"","status":"","extractor_method":"","source_session_id":"","source_episode_id":"","source_run_id":"","supersedes_entry_id":"","superseded_by_entry_id":"","limit":2,"include_context":true,"context_max_bytes":340}`,
 		event.FiltersJSON,
 	)
-	require.Len(t, event.Exposures, 2)
+	require.Len(event.Exposures, 2)
 	packed := map[string]bool{}
 	for i, exposure := range event.Exposures {
 		packed[exposure.EntryID] = exposure.Packed
-		assert.Equal(t, i+1, exposure.Rank)
-		assert.Equal(t, got.RecallEntries[i].ID, exposure.EntryID)
-		assert.Equal(t, got.RecallEntries[i].Score, exposure.Score)
+		assert.Equal(i+1, exposure.Rank)
+		assert.Equal(got.RecallEntries[i].ID, exposure.EntryID)
+		assert.Equal(got.RecallEntries[i].Score, exposure.Score)
 	}
-	assert.True(t, packed["packed"])
-	assert.False(t, packed["omitted"])
-	assert.Equal(t, got.RecallEntries[0].Score, event.TopScore)
+	assert.True(packed["packed"])
+	assert.False(packed["omitted"])
+	assert.Equal(got.RecallEntries[0].Score, event.TopScore)
 }
 
 func TestDirectBackend_RecallWithoutContextRecordsNoMiss(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := dbtest.OpenTestDB(t)
 	seedServiceRecallEntrySession(t, d)
 	seedServiceRecallEntry(t, d, db.RecallEntry{
@@ -267,25 +286,28 @@ func TestDirectBackend_RecallWithoutContextRecordsNoMiss(t *testing.T) {
 	})
 	svc := service.NewReadOnlyBackend(d)
 
-	got, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	got, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query: "cwd recall", Limit: 5,
 	})
 
-	require.NoError(t, err)
-	assert.NotEmpty(t, got.QueryID)
-	assert.Empty(t, got.MissReason)
-	event, err := d.GetRecallQueryEvent(context.Background(), got.QueryID)
-	require.NoError(t, err)
-	require.NotNil(t, event)
-	assert.Empty(t, event.MissReason)
-	assert.Zero(t, event.PackedCount)
-	require.Len(t, event.Exposures, 1)
-	assert.False(t, event.Exposures[0].Packed)
+	require.NoError(err)
+	assert.NotEmpty(got.QueryID)
+	assert.Empty(got.MissReason)
+	event, err := d.GetRecallQueryEvent(t.Context(), got.QueryID)
+	require.NoError(err)
+	require.NotNil(event)
+	assert.Empty(event.MissReason)
+	assert.Zero(event.PackedCount)
+	require.Len(event.Exposures, 1)
+	assert.False(event.Exposures[0].Packed)
 }
 
 func TestDirectBackend_RecallRecordingFailureIsBestEffortUnlessStrict(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := dbtest.OpenTestDB(t)
 	seedServiceRecallEntrySession(t, d)
 	seedServiceRecallEntry(t, d, db.RecallEntry{
@@ -296,57 +318,62 @@ func TestDirectBackend_RecallRecordingFailureIsBestEffortUnlessStrict(
 	store := &failingRecallRecorder{Store: d, err: recordErr}
 	svc := service.NewReadOnlyBackend(store)
 
-	got, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	got, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query: "cwd recall", Limit: 5,
 	})
 
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.Empty(t, got.QueryID)
-	assert.Equal(t, 1, store.calls)
+	require.NoError(err)
+	require.NotNil(got)
+	assert.Empty(got.QueryID)
+	assert.Equal(1, store.calls)
 
-	_, err = svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	_, err = svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query: "cwd recall", Limit: 5, StrictRecording: true,
 	})
-	require.ErrorIs(t, err, recordErr)
-	assert.Equal(t, 2, store.calls)
+	require.ErrorIs(err, recordErr)
+	assert.Equal(2, store.calls)
 }
 
 func TestDirectBackend_ReadOnlySQLiteSkipsRecallRecording(t *testing.T) {
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "readonly-recall.db")
 	writable, err := db.Open(path)
-	require.NoError(t, err)
+	require.NoError(err)
 	seedServiceRecallEntrySession(t, writable)
 	seedServiceRecallEntry(t, writable, db.RecallEntry{
 		ID: "m1", Title: "Cwd recall", Body: "Recover the cwd.",
 		SourceSessionID: "recall-session",
 	})
-	require.NoError(t, writable.Close())
+	require.NoError(writable.Close())
 	readonly, err := db.OpenReadOnly(path)
-	require.NoError(t, err)
+	require.NoError(err)
 	defer readonly.Close()
 	svc := service.NewReadOnlyBackend(readonly)
 
-	got, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	got, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query: "cwd recall", IncludeContext: true, Limit: 5,
 	})
 
-	require.NoError(t, err)
-	require.Len(t, got.RecallEntries, 1)
+	require.NoError(err)
+	require.Len(got.RecallEntries, 1)
 	assert.Empty(t, got.QueryID)
 
-	_, err = svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	_, err = svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query:           "cwd recall",
 		IncludeContext:  true,
 		Limit:           5,
 		StrictRecording: true,
 	})
 
-	require.ErrorIs(t, err, db.ErrReadOnly,
+	require.ErrorIs(err, db.ErrReadOnly,
 		"strict calibration must fail when it cannot persist a query ID")
 }
 
 func TestDirectBackend_QueryRecallEntries(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	seedServiceRecallEntrySession(t, d)
@@ -364,7 +391,7 @@ func TestDirectBackend_QueryRecallEntries(t *testing.T) {
 	})
 
 	svc := service.NewReadOnlyBackend(d)
-	got, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	got, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query:          "cwd failed reads",
 		Project:        "agentsview",
 		Agent:          "codex",
@@ -372,23 +399,23 @@ func TestDirectBackend_QueryRecallEntries(t *testing.T) {
 		Limit:          5,
 	})
 
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	require.Len(t, got.RecallEntries, 1)
-	assert.Equal(t, "m1", got.RecallEntries[0].ID)
-	require.NotNil(t, got.Summary)
-	assert.Equal(t, 1, got.Summary.Count)
-	assert.Equal(t, 1, got.Summary.ByType["procedure"])
-	assert.Equal(t, 1, got.Summary.ByScope["project"])
-	assert.Equal(t, 1, got.Summary.ByProject["agentsview"])
-	assert.Equal(t, 1, got.Summary.ByAgent["codex"])
-	assert.Equal(t, 1, got.Summary.ByCWD["/repo/agentsview"])
-	assert.Equal(t, 1, got.Summary.ByGitBranch["main"])
-	assert.Equal(t, 1, got.Summary.ByMatchReason["keyword"])
-	assert.Equal(t, 1, got.Summary.ByTransferability["not_transferable"])
-	assert.Equal(t, 1, got.Summary.ByProvenanceAudit["provenance_unverified"])
-	assert.Equal(t, 1, got.Summary.ByEvidence["without_evidence"])
-	assert.Equal(t, 1, got.Summary.ByLifecycle["active"])
+	require.NoError(err)
+	require.NotNil(got)
+	require.Len(got.RecallEntries, 1)
+	assert.Equal("m1", got.RecallEntries[0].ID)
+	require.NotNil(got.Summary)
+	assert.Equal(1, got.Summary.Count)
+	assert.Equal(1, got.Summary.ByType["procedure"])
+	assert.Equal(1, got.Summary.ByScope["project"])
+	assert.Equal(1, got.Summary.ByProject["agentsview"])
+	assert.Equal(1, got.Summary.ByAgent["codex"])
+	assert.Equal(1, got.Summary.ByCWD["/repo/agentsview"])
+	assert.Equal(1, got.Summary.ByGitBranch["main"])
+	assert.Equal(1, got.Summary.ByMatchReason["keyword"])
+	assert.Equal(1, got.Summary.ByTransferability["not_transferable"])
+	assert.Equal(1, got.Summary.ByProvenanceAudit["provenance_unverified"])
+	assert.Equal(1, got.Summary.ByEvidence["without_evidence"])
+	assert.Equal(1, got.Summary.ByLifecycle["active"])
 	var rawSummary struct {
 		ByStatus          map[string]int `json:"by_status"`
 		ByTransferability map[string]int `json:"by_transferability"`
@@ -396,38 +423,39 @@ func TestDirectBackend_QueryRecallEntries(t *testing.T) {
 		ByEvidence        map[string]int `json:"by_evidence"`
 		ByLifecycle       map[string]int `json:"by_lifecycle"`
 	}
-	require.NoError(t, roundTripJSON(t, got.Summary, &rawSummary))
-	assert.Equal(t, 1, rawSummary.ByStatus["accepted"])
-	assert.Equal(t, 1, rawSummary.ByTransferability["not_transferable"])
-	assert.Equal(t, 1, rawSummary.ByProvenanceAudit["provenance_unverified"])
-	assert.Equal(t, 1, rawSummary.ByEvidence["without_evidence"])
-	assert.Equal(t, 1, rawSummary.ByLifecycle["active"])
-	assert.Equal(t, 1, got.Summary.BySourceSession["recall-session"])
-	assert.Equal(t, 1, got.Summary.BySourceEpisode["recall-session:chunk:0001"])
-	assert.Contains(t, got.Context, "Check cwd before file reads")
-	assert.Contains(t, got.Context, "source_session=recall-session")
-	assert.Contains(t, got.Context, "source_episode=recall-session:chunk:0001")
-	assert.Contains(t, got.Context, "source_run=recall-probe-run")
-	require.NotNil(t, got.ContextMeta)
-	assert.Equal(t, 1, got.ContextMeta.EntryCount)
-	assert.Equal(t, []string{"m1"}, got.ContextMeta.IncludedIDs)
-	assert.Equal(t, []string{"recall-session"}, got.ContextMeta.SourceSessionIDs)
-	assert.Equal(t, []string{"recall-session:chunk:0001"}, got.ContextMeta.SourceEpisodeIDs)
-	assert.Equal(t, []string{"recall-probe-run"}, got.ContextMeta.SourceRunIDs)
-	assert.False(t, got.ContextMeta.Truncated)
+	require.NoError(roundTripJSON(t, got.Summary, &rawSummary))
+	assert.Equal(1, rawSummary.ByStatus["accepted"])
+	assert.Equal(1, rawSummary.ByTransferability["not_transferable"])
+	assert.Equal(1, rawSummary.ByProvenanceAudit["provenance_unverified"])
+	assert.Equal(1, rawSummary.ByEvidence["without_evidence"])
+	assert.Equal(1, rawSummary.ByLifecycle["active"])
+	assert.Equal(1, got.Summary.BySourceSession["recall-session"])
+	assert.Equal(1, got.Summary.BySourceEpisode["recall-session:chunk:0001"])
+	assert.Contains(got.Context, "Check cwd before file reads")
+	assert.Contains(got.Context, "source_session=recall-session")
+	assert.Contains(got.Context, "source_episode=recall-session:chunk:0001")
+	assert.Contains(got.Context, "source_run=recall-probe-run")
+	require.NotNil(got.ContextMeta)
+	assert.Equal(1, got.ContextMeta.EntryCount)
+	assert.Equal([]string{"m1"}, got.ContextMeta.IncludedIDs)
+	assert.Equal([]string{"recall-session"}, got.ContextMeta.SourceSessionIDs)
+	assert.Equal([]string{"recall-session:chunk:0001"}, got.ContextMeta.SourceEpisodeIDs)
+	assert.Equal([]string{"recall-probe-run"}, got.ContextMeta.SourceRunIDs)
+	assert.False(got.ContextMeta.Truncated)
 	rawMeta := marshalRecallContextMeta(t, got.ContextMeta)
-	assert.Equal(t, []any{"recall-session"}, rawMeta["source_session_ids"])
-	assert.Equal(t, []any{"recall-session:chunk:0001"}, rawMeta["source_episode_ids"])
-	assert.Equal(t, []any{"recall-probe-run"}, rawMeta["source_run_ids"])
-	assert.Equal(t,
-		map[string]any{"m1": "procedure"},
+	assert.Equal([]any{"recall-session"}, rawMeta["source_session_ids"])
+	assert.Equal([]any{"recall-session:chunk:0001"}, rawMeta["source_episode_ids"])
+	assert.Equal([]any{"recall-probe-run"}, rawMeta["source_run_ids"])
+	assert.Equal(map[string]any{"m1": "procedure"},
 		rawMeta["included_types_by_id"])
-	assert.Equal(t,
-		map[string]any{"m1": []any{"keyword"}},
+	assert.Equal(map[string]any{"m1": []any{"keyword"}},
 		rawMeta["included_match_reasons_by_id"])
 }
 
 func TestDirectBackend_QueryRecallEntriesFlagsPromptInjectionContext(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	seedServiceRecallEntrySession(t, d)
@@ -441,7 +469,7 @@ func TestDirectBackend_QueryRecallEntriesFlagsPromptInjectionContext(t *testing.
 	})
 
 	svc := service.NewReadOnlyBackend(d)
-	got, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	got, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query:          "hostile prompt injection",
 		Project:        "agentsview",
 		Agent:          "codex",
@@ -449,24 +477,23 @@ func TestDirectBackend_QueryRecallEntriesFlagsPromptInjectionContext(t *testing.
 		Limit:          5,
 	})
 
-	require.NoError(t, err)
-	require.NotNil(t, got.ContextMeta)
-	assert.True(t, got.ContextMeta.PromptInjectionContext)
-	assert.Equal(t, []string{"m-injection"},
+	require.NoError(err)
+	require.NotNil(got.ContextMeta)
+	assert.True(got.ContextMeta.PromptInjectionContext)
+	assert.Equal([]string{"m-injection"},
 		got.ContextMeta.PromptInjectionContextIDs)
-	assert.Equal(t, []string{"prior_instruction_override"},
+	assert.Equal([]string{"prior_instruction_override"},
 		got.ContextMeta.PromptInjectionContextReasons)
-	assert.Equal(t, map[string][]string{
+	assert.Equal(map[string][]string{
 		"m-injection": {"prior_instruction_override"},
 	}, got.ContextMeta.PromptInjectionContextReasonsByID)
 	rawMeta := marshalRecallContextMeta(t, got.ContextMeta)
-	assert.Equal(t, true, rawMeta["prompt_injection_context"])
-	assert.Equal(t, []any{"m-injection"},
+	assert.Equal(true, rawMeta["prompt_injection_context"])
+	assert.Equal([]any{"m-injection"},
 		rawMeta["prompt_injection_context_ids"])
-	assert.Equal(t, []any{"prior_instruction_override"},
+	assert.Equal([]any{"prior_instruction_override"},
 		rawMeta["prompt_injection_context_reasons"])
-	assert.Equal(t,
-		map[string]any{"m-injection": []any{"prior_instruction_override"}},
+	assert.Equal(map[string]any{"m-injection": []any{"prior_instruction_override"}},
 		rawMeta["prompt_injection_context_reasons_by_id"])
 }
 
@@ -490,6 +517,9 @@ func roundTripJSON(t *testing.T, value any, out any) error {
 }
 
 func TestDirectBackend_QueryRecallEntriesHonorsContextMaxBytes(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	seedServiceRecallEntrySession(t, d)
@@ -513,7 +543,7 @@ func TestDirectBackend_QueryRecallEntriesHonorsContextMaxBytes(t *testing.T) {
 	})
 
 	svc := service.NewReadOnlyBackend(d)
-	got, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	got, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query:           "cwd failed reads",
 		Project:         "agentsview",
 		Agent:           "codex",
@@ -522,19 +552,22 @@ func TestDirectBackend_QueryRecallEntriesHonorsContextMaxBytes(t *testing.T) {
 		Limit:           5,
 	})
 
-	require.NoError(t, err)
-	require.Len(t, got.RecallEntries, 2)
-	require.NotNil(t, got.ContextMeta)
-	assert.Equal(t, 1, got.ContextMeta.EntryCount)
-	assert.True(t, got.ContextMeta.Truncated)
-	assert.Equal(t, 1, got.ContextMeta.OmittedCount)
-	require.Len(t, got.ContextEntries, 1)
-	require.Len(t, got.ContextMeta.IncludedIDs, 1)
-	assert.Equal(t, got.ContextMeta.IncludedIDs[0], got.ContextEntries[0].ID)
-	assert.LessOrEqual(t, len([]byte(got.Context)), 250)
+	require.NoError(err)
+	require.Len(got.RecallEntries, 2)
+	require.NotNil(got.ContextMeta)
+	assert.Equal(1, got.ContextMeta.EntryCount)
+	assert.True(got.ContextMeta.Truncated)
+	assert.Equal(1, got.ContextMeta.OmittedCount)
+	require.Len(got.ContextEntries, 1)
+	require.Len(got.ContextMeta.IncludedIDs, 1)
+	assert.Equal(got.ContextMeta.IncludedIDs[0], got.ContextEntries[0].ID)
+	assert.LessOrEqual(len([]byte(got.Context)), 250)
 }
 
 func TestDirectBackend_QueryRecallEntriesReportsZeroContextSummary(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	seedServiceRecallEntrySession(t, d)
@@ -548,7 +581,7 @@ func TestDirectBackend_QueryRecallEntriesReportsZeroContextSummary(t *testing.T)
 	})
 
 	svc := service.NewReadOnlyBackend(d)
-	got, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	got, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query:           "cwd failed reads",
 		Project:         "agentsview",
 		Agent:           "codex",
@@ -557,15 +590,15 @@ func TestDirectBackend_QueryRecallEntriesReportsZeroContextSummary(t *testing.T)
 		Limit:           5,
 	})
 
-	require.NoError(t, err)
-	require.Len(t, got.RecallEntries, 1)
-	require.NotNil(t, got.ContextMeta)
-	assert.Equal(t, 0, got.ContextMeta.EntryCount)
-	assert.True(t, got.ContextMeta.Truncated)
-	assert.Equal(t, 1, got.ContextMeta.OmittedCount)
-	require.NotNil(t, got.ContextSummary)
-	assert.Equal(t, 0, got.ContextSummary.Count)
-	assert.Empty(t, got.ContextSummary.ByType)
+	require.NoError(err)
+	require.Len(got.RecallEntries, 1)
+	require.NotNil(got.ContextMeta)
+	assert.Equal(0, got.ContextMeta.EntryCount)
+	assert.True(got.ContextMeta.Truncated)
+	assert.Equal(1, got.ContextMeta.OmittedCount)
+	require.NotNil(got.ContextSummary)
+	assert.Equal(0, got.ContextSummary.Count)
+	assert.Empty(got.ContextSummary.ByType)
 }
 
 func TestValidateRecallContextEntriesRejectsMissingRows(t *testing.T) {
@@ -582,6 +615,9 @@ func TestValidateRecallContextEntriesRejectsMissingRows(t *testing.T) {
 }
 
 func TestDirectBackend_QueryRecallEntriesFocusesTruncatedContextOnQuery(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	seedServiceRecallEntrySession(t, d)
@@ -598,7 +634,7 @@ func TestDirectBackend_QueryRecallEntriesFocusesTruncatedContextOnQuery(t *testi
 	})
 
 	svc := service.NewReadOnlyBackend(d)
-	got, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	got, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query:           "which filter option labels contain Incident",
 		Project:         "agentsview",
 		Agent:           "codex",
@@ -607,15 +643,18 @@ func TestDirectBackend_QueryRecallEntriesFocusesTruncatedContextOnQuery(t *testi
 		Limit:           5,
 	})
 
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.Contains(t, got.Context, "Incident Mobile")
-	assert.Contains(t, got.Context, "Incident Portal")
-	assert.NotContains(t, got.Context, strings.Repeat("prefix filler ", 10))
-	assert.LessOrEqual(t, len([]byte(got.Context)), 320)
+	require.NoError(err)
+	require.NotNil(got)
+	assert.Contains(got.Context, "Incident Mobile")
+	assert.Contains(got.Context, "Incident Portal")
+	assert.NotContains(got.Context, strings.Repeat("prefix filler ", 10))
+	assert.LessOrEqual(len([]byte(got.Context)), 320)
 }
 
 func TestDirectBackend_QueryRecallEntriesPacksMultipleFocusedEntries(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	seedServiceRecallEntrySession(t, d)
@@ -638,7 +677,7 @@ func TestDirectBackend_QueryRecallEntriesPacksMultipleFocusedEntries(t *testing.
 	})
 
 	svc := service.NewReadOnlyBackend(d)
-	got, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	got, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query:           "Incident filters labels",
 		Project:         "agentsview",
 		Agent:           "codex",
@@ -647,13 +686,13 @@ func TestDirectBackend_QueryRecallEntriesPacksMultipleFocusedEntries(t *testing.
 		Limit:           2,
 	})
 
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	require.NotNil(t, got.ContextMeta)
-	assert.Equal(t, 2, got.ContextMeta.EntryCount)
-	assert.Equal(t, []string{"m1", "m2"}, got.ContextMeta.IncludedIDs)
-	assert.Contains(t, got.Context, "Incident Mobile")
-	assert.LessOrEqual(t, len([]byte(got.Context)), 900)
+	require.NoError(err)
+	require.NotNil(got)
+	require.NotNil(got.ContextMeta)
+	assert.Equal(2, got.ContextMeta.EntryCount)
+	assert.Equal([]string{"m1", "m2"}, got.ContextMeta.IncludedIDs)
+	assert.Contains(got.Context, "Incident Mobile")
+	assert.LessOrEqual(len([]byte(got.Context)), 900)
 }
 
 func TestDirectBackend_QueryRecallEntriesRejectsNegativeContextMaxBytes(t *testing.T) {
@@ -661,7 +700,7 @@ func TestDirectBackend_QueryRecallEntriesRejectsNegativeContextMaxBytes(t *testi
 	d := dbtest.OpenTestDB(t)
 
 	svc := service.NewReadOnlyBackend(d)
-	_, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	_, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query:           "cwd",
 		IncludeContext:  true,
 		ContextMaxBytes: -1,
@@ -676,7 +715,7 @@ func TestDirectBackend_QueryRecallEntriesRejectsNegativeLimit(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 
 	svc := service.NewReadOnlyBackend(d)
-	_, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	_, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query: "cwd",
 		Limit: -1,
 	})
@@ -686,6 +725,9 @@ func TestDirectBackend_QueryRecallEntriesRejectsNegativeLimit(t *testing.T) {
 }
 
 func TestBuildRecallContextIncludesLifecycleMetadata(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	text, meta, err := service.BuildRecallContext([]db.RecallResult{
 		{
@@ -709,13 +751,13 @@ func TestBuildRecallContextIncludesLifecycleMetadata(t *testing.T) {
 		},
 	}, 1000, "")
 
-	require.NoError(t, err)
-	require.NotNil(t, meta)
-	assert.Equal(t, 2, meta.EntryCount)
-	assert.Contains(t, text, "review_state=unreviewed_auto")
-	assert.Contains(t, text, "supersedes=old")
-	assert.Contains(t, text, "status=archived")
-	assert.Contains(t, text, "superseded_by=new")
+	require.NoError(err)
+	require.NotNil(meta)
+	assert.Equal(2, meta.EntryCount)
+	assert.Contains(text, "review_state=unreviewed_auto")
+	assert.Contains(text, "supersedes=old")
+	assert.Contains(text, "status=archived")
+	assert.Contains(text, "superseded_by=new")
 }
 
 func TestDirectBackend_ListRecallEntriesRejectsNegativeLimit(t *testing.T) {
@@ -723,7 +765,7 @@ func TestDirectBackend_ListRecallEntriesRejectsNegativeLimit(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 
 	svc := service.NewReadOnlyBackend(d)
-	_, err := svc.ListRecallEntries(context.Background(), service.RecallFilter{
+	_, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{
 		Limit: -1,
 	})
 
@@ -732,13 +774,16 @@ func TestDirectBackend_ListRecallEntriesRejectsNegativeLimit(t *testing.T) {
 }
 
 func TestDirectBackend_ListRecallEntriesWithoutQueryUsesUpdatedOrder(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	dbPath := filepath.Join(
 		dbtest.MkdirTempWithCleanup(t, "agentsview-service-recall-list-*"),
 		"test.db",
 	)
 	d, err := db.Open(dbPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(func() { d.Close() })
 	seedServiceRecallEntrySession(t, d)
 	seedServiceRecallEntry(t, d, db.RecallEntry{
@@ -760,28 +805,28 @@ func TestDirectBackend_ListRecallEntriesWithoutQueryUsesUpdatedOrder(t *testing.
 		SourceEpisodeID: "z-source",
 	})
 	raw, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(func() { raw.Close() })
-	_, err = raw.Exec(`
+	_, err = raw.ExecContext(t.Context(), `
 		UPDATE recall_entries SET updated_at = CASE id
 			WHEN 'older-source-first' THEN '2024-01-01T00:00:00Z'
 			WHEN 'newer-source-second' THEN '2024-02-01T00:00:00Z'
 			ELSE updated_at
 		END
 		WHERE id IN ('older-source-first', 'newer-source-second')`)
-	require.NoError(t, err)
+	require.NoError(err)
 	svc := service.NewReadOnlyBackend(d)
 
-	list, err := svc.ListRecallEntries(context.Background(), service.RecallFilter{
+	list, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{
 		Project: "agentsview",
 		Agent:   "codex",
 		Limit:   2,
 	})
 
-	require.NoError(t, err)
-	require.Len(t, list.RecallEntries, 2)
-	assert.Equal(t, "newer-source-second", list.RecallEntries[0].ID)
-	assert.Equal(t, "older-source-first", list.RecallEntries[1].ID)
+	require.NoError(err)
+	require.Len(list.RecallEntries, 2)
+	assert.Equal("newer-source-second", list.RecallEntries[0].ID)
+	assert.Equal("older-source-first", list.RecallEntries[1].ID)
 }
 
 func TestDirectBackend_ListRecallEntriesFiltersBySourceEpisodeID(t *testing.T) {
@@ -808,7 +853,7 @@ func TestDirectBackend_ListRecallEntriesFiltersBySourceEpisodeID(t *testing.T) {
 	})
 	svc := service.NewReadOnlyBackend(d)
 
-	list, err := svc.ListRecallEntries(context.Background(), service.RecallFilter{
+	list, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{
 		Project:         "agentsview",
 		Agent:           "codex",
 		SourceEpisodeID: "recall-session:chunk:0001",
@@ -821,6 +866,9 @@ func TestDirectBackend_ListRecallEntriesFiltersBySourceEpisodeID(t *testing.T) {
 }
 
 func TestDirectBackend_ListRecallEntriesReportsTrustedOnly(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	seedServiceRecallEntrySession(t, d)
@@ -848,7 +896,7 @@ func TestDirectBackend_ListRecallEntriesReportsTrustedOnly(t *testing.T) {
 	})
 	svc := service.NewReadOnlyBackend(d)
 
-	list, err := svc.ListRecallEntries(context.Background(), service.RecallFilter{
+	list, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{
 		Query:       "wrong cwd files",
 		Project:     "agentsview",
 		Agent:       "codex",
@@ -856,17 +904,17 @@ func TestDirectBackend_ListRecallEntriesReportsTrustedOnly(t *testing.T) {
 		Limit:       5,
 	})
 
-	require.NoError(t, err)
-	require.Len(t, list.RecallEntries, 1)
-	assert.Equal(t, "trusted", list.RecallEntries[0].ID)
+	require.NoError(err)
+	require.Len(list.RecallEntries, 1)
+	assert.Equal("trusted", list.RecallEntries[0].ID)
 	encoded, err := json.Marshal(list)
-	require.NoError(t, err)
+	require.NoError(err)
 	var raw map[string]jsontext.Value
-	require.NoError(t, json.Unmarshal(encoded, &raw))
-	require.Contains(t, raw, "trusted_only")
+	require.NoError(json.Unmarshal(encoded, &raw))
+	require.Contains(raw, "trusted_only")
 	var trustedOnly bool
-	require.NoError(t, json.Unmarshal(raw["trusted_only"], &trustedOnly))
-	assert.True(t, trustedOnly)
+	require.NoError(json.Unmarshal(raw["trusted_only"], &trustedOnly))
+	assert.True(trustedOnly)
 }
 
 func TestDirectBackend_QueryRecallEntriesFiltersBySourceEpisodeID(t *testing.T) {
@@ -893,7 +941,7 @@ func TestDirectBackend_QueryRecallEntriesFiltersBySourceEpisodeID(t *testing.T) 
 	})
 	svc := service.NewReadOnlyBackend(d)
 
-	query, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	query, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query:           "wrong cwd files",
 		Project:         "agentsview",
 		Agent:           "codex",
@@ -907,6 +955,9 @@ func TestDirectBackend_QueryRecallEntriesFiltersBySourceEpisodeID(t *testing.T) 
 }
 
 func TestDirectBackend_QueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	seedServiceRecallEntrySession(t, d)
@@ -934,7 +985,7 @@ func TestDirectBackend_QueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 	})
 	svc := service.NewReadOnlyBackend(d)
 
-	query, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	query, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query:       "wrong cwd files",
 		Project:     "agentsview",
 		Agent:       "codex",
@@ -942,20 +993,23 @@ func TestDirectBackend_QueryRecallEntriesFiltersTrustedOnly(t *testing.T) {
 		Limit:       5,
 	})
 
-	require.NoError(t, err)
-	require.Len(t, query.RecallEntries, 1)
-	assert.Equal(t, "trusted", query.RecallEntries[0].ID)
+	require.NoError(err)
+	require.Len(query.RecallEntries, 1)
+	assert.Equal("trusted", query.RecallEntries[0].ID)
 	var raw map[string]jsontext.Value
 	encoded, err := json.Marshal(query)
-	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(encoded, &raw))
-	require.Contains(t, raw, "trusted_only")
+	require.NoError(err)
+	require.NoError(json.Unmarshal(encoded, &raw))
+	require.Contains(raw, "trusted_only")
 	var trustedOnly bool
-	require.NoError(t, json.Unmarshal(raw["trusted_only"], &trustedOnly))
-	assert.True(t, trustedOnly)
+	require.NoError(json.Unmarshal(raw["trusted_only"], &trustedOnly))
+	assert.True(trustedOnly)
 }
 
 func TestDirectBackend_ImportRecallEntries(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	seedServiceRecallEntrySession(t, d)
@@ -964,21 +1018,24 @@ func TestDirectBackend_ImportRecallEntries(t *testing.T) {
 `)
 
 	result, err := svc.ImportRecallEntries(
-		context.Background(),
+		t.Context(),
 		input,
 		db.RecallImportOptions{},
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.Equal(t, 1, result.Imported)
-	got, err := svc.GetRecallEntry(context.Background(), "m-imported")
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.Equal(t, "Check cwd before file reads", got.Title)
+	require.NoError(err)
+	require.NotNil(result)
+	assert.Equal(1, result.Imported)
+	got, err := svc.GetRecallEntry(t.Context(), "m-imported")
+	require.NoError(err)
+	require.NotNil(got)
+	assert.Equal("Check cwd before file reads", got.Title)
 }
 
 func TestHTTPBackend_RecallEntriesRoundtrip(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
 	d := env.DB
@@ -993,46 +1050,49 @@ func TestHTTPBackend_RecallEntriesRoundtrip(t *testing.T) {
 	})
 
 	svc := env.Backend("", false)
-	list, err := svc.ListRecallEntries(context.Background(), service.RecallFilter{
+	list, err := svc.ListRecallEntries(t.Context(), service.RecallFilter{
 		Project: "agentsview",
 		Agent:   "codex",
 		Limit:   5,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, list)
-	require.Len(t, list.RecallEntries, 1)
-	assert.Equal(t, "m-http", list.RecallEntries[0].ID)
+	require.NoError(err)
+	require.NotNil(list)
+	require.Len(list.RecallEntries, 1)
+	assert.Equal("m-http", list.RecallEntries[0].ID)
 
-	recall, err := svc.GetRecallEntry(context.Background(), "m-http")
-	require.NoError(t, err)
-	require.NotNil(t, recall)
-	assert.Equal(t, "Check cwd before file reads", recall.Title)
+	recall, err := svc.GetRecallEntry(t.Context(), "m-http")
+	require.NoError(err)
+	require.NotNil(recall)
+	assert.Equal("Check cwd before file reads", recall.Title)
 
-	query, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
+	query, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
 		Query:          "cwd failed reads",
 		Project:        "agentsview",
 		Agent:          "codex",
 		IncludeContext: true,
 		Limit:          5,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, query)
-	require.Len(t, query.RecallEntries, 1)
-	assert.Equal(t, "m-http", query.RecallEntries[0].ID)
-	assert.NotEmpty(t, query.QueryID)
-	assert.Empty(t, query.MissReason)
-	assert.Contains(t, query.Context, "Check cwd before file reads")
-	require.NotNil(t, query.ContextMeta)
-	assert.Equal(t, 1, query.ContextMeta.EntryCount)
-	assert.Equal(t, []string{"m-http"}, query.ContextMeta.IncludedIDs)
-	event, err := d.GetRecallQueryEvent(context.Background(), query.QueryID)
-	require.NoError(t, err)
-	require.NotNil(t, event)
-	assert.Equal(t, query.QueryID, event.QueryID)
-	assert.Equal(t, "query", event.Surface)
+	require.NoError(err)
+	require.NotNil(query)
+	require.Len(query.RecallEntries, 1)
+	assert.Equal("m-http", query.RecallEntries[0].ID)
+	assert.NotEmpty(query.QueryID)
+	assert.Empty(query.MissReason)
+	assert.Contains(query.Context, "Check cwd before file reads")
+	require.NotNil(query.ContextMeta)
+	assert.Equal(1, query.ContextMeta.EntryCount)
+	assert.Equal([]string{"m-http"}, query.ContextMeta.IncludedIDs)
+	event, err := d.GetRecallQueryEvent(t.Context(), query.QueryID)
+	require.NoError(err)
+	require.NotNil(event)
+	assert.Equal(query.QueryID, event.QueryID)
+	assert.Equal("query", event.Surface)
 }
 
 func TestHTTPBackend_ImportRecallEntries(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
 	d := env.DB
@@ -1042,18 +1102,18 @@ func TestHTTPBackend_ImportRecallEntries(t *testing.T) {
 `)
 
 	result, err := svc.ImportRecallEntries(
-		context.Background(),
+		t.Context(),
 		input,
 		db.RecallImportOptions{},
 	)
 
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.Equal(t, 1, result.Imported)
-	got, err := svc.GetRecallEntry(context.Background(), "m-http-imported")
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.Equal(t, "Check cwd before file reads", got.Title)
+	require.NoError(err)
+	require.NotNil(result)
+	assert.Equal(1, result.Imported)
+	got, err := svc.GetRecallEntry(t.Context(), "m-http-imported")
+	require.NoError(err)
+	require.NotNil(got)
+	assert.Equal("Check cwd before file reads", got.Title)
 }
 
 func TestHTTPBackend_ImportRecallEntriesRequireExistingSessions(t *testing.T) {
@@ -1064,7 +1124,7 @@ func TestHTTPBackend_ImportRecallEntriesRequireExistingSessions(t *testing.T) {
 `)
 
 	_, err := svc.ImportRecallEntries(
-		context.Background(),
+		t.Context(),
 		input,
 		db.RecallImportOptions{RequireExistingSessions: true},
 	)
@@ -1079,7 +1139,7 @@ func TestHTTPBackend_GetRecallEntryNotFound(t *testing.T) {
 	env := newHTTPBackendEnv(t)
 
 	svc := env.Backend("", false)
-	recall, err := svc.GetRecallEntry(context.Background(), "missing")
+	recall, err := svc.GetRecallEntry(t.Context(), "missing")
 
 	require.NoError(t, err)
 	assert.Nil(t, recall)

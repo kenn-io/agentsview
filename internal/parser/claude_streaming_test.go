@@ -12,9 +12,12 @@ import (
 )
 
 func TestClaudeFullParseDoesNotAllocateDiscardedProgressBytes(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := t.TempDir() + "/large.jsonl"
 	f, err := os.Create(path)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	const (
 		lineCount   = 32
@@ -56,31 +59,31 @@ func TestClaudeFullParseDoesNotAllocateDiscardedProgressBytes(t *testing.T) {
 			)
 		}
 		_, err = f.WriteString(record)
-		require.NoError(t, err)
+		require.NoError(err)
 	}
-	require.NoError(t, f.Close())
+	require.NoError(f.Close())
 
 	runtime.GC()
 	var before runtime.MemStats
 	runtime.ReadMemStats(&before)
 	results, excluded, err := claudeParseWithExclusions(path, "project", "local")
-	require.NoError(t, err)
+	require.NoError(err)
 	var after runtime.MemStats
 	runtime.ReadMemStats(&after)
 
-	require.Len(t, results, 1)
-	assert.Empty(t, excluded)
-	assert.Len(t, results[0].Messages, 2)
+	require.Len(results, 1)
+	assert.Empty(excluded)
+	assert.Len(results[0].Messages, 2)
 	assistant := results[0].Messages[0]
-	assert.Equal(t, "model-1", assistant.Model)
-	assert.JSONEq(t, `{"input_tokens":4,"output_tokens":2}`, string(assistant.TokenUsage))
-	require.Len(t, assistant.ToolCalls, 1)
-	assert.Equal(t, `{"file_path":"notes.txt"}`, assistant.ToolCalls[0].InputJSON)
+	assert.Equal("model-1", assistant.Model)
+	assert.JSONEq(`{"input_tokens":4,"output_tokens":2}`, string(assistant.TokenUsage))
+	require.Len(assistant.ToolCalls, 1)
+	assert.Equal(`{"file_path":"notes.txt"}`, assistant.ToolCalls[0].InputJSON)
 	last := results[0].Messages[1]
-	require.Len(t, last.ToolResults, 1)
-	assert.Equal(t, `"result"`, last.ToolResults[0].ContentRaw)
+	require.Len(last.ToolResults, 1)
+	assert.Equal(`"result"`, last.ToolResults[0].ContentRaw)
 	allocated := after.TotalAlloc - before.TotalAlloc
-	assert.Less(t, allocated, uint64(lineCount*paddingSize/2),
+	assert.Less(allocated, uint64(lineCount*paddingSize/2),
 		"full parse should not copy ignored JSONL payload into the Go heap")
 	runtime.KeepAlive(results)
 }

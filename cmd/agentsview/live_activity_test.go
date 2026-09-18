@@ -20,6 +20,9 @@ import (
 )
 
 func TestCollectLiveActivityTargetsUsesOnlyConfiguredHintProviders(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	base := t.TempDir()
 	custom := filepath.Join(t.TempDir(), "custom")
 	cfg := config.Config{
@@ -37,10 +40,10 @@ func TestCollectLiveActivityTargetsUsesOnlyConfiguredHintProviders(t *testing.T)
 
 	targets, err := collectLiveActivityTargets(t.Context(), cfg)
 
-	require.NoError(t, err)
-	require.Len(t, targets, 1)
-	assert.Equal(t, parser.AgentCodex, targets[0].Provider.Definition().Type)
-	assert.Equal(t, []parser.ActivityHintSource{
+	require.NoError(err)
+	require.Len(targets, 1)
+	assert.Equal(parser.AgentCodex, targets[0].Provider.Definition().Type)
+	assert.Equal([]parser.ActivityHintSource{
 		{Path: filepath.Join(base, "history.jsonl")},
 		{Path: filepath.Join(custom, "history.jsonl")},
 	}, targets[0].Sources)
@@ -50,6 +53,9 @@ func TestCollectLiveActivityTargetsUsesOnlyConfiguredHintProviders(t *testing.T)
 // TRAE CLI writes history.jsonl at the same position relative to its sessions
 // root as Codex, so it reaches the poller with its own traex: ID prefix.
 func TestCollectLiveActivityTargetsIncludesTraeX(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	base := filepath.Join(t.TempDir(), ".trae", "cli")
 	cfg := config.Config{
 		InstallationID: "local",
@@ -60,16 +66,19 @@ func TestCollectLiveActivityTargetsIncludesTraeX(t *testing.T) {
 
 	targets, err := collectLiveActivityTargets(t.Context(), cfg)
 
-	require.NoError(t, err)
-	require.Len(t, targets, 1)
-	assert.Equal(t, parser.AgentTraeX, targets[0].Provider.Definition().Type)
-	assert.Equal(t, "traex:", targets[0].Provider.Definition().IDPrefix)
-	assert.Equal(t, []parser.ActivityHintSource{
+	require.NoError(err)
+	require.Len(targets, 1)
+	assert.Equal(parser.AgentTraeX, targets[0].Provider.Definition().Type)
+	assert.Equal("traex:", targets[0].Provider.Definition().IDPrefix)
+	assert.Equal([]parser.ActivityHintSource{
 		{Path: filepath.Join(base, "history.jsonl")},
 	}, targets[0].Sources)
 }
 
 func TestCollectLiveActivityTargetsDoesNotRequireExistingRoots(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	base := t.TempDir()
 	missing := filepath.Join(base, "missing", "sessions")
 	cfg := config.Config{
@@ -80,23 +89,26 @@ func TestCollectLiveActivityTargetsDoesNotRequireExistingRoots(t *testing.T) {
 
 	targets, err := collectLiveActivityTargets(t.Context(), cfg)
 
-	require.NoError(t, err)
-	require.Len(t, targets, 1)
-	assert.Equal(t, filepath.Join(base, "missing", "history.jsonl"),
+	require.NoError(err)
+	require.Len(targets, 1)
+	assert.Equal(filepath.Join(base, "missing", "history.jsonl"),
 		targets[0].Sources[0].Path)
 	_, statErr := os.Stat(missing)
-	assert.ErrorIs(t, statErr, os.ErrNotExist,
+	assert.ErrorIs(statErr, os.ErrNotExist,
 		"target collection must not create or discover rollout roots")
 }
 
 func TestLiveActivityIndexedLookupReturnsExactStoredMetadata(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := dbtest.OpenTestDB(t)
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")
 	size := int64(123)
 	mtime := int64(456)
 	inode := int64(789)
 	device := int64(1011)
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID:         "codex:exact-id",
 		Project:    "project",
 		Machine:    "local",
@@ -111,9 +123,9 @@ func TestLiveActivityIndexedLookupReturnsExactStoredMetadata(t *testing.T) {
 
 	got, found, err := lookup(t.Context(), "codex:exact-id")
 
-	require.NoError(t, err)
-	assert.True(t, found)
-	assert.Equal(t, agentsync.LiveActivitySource{
+	require.NoError(err)
+	assert.True(found)
+	assert.Equal(agentsync.LiveActivitySource{
 		Path:              path,
 		StoredSize:        size,
 		StoredMTimeNS:     mtime,
@@ -124,14 +136,17 @@ func TestLiveActivityIndexedLookupReturnsExactStoredMetadata(t *testing.T) {
 	}, got)
 
 	_, found, err = lookup(t.Context(), "codex:missing-id")
-	require.NoError(t, err)
-	assert.False(t, found)
+	require.NoError(err)
+	assert.False(found)
 }
 
 func TestLiveActivityIndexedLookupSchedulesRowsWithoutCompleteStat(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := dbtest.OpenTestDB(t)
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID:       "codex:no-stat",
 		Project:  "project",
 		Machine:  "local",
@@ -143,14 +158,16 @@ func TestLiveActivityIndexedLookupSchedulesRowsWithoutCompleteStat(t *testing.T)
 		t.Context(), "codex:no-stat",
 	)
 
-	require.NoError(t, err)
-	assert.True(t, found)
-	assert.Equal(t, path, got.Path)
-	assert.False(t, got.HasStoredStat)
+	require.NoError(err)
+	assert.True(found)
+	assert.Equal(path, got.Path)
+	assert.False(got.HasStoredStat)
 }
 
 func TestStartLiveActivityRunTracksSyncAndWaitsForStop(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		require := require.New(t)
+
 		ctx, cancel := context.WithCancel(t.Context())
 		defer cancel()
 		base := t.TempDir()
@@ -159,21 +176,21 @@ func TestStartLiveActivityRunTracksSyncAndWaitsForStop(t *testing.T) {
 		rollout := filepath.Join(base, "rollout.jsonl")
 		id := "019f0000-0000-7000-8000-000000000002"
 		now := time.Now()
-		require.NoError(t, os.WriteFile(history, []byte(
+		require.NoError(os.WriteFile(history, []byte(
 			`{"session_id":"`+id+`","ts":`+
 				strconv.FormatInt(now.Unix(), 10)+
 				`,"text":"private prompt sentinel"}`+"\n",
 		), 0o644))
-		require.NoError(t, os.WriteFile(rollout, []byte("changed"), 0o644))
+		require.NoError(os.WriteFile(rollout, []byte("changed"), 0o644))
 		provider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{
 			Roots: []string{sessions},
 		})
-		require.True(t, ok)
+		require.True(ok)
 		hints, ok, err := parser.ResolveActivityHintProvider(provider)
-		require.NoError(t, err)
-		require.True(t, ok)
+		require.NoError(err)
+		require.True(ok)
 		sources, err := hints.ActivityHintSources(t.Context())
-		require.NoError(t, err)
+		require.NoError(err)
 
 		idled := make(chan struct{}, 1)
 		idle := server.NewIdleTracker(20*time.Millisecond, func() {
@@ -212,14 +229,14 @@ func TestStartLiveActivityRunTracksSyncAndWaitsForStop(t *testing.T) {
 		select {
 		case <-entered:
 		case <-time.After(time.Second):
-			require.FailNow(t, "tracked sync did not start")
+			require.FailNow("tracked sync did not start")
 		}
 		// Exercise idle suppression only after the sync has acquired its work
 		// lease; slow file reads during startup are not part of this contract.
 		go idle.Run(ctx)
 		select {
 		case <-idled:
-			require.FailNow(t, "idle callback fired while sync work was active")
+			require.FailNow("idle callback fired while sync work was active")
 		case <-time.After(3 * 20 * time.Millisecond):
 		}
 
@@ -230,19 +247,19 @@ func TestStartLiveActivityRunTracksSyncAndWaitsForStop(t *testing.T) {
 		}()
 		select {
 		case <-stopped:
-			require.FailNow(t, "stop returned before active sync work completed")
+			require.FailNow("stop returned before active sync work completed")
 		case <-time.After(20 * time.Millisecond):
 		}
 		release <- struct{}{}
 		select {
 		case <-finished:
 		case <-time.After(time.Second):
-			require.FailNow(t, "tracked sync did not finish")
+			require.FailNow("tracked sync did not finish")
 		}
 		select {
 		case <-stopped:
 		case <-time.After(time.Second):
-			require.FailNow(t, "stop did not join the poller goroutine")
+			require.FailNow("stop did not join the poller goroutine")
 		}
 	})
 }

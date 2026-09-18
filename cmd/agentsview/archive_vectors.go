@@ -27,7 +27,7 @@ func clearUsageOnlyVectors(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 	if !ok {
-		return fmt.Errorf("cannot apply usage-only policy while the vector index is being written")
+		return errors.New("cannot apply usage-only policy while the vector index is being written")
 	}
 	defer lock.Close()
 	for _, spec := range []vector.IndexSpec{vector.MessageIndexSpec(), vector.RecallIndexSpec()} {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -52,7 +53,7 @@ func runImport(cfg ImportConfig) {
 	stats, err := runImportDispatch(
 		ctx, database, cfg.Type, dir, assetsDir, appCfg.InstallationID,
 	)
-	if err != nil && strings.HasPrefix(err.Error(), "unknown import type:") {
+	if errors.Is(err, errUnknownImportType) {
 		log.Fatalf("%v", err)
 	}
 
@@ -72,6 +73,8 @@ func runImport(cfg ImportConfig) {
 	}
 }
 
+var errUnknownImportType = errors.New("unknown import type")
+
 func runImportDispatch(
 	ctx context.Context,
 	database *db.DB,
@@ -86,8 +89,8 @@ func runImportDispatch(
 		return runGeminiAppsImport(ctx, database, path, machine)
 	default:
 		return importer.ImportStats{}, fmt.Errorf(
-			"unknown import type: %s (use claude-ai, chatgpt, or gemini-apps)",
-			importType,
+			"%w: %s (use claude-ai, chatgpt, or gemini-apps)",
+			errUnknownImportType, importType,
 		)
 	}
 }

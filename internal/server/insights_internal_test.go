@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"net/http"
 	"testing"
 	"time"
@@ -17,11 +16,14 @@ import (
 // request time with the transient 503 + Retry-After instead of running for
 // minutes and then failing to save.
 func TestGenerateInsightRejectsWriterClosedBeforeStream(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	srv := testServer(t, 5*time.Second)
 	local, ok := srv.db.(*db.DB)
-	require.True(t, ok)
-	require.NoError(t, local.CloseWriter())
-	t.Cleanup(func() { require.NoError(t, local.ReopenWriter()) })
+	require.True(ok)
+	require.NoError(local.CloseWriter())
+	t.Cleanup(func() { require.NoError(local.ReopenWriter()) })
 
 	w := serveJSON(t, srv.Handler(), http.MethodPost, "/api/v1/insights/generate",
 		map[string]any{
@@ -30,10 +32,10 @@ func TestGenerateInsightRejectsWriterClosedBeforeStream(t *testing.T) {
 			"date_to":   "2026-01-01",
 		})
 
-	require.Equal(t, http.StatusServiceUnavailable, w.Code,
+	require.Equal(http.StatusServiceUnavailable, w.Code,
 		"body: %s", w.Body.String())
-	assert.Equal(t, writerClosedRetryAfterSeconds, w.Header().Get("Retry-After"))
-	assert.NotContains(t, w.Body.String(), "event:",
+	assert.Equal(writerClosedRetryAfterSeconds, w.Header().Get("Retry-After"))
+	assert.NotContains(w.Body.String(), "event:",
 		"the rejection must not open an SSE stream")
 }
 
@@ -46,15 +48,18 @@ func TestGenerateInsightRejectsWriterClosedBeforeStream(t *testing.T) {
 // exclude it under UTC. Before the fix the window was always UTC, so the New
 // York request would have wrongly excluded the session.
 func TestActivityRangeSummaryUsesRequestTimezone(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	srv := testServer(t, 0)
-	ctx := context.Background()
+	ctx := t.Context()
 	ts := "2026-06-16T02:00:00Z"
-	require.NoError(t, srv.db.UpsertSession(db.Session{
+	require.NoError(srv.db.UpsertSession(db.Session{
 		ID: "x", Project: "proj", Machine: "test", Agent: "claude",
 		StartedAt: &ts, EndedAt: &ts, MessageCount: 1,
 		RelationshipType: "root", DataVersion: 1,
 	}))
-	require.NoError(t, srv.db.ReplaceSessionMessages("x", []db.Message{{
+	require.NoError(srv.db.ReplaceSessionMessages("x", []db.Message{{
 		SessionID: "x", Ordinal: 0, Role: "assistant", Content: "x",
 		Timestamp: ts, Model: "m1",
 	}}))
@@ -63,18 +68,18 @@ func TestActivityRangeSummaryUsesRequestTimezone(t *testing.T) {
 		Type: "daily_activity", DateFrom: "2026-06-15", DateTo: "2026-06-15",
 		Timezone: "America/New_York",
 	})
-	require.NoError(t, err)
-	require.NotNil(t, ny)
-	assert.Equal(t, 1, ny.Sessions,
+	require.NoError(err)
+	require.NotNil(ny)
+	assert.Equal(1, ny.Sessions,
 		"New York June-15 window covers the 02:00Z instant (22:00 local)")
 
 	utc, err := srv.activityRangeSummary(ctx, generateInsightRequest{
 		Type: "daily_activity", DateFrom: "2026-06-15", DateTo: "2026-06-15",
 		Timezone: "UTC",
 	})
-	require.NoError(t, err)
-	require.NotNil(t, utc)
-	assert.Equal(t, 0, utc.Sessions,
+	require.NoError(err)
+	require.NotNil(utc)
+	assert.Equal(0, utc.Sessions,
 		"UTC June-15 window ends at June 16 00:00Z, before the instant")
 }
 
@@ -84,29 +89,32 @@ func TestActivityRangeSummaryUsesRequestTimezone(t *testing.T) {
 // covers the same sessions BuildPrompt's list does. Before the fix the summary
 // hard-coded ExcludeAutomated, so "all" and "automated" requests undercounted.
 func TestActivityRangeSummaryAppliesAutomatedScope(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	srv := testServer(t, 0)
-	ctx := context.Background()
+	ctx := t.Context()
 	ts := "2026-06-15T12:00:00Z"
 
 	// Interactive session: multi-turn, ordinary prompt.
-	require.NoError(t, srv.db.UpsertSession(db.Session{
+	require.NoError(srv.db.UpsertSession(db.Session{
 		ID: "human", Project: "proj", Machine: "test", Agent: "claude",
 		StartedAt: &ts, EndedAt: &ts, MessageCount: 4, UserMessageCount: 2,
 		RelationshipType: "root", DataVersion: 1,
 	}))
-	require.NoError(t, srv.db.ReplaceSessionMessages("human", []db.Message{{
+	require.NoError(srv.db.ReplaceSessionMessages("human", []db.Message{{
 		SessionID: "human", Ordinal: 0, Role: "assistant", Content: "x",
 		Timestamp: ts, Model: "m1",
 	}}))
 
 	// Automated session: a single-turn review prompt sets is_automated.
 	reviewPrompt := "You are a code reviewer. Review the code."
-	require.NoError(t, srv.db.UpsertSession(db.Session{
+	require.NoError(srv.db.UpsertSession(db.Session{
 		ID: "auto", Project: "proj", Machine: "test", Agent: "claude",
 		StartedAt: &ts, EndedAt: &ts, MessageCount: 3, UserMessageCount: 1,
 		FirstMessage: &reviewPrompt, RelationshipType: "root", DataVersion: 1,
 	}))
-	require.NoError(t, srv.db.ReplaceSessionMessages("auto", []db.Message{{
+	require.NoError(srv.db.ReplaceSessionMessages("auto", []db.Message{{
 		SessionID: "auto", Ordinal: 0, Role: "assistant", Content: "x",
 		Timestamp: ts, Model: "m1",
 	}}))
@@ -119,16 +127,16 @@ func TestActivityRangeSummaryAppliesAutomatedScope(t *testing.T) {
 	human := base
 	human.AutomatedScope = "human"
 	humanSummary, err := srv.activityRangeSummary(ctx, human)
-	require.NoError(t, err)
-	require.NotNil(t, humanSummary)
-	assert.Equal(t, 1, humanSummary.Sessions,
+	require.NoError(err)
+	require.NotNil(humanSummary)
+	assert.Equal(1, humanSummary.Sessions,
 		"human scope counts only the interactive session")
 
 	all := base
 	all.AutomatedScope = "all"
 	allSummary, err := srv.activityRangeSummary(ctx, all)
-	require.NoError(t, err)
-	require.NotNil(t, allSummary)
-	assert.Equal(t, 2, allSummary.Sessions,
+	require.NoError(err)
+	require.NotNil(allSummary)
+	assert.Equal(2, allSummary.Sessions,
 		"all scope counts interactive and automated sessions")
 }

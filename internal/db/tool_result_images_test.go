@@ -1,14 +1,15 @@
 package db
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/mattn/go-sqlite3"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/mattn/go-sqlite3"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,51 +43,53 @@ func testImageMessage(sessionID string) Message {
 }
 
 func TestStripToolResultImages(t *testing.T) {
+	assert := assert.New(t)
+
 	content := testInlineImageContent()
 	got, stats := StripToolResultImages(content)
-	assert.Equal(t, int64(1), stats.Payloads)
-	assert.Equal(t, int64(3), stats.DecodedBytes)
-	assert.Equal(t, int64(len("data:image/png;base64,AAEC")), stats.StoredBytes)
-	assert.NotContains(t, got, "input_image")
-	assert.Contains(t, got, `"type":"agentsview_image"`)
-	assert.Contains(t, got, `"version":1`)
-	assert.Contains(t, got, `"media_type":"image/png"`)
-	assert.Contains(t, got, `"byte_size":3`)
-	assert.Contains(t, got, `"sha256":""`)
-	assert.Contains(t, got, `"text":"before"`)
-	assert.Contains(t, got, `"text":"after"`)
-	assert.Equal(t, got, mustStripImage(t, got))
+	assert.Equal(int64(1), stats.Payloads)
+	assert.Equal(int64(3), stats.DecodedBytes)
+	assert.Equal(int64(len("data:image/png;base64,AAEC")), stats.StoredBytes)
+	assert.NotContains(got, "input_image")
+	assert.Contains(got, `"type":"agentsview_image"`)
+	assert.Contains(got, `"version":1`)
+	assert.Contains(got, `"media_type":"image/png"`)
+	assert.Contains(got, `"byte_size":3`)
+	assert.Contains(got, `"sha256":""`)
+	assert.Contains(got, `"text":"before"`)
+	assert.Contains(got, `"text":"after"`)
+	assert.Equal(got, mustStripImage(t, got))
 
 	var blocks []map[string]any
 	require.NoError(t, json.Unmarshal([]byte(got), &blocks))
-	assert.Equal(t, "agentsview_image", blocks[1]["type"])
+	assert.Equal("agentsview_image", blocks[1]["type"])
 
 	withMarkup := `[{"type":"text","text":"<b> & redirect >"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
 	got, _ = StripToolResultImages(withMarkup)
-	assert.Contains(t, got, `<b> & redirect >`)
-	assert.NotContains(t, got, `\u003c`)
+	assert.Contains(got, `<b> & redirect >`)
+	assert.NotContains(got, `\u003c`)
 
 	withUnknownFields := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC","detail":"high","vendor":{"mode":"full"}}]`
 	got, _ = StripToolResultImages(withUnknownFields)
-	assert.Contains(t, got, `"detail":"high"`)
-	assert.Contains(t, got, `"vendor":{"mode":"full"}`)
+	assert.Contains(got, `"detail":"high"`)
+	assert.Contains(got, `"vendor":{"mode":"full"}`)
 
 	withSHA256 := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC","sha256":"abc123"}]`
 	got, _ = StripToolResultImages(withSHA256)
-	assert.Contains(t, got, `"sha256":"abc123"`)
+	assert.Contains(got, `"sha256":"abc123"`)
 
 	withCaseVariantKeys := `[{"TYPE":"input_image","IMAGE_URL":"data:image/png;base64,AAEC"}]`
 	got, stats = StripToolResultImages(withCaseVariantKeys)
-	assert.Equal(t, int64(1), stats.Payloads)
-	assert.NotContains(t, got, "data:image/png")
-	assert.Contains(t, got, `"type":"agentsview_image"`)
+	assert.Equal(int64(1), stats.Payloads)
+	assert.NotContains(got, "data:image/png")
+	assert.Contains(got, `"type":"agentsview_image"`)
 
 	multiAgent := "agent-a:\n" + content + "\n\nagent-b:\n" + content
 	got, stats = StripToolResultImages(multiAgent)
-	assert.Equal(t, int64(2), stats.Payloads)
-	assert.NotContains(t, got, "input_image")
-	assert.Contains(t, got, "agent-a:\n")
-	assert.Contains(t, got, "agent-b:\n")
+	assert.Equal(int64(2), stats.Payloads)
+	assert.NotContains(got, "input_image")
+	assert.Contains(got, "agent-a:\n")
+	assert.Contains(got, "agent-b:\n")
 }
 
 func TestStripToolResultImagesAcceptsEscapedType(t *testing.T) {
@@ -120,39 +123,45 @@ func TestStripToolResultImagesNegativeSpace(t *testing.T) {
 }
 
 func TestStripToolResultImagesRemovesOffloadReference(t *testing.T) {
+	assert := assert.New(t)
+
 	content := `[{"byte_size":3,"image_ref":"asset://abc.png","media_type":"image/png","sha256":"abc","text":"![Image: image/png, 3 bytes](asset://abc.png)","type":"agentsview_image","version":1}]`
 
 	got, stats := StripToolResultImages(content)
 
-	assert.Equal(t, int64(1), stats.Payloads)
-	assert.Contains(t, got, `"text":"[Image: image/png, 3 bytes]"`)
-	assert.NotContains(t, got, "image_ref")
-	assert.NotContains(t, got, "asset://")
+	assert.Equal(int64(1), stats.Payloads)
+	assert.Contains(got, `"text":"[Image: image/png, 3 bytes]"`)
+	assert.NotContains(got, "image_ref")
+	assert.NotContains(got, "asset://")
 }
 
 func TestDowngradeOffloadedToolResultImagesKeepsInlineImages(t *testing.T) {
+	assert := assert.New(t)
+
 	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"},{"byte_size":3,"image_ref":"asset://abc.png","media_type":"image/png","sha256":"abc","text":"![Image: image/png, 3 bytes](asset://abc.png)","type":"agentsview_image","version":1}]`
 
 	got, stats := DowngradeOffloadedToolResultImages(content)
 
-	assert.Equal(t, int64(1), stats.Payloads)
-	assert.Contains(t, got, "data:image/png;base64,AAEC")
-	assert.Contains(t, got, `"text":"[Image: image/png, 3 bytes]"`)
-	assert.NotContains(t, got, "image_ref")
-	assert.NotContains(t, got, "asset://")
+	assert.Equal(int64(1), stats.Payloads)
+	assert.Contains(got, "data:image/png;base64,AAEC")
+	assert.Contains(got, `"text":"[Image: image/png, 3 bytes]"`)
+	assert.NotContains(got, "image_ref")
+	assert.NotContains(got, "asset://")
 }
 
 func TestDBPolicyZeroValue(t *testing.T) {
+	assert := assert.New(t)
+
 	d := testDB(t)
-	assert.Equal(t, config.ToolResultImagesKeep, d.ToolResultImages())
+	assert.Equal(config.ToolResultImagesKeep, d.ToolResultImages())
 	insertSession(t, d, "keep", "project")
 	insertMessages(t, d, testImageMessage("keep"))
-	got, err := d.GetAllMessages(context.Background(), "keep")
+	got, err := d.GetAllMessages(t.Context(), "keep")
 	require.NoError(t, err)
-	assert.Contains(t, got[0].ToolCalls[0].ResultContent, "input_image")
+	assert.Contains(got[0].ToolCalls[0].ResultContent, "input_image")
 
 	d.SetToolResultImages(config.ToolResultImagesDrop)
-	assert.Equal(t, config.ToolResultImagesDrop, d.ToolResultImages())
+	assert.Equal(config.ToolResultImagesDrop, d.ToolResultImages())
 }
 
 func TestProjectToolResultImagesForComparisonDoesNotWriteAssets(t *testing.T) {
@@ -184,57 +193,63 @@ func TestProjectToolResultImagesNormalizesNilForOmittedArchives(t *testing.T) {
 }
 
 func TestIngestWithDropRemovesInlineImagesFromBothTables(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	d.SetToolResultImages(config.ToolResultImagesDrop)
 	insertSession(t, d, "ingest", "project")
 	message := testImageMessage("ingest")
 	original := message
 	insertMessages(t, d, message)
-	assert.Equal(t, original.ToolCalls[0].ResultContent, message.ToolCalls[0].ResultContent)
+	assert.Equal(original.ToolCalls[0].ResultContent, message.ToolCalls[0].ResultContent)
 
-	got, err := d.GetAllMessages(context.Background(), "ingest")
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.NotContains(t, got[0].ToolCalls[0].ResultContent, "input_image")
-	assert.NotContains(t, got[0].ToolCalls[0].ResultEvents[0].Content, "input_image")
-	assert.Contains(t, got[0].ToolCalls[0].ResultContent, "agentsview_image")
-	assert.Contains(t, got[0].ToolCalls[0].ResultEvents[0].Content, "agentsview_image")
+	got, err := d.GetAllMessages(t.Context(), "ingest")
+	require.NoError(err)
+	require.Len(got, 1)
+	assert.NotContains(got[0].ToolCalls[0].ResultContent, "input_image")
+	assert.NotContains(got[0].ToolCalls[0].ResultEvents[0].Content, "input_image")
+	assert.Contains(got[0].ToolCalls[0].ResultContent, "agentsview_image")
+	assert.Contains(got[0].ToolCalls[0].ResultEvents[0].Content, "agentsview_image")
 }
 
 func TestToolResultImagesWriteRoutes(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	d.SetToolResultImages(config.ToolResultImagesDrop)
 
 	insertSession(t, d, "direct", "project")
 	direct := testImageMessage("direct")
-	require.NoError(t, d.InsertMessages([]Message{direct}))
+	require.NoError(d.InsertMessages([]Message{direct}))
 
 	insertSession(t, d, "incremental", "project")
 	_, err := d.WriteSessionIncremental(
 		"incremental", []Message{testImageMessage("incremental")}, IncrementalSessionUpdate{},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	insertSession(t, d, "replacement", "project")
-	require.NoError(t, d.ReplaceSessionMessages("replacement", []Message{testImageMessage("replacement")}))
-	require.NoError(t, d.ReplaceSessionContent("replacement", []Message{testImageMessage("replacement")}, SessionSignalUpdate{}, nil))
+	require.NoError(d.ReplaceSessionMessages("replacement", []Message{testImageMessage("replacement")}))
+	require.NoError(d.ReplaceSessionContent("replacement", []Message{testImageMessage("replacement")}, SessionSignalUpdate{}, nil))
 
 	insertSession(t, d, "batch", "project")
 	_, err = d.WriteSessionBatch([]SessionBatchWrite{{
 		Session:  Session{ID: "batch", Project: "project", Machine: "local", Agent: "codex"},
 		Messages: []Message{testImageMessage("batch")},
 	}})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	for _, sessionID := range []string{"direct", "incremental", "replacement", "batch"} {
-		messages, err := d.GetAllMessages(context.Background(), sessionID)
-		require.NoError(t, err, sessionID)
-		require.Len(t, messages, 1, sessionID)
-		assert.NotContains(t, messages[0].ToolCalls[0].ResultContent, "input_image", sessionID)
+		messages, err := d.GetAllMessages(t.Context(), sessionID)
+		require.NoError(err, sessionID)
+		require.Len(messages, 1, sessionID)
+		assert.NotContains(messages[0].ToolCalls[0].ResultContent, "input_image", sessionID)
 	}
 
 	insertSession(t, d, "incremental-link", "project")
-	require.NoError(t, d.InsertMessages([]Message{testImageMessage("incremental-link")}))
+	require.NoError(d.InsertMessages([]Message{testImageMessage("incremental-link")}))
 	links := []ToolCallSubagentLink{{
 		ToolUseID:        "call-1",
 		ResultContent:    testInlineImageContent(),
@@ -245,19 +260,21 @@ func TestToolResultImagesWriteRoutes(t *testing.T) {
 	_, err = d.WriteSessionIncremental(
 		"incremental-link", nil, IncrementalSessionUpdate{SubagentLinks: links},
 	)
-	require.NoError(t, err)
-	assert.Equal(t, originalLinks, links)
-	messages, err := d.GetAllMessages(context.Background(), "incremental-link")
-	require.NoError(t, err)
-	assert.NotContains(t, messages[0].ToolCalls[0].ResultContent, "input_image")
+	require.NoError(err)
+	assert.Equal(originalLinks, links)
+	messages, err := d.GetAllMessages(t.Context(), "incremental-link")
+	require.NoError(err)
+	assert.NotContains(messages[0].ToolCalls[0].ResultContent, "input_image")
 }
 
 func TestWriteSessionBatchAtomicWithDropProjectsStoredToolRows(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	d.SetToolResultImages(config.ToolResultImagesDrop)
 	message := testImageMessage("atomic-images")
-	message.ToolCalls[0].ResultContent =
-		`[{"type":"text","text":"summary"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
+	message.ToolCalls[0].ResultContent = `[{"type":"text","text":"summary"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
 	originalCallContent := message.ToolCalls[0].ResultContent
 	originalEventContent := message.ToolCalls[0].ResultEvents[0].Content
 
@@ -268,13 +285,13 @@ func TestWriteSessionBatchAtomicWithDropProjectsStoredToolRows(t *testing.T) {
 		Messages:        []Message{message},
 		ReplaceMessages: true,
 	}})
-	require.NoError(t, err)
-	assert.Equal(t, 1, result.WrittenSessions)
-	assert.Equal(t, originalCallContent, message.ToolCalls[0].ResultContent)
-	assert.Equal(t, originalEventContent, message.ToolCalls[0].ResultEvents[0].Content)
+	require.NoError(err)
+	assert.Equal(1, result.WrittenSessions)
+	assert.Equal(originalCallContent, message.ToolCalls[0].ResultContent)
+	assert.Equal(originalEventContent, message.ToolCalls[0].ResultEvents[0].Content)
 
 	var storedCall, storedEvent string
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(d.getReader().QueryRow(`
 		SELECT COALESCE(tc.result_content, ''), ev.content
 		FROM tool_calls tc
 		JOIN tool_result_events ev
@@ -284,27 +301,30 @@ func TestWriteSessionBatchAtomicWithDropProjectsStoredToolRows(t *testing.T) {
 		WHERE tc.session_id = ?`, "atomic-images").Scan(
 		&storedCall, &storedEvent,
 	))
-	assert.NotContains(t, storedCall, "input_image")
-	assert.NotContains(t, storedEvent, "input_image")
-	assert.Contains(t, storedEvent, "agentsview_image")
+	assert.NotContains(storedCall, "input_image")
+	assert.NotContains(storedEvent, "input_image")
+	assert.Contains(storedEvent, "agentsview_image")
 }
 
 func TestToolResultImagesDedupAndLengths(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	d.SetToolResultImages(config.ToolResultImagesDrop)
 	insertSession(t, d, "lengths", "project")
-	require.NoError(t, d.InsertMessages([]Message{testImageMessage("lengths")}))
+	require.NoError(d.InsertMessages([]Message{testImageMessage("lengths")}))
 
 	var summaryLength, eventLength int
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT result_content_length FROM tool_calls WHERE session_id = ?", "lengths",
 	).Scan(&summaryLength))
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(d.getReader().QueryRow(
 		"SELECT content_length FROM tool_result_events WHERE session_id = ?", "lengths",
 	).Scan(&eventLength))
-	assert.Greater(t, summaryLength, 0)
-	assert.Greater(t, eventLength, 0)
-	assert.Equal(t, eventLength, summaryLength)
+	assert.Positive(summaryLength)
+	assert.Positive(eventLength)
+	assert.Equal(eventLength, summaryLength)
 }
 
 func TestDropImagesPreservesEmptySummaryMeaning(t *testing.T) {
@@ -340,10 +360,13 @@ func TestDropImagesPreservesEmptySummaryMeaning(t *testing.T) {
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			d := testDB(t)
 			d.SetToolResultImages(config.ToolResultImagesDrop)
 			insertSession(t, d, "empty-summary", "project")
-			require.NoError(t, d.InsertMessages([]Message{{
+			require.NoError(d.InsertMessages([]Message{{
 				SessionID: "empty-summary", Role: "assistant",
 				ToolCalls: []ToolCall{{
 					ToolUseID: "call", ResultContentLength: tt.summaryLength,
@@ -353,7 +376,7 @@ func TestDropImagesPreservesEmptySummaryMeaning(t *testing.T) {
 
 			var summary, event string
 			var summaryLength, eventLength int
-			require.NoError(t, d.getReader().QueryRow(`
+			require.NoError(d.getReader().QueryRow(`
 				SELECT COALESCE(tc.result_content, ''), COALESCE(tc.result_content_length, 0),
 				       ev.content, ev.content_length
 				FROM tool_calls tc
@@ -361,19 +384,22 @@ func TestDropImagesPreservesEmptySummaryMeaning(t *testing.T) {
 				  ON ev.session_id = tc.session_id AND ev.call_index = tc.call_index
 				WHERE tc.session_id = 'empty-summary' AND ev.event_index = 0`,
 			).Scan(&summary, &summaryLength, &event, &eventLength))
-			assert.Empty(t, summary)
-			assert.Equal(t, tt.wantLength, summaryLength)
-			assert.Equal(t, tt.wantEvent, event)
-			assert.Equal(t, tt.wantEventLen, eventLength)
+			assert.Empty(summary)
+			assert.Equal(tt.wantLength, summaryLength)
+			assert.Equal(tt.wantEvent, event)
+			assert.Equal(tt.wantEventLen, eventLength)
 		})
 	}
 }
 
 func TestDropImagesLateResultsRetainRawIdentity(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	d.SetToolResultImages(config.ToolResultImagesDrop)
 	insertSession(t, d, "late-images", "project")
-	require.NoError(t, d.InsertMessages([]Message{{
+	require.NoError(d.InsertMessages([]Message{{
 		SessionID: "late-images", Role: "assistant",
 		ToolCalls: []ToolCall{{
 			ToolUseID: "call", ToolName: "exec_command", Category: "Bash",
@@ -391,74 +417,82 @@ func TestDropImagesLateResultsRetainRawIdentity(t *testing.T) {
 		}},
 	}
 	_, err := d.WriteSessionIncremental("late-images", nil, update)
-	require.NoError(t, err)
+	require.NoError(err)
 	messages, err := d.GetAllMessages(t.Context(), "late-images")
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	require.Len(t, messages[0].ToolCalls, 1)
+	require.NoError(err)
+	require.Len(messages, 1)
+	require.Len(messages[0].ToolCalls, 1)
 	call := messages[0].ToolCalls[0]
-	require.Len(t, call.ResultEvents, 2)
+	require.Len(call.ResultEvents, 2)
 	const want = `[{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1}]`
-	assert.Equal(t, want, call.ResultContent)
+	assert.JSONEq(want, call.ResultContent)
 	for _, event := range call.ResultEvents {
-		assert.Equal(t, want, event.Content)
-		assert.Equal(t, len(want), event.ContentLength)
+		assert.JSONEq(want, event.Content)
+		assert.Equal(len(want), event.ContentLength)
 	}
-	assert.NotEqual(t, call.ResultEvents[0].RawContentDigest, call.ResultEvents[1].RawContentDigest)
+	assert.NotEqual(call.ResultEvents[0].RawContentDigest, call.ResultEvents[1].RawContentDigest)
 	before, err := d.GetSessionFull(t.Context(), "late-images")
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = d.WriteSessionIncremental("late-images", nil, update)
-	require.NoError(t, err)
+	require.NoError(err)
 	after, err := d.GetSessionFull(t.Context(), "late-images")
-	require.NoError(t, err)
-	assert.Equal(t, before.TranscriptRevision, after.TranscriptRevision, "raw replay must remain a no-op after projection")
-	assert.Equal(t, first, update.ToolCallResultUpdates[0].Events[0].Content)
+	require.NoError(err)
+	assert.Equal(before.TranscriptRevision, after.TranscriptRevision, "raw replay must remain a no-op after projection")
+	assert.JSONEq(first, update.ToolCallResultUpdates[0].Events[0].Content)
 }
 
 func TestStripToolImagesMixedSummary(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "mixed", "project")
-	require.NoError(t, d.InsertMessages([]Message{{SessionID: "mixed", Role: "assistant", ToolCalls: []ToolCall{{ToolUseID: "call", ToolName: "exec_command", Category: "Bash"}}}}))
+	require.NoError(d.InsertMessages([]Message{{SessionID: "mixed", Role: "assistant", ToolCalls: []ToolCall{{ToolUseID: "call", ToolName: "exec_command", Category: "Bash"}}}}))
 	raw := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
 	_, err := d.WriteSessionIncremental("mixed", nil, IncrementalSessionUpdate{MsgCount: 1, NextOrdinal: 1, ToolCallResultUpdates: []ToolCallResultUpdate{{ToolUseID: "call", Events: []ToolResultEvent{
 		{AgentID: "agent-a", Content: raw, Source: "function_call_output"},
 		{AgentID: "agent-b", Content: "plain result", Source: "function_call_output"},
 		{Content: raw, Source: "function_call_output"},
 	}}}})
-	require.NoError(t, err)
+	require.NoError(err)
 	report, err := d.StripToolImages(t.Context(), StripImagesFilter{})
-	require.NoError(t, err)
+	require.NoError(err)
 	var after string
-	require.NoError(t, d.getReader().QueryRow("SELECT result_content FROM tool_calls WHERE session_id = ?", "mixed").Scan(&after))
-	assert.NotContains(t, after, "input_image")
-	assert.Equal(t, int64(4), report.Payloads)
+	require.NoError(d.getReader().QueryRow("SELECT result_content FROM tool_calls WHERE session_id = ?", "mixed").Scan(&after))
+	assert.NotContains(after, "input_image")
+	assert.Equal(int64(4), report.Payloads)
 }
 
 func TestDropImagesLateSummaryWithExistingRawEvent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "late-existing", "project")
 	raw := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
-	require.NoError(t, d.InsertMessages([]Message{{SessionID: "late-existing", Role: "assistant", ToolCalls: []ToolCall{{ToolUseID: "call", ToolName: "exec_command", Category: "Bash"}}}}))
+	require.NoError(d.InsertMessages([]Message{{SessionID: "late-existing", Role: "assistant", ToolCalls: []ToolCall{{ToolUseID: "call", ToolName: "exec_command", Category: "Bash"}}}}))
 	_, firstErr := d.WriteSessionIncremental("late-existing", nil, IncrementalSessionUpdate{MsgCount: 1, NextOrdinal: 1, ToolCallResultUpdates: []ToolCallResultUpdate{{ToolUseID: "call", Events: []ToolResultEvent{{AgentID: "agent-a", Content: raw, Source: "function_call_output"}}}}})
-	require.NoError(t, firstErr)
+	require.NoError(firstErr)
 	d.SetToolResultImages(config.ToolResultImagesDrop)
 	_, err := d.WriteSessionIncremental("late-existing", nil, IncrementalSessionUpdate{MsgCount: 1, NextOrdinal: 1, ToolCallResultUpdates: []ToolCallResultUpdate{{ToolUseID: "call", Events: []ToolResultEvent{{AgentID: "agent-b", Content: raw, Source: "function_call_output"}}}}})
-	require.NoError(t, err)
+	require.NoError(err)
 	messages, err := d.GetAllMessages(t.Context(), "late-existing")
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	require.Len(t, messages[0].ToolCalls, 1)
+	require.NoError(err)
+	require.Len(messages, 1)
+	require.Len(messages[0].ToolCalls, 1)
 	call := messages[0].ToolCalls[0]
-	require.Len(t, call.ResultEvents, 2)
-	assert.NotContains(t, call.ResultEvents[1].Content, "input_image")
-	assert.NotContains(t, call.ResultContent, "input_image")
-	assert.Equal(t, len(call.ResultContent), call.ResultContentLength)
-	assert.Contains(t, call.ResultContent, "agent-a:")
-	assert.Contains(t, call.ResultContent, "agent-b:")
-	assert.Contains(t, call.ResultEvents[0].Content, "input_image")
+	require.Len(call.ResultEvents, 2)
+	assert.NotContains(call.ResultEvents[1].Content, "input_image")
+	assert.NotContains(call.ResultContent, "input_image")
+	assert.Equal(len(call.ResultContent), call.ResultContentLength)
+	assert.Contains(call.ResultContent, "agent-a:")
+	assert.Contains(call.ResultContent, "agent-b:")
+	assert.Contains(call.ResultEvents[0].Content, "input_image")
 }
 
 func TestStripToolResultSummarySections(t *testing.T) {
+	assert := assert.New(t)
+
 	const raw = `[
  {"type":"text","text":"before"},
 
@@ -473,12 +507,12 @@ func TestStripToolResultSummarySections(t *testing.T) {
 		{"plain text\n\n" + raw, 1},
 	} {
 		projected, stats := StripToolResultImages(tt.content)
-		assert.NotContains(t, projected, "input_image")
-		assert.Contains(t, projected, `"text":"before"`)
-		assert.Equal(t, tt.payloads, stats.Payloads)
+		assert.NotContains(projected, "input_image")
+		assert.Contains(projected, `"text":"before"`)
+		assert.Equal(tt.payloads, stats.Payloads)
 		again, repeated := StripToolResultImages(projected)
-		assert.Equal(t, projected, again)
-		assert.Zero(t, repeated)
+		assert.Equal(projected, again)
+		assert.Zero(repeated)
 	}
 }
 
@@ -520,44 +554,52 @@ func assertOffloadedImage(t *testing.T, content, dir string) {
 }
 
 func TestProjectToolResultImageContent(t *testing.T) {
+	parentAssert := assert.New(t)
+	parentRequire := require.New(t)
+
 	raw := testInlineImageContent()
 	for _, mode := range []config.ToolResultImages{config.ToolResultImagesKeep, config.ToolResultImagesDrop, config.ToolResultImagesOffload, "unknown"} {
 		t.Run(string(mode), func(t *testing.T) {
+			assert := assert.New(t)
+
 			dir := t.TempDir()
 			got := ProjectToolResultImageContent(raw, mode, dir)
 			if mode == config.ToolResultImagesOffload {
 				assertOffloadedImage(t, got, dir)
-				assert.Contains(t, got, `"text":"before"`)
-				assert.Contains(t, got, `"text":"after"`)
+				assert.Contains(got, `"text":"before"`)
+				assert.Contains(got, `"text":"after"`)
 			} else {
 				entries, err := os.ReadDir(dir)
 				require.NoError(t, err)
-				assert.Empty(t, entries)
+				assert.Empty(entries)
 				if mode == config.ToolResultImagesDrop {
-					assert.Contains(t, got, `"type":"agentsview_image"`)
-					assert.NotContains(t, got, "image_ref")
+					assert.Contains(got, `"type":"agentsview_image"`)
+					assert.NotContains(got, "image_ref")
 				} else {
-					assert.Equal(t, raw, got)
+					assert.Equal(raw, got)
 				}
 			}
 		})
 	}
 	for _, raw := range []string{"", "ordinary text", `[{"type":"input_image","image_url":"data:image/svg+xml;base64,AAEC"}]`, `[{"type":"input_image","image_url":"data:image/png;base64,!!!"}]`, `[{"type":"input_image","image_url":"data:image/png,AAEC"}]`} {
 		dir := t.TempDir()
-		assert.Equal(t, raw, ProjectToolResultImageContent(raw, config.ToolResultImagesOffload, dir))
+		parentAssert.Equal(raw, ProjectToolResultImageContent(raw, config.ToolResultImagesOffload, dir))
 		entries, err := os.ReadDir(dir)
-		require.NoError(t, err)
-		assert.Empty(t, entries)
+		parentRequire.NoError(err)
+		parentAssert.Empty(entries)
 	}
 	blocked := filepath.Join(t.TempDir(), "file")
-	require.NoError(t, os.WriteFile(blocked, []byte("occupied"), 0o600))
-	assert.Equal(t, raw, ProjectToolResultImageContent(raw, config.ToolResultImagesOffload, blocked))
-	assert.Equal(t, raw, ProjectToolResultImageContent(raw, config.ToolResultImagesOffload, ""))
+	parentRequire.NoError(os.WriteFile(blocked, []byte("occupied"), 0o600))
+	parentAssert.Equal(raw, ProjectToolResultImageContent(raw, config.ToolResultImagesOffload, blocked))
+	parentAssert.Equal(raw, ProjectToolResultImageContent(raw, config.ToolResultImagesOffload, ""))
 }
 
 func TestToolResultImagesOffloadWriteRoutes(t *testing.T) {
 	for _, route := range []string{"insert", "incremental", "replacement", "content", "batch", "atomic"} {
 		t.Run(route, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			d := testDB(t)
 			d.SetToolResultImages(config.ToolResultImagesOffload)
 			d.SetAssetsDir(t.TempDir())
@@ -565,14 +607,14 @@ func TestToolResultImagesOffloadWriteRoutes(t *testing.T) {
 			messages := []Message{testImageMessage(route)}
 			switch route {
 			case "insert":
-				require.NoError(t, d.InsertMessages(messages))
+				require.NoError(d.InsertMessages(messages))
 			case "incremental":
 				_, err := d.WriteSessionIncremental(route, messages, IncrementalSessionUpdate{})
-				require.NoError(t, err)
+				require.NoError(err)
 			case "replacement":
-				require.NoError(t, d.ReplaceSessionMessages(route, messages))
+				require.NoError(d.ReplaceSessionMessages(route, messages))
 			case "content":
-				require.NoError(t, d.ReplaceSessionContent(route, messages, SessionSignalUpdate{}, nil))
+				require.NoError(d.ReplaceSessionContent(route, messages, SessionSignalUpdate{}, nil))
 			default:
 				writes := []SessionBatchWrite{{Session: Session{ID: route, Project: "project", Machine: "local", Agent: "codex"}, Messages: messages}}
 				var result SessionBatchResult
@@ -582,18 +624,18 @@ func TestToolResultImagesOffloadWriteRoutes(t *testing.T) {
 				} else {
 					result, err = d.WriteSessionBatch(writes)
 				}
-				require.NoError(t, err)
-				require.Equal(t, 1, result.WrittenSessions)
+				require.NoError(err)
+				require.Equal(1, result.WrittenSessions)
 			}
 			stored, err := d.GetAllMessages(t.Context(), route)
-			require.NoError(t, err)
-			require.Len(t, stored, 1)
+			require.NoError(err)
+			require.Len(stored, 1)
 			call := stored[0].ToolCalls[0]
 			assertOffloadedImage(t, call.ResultContent, d.AssetsDir())
-			require.Len(t, call.ResultEvents, 1)
+			require.Len(call.ResultEvents, 1)
 			assertOffloadedImage(t, call.ResultEvents[0].Content, d.AssetsDir())
-			assert.Equal(t, len(call.ResultEvents[0].Content), call.ResultEvents[0].ContentLength)
-			assert.Equal(t, testInlineImageContent(), messages[0].ToolCalls[0].ResultEvents[0].Content)
+			assert.Equal(len(call.ResultEvents[0].Content), call.ResultEvents[0].ContentLength)
+			assert.Equal(testInlineImageContent(), messages[0].ToolCalls[0].ResultEvents[0].Content)
 		})
 	}
 }
@@ -602,11 +644,14 @@ func TestToolResultImagesOffloadLateAndLinked(t *testing.T) {
 	for _, blocked := range []bool{false, true} {
 		for _, linked := range []bool{false, true} {
 			t.Run(fmt.Sprintf("blocked=%t/linked=%t", blocked, linked), func(t *testing.T) {
+				assert := assert.New(t)
+				require := require.New(t)
+
 				d := testDB(t)
 				d.SetToolResultImages(config.ToolResultImagesOffload)
 				d.SetAssetsDir(t.TempDir())
 				insertSession(t, d, "late", "project")
-				require.NoError(t, d.InsertMessages([]Message{{SessionID: "late", Role: "assistant", ToolCalls: []ToolCall{{ToolUseID: "call", Category: "Bash"}}}}))
+				require.NoError(d.InsertMessages([]Message{{SessionID: "late", Role: "assistant", ToolCalls: []ToolCall{{ToolUseID: "call", Category: "Bash"}}}}))
 				raw := testInlineImageContent()
 				update := IncrementalSessionUpdate{MsgCount: 1, NextOrdinal: 1, BlockedResultCategories: map[string]bool{"Bash": blocked}}
 				if linked {
@@ -615,27 +660,27 @@ func TestToolResultImagesOffloadLateAndLinked(t *testing.T) {
 					update.ToolCallResultUpdates = []ToolCallResultUpdate{{ToolUseID: "call", Events: []ToolResultEvent{{Content: raw, Source: "function_call_output"}}}}
 				}
 				_, err := d.WriteSessionIncremental("late", nil, update)
-				require.NoError(t, err)
+				require.NoError(err)
 				stored, err := d.GetAllMessages(t.Context(), "late")
-				require.NoError(t, err)
+				require.NoError(err)
 				call := stored[0].ToolCalls[0]
 				if blocked {
-					assert.Empty(t, call.ResultContent)
-					assert.Equal(t, len(raw), call.ResultContentLength)
+					assert.Empty(call.ResultContent)
+					assert.Equal(len(raw), call.ResultContentLength)
 					entries, err := os.ReadDir(d.AssetsDir())
-					require.NoError(t, err)
-					assert.Empty(t, entries)
+					require.NoError(err)
+					assert.Empty(entries)
 				} else {
 					assertOffloadedImage(t, call.ResultContent, d.AssetsDir())
-					assert.Equal(t, len(call.ResultContent), call.ResultContentLength)
+					assert.Equal(len(call.ResultContent), call.ResultContentLength)
 				}
 				before, err := d.GetSessionFull(t.Context(), "late")
-				require.NoError(t, err)
+				require.NoError(err)
 				_, err = d.WriteSessionIncremental("late", nil, update)
-				require.NoError(t, err)
+				require.NoError(err)
 				after, err := d.GetSessionFull(t.Context(), "late")
-				require.NoError(t, err)
-				assert.Equal(t, before.TranscriptRevision, after.TranscriptRevision)
+				require.NoError(err)
+				assert.Equal(before.TranscriptRevision, after.TranscriptRevision)
 			})
 		}
 	}
@@ -643,23 +688,25 @@ func TestToolResultImagesOffloadLateAndLinked(t *testing.T) {
 
 func TestToolResultImagesResyncRoute(t *testing.T) {
 	for _, failed := range []bool{false, true} {
-		t.Run(fmt.Sprint(failed), func(t *testing.T) {
+		t.Run(strconv.FormatBool(failed), func(t *testing.T) {
+			require := require.New(t)
+
 			d := testDB(t)
 			dir := t.TempDir()
 			if failed {
 				dir = filepath.Join(dir, "file")
-				require.NoError(t, os.WriteFile(dir, []byte("occupied"), 0o600))
+				require.NoError(os.WriteFile(dir, []byte("occupied"), 0o600))
 			}
 			d.SetAssetsDir(dir)
 			for _, id := range []string{"copied", "untouched"} {
 				insertSession(t, d, id, "project")
-				require.NoError(t, d.InsertMessages([]Message{testImageMessage(id)}))
+				require.NoError(d.InsertMessages([]Message{testImageMessage(id)}))
 			}
 			d.SetToolResultImages(config.ToolResultImagesOffload)
-			require.NoError(t, d.ProjectToolImagesForSessions(t.Context(), []string{"copied"}))
+			require.NoError(d.ProjectToolImagesForSessions(t.Context(), []string{"copied"}))
 			for _, id := range []string{"copied", "untouched"} {
 				messages, err := d.GetAllMessages(t.Context(), id)
-				require.NoError(t, err)
+				require.NoError(err)
 				if id == "copied" && !failed {
 					assertOffloadedImage(t, messages[0].ToolCalls[0].ResultContent, dir)
 				} else {
@@ -673,6 +720,8 @@ func TestToolResultImagesResyncRoute(t *testing.T) {
 func TestToolResultImagesOffloadOmittedArchives(t *testing.T) {
 	for _, policy := range []config.ArchiveContent{config.ArchiveContentTranscripts, config.ArchiveContentUsage} {
 		t.Run(string(policy), func(t *testing.T) {
+			require := require.New(t)
+
 			d := testDB(t)
 			d.SetToolResultImages(config.ToolResultImagesOffload)
 			d.SetAssetsDir(t.TempDir())
@@ -680,86 +729,95 @@ func TestToolResultImagesOffloadOmittedArchives(t *testing.T) {
 			insertSession(t, d, "omitted", "project")
 			message := testImageMessage("omitted")
 			message.ToolCalls[0].ResultEvents = nil
-			require.NoError(t, d.InsertMessages([]Message{message}))
+			require.NoError(d.InsertMessages([]Message{message}))
 			_, err := d.WriteSessionIncremental("omitted", nil, IncrementalSessionUpdate{SubagentLinks: []ToolCallSubagentLink{{ToolUseID: "call-1", HasResult: true, ResultContent: testInlineImageContent()}}, ToolCallResultUpdates: []ToolCallResultUpdate{{ToolUseID: "call-1", Events: []ToolResultEvent{{Content: testInlineImageContent()}}}}})
-			require.NoError(t, err)
-			require.NoError(t, d.ProjectToolImagesForSessions(t.Context(), []string{"omitted"}))
+			require.NoError(err)
+			require.NoError(d.ProjectToolImagesForSessions(t.Context(), []string{"omitted"}))
 			entries, err := os.ReadDir(d.AssetsDir())
-			require.NoError(t, err)
+			require.NoError(err)
 			assert.Empty(t, entries)
 		})
 	}
 }
 
 func TestToolResultImagesOffloadPublishesBeforeInsert(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
 	d.SetAssetsDir(t.TempDir())
 	d.SetToolResultImages(config.ToolResultImagesOffload)
 	insertSession(t, d, "ordered", "project")
 	conn, err := d.getWriter().Conn(t.Context())
-	require.NoError(t, err)
-	require.NoError(t, conn.Raw(func(driverConn any) error {
+	require.NoError(err)
+	require.NoError(conn.Raw(func(driverConn any) error {
 		return driverConn.(*sqlite3.SQLiteConn).RegisterFunc("asset_published", func(content string) bool {
 			const object = "ae4b3280e56e2faf83f414a6e3dabe9d5fbe18976544c05fed121accb85b53fc.png"
 			body, err := os.ReadFile(filepath.Join(d.AssetsDir(), object))
 			return err == nil && string(body) == "\x00\x01\x02" && strings.Contains(content, "asset://"+object)
 		}, false)
 	}))
-	require.NoError(t, conn.Close())
+	require.NoError(conn.Close())
 	_, err = d.getWriter().Exec(`CREATE TEMP TRIGGER require_asset BEFORE INSERT ON tool_result_events WHEN NOT asset_published(NEW.content) BEGIN SELECT RAISE(ABORT, 'asset missing before insert'); END`)
-	require.NoError(t, err)
-	require.NoError(t, d.InsertMessages([]Message{testImageMessage("ordered")}))
+	require.NoError(err)
+	require.NoError(d.InsertMessages([]Message{testImageMessage("ordered")}))
 	var count int
-	require.NoError(t, d.getReader().QueryRow("SELECT COUNT(*) FROM tool_result_events WHERE session_id = 'ordered'").Scan(&count))
+	require.NoError(d.getReader().QueryRow("SELECT COUNT(*) FROM tool_result_events WHERE session_id = 'ordered'").Scan(&count))
 	assert.Equal(t, 1, count)
 }
 
 func TestOffloadLinkedSummaryKeepsReferenceWithOlderInlineEvent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "older", "project")
-	require.NoError(t, d.InsertMessages([]Message{testImageMessage("older")}))
+	require.NoError(d.InsertMessages([]Message{testImageMessage("older")}))
 	d.SetToolResultImages(config.ToolResultImagesOffload)
 	d.SetAssetsDir(t.TempDir())
 	_, err := d.WriteSessionIncremental("older", nil, IncrementalSessionUpdate{SubagentLinks: []ToolCallSubagentLink{{ToolUseID: "call-1", HasResult: true, ResultContent: testInlineImageContent()}}})
-	require.NoError(t, err)
+	require.NoError(err)
 	messages, err := d.GetAllMessages(t.Context(), "older")
-	require.NoError(t, err)
-	require.Len(t, messages, 1)
-	require.Len(t, messages[0].ToolCalls, 1)
+	require.NoError(err)
+	require.Len(messages, 1)
+	require.Len(messages[0].ToolCalls, 1)
 	call := messages[0].ToolCalls[0]
 	assertOffloadedImage(t, call.ResultContent, d.AssetsDir())
-	require.Len(t, call.ResultEvents, 1)
-	assert.Equal(t, testInlineImageContent(), call.ResultEvents[0].Content)
-	assert.Equal(t, len(call.ResultContent), call.ResultContentLength)
+	require.Len(call.ResultEvents, 1)
+	assert.Equal(testInlineImageContent(), call.ResultEvents[0].Content)
+	assert.Equal(len(call.ResultContent), call.ResultContentLength)
 }
 
 func TestOffloadOmittedLateResultDoesNotPublishOlderImages(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "retained", "project")
 	message := testImageMessage("retained")
 	PrepareToolResultEvent(&message.ToolCalls[0].ResultEvents[0])
-	require.NoError(t, d.InsertMessages([]Message{message}))
+	require.NoError(d.InsertMessages([]Message{message}))
 	d.SetAssetsDir(t.TempDir())
 	d.SetToolResultImages(config.ToolResultImagesOffload)
 	d.SetArchiveContent(config.ArchiveContentTranscripts)
 	_, err := d.WriteSessionIncremental("retained", nil, IncrementalSessionUpdate{ToolCallResultUpdates: []ToolCallResultUpdate{{ToolUseID: "call-1", Events: []ToolResultEvent{{Content: "later result", Source: "function_call_output"}}}}})
-	require.NoError(t, err)
+	require.NoError(err)
 	objects, err := os.ReadDir(d.AssetsDir())
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Empty(t, objects)
 }
 
 func TestToolImageDelimiterVariantsRemovePayload(t *testing.T) {
 	for _, field := range []string{"image-url", "imageurl", "IMAGE_URL"} {
 		t.Run(field, func(t *testing.T) {
+			assert := assert.New(t)
+
 			content := `[{"type":"input_image","` + field + `":"data:image/png;base64,AAEC"}]`
 			stripped, stats := StripToolResultImages(content)
-			assert.Equal(t, int64(1), stats.Payloads)
-			assert.NotContains(t, stripped, "base64")
+			assert.Equal(int64(1), stats.Payloads)
+			assert.NotContains(stripped, "base64")
 			migrated, err := migrateToolResultImages(content, fakePut)
 			require.NoError(t, err)
-			assert.Contains(t, migrated, "asset://fake.png")
-			assert.NotContains(t, migrated, "base64")
+			assert.Contains(migrated, "asset://fake.png")
+			assert.NotContains(migrated, "base64")
 		})
 	}
 	content := `[{"type":"agentsview_image","image-ref":"asset://abc.png","media_type":"image/png","byte_size":3}]`

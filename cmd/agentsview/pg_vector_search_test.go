@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -78,18 +77,21 @@ func TestResolvePGServeVectorState(t *testing.T) {
 }
 
 func TestWirePGVectorSearchRecordsVectorDisabledReason(t *testing.T) {
-	store := &postgres.Store{}
-	require.NoError(t, wirePGVectorSearch(
-		context.Background(), config.Config{}, store, "pg serve"))
+	assert := assert.New(t)
+	require := require.New(t)
 
-	_, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+	store := &postgres.Store{}
+	require.NoError(wirePGVectorSearch(
+		t.Context(), config.Config{}, store, "pg serve"))
+
+	_, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "hello", Mode: "semantic",
 	})
-	require.Error(t, err)
-	assert.ErrorIs(t, err, db.ErrSemanticUnavailable)
-	assert.Contains(t, err.Error(), "PostgreSQL requires [vector] enabled")
-	assert.Contains(t, err.Error(), "agentsview pg push")
-	assert.NotContains(t, err.Error(), "agentsview embeddings build")
+	require.Error(err)
+	require.ErrorIs(err, db.ErrSemanticUnavailable)
+	assert.Contains(err.Error(), "PostgreSQL requires [vector] enabled")
+	assert.Contains(err.Error(), "agentsview pg push")
+	assert.NotContains(err.Error(), "agentsview embeddings build")
 }
 
 // TestNewPGReadServiceRunsVectorWiring proves the CLI direct-read constructor
@@ -99,6 +101,9 @@ func TestWirePGVectorSearchRecordsVectorDisabledReason(t *testing.T) {
 // wiring call from newPGReadService, or passing it a different store or
 // config, fails this test.
 func TestNewPGReadServiceRunsVectorWiring(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	fakeStore := dbtest.OpenTestDBAt(t, filepath.Join(t.TempDir(), "pg.db"))
 	stubPGReadStore(t, fakeStore)
 
@@ -119,14 +124,14 @@ func TestNewPGReadServiceRunsVectorWiring(t *testing.T) {
 		URL:    "postgres://example.test/agentsview",
 		Schema: "agentsview",
 	})
-	require.NoError(t, err)
-	require.NotNil(t, svc)
+	require.NoError(err)
+	require.NotNil(svc)
 	t.Cleanup(cleanup)
 
-	require.Equal(t, 1, calls, "vector wiring must run exactly once per service")
-	assert.Same(t, db.Store(fakeStore), gotStore,
+	require.Equal(1, calls, "vector wiring must run exactly once per service")
+	assert.Same(db.Store(fakeStore), gotStore,
 		"wiring must target the store the service serves reads from")
-	assert.True(t, gotCfg.Vector.Enabled,
+	assert.True(gotCfg.Vector.Enabled,
 		"wiring must see the caller's vector config")
 }
 

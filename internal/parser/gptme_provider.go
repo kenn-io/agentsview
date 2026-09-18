@@ -2,7 +2,7 @@ package parser
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -202,7 +202,7 @@ func (p *gptmeProvider) Parse(
 		return ParseOutcome{}, err
 	}
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("gptme source path unavailable")
+		return ParseOutcome{}, errors.New("gptme source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	sess, msgs, err := p.parseSession(path, machine)

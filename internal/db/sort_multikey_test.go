@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -53,14 +52,17 @@ func TestParseSortSpec(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			got, err := ParseSortSpec(tc.spec)
 			if tc.wantErr != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tc.wantErr)
+				require.Error(err)
+				assert.Contains(err.Error(), tc.wantErr)
 				return
 			}
-			require.NoError(t, err)
-			assert.Equal(t, tc.want, got)
+			require.NoError(err)
+			assert.Equal(tc.want, got)
 		})
 	}
 }
@@ -82,25 +84,28 @@ func TestFormatSortSpec(t *testing.T) {
 }
 
 func TestApplyFallbackDirection(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	asc, desc := false, true
 
 	// nil fallback leaves terms untouched.
 	in := []SortKey{{Key: "messages"}, {Key: "started", Descending: &asc}}
-	assert.Equal(t, in, ApplyFallbackDirection(in, nil))
+	assert.Equal(in, ApplyFallbackDirection(in, nil))
 
 	// A fallback fills only the terms without an explicit direction.
 	out := ApplyFallbackDirection(
 		[]SortKey{{Key: "messages"}, {Key: "started", Descending: &asc}},
 		&desc,
 	)
-	require.Len(t, out, 2)
-	require.NotNil(t, out[0].Descending)
-	assert.True(t, *out[0].Descending, "bare term takes the fallback")
-	require.NotNil(t, out[1].Descending)
-	assert.False(t, *out[1].Descending, "explicit term is untouched")
+	require.Len(out, 2)
+	require.NotNil(out[0].Descending)
+	assert.True(*out[0].Descending, "bare term takes the fallback")
+	require.NotNil(out[1].Descending)
+	assert.False(*out[1].Descending, "explicit term is untouched")
 
 	// The input slice is not mutated.
-	assert.Nil(t, in[0].Descending)
+	assert.Nil(in[0].Descending)
 }
 
 func TestResolveSort(t *testing.T) {
@@ -183,7 +188,6 @@ func TestResolveSort(t *testing.T) {
 // id tie-breaker following the last term's direction. Both the structured Sort
 // field and the OrderBy string spell out the same ordering and must agree.
 func TestListSessions_MultiKeySort(t *testing.T) {
-
 	asc, desc := false, true
 	d := testDB(t)
 	insertSession(t, d, "mk-a", "p", func(s *Session) {
@@ -213,7 +217,6 @@ func TestListSessions_MultiKeySort(t *testing.T) {
 	want := []string{"mk-e", "mk-a", "mk-b", "mk-d", "mk-c"}
 
 	t.Run("structured Sort", func(t *testing.T) {
-
 		got := listSortedIDs(t, d, filterWith(func(f *SessionFilter) {
 			f.Sort = []SortKey{
 				{Key: "messages", Descending: &asc},
@@ -224,7 +227,6 @@ func TestListSessions_MultiKeySort(t *testing.T) {
 	})
 
 	t.Run("OrderBy string", func(t *testing.T) {
-
 		got := listSortedIDs(t, d, filterWith(func(f *SessionFilter) {
 			f.OrderBy = "messages:asc,started:desc"
 		}))
@@ -236,6 +238,8 @@ func TestListSessions_MultiKeySort(t *testing.T) {
 // paginating one row at a time through a mixed-direction multi-key sort with
 // ties must return the full ordered set exactly once.
 func TestListSessions_MultiKeyPaginationWalk(t *testing.T) {
+	require := require.New(t)
+
 	asc, desc := false, true
 	d := testDB(t)
 	// 12 sessions across 3 message buckets with repeated started timestamps so
@@ -274,21 +278,21 @@ func TestListSessions_MultiKeyPaginationWalk(t *testing.T) {
 
 	// Full-listing order is the reference; the paginated walk must reproduce it.
 	want := listSortedIDs(t, d, filterWith(func(f *SessionFilter) { f.Sort = sortKeys }))
-	require.Len(t, want, len(rows))
+	require.Len(want, len(rows))
 
 	var got []string
 	seen := map[string]bool{}
 	cursor := ""
 	for pages := 0; ; pages++ {
-		require.LessOrEqual(t, pages, len(rows)+1, "pagination did not terminate")
-		page, err := d.ListSessions(context.Background(), SessionFilter{
+		require.LessOrEqual(pages, len(rows)+1, "pagination did not terminate")
+		page, err := d.ListSessions(t.Context(), SessionFilter{
 			Limit:  1,
 			Sort:   sortKeys,
 			Cursor: cursor,
 		})
-		require.NoError(t, err, "ListSessions page")
+		require.NoError(err, "ListSessions page")
 		for _, s := range page.Sessions {
-			require.False(t, seen[s.ID], "duplicate %s", s.ID)
+			require.False(seen[s.ID], "duplicate %s", s.ID)
 			seen[s.ID] = true
 			got = append(got, s.ID)
 		}
@@ -316,7 +320,7 @@ func TestListSessions_MultiKeyCursorMismatch(t *testing.T) {
 		{Key: "messages", Descending: &asc},
 		{Key: "started", Descending: &desc},
 	}
-	page, err := d.ListSessions(context.Background(), SessionFilter{Limit: 2, Sort: base})
+	page, err := d.ListSessions(t.Context(), SessionFilter{Limit: 2, Sort: base})
 	require.NoError(t, err)
 	require.NotEmpty(t, page.NextCursor)
 	cursor := page.NextCursor
@@ -339,7 +343,7 @@ func TestListSessions_MultiKeyCursorMismatch(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := d.ListSessions(context.Background(), SessionFilter{
+			_, err := d.ListSessions(t.Context(), SessionFilter{
 				Limit: 2, Sort: tc.sort, Cursor: cursor,
 			})
 			if tc.ok {
@@ -358,27 +362,33 @@ func TestNextSessionCursor_LegacyFields(t *testing.T) {
 	last := &Session{ID: "z", EndedAt: Ptr("2024-05-01T00:00:00Z"), MessageCount: 7}
 
 	t.Run("single key recent populates legacy + EndedAt", func(t *testing.T) {
+		assert := assert.New(t)
+
 		rs := ResolveSort(SessionFilter{}) // recent desc
 		cur := NextSessionCursor(last, rs, 3, SessionFilter{})
 		require.Len(t, cur.Keys, 1)
-		assert.Equal(t, "recent", cur.Keys[0].Sort)
-		assert.Equal(t, "recent", cur.Sort)
-		assert.True(t, cur.Desc)
-		assert.Equal(t, cur.Keys[0].Value, cur.Value)
-		assert.Equal(t, cur.Keys[0].Value, cur.EndedAt, "recent populates legacy EndedAt")
+		assert.Equal("recent", cur.Keys[0].Sort)
+		assert.Equal("recent", cur.Sort)
+		assert.True(cur.Desc)
+		assert.Equal(cur.Keys[0].Value, cur.Value)
+		assert.Equal(cur.Keys[0].Value, cur.EndedAt, "recent populates legacy EndedAt")
 	})
 
 	t.Run("single key non-recent leaves EndedAt empty", func(t *testing.T) {
+		assert := assert.New(t)
+
 		asc := false
 		rs := ResolveSort(SessionFilter{Sort: []SortKey{{Key: "messages", Descending: &asc}}})
 		cur := NextSessionCursor(last, rs, 3, SessionFilter{})
 		require.Len(t, cur.Keys, 1)
-		assert.Equal(t, "messages", cur.Sort)
-		assert.Equal(t, "7", cur.Value)
-		assert.Empty(t, cur.EndedAt, "non-recent single key does not set EndedAt")
+		assert.Equal("messages", cur.Sort)
+		assert.Equal("7", cur.Value)
+		assert.Empty(cur.EndedAt, "non-recent single key does not set EndedAt")
 	})
 
 	t.Run("multi key populates only Keys", func(t *testing.T) {
+		assert := assert.New(t)
+
 		asc, desc := false, true
 		rs := ResolveSort(SessionFilter{Sort: []SortKey{
 			{Key: "messages", Descending: &asc},
@@ -386,8 +396,8 @@ func TestNextSessionCursor_LegacyFields(t *testing.T) {
 		}})
 		cur := NextSessionCursor(last, rs, 3, SessionFilter{})
 		require.Len(t, cur.Keys, 2)
-		assert.Empty(t, cur.Sort, "multi-key leaves legacy Sort empty")
-		assert.Empty(t, cur.Value)
-		assert.Empty(t, cur.EndedAt)
+		assert.Empty(cur.Sort, "multi-key leaves legacy Sort empty")
+		assert.Empty(cur.Value)
+		assert.Empty(cur.EndedAt)
 	})
 }

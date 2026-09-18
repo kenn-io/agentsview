@@ -30,25 +30,27 @@ func TestDesktopAppIconIncludesTransparentDockPadding(t *testing.T) {
 }
 
 func TestDesktopMacIconBundleIncludesTransparentDockPadding(t *testing.T) {
+	require := require.New(t)
+
 	data, err := os.ReadFile("desktop/src-tauri/icons/icon.icns")
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(data), 8, "icon.icns should contain an ICNS header")
-	require.Equal(t, "icns", string(data[:4]))
-	require.Equal(t, len(data), int(binary.BigEndian.Uint32(data[4:8])))
+	require.NoError(err)
+	require.GreaterOrEqual(len(data), 8, "icon.icns should contain an ICNS header")
+	require.Equal("icns", string(data[:4]))
+	require.Equal(len(data), int(binary.BigEndian.Uint32(data[4:8])))
 
 	const pngSignature = "\x89PNG\r\n\x1a\n"
 	decoded := 0
 	for offset := 8; offset < len(data); {
-		require.LessOrEqual(t, offset+8, len(data), "truncated ICNS entry header")
+		require.LessOrEqual(offset+8, len(data), "truncated ICNS entry header")
 		entryType := string(data[offset : offset+4])
 		entrySize := int(binary.BigEndian.Uint32(data[offset+4 : offset+8]))
-		require.GreaterOrEqual(t, entrySize, 8, "invalid ICNS entry size for %s", entryType)
-		require.LessOrEqual(t, offset+entrySize, len(data), "truncated ICNS entry %s", entryType)
+		require.GreaterOrEqual(entrySize, 8, "invalid ICNS entry size for %s", entryType)
+		require.LessOrEqual(offset+entrySize, len(data), "truncated ICNS entry %s", entryType)
 
 		payload := data[offset+8 : offset+entrySize]
 		if bytes.HasPrefix(payload, []byte(pngSignature)) {
 			img, err := png.Decode(bytes.NewReader(payload))
-			require.NoError(t, err, "decode ICNS PNG entry %s", entryType)
+			require.NoError(err, "decode ICNS PNG entry %s", entryType)
 			assertIconHasTransparentPadding(t, entryType, img)
 			decoded++
 		}
@@ -56,7 +58,7 @@ func TestDesktopMacIconBundleIncludesTransparentDockPadding(t *testing.T) {
 		offset += entrySize
 	}
 
-	require.NotZero(t, decoded, "icon.icns should include PNG icon renditions")
+	require.NotZero(decoded, "icon.icns should include PNG icon renditions")
 }
 
 func decodePNGFile(t *testing.T, path string) image.Image {

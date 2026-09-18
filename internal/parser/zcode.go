@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -209,7 +210,7 @@ func zcodeSessionMeta(
 	}
 	defer db.Close()
 	row, err := loadZCodeSessionRow(ctx, db, sessionID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return dbBackedSessionMeta{}, false, nil
 	}
 	if err != nil {
@@ -787,6 +788,15 @@ func listZCodeUsageEvents(
 	sessionID string,
 	startedAt, endedAt time.Time,
 ) ([]ParsedUsageEvent, error) {
+	var hasUsage bool
+	if err := db.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'model_usage')`,
+	).Scan(&hasUsage); err != nil {
+		return nil, fmt.Errorf("checking zcode usage table: %w", err)
+	}
+	if !hasUsage {
+		return nil, nil
+	}
 	rows, err := db.QueryContext(ctx, `
 		SELECT session_id,
 		       CAST(turn_id AS TEXT),
@@ -822,9 +832,6 @@ func listZCodeUsageEvents(
 		       COALESCE(tool_call_count, 0)
 	`, sessionID)
 	if err != nil {
-		if strings.Contains(err.Error(), "no such table: model_usage") {
-			return nil, nil
-		}
 		return nil, fmt.Errorf("listing zcode usage rows for %s: %w", sessionID, err)
 	}
 	defer rows.Close()

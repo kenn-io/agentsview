@@ -11,6 +11,9 @@ import (
 )
 
 func TestFoldProjectTotalsKeepsDistinctOpaqueProjectKeys(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	got, err := foldProjectTotals([]db.DailyUsageEntry{{
 		ProjectBreakdowns: []db.ProjectBreakdown{
 			{ProjectKey: "pl1:sha256:first", Project: "", Cost: money.MustParseDollars("1")},
@@ -18,8 +21,8 @@ func TestFoldProjectTotalsKeepsDistinctOpaqueProjectKeys(t *testing.T) {
 		},
 	}})
 
-	require.NoError(t, err)
-	require.Len(t, got, 2)
-	assert.Equal(t, "pl1:sha256:second", got[0].ProjectKey)
-	assert.Equal(t, "pl1:sha256:first", got[1].ProjectKey)
+	require.NoError(err)
+	require.Len(got, 2)
+	assert.Equal("pl1:sha256:second", got[0].ProjectKey)
+	assert.Equal("pl1:sha256:first", got[1].ProjectKey)
 }

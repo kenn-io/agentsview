@@ -95,9 +95,7 @@ func sessionUsageDataForCommand(
 	remote, _ := cmd.Flags().GetString("server")
 	if remote != "" {
 		if pgReadRequested(cmd) {
-			return nil, tokenUseExitErr, fmt.Errorf(
-				"--server and --pg are mutually exclusive",
-			)
+			return nil, tokenUseExitErr, errors.New("--server and --pg are mutually exclusive")
 		}
 		token, err := explicitServerToken(cmd)
 		if err != nil {
@@ -182,7 +180,7 @@ func httpSessionUsageData(
 		ctx, servicehttp.NewHTTPBackend(baseURL, token, false, ""), sessionID,
 	)
 	if err != nil {
-		if strings.HasPrefix(err.Error(), "session not found:") {
+		if errors.Is(err, errSessionNotFound) {
 			fmt.Fprintf(os.Stderr, "session not found: %s\n", sessionID)
 			return nil, tokenUseExitNotFound, nil
 		}
@@ -237,7 +235,8 @@ func httpSessionUsageData(
 		TotalOutputTokens: int(wire.TotalOutputTokens), PeakContextTokens: int(wire.PeakContextTokens),
 		HasTokenData: wire.HasTokenData, Cost: wire.Cost, HasCost: wire.HasCost, CostUSD: wire.CostUsd,
 		Models: wire.Models, UnpricedModels: wire.UnpricedModels,
-		BreakdownCount: int(wire.BreakdownCount), Breakdown: wire.Breakdown, ServerRunning: true}
+		BreakdownCount: int(wire.BreakdownCount), Breakdown: wire.Breakdown, ServerRunning: true,
+	}
 	if wire.CostSource != nil {
 		out.CostSource = export.CostSource(*wire.CostSource)
 	}
@@ -282,7 +281,7 @@ func storeSessionUsageData(
 	sessionID := query.SessionID
 	resolvedID, err := resolveStoreSessionID(ctx, store, sessionID)
 	if err != nil {
-		if !strings.HasPrefix(err.Error(), "session not found:") {
+		if !errors.Is(err, errSessionNotFound) {
 			return nil, tokenUseExitErr,
 				fmt.Errorf("resolving %s session id: %w", storeName, err)
 		}

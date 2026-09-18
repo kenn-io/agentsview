@@ -12,21 +12,26 @@ import (
 )
 
 func TestAgentHomeDirs(t *testing.T) {
-	claude, ok := parser.AgentByType(parser.AgentClaude)
-	require.True(t, ok)
-	codex, ok := parser.AgentByType(parser.AgentCodex)
-	require.True(t, ok)
+	assert := assert.New(t)
+	require := require.New(t)
 
-	assert.Equal(t, []string{filepath.Join("/homes/a", "projects")},
+	claude, ok := parser.AgentByType(parser.AgentClaude)
+	require.True(ok)
+	codex, ok := parser.AgentByType(parser.AgentCodex)
+	require.True(ok)
+
+	assert.Equal([]string{filepath.Join("/homes/a", "projects")},
 		AgentHomeDirs(claude, "/homes/a"))
-	assert.Equal(t, []string{
+	assert.Equal([]string{
 		filepath.Join("/homes/b", "sessions"),
 		filepath.Join("/homes/b", "archived_sessions"),
 	}, AgentHomeDirs(codex, "/homes/b"))
-	assert.Nil(t, AgentHomeDirs(parser.AgentDef{Type: "none"}, "/homes/c"))
+	assert.Nil(AgentHomeDirs(parser.AgentDef{Type: "none"}, "/homes/c"))
 }
 
 func TestLoadFileAgentHomesAreAdditiveToDefaults(t *testing.T) {
+	assert := assert.New(t)
+
 	f := newConfigFixture(t)
 	home := canonicalTempDir(t)
 	setTestHome(t, home)
@@ -42,11 +47,11 @@ homes = ["/homes/work/.codex", "/homes/other/.codex-alt"]
 
 	cfg := f.LoadMinimal(t)
 
-	assert.Equal(t, []string{
+	assert.Equal([]string{
 		filepath.Join(home, ".claude", "projects"),
 		filepath.Join(absoluteTestPath(t, "/homes/work/.claude"), "projects"),
 	}, cfg.ResolveDirs(parser.AgentClaude))
-	assert.Equal(t, []string{
+	assert.Equal([]string{
 		filepath.Join(home, ".codex", "sessions"),
 		filepath.Join(home, ".codex", "archived_sessions"),
 		filepath.Join(absoluteTestPath(t, "/homes/work/.codex"), "sessions"),
@@ -54,9 +59,9 @@ homes = ["/homes/work/.codex", "/homes/other/.codex-alt"]
 		filepath.Join(absoluteTestPath(t, "/homes/other/.codex-alt"), "sessions"),
 		filepath.Join(absoluteTestPath(t, "/homes/other/.codex-alt"), "archived_sessions"),
 	}, cfg.ResolveDirs(parser.AgentCodex))
-	assert.True(t, cfg.IsUserConfigured(parser.AgentClaude))
-	assert.True(t, cfg.IsUserConfigured(parser.AgentCodex))
-	assert.Equal(t, cfg.InstallationID,
+	assert.True(cfg.IsUserConfigured(parser.AgentClaude))
+	assert.True(cfg.IsUserConfigured(parser.AgentCodex))
+	assert.Equal(cfg.InstallationID,
 		cfg.SourceMachines[parser.AgentCodex][filepath.Join(absoluteTestPath(t, "/homes/work/.codex"), "sessions")])
 }
 
@@ -169,28 +174,31 @@ func TestResolveDirs_CodexHomeRootEnvVar(t *testing.T) {
 }
 
 func TestLoadFileAgentHomesDeduplicateSymlinkedRoots(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	f := newConfigFixture(t)
 	home := canonicalTempDir(t)
 	setTestHome(t, home)
 	t.Setenv("CLAUDE_CONFIG_DIR", "")
 	t.Setenv("CODEX_HOME", "")
 	primary := filepath.Join(home, ".codex")
-	require.NoError(t, os.MkdirAll(filepath.Join(primary, "sessions"), 0o755))
+	require.NoError(os.MkdirAll(filepath.Join(primary, "sessions"), 0o755))
 	alt := filepath.Join(home, ".codex-alt")
-	require.NoError(t, os.MkdirAll(alt, 0o755))
-	require.NoError(t, os.Symlink(
+	require.NoError(os.MkdirAll(alt, 0o755))
+	require.NoError(os.Symlink(
 		filepath.Join(primary, "sessions"), filepath.Join(alt, "sessions")))
 	f.WriteConfigText(t, "[agents.codex]\nhomes = [\"~/.codex-alt\"]\n")
 
 	cfg := f.LoadMinimal(t)
 
-	assert.Equal(t, []string{
+	assert.Equal([]string{
 		filepath.Join(primary, "sessions"),
 		filepath.Join(primary, "archived_sessions"),
 		filepath.Join(alt, "archived_sessions"),
 	}, cfg.ResolveDirs(parser.AgentCodex))
 	// Shared sessions read both homes. Each separate archive keeps its own metadata.
-	assert.Equal(t, map[string][]string{
+	assert.Equal(map[string][]string{
 		filepath.Join(primary, "sessions"):          {primary, alt},
 		filepath.Join(primary, "archived_sessions"): {primary},
 		filepath.Join(alt, "archived_sessions"):     {alt},
@@ -198,37 +206,40 @@ func TestLoadFileAgentHomesDeduplicateSymlinkedRoots(t *testing.T) {
 }
 
 func TestSaveSettingsPersistsAgentHomes(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := setupTestEnv(t)
 	cfg, err := Default()
-	require.NoError(t, err)
+	require.NoError(err)
 	cfg.DataDir = dir
 
-	require.NoError(t, cfg.SaveSettings(map[string]any{
+	require.NoError(cfg.SaveSettings(map[string]any{
 		"agent_homes": map[parser.AgentType][]string{
 			parser.AgentCodex:  {" ~/.codex-work ", "~/.codex-work", absoluteTestPath(t, "/srv/codex")},
 			parser.AgentClaude: {"~/.claude-work"},
 		},
 	}))
-	assert.Equal(t, []string{"~/.codex-work", absoluteTestPath(t, "/srv/codex")},
+	assert.Equal([]string{"~/.codex-work", absoluteTestPath(t, "/srv/codex")},
 		cfg.ConfiguredAgentHomes(parser.AgentCodex))
-	assert.Equal(t, []string{"~/.claude-work"},
+	assert.Equal([]string{"~/.claude-work"},
 		cfg.ConfiguredAgentHomes(parser.AgentClaude))
 
 	reloaded, err := LoadMinimal()
-	require.NoError(t, err)
-	assert.Equal(t, []string{"~/.codex-work", absoluteTestPath(t, "/srv/codex")},
+	require.NoError(err)
+	assert.Equal([]string{"~/.codex-work", absoluteTestPath(t, "/srv/codex")},
 		reloaded.ConfiguredAgentHomes(parser.AgentCodex))
-	assert.Contains(t, reloaded.ResolveDirs(parser.AgentCodex),
+	assert.Contains(reloaded.ResolveDirs(parser.AgentCodex),
 		filepath.Join(absoluteTestPath(t, "/srv/codex"), "sessions"))
 
-	require.NoError(t, cfg.SaveSettings(map[string]any{
+	require.NoError(cfg.SaveSettings(map[string]any{
 		"agent_homes": map[parser.AgentType][]string{parser.AgentCodex: {}},
 	}))
-	assert.Nil(t, cfg.ConfiguredAgentHomes(parser.AgentCodex))
+	assert.Nil(cfg.ConfiguredAgentHomes(parser.AgentCodex))
 	reloaded, err = LoadMinimal()
-	require.NoError(t, err)
-	assert.Nil(t, reloaded.ConfiguredAgentHomes(parser.AgentCodex))
-	assert.Equal(t, []string{"~/.claude-work"},
+	require.NoError(err)
+	assert.Nil(reloaded.ConfiguredAgentHomes(parser.AgentCodex))
+	assert.Equal([]string{"~/.claude-work"},
 		reloaded.ConfiguredAgentHomes(parser.AgentClaude))
 }
 
@@ -291,13 +302,16 @@ homes = ["/homes/a", " /homes/a ", "", "/homes/b"]
 func TestRuntimeRootsResolveBeforeDeduplication(t *testing.T) {
 	for _, createTarget := range []bool{false, true} {
 		t.Run(map[bool]string{false: "missing target", true: "existing target"}[createTarget], func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			base := canonicalTempDir(t)
 			t.Chdir(base)
-			require.NoError(t, os.Mkdir("profile", 0o755))
+			require.NoError(os.Mkdir("profile", 0o755))
 			for _, name := range []string{"sessions", "archived_sessions"} {
-				require.NoError(t, os.Symlink(filepath.Join("..", "primary", name), filepath.Join("profile", name)))
+				require.NoError(os.Symlink(filepath.Join("..", "primary", name), filepath.Join("profile", name)))
 				if createTarget {
-					require.NoError(t, os.MkdirAll(filepath.Join("primary", name), 0o755))
+					require.NoError(os.MkdirAll(filepath.Join("primary", name), 0o755))
 				}
 			}
 			cfg := Config{
@@ -309,14 +323,14 @@ func TestRuntimeRootsResolveBeforeDeduplication(t *testing.T) {
 				agentDirSource:       make(map[parser.AgentType]dirSource),
 				sessionSourceConfigs: []sessionSourceConfig{{Agent: "codex", Dir: "profile/sessions", Machine: new("host-b")}},
 			}
-			require.NoError(t, cfg.resolveSessionSources())
+			require.NoError(cfg.resolveSessionSources())
 			sessions := filepath.Join(base, "primary", "sessions")
 			archive := filepath.Join(base, "primary", "archived_sessions")
-			assert.Equal(t, []string{sessions, archive}, cfg.ResolveDirs(parser.AgentCodex))
-			assert.Equal(t, "host-b", cfg.SourceMachines[parser.AgentCodex][sessions])
-			require.Len(t, cfg.SessionSources, 1)
-			assert.Equal(t, sessions, cfg.SessionSources[0].Dir)
-			assert.Contains(t, cfg.ProviderMetadata[parser.AgentCodex][sessions], filepath.Join(base, "profile"))
+			assert.Equal([]string{sessions, archive}, cfg.ResolveDirs(parser.AgentCodex))
+			assert.Equal("host-b", cfg.SourceMachines[parser.AgentCodex][sessions])
+			require.Len(cfg.SessionSources, 1)
+			assert.Equal(sessions, cfg.SessionSources[0].Dir)
+			assert.Contains(cfg.ProviderMetadata[parser.AgentCodex][sessions], filepath.Join(base, "profile"))
 		})
 	}
 }
@@ -330,22 +344,25 @@ func TestCLILoadPreservesCodexHomeMetadata(t *testing.T) {
 		{"pflags", loadConfigFromPFlags},
 	} {
 		t.Run(loader.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			f := newConfigFixture(t)
 			f.WriteConfigText(t, "")
 			base := canonicalTempDir(t)
 			home := filepath.Join(base, "profile")
 			root := filepath.Join(base, "primary", "sessions")
-			require.NoError(t, os.MkdirAll(root, 0o755))
-			require.NoError(t, os.MkdirAll(home, 0o755))
+			require.NoError(os.MkdirAll(root, 0o755))
+			require.NoError(os.MkdirAll(home, 0o755))
 			alias := filepath.Join(home, "sessions")
-			require.NoError(t, os.Symlink(root, alias))
+			require.NoError(os.Symlink(root, alias))
 			t.Setenv("CODEX_HOME", home)
 			t.Setenv("CODEX_SESSIONS_DIR", "")
 
 			cfg, err := loader.load(t)
-			require.NoError(t, err)
-			assert.Contains(t, cfg.ResolveDirs(parser.AgentCodex), root)
-			assert.Contains(t, cfg.ProviderMetadata[parser.AgentCodex][root], home,
+			require.NoError(err)
+			assert.Contains(cfg.ResolveDirs(parser.AgentCodex), root)
+			assert.Contains(cfg.ProviderMetadata[parser.AgentCodex][root], home,
 				"CLI loading must retain the configured home's title and history location")
 		})
 	}

@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -22,7 +21,7 @@ func TestDuckValueLiteralFormatsTimestampWithoutZone(t *testing.T) {
 }
 
 func TestDuckSQLWithArgsExecutesQuotedMultilineString(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	duck := openTestDuckDB(t)
 	want := "first line\nquoted ' value\ncontains $$ delimiter text"
 
@@ -35,7 +34,7 @@ func TestDuckSQLWithArgsExecutesQuotedMultilineString(t *testing.T) {
 }
 
 func TestDuckSQLWithArgsStripsNULFromStringLiteral(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	duck := openTestDuckDB(t)
 
 	stmt, err := duckSQLWithArgs(`SELECT ?`, "before\x00after")
@@ -47,7 +46,7 @@ func TestDuckSQLWithArgsStripsNULFromStringLiteral(t *testing.T) {
 }
 
 func TestDuckSQLWithArgsExecutesStringPointer(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	duck := openTestDuckDB(t)
 	want := "pinned note\nquoted ' value"
 
@@ -87,7 +86,10 @@ func TestDuckValueLiteralFormatsNullableNumericPointers(t *testing.T) {
 }
 
 func TestDuckSQLWithArgsExecutesNamedStringKinds(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	duck := openTestDuckDB(t)
 
 	stmt, err := duckSQLWithArgs(
@@ -96,14 +98,14 @@ func TestDuckSQLWithArgsExecutesNamedStringKinds(t *testing.T) {
 		export.CheckoutBranch,
 		export.ProjectResolutionAmbiguous,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	var relationship, checkout, resolution string
-	require.NoError(t, duck.QueryRowContext(ctx, stmt).
+	require.NoError(duck.QueryRowContext(ctx, stmt).
 		Scan(&relationship, &checkout, &resolution))
-	assert.Equal(t, string(export.WorktreeLinked), relationship)
-	assert.Equal(t, string(export.CheckoutBranch), checkout)
-	assert.Equal(t, string(export.ProjectResolutionAmbiguous), resolution)
+	assert.Equal(string(export.WorktreeLinked), relationship)
+	assert.Equal(string(export.CheckoutBranch), checkout)
+	assert.Equal(string(export.ProjectResolutionAmbiguous), resolution)
 }
 
 func TestDuckValueLiteralFormatsNamedScalarKinds(t *testing.T) {

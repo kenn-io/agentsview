@@ -34,15 +34,17 @@ func TestVnodeObserverWakesOnEntryCreation(t *testing.T) {
 }
 
 func TestVnodeObserverUsesOneDescriptorRegardlessOfEntries(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	for i := range 200 {
-		require.NoError(t, os.WriteFile(
+		require.NoError(os.WriteFile(
 			filepath.Join(dir, fmt.Sprintf("f%03d", i)), nil, 0o644))
 	}
 	o, err := newVnodeObserver(func() {})
-	require.NoError(t, err)
+	require.NoError(err)
 	defer o.Close()
-	require.NoError(t, o.Add(dir))
+	require.NoError(o.Add(dir))
 	assert.Equal(t, 1, o.watchedCount(),
 		"observer must hold one descriptor per directory, not per entry")
 }
@@ -75,10 +77,12 @@ func TestVnodeObserverCloseInterruptsBlockedRun(t *testing.T) {
 // Close does not return before the first finishes: every Close returns only
 // after run() exited and the descriptors are torn down.
 func TestVnodeObserverConcurrentCloseWaitsForTeardown(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	o, err := newVnodeObserver(func() {})
-	require.NoError(t, err)
-	require.NoError(t, o.Add(dir))
+	require.NoError(err)
+	require.NoError(o.Add(dir))
 
 	const closers = 4
 	results := make(chan error, closers)
@@ -88,7 +92,7 @@ func TestVnodeObserverConcurrentCloseWaitsForTeardown(t *testing.T) {
 	for range closers {
 		select {
 		case err := <-results:
-			require.NoError(t, err)
+			require.NoError(err)
 			select {
 			case <-o.done:
 			default:
@@ -107,12 +111,14 @@ func TestVnodeObserverConcurrentCloseWaitsForTeardown(t *testing.T) {
 }
 
 func TestVnodeObserverRemoveAndCloseAreIdempotent(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	o, err := newVnodeObserver(func() {})
-	require.NoError(t, err)
-	require.NoError(t, o.Add(dir))
-	require.NoError(t, o.Remove(dir))
-	require.NoError(t, o.Remove(dir)) // second remove is a no-op
-	require.NoError(t, o.Close())
-	require.NoError(t, o.Close())
+	require.NoError(err)
+	require.NoError(o.Add(dir))
+	require.NoError(o.Remove(dir))
+	require.NoError(o.Remove(dir)) // second remove is a no-op
+	require.NoError(o.Close())
+	require.NoError(o.Close())
 }

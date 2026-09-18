@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -22,12 +21,14 @@ import (
 // checkpoint is adopted on the next real source change, when an authoritative
 // parse is already required.
 func TestCodexCheckpointAdoptionIsLazyForUpgradedArchive(t *testing.T) {
+	require := require.New(t)
+
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122b05"
 	root := writeCodexParityRoot(t, uuid)
 	sessionID := "codex:" + uuid
 
 	database, err := db.Open(filepath.Join(t.TempDir(), "bootstrap.db"))
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(func() { _ = database.Close() })
 	engine := NewEngine(database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
@@ -38,34 +39,34 @@ func TestCodexCheckpointAdoptionIsLazyForUpgradedArchive(t *testing.T) {
 	t.Cleanup(engine.Close)
 
 	// Initial cold sync commits content and a checkpoint.
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
 	cp, ok, err := database.GetParserCheckpoint(sessionID)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, codexCheckpointVersion, cp.Version)
+	require.NoError(err)
+	require.True(ok)
+	require.Equal(codexCheckpointVersion, cp.Version)
 	before, err := database.GetAllMessages(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.NotEmpty(t, before)
+	require.NoError(err)
+	require.NotEmpty(before)
 
 	// Simulate an archive written before parser checkpoints existed.
-	require.NoError(t, database.DeleteParserCheckpoint(sessionID))
+	require.NoError(database.DeleteParserCheckpoint(sessionID))
 
 	// An unchanged archive stays on the current-main stat-digest path. It
 	// neither rewrites the session nor eagerly migrates optimization state.
 	if runtime.GOOS == "linux" {
 		rcharBefore := processRchar(t)
 		stats := engine.SyncAll(t.Context(), nil)
-		require.Zero(t, stats.Synced)
-		require.Less(t, processRchar(t)-rcharBefore, int64(1<<20))
+		require.Zero(stats.Synced)
+		require.Less(processRchar(t)-rcharBefore, int64(1<<20))
 	} else {
-		require.Zero(t, engine.SyncAll(t.Context(), nil).Synced)
+		require.Zero(engine.SyncAll(t.Context(), nil).Synced)
 	}
 	_, ok, err = database.GetParserCheckpoint(sessionID)
-	require.NoError(t, err)
-	require.False(t, ok, "unchanged archives must not be eagerly migrated")
+	require.NoError(err)
+	require.False(ok, "unchanged archives must not be eagerly migrated")
 	afterSkip, err := database.GetAllMessages(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.Equal(t, before, afterSkip)
+	require.NoError(err)
+	require.Equal(before, afterSkip)
 
 	// A real append already requires parsing. The same authoritative write
 	// adopts a checkpoint atomically with the updated projection.
@@ -82,35 +83,35 @@ func TestCodexCheckpointAdoptionIsLazyForUpgradedArchive(t *testing.T) {
 		),
 	)
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = f.WriteString(appended)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+	require.NoError(err)
+	require.NoError(f.Close())
 
 	stats := engine.SyncAll(t.Context(), nil)
-	require.Zero(t, stats.Failed)
-	require.Equal(t, 1, stats.Synced)
+	require.Zero(stats.Failed)
+	require.Equal(1, stats.Synced)
 	cp, ok, err = database.GetParserCheckpoint(sessionID)
-	require.NoError(t, err)
-	require.True(t, ok, "a real source change must adopt a checkpoint")
-	require.Equal(t, codexCheckpointVersion, cp.Version)
+	require.NoError(err)
+	require.True(ok, "a real source change must adopt a checkpoint")
+	require.Equal(codexCheckpointVersion, cp.Version)
 
 	// Authoritative full-parse parity for the changed source.
 	cfg := parser.ProviderConfig{Roots: []string{root}, Machine: "local"}
 	provider, ok := parser.NewProvider(parser.AgentCodex, cfg)
-	require.True(t, ok)
+	require.True(ok)
 	source, found, err := provider.FindSource(
-		context.Background(), parser.FindSourceRequest{FullSessionID: sessionID},
+		t.Context(), parser.FindSourceRequest{FullSessionID: sessionID},
 	)
-	require.NoError(t, err)
-	require.True(t, found)
+	require.NoError(err)
+	require.True(found)
 	collecting := parser.NewCodexCollectingSink(0)
 	_, msgs, _, _, _, _, err := parser.ParseCodexSessionStreaming(
-		context.Background(), cfg, source, collecting,
+		t.Context(), cfg, source, collecting,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	stored, err := database.GetAllMessages(t.Context(), sessionID)
-	require.NoError(t, err)
+	require.NoError(err)
 	for i := range stored {
 		stored[i].ID = 0
 		stored[i].SessionID = ""
@@ -126,16 +127,18 @@ func TestCodexCheckpointAdoptionIsLazyForUpgradedArchive(t *testing.T) {
 			expected[i].ToolCalls[j].Rendering = ""
 		}
 	}
-	require.Equal(t, expected, stored)
+	require.Equal(expected, stored)
 }
 
 func TestCodexCheckpointMissingHonorsMatchingSkipEntry(t *testing.T) {
+	require := require.New(t)
+
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122c07"
 	root := writeCodexParityRoot(t, uuid)
 	sessionID := "codex:" + uuid
 
 	database, err := db.Open(filepath.Join(t.TempDir(), "bootstrap-skip.db"))
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(func() { _ = database.Close() })
 	engine := NewEngine(database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
@@ -145,8 +148,8 @@ func TestCodexCheckpointMissingHonorsMatchingSkipEntry(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	require.NoError(t, database.DeleteParserCheckpoint(sessionID))
+	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
+	require.NoError(database.DeleteParserCheckpoint(sessionID))
 
 	path := filepath.Join(
 		root, "2024", "01", "01",
@@ -154,14 +157,14 @@ func TestCodexCheckpointMissingHonorsMatchingSkipEntry(t *testing.T) {
 	)
 	cfg := parser.ProviderConfig{Roots: []string{root}, Machine: "local"}
 	provider, ok := parser.NewProvider(parser.AgentCodex, cfg)
-	require.True(t, ok)
+	require.True(ok)
 	source, found, err := provider.FindSource(
-		context.Background(), parser.FindSourceRequest{FullSessionID: sessionID},
+		t.Context(), parser.FindSourceRequest{FullSessionID: sessionID},
 	)
-	require.NoError(t, err)
-	require.True(t, found)
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
-	require.NoError(t, err)
+	require.NoError(err)
+	require.True(found)
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
+	require.NoError(err)
 	file := parser.DiscoveredFile{
 		Path: path, Agent: parser.AgentCodex,
 		ProviderSource: &source, ProviderProcess: true,
@@ -171,11 +174,11 @@ func TestCodexCheckpointMissingHonorsMatchingSkipEntry(t *testing.T) {
 	)
 	engine.InjectSkipCache(map[string]int64{cacheKey: fingerprint.MTimeNS})
 
-	require.Zero(t, engine.SyncAll(t.Context(), nil).Synced,
+	require.Zero(engine.SyncAll(t.Context(), nil).Synced,
 		"missing optimization state must not defeat a valid skip entry")
 	_, ok, err = database.GetParserCheckpoint(sessionID)
-	require.NoError(t, err)
-	require.False(t, ok)
+	require.NoError(err)
+	require.False(ok)
 }
 
 func TestCodexCheckpointDeviceChangeVerifiesContentBeforeReparsing(t *testing.T) {
@@ -189,6 +192,8 @@ func TestCodexCheckpointDeviceChangeVerifiesContentBeforeReparsing(t *testing.T)
 		{name: "changed without stored hash", changed: true, missingHash: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			require := require.New(t)
+
 			const uuid = "019eb791-cf7d-75c1-8439-9ed74c122c11"
 			root := writeCodexParityRoot(t, uuid)
 			path := filepath.Join(root, "2024", "01", "01",
@@ -199,52 +204,54 @@ func TestCodexCheckpointDeviceChangeVerifiesContentBeforeReparsing(t *testing.T)
 				Machine:   "local",
 			}
 			engine := NewEngine(database, cfg)
-			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+			require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
 			engine.Close()
 			cp, ok, err := database.GetParserCheckpoint("codex:" + uuid)
-			require.NoError(t, err)
-			require.True(t, ok)
+			require.NoError(err)
+			require.True(ok)
 			blobs, ok, err := database.GetParserCheckpointBlobs(cp.SessionID)
-			require.NoError(t, err)
-			require.True(t, ok)
+			require.NoError(err)
+			require.True(ok)
 			// Device numbers can change across boots. The checkpoint must no
 			// longer authorize an append, but the transcript may be unchanged.
 			cp.FileDevice++
-			require.NoError(t, database.UpsertParserCheckpoint(*cp, blobs))
+			require.NoError(database.UpsertParserCheckpoint(*cp, blobs))
 			if tt.missingHash {
 				session, err := database.GetSessionFull(t.Context(), cp.SessionID)
-				require.NoError(t, err)
-				require.NotNil(t, session)
+				require.NoError(err)
+				require.NotNil(session)
 				session.FileHash = nil
-				require.NoError(t, database.UpsertSession(*session))
+				require.NoError(database.UpsertSession(*session))
 			}
-			require.NoError(t, database.DeleteProviderStatHash(t.Context(), parser.AgentCodex, path))
+			require.NoError(database.DeleteProviderStatHash(t.Context(), parser.AgentCodex, path))
 			wantMessage, wantSynced := "run the suite", 0
 			if tt.changed {
 				info, err := os.Stat(path)
-				require.NoError(t, err)
+				require.NoError(err)
 				content, err := os.ReadFile(path)
-				require.NoError(t, err)
-				require.NoError(t, os.WriteFile(path,
+				require.NoError(err)
+				require.NoError(os.WriteFile(path,
 					[]byte(strings.Replace(string(content), "run the suite", "fix the suite", 1)), 0o644))
-				require.NoError(t, os.Chtimes(path, info.ModTime(), info.ModTime()))
+				require.NoError(os.Chtimes(path, info.ModTime(), info.ModTime()))
 				wantMessage, wantSynced = "fix the suite", 1
 			}
 			fresh := NewEngine(database, cfg)
 			t.Cleanup(fresh.Close)
 			stats := fresh.SyncAll(t.Context(), nil)
-			require.Zero(t, stats.Failed)
+			require.Zero(stats.Failed)
 			messages, err := database.GetAllMessages(t.Context(), cp.SessionID)
-			require.NoError(t, err)
-			require.NotEmpty(t, messages)
-			require.Equal(t, wantMessage, messages[0].Content)
-			require.Equal(t, wantSynced, stats.Synced)
-			require.Zero(t, fresh.SyncAll(t.Context(), nil).Synced)
+			require.NoError(err)
+			require.NotEmpty(messages)
+			require.Equal(wantMessage, messages[0].Content)
+			require.Equal(wantSynced, stats.Synced)
+			require.Zero(fresh.SyncAll(t.Context(), nil).Synced)
 		})
 	}
 }
 
 func TestCodexCheckpointInvalidIsDiscardedOnNextSourceChange(t *testing.T) {
+	require := require.New(t)
+
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122c08"
 	root := writeCodexParityRoot(t, uuid)
 	sessionID := "codex:" + uuid
@@ -254,7 +261,7 @@ func TestCodexCheckpointInvalidIsDiscardedOnNextSourceChange(t *testing.T) {
 	)
 
 	database, err := db.Open(filepath.Join(t.TempDir(), "invalid-cp.db"))
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(func() { _ = database.Close() })
 	engine := NewEngine(database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
@@ -264,44 +271,46 @@ func TestCodexCheckpointInvalidIsDiscardedOnNextSourceChange(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
 	cp, ok, err := database.GetParserCheckpoint(sessionID)
-	require.NoError(t, err)
-	require.True(t, ok)
+	require.NoError(err)
+	require.True(ok)
 	blobs, hasBlobs, err := database.GetParserCheckpointBlobs(sessionID)
-	require.NoError(t, err)
-	require.True(t, hasBlobs)
+	require.NoError(err)
+	require.True(hasBlobs)
 	corrupted := *cp
 	corrupted.Hash = "corrupted-proof"
-	require.NoError(t, database.UpsertParserCheckpoint(corrupted, blobs))
+	require.NoError(database.UpsertParserCheckpoint(corrupted, blobs))
 
 	// Stat-digest freshness may skip an unchanged source without consulting
 	// disposable checkpoint state. A real source change reaches checkpoint
 	// validation, rejects the corrupted proof, and performs a full repair.
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = f.WriteString(testjsonl.CodexMsgJSON(
 		"user", "changed", "2024-01-01T10:00:13Z",
 	))
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+	require.NoError(err)
+	require.NoError(f.Close())
 
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
 	_, ok, err = database.GetParserCheckpoint(sessionID)
-	require.NoError(t, err)
-	require.False(t, ok,
+	require.NoError(err)
+	require.False(ok,
 		"an unsafe full-parse boundary must discard the invalid checkpoint")
 	stored, err := database.GetAllMessages(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.Equal(t, "changed", stored[len(stored)-1].Content)
+	require.NoError(err)
+	require.Equal("changed", stored[len(stored)-1].Content)
 }
 
 func TestCodexCheckpointAuditDeepVerifiesDespiteWarmGates(t *testing.T) {
+	require := require.New(t)
+
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122c09"
 	root := writeCodexParityRoot(t, uuid)
 
 	database, err := db.Open(filepath.Join(t.TempDir(), "audit-cp.db"))
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(func() { _ = database.Close() })
 	engine := NewEngine(database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
@@ -311,21 +320,23 @@ func TestCodexCheckpointAuditDeepVerifiesDespiteWarmGates(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	require.Zero(t, engine.SyncAll(t.Context(), nil).Synced,
+	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
+	require.Zero(engine.SyncAll(t.Context(), nil).Synced,
 		"second pass must be a warm no-op")
 
 	engine.SetCheckpointAudit(true)
 	t.Cleanup(func() { engine.SetCheckpointAudit(false) })
-	require.Zero(t, engine.SyncAll(t.Context(), nil).Synced,
+	require.Zero(engine.SyncAll(t.Context(), nil).Synced,
 		"an unchanged source still skips after the audit's full hash check")
 }
 
 func TestCodexCheckpointAuditRepairsPrefixRewriteBeforeAppend(t *testing.T) {
+	require := require.New(t)
+
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122c10"
 	root := t.TempDir()
 	day := filepath.Join(root, "2024", "01", "01")
-	require.NoError(t, os.MkdirAll(day, 0o755))
+	require.NoError(os.MkdirAll(day, 0o755))
 	path := filepath.Join(
 		day, "rollout-2024-01-01T10-00-00-"+uuid+".jsonl",
 	)
@@ -343,10 +354,10 @@ func TestCodexCheckpointAuditRepairsPrefixRewriteBeforeAppend(t *testing.T) {
 			"user", body, "2024-01-01T10:00:02Z",
 		),
 	)
-	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
+	require.NoError(os.WriteFile(path, []byte(initial), 0o644))
 
 	database, err := db.Open(filepath.Join(t.TempDir(), "audit-rewrite.db"))
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(func() { _ = database.Close() })
 	engine := NewEngine(database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
@@ -357,42 +368,44 @@ func TestCodexCheckpointAuditRepairsPrefixRewriteBeforeAppend(t *testing.T) {
 	t.Cleanup(engine.Close)
 	sessionID := "codex:" + uuid
 
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
 	before, err := database.GetAllMessages(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.NotEmpty(t, before)
-	require.Contains(t, before[0].Content, "OLD-MARKER")
+	require.NoError(err)
+	require.NotEmpty(before)
+	require.Contains(before[0].Content, "OLD-MARKER")
 
 	info, err := os.Stat(path)
-	require.NoError(t, err)
+	require.NoError(err)
 	rewritten := strings.Replace(initial, "OLD-MARKER", "NEW-MARKER", 1)
-	require.NotEqual(t, initial, rewritten)
-	require.NoError(t, os.WriteFile(path, []byte(rewritten), 0o644))
-	require.NoError(t, os.Chtimes(path, info.ModTime(), info.ModTime()))
+	require.NotEqual(initial, rewritten)
+	require.NoError(os.WriteFile(path, []byte(rewritten), 0o644))
+	require.NoError(os.Chtimes(path, info.ModTime(), info.ModTime()))
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = f.WriteString(testjsonl.CodexTokenCountJSON(
 		"2024-01-01T10:00:03Z", 100, 50, 80,
 	) + "\n")
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+	require.NoError(err)
+	require.NoError(f.Close())
 
 	engine.SetCheckpointAudit(true)
 	t.Cleanup(func() { engine.SetCheckpointAudit(false) })
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced,
+	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced,
 		"the audit must repair a rewritten prefix instead of tail-applying")
 	after, err := database.GetAllMessages(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.NotEmpty(t, after)
-	require.Contains(t, after[0].Content, "NEW-MARKER",
+	require.NoError(err)
+	require.NotEmpty(after)
+	require.Contains(after[0].Content, "NEW-MARKER",
 		"the repaired prefix must replace the stale stored content")
 }
 
 func TestCodexIncrementalResumeHashFailureRetainsCheckpoint(t *testing.T) {
+	require := require.New(t)
+
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122c13"
 	root := t.TempDir()
 	day := filepath.Join(root, "2024", "01", "01")
-	require.NoError(t, os.MkdirAll(day, 0o755))
+	require.NoError(os.MkdirAll(day, 0o755))
 	path := filepath.Join(
 		day, "rollout-2024-01-01T10-00-00-"+uuid+".jsonl",
 	)
@@ -413,11 +426,11 @@ func TestCodexIncrementalResumeHashFailureRetainsCheckpoint(t *testing.T) {
 			"exec_command", "call_x", nil, "2024-01-01T10:00:04Z",
 		),
 	)
-	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
+	require.NoError(os.WriteFile(path, []byte(initial), 0o644))
 	sessionID := "codex:" + uuid
 
 	database, err := db.Open(filepath.Join(t.TempDir(), "resume-fail.db"))
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(func() { _ = database.Close() })
 	engine := NewEngine(database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
@@ -427,10 +440,10 @@ func TestCodexIncrementalResumeHashFailureRetainsCheckpoint(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
 	before, ok, err := database.GetParserCheckpoint(sessionID)
-	require.NoError(t, err)
-	require.True(t, ok)
+	require.NoError(err)
+	require.True(ok)
 	oldOffset := before.Offset
 
 	appended := testjsonl.JoinJSONL(
@@ -439,10 +452,10 @@ func TestCodexIncrementalResumeHashFailureRetainsCheckpoint(t *testing.T) {
 		),
 	)
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = f.WriteString(appended)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+	require.NoError(err)
+	require.NoError(f.Close())
 
 	orig := codexResumeHashFn
 	codexResumeHashFn = func(
@@ -452,33 +465,33 @@ func TestCodexIncrementalResumeHashFailureRetainsCheckpoint(t *testing.T) {
 	}
 	t.Cleanup(func() { codexResumeHashFn = orig })
 
-	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	require.Equal(1, engine.SyncAll(t.Context(), nil).Synced)
 	cp, ok, err := database.GetParserCheckpoint(sessionID)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, oldOffset, cp.Offset,
+	require.NoError(err)
+	require.True(ok)
+	require.Equal(oldOffset, cp.Offset,
 		"a failed reconstruction must not advance the checkpoint")
 
 	// The failed hash-state reconstruction does not invalidate the content
 	// transaction: the stored projection carries the authoritative full-file
 	// hash, while the disposable checkpoint remains at its previous offset.
 	storedHash, hasHash := database.GetFileHashByAgentPath(path, "codex")
-	require.True(t, hasHash)
+	require.True(hasHash)
 	actualHash, err := ComputeFileHash(path)
-	require.NoError(t, err)
-	require.Equal(t, actualHash, storedHash)
+	require.NoError(err)
+	require.Equal(actualHash, storedHash)
 
 	// Lazy checkpoint adoption leaves an unchanged source on the stat-digest
 	// fast path. Restoring the hasher alone must not rewrite the session or
 	// advance the stale checkpoint.
 	codexResumeHashFn = orig
 	unchanged := engine.SyncAll(t.Context(), nil)
-	require.Zero(t, unchanged.Failed)
-	require.Zero(t, unchanged.Synced)
+	require.Zero(unchanged.Failed)
+	require.Zero(unchanged.Synced)
 	skipped, ok, err := database.GetParserCheckpoint(sessionID)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, oldOffset, skipped.Offset)
+	require.NoError(err)
+	require.True(ok)
+	require.Equal(oldOffset, skipped.Offset)
 
 	// The next real source change reaches checkpoint validation and repairs
 	// the stale optimization state in the same authoritative write.
@@ -488,28 +501,27 @@ func TestCodexIncrementalResumeHashFailureRetainsCheckpoint(t *testing.T) {
 		),
 	)
 	f, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = f.WriteString(repairBoundary)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+	require.NoError(err)
+	require.NoError(f.Close())
 
 	repaired := engine.SyncAll(t.Context(), nil)
-	require.Zero(t, repaired.Failed)
-	require.Equal(t, 1, repaired.Synced)
+	require.Zero(repaired.Failed)
+	require.Equal(1, repaired.Synced)
 	fixed, ok, err := database.GetParserCheckpoint(sessionID)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Greater(t, fixed.Offset, oldOffset)
-	require.Equal(t,
-		int64(len(initial)+len(appended)+len(repairBoundary)),
+	require.NoError(err)
+	require.True(ok)
+	require.Greater(fixed.Offset, oldOffset)
+	require.Equal(int64(len(initial)+len(appended)+len(repairBoundary)),
 		fixed.Offset,
 	)
 	storedHash, hasHash = database.GetFileHashByAgentPath(path, "codex")
-	require.True(t, hasHash)
+	require.True(hasHash)
 	actualHash, err = ComputeFileHash(path)
-	require.NoError(t, err)
-	require.Equal(t, actualHash, storedHash)
-	require.Equal(t, storedHash, fixed.Hash)
+	require.NoError(err)
+	require.Equal(actualHash, storedHash)
+	require.Equal(storedHash, fixed.Hash)
 }
 
 // processRchar returns the process's cumulative read bytes (Linux).

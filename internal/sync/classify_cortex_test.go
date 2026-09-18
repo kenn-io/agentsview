@@ -75,16 +75,18 @@ func TestClassifyOnePath_Cortex(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			files := requireClassifyPaths(t, eng, []string{tt.path})
 			if !tt.want {
-				assert.Empty(t, files)
+				assert.Empty(files)
 				return
 			}
 			require.Len(t, files, 1)
 			got := files[0]
 			if tt.want {
-				assert.Equal(t, tt.agent, got.Agent)
-				assert.Equal(t, tt.retPath, got.Path)
+				assert.Equal(tt.agent, got.Agent)
+				assert.Equal(tt.retPath, got.Path)
 			}
 		})
 	}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"fmt"
 	"net/http"
 	"testing"
@@ -263,7 +262,7 @@ func TestResolveHealthSessionIDMatchesDisplayedShortID(t *testing.T) {
 	}), "upsert one-shot session")
 
 	got, err := resolveHealthSessionID(
-		context.Background(),
+		t.Context(),
 		service.NewDirectBackend(database, nil),
 		"abcdef12",
 	)
@@ -273,30 +272,34 @@ func TestResolveHealthSessionIDMatchesDisplayedShortID(t *testing.T) {
 }
 
 func TestResolveHealthSessionIDExactMatchCanBeOutsideHealthList(t *testing.T) {
+	require := require.New(t)
+
 	database := dbtest.OpenTestDB(t)
 
 	parentID := "parent-session"
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: parentID, Project: "p", Machine: "m", Agent: "claude",
 		MessageCount: 2, UserMessageCount: 2,
 	}), "upsert parent session")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: "child-session", Project: "p", Machine: "m", Agent: "codex",
 		MessageCount: 2, UserMessageCount: 2,
 		ParentSessionID: &parentID, RelationshipType: "subagent",
 	}), "upsert child session")
 
 	got, err := resolveHealthSessionID(
-		context.Background(),
+		t.Context(),
 		service.NewDirectBackend(database, nil),
 		"child-session",
 	)
 
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Equal(t, "child-session", got)
 }
 
 func TestResolveHealthSessionIDPartialMatchCanBeOutsideHealthList(t *testing.T) {
+	require := require.New(t)
+
 	database := dbtest.OpenTestDB(t)
 
 	writes := make([]db.SessionBatchWrite, 0, maxHealthLimit+1)
@@ -314,16 +317,16 @@ func TestResolveHealthSessionIDPartialMatchCanBeOutsideHealthList(t *testing.T) 
 		Agent: "codex", MessageCount: 1, StartedAt: &oldStarted,
 	}})
 	result, err := database.WriteSessionBatchAtomic(writes)
-	require.NoError(t, err, "seed health sessions")
-	require.Equal(t, maxHealthLimit+1, result.WrittenSessions)
+	require.NoError(err, "seed health sessions")
+	require.Equal(maxHealthLimit+1, result.WrittenSessions)
 
 	got, err := resolveHealthSessionID(
-		context.Background(),
+		t.Context(),
 		service.NewDirectBackend(database, nil),
 		"partial-target",
 	)
 
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Equal(t, "old-partial-target", got)
 }
 
@@ -337,7 +340,7 @@ func TestResolveHealthSessionIDUsesDaemonPartialLookup(t *testing.T) {
 	})
 
 	got, err := resolveHealthSessionID(
-		context.Background(),
+		t.Context(),
 		servicehttp.NewHTTPBackend(ts.URL, "", false, ""),
 		"partial-target",
 	)
@@ -350,27 +353,30 @@ func TestResolveHealthSessionIDUsesDaemonPartialLookup(t *testing.T) {
 func TestResolveHealthSessionIDExactMatchStillChecksShortIDAmbiguity(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := dbtest.OpenTestDB(t)
 
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: "abcdef12", Project: "p", Machine: "m",
 		Agent: "claude", MessageCount: 1,
 	}), "upsert exact session")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: "abcdef1234567890", Project: "p", Machine: "m",
 		Agent: "codex", MessageCount: 1,
 	}), "upsert short-id collision")
 
 	got, err := resolveHealthSessionID(
-		context.Background(),
+		t.Context(),
 		service.NewDirectBackend(database, nil),
 		"abcdef12",
 	)
 
-	require.Error(t, err)
-	assert.Empty(t, got)
-	assert.Contains(t, err.Error(), "ambiguous")
-	assert.Contains(t, err.Error(), "abcdef1234567890")
+	require.Error(err)
+	assert.Empty(got)
+	assert.Contains(err.Error(), "ambiguous")
+	assert.Contains(err.Error(), "abcdef1234567890")
 }
 
 func TestResolveSessionID(t *testing.T) {
@@ -397,7 +403,7 @@ func TestResolveSessionID(t *testing.T) {
 	upsert("local-uuid-aaaa-bbbb")
 	upsert("remotehost~local-uuid-aaaa-bbbb")
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("unique substring resolves", func(t *testing.T) {
 		got, err := resolveSessionID(ctx, database, "unique")
@@ -478,7 +484,7 @@ func TestResolveSessionIDCollisionBeyondTopFew(t *testing.T) {
 	// match result set (well beyond the previous limit of 5).
 	upsert(partial+"-collide", "2020-01-01T00:00:00Z")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := resolveSessionID(ctx, database, partial)
 	require.Error(t, err, "expected ambiguity error")
 	assert.Contains(t, err.Error(), "ambiguous",

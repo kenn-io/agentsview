@@ -508,6 +508,7 @@ func TestParseCodexSessionInfersSkillNameFromSessionCwd(t *testing.T) {
 }
 
 func TestParseCodexSessionFromInfersSkillNameFromSeededCwd(t *testing.T) {
+	require := require.New(t)
 
 	path := writeTestSkill(t, "index", "data-analytics:index")
 	cwd := filepath.Dir(filepath.Dir(filepath.Dir(path)))
@@ -518,10 +519,10 @@ func TestParseCodexSessionFromInfersSkillNameFromSeededCwd(t *testing.T) {
 	)
 	file := createTestFile(t, "incremental-skill.jsonl", initial)
 	_, msgs, err := parseCodexTestSession(t, file, "local", false)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	info, err := os.Stat(file)
-	require.NoError(t, err)
+	require.NoError(err)
 	offset := info.Size()
 
 	appended := testjsonl.CodexFunctionCallArgsJSON(
@@ -529,15 +530,15 @@ func TestParseCodexSessionFromInfersSkillNameFromSeededCwd(t *testing.T) {
 			"cmd": "sed -n '1,220p' skills/index/SKILL.md",
 		}, tsLateS5)
 	f, err := os.OpenFile(file, os.O_APPEND|os.O_WRONLY, 0o644)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = f.WriteString(appended)
-	require.NoError(t, err)
-	require.NoError(t, f.Close())
+	require.NoError(err)
+	require.NoError(f.Close())
 
 	newMsgs, _, _, err := parseCodexTestSessionFrom(t, file, offset, len(msgs), false)
-	require.NoError(t, err)
-	require.Len(t, newMsgs, 1)
-	require.Len(t, newMsgs[0].ToolCalls, 1)
+	require.NoError(err)
+	require.Len(newMsgs, 1)
+	require.Len(newMsgs[0].ToolCalls, 1)
 	assert.Equal(t, "data-analytics:index", newMsgs[0].ToolCalls[0].SkillName)
 }
 

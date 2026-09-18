@@ -280,10 +280,12 @@ func projectIdentityPublicationChangeWhere(
 	return where, args
 }
 
-var ErrDatabaseIDMissing = errors.New("database id is missing")
-var ErrArchiveIDMissing = errors.New("archive id is missing")
-var ErrArchiveSaltMissing = errors.New("archive salt is missing")
-var ErrArchiveSaltInvalid = errors.New("archive salt is invalid")
+var (
+	ErrDatabaseIDMissing  = errors.New("database id is missing")
+	ErrArchiveIDMissing   = errors.New("archive id is missing")
+	ErrArchiveSaltMissing = errors.New("archive salt is missing")
+	ErrArchiveSaltInvalid = errors.New("archive salt is invalid")
+)
 
 func validateArchiveSalt(salt string) (string, error) {
 	salt = strings.TrimSpace(salt)
@@ -624,7 +626,7 @@ func (db *DB) SetDatabaseIDForTest(ctx context.Context, id string) error {
 	}
 	id = strings.TrimSpace(id)
 	if id == "" {
-		return fmt.Errorf("database id is required")
+		return errors.New("database id is required")
 	}
 
 	db.mu.Lock()
@@ -653,7 +655,7 @@ func (db *DB) SetArchiveIdentityForTest(ctx context.Context, id, salt string) er
 	id = strings.TrimSpace(id)
 	salt = strings.TrimSpace(salt)
 	if id == "" || salt == "" {
-		return fmt.Errorf("archive id and salt are required")
+		return errors.New("archive id and salt are required")
 	}
 	db.mu.Lock()
 	defer db.mu.Unlock()
@@ -787,7 +789,7 @@ func (db *DB) upsertSessionWithProjectIdentity(
 		return sessionUpsertResult{}, err
 	}
 	if strings.TrimSpace(s.ID) == "" {
-		return sessionUpsertResult{}, fmt.Errorf("session id is required")
+		return sessionUpsertResult{}, errors.New("session id is required")
 	}
 	normalized, err := normalizeProjectIdentityObservation(obs)
 	if err != nil {
@@ -795,7 +797,7 @@ func (db *DB) upsertSessionWithProjectIdentity(
 	}
 	if normalized.SessionID == "" {
 		return sessionUpsertResult{},
-			fmt.Errorf("identity observation session id is required")
+			errors.New("identity observation session id is required")
 	}
 	if normalized.SessionID != s.ID {
 		return sessionUpsertResult{}, fmt.Errorf(
@@ -1352,10 +1354,10 @@ func normalizeProjectIdentityObservation(
 	obs.WorktreeRootPath = strings.TrimSpace(obs.WorktreeRootPath)
 	obs.GitBranch = strings.TrimSpace(obs.GitBranch)
 	if obs.Project == "" {
-		return obs, fmt.Errorf("project is required")
+		return obs, errors.New("project is required")
 	}
 	if obs.Machine == "" {
-		return obs, fmt.Errorf("machine is required")
+		return obs, errors.New("machine is required")
 	}
 	if obs.ObservedAt.IsZero() {
 		obs.ObservedAt = time.Now().UTC()

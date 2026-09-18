@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync/atomic"
 	"testing"
 
@@ -117,6 +118,9 @@ func TestResolveLatestTag(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			srv := httptest.NewServer(http.HandlerFunc(
 				func(w http.ResponseWriter, _ *http.Request) {
 					if tt.location != "" {
@@ -129,12 +133,12 @@ func TestResolveLatestTag(t *testing.T) {
 
 			tag, err := resolveLatestTag(srv.URL)
 			if tt.wantErrSub != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.wantErrSub)
+				require.Error(err)
+				assert.Contains(err.Error(), tt.wantErrSub)
 				return
 			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.wantTag, tag)
+			require.NoError(err)
+			assert.Equal(tt.wantTag, tag)
 		})
 	}
 }
@@ -161,12 +165,15 @@ func TestFetchContentLength(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			srv := httptest.NewServer(http.HandlerFunc(
 				func(w http.ResponseWriter, _ *http.Request) {
 					if tt.bodySize > 0 {
 						w.Header().Set(
 							"Content-Length",
-							fmt.Sprintf("%d", tt.bodySize),
+							strconv.Itoa(tt.bodySize),
 						)
 					}
 					w.WriteHeader(tt.status)
@@ -176,12 +183,12 @@ func TestFetchContentLength(t *testing.T) {
 
 			size, err := fetchContentLength(srv.URL)
 			if tt.wantErrSub != "" {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tt.wantErrSub)
+				require.Error(err)
+				assert.Contains(err.Error(), tt.wantErrSub)
 				return
 			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.wantSize, size)
+			require.NoError(err)
+			assert.Equal(tt.wantSize, size)
 		})
 	}
 }
@@ -232,6 +239,8 @@ func TestExtractTarGz(t *testing.T) {
 }
 
 func TestInstallBinaryToSetsExecutableMode(t *testing.T) {
+	require := require.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix mode bits not meaningful on Windows")
 	}
@@ -241,33 +250,36 @@ func TestInstallBinaryToSetsExecutableMode(t *testing.T) {
 	srcPath := filepath.Join(srcDir, "agentsview")
 	dstPath := filepath.Join(dstDir, "agentsview")
 
-	require.NoError(t, os.WriteFile(srcPath, []byte("binary"), 0o644))
+	require.NoError(os.WriteFile(srcPath, []byte("binary"), 0o644))
 
-	require.NoError(t, installBinaryTo(srcPath, dstPath))
+	require.NoError(installBinaryTo(srcPath, dstPath))
 
 	info, err := os.Stat(dstPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Equal(t, os.FileMode(0o755), info.Mode().Perm())
 }
 
 func TestInstallBinaryToPreservesOnSourceMissing(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dstDir := t.TempDir()
 	dstPath := filepath.Join(dstDir, "agentsview")
 
-	require.NoError(t, os.WriteFile(dstPath, []byte("original"), 0o755))
+	require.NoError(os.WriteFile(dstPath, []byte("original"), 0o755))
 
 	missingSrc := filepath.Join(t.TempDir(), "does-not-exist")
 
-	require.Error(t, installBinaryTo(missingSrc, dstPath), "expected error from missing source")
+	require.Error(installBinaryTo(missingSrc, dstPath), "expected error from missing source")
 
 	got, err := os.ReadFile(dstPath)
-	require.NoError(t, err, "dstPath should still exist")
-	assert.Equal(t, "original", string(got))
+	require.NoError(err, "dstPath should still exist")
+	assert.Equal("original", string(got))
 
 	_, err = os.Stat(dstPath + ".new")
-	assert.True(t, os.IsNotExist(err), "staging .new file should not be left behind")
+	assert.True(os.IsNotExist(err), "staging .new file should not be left behind")
 	_, err = os.Stat(dstPath + ".old")
-	assert.True(t, os.IsNotExist(err), "backup .old file should not be left behind")
+	assert.True(os.IsNotExist(err), "backup .old file should not be left behind")
 }
 
 func TestInstallBinaryToNeverMissingDuringUpdate(t *testing.T) {
@@ -334,17 +346,19 @@ func TestInstallBinaryToNeverMissingDuringUpdate(t *testing.T) {
 }
 
 func TestInstallBinaryToRemovesStaleStagingFile(t *testing.T) {
+	require := require.New(t)
+
 	srcDir := t.TempDir()
 	dstDir := t.TempDir()
 	srcPath := filepath.Join(srcDir, "agentsview")
 	dstPath := filepath.Join(dstDir, "agentsview")
 
-	require.NoError(t, os.WriteFile(srcPath, []byte("new-binary"), 0o755))
-	require.NoError(t, os.WriteFile(dstPath, []byte("old-binary"), 0o755))
+	require.NoError(os.WriteFile(srcPath, []byte("new-binary"), 0o755))
+	require.NoError(os.WriteFile(dstPath, []byte("old-binary"), 0o755))
 	stagingPath := dstPath + ".new"
-	require.NoError(t, os.WriteFile(stagingPath, []byte("stale-staging"), 0o644))
+	require.NoError(os.WriteFile(stagingPath, []byte("stale-staging"), 0o644))
 
-	require.NoError(t, installBinaryTo(srcPath, dstPath))
+	require.NoError(installBinaryTo(srcPath, dstPath))
 
 	_, err := os.Stat(stagingPath)
 	assert.True(t, os.IsNotExist(err), "stale staging file should be removed, got err=%v", err)
@@ -373,6 +387,9 @@ func TestInstallBinaryTo(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			srcDir := t.TempDir()
 			dstDir := t.TempDir()
 
@@ -380,20 +397,20 @@ func TestInstallBinaryTo(t *testing.T) {
 			dstPath := filepath.Join(dstDir, "agentsview")
 
 			if tt.existingDest != "" {
-				require.NoError(t, os.WriteFile(dstPath, []byte(tt.existingDest), 0o755))
+				require.NoError(os.WriteFile(dstPath, []byte(tt.existingDest), 0o755))
 			}
 
-			require.NoError(t, os.WriteFile(srcPath, []byte(tt.newBinary), 0o755))
+			require.NoError(os.WriteFile(srcPath, []byte(tt.newBinary), 0o755))
 
-			require.NoError(t, installBinaryTo(srcPath, dstPath))
+			require.NoError(installBinaryTo(srcPath, dstPath))
 
 			got, err := os.ReadFile(dstPath)
-			require.NoError(t, err)
-			assert.Equal(t, tt.want, string(got))
+			require.NoError(err)
+			assert.Equal(tt.want, string(got))
 
 			if tt.existingDest != "" {
 				_, err := os.Stat(dstPath + ".old")
-				assert.True(t, os.IsNotExist(err), "backup .old file should be removed")
+				assert.True(os.IsNotExist(err), "backup .old file should be removed")
 			}
 		})
 	}

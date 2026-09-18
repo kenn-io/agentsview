@@ -49,7 +49,7 @@ func TestAwaitQuiescentSourcesClassifiesDeadlineDuringLookup(t *testing.T) {
 				SourceObserved:    test.sourceObserved,
 				Limits:            testLimits(),
 			}}
-			ctx := &deadlineOnSecondErrContext{Context: context.Background()}
+			ctx := &deadlineOnSecondErrContext{Context: t.Context()}
 
 			_, err := awaitQuiescentSources(
 				ctx, state, time.Now().Add(time.Minute))
@@ -77,6 +77,9 @@ func TestOversizedResultWritesBoundedFailureAndKeepsPriorFailure(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			limits := DefaultLimits()
 			limits.MaxResultBytes = minResultBytes
 			state := &captureState{
@@ -93,8 +96,8 @@ func TestOversizedResultWritesBoundedFailureAndKeepsPriorFailure(t *testing.T) {
 				prior := failureResult(state.manifest, test.priorReason, "test")
 				var err error
 				priorData, err = encodeResult(prior, limits.MaxResultBytes)
-				require.NoError(t, err)
-				require.NoError(t, state.storeAttempt(priorData, false))
+				require.NoError(err)
+				require.NoError(state.storeAttempt(priorData, false))
 			}
 			oversized := baseResult(state.manifest, "test")
 			oversized.Reporting = ReportingOutcome{Outcome: ReportingComplete}
@@ -107,22 +110,25 @@ func TestOversizedResultWritesBoundedFailureAndKeepsPriorFailure(t *testing.T) {
 
 			result, data, err := encodeAndStoreResult(state, oversized, nil)
 
-			require.Error(t, err)
-			assert.Equal(t, ReportingFailed, result.Reporting.Outcome)
-			assert.Equal(t, test.wantReason, result.Reporting.Reason)
-			require.NotEmpty(t, data)
-			assert.LessOrEqual(t, len(data), limits.MaxResultBytes)
+			require.Error(err)
+			assert.Equal(ReportingFailed, result.Reporting.Outcome)
+			assert.Equal(test.wantReason, result.Reporting.Reason)
+			require.NotEmpty(data)
+			assert.LessOrEqual(len(data), limits.MaxResultBytes)
 			stored, readErr := os.ReadFile(state.sealedPath())
-			require.NoError(t, readErr)
-			assert.Equal(t, data, stored)
+			require.NoError(readErr)
+			assert.Equal(data, stored)
 			if priorData != nil {
-				assert.Equal(t, priorData, data)
+				assert.Equal(priorData, data)
 			}
 		})
 	}
 }
 
 func TestCompletedAttemptBecomesRecoverableTimeoutAtSealDeadline(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	state := &captureState{
 		dir: t.TempDir(),
 		manifest: manifest{
@@ -140,17 +146,20 @@ func TestCompletedAttemptBecomesRecoverableTimeoutAtSealDeadline(t *testing.T) {
 		Producer: ProducerMetadata{AgentsViewVersion: "test"},
 	}, nil)
 
-	require.Error(t, err)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.Equal(t, ReportingFailed, result.Reporting.Outcome)
-	assert.Equal(t, ReasonFinalizationTimeout, result.Reporting.Reason)
-	assert.Empty(t, state.manifest.SealedDigest)
+	require.Error(err)
+	require.ErrorIs(err, context.DeadlineExceeded)
+	assert.Equal(ReportingFailed, result.Reporting.Outcome)
+	assert.Equal(ReasonFinalizationTimeout, result.Reporting.Reason)
+	assert.Empty(state.manifest.SealedDigest)
 	stored, readErr := os.ReadFile(state.sealedPath())
-	require.NoError(t, readErr)
-	assert.Equal(t, data, stored)
+	require.NoError(readErr)
+	assert.Equal(data, stored)
 }
 
 func TestCompletedRetryKeepsPriorFailureWhenSealingExpires(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	state := &captureState{
 		dir: t.TempDir(),
 		manifest: manifest{
@@ -160,8 +169,8 @@ func TestCompletedRetryKeepsPriorFailureWhenSealingExpires(t *testing.T) {
 	}
 	first := failureResult(state.manifest, ReasonNoSession, "test")
 	firstData, err := encodeResult(first, state.manifest.Limits.MaxResultBytes)
-	require.NoError(t, err)
-	require.NoError(t, state.storeAttempt(firstData, false))
+	require.NoError(err)
+	require.NoError(state.storeAttempt(firstData, false))
 	state.finalizationDeadline = time.Now().Add(-time.Second)
 
 	result, data, err := encodeAndStoreResult(state, Result{
@@ -172,26 +181,29 @@ func TestCompletedRetryKeepsPriorFailureWhenSealingExpires(t *testing.T) {
 		Producer:     ProducerMetadata{AgentsViewVersion: "test"},
 	}, nil)
 
-	require.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.Equal(t, ReasonNoSession, result.Reporting.Reason)
-	assert.Equal(t, firstData, data)
+	require.ErrorIs(err, context.DeadlineExceeded)
+	assert.Equal(ReasonNoSession, result.Reporting.Reason)
+	assert.Equal(firstData, data)
 	stored, readErr := os.ReadFile(state.sealedPath())
-	require.NoError(t, readErr)
-	assert.Equal(t, firstData, stored)
-	assert.Empty(t, state.manifest.SealedDigest)
+	require.NoError(readErr)
+	assert.Equal(firstData, stored)
+	assert.Empty(state.manifest.SealedDigest)
 }
 
 func TestFinishIngestedResultClassifiesArchiveCloseFailure(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database, err := db.OpenIsolated(filepath.Join(t.TempDir(), "capture.db"))
-	require.NoError(t, err)
+	require.NoError(err)
 	rows, err := database.Reader().Query("SELECT 1")
-	require.NoError(t, err)
-	require.True(t, rows.Next())
+	require.NoError(err)
+	require.True(rows.Next())
 	restoreTimeout := db.SetCloseDrainTimeoutForTest(10 * time.Millisecond)
 	t.Cleanup(restoreTimeout)
 	t.Cleanup(func() {
-		require.NoError(t, rows.Close())
-		require.NoError(t, database.Close())
+		require.NoError(rows.Close())
+		require.NoError(database.Close())
 	})
 
 	state := &captureState{manifest: manifest{
@@ -200,7 +212,7 @@ func TestFinishIngestedResultClassifiesArchiveCloseFailure(t *testing.T) {
 		ProviderSessionID: "11111111-1111-4111-8111-111111111111",
 	}}
 	result, err := finishIngestedResult(
-		context.Background(),
+		t.Context(),
 		state,
 		&ingestedCapture{
 			Database: database,
@@ -212,55 +224,62 @@ func TestFinishIngestedResultClassifiesArchiveCloseFailure(t *testing.T) {
 		"test",
 	)
 
-	require.Error(t, err)
-	assert.Equal(t, ReportingFailed, result.Reporting.Outcome)
-	assert.Equal(t, ReasonIngestFailed, result.Reporting.Reason)
+	require.Error(err)
+	assert.Equal(ReportingFailed, result.Reporting.Outcome)
+	assert.Equal(ReasonIngestFailed, result.Reporting.Reason)
 }
 
 func TestOpenCaptureEngineStopsBeforeInitializationAfterDeadline(t *testing.T) {
+	assert := assert.New(t)
+
 	state := &captureState{dir: t.TempDir(), manifest: manifest{
 		Provider: string(ProviderClaude),
 	}}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	database, engine, err := openCaptureEngine(ctx, state, nil)
 
 	require.ErrorIs(t, err, context.Canceled)
-	assert.Nil(t, database)
-	assert.Nil(t, engine)
-	assert.NoFileExists(t, state.archivePath())
+	assert.Nil(database)
+	assert.Nil(engine)
+	assert.NoFileExists(state.archivePath())
 }
 
 func TestOpenCaptureEngineRebuildsInterruptedScratchArchive(t *testing.T) {
+	require := require.New(t)
+
 	state := &captureState{dir: t.TempDir(), manifest: manifest{
 		Provider: string(ProviderClaude),
 	}}
-	require.NoError(t, os.WriteFile(state.archivePath(), []byte("partial"), 0o600))
+	require.NoError(os.WriteFile(state.archivePath(), []byte("partial"), 0o600))
 
 	database, engine, err := openCaptureEngine(t.Context(), state, nil)
-	require.NoError(t, err)
+	require.NoError(err)
 	engine.Close()
-	require.NoError(t, database.Close())
+	require.NoError(database.Close())
 
 	info, err := os.Stat(state.archivePath())
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Greater(t, info.Size(), int64(len("partial")))
 }
 
 func TestFinishIngestedResultBoundsArchiveCloseByFinalizationDeadline(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database, err := db.OpenIsolated(filepath.Join(t.TempDir(), "capture.db"))
-	require.NoError(t, err)
+	require.NoError(err)
 	rows, err := database.Reader().Query("SELECT 1")
-	require.NoError(t, err)
-	require.True(t, rows.Next())
+	require.NoError(err)
+	require.True(rows.Next())
 	restoreTimeout := db.SetCloseDrainTimeoutForTest(2 * time.Second)
 	t.Cleanup(restoreTimeout)
 	t.Cleanup(func() {
-		require.NoError(t, rows.Close())
-		require.NoError(t, database.Close())
+		require.NoError(rows.Close())
+		require.NoError(database.Close())
 	})
 
 	state := &captureState{manifest: manifest{
@@ -268,7 +287,7 @@ func TestFinishIngestedResultBoundsArchiveCloseByFinalizationDeadline(
 		Provider:          string(ProviderClaude),
 		ProviderSessionID: "11111111-1111-4111-8111-111111111111",
 	}}
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Millisecond)
 	defer cancel()
 	started := time.Now()
 	result, err := finishIngestedResult(
@@ -284,45 +303,48 @@ func TestFinishIngestedResultBoundsArchiveCloseByFinalizationDeadline(
 		"test",
 	)
 
-	require.Error(t, err)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
-	assert.Less(t, time.Since(started), 500*time.Millisecond)
-	assert.Equal(t, ReportingFailed, result.Reporting.Outcome)
-	assert.Equal(t, ReasonFinalizationTimeout, result.Reporting.Reason)
+	require.Error(err)
+	require.ErrorIs(err, context.DeadlineExceeded)
+	assert.Less(time.Since(started), 500*time.Millisecond)
+	assert.Equal(ReportingFailed, result.Reporting.Outcome)
+	assert.Equal(ReasonFinalizationTimeout, result.Reporting.Reason)
 }
 
 func TestCodexFinalVerificationRejectsLateChildCandidate(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	anchor := time.Date(2026, 8, 18, 12, 0, 0, 0, time.UTC)
 	dayDir := filepath.Join(root, filepath.FromSlash(anchor.Format("2006/01/02")))
-	require.NoError(t, os.MkdirAll(dayDir, 0o700))
+	require.NoError(os.MkdirAll(dayDir, 0o700))
 	rootID := "11111111-1111-4111-8111-111111111111"
 	childID := "22222222-2222-4222-8222-222222222222"
 	writeSource := func(name, id string) string {
 		path := filepath.Join(dayDir, name+"-"+id+".jsonl")
 		line := fmt.Sprintf(`{"type":"session_meta","payload":{"id":%q}}`, id)
-		require.NoError(t, os.WriteFile(path, []byte(line+"\n"), 0o600))
+		require.NoError(os.WriteFile(path, []byte(line+"\n"), 0o600))
 		return path
 	}
 	rootPath := writeSource("rollout-root", rootID)
 	childPath := writeSource("rollout-child", childID)
 	limits := testLimits()
 	expected, err := snapshotSources(
-		context.Background(), []string{rootPath, childPath}, limits)
-	require.NoError(t, err)
+		t.Context(), []string{rootPath, childPath}, limits)
+	require.NoError(err)
 	writeSource("rollout-late-conflict", childID)
 	state := &captureState{manifest: manifest{
 		Provider: string(ProviderCodex), ProviderRoot: root, Limits: limits,
 	}}
 
 	unchanged, err := liveSourcesUnchanged(
-		context.Background(), state, expected, []codexSourceSelection{
+		t.Context(), state, expected, []codexSourceSelection{
 			{ID: rootID, Anchor: anchor, LivePath: rootPath},
 			{ID: childID, Anchor: anchor, LivePath: childPath},
 		},
 	)
 
-	require.Error(t, err)
-	assert.False(t, unchanged)
-	assert.Equal(t, ReasonMultipleSessions, reasonForError(err, ""))
+	require.Error(err)
+	assert.False(unchanged)
+	assert.Equal(ReasonMultipleSessions, reasonForError(err, ""))
 }

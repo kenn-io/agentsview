@@ -86,9 +86,7 @@ func commitUpload(upload stagedUpload) (committedUpload, error) {
 	switch {
 	case err == nil:
 		if !info.Mode().IsRegular() {
-			return state, fmt.Errorf(
-				"committing upload: destination is not a regular file",
-			)
+			return state, errors.New("committing upload: destination is not a regular file")
 		}
 		backupPath, err := createUploadBackupPath(upload.finalPath)
 		if err != nil {
@@ -112,7 +110,7 @@ func commitUpload(upload stagedUpload) (committedUpload, error) {
 		if state.hadPrevious {
 			if rbErr := os.Rename(state.backupPath, upload.finalPath); rbErr != nil {
 				return state, fmt.Errorf(
-					"committing upload: %w (restore previous upload failed: %v)",
+					"committing upload: %w (restore previous upload failed: %w)",
 					err, rbErr,
 				)
 			}

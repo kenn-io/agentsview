@@ -79,7 +79,7 @@ func TestHandleSearchSortParam(t *testing.T) {
 				mux:      http.NewServeMux(),
 			}
 			srv.routes()
-			req := httptest.NewRequest(
+			req := httptest.NewRequestWithContext(t.Context(),
 				http.MethodGet,
 				"/api/v1/search?"+tt.query, nil,
 			)
@@ -101,7 +101,7 @@ func TestSearchDateRangeHTTPTransport(t *testing.T) {
 	httpServer := httptest.NewServer(srv.mux)
 	t.Cleanup(httpServer.Close)
 	client := servicehttp.NewHTTPBackend(httpServer.URL, "", true, "")
-	_, err := client.Search(context.Background(), service.SearchRequest{
+	_, err := client.Search(t.Context(), service.SearchRequest{
 		Query: "hello", DateFrom: "2024-06-01", DateTo: "2024-06-02",
 	})
 	require.NoError(t, err)
@@ -125,7 +125,7 @@ func TestSearchRejectsInvalidDateRange(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/search?q=hello&"+tc.params, nil)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/search?q=hello&"+tc.params, nil)
 			srv.mux.ServeHTTP(w, req)
 			assert.Equal(t, http.StatusBadRequest, w.Code, "%s", w.Body.String())
 			assert.Contains(t, w.Body.String(), tc.message)

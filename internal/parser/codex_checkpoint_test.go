@@ -1,10 +1,9 @@
 package parser
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,27 +43,32 @@ func TestCodexCursorStateCheckpointRoundTrip(t *testing.T) {
 }
 
 func TestCodexCursorStateCheckpointRejectsBadPayloads(t *testing.T) {
+	require := require.New(t)
+
 	var state codexCursorState
 
 	// Wrong version.
 	blob, err := state.MarshalBinary()
-	require.NoError(t, err)
+	require.NoError(err)
 	blob[0] = 99
-	require.Error(t, state.UnmarshalBinary(blob))
+	require.Error(state.UnmarshalBinary(blob))
 
 	// Truncated payload.
 	blob, err = state.MarshalBinary()
-	require.NoError(t, err)
-	require.Error(t, state.UnmarshalBinary(blob[:len(blob)-3]))
+	require.NoError(err)
+	require.Error(state.UnmarshalBinary(blob[:len(blob)-3]))
 
 	// Oversized pending-call count.
 	blob, err = state.MarshalBinary()
-	require.NoError(t, err)
+	require.NoError(err)
 	blob[len(blob)-1] = 200
-	require.Error(t, state.UnmarshalBinary(blob))
+	require.Error(state.UnmarshalBinary(blob))
 }
 
 func TestCodexProviderIncrementalResumesFromCheckpointSeed(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const (
 		uuid   = "019eb791-cf7d-75c1-8439-9ed74c122a01"
 		callID = "call_checkpoint"
@@ -85,18 +89,18 @@ func TestCodexProviderIncrementalResumesFromCheckpointSeed(t *testing.T) {
 	provider, ok := NewProvider(
 		AgentCodex, ProviderConfig{Roots: []string{root}},
 	)
-	require.True(t, ok)
+	require.True(ok)
 	source := requireCodexProviderSource(t, provider, uuid)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
-	require.NoError(t, err)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
+	require.NoError(err)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: source, Fingerprint: fingerprint,
 	})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
+	require.NoError(err)
+	require.Len(outcome.Results, 1)
 	checkpoint := outcome.Results[0].Result.Checkpoint
-	require.NotEmpty(t, checkpoint,
+	require.NotEmpty(checkpoint,
 		"a full parse of a safe-offset transcript must produce a checkpoint")
 
 	tail := testjsonl.JoinJSONL(testjsonl.CodexFunctionCallOutputJSON(
@@ -104,10 +108,10 @@ func TestCodexProviderIncrementalResumesFromCheckpointSeed(t *testing.T) {
 	))
 	appendCodexProviderContent(t, path, tail)
 
-	fingerprint, err = provider.Fingerprint(context.Background(), source)
-	require.NoError(t, err)
+	fingerprint, err = provider.Fingerprint(t.Context(), source)
+	require.NoError(err)
 	incOutcome, status, err := provider.ParseIncremental(
-		context.Background(), IncrementalRequest{
+		t.Context(), IncrementalRequest{
 			Source:       source,
 			Fingerprint:  fingerprint,
 			SessionID:    "codex:" + uuid,
@@ -116,12 +120,12 @@ func TestCodexProviderIncrementalResumesFromCheckpointSeed(t *testing.T) {
 			Seed:         checkpoint,
 		},
 	)
-	require.NoError(t, err)
-	assert.Equal(t, IncrementalApplied, status)
-	assert.Empty(t, incOutcome.Messages)
-	require.Len(t, incOutcome.ToolCallUpdates, 1)
-	assert.Equal(t, callID, incOutcome.ToolCallUpdates[0].ToolUseID)
-	assert.NotEmpty(t, incOutcome.NextCursor,
+	require.NoError(err)
+	assert.Equal(IncrementalApplied, status)
+	assert.Empty(incOutcome.Messages)
+	require.Len(incOutcome.ToolCallUpdates, 1)
+	assert.Equal(callID, incOutcome.ToolCallUpdates[0].ToolUseID)
+	assert.NotEmpty(incOutcome.NextCursor,
 		"an applied incremental parse must advance the cursor")
 }
 
@@ -131,6 +135,9 @@ func TestCodexProviderIncrementalResumesFromCheckpointSeed(t *testing.T) {
 // equal the hash of the trailing window, so checkpoint persistence never
 // needs a second source read.
 func TestCodexParseCarriesSinglePassHashState(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122a02"
 	prefix := testjsonl.JoinJSONL(
 		testjsonl.CodexSessionMetaJSON(
@@ -146,37 +153,37 @@ func TestCodexParseCarriesSinglePassHashState(t *testing.T) {
 	provider, ok := NewProvider(
 		AgentCodex, ProviderConfig{Roots: []string{root}},
 	)
-	require.True(t, ok)
+	require.True(ok)
 	source := requireCodexProviderSource(t, provider, uuid)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
-	require.NoError(t, err)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
+	require.NoError(err)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: source, Fingerprint: fingerprint,
 	})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
+	require.NoError(err)
+	require.Len(outcome.Results, 1)
 	result := outcome.Results[0].Result
-	require.NotEmpty(t, result.CheckpointHashState,
+	require.NotEmpty(result.CheckpointHashState,
 		"the parse must capture the resumable hash state")
 
 	// The state digest must equal the snapshot's full hash.
 	stateHash := sha256.New()
-	require.NoError(t, stateHash.(interface{ UnmarshalBinary([]byte) error }).
+	require.NoError(stateHash.(interface{ UnmarshalBinary([]byte) error }).
 		UnmarshalBinary(result.CheckpointHashState))
-	assert.Equal(t, fingerprint.Hash, result.Session.File.Hash)
+	assert.Equal(fingerprint.Hash, result.Session.File.Hash)
 	wantDigest := sha256.Sum256([]byte(prefix))
-	assert.Equal(t, fingerprint.Hash,
-		fmt.Sprintf("%x", wantDigest[:]),
+	assert.Equal(fingerprint.Hash,
+		hex.EncodeToString(wantDigest[:]),
 		"sanity: the provider fingerprint is the snapshot hash")
 	stateSum := stateHash.Sum(nil)
-	assert.Equal(t, wantDigest[:], stateSum,
+	assert.Equal(wantDigest[:], stateSum,
 		"the captured state must hash exactly the parsed snapshot")
 
 	// The anchor digest must equal the trailing window's hash.
 	window := prefix[max(0, len(prefix)-codexCheckpointAnchorSize):]
 	wantAnchor := sha256.Sum256([]byte(window))
-	assert.Equal(t, fmt.Sprintf("%x", wantAnchor[:]),
+	assert.Equal(hex.EncodeToString(wantAnchor[:]),
 		result.CheckpointAnchorDigest)
 
 	// Resuming the state over an appended tail must reproduce the real
@@ -187,17 +194,20 @@ func TestCodexParseCarriesSinglePassHashState(t *testing.T) {
 	))
 	appendCodexProviderContent(t, path, tail)
 	resumed := sha256.New()
-	require.NoError(t, resumed.(interface{ UnmarshalBinary([]byte) error }).
+	require.NoError(resumed.(interface{ UnmarshalBinary([]byte) error }).
 		UnmarshalBinary(result.CheckpointHashState))
 	_, err = resumed.Write([]byte(tail))
-	require.NoError(t, err)
+	require.NoError(err)
 	full := append([]byte(prefix), []byte(tail)...)
 	wantFull := sha256.Sum256(full)
-	assert.Equal(t, wantFull[:], resumed.Sum(nil),
+	assert.Equal(wantFull[:], resumed.Sum(nil),
 		"resuming the captured state must reproduce the full-file hash")
 }
 
 func TestCodexProviderIncrementalTargetsLatestDuplicateCallIDOccurrence(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const (
 		uuid   = "019eb791-cf7d-75c1-8439-9ed74c122d01"
 		callID = "reused-call"
@@ -219,26 +229,26 @@ func TestCodexProviderIncrementalTargetsLatestDuplicateCallIDOccurrence(t *testi
 	provider, ok := NewProvider(
 		AgentCodex, ProviderConfig{Roots: []string{root}},
 	)
-	require.True(t, ok)
+	require.True(ok)
 	source := requireCodexProviderSource(t, provider, uuid)
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
-	require.NoError(t, err)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
+	require.NoError(err)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: source, Fingerprint: fingerprint,
 	})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
+	require.NoError(err)
+	require.Len(outcome.Results, 1)
 	checkpoint := outcome.Results[0].Result.Checkpoint
-	require.NotEmpty(t, checkpoint)
+	require.NotEmpty(checkpoint)
 
 	tail := testjsonl.JoinJSONL(testjsonl.CodexFunctionCallOutputJSON(
 		callID, "second result", "2026-08-02T09:00:06Z",
 	))
 	appendCodexProviderContent(t, path, tail)
-	fingerprint, err = provider.Fingerprint(context.Background(), source)
-	require.NoError(t, err)
+	fingerprint, err = provider.Fingerprint(t.Context(), source)
+	require.NoError(err)
 	incOutcome, status, err := provider.ParseIncremental(
-		context.Background(), IncrementalRequest{
+		t.Context(), IncrementalRequest{
 			Source:       source,
 			Fingerprint:  fingerprint,
 			SessionID:    "codex:" + uuid,
@@ -247,90 +257,96 @@ func TestCodexProviderIncrementalTargetsLatestDuplicateCallIDOccurrence(t *testi
 			Seed:         checkpoint,
 		},
 	)
-	require.NoError(t, err)
-	assert.Equal(t, IncrementalApplied, status)
-	require.Len(t, incOutcome.ToolCallUpdates, 1)
+	require.NoError(err)
+	assert.Equal(IncrementalApplied, status)
+	require.Len(incOutcome.ToolCallUpdates, 1)
 	update := incOutcome.ToolCallUpdates[0]
-	assert.Equal(t, callID, update.ToolUseID)
-	assert.True(t, update.TargetKnown)
-	assert.Equal(t, 2, update.MessageOrdinal)
-	assert.Equal(t, 0, update.CallIndex)
-	require.Len(t, update.ResultEvents, 1)
-	assert.Equal(t, "second result", update.ResultEvents[0].Content)
+	assert.Equal(callID, update.ToolUseID)
+	assert.True(update.TargetKnown)
+	assert.Equal(2, update.MessageOrdinal)
+	assert.Equal(0, update.CallIndex)
+	require.Len(update.ResultEvents, 1)
+	assert.Equal("second result", update.ResultEvents[0].Content)
 }
 
 func TestCodexCheckpointRecoversAfterPendingCallBurst(t *testing.T) {
 	for _, outputs := range []int{0, 1, 8, 9} {
-		t.Run(fmt.Sprint(outputs), func(t *testing.T) {
+		t.Run(strconv.Itoa(outputs), func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			const uuid = "019eb791-cf7d-75c1-8439-9ed74c122a09"
 			lines := []string{
 				testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project-a", "codex_cli_rs", tsEarly),
 				testjsonl.CodexMsgJSON("user", "run the commands", tsEarlyS1),
 			}
 			for i := range 9 {
-				lines = append(lines, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", fmt.Sprint(i), nil, tsEarlyS5))
+				lines = append(lines, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", strconv.Itoa(i), nil, tsEarlyS5))
 			}
 			for i := range outputs {
-				lines = append(lines, testjsonl.CodexFunctionCallOutputJSON(fmt.Sprint(i), "done", tsLate))
+				lines = append(lines, testjsonl.CodexFunctionCallOutputJSON(strconv.Itoa(i), "done", tsLate))
 			}
 			content := testjsonl.JoinJSONL(lines...)
 			root := t.TempDir()
 			path := writeCodexProviderSessionContent(t, root, uuid, content)
 			provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-			require.True(t, ok)
+			require.True(ok)
 			source := requireCodexProviderSource(t, provider, uuid)
 			ctx := WithoutFilesystemProjectDiscovery(t.Context())
 			outcome, err := provider.Parse(ctx, ParseRequest{Source: source})
-			require.NoError(t, err)
-			require.Len(t, outcome.Results, 1)
+			require.NoError(err)
+			require.Len(outcome.Results, 1)
 			result := outcome.Results[0].Result
 			sum := sha256.Sum256([]byte(content))
-			assert.Equal(t, hex.EncodeToString(sum[:]), result.Session.File.Hash)
-			require.Len(t, result.Messages, 10)
+			assert.Equal(hex.EncodeToString(sum[:]), result.Session.File.Hash)
+			require.Len(result.Messages, 10)
 			for _, msg := range result.Messages[1 : outputs+1] {
-				require.Len(t, msg.ToolCalls, 1)
-				require.Len(t, msg.ToolCalls[0].ResultEvents, 1)
-				assert.Equal(t, "done", msg.ToolCalls[0].ResultEvents[0].Content)
+				require.Len(msg.ToolCalls, 1)
+				require.Len(msg.ToolCalls[0].ResultEvents, 1)
+				assert.Equal("done", msg.ToolCalls[0].ResultEvents[0].Content)
 			}
 			if outputs == 0 {
-				assert.Empty(t, result.Checkpoint)
+				assert.Empty(result.Checkpoint)
 				return
 			}
-			require.NotEmpty(t, result.Checkpoint)
+			require.NotEmpty(result.Checkpoint)
 			if outputs == 8 {
 				appendCodexProviderContent(t, path, testjsonl.JoinJSONL(testjsonl.CodexFunctionCallOutputJSON("8", "last result", tsLateS5)))
 				fingerprint, err := provider.Fingerprint(ctx, source)
-				require.NoError(t, err)
+				require.NoError(err)
 				tail, status, err := provider.ParseIncremental(ctx, IncrementalRequest{
 					Source: source, Fingerprint: fingerprint, SessionID: "codex:" + uuid,
 					Offset: int64(len(content)), StartOrdinal: 10, Seed: result.Checkpoint,
 				})
-				require.NoError(t, err)
-				require.Equal(t, IncrementalApplied, status)
-				require.Len(t, tail.ToolCallUpdates, 1)
-				assert.Equal(t, 9, tail.ToolCallUpdates[0].MessageOrdinal)
-				require.Len(t, tail.ToolCallUpdates[0].ResultEvents, 1)
-				assert.Equal(t, "last result", tail.ToolCallUpdates[0].ResultEvents[0].Content)
+				require.NoError(err)
+				require.Equal(IncrementalApplied, status)
+				require.Len(tail.ToolCallUpdates, 1)
+				assert.Equal(9, tail.ToolCallUpdates[0].MessageOrdinal)
+				require.Len(tail.ToolCallUpdates[0].ResultEvents, 1)
+				assert.Equal("last result", tail.ToolCallUpdates[0].ResultEvents[0].Content)
 			}
 		})
 	}
 }
 
 func TestCodexSeedlessAppendWithUnresolvedCallOverflow(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122a10"
 	lines := []string{
 		testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project-a", "codex_cli_rs", tsEarly),
 		testjsonl.CodexMsgJSON("user", "run the commands", tsEarlyS1),
 	}
 	for i := range 10 {
-		lines = append(lines, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", fmt.Sprint(i), nil, tsEarlyS5))
+		lines = append(lines, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", strconv.Itoa(i), nil, tsEarlyS5))
 	}
 	lines = append(lines, `{"type":"event_msg","payload":{"type":"turn_aborted"}}`)
 	prefix := testjsonl.JoinJSONL(lines...)
 	root := t.TempDir()
 	path := writeCodexProviderSessionContent(t, root, uuid, prefix)
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
+	require.True(ok)
 	source := requireCodexProviderSource(t, provider, uuid)
 	ctx := WithoutFilesystemProjectDiscovery(t.Context())
 	appendCodexProviderContent(t, path, testjsonl.JoinJSONL(
@@ -339,22 +355,22 @@ func TestCodexSeedlessAppendWithUnresolvedCallOverflow(t *testing.T) {
 		testjsonl.CodexFunctionCallOutputJSON("9", "late result", "2024-01-01T10:01:06Z"),
 	))
 	fingerprint, err := provider.Fingerprint(ctx, source)
-	require.NoError(t, err)
+	require.NoError(err)
 	outcome, status, err := provider.ParseIncremental(ctx, IncrementalRequest{
 		Source: source, Fingerprint: fingerprint, SessionID: "codex:" + uuid,
 		Offset: int64(len(prefix)), StartOrdinal: 11,
 	})
-	require.NoError(t, err)
-	require.Equal(t, IncrementalApplied, status)
-	assert.Empty(t, outcome.NextCursor)
-	require.Len(t, outcome.Messages, 2)
-	assert.Equal(t, "continue", outcome.Messages[0].Content)
-	assert.Equal(t, "reading the result", outcome.Messages[1].Content)
-	require.Len(t, outcome.ToolCallUpdates, 1)
-	assert.True(t, outcome.ToolCallUpdates[0].TargetKnown)
-	assert.Equal(t, 10, outcome.ToolCallUpdates[0].MessageOrdinal)
-	require.Len(t, outcome.ToolCallUpdates[0].ResultEvents, 1)
-	assert.Equal(t, "late result", outcome.ToolCallUpdates[0].ResultEvents[0].Content)
-	require.NotNil(t, outcome.TerminationStatus)
-	assert.Equal(t, TerminationToolCallPending, *outcome.TerminationStatus)
+	require.NoError(err)
+	require.Equal(IncrementalApplied, status)
+	assert.Empty(outcome.NextCursor)
+	require.Len(outcome.Messages, 2)
+	assert.Equal("continue", outcome.Messages[0].Content)
+	assert.Equal("reading the result", outcome.Messages[1].Content)
+	require.Len(outcome.ToolCallUpdates, 1)
+	assert.True(outcome.ToolCallUpdates[0].TargetKnown)
+	assert.Equal(10, outcome.ToolCallUpdates[0].MessageOrdinal)
+	require.Len(outcome.ToolCallUpdates[0].ResultEvents, 1)
+	assert.Equal("late result", outcome.ToolCallUpdates[0].ResultEvents[0].Content)
+	require.NotNil(outcome.TerminationStatus)
+	assert.Equal(TerminationToolCallPending, *outcome.TerminationStatus)
 }

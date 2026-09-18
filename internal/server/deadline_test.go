@@ -34,7 +34,7 @@ func TestMiddleware_Timeout(t *testing.T) {
 			ctx, cancel := expiredContext(t)
 			defer cancel()
 
-			req := httptest.NewRequest(tt.method, tt.path, nil).WithContext(ctx)
+			req := httptest.NewRequestWithContext(ctx, tt.method, tt.path, nil).WithContext(ctx)
 			w := httptest.NewRecorder()
 			te.handler.ServeHTTP(w, req)
 

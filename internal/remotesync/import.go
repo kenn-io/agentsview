@@ -264,11 +264,11 @@ func hostProgress(host string, progress syncpkg.ProgressFunc) syncpkg.ProgressFu
 func transformHostProgress(host string, p syncpkg.Progress) syncpkg.Progress {
 	switch {
 	case p.Phase == syncpkg.PhaseDiscovering:
-		p.Detail = fmt.Sprintf("Discovering sessions from %s", host)
+		p.Detail = "Discovering sessions from " + host
 	case p.Phase == syncpkg.PhaseSyncing && p.SessionsTotal > 0:
-		p.Detail = fmt.Sprintf("Processing sessions from %s", host)
+		p.Detail = "Processing sessions from " + host
 	case p.Phase == syncpkg.PhaseDone && p.SessionsTotal > 0:
-		p.Detail = fmt.Sprintf("Processing sessions from %s", host)
+		p.Detail = "Processing sessions from " + host
 	}
 	return p
 }

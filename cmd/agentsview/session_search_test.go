@@ -114,13 +114,16 @@ func TestSessionSearchSinceFiltersByActivity(t *testing.T) {
 }
 
 func TestSessionSearchDocumentedIdentifierRecipeFindsToolInput(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const identifier = "ResolveTrackerIssue1511"
 	dataDir := newAgentDataDir(t)
 	seedSessionWithOpts(t, dataDir, "tool-only", "p", nil)
 
 	d, err := db.Open(sessionsDBPath(dataDir))
-	require.NoError(t, err)
-	require.NoError(t, d.ReplaceSessionMessages("tool-only", []db.Message{{
+	require.NoError(err)
+	require.NoError(d.ReplaceSessionMessages("tool-only", []db.Message{{
 		SessionID: "tool-only",
 		Ordinal:   1,
 		Role:      "assistant",
@@ -132,18 +135,18 @@ func TestSessionSearchDocumentedIdentifierRecipeFindsToolInput(t *testing.T) {
 			InputJSON: `{"command":"ResolveTrackerIssue1511"}`,
 		}},
 	}}))
-	require.NoError(t, d.Close())
+	require.NoError(d.Close())
 
 	out, err := executeCommand(newRootCommand(),
 		"session", "search", identifier,
 		"--in", "tool_input,tool_result", "--json", "--limit", "8")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	got := decodeCLIJSON[service.ContentSearchResult](t, out)
-	require.Len(t, got.Matches, 1)
-	assert.Equal(t, "tool-only", got.Matches[0].SessionID)
-	assert.Equal(t, "tool_input", got.Matches[0].Location)
-	assert.Contains(t, got.Matches[0].Snippet, identifier)
+	require.Len(got.Matches, 1)
+	assert.Equal("tool-only", got.Matches[0].SessionID)
+	assert.Equal("tool_input", got.Matches[0].Location)
+	assert.Contains(got.Matches[0].Snippet, identifier)
 }
 
 func TestSessionSearchExcludeSessionDropsMatches(t *testing.T) {
@@ -268,10 +271,14 @@ func TestValidateScopeFlag(t *testing.T) {
 		{name: "top with semantic", scope: "top", useSemantic: true},
 		{name: "all with hybrid", scope: "all", useHybrid: true},
 		{name: "subordinate with semantic", scope: "subordinate", useSemantic: true},
-		{name: "scope without mode flag", scope: "top",
-			wantErr: "--semantic or --hybrid"},
-		{name: "invalid value", scope: "bogus", useSemantic: true,
-			wantErr: "top, all, or subordinate"},
+		{
+			name: "scope without mode flag", scope: "top",
+			wantErr: "--semantic or --hybrid",
+		},
+		{
+			name: "invalid value", scope: "bogus", useSemantic: true,
+			wantErr: "top, all, or subordinate",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -287,6 +294,9 @@ func TestValidateScopeFlag(t *testing.T) {
 }
 
 func TestPrintContentMatchesHumanShowsScoreForScoredMatches(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	score := 0.834
 	res := &service.ContentSearchResult{
 		Matches: []db.ContentMatch{
@@ -308,16 +318,19 @@ func TestPrintContentMatchesHumanShowsScoreForScoredMatches(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printContentMatchesHuman(&buf, res, renderNow))
+	require.NoError(printContentMatchesHuman(&buf, res, renderNow))
 	out := buf.String()
-	assert.Contains(t, out, "score=0.83")
+	assert.Contains(out, "score=0.83")
 	lines := bytes.Split(buf.Bytes(), []byte("\n"))
-	require.NotEmpty(t, lines)
-	assert.NotContains(t, string(lines[2]), "score=",
+	require.NotEmpty(lines)
+	assert.NotContains(string(lines[2]), "score=",
 		"unscored match should not print a score")
 }
 
 func TestPrintContentMatchesHumanShowsContext(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	res := &service.ContentSearchResult{
 		Matches: []db.ContentMatch{
 			{
@@ -333,16 +346,19 @@ func TestPrintContentMatchesHumanShowsContext(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printContentMatchesHuman(&buf, res, renderNow))
+	require.NoError(printContentMatchesHuman(&buf, res, renderNow))
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	require.Len(t, lines, 4)
-	assert.Equal(t, "  user: earlier question", lines[0])
-	assert.Contains(t, lines[1], "sess1")
-	assert.Contains(t, lines[2], "the match line")
-	assert.Equal(t, "  assistant: later reply", lines[3])
+	require.Len(lines, 4)
+	assert.Equal("  user: earlier question", lines[0])
+	assert.Contains(lines[1], "sess1")
+	assert.Contains(lines[2], "the match line")
+	assert.Equal("  assistant: later reply", lines[3])
 }
 
 func TestPrintContentMatchesHumanTruncatesContextLine(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	longContent := strings.Repeat("a", 250)
 	res := &service.ContentSearchResult{
 		Matches: []db.ContentMatch{
@@ -353,16 +369,19 @@ func TestPrintContentMatchesHumanTruncatesContextLine(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printContentMatchesHuman(&buf, res, renderNow))
+	require.NoError(printContentMatchesHuman(&buf, res, renderNow))
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	require.NotEmpty(t, lines)
-	require.True(t, strings.HasPrefix(lines[0], "  user: "))
+	require.NotEmpty(lines)
+	require.True(strings.HasPrefix(lines[0], "  user: "))
 	body := strings.TrimPrefix(lines[0], "  user: ")
-	assert.LessOrEqual(t, len([]rune(body)), 201)
-	assert.True(t, strings.HasSuffix(body, "…"))
+	assert.LessOrEqual(len([]rune(body)), 201)
+	assert.True(strings.HasSuffix(body, "…"))
 }
 
 func TestContentMatchJSONRoundTripsContext(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	res := service.ContentSearchResult{
 		Matches: []db.ContentMatch{
 			{
@@ -374,19 +393,22 @@ func TestContentMatchJSONRoundTripsContext(t *testing.T) {
 		},
 	}
 	data, err := json.Marshal(res)
-	require.NoError(t, err)
-	assert.Contains(t, string(data), `"context_before"`)
-	assert.Contains(t, string(data), `"context_after"`)
+	require.NoError(err)
+	assert.Contains(string(data), `"context_before"`)
+	assert.Contains(string(data), `"context_after"`)
 
 	var decoded service.ContentSearchResult
-	require.NoError(t, json.Unmarshal(data, &decoded))
-	require.Len(t, decoded.Matches, 2)
-	require.Len(t, decoded.Matches[0].ContextBefore, 1)
-	assert.Equal(t, "before", decoded.Matches[0].ContextBefore[0].Content)
-	assert.Empty(t, decoded.Matches[1].ContextBefore)
+	require.NoError(json.Unmarshal(data, &decoded))
+	require.Len(decoded.Matches, 2)
+	require.Len(decoded.Matches[0].ContextBefore, 1)
+	assert.Equal("before", decoded.Matches[0].ContextBefore[0].Content)
+	assert.Empty(decoded.Matches[1].ContextBefore)
 }
 
 func TestContentMatchJSONRoundTripsScore(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	score := 0.5
 	res := service.ContentSearchResult{
 		Matches: []db.ContentMatch{
@@ -395,15 +417,15 @@ func TestContentMatchJSONRoundTripsScore(t *testing.T) {
 		},
 	}
 	data, err := json.Marshal(res)
-	require.NoError(t, err)
-	assert.Contains(t, string(data), `"score":0.5`)
+	require.NoError(err)
+	assert.Contains(string(data), `"score":0.5`)
 
 	var decoded service.ContentSearchResult
-	require.NoError(t, json.Unmarshal(data, &decoded))
-	require.Len(t, decoded.Matches, 2)
-	require.NotNil(t, decoded.Matches[0].Score)
-	assert.InDelta(t, score, *decoded.Matches[0].Score, 0.0001)
-	assert.Nil(t, decoded.Matches[1].Score)
+	require.NoError(json.Unmarshal(data, &decoded))
+	require.Len(decoded.Matches, 2)
+	require.NotNil(decoded.Matches[0].Score)
+	assert.InDelta(score, *decoded.Matches[0].Score, 0.0001)
+	assert.Nil(decoded.Matches[1].Score)
 }
 
 // TestPrintContentMatchesHumanRendersUnitRangeAndSubMarker pins the human
@@ -411,6 +433,9 @@ func TestContentMatchJSONRoundTripsScore(t *testing.T) {
 // renders "#<start>-<end> @<anchor>", a subordinate hit gains a "sub"
 // marker, and a single-ordinal hit keeps today's plain "#<ordinal>" form.
 func TestPrintContentMatchesHumanRendersUnitRangeAndSubMarker(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	score := 0.91
 	res := &service.ContentSearchResult{
 		Matches: []db.ContentMatch{
@@ -427,17 +452,17 @@ func TestPrintContentMatchesHumanRendersUnitRangeAndSubMarker(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printContentMatchesHuman(&buf, res, renderNow))
+	require.NoError(printContentMatchesHuman(&buf, res, renderNow))
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	require.Len(t, lines, 4)
+	require.Len(lines, 4)
 
-	assert.Contains(t, lines[0], "#12-40 @19", "range with anchor marker")
-	assert.Contains(t, lines[0], " sub", "subordinate marker")
-	assert.Contains(t, lines[0], "score=0.91")
+	assert.Contains(lines[0], "#12-40 @19", "range with anchor marker")
+	assert.Contains(lines[0], " sub", "subordinate marker")
+	assert.Contains(lines[0], "score=0.91")
 
-	assert.Contains(t, lines[2], "#5", "single-ordinal hit keeps the plain form")
-	assert.NotContains(t, lines[2], "@", "no anchor marker for single-ordinal hits")
-	assert.NotContains(t, lines[2], " sub", "no subordinate marker for top-level hits")
+	assert.Contains(lines[2], "#5", "single-ordinal hit keeps the plain form")
+	assert.NotContains(lines[2], "@", "no anchor marker for single-ordinal hits")
+	assert.NotContains(lines[2], " sub", "no subordinate marker for top-level hits")
 }
 
 // TestPrintContentMatchesTableBasic pins the flat (no --context) human
@@ -445,6 +470,9 @@ func TestPrintContentMatchesHumanRendersUnitRangeAndSubMarker(t *testing.T) {
 // the fused location:tool column, and an untruncated snippet when no
 // terminal width is known (termWidth 0 — pipes, files, tests).
 func TestPrintContentMatchesTableBasic(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	longSnippet := strings.Repeat("s", 300)
 	res := &service.ContentSearchResult{
 		Matches: []db.ContentMatch{
@@ -460,57 +488,64 @@ func TestPrintContentMatchesTableBasic(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printContentMatchesTable(&buf, res, 0, renderNow))
+	require.NoError(printContentMatchesTable(&buf, res, 0, renderNow))
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	require.Len(t, lines, 3)
+	require.Len(lines, 3)
 
 	header, row1, row2 := lines[0], lines[1], lines[2]
 	for _, col := range []string{"ID", "MATCH", "AGE", "PROJECT", "LOCATION", "SNIPPET"} {
-		assert.Contains(t, header, col)
+		assert.Contains(header, col)
 	}
-	assert.NotContains(t, header, "SCORE",
+	assert.NotContains(header, "SCORE",
 		"SCORE column omitted when no match is scored")
-	assert.Greater(t, strings.Index(header, "AGE"), strings.Index(header, "MATCH"),
+	assert.Greater(strings.Index(header, "AGE"), strings.Index(header, "MATCH"),
 		"AGE comes after MATCH in the unscored table")
-	assert.Less(t, strings.Index(header, "AGE"), strings.Index(header, "PROJECT"),
+	assert.Less(strings.Index(header, "AGE"), strings.Index(header, "PROJECT"),
 		"AGE comes before PROJECT in the unscored table")
 
-	assert.Contains(t, row1, "fc9367d6-38f7-4d18-863d-118dec238bd0")
-	assert.Contains(t, row1, "#12")
-	assert.Contains(t, row1, "tool_result:Bash")
-	assert.Contains(t, row1, longSnippet, "snippet untruncated at width 0")
-	assert.Contains(t, row2, "line one line two",
+	assert.Contains(row1, "fc9367d6-38f7-4d18-863d-118dec238bd0")
+	assert.Contains(row1, "#12")
+	assert.Contains(row1, "tool_result:Bash")
+	assert.Contains(row1, longSnippet, "snippet untruncated at width 0")
+	assert.Contains(row2, "line one line two",
 		"newlines collapsed to keep one row per match")
 
 	// Columns align: each header label starts at the same rune offset as
 	// the corresponding cell in every row.
 	idIdx := strings.Index(header, "ID")
 	matchIdx := strings.Index(header, "MATCH")
-	assert.Equal(t, idIdx, strings.Index(row1, "fc9367d6"))
-	assert.Equal(t, matchIdx, strings.Index(row1, "#12"))
-	assert.Equal(t, matchIdx, strings.Index(row2, "#3"))
+	assert.Equal(idIdx, strings.Index(row1, "fc9367d6"))
+	assert.Equal(matchIdx, strings.Index(row1, "#12"))
+	assert.Equal(matchIdx, strings.Index(row2, "#3"))
 }
 
 // TestPrintContentMatchesTableScoreColumn pins the conditional SCORE
 // column: present when any match carries a score, with an em dash for
 // unscored rows.
 func TestPrintContentMatchesTableScoreColumn(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	score := 0.834
 	res := &service.ContentSearchResult{
 		Matches: []db.ContentMatch{
-			{SessionID: "s1", Project: "p", Location: "message",
-				Ordinal: 3, Snippet: "hit", Score: &score},
-			{SessionID: "s2", Project: "p", Location: "message",
-				Ordinal: 1, Snippet: "hit"},
+			{
+				SessionID: "s1", Project: "p", Location: "message",
+				Ordinal: 3, Snippet: "hit", Score: &score,
+			},
+			{
+				SessionID: "s2", Project: "p", Location: "message",
+				Ordinal: 1, Snippet: "hit",
+			},
 		},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printContentMatchesTable(&buf, res, 0, renderNow))
+	require.NoError(printContentMatchesTable(&buf, res, 0, renderNow))
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	require.Len(t, lines, 3)
-	assert.Contains(t, lines[0], "SCORE")
-	assert.Contains(t, lines[1], "0.83")
-	assert.Contains(t, lines[2], emDash, "unscored row shows an em dash")
+	require.Len(lines, 3)
+	assert.Contains(lines[0], "SCORE")
+	assert.Contains(lines[1], "0.83")
+	assert.Contains(lines[2], emDash, "unscored row shows an em dash")
 }
 
 // TestPrintContentMatchesTableRangeAndSub pins the MATCH column for
@@ -535,20 +570,25 @@ func TestPrintContentMatchesTableRangeAndSub(t *testing.T) {
 // snippet expands to the remaining terminal width and is ellipsized there,
 // so no row exceeds the terminal width.
 func TestPrintContentMatchesTableSnippetFillsWidth(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	res := &service.ContentSearchResult{
 		Matches: []db.ContentMatch{
-			{SessionID: "s1", Project: "p", Location: "message",
-				Ordinal: 1, Snippet: strings.Repeat("x", 500)},
+			{
+				SessionID: "s1", Project: "p", Location: "message",
+				Ordinal: 1, Snippet: strings.Repeat("x", 500),
+			},
 		},
 	}
 	const width = 100
 	var buf bytes.Buffer
-	require.NoError(t, printContentMatchesTable(&buf, res, width, renderNow))
+	require.NoError(printContentMatchesTable(&buf, res, width, renderNow))
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	require.Len(t, lines, 2)
+	require.Len(lines, 2)
 	row := lines[1]
-	assert.LessOrEqual(t, len([]rune(row)), width)
-	assert.True(t, strings.HasSuffix(row, "…"), "truncated snippet gains an ellipsis")
+	assert.LessOrEqual(len([]rune(row)), width)
+	assert.True(strings.HasSuffix(row, "…"), "truncated snippet gains an ellipsis")
 }
 
 // TestPrintContentMatchesTableLocationCap pins the LOCATION cap: on a
@@ -556,47 +596,57 @@ func TestPrintContentMatchesTableSnippetFillsWidth(t *testing.T) {
 // output (termWidth 0) keeps the full value, matching the untruncated
 // snippet policy for pipes.
 func TestPrintContentMatchesTableLocationCap(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	res := &service.ContentSearchResult{
 		Matches: []db.ContentMatch{
-			{SessionID: "s1", Project: "p", Location: "tool_result",
-				ToolName: strings.Repeat("t", 200), Ordinal: 1, Snippet: "hit"},
+			{
+				SessionID: "s1", Project: "p", Location: "tool_result",
+				ToolName: strings.Repeat("t", 200), Ordinal: 1, Snippet: "hit",
+			},
 		},
 	}
 	loc := "tool_result:" + strings.Repeat("t", 200)
 
 	var buf bytes.Buffer
-	require.NoError(t, printContentMatchesTable(&buf, res, 200, renderNow))
+	require.NoError(printContentMatchesTable(&buf, res, 200, renderNow))
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	require.Len(t, lines, 2)
-	assert.NotContains(t, lines[1], loc, "location is capped on a TTY")
-	assert.Contains(t, lines[1], "…")
-	assert.Contains(t, lines[1], "hit", "snippet survives a huge tool name")
+	require.Len(lines, 2)
+	assert.NotContains(lines[1], loc, "location is capped on a TTY")
+	assert.Contains(lines[1], "…")
+	assert.Contains(lines[1], "hit", "snippet survives a huge tool name")
 
 	buf.Reset()
-	require.NoError(t, printContentMatchesTable(&buf, res, 0, renderNow))
+	require.NoError(printContentMatchesTable(&buf, res, 0, renderNow))
 	lines = strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	require.Len(t, lines, 2)
-	assert.Contains(t, lines[1], loc, "piped output keeps the full location")
+	require.Len(lines, 2)
+	assert.Contains(lines[1], loc, "piped output keeps the full location")
 }
 
 // TestPrintContentMatchesTableEmptyAndCursor pins the unchanged empty
 // message and pagination footer around the table.
 func TestPrintContentMatchesTableEmptyAndCursor(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	var buf bytes.Buffer
-	require.NoError(t, printContentMatchesTable(
+	require.NoError(printContentMatchesTable(
 		&buf, &service.ContentSearchResult{}, 0, renderNow))
-	assert.Equal(t, "(no matches)\n", buf.String())
+	assert.Equal("(no matches)\n", buf.String())
 
 	buf.Reset()
 	res := &service.ContentSearchResult{
 		Matches: []db.ContentMatch{
-			{SessionID: "s1", Project: "p", Location: "message",
-				Ordinal: 1, Snippet: "hit"},
+			{
+				SessionID: "s1", Project: "p", Location: "message",
+				Ordinal: 1, Snippet: "hit",
+			},
 		},
 		NextCursor: 7,
 	}
-	require.NoError(t, printContentMatchesTable(&buf, res, 0, renderNow))
-	assert.Contains(t, buf.String(), "More results: --cursor 7")
+	require.NoError(printContentMatchesTable(&buf, res, 0, renderNow))
+	assert.Contains(buf.String(), "More results: --cursor 7")
 }
 
 // TestContentSnippetBudget pins the snippet width computation: 0 means
@@ -624,6 +674,9 @@ func TestContentSnippetBudget(t *testing.T) {
 // requests keep the record-style output (context lines cannot live in
 // table rows), while flat results render as a table.
 func TestPrintContentSearchResultPicksRenderer(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	res := &service.ContentSearchResult{
 		Matches: []db.ContentMatch{
 			{
@@ -634,20 +687,23 @@ func TestPrintContentSearchResultPicksRenderer(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printContentSearchResult(&buf, res, 1))
-	assert.Contains(t, buf.String(), "  user: before",
+	require.NoError(printContentSearchResult(&buf, res, 1))
+	assert.Contains(buf.String(), "  user: before",
 		"context mode keeps record-style output")
-	assert.NotContains(t, buf.String(), "SNIPPET")
+	assert.NotContains(buf.String(), "SNIPPET")
 
 	buf.Reset()
-	require.NoError(t, printContentSearchResult(&buf, res, 0))
-	assert.Contains(t, buf.String(), "SNIPPET", "flat mode renders the table")
+	require.NoError(printContentSearchResult(&buf, res, 0))
+	assert.Contains(buf.String(), "SNIPPET", "flat mode renders the table")
 }
 
 // TestPrintContentMatchesTableSnippetExactFit pins the truncation boundary:
 // a snippet that exactly fits the remaining width prints unmodified, with
 // no rune dropped and no ellipsis.
 func TestPrintContentMatchesTableSnippetExactFit(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const width = 100
 	// Fixed columns for this row: ID "s1" (header "ID" wins, 2) + MATCH
 	// "#1"/"MATCH" (5) + AGE "—"/"AGE" (3) + PROJECT "p"/"PROJECT" (7) +
@@ -656,17 +712,19 @@ func TestPrintContentMatchesTableSnippetExactFit(t *testing.T) {
 	snippet := strings.Repeat("x", 65)
 	res := &service.ContentSearchResult{
 		Matches: []db.ContentMatch{
-			{SessionID: "s1", Project: "p", Location: "message",
-				Ordinal: 1, Snippet: snippet},
+			{
+				SessionID: "s1", Project: "p", Location: "message",
+				Ordinal: 1, Snippet: snippet,
+			},
 		},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printContentMatchesTable(&buf, res, width, renderNow))
+	require.NoError(printContentMatchesTable(&buf, res, width, renderNow))
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	require.Len(t, lines, 2)
-	assert.True(t, strings.HasSuffix(lines[1], snippet),
+	require.Len(lines, 2)
+	assert.True(strings.HasSuffix(lines[1], snippet),
 		"exact-fit snippet prints unmodified")
-	assert.Equal(t, width, len([]rune(lines[1])))
+	assert.Len([]rune(lines[1]), width)
 }
 
 // TestPrintContentMatchesTableProjectCap pins the PROJECT cap: on a TTY
@@ -674,29 +732,33 @@ func TestPrintContentMatchesTableSnippetExactFit(t *testing.T) {
 // it cannot starve the snippet column, while non-TTY output keeps the
 // full (whitespace-collapsed) value.
 func TestPrintContentMatchesTableProjectCap(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	res := &service.ContentSearchResult{
 		Matches: []db.ContentMatch{
-			{SessionID: "s1", Project: strings.Repeat("p", 200) + "\nq",
-				Location: "message", Ordinal: 1, Snippet: "hit"},
+			{
+				SessionID: "s1", Project: strings.Repeat("p", 200) + "\nq",
+				Location: "message", Ordinal: 1, Snippet: "hit",
+			},
 		},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printContentMatchesTable(&buf, res, 200, renderNow))
+	require.NoError(printContentMatchesTable(&buf, res, 200, renderNow))
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	require.Len(t, lines, 2)
-	assert.NotContains(t, lines[1], strings.Repeat("p", 200), "project is capped")
-	assert.NotContains(t, lines[1], "\nq", "project whitespace collapsed")
-	assert.Contains(t, lines[1], "…")
-	assert.Contains(t, lines[1], "hit", "snippet survives a huge project name")
-	assert.LessOrEqual(t,
-		strings.Index(lines[1], "hit"), 100,
+	require.Len(lines, 2)
+	assert.NotContains(lines[1], strings.Repeat("p", 200), "project is capped")
+	assert.NotContains(lines[1], "\nq", "project whitespace collapsed")
+	assert.Contains(lines[1], "…")
+	assert.Contains(lines[1], "hit", "snippet survives a huge project name")
+	assert.LessOrEqual(strings.Index(lines[1], "hit"), 100,
 		"fixed columns stay bounded ahead of the snippet")
 
 	buf.Reset()
-	require.NoError(t, printContentMatchesTable(&buf, res, 0, renderNow))
+	require.NoError(printContentMatchesTable(&buf, res, 0, renderNow))
 	lines = strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	require.Len(t, lines, 2)
-	assert.Contains(t, lines[1], strings.Repeat("p", 200)+" q",
+	require.Len(lines, 2)
+	assert.Contains(lines[1], strings.Repeat("p", 200)+" q",
 		"piped output keeps the full collapsed project")
 }
 
@@ -707,10 +769,14 @@ func TestPrintContentMatchesTableProjectCap(t *testing.T) {
 func TestPrintContentMatchesTableWideRunesAlign(t *testing.T) {
 	res := &service.ContentSearchResult{
 		Matches: []db.ContentMatch{
-			{SessionID: "s1", Project: "日本語", Location: "message",
-				Ordinal: 1, Snippet: "hit"},
-			{SessionID: "s2", Project: "ascii", Location: "message",
-				Ordinal: 2, Snippet: "hit"},
+			{
+				SessionID: "s1", Project: "日本語", Location: "message",
+				Ordinal: 1, Snippet: "hit",
+			},
+			{
+				SessionID: "s2", Project: "ascii", Location: "message",
+				Ordinal: 2, Snippet: "hit",
+			},
 		},
 	}
 	var buf bytes.Buffer
@@ -730,20 +796,25 @@ func TestPrintContentMatchesTableWideRunesAlign(t *testing.T) {
 // truncation: a snippet of full-width runes must be cut so the whole row
 // fits the terminal in display cells, not rune count.
 func TestPrintContentMatchesTableWideSnippetBudget(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	res := &service.ContentSearchResult{
 		Matches: []db.ContentMatch{
-			{SessionID: "s1", Project: "p", Location: "message",
-				Ordinal: 1, Snippet: strings.Repeat("界", 200)},
+			{
+				SessionID: "s1", Project: "p", Location: "message",
+				Ordinal: 1, Snippet: strings.Repeat("界", 200),
+			},
 		},
 	}
 	const width = 100
 	var buf bytes.Buffer
-	require.NoError(t, printContentMatchesTable(&buf, res, width, renderNow))
+	require.NoError(printContentMatchesTable(&buf, res, width, renderNow))
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	require.Len(t, lines, 2)
-	assert.LessOrEqual(t, runewidth.StringWidth(lines[1]), width,
+	require.Len(lines, 2)
+	assert.LessOrEqual(runewidth.StringWidth(lines[1]), width,
 		"row fits the terminal in display cells")
-	assert.True(t, strings.HasSuffix(lines[1], "…"))
+	assert.True(strings.HasSuffix(lines[1], "…"))
 }
 
 // TestPrintContentMatchesTableAgeColumn pins the AGE column: present in the
@@ -751,6 +822,9 @@ func TestPrintContentMatchesTableWideSnippetBudget(t *testing.T) {
 // relative bucket for recent matches and a year-disambiguated absolute date
 // for older ones. Matches with no timestamp render an em dash.
 func TestPrintContentMatchesTableAgeColumn(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	score := 0.83
 	res := &service.ContentSearchResult{
 		Matches: []db.ContentMatch{
@@ -771,30 +845,33 @@ func TestPrintContentMatchesTableAgeColumn(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printContentMatchesTable(&buf, res, 0, renderNow))
+	require.NoError(printContentMatchesTable(&buf, res, 0, renderNow))
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	require.Len(t, lines, 4)
+	require.Len(lines, 4)
 
 	header := lines[0]
-	assert.Contains(t, header, "AGE")
+	assert.Contains(header, "AGE")
 	matchIdx := strings.Index(header, "MATCH")
 	ageIdx := strings.Index(header, "AGE")
 	scoreIdx := strings.Index(header, "SCORE")
-	require.GreaterOrEqual(t, matchIdx, 0)
-	require.GreaterOrEqual(t, ageIdx, 0)
-	require.GreaterOrEqual(t, scoreIdx, 0)
-	assert.Greater(t, ageIdx, matchIdx, "AGE comes after MATCH")
-	assert.Less(t, ageIdx, scoreIdx, "AGE comes before SCORE")
+	require.GreaterOrEqual(matchIdx, 0)
+	require.GreaterOrEqual(ageIdx, 0)
+	require.GreaterOrEqual(scoreIdx, 0)
+	assert.Greater(ageIdx, matchIdx, "AGE comes after MATCH")
+	assert.Less(ageIdx, scoreIdx, "AGE comes before SCORE")
 
-	assert.Contains(t, lines[1], "3h")
-	assert.Contains(t, lines[2], "Jan 2025")
-	assert.Contains(t, lines[3], emDash, "missing timestamp renders an em dash")
+	assert.Contains(lines[1], "3h")
+	assert.Contains(lines[2], "Jan 2025")
+	assert.Contains(lines[3], emDash, "missing timestamp renders an em dash")
 }
 
 // TestPrintContentMatchesHumanAgeToken pins the --context record format: the
 // age token sits on the match line between the ordinal/score markers and the
 // project, e.g. "s1  #14 score=0.83  3h  proj  message".
 func TestPrintContentMatchesHumanAgeToken(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	score := 0.83
 	res := &service.ContentSearchResult{
 		Matches: []db.ContentMatch{
@@ -810,18 +887,18 @@ func TestPrintContentMatchesHumanAgeToken(t *testing.T) {
 		},
 	}
 	var buf bytes.Buffer
-	require.NoError(t, printContentMatchesHuman(&buf, res, renderNow))
+	require.NoError(printContentMatchesHuman(&buf, res, renderNow))
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	require.Len(t, lines, 4)
-	assert.Contains(t, lines[2], emDash,
+	require.Len(lines, 4)
+	assert.Contains(lines[2], emDash,
 		"missing timestamp renders an em dash on the match line")
 	line := lines[0]
 	scoreIdx := strings.Index(line, "score=0.83")
 	ageIdx := strings.Index(line, "3h")
 	projIdx := strings.Index(line, "proj")
-	require.GreaterOrEqual(t, scoreIdx, 0)
-	require.GreaterOrEqual(t, ageIdx, 0)
-	require.GreaterOrEqual(t, projIdx, 0)
-	assert.Greater(t, ageIdx, scoreIdx, "age token comes after the score marker")
-	assert.Less(t, ageIdx, projIdx, "age token comes before the project")
+	require.GreaterOrEqual(scoreIdx, 0)
+	require.GreaterOrEqual(ageIdx, 0)
+	require.GreaterOrEqual(projIdx, 0)
+	assert.Greater(ageIdx, scoreIdx, "age token comes after the score marker")
+	assert.Less(ageIdx, projIdx, "age token comes before the project")
 }

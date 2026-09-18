@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -18,7 +17,7 @@ func scanUnits(
 	t.Helper()
 	var got []EmbeddableUnit
 	maxEnded, err := d.ScanEmbeddableUnits(
-		context.Background(), since, includeAutomated,
+		t.Context(), since, includeAutomated,
 		func(u EmbeddableUnit) error {
 			got = append(got, u)
 			return nil
@@ -32,6 +31,9 @@ func scanUnits(
 // "run" unit per contiguous span of assistant messages, joined with "\n\n"
 // and carrying the first/last member's ordinal.
 func TestScanEmbeddableUnitsUserAssistantAlternation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "sess-1", "proj", func(s *Session) {
 		s.EndedAt = Ptr(tsHour1)
@@ -63,28 +65,28 @@ func TestScanEmbeddableUnitsUserAssistantAlternation(t *testing.T) {
 
 	got, _ := scanUnits(t, d, "", true)
 
-	require.Len(t, got, 4)
-	assert.Equal(t, EmbeddableUnit{
+	require.Len(got, 4)
+	assert.Equal(EmbeddableUnit{
 		SessionID: "sess-1", Kind: "user", SourceUUID: "uuid-u0",
 		Ordinal: 0, OrdinalEnd: 0, Content: "u0",
 	}, got[0])
 
-	assert.Equal(t, "run", got[1].Kind)
-	assert.Equal(t, "uuid-a1", got[1].SourceUUID)
-	assert.Equal(t, 1, got[1].Ordinal)
-	assert.Equal(t, 2, got[1].OrdinalEnd)
-	assert.Equal(t, "a1\n\na2", got[1].Content)
-	require.Len(t, got[1].Offsets, 2)
+	assert.Equal("run", got[1].Kind)
+	assert.Equal("uuid-a1", got[1].SourceUUID)
+	assert.Equal(1, got[1].Ordinal)
+	assert.Equal(2, got[1].OrdinalEnd)
+	assert.Equal("a1\n\na2", got[1].Content)
+	require.Len(got[1].Offsets, 2)
 
-	assert.Equal(t, EmbeddableUnit{
+	assert.Equal(EmbeddableUnit{
 		SessionID: "sess-1", Kind: "user",
 		Ordinal: 3, OrdinalEnd: 3, Content: "u3",
 	}, got[2])
 
-	assert.Equal(t, "run", got[3].Kind)
-	assert.Equal(t, 4, got[3].Ordinal)
-	assert.Equal(t, 4, got[3].OrdinalEnd)
-	require.Len(t, got[3].Offsets, 1)
+	assert.Equal("run", got[3].Kind)
+	assert.Equal(4, got[3].Ordinal)
+	assert.Equal(4, got[3].OrdinalEnd)
+	require.Len(got[3].Offsets, 1)
 }
 
 // TestScanEmbeddableUnitsSystemPrefixedUserRowDoesNotSplitRun asserts that a
@@ -92,6 +94,8 @@ func TestScanEmbeddableUnitsUserAssistantAlternation(t *testing.T) {
 // SystemPrefixSQL) is invisible to the reducer and therefore does not split
 // the assistant run around it.
 func TestScanEmbeddableUnitsSystemPrefixedUserRowDoesNotSplitRun(t *testing.T) {
+	assert := assert.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "sess-1", "proj", func(s *Session) {
 		s.EndedAt = Ptr(tsHour1)
@@ -115,10 +119,10 @@ func TestScanEmbeddableUnitsSystemPrefixedUserRowDoesNotSplitRun(t *testing.T) {
 	got, _ := scanUnits(t, d, "", true)
 
 	require.Len(t, got, 1)
-	assert.Equal(t, "run", got[0].Kind)
-	assert.Equal(t, 0, got[0].Ordinal)
-	assert.Equal(t, 2, got[0].OrdinalEnd)
-	assert.Equal(t, "a0\n\na2", got[0].Content)
+	assert.Equal("run", got[0].Kind)
+	assert.Equal(0, got[0].Ordinal)
+	assert.Equal(2, got[0].OrdinalEnd)
+	assert.Equal("a0\n\na2", got[0].Content)
 }
 
 // TestScanEmbeddableUnitsIsSystemUserRowDoesNotSplitButPlainUserRowDoes
@@ -127,6 +131,8 @@ func TestScanEmbeddableUnitsSystemPrefixedUserRowDoesNotSplitRun(t *testing.T) {
 func TestScanEmbeddableUnitsIsSystemUserRowDoesNotSplitButPlainUserRowDoes(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "sess-1", "proj", func(s *Session) {
 		s.EndedAt = Ptr(tsHour1)
@@ -154,11 +160,11 @@ func TestScanEmbeddableUnitsIsSystemUserRowDoesNotSplitButPlainUserRowDoes(
 	got, _ := scanUnits(t, d, "", true)
 
 	require.Len(t, got, 2)
-	assert.Equal(t, "run", got[0].Kind)
-	assert.Equal(t, 0, got[0].Ordinal)
-	assert.Equal(t, 2, got[0].OrdinalEnd)
-	assert.Equal(t, "user", got[1].Kind)
-	assert.Equal(t, 3, got[1].Ordinal)
+	assert.Equal("run", got[0].Kind)
+	assert.Equal(0, got[0].Ordinal)
+	assert.Equal(2, got[0].OrdinalEnd)
+	assert.Equal("user", got[1].Kind)
+	assert.Equal(3, got[1].Ordinal)
 }
 
 // TestScanEmbeddableUnitsSidechainTransitionSplitsRun asserts that a
@@ -166,6 +172,8 @@ func TestScanEmbeddableUnitsIsSystemUserRowDoesNotSplitButPlainUserRowDoes(
 // the open run and starts a new one, and that a run whose members are
 // is_sidechain is marked Subordinate even in an otherwise top-level session.
 func TestScanEmbeddableUnitsSidechainTransitionSplitsRun(t *testing.T) {
+	assert := assert.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "sess-1", "proj", func(s *Session) {
 		s.EndedAt = Ptr(tsHour1)
@@ -195,18 +203,18 @@ func TestScanEmbeddableUnitsSidechainTransitionSplitsRun(t *testing.T) {
 
 	require.Len(t, got, 3)
 
-	assert.Equal(t, 0, got[0].Ordinal)
-	assert.Equal(t, 0, got[0].OrdinalEnd)
-	assert.False(t, got[0].Subordinate)
+	assert.Equal(0, got[0].Ordinal)
+	assert.Equal(0, got[0].OrdinalEnd)
+	assert.False(got[0].Subordinate)
 
-	assert.Equal(t, 1, got[1].Ordinal)
-	assert.Equal(t, 2, got[1].OrdinalEnd)
-	assert.True(t, got[1].Subordinate,
+	assert.Equal(1, got[1].Ordinal)
+	assert.Equal(2, got[1].OrdinalEnd)
+	assert.True(got[1].Subordinate,
 		"a run whose members are is_sidechain must be marked subordinate")
 
-	assert.Equal(t, 3, got[2].Ordinal)
-	assert.Equal(t, 3, got[2].OrdinalEnd)
-	assert.False(t, got[2].Subordinate)
+	assert.Equal(3, got[2].Ordinal)
+	assert.Equal(3, got[2].OrdinalEnd)
+	assert.False(got[2].Subordinate)
 }
 
 // TestScanEmbeddableUnitsSubordinateClassification covers the session-level
@@ -259,6 +267,9 @@ func TestScanEmbeddableUnitsSubordinateClassification(t *testing.T) {
 // correctly account for multi-byte UTF-8 characters, and that each offset
 // locates the start of its member's own text within Content.
 func TestScanEmbeddableUnitsOffsetsMultiByteContent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "sess-1", "proj", func(s *Session) {
 		s.EndedAt = Ptr(tsHour1)
@@ -278,26 +289,25 @@ func TestScanEmbeddableUnitsOffsetsMultiByteContent(t *testing.T) {
 
 	got, _ := scanUnits(t, d, "", true)
 
-	require.Len(t, got, 1)
+	require.Len(got, 1)
 	unit := got[0]
-	require.Len(t, unit.Offsets, 2)
+	require.Len(unit.Offsets, 2)
 
-	assert.Equal(t, 0, unit.Offsets[0].RuneStart)
-	assert.Equal(t, 0, unit.Offsets[0].ByteStart)
-	assert.True(t, strings.HasPrefix(
+	assert.Equal(0, unit.Offsets[0].RuneStart)
+	assert.Equal(0, unit.Offsets[0].ByteStart)
+	assert.True(strings.HasPrefix(
 		unit.Content[unit.Offsets[0].ByteStart:], first,
 	))
 
 	wantSecondRuneStart := utf8.RuneCountInString(first) + utf8.RuneCountInString("\n\n")
 	wantSecondByteStart := len(first) + len("\n\n")
-	assert.Equal(t, wantSecondRuneStart, unit.Offsets[1].RuneStart)
-	assert.Equal(t, wantSecondByteStart, unit.Offsets[1].ByteStart)
-	assert.True(t, strings.HasPrefix(
+	assert.Equal(wantSecondRuneStart, unit.Offsets[1].RuneStart)
+	assert.Equal(wantSecondByteStart, unit.Offsets[1].ByteStart)
+	assert.True(strings.HasPrefix(
 		unit.Content[unit.Offsets[1].ByteStart:], second,
 	))
 
-	assert.Equal(t,
-		utf8.RuneCountInString(unit.Content[:unit.Offsets[1].ByteStart]),
+	assert.Equal(utf8.RuneCountInString(unit.Content[:unit.Offsets[1].ByteStart]),
 		unit.Offsets[1].RuneStart,
 		"RuneStart must equal the rune count of everything preceding it in Content")
 }
@@ -306,6 +316,9 @@ func TestScanEmbeddableUnitsOffsetsMultiByteContent(t *testing.T) {
 // consisting of a single assistant message has Ordinal == OrdinalEnd and a
 // single zero-based offset.
 func TestScanEmbeddableUnitsSingleMessageRunDegenerates(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "sess-1", "proj", func(s *Session) {
 		s.EndedAt = Ptr(tsHour1)
@@ -318,14 +331,14 @@ func TestScanEmbeddableUnitsSingleMessageRunDegenerates(t *testing.T) {
 
 	got, _ := scanUnits(t, d, "", true)
 
-	require.Len(t, got, 1)
-	assert.Equal(t, "run", got[0].Kind)
-	assert.Equal(t, "uuid-solo", got[0].SourceUUID)
-	assert.Equal(t, 5, got[0].Ordinal)
-	assert.Equal(t, got[0].Ordinal, got[0].OrdinalEnd)
-	assert.Equal(t, "solo", got[0].Content)
-	require.Len(t, got[0].Offsets, 1)
-	assert.Equal(t, UnitOffset{Ordinal: 5, RuneStart: 0, ByteStart: 0},
+	require.Len(got, 1)
+	assert.Equal("run", got[0].Kind)
+	assert.Equal("uuid-solo", got[0].SourceUUID)
+	assert.Equal(5, got[0].Ordinal)
+	assert.Equal(got[0].Ordinal, got[0].OrdinalEnd)
+	assert.Equal("solo", got[0].Content)
+	require.Len(got[0].Offsets, 1)
+	assert.Equal(UnitOffset{Ordinal: 5, RuneStart: 0, ByteStart: 0},
 		got[0].Offsets[0])
 }
 
@@ -337,6 +350,8 @@ func TestScanEmbeddableUnitsSingleMessageRunDegenerates(t *testing.T) {
 // both wrongly exclude a since-eligible fractional row and wrongly report an
 // earlier whole-second row as the max.
 func TestScanEmbeddableUnitsMixedFractionalPrecisionSinceAndMaxEnded(t *testing.T) {
+	assert := assert.New(t)
+
 	d := testDB(t)
 
 	seed := func(id, endedAt string) {
@@ -361,12 +376,12 @@ func TestScanEmbeddableUnitsMixedFractionalPrecisionSinceAndMaxEnded(t *testing.
 	for _, u := range got {
 		ids = append(ids, u.SessionID)
 	}
-	assert.NotContains(t, ids, "too-old",
+	assert.NotContains(ids, "too-old",
 		"a session ended before since must be excluded")
-	assert.Contains(t, ids, "frac-after-since")
-	assert.Contains(t, ids, "whole-second-max-trap")
-	assert.Contains(t, ids, "true-max-fractional")
-	assert.Equal(t, "2024-01-01T00:00:05.900Z", maxEnded,
+	assert.Contains(ids, "frac-after-since")
+	assert.Contains(ids, "whole-second-max-trap")
+	assert.Contains(ids, "true-max-fractional")
+	assert.Equal("2024-01-01T00:00:05.900Z", maxEnded,
 		"maxEnded must be the chronologically latest ended_at")
 }
 
@@ -420,6 +435,8 @@ func TestScanEmbeddableUnitsExcludesAutomatedByDefault(t *testing.T) {
 // an is_system user message, and asserts only the clean user/assistant rows
 // contribute units, with maxEnded reporting the session's ended_at.
 func TestScanEmbeddableUnitsFiltersRolesAndPrefixes(t *testing.T) {
+	assert := assert.New(t)
+
 	d := testDB(t)
 
 	insertSession(t, d, "sess-1", "proj", func(s *Session) {
@@ -461,15 +478,15 @@ func TestScanEmbeddableUnitsFiltersRolesAndPrefixes(t *testing.T) {
 	got, maxEnded := scanUnits(t, d, "", true)
 
 	require.Len(t, got, 2)
-	assert.Equal(t, EmbeddableUnit{
+	assert.Equal(EmbeddableUnit{
 		SessionID: "sess-1", Kind: "user", Ordinal: 0, OrdinalEnd: 0,
 		Content: "hello there",
 	}, got[0])
-	assert.Equal(t, "run", got[1].Kind)
-	assert.Equal(t, 1, got[1].Ordinal)
-	assert.Equal(t, 1, got[1].OrdinalEnd)
-	assert.Equal(t, "hi back", got[1].Content)
-	assert.Equal(t, tsHour1, maxEnded)
+	assert.Equal("run", got[1].Kind)
+	assert.Equal(1, got[1].Ordinal)
+	assert.Equal(1, got[1].OrdinalEnd)
+	assert.Equal("hi back", got[1].Content)
+	assert.Equal(tsHour1, maxEnded)
 }
 
 // TestScanEmbeddableUnitsSinceFiltersOlderSessions asserts that since
@@ -597,6 +614,8 @@ func TestScanEmbeddableUnitsEmptyReturnsEmptyWatermark(t *testing.T) {
 // (session_id, ordinal) order of their first member across multiple
 // sessions, regardless of insertion order.
 func TestScanEmbeddableUnitsOrdersBySessionThenOrdinal(t *testing.T) {
+	assert := assert.New(t)
+
 	d := testDB(t)
 
 	insertSession(t, d, "sess-b", "proj", func(s *Session) {
@@ -625,14 +644,14 @@ func TestScanEmbeddableUnitsOrdersBySessionThenOrdinal(t *testing.T) {
 	got, _ := scanUnits(t, d, "", true)
 
 	require.Len(t, got, 3)
-	assert.Equal(t, "sess-a", got[0].SessionID)
-	assert.Equal(t, 0, got[0].Ordinal)
-	assert.Equal(t, "uuid-a0", got[0].SourceUUID)
-	assert.Equal(t, "sess-a", got[1].SessionID)
-	assert.Equal(t, 1, got[1].Ordinal)
-	assert.Equal(t, "uuid-a1", got[1].SourceUUID)
-	assert.Equal(t, "sess-b", got[2].SessionID)
-	assert.Equal(t, 0, got[2].Ordinal)
+	assert.Equal("sess-a", got[0].SessionID)
+	assert.Equal(0, got[0].Ordinal)
+	assert.Equal("uuid-a0", got[0].SourceUUID)
+	assert.Equal("sess-a", got[1].SessionID)
+	assert.Equal(1, got[1].Ordinal)
+	assert.Equal("uuid-a1", got[1].SourceUUID)
+	assert.Equal("sess-b", got[2].SessionID)
+	assert.Equal(0, got[2].Ordinal)
 }
 
 // TestScanEmbeddableUnitsExcludesTrashedSessions asserts that units
@@ -670,6 +689,8 @@ func TestScanEmbeddableUnitsExcludesTrashedSessions(t *testing.T) {
 // open at the end of one session is closed and emitted before any unit from
 // the next session, even though both sessions end in an open assistant run.
 func TestScanEmbeddableUnitsSessionChangeClosesOpenRun(t *testing.T) {
+	assert := assert.New(t)
+
 	d := testDB(t)
 	insertSession(t, d, "sess-a", "proj", func(s *Session) {
 		s.EndedAt = Ptr(tsHour1)
@@ -695,9 +716,9 @@ func TestScanEmbeddableUnitsSessionChangeClosesOpenRun(t *testing.T) {
 	got, _ := scanUnits(t, d, "", true)
 
 	require.Len(t, got, 2)
-	assert.Equal(t, "sess-a", got[0].SessionID)
-	assert.Equal(t, 0, got[0].Ordinal)
-	assert.Equal(t, 1, got[0].OrdinalEnd)
-	assert.Equal(t, "sess-b", got[1].SessionID)
-	assert.Equal(t, 0, got[1].Ordinal)
+	assert.Equal("sess-a", got[0].SessionID)
+	assert.Equal(0, got[0].Ordinal)
+	assert.Equal(1, got[0].OrdinalEnd)
+	assert.Equal("sess-b", got[1].SessionID)
+	assert.Equal(0, got[1].Ordinal)
 }

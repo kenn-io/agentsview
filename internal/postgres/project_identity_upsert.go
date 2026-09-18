@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -803,7 +804,7 @@ func deleteProjectIdentityFallbackRows(
 		if _, err := tx.ExecContext(ctx, `
 			DELETE FROM source_project_identity_observations
 			WHERE git_remote = ''
-			  AND remote_resolution != $`+fmt.Sprint(ambiguousParam)+`
+			  AND remote_resolution != $`+strconv.Itoa(ambiguousParam)+`
 			  AND (source_archive_id, project, machine, root_path) IN (`+tuples+`)`,
 			args...,
 		); err != nil {
@@ -840,7 +841,7 @@ func projectIdentityFallbacksWithoutRealRemote(
 			SELECT DISTINCT source_archive_id, project, machine, root_path
 			FROM source_project_identity_observations
 			WHERE (git_remote != '' OR remote_resolution = $`+
-			fmt.Sprint(ambiguousParam)+`)
+			strconv.Itoa(ambiguousParam)+`)
 			  AND (source_archive_id, project, machine, root_path) IN (`+tuples+`)`,
 			args...,
 		)

@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"encoding/json/v2"
 	"fmt"
 	"os"
@@ -106,11 +105,13 @@ func TestScheduledReconcileWorkIsClaudeCardinalityIndependent(t *testing.T) {
 	observed := make(map[int]int)
 	for _, claudeCount := range []int{5, 500} {
 		t.Run(fmt.Sprintf("claude_%d", claudeCount), func(t *testing.T) {
+			require := require.New(t)
+
 			base := t.TempDir()
 			coworkDir := filepath.Join(base, "cowork")
 			claudeDir := filepath.Join(base, "claude")
-			require.NoError(t, os.MkdirAll(coworkDir, 0o755))
-			require.NoError(t, os.MkdirAll(claudeDir, 0o755))
+			require.NoError(os.MkdirAll(coworkDir, 0o755))
+			require.NoError(os.MkdirAll(claudeDir, 0o755))
 			writeCoworkCorpus(t, coworkDir, coworkCount)
 			writeClaudeCorpus(t, claudeDir, claudeCount)
 
@@ -123,24 +124,25 @@ func TestScheduledReconcileWorkIsClaudeCardinalityIndependent(t *testing.T) {
 				Machine: "local",
 			})
 			t.Cleanup(engine.Close)
-			require.Equal(t, coworkCount+claudeCount,
-				engine.SyncAll(context.Background(), nil).Synced)
+			require.Equal(coworkCount+claudeCount,
+				engine.SyncAll(t.Context(), nil).Synced)
 
-			require.NoError(t, engine.ReconcileProviderRoots(
-				context.Background(), parser.AgentCowork, []string{coworkDir}))
-			observed[claudeCount] =
-				engine.LastReconciliationResult().Metrics.MaxRehydratedSources
+			require.NoError(engine.ReconcileProviderRoots(
+				t.Context(), parser.AgentCowork, []string{coworkDir}))
+			observed[claudeCount] = engine.LastReconciliationResult().Metrics.MaxRehydratedSources
 		})
 	}
 	assert.Equal(t, observed[5], observed[500],
 		"scheduled reconcile work must not grow with an unrelated provider's archive")
 
 	t.Run("deletion_preserved", func(t *testing.T) {
+		require := require.New(t)
+
 		base := t.TempDir()
 		coworkDir := filepath.Join(base, "cowork")
 		claudeDir := filepath.Join(base, "claude")
-		require.NoError(t, os.MkdirAll(coworkDir, 0o755))
-		require.NoError(t, os.MkdirAll(claudeDir, 0o755))
+		require.NoError(os.MkdirAll(coworkDir, 0o755))
+		require.NoError(os.MkdirAll(claudeDir, 0o755))
 		cowork := writeCoworkCorpus(t, coworkDir, coworkCount)
 		claudeIDs := writeClaudeCorpus(t, claudeDir, coworkCount)
 
@@ -153,21 +155,21 @@ func TestScheduledReconcileWorkIsClaudeCardinalityIndependent(t *testing.T) {
 			Machine: "local",
 		})
 		t.Cleanup(engine.Close)
-		require.Equal(t, 2*coworkCount,
-			engine.SyncAll(context.Background(), nil).Synced)
+		require.Equal(2*coworkCount,
+			engine.SyncAll(t.Context(), nil).Synced)
 
-		require.NoError(t, os.RemoveAll(cowork[2].sessionDir))
-		require.NoError(t, os.Remove(cowork[2].metaPath))
+		require.NoError(os.RemoveAll(cowork[2].sessionDir))
+		require.NoError(os.Remove(cowork[2].metaPath))
 
-		require.NoError(t, engine.ReconcileProviderRoots(
-			context.Background(), parser.AgentCowork, []string{coworkDir}))
+		require.NoError(engine.ReconcileProviderRoots(
+			t.Context(), parser.AgentCowork, []string{coworkDir}))
 
-		deleted, err := database.GetSessionFull(context.Background(), cowork[2].id)
-		require.NoError(t, err)
+		deleted, err := database.GetSessionFull(t.Context(), cowork[2].id)
+		require.NoError(err)
 		assertSourceMissingState(t, deleted)
 		for _, id := range claudeIDs {
-			active, err := database.GetSession(context.Background(), id)
-			require.NoError(t, err)
+			active, err := database.GetSession(t.Context(), id)
+			require.NoError(err)
 			assert.NotNil(t, active,
 				"Cowork-scoped pass must not tombstone Claude sources")
 		}
@@ -197,7 +199,7 @@ func TestSourceHashSkipMutationWorkIsArchiveCardinalityIndependent(t *testing.T)
 			insertWork := engine.cacheSkip(base+"new", 2)
 			removeWork := engine.clearSkip(base + "new")
 
-			assert.Equal(t, cacheSize-1, len(engine.SnapshotSkipCache()))
+			assert.Len(t, engine.SnapshotSkipCache(), cacheSize-1)
 			observed[cacheSize] = workCounts{
 				insert: insertWork,
 				remove: removeWork,
@@ -216,6 +218,8 @@ func TestSourceHashSkipMutationWorkIsArchiveCardinalityIndependent(t *testing.T)
 // distinct from the generic check the Vibe test covers; both have
 // regressed independently in the past.
 func TestWarmFullSyncDoesNoBulkWriteWork(t *testing.T) {
+	assert := assert.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -229,24 +233,24 @@ func TestWarmFullSyncDoesNoBulkWriteWork(t *testing.T) {
 		)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	first := fx.engine.SyncAll(ctx, nil)
 	require.Equal(t, n, first.Synced,
 		"first sync parses and stores every session")
 
 	second := fx.engine.SyncAll(ctx, nil)
-	assert.Equal(t, 0, second.Synced,
+	assert.Equal(0, second.Synced,
 		"unchanged sessions must not be re-synced on a warm pass")
-	assert.GreaterOrEqual(t, second.Skipped, n,
+	assert.GreaterOrEqual(second.Skipped, n,
 		"every unchanged session must be counted as skipped")
 
 	// PhaseStats resets at the start of each pass, so after the
 	// second pass it reflects only that pass: a warm no-op sync
 	// must not have run a single bulk-write batch.
 	stats := fx.engine.PhaseStats()
-	assert.Zero(t, stats.Batches.Load(),
+	assert.Zero(stats.Batches.Load(),
 		"warm no-op sync must not run any bulk-write batch")
-	assert.Zero(t, stats.BatchedWrites.Load(),
+	assert.Zero(stats.BatchedWrites.Load(),
 		"warm no-op sync must not rewrite any session")
 }
 
@@ -255,6 +259,8 @@ func TestWarmFullSyncDoesNoBulkWriteWork(t *testing.T) {
 // discovered session through batched writes. A remote contributor accidentally
 // restored to the active-archive write mode would report zero batched writes.
 func TestRebuildLocalAndRemoteContributorsBulkWriteDiscoveredCount(t *testing.T) {
+	parentAssert := assert.New(t)
+
 	if testing.Short() {
 		t.Skip("skipping integration test")
 	}
@@ -268,6 +274,9 @@ func TestRebuildLocalAndRemoteContributorsBulkWriteDiscoveredCount(t *testing.T)
 	observed := make(map[int]workCounts)
 	for _, sessionsPerSource := range []int{5, 500} {
 		t.Run(fmt.Sprintf("%d_sessions", sessionsPerSource), func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			localRoot := t.TempDir()
 			remoteRoot := t.TempDir()
 			writeSessions := func(root, prefix string) {
@@ -275,8 +284,8 @@ func TestRebuildLocalAndRemoteContributorsBulkWriteDiscoveredCount(t *testing.T)
 				for i := range sessionsPerSource {
 					path := filepath.Join(root, "project",
 						fmt.Sprintf("%s-%03d.jsonl", prefix, i))
-					require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
-					require.NoError(t, os.WriteFile(path, []byte(
+					require.NoError(os.MkdirAll(filepath.Dir(path), 0o755))
+					require.NoError(os.WriteFile(path, []byte(
 						testjsonl.NewSessionBuilder().
 							AddClaudeUser("2024-01-01T00:00:00Z",
 								fmt.Sprintf("%s %d", prefix, i)).
@@ -298,7 +307,7 @@ func TestRebuildLocalAndRemoteContributorsBulkWriteDiscoveredCount(t *testing.T)
 			remoteStarted := false
 			localDiscovered := 0
 			remoteDiscovered := 0
-			stats, err := engine.ResyncAllWithOptions(context.Background(), func(p Progress) {
+			stats, err := engine.ResyncAllWithOptions(t.Context(), func(p Progress) {
 				progressMu.Lock()
 				defer progressMu.Unlock()
 				if !remoteStarted && p.SessionsTotal > localDiscovered {
@@ -326,38 +335,38 @@ func TestRebuildLocalAndRemoteContributorsBulkWriteDiscoveredCount(t *testing.T)
 					},
 				}},
 			})
-			require.NoError(t, err)
-			require.False(t, stats.Aborted)
-			require.Len(t, stats.RebuildPhases, 2)
+			require.NoError(err)
+			require.False(stats.Aborted)
+			require.Len(stats.RebuildPhases, 2)
 
 			progressMu.Lock()
-			assert.Equal(t, sessionsPerSource, localDiscovered,
+			assert.Equal(sessionsPerSource, localDiscovered,
 				"local discovery must stay bounded by the local corpus")
-			assert.Equal(t, sessionsPerSource, remoteDiscovered,
+			assert.Equal(sessionsPerSource, remoteDiscovered,
 				"remote discovery must stay bounded by the remote corpus")
 			progressMu.Unlock()
 
 			wantBatches := int64((sessionsPerSource + batchSize - 1) / batchSize)
 			for i, wantName := range []string{"local", "remote"} {
 				phase := stats.RebuildPhases[i]
-				assert.Equal(t, wantName, phase.Contributor,
+				assert.Equal(wantName, phase.Contributor,
 					"contributors must retain deterministic local-then-remote order")
-				assert.EqualValues(t, sessionsPerSource, phase.BatchedWrites,
+				assert.EqualValues(sessionsPerSource, phase.BatchedWrites,
 					"%s must bulk-write every discovered session", wantName)
-				assert.EqualValues(t, sessionsPerSource, phase.WriteBatchSize,
+				assert.EqualValues(sessionsPerSource, phase.WriteBatchSize,
 					"%s batch sizes must sum to its discovered count", wantName)
-				assert.Equal(t, wantBatches, phase.Batches,
+				assert.Equal(wantBatches, phase.Batches,
 					"%s must use ceil(%d/%d) batches", wantName,
 					sessionsPerSource, batchSize)
 			}
-			assert.Equal(t, sessionsPerSource*2, stats.TotalSessions,
+			assert.Equal(sessionsPerSource*2, stats.TotalSessions,
 				"combined discovery count")
-			assert.Equal(t, sessionsPerSource*2, stats.Synced,
+			assert.Equal(sessionsPerSource*2, stats.Synced,
 				"combined written session count")
-			assert.Equal(t, stats.RebuildPhases[0].Batches,
+			assert.Equal(stats.RebuildPhases[0].Batches,
 				stats.RebuildPhases[1].Batches,
 				"equivalent local and remote corpora must have equal batch work")
-			assert.Equal(t, stats.RebuildPhases[0].BatchedWrites,
+			assert.Equal(stats.RebuildPhases[0].BatchedWrites,
 				stats.RebuildPhases[1].BatchedWrites,
 				"equivalent local and remote corpora must have equal write work")
 
@@ -372,15 +381,15 @@ func TestRebuildLocalAndRemoteContributorsBulkWriteDiscoveredCount(t *testing.T)
 
 	small := observed[5]
 	large := observed[500]
-	assert.Equal(t, small.localBatches*5, large.localBatches,
+	parentAssert.Equal(small.localBatches*5, large.localBatches,
 		"local batch count must grow from 1 to 5 at the 100-session boundary")
-	assert.Equal(t, small.remoteBatches*5, large.remoteBatches,
+	parentAssert.Equal(small.remoteBatches*5, large.remoteBatches,
 		"remote batch count must grow from 1 to 5 at the 100-session boundary")
-	assert.Equal(t, small.localWrites*100, large.localWrites,
+	parentAssert.Equal(small.localWrites*100, large.localWrites,
 		"local writes must grow exactly with corpus cardinality")
-	assert.Equal(t, small.remoteWrites*100, large.remoteWrites,
+	parentAssert.Equal(small.remoteWrites*100, large.remoteWrites,
 		"remote writes must grow exactly with corpus cardinality")
-	assert.Equal(t, large.localWrites, large.remoteWrites,
+	parentAssert.Equal(large.localWrites, large.remoteWrites,
 		"large equivalent contributors must retain equal work counts")
 }
 
@@ -425,7 +434,7 @@ func TestWarmFullSyncDoesNotRehashClaudeArchive(t *testing.T) {
 
 			// Cold pass: populates the archive and earns verified-source trust.
 			require.Equal(t, claudeCount,
-				engine.SyncAll(context.Background(), nil).Synced)
+				engine.SyncAll(t.Context(), nil).Synced)
 
 			var mu gosync.Mutex
 			reads := 0
@@ -445,7 +454,7 @@ func TestWarmFullSyncDoesNotRehashClaudeArchive(t *testing.T) {
 				mu.Lock()
 				reads = 0
 				mu.Unlock()
-				engine.SyncAll(context.Background(), nil)
+				engine.SyncAll(t.Context(), nil)
 				mu.Lock()
 				defer mu.Unlock()
 				return reads

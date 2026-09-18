@@ -106,15 +106,18 @@ func (r *trendsProbeRows) Next(dest []driver.Value) error {
 }
 
 func TestGetTrendsTermsModelFilterTargetsOuterMessages(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	state := &trendsProbeState{}
 	store := &Store{
 		pg: newTrendsProbeDB(t, state),
 	}
 	terms, err := db.ParseTrendTerms([]string{"seam"})
-	require.NoError(t, err, "ParseTrendTerms")
+	require.NoError(err, "ParseTrendTerms")
 
 	_, err = store.GetTrendsTerms(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{
 			From: "2024-06-01", To: "2024-06-02",
 			Timezone: "UTC",
@@ -123,12 +126,12 @@ func TestGetTrendsTermsModelFilterTargetsOuterMessages(t *testing.T) {
 		terms,
 		"day",
 	)
-	require.NoError(t, err, "GetTrendsTerms")
-	require.NotEmpty(t, state.queries, "queries")
+	require.NoError(err, "GetTrendsTerms")
+	require.NotEmpty(state.queries, "queries")
 
 	query := strings.ToLower(strings.Join(state.queries, "\n"))
-	assert.Contains(t, query, "join messages m on m.session_id = s.id")
-	assert.Contains(t, query, "order by m.session_id, m.ordinal")
-	assert.NotContains(t, query, "and m.model = $1")
-	assert.NotContains(t, query, "exists (select 1 from messages")
+	assert.Contains(query, "join messages m on m.session_id = s.id")
+	assert.Contains(query, "order by m.session_id, m.ordinal")
+	assert.NotContains(query, "and m.model = $1")
+	assert.NotContains(query, "exists (select 1 from messages")
 }

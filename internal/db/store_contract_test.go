@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -87,8 +86,7 @@ func storeContractSQLiteFixtureForTest(t *testing.T) storeContractFixture {
 func storeContractSQLiteTemplate(t *testing.T) (string, storeContractFixture) {
 	t.Helper()
 	storeContractSQLiteTemplateOnce.Do(func() {
-		storeContractSQLiteTemplateDir, storeContractSQLiteTemplateErr =
-			os.MkdirTemp("", "agentsview-store-contract-*")
+		storeContractSQLiteTemplateDir, storeContractSQLiteTemplateErr = os.MkdirTemp("", "agentsview-store-contract-*")
 		if storeContractSQLiteTemplateErr != nil {
 			return
 		}
@@ -107,7 +105,7 @@ func storeContractSQLiteTemplate(t *testing.T) (string, storeContractFixture) {
 			return
 		}
 		storeContractSQLiteTemplateFixture = seedStoreContractSQLite(t, d)
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 		defer cancel()
 		storeContractSQLiteTemplateErr = d.CheckpointWALTruncate(ctx)
 		if closeErr := d.Close(); storeContractSQLiteTemplateErr == nil {
@@ -120,7 +118,6 @@ func storeContractSQLiteTemplate(t *testing.T) (string, storeContractFixture) {
 }
 
 func TestStoreContract(t *testing.T) {
-
 	tests := []struct {
 		name string
 		run  func(t *testing.T, store Store, fixture storeContractFixture, backend storeContractBackend)
@@ -154,7 +151,7 @@ func contractSessionsCursorFiltersAndDates(
 	_ storeContractBackend,
 ) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	page, err := store.ListSessions(ctx, SessionFilter{Limit: 2})
 	require.NoError(t, err)
@@ -253,7 +250,7 @@ func contractMessagesOrderingAndToolResults(
 	_ storeContractBackend,
 ) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	asc, err := store.GetMessages(ctx, fixture.alphaID, 1, 3, true)
 	require.NoError(t, err)
@@ -296,7 +293,7 @@ func contractSearchModesAndSecretFindings(
 	_ storeContractBackend,
 ) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if store.HasFTS() {
 		search, err := store.Search(ctx, SearchFilter{
@@ -391,7 +388,7 @@ func contractStarsAndPins(
 		return
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	ok, err := store.StarSession(fixture.alphaID)
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -439,7 +436,7 @@ func contractAnalyticsTrendsAndUsage(
 	_ storeContractBackend,
 ) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	summary, err := store.GetAnalyticsSummary(ctx, AnalyticsFilter{
 		From:     "2026-01-09",
@@ -593,7 +590,7 @@ func contractLocalOnlyMethods(
 	backend storeContractBackend,
 ) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	if !backend.supportsLocalWrites {
 		require.True(t, store.ReadOnly())
@@ -683,7 +680,7 @@ func contractDataInventoryRulesCandidates(
 	_ storeContractBackend,
 ) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 
 	inventory, err := store.GetProjectInventory(ctx, ProjectDateFilter{})
 	require.NoError(t, err)
@@ -733,7 +730,7 @@ func TestStoreContractGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUs
 ) {
 	store, ok := openStoreContractSQLiteFixtureDB(t).(*DB)
 	require.True(t, ok, "sqlite fixture should expose *DB")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, store, "contract-copilot-empty", "alpha", func(s *Session) {
 		ts := "2026-01-12T16:00:00Z"
@@ -765,7 +762,7 @@ func TestStoreContractGetUsageMatchingSessionCountCountsCopilotSessionByMessageT
 ) {
 	store, ok := openStoreContractSQLiteFixtureDB(t).(*DB)
 	require.True(t, ok, "sqlite fixture should expose *DB")
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, store, "contract-copilot-late-message", "alpha", func(s *Session) {
 		ts := "2026-02-08T10:00:00Z"
@@ -1240,17 +1237,20 @@ func agentNames(agents []AgentInfo) []string {
 func requireReadOnly(t *testing.T, err error) {
 	t.Helper()
 	require.Error(t, err)
-	require.True(t, errors.Is(err, ErrReadOnly), "expected ErrReadOnly, got %v", err)
+	require.ErrorIs(t, err, ErrReadOnly, "expected ErrReadOnly, got %v", err)
 }
 
 func TestStoreContractBackendsAreRegisteredExplicitly(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	backends := storeContractBackends()
-	require.NotEmpty(t, backends)
+	require.NotEmpty(backends)
 	names := make([]string, 0, len(backends))
 	for _, backend := range backends {
 		names = append(names, backend.name)
-		assert.NotNil(t, backend.open)
-		assert.NotNil(t, backend.seed)
+		assert.NotNil(backend.open)
+		assert.NotNil(backend.seed)
 	}
-	require.True(t, slices.Contains(names, "sqlite"))
+	require.True(slices.Contains(names, "sqlite"))
 }

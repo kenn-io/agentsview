@@ -19,26 +19,29 @@ import (
 // Content changes are detected by SQLite's own write markers regardless of
 // any timestamp.
 func TestSQLiteContainerStateIgnoresSubSecondMtimeChanges(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dbPath, _, db := newTestDB(t)
-	require.NoError(t, db.Close())
+	require.NoError(db.Close())
 
 	base := time.Unix(1700000000, 100*int64(time.Millisecond))
-	require.NoError(t, os.Chtimes(dbPath, base, base))
+	require.NoError(os.Chtimes(dbPath, base, base))
 	before, ok := StatSQLiteContainerState(dbPath)
-	require.True(t, ok, "state must be readable")
+	require.True(ok, "state must be readable")
 
 	nudged := time.Unix(1700000000, 900*int64(time.Millisecond))
-	require.NoError(t, os.Chtimes(dbPath, nudged, nudged))
+	require.NoError(os.Chtimes(dbPath, nudged, nudged))
 	within, ok := StatSQLiteContainerState(dbPath)
-	require.True(t, ok, "state must be readable after sub-second nudge")
-	assert.Equal(t, before, within,
+	require.True(ok, "state must be readable after sub-second nudge")
+	assert.Equal(before, within,
 		"a sub-second mtime change must not change the container state")
 
 	crossed := time.Unix(1700000001, 0)
-	require.NoError(t, os.Chtimes(dbPath, crossed, crossed))
+	require.NoError(os.Chtimes(dbPath, crossed, crossed))
 	afterSecond, ok := StatSQLiteContainerState(dbPath)
-	require.True(t, ok, "state must be readable after second boundary")
-	assert.NotEqual(t, before, afterSecond,
+	require.True(ok, "state must be readable after second boundary")
+	assert.NotEqual(before, afterSecond,
 		"an mtime change across a second boundary must change the state")
 }
 
@@ -61,34 +64,35 @@ func TestSQLiteContainerStateRejectsNonSQLiteFiles(t *testing.T) {
 // restored or replaced database landing in the same second with the same
 // size and change counter would be indistinguishable from the original.
 func TestSQLiteContainerStateDetectsFileReplacement(t *testing.T) {
+	require := require.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("file identity is unavailable on Windows")
 	}
 	dbPath, _, db := newTestDB(t)
-	require.NoError(t, db.Close())
+	require.NoError(db.Close())
 
 	before, ok := StatSQLiteContainerState(dbPath)
-	require.True(t, ok, "state must be readable before replacement")
+	require.True(ok, "state must be readable before replacement")
 
 	raw, err := os.ReadFile(dbPath)
-	require.NoError(t, err, "read container bytes")
+	require.NoError(err, "read container bytes")
 	info, err := os.Stat(dbPath)
-	require.NoError(t, err, "stat container")
+	require.NoError(err, "stat container")
 	// Write the copy while the original still exists so the two files are
 	// guaranteed distinct inodes, then rename over the original. A
 	// remove-then-recreate at the same path can reuse the freed inode and
 	// make the replacement genuinely indistinguishable.
 	replacement := dbPath + ".replacement"
-	require.NoError(t, os.WriteFile(replacement, raw, 0o644),
+	require.NoError(os.WriteFile(replacement, raw, 0o644),
 		"write replacement container with identical bytes")
-	require.NoError(t, os.Rename(replacement, dbPath),
+	require.NoError(os.Rename(replacement, dbPath),
 		"swap replacement over container")
-	require.NoError(t,
-		os.Chtimes(dbPath, info.ModTime(), info.ModTime()),
+	require.NoError(os.Chtimes(dbPath, info.ModTime(), info.ModTime()),
 		"restore container mtime")
 
 	after, ok := StatSQLiteContainerState(dbPath)
-	require.True(t, ok, "state must be readable after replacement")
+	require.True(ok, "state must be readable after replacement")
 	assert.NotEqual(t, before, after,
 		"a replaced container file must change the state")
 }
@@ -111,14 +115,17 @@ func TestSQLiteContainerStateRejectsUnknownWALFormat(t *testing.T) {
 	}
 
 	t.Run("documented header is read", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		dbPath, _, db := newTestDB(t)
-		require.NoError(t, db.Close())
+		require.NoError(db.Close())
 		writeWAL(t, dbPath, 0x377f0683, 3007000)
 		state, ok := StatSQLiteContainerState(dbPath)
-		require.True(t, ok, "documented WAL header must be readable")
-		assert.Equal(t, uint32(7), state.WALCkptSeq)
-		assert.Equal(t, uint32(11), state.WALSalt1)
-		assert.Equal(t, uint32(13), state.WALSalt2)
+		require.True(ok, "documented WAL header must be readable")
+		assert.Equal(uint32(7), state.WALCkptSeq)
+		assert.Equal(uint32(11), state.WALSalt1)
+		assert.Equal(uint32(13), state.WALSalt2)
 	})
 
 	t.Run("wrong magic fails closed", func(t *testing.T) {
@@ -146,14 +153,16 @@ func TestSQLiteContainerStateRejectsUnknownWALFormat(t *testing.T) {
 // write invalidates it. Without the cache every parsed session re-queried
 // the full project table, which dominated re-parse CPU on large archives.
 func TestOpenCodeProjectsCacheReusesUntilContainerChanges(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dbPath, seeder, db := newTestDB(t)
 	defer db.Close()
 	seeder.AddProject("prj_1", "/home/user/code/app-one")
 
-	first, err := loadOpenCodeProjectsCached(db, dbPath)
-	require.NoError(t, err)
-	assert.Equal(t,
-		map[string]string{"prj_1": "/home/user/code/app-one"}, first)
+	first, err := loadOpenCodeProjectsCached(t.Context(), db, dbPath)
+	require.NoError(err)
+	assert.Equal(map[string]string{"prj_1": "/home/user/code/app-one"}, first)
 
 	// Poison the cached copy to make hits observable: an unchanged
 	// container must serve the poisoned entry back, and a changed one must
@@ -164,19 +173,19 @@ func TestOpenCodeProjectsCacheReusesUntilContainerChanges(t *testing.T) {
 	openCodeProjectsCache[dbPath] = entry
 	openCodeProjectsCacheMu.Unlock()
 
-	second, err := loadOpenCodeProjectsCached(db, dbPath)
-	require.NoError(t, err)
-	assert.Equal(t, "cached-marker", second["prj_1"],
+	second, err := loadOpenCodeProjectsCached(t.Context(), db, dbPath)
+	require.NoError(err)
+	assert.Equal("cached-marker", second["prj_1"],
 		"an unchanged container must be served from the cache")
 
-	_, err = db.Exec(
+	_, err = db.ExecContext(t.Context(),
 		"UPDATE project SET worktree = ? WHERE id = ?",
 		"/home/user/code/renamed", "prj_1",
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	third, err := loadOpenCodeProjectsCached(db, dbPath)
-	require.NoError(t, err)
-	assert.Equal(t, "/home/user/code/renamed", third["prj_1"],
+	third, err := loadOpenCodeProjectsCached(t.Context(), db, dbPath)
+	require.NoError(err)
+	assert.Equal("/home/user/code/renamed", third["prj_1"],
 		"a committed write must invalidate the cached projects")
 }

@@ -299,7 +299,7 @@ func waitForServerRuntime(
 		if err != nil {
 			return fmt.Errorf("managed caddy error: %w", err)
 		}
-		return fmt.Errorf("managed caddy exited unexpectedly")
+		return errors.New("managed caddy exited unexpectedly")
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(
 			context.Background(), 5*time.Second,

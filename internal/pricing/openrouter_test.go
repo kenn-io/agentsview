@@ -31,7 +31,7 @@ func TestFetchCatalogDegradesWhenOpenRouterFails(t *testing.T) {
 	}
 
 	catalog, err := fetchCatalog(
-		context.Background(), noGenAIPricing, fetchLiteLLM, fetchOpenRouter,
+		t.Context(), noGenAIPricing, fetchLiteLLM, fetchOpenRouter,
 	)
 
 	assert.ErrorIs(t, err, openrouterErr)
@@ -50,7 +50,7 @@ func TestFetchCatalogFailsWhenLiteLLMFails(t *testing.T) {
 	}
 
 	catalog, err := fetchCatalog(
-		context.Background(), noGenAIPricing, fetchLiteLLM, fetchOpenRouter,
+		t.Context(), noGenAIPricing, fetchLiteLLM, fetchOpenRouter,
 	)
 
 	assert.ErrorIs(t, err, litellmErr)
@@ -58,6 +58,9 @@ func TestFetchCatalogFailsWhenLiteLLMFails(t *testing.T) {
 }
 
 func TestCatalogReconcile(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	litellm := []ModelPricing{
 		{ModelPattern: "minimax/MiniMax-M3", InputPerMTok: rate("2")},
 		{ModelPattern: "openrouter/openai/gpt-x", InputPerMTok: rate("1")},
@@ -85,21 +88,21 @@ func TestCatalogReconcile(t *testing.T) {
 		LiteLLM: litellm, OpenRouter: openrouter,
 	}.Reconcile(stored, []string{"acme/previous", "acme/old-spelling"})
 
-	assert.Equal(t, append(litellm, openrouter[4]), prices)
-	assert.Equal(t, []string{"acme/only-openrouter", "acme/previous"}, owned,
+	assert.Equal(append(litellm, openrouter[4]), prices)
+	assert.Equal([]string{"acme/only-openrouter", "acme/previous"}, owned,
 		"a delisted OpenRouter row stays tracked until something covers it")
-	assert.Equal(t, []string{"acme/old-spelling"}, retired)
+	assert.Equal([]string{"acme/old-spelling"}, retired)
 
 	byPattern := make(map[string]ModelPricing, len(prices))
 	for _, p := range prices {
 		byPattern[p.ModelPattern] = p
 	}
 	price, ok := Resolve(byPattern, "MiniMax-M3")
-	require.True(t, ok, "bare lookup resolves without a tie")
-	assert.Equal(t, rate("2"), price.InputPerMTok)
+	require.True(ok, "bare lookup resolves without a tie")
+	assert.Equal(rate("2"), price.InputPerMTok)
 	price, ok = Resolve(byPattern, "only-openrouter")
-	require.True(t, ok, "OpenRouter-only model resolves by bare name")
-	assert.Equal(t, rate("7"), price.InputPerMTok)
+	require.True(ok, "OpenRouter-only model resolves by bare name")
+	assert.Equal(rate("7"), price.InputPerMTok)
 }
 
 func TestCatalogReconcileRetiresShadowedPrevious(t *testing.T) {
@@ -151,15 +154,18 @@ func TestShadowedPatterns(t *testing.T) {
 }
 
 func TestOpenRouterModelsRoundTrip(t *testing.T) {
-	assert.Equal(t, "[]", EncodeOpenRouterModels(nil))
+	assert := assert.New(t)
+	require := require.New(t)
+
+	assert.Equal("[]", EncodeOpenRouterModels(nil))
 	decoded, err := DecodeOpenRouterModels(EncodeOpenRouterModels(
 		[]string{"a", "b"},
 	))
-	require.NoError(t, err)
-	assert.Equal(t, []string{"a", "b"}, decoded)
+	require.NoError(err)
+	assert.Equal([]string{"a", "b"}, decoded)
 	decoded, err = DecodeOpenRouterModels("")
-	require.NoError(t, err)
-	assert.Nil(t, decoded)
+	require.NoError(err)
+	assert.Nil(decoded)
 	_, err = DecodeOpenRouterModels("not json")
-	require.Error(t, err)
+	require.Error(err)
 }

@@ -3,7 +3,6 @@ package parser
 import (
 	"context"
 	"encoding/json/v2"
-	"errors"
 	"path/filepath"
 	"testing"
 
@@ -12,6 +11,8 @@ import (
 )
 
 func TestProviderConfigCloneCopiesRoots(t *testing.T) {
+	assert := assert.New(t)
+
 	cfg := ProviderConfig{
 		Roots:   []string{"one", "two"},
 		Machine: "devbox",
@@ -23,31 +24,34 @@ func TestProviderConfigCloneCopiesRoots(t *testing.T) {
 	clone.Roots[1] = "clone-mutated"
 	rootsCopy[1] = "copy-mutated"
 
-	assert.Equal(t, []string{"one", "clone-mutated"}, clone.Roots)
-	assert.Equal(t, []string{"one", "copy-mutated"}, rootsCopy)
-	assert.Equal(t, []string{"mutated", "two"}, cfg.Roots)
-	assert.Equal(t, "devbox", clone.Machine)
+	assert.Equal([]string{"one", "clone-mutated"}, clone.Roots)
+	assert.Equal([]string{"one", "copy-mutated"}, rootsCopy)
+	assert.Equal([]string{"mutated", "two"}, cfg.Roots)
+	assert.Equal("devbox", clone.Machine)
 }
 
 func TestProviderBaseZeroValueOptionalMethods(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	var base ProviderBase
 
 	discovered, err := base.Discover(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, discovered)
+	require.NoError(err)
+	assert.Empty(discovered)
 
 	plan, err := base.WatchPlan(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, plan.Roots)
+	require.NoError(err)
+	assert.Empty(plan.Roots)
 
 	changed, err := base.SourcesForChangedPath(ctx, ChangedPathRequest{
 		Path:      "/tmp/session.jsonl",
 		EventKind: "write",
 		WatchRoot: "/tmp",
 	})
-	require.NoError(t, err)
-	assert.Empty(t, changed)
+	require.NoError(err)
+	assert.Empty(changed)
 
 	source, found, err := base.FindSource(ctx, FindSourceRequest{
 		RawSessionID:       "raw",
@@ -56,21 +60,21 @@ func TestProviderBaseZeroValueOptionalMethods(t *testing.T) {
 		FingerprintKey:     "/tmp/session.jsonl",
 		RequireFreshSource: true,
 	})
-	require.NoError(t, err)
-	assert.False(t, found)
-	assert.Empty(t, source)
+	require.NoError(err)
+	assert.False(found)
+	assert.Empty(source)
 
 	fingerprint, err := base.Fingerprint(ctx, SourceRef{
 		Provider: AgentCodex,
 		Key:      "source",
 	})
-	require.Error(t, err)
-	assert.Empty(t, fingerprint)
-	assert.True(t, errors.Is(err, ErrUnsupportedProviderFeature))
+	require.Error(err)
+	assert.Empty(fingerprint)
+	assert.ErrorIs(err, ErrUnsupportedProviderFeature)
 	var unsupported UnsupportedProviderFeatureError
-	require.ErrorAs(t, err, &unsupported)
-	assert.Equal(t, AgentType(""), unsupported.Provider)
-	assert.Equal(t, ProviderFeatureFingerprint, unsupported.Feature)
+	require.ErrorAs(err, &unsupported)
+	assert.Equal(AgentType(""), unsupported.Provider)
+	assert.Equal(ProviderFeatureFingerprint, unsupported.Feature)
 
 	incremental, status, err := base.ParseIncremental(ctx, IncrementalRequest{
 		Source:       SourceRef{Provider: AgentCodex, Key: "source"},
@@ -80,12 +84,12 @@ func TestProviderBaseZeroValueOptionalMethods(t *testing.T) {
 		StartOrdinal: 7,
 		Machine:      "devbox",
 	})
-	require.NoError(t, err)
-	assert.Equal(t, IncrementalUnsupported, status)
-	assert.Empty(t, incremental)
+	require.NoError(err)
+	assert.Equal(IncrementalUnsupported, status)
+	assert.Empty(incremental)
 
 	_, ok := any(base).(Provider)
-	assert.False(t, ok, "ProviderBase must not satisfy Provider without Parse")
+	assert.False(ok, "ProviderBase must not satisfy Provider without Parse")
 }
 
 func TestUnsupportedProviderFeatureErrorWrapsSentinel(t *testing.T) {
@@ -94,52 +98,57 @@ func TestUnsupportedProviderFeatureErrorWrapsSentinel(t *testing.T) {
 		Feature:  ProviderFeatureFingerprint,
 	}
 
-	assert.True(t, errors.Is(err, ErrUnsupportedProviderFeature))
+	assert.ErrorIs(t, err, ErrUnsupportedProviderFeature)
 	assert.Contains(t, err.Error(), string(AgentCodex))
 	assert.Contains(t, err.Error(), ProviderFeatureFingerprint)
 }
 
 func TestCapabilitySupportTextAndJSON(t *testing.T) {
-	assert.Equal(t, "unsupported", CapabilityUnsupported.String())
-	assert.Equal(t, "supported", CapabilitySupported.String())
-	assert.Equal(t, "not_applicable", CapabilityNotApplicable.String())
+	assert := assert.New(t)
+	require := require.New(t)
+
+	assert.Equal("unsupported", CapabilityUnsupported.String())
+	assert.Equal("supported", CapabilitySupported.String())
+	assert.Equal("not_applicable", CapabilityNotApplicable.String())
 
 	marshaled, err := json.Marshal(CapabilitySupported)
-	require.NoError(t, err)
-	assert.JSONEq(t, `"supported"`, string(marshaled))
+	require.NoError(err)
+	assert.JSONEq(`"supported"`, string(marshaled))
 
 	var decoded CapabilitySupport
-	require.NoError(t, json.Unmarshal([]byte(`"not_applicable"`), &decoded))
-	assert.Equal(t, CapabilityNotApplicable, decoded)
+	require.NoError(json.Unmarshal([]byte(`"not_applicable"`), &decoded))
+	assert.Equal(CapabilityNotApplicable, decoded)
 
 	text, err := CapabilitySupported.MarshalText()
-	require.NoError(t, err)
-	assert.Equal(t, "supported", string(text))
+	require.NoError(err)
+	assert.Equal("supported", string(text))
 
-	require.NoError(t, decoded.UnmarshalText([]byte("unsupported")))
-	assert.Equal(t, CapabilityUnsupported, decoded)
-	assert.Error(t, decoded.UnmarshalText([]byte("bogus")))
+	require.NoError(decoded.UnmarshalText([]byte("unsupported")))
+	assert.Equal(CapabilityUnsupported, decoded)
+	assert.Error(decoded.UnmarshalText([]byte("bogus")))
 }
 
 func TestProviderRegistryMirrorsAgentRegistry(t *testing.T) {
+	require := require.New(t)
+
 	factories := ProviderFactories()
-	require.Len(t, factories, len(Registry))
+	require.Len(factories, len(Registry))
 
 	seen := make(map[AgentType]bool, len(factories))
 	for _, factory := range factories {
 		def := factory.Definition()
-		require.Falsef(t, seen[def.Type], "duplicate provider factory for %s", def.Type)
+		require.Falsef(seen[def.Type], "duplicate provider factory for %s", def.Type)
 		seen[def.Type] = true
 
 		registryDef, ok := AgentByType(def.Type)
-		require.Truef(t, ok, "provider factory for unknown agent %s", def.Type)
+		require.Truef(ok, "provider factory for unknown agent %s", def.Type)
 		assertAgentDefMetadataEqual(t, registryDef, def)
 
 		provider := factory.NewProvider(ProviderConfig{
 			Roots:   []string{"/tmp/root"},
 			Machine: "devbox",
 		})
-		require.NotNil(t, provider)
+		require.NotNil(provider)
 		assertAgentDefMetadataEqual(t, def, provider.Definition())
 	}
 
@@ -149,6 +158,8 @@ func TestProviderRegistryMirrorsAgentRegistry(t *testing.T) {
 }
 
 func TestStoredSourceHintCapabilitiesMatchConsumers(t *testing.T) {
+	assert := assert.New(t)
+
 	wantSupported := map[AgentType]bool{
 		AgentCursorIDE: true,
 		AgentDevin:     true,
@@ -169,49 +180,52 @@ func TestStoredSourceHintCapabilitiesMatchConsumers(t *testing.T) {
 		agent := factory.Definition().Type
 		got := factory.Capabilities().Source.StoredSourceHints
 		if wantSupported[agent] {
-			assert.Equalf(t, CapabilitySupported, got, "%s consumes stored path hints", agent)
+			assert.Equalf(CapabilitySupported, got, "%s consumes stored path hints", agent)
 			provider := factory.NewProvider(ProviderConfig{})
-			assert.Equalf(t, CapabilitySupported,
+			assert.Equalf(CapabilitySupported,
 				provider.Capabilities().Source.StoredSourceHints,
 				"%s configured provider consumes stored path hints", agent)
-			assert.Implementsf(t, (*StoredSourceHintScopeProvider)(nil), provider,
+			assert.Implementsf((*StoredSourceHintScopeProvider)(nil), provider,
 				"%s must scope stored hints before the engine queries them", agent)
 		} else {
-			assert.Equalf(t, CapabilityUnsupported, got, "%s must not schedule stored path hints", agent)
+			assert.Equalf(CapabilityUnsupported, got, "%s must not schedule stored path hints", agent)
 		}
 	}
 }
 
 func TestStoredSourceHintScopesDistinguishContainersFromExactMembers(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	forge, ok := NewProvider(AgentForge, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
+	require.True(ok)
 	forgeScopes := forge.(StoredSourceHintScopeProvider)
 	dbPath := filepath.Join(root, ForgeDBFilename)
-	assert.Equal(t, []StoredSourceHintScope{{
+	assert.Equal([]StoredSourceHintScope{{
 		Path: dbPath, IncludeVirtualMembers: true,
 	}}, forgeScopes.StoredSourceHintScopes(ChangedPathRequest{
 		Path: dbPath + "-wal", WatchRoot: root,
 	}))
 	virtualPath := VirtualSourcePath(dbPath, "conversation-a")
-	assert.Equal(t, []StoredSourceHintScope{{Path: virtualPath}},
+	assert.Equal([]StoredSourceHintScope{{Path: virtualPath}},
 		forgeScopes.StoredSourceHintScopes(ChangedPathRequest{
 			Path: virtualPath, WatchRoot: root,
 		}))
 
 	visualStudio, ok := NewProvider(AgentVSCopilot, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
+	require.True(ok)
 	visualStudioScopes := visualStudio.(StoredSourceHintScopeProvider)
 	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
 	container := filepath.Join(
 		root, ".vs", "SampleApp", "copilot-chat", "thread", "sessions",
 		conversationID,
 	)
-	assert.Equal(t, []StoredSourceHintScope{{
+	assert.Equal([]StoredSourceHintScope{{
 		Path: container, IncludeVirtualMembers: true,
 	}}, visualStudioScopes.StoredSourceHintScopes(ChangedPathRequest{Path: container}))
 	member := VisualStudioCopilotVirtualPath(container, conversationID)
-	assert.Equal(t, []StoredSourceHintScope{{Path: member}},
+	assert.Equal([]StoredSourceHintScope{{Path: member}},
 		visualStudioScopes.StoredSourceHintScopes(ChangedPathRequest{Path: member}))
 }
 
@@ -243,37 +257,43 @@ func TestVerifiedLocalStatCapabilitiesMatchConsumers(t *testing.T) {
 }
 
 func TestProviderFactoryLookupRejectsMissingAgent(t *testing.T) {
-	require.NotEmpty(t, Registry)
+	assert := assert.New(t)
+	require := require.New(t)
+
+	require.NotEmpty(Registry)
 	agent := Registry[0].Type
 
 	factory, ok := ProviderFactoryByType(agent)
-	require.True(t, ok)
-	assert.Equal(t, agent, factory.Definition().Type)
+	require.True(ok)
+	assert.Equal(agent, factory.Definition().Type)
 
 	provider, ok := NewProvider(agent, ProviderConfig{
 		Roots:   []string{"/tmp/one", "/tmp/two"},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
-	require.NotNil(t, provider)
+	require.True(ok)
+	require.NotNil(provider)
 
 	_, ok = ProviderFactoryByType("missing")
-	assert.False(t, ok)
+	assert.False(ok)
 	_, ok = NewProvider("missing", ProviderConfig{})
-	assert.False(t, ok)
+	assert.False(ok)
 }
 
 func TestProviderFactoryByTypeDevin(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	factory, ok := ProviderFactoryByType(AgentDevin)
-	require.True(t, ok)
-	assert.Equal(t, AgentDevin, factory.Definition().Type)
+	require.True(ok)
+	assert.Equal(AgentDevin, factory.Definition().Type)
 
 	provider := factory.NewProvider(ProviderConfig{
 		Roots:   []string{"/tmp/devin"},
 		Machine: "devbox",
 	})
-	require.NotNil(t, provider)
-	assert.Equal(t, AgentDevin, provider.Definition().Type)
+	require.NotNil(provider)
+	assert.Equal(AgentDevin, provider.Definition().Type)
 }
 
 func TestProviderMigrationModesCoverRegistry(t *testing.T) {

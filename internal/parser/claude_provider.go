@@ -215,7 +215,7 @@ func (p *claudeProvider) Parse(
 	}
 	path, ok := p.sources.pathFromSource(req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("claude source path unavailable")
+		return ParseOutcome{}, errors.New("claude source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	project := claudeProviderProject(ctx, req.Source.ProjectHint, path)
@@ -301,7 +301,7 @@ func (p *claudeProvider) ParseIncremental(
 	path, ok := p.sources.pathFromSource(req.Source)
 	if !ok {
 		return IncrementalOutcome{}, IncrementalUnsupported,
-			fmt.Errorf("claude source path unavailable")
+			errors.New("claude source path unavailable")
 	}
 	if req.Offset > 0 && req.Fingerprint.Size < req.Offset {
 		return IncrementalOutcome{ForceReplace: true},

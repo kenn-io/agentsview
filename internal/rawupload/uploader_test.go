@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -67,10 +68,13 @@ func (s *uploadTransportStub) CommitManifest(
 }
 
 func TestUploaderRetriesPostCommitAcknowledgementWithoutRecommitting(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	base := t.TempDir()
 	store, generation := queuedUploadTestGenerationAt(t, base, func() time.Time { return now })
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	t.Cleanup(func() { require.NoError(store.Close()) })
 	commit := rawsync.CommitResult{
 		ManifestID: strings.Repeat("a", 64),
 		Receipt:    strings.Repeat("b", 64),
@@ -78,50 +82,53 @@ func TestUploaderRetriesPostCommitAcknowledgementWithoutRecommitting(t *testing.
 		Created:    true,
 	}
 	checkpoint, err := sql.Open("sqlite3", filepath.Join(base, "checkpoint.db"))
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, checkpoint.Close()) })
-	_, err = checkpoint.Exec(`CREATE TRIGGER fail_acknowledgement
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(checkpoint.Close()) })
+	_, err = checkpoint.ExecContext(t.Context(), `CREATE TRIGGER fail_acknowledgement
 		BEFORE UPDATE OF head_capture_id ON raw_sources
 		BEGIN SELECT RAISE(FAIL, 'forced acknowledgement failure'); END`)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	transport := &uploadTransportStub{uploaded: make(map[rawsync.ObjectRef]string), commit: commit}
 	uploader := New(store, transport, "device-a")
 	uploader.now = func() time.Time { return now }
 	_, uploaded, err := uploader.UploadNext(t.Context())
-	require.Error(t, err)
-	require.True(t, uploaded)
-	assert.Equal(t, 1, transport.commitCalls)
+	require.Error(err)
+	require.True(uploaded)
+	assert.Equal(1, transport.commitCalls)
 
 	_, uploaded, err = uploader.UploadNext(t.Context())
-	require.NoError(t, err)
-	assert.False(t, uploaded, "post-commit acknowledgement failures must honor backoff")
-	assert.Equal(t, 1, transport.commitCalls)
-	_, err = checkpoint.Exec(`DROP TRIGGER fail_acknowledgement`)
-	require.NoError(t, err)
+	require.NoError(err)
+	assert.False(uploaded, "post-commit acknowledgement failures must honor backoff")
+	assert.Equal(1, transport.commitCalls)
+	_, err = checkpoint.ExecContext(t.Context(), `DROP TRIGGER fail_acknowledgement`)
+	require.NoError(err)
 
 	now = now.Add(transientRetryDelay)
 	result, uploaded, err := uploader.UploadNext(t.Context())
 
-	require.NoError(t, err)
-	require.True(t, uploaded)
-	assert.Equal(t, 1, transport.commitCalls, "retry must use the durable commit result")
-	assert.Equal(t, generation.CaptureID, result.CaptureID)
-	assert.Equal(t, commit.ManifestID, result.ManifestID)
-	assert.Equal(t, commit.Receipt, result.Receipt)
-	assert.Equal(t, commit.Generation, result.Generation)
+	require.NoError(err)
+	require.True(uploaded)
+	assert.Equal(1, transport.commitCalls, "retry must use the durable commit result")
+	assert.Equal(generation.CaptureID, result.CaptureID)
+	assert.Equal(commit.ManifestID, result.ManifestID)
+	assert.Equal(commit.Receipt, result.Receipt)
+	assert.Equal(commit.Generation, result.Generation)
 	head, ok, err := store.SourceHead(
 		t.Context(), generation.Source.Provider, generation.Source.ConfiguredRootID,
 		generation.Source.SourceKey,
 	)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, commit.ManifestID, head.ManifestID)
-	assert.Equal(t, commit.Receipt, head.Receipt)
-	assert.Equal(t, commit.Generation, head.Generation)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(commit.ManifestID, head.ManifestID)
+	assert.Equal(commit.Receipt, head.Receipt)
+	assert.Equal(commit.Generation, head.Generation)
 }
 
 func TestUploaderClassifiesGatewayTimeoutByHTTPStatus(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	store, generation := queuedUploadTestGeneration(t)
 	transport := &uploadTransportStub{
 		uploaded: make(map[rawsync.ObjectRef]string),
@@ -135,19 +142,21 @@ func TestUploaderClassifiesGatewayTimeoutByHTTPStatus(t *testing.T) {
 
 	result, found, err := uploader.UploadNext(t.Context())
 
-	require.Error(t, err)
-	require.True(t, found)
-	assert.Zero(t, result)
+	require.Error(err)
+	require.True(found)
+	assert.Zero(result)
 	_, found, retryErr := uploader.UploadNext(t.Context())
-	require.NoError(t, retryErr)
-	assert.False(t, found, "durable retry time must delay the finalized generation")
+	require.NoError(retryErr)
+	assert.False(found, "durable retry time must delay the finalized generation")
 	base, ok, readErr := store.CaptureBase(t.Context(), generation.Source)
-	require.NoError(t, readErr)
-	require.True(t, ok)
-	assert.Equal(t, generation.CaptureID, base.CaptureID)
+	require.NoError(readErr)
+	require.True(ok)
+	assert.Equal(generation.CaptureID, base.CaptureID)
 }
 
 func TestUploaderRetriesRecoverableClientErrors(t *testing.T) {
+	require := require.New(t)
+
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	store, _ := queuedUploadTestGenerationWithNow(t, func() time.Time { return now })
 	transport := &uploadTransportStub{
@@ -162,8 +171,8 @@ func TestUploaderRetriesRecoverableClientErrors(t *testing.T) {
 	uploader.now = func() time.Time { return now }
 
 	_, found, err := uploader.UploadNext(t.Context())
-	require.Error(t, err)
-	require.True(t, found)
+	require.Error(err)
+	require.True(found)
 	now = now.Add(2 * transientRetryDelay)
 	transport.commitErr = nil
 	transport.commit = rawsync.CommitResult{
@@ -171,11 +180,14 @@ func TestUploaderRetriesRecoverableClientErrors(t *testing.T) {
 		Generation: 1, Created: true,
 	}
 	_, found, err = uploader.UploadNext(t.Context())
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.True(t, found, "corrected credentials must resume the source chain")
 }
 
 func TestUploaderExponentiallyBacksOffRepeatedTransientFailures(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	store, _ := queuedUploadTestGenerationWithNow(t, func() time.Time { return now })
 	transport := &uploadTransportStub{
@@ -188,12 +200,12 @@ func TestUploaderExponentiallyBacksOffRepeatedTransientFailures(t *testing.T) {
 	uploader.now = func() time.Time { return now }
 
 	_, found, err := uploader.UploadNext(t.Context())
-	require.Error(t, err)
-	require.True(t, found)
+	require.Error(err)
+	require.True(found)
 	now = now.Add(transientRetryDelay)
 	_, found, err = uploader.UploadNext(t.Context())
-	require.Error(t, err)
-	require.True(t, found)
+	require.Error(err)
+	require.True(found)
 	transport.commitErr = nil
 	transport.commit = rawsync.CommitResult{
 		ManifestID: strings.Repeat("c", 64), Receipt: strings.Repeat("d", 64),
@@ -201,15 +213,18 @@ func TestUploaderExponentiallyBacksOffRepeatedTransientFailures(t *testing.T) {
 	}
 	now = now.Add(transientRetryDelay)
 	_, found, err = uploader.UploadNext(t.Context())
-	require.NoError(t, err)
-	assert.False(t, found, "second transient failure must wait longer than the first")
+	require.NoError(err)
+	assert.False(found, "second transient failure must wait longer than the first")
 	now = now.Add(transientRetryDelay)
 	_, found, err = uploader.UploadNext(t.Context())
-	require.NoError(t, err)
-	assert.True(t, found)
+	require.NoError(err)
+	assert.True(found)
 }
 
 func TestUploaderRecoversHeadConflictAfterTransientFailure(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	now := time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC)
 	store, generation := queuedUploadTestGenerationWithNow(t, func() time.Time { return now })
 	reconciled := rawsync.CommitResult{
@@ -235,7 +250,7 @@ func TestUploaderRecoversHeadConflictAfterTransientFailure(t *testing.T) {
 				CurrentGeneration: reconciled.Generation,
 			}
 		default:
-			assert.Equal(t, reconciled.Receipt, manifest.ExpectedParentReceipt)
+			assert.Equal(reconciled.Receipt, manifest.ExpectedParentReceipt)
 			return committed, nil
 		}
 	}
@@ -243,37 +258,42 @@ func TestUploaderRecoversHeadConflictAfterTransientFailure(t *testing.T) {
 	uploader.now = func() time.Time { return now }
 
 	_, found, err := uploader.UploadNext(t.Context())
-	require.Error(t, err)
-	require.True(t, found)
+	require.Error(err)
+	require.True(found)
 	now = now.Add(transientRetryDelay)
 	_, found, err = uploader.UploadNext(t.Context())
-	require.Error(t, err)
-	require.True(t, found)
+	require.Error(err)
+	require.True(found)
 
 	result, found, err := uploader.UploadNext(t.Context())
 
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, generation.CaptureID, result.CaptureID)
-	assert.Equal(t, committed.Receipt, result.Receipt)
-	assert.Equal(t, 3, transport.commitCalls)
+	require.NoError(err)
+	require.True(found)
+	assert.Equal(generation.CaptureID, result.CaptureID)
+	assert.Equal(committed.Receipt, result.Receipt)
+	assert.Equal(3, transport.commitCalls)
 }
 
 func TestUploaderBacksOffMissingLocalSpoolObject(t *testing.T) {
+	require := require.New(t)
+
 	store, generation := queuedUploadTestGeneration(t)
 	ref := generation.Entries[0].Objects[0]
-	require.NoError(t, os.Remove(store.ObjectPath(ref)))
+	require.NoError(os.Remove(store.ObjectPath(ref)))
 	uploader := New(store, &uploadTransportStub{}, "device-a")
 
 	_, found, err := uploader.UploadNext(t.Context())
-	require.Error(t, err)
-	require.True(t, found)
+	require.Error(err)
+	require.True(found)
 	_, found, err = uploader.UploadNext(t.Context())
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.False(t, found, "persistent local failures must not hot-loop")
 }
 
 func TestUploaderPersistsPermanentRejectionAndSuppressesRetry(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	baseDir := t.TempDir()
 	store, generation := queuedUploadTestGenerationAt(t, baseDir, nil)
 	transport := &uploadTransportStub{
@@ -285,31 +305,34 @@ func TestUploaderPersistsPermanentRejectionAndSuppressesRetry(t *testing.T) {
 
 	_, found, err := New(store, transport, "device-a").UploadNext(t.Context())
 
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrPermanentFailure)
-	require.True(t, found)
-	require.NoError(t, store.Close())
+	require.Error(err)
+	assert.ErrorIs(err, ErrPermanentFailure)
+	require.True(found)
+	require.NoError(store.Close())
 	store, err = rawcheckpoint.OpenWithOptions(
 		t.Context(), filepath.Join(baseDir, "checkpoint.db"),
 		rawcheckpoint.Options{
 			SpoolDir: filepath.Join(baseDir, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
 	base, ok, err := store.CaptureBase(t.Context(), generation.Source)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, generation.CaptureID, base.CaptureID)
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(generation.CaptureID, base.CaptureID)
 	_, found, err = New(store, transport, "device-a").UploadNext(t.Context())
-	require.NoError(t, err)
-	assert.False(t, found)
+	require.NoError(err)
+	assert.False(found)
 	status, err := store.ClientStatus(t.Context())
-	require.NoError(t, err)
-	assert.Equal(t, 1, status.PermanentFailures)
+	require.NoError(err)
+	assert.Equal(1, status.PermanentFailures)
 }
 
 func TestUploaderUploadsMissingObjectsBeforeAcknowledgingManifest(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	base := t.TempDir()
 	store, err := rawcheckpoint.OpenWithOptions(
 		t.Context(), filepath.Join(base, "checkpoint.db"),
@@ -317,19 +340,19 @@ func TestUploaderUploadsMissingObjectsBeforeAcknowledgingManifest(t *testing.T) 
 			SpoolDir: filepath.Join(base, "spool"), MaxOutboxBytes: 1 << 20,
 		},
 	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	require.NoError(t, store.SetDevice(t.Context(), "device-a"))
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(store.Close()) })
+	require.NoError(store.SetDevice(t.Context(), "device-a"))
 	rootPath := t.TempDir()
 	root, err := store.ResolveConfiguredRoot(t.Context(), parser.AgentClaude, rootPath)
-	require.NoError(t, err)
+	require.NoError(err)
 	contents := []string{"first", "second"}
 	refs := make([]rawsync.ObjectRef, 0, len(contents))
 	for _, content := range contents {
 		ref := objectRefFor(content)
 		path := store.ObjectPath(ref)
-		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o700))
-		require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
+		require.NoError(os.MkdirAll(filepath.Dir(path), 0o700))
+		require.NoError(os.WriteFile(path, []byte(content), 0o600))
 		refs = append(refs, ref)
 	}
 	source := rawcheckpoint.SourceIdentity{
@@ -339,7 +362,7 @@ func TestUploaderUploadsMissingObjectsBeforeAcknowledgingManifest(t *testing.T) 
 		t.Context(), source, int64(len(contents[0])+len(contents[1]))+
 			rawcheckpoint.CaptureMetadataCharge(1, len(refs)),
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	generation := rawcheckpoint.CapturedGeneration{
 		CaptureID: strings.Repeat("1", 32), Source: source,
 		CapturedAt: time.Date(2026, 8, 27, 12, 0, 0, 0, time.UTC),
@@ -350,7 +373,7 @@ func TestUploaderUploadsMissingObjectsBeforeAcknowledgingManifest(t *testing.T) 
 			Appendable: true, Objects: refs,
 		}},
 	}
-	require.NoError(t, store.CommitCapture(t.Context(), reservation.ID, generation))
+	require.NoError(store.CommitCapture(t.Context(), reservation.ID, generation))
 	transport := &uploadTransportStub{
 		uploaded: make(map[rawsync.ObjectRef]string),
 		commit: rawsync.CommitResult{
@@ -363,23 +386,26 @@ func TestUploaderUploadsMissingObjectsBeforeAcknowledgingManifest(t *testing.T) 
 
 	result, uploaded, err := New(store, transport, "device-a").UploadNext(t.Context())
 
-	require.NoError(t, err)
-	require.True(t, uploaded)
-	assert.Equal(t, generation.CaptureID, result.CaptureID)
-	assert.Equal(t, int64(len(contents[0])+len(contents[1])), result.UploadedBytes)
-	assert.Equal(t, contents[0], transport.uploaded[refs[0]])
-	assert.Equal(t, contents[1], transport.uploaded[refs[1]])
+	require.NoError(err)
+	require.True(uploaded)
+	assert.Equal(generation.CaptureID, result.CaptureID)
+	assert.Equal(int64(len(contents[0])+len(contents[1])), result.UploadedBytes)
+	assert.Equal(contents[0], transport.uploaded[refs[0]])
+	assert.Equal(contents[1], transport.uploaded[refs[1]])
 	head, ok, err := store.SourceHead(
 		t.Context(), source.Provider, source.ConfiguredRootID, source.SourceKey,
 	)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, transport.commit.Receipt, head.Receipt)
-	assert.NoFileExists(t, store.ObjectPath(refs[0]))
-	assert.NoFileExists(t, store.ObjectPath(refs[1]))
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(transport.commit.Receipt, head.Receipt)
+	assert.NoFileExists(store.ObjectPath(refs[0]))
+	assert.NoFileExists(store.ObjectPath(refs[1]))
 }
 
 func TestMissingObjectNegotiationUsesBoundedBatches(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	transport := &uploadTransportStub{}
 	objects := make([]rawsync.ObjectRef, 5000)
 	for i := range objects {
@@ -390,17 +416,17 @@ func TestMissingObjectNegotiationUsesBoundedBatches(t *testing.T) {
 		t.Context(), transport, parser.AgentClaude, objects,
 	)
 
-	require.NoError(t, err)
-	assert.Equal(t, objects, missing)
-	require.Greater(t, len(transport.missingBatches), 1)
+	require.NoError(err)
+	assert.Equal(objects, missing)
+	require.Greater(len(transport.missingBatches), 1)
 	for _, batch := range transport.missingBatches {
-		assert.LessOrEqual(t, len(batch), missingObjectBatchSize)
+		assert.LessOrEqual(len(batch), missingObjectBatchSize)
 	}
 }
 
 func objectRefFor(content string) rawsync.ObjectRef {
 	digest := sha256.Sum256([]byte(content))
-	ref, err := rawsync.NewObjectRef(fmt.Sprintf("%x", digest), int64(len(content)))
+	ref, err := rawsync.NewObjectRef(hex.EncodeToString(digest[:]), int64(len(content)))
 	if err != nil {
 		panic(err)
 	}

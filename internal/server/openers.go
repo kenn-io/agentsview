@@ -219,7 +219,7 @@ func launchTerminalInDir(o Opener, dir string) *exec.Cmd {
 			)
 			return exec.Command("osascript", "-e", script)
 		case "terminal":
-			shellCmd := fmt.Sprintf("cd %s", shellQuote(dir))
+			shellCmd := "cd " + shellQuote(dir)
 			script := fmt.Sprintf(
 				`tell application "Terminal"
 					activate

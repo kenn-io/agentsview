@@ -20,7 +20,7 @@ func TestSyncStats_RecordSkip(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var s SyncStats
-			for i := 0; i < tt.skips; i++ {
+			for range tt.skips {
 				s.RecordSkip()
 			}
 			assert.Equal(t, tt.want, s.Skipped)
@@ -159,6 +159,8 @@ func TestAnomalyStats_RecordUnknownSchemaSessions(t *testing.T) {
 // TestAnomalyAccumulator_RecordUnknownSchemaSession verifies whole-session
 // accumulation per agent (no per-source dedup) and that a reset clears it.
 func TestAnomalyAccumulator_RecordUnknownSchemaSession(t *testing.T) {
+	assert := assert.New(t)
+
 	var acc anomalyAccumulator
 	acc.reset()
 
@@ -168,18 +170,18 @@ func TestAnomalyAccumulator_RecordUnknownSchemaSession(t *testing.T) {
 
 	var stats SyncStats
 	acc.applyTo(&stats)
-	assert.Equal(t, 3, stats.Anomalies.UnknownSchemaSessionsTotal)
-	assert.Equal(t, map[string]int{"antigravity": 2, "antigravity-cli": 1},
+	assert.Equal(3, stats.Anomalies.UnknownSchemaSessionsTotal)
+	assert.Equal(map[string]int{"antigravity": 2, "antigravity-cli": 1},
 		stats.Anomalies.UnknownSchemaSessionsByAgent)
-	assert.False(t, stats.Anomalies.IsZero())
+	assert.False(stats.Anomalies.IsZero())
 
 	// A fresh run starts from zero.
 	acc.reset()
 	var next SyncStats
 	acc.applyTo(&next)
-	assert.True(t, next.Anomalies.IsZero())
-	assert.Zero(t, next.Anomalies.UnknownSchemaSessionsTotal)
-	assert.Nil(t, next.Anomalies.UnknownSchemaSessionsByAgent)
+	assert.True(next.Anomalies.IsZero())
+	assert.Zero(next.Anomalies.UnknownSchemaSessionsTotal)
+	assert.Nil(next.Anomalies.UnknownSchemaSessionsByAgent)
 }
 
 func TestAnomalyStats_RecordGenMetadataWithoutUsage(t *testing.T) {
@@ -239,6 +241,8 @@ func TestAnomalyStats_RecordGenMetadataWithoutUsage(t *testing.T) {
 // whole-session accumulation per agent (no per-source dedup) and that a
 // reset clears it.
 func TestAnomalyAccumulator_RecordGenMetadataWithoutUsageSession(t *testing.T) {
+	assert := assert.New(t)
+
 	var acc anomalyAccumulator
 	acc.reset()
 
@@ -248,21 +252,23 @@ func TestAnomalyAccumulator_RecordGenMetadataWithoutUsageSession(t *testing.T) {
 
 	var stats SyncStats
 	acc.applyTo(&stats)
-	assert.Equal(t, 3, stats.Anomalies.GenMetadataWithoutUsageTotal)
-	assert.Equal(t, map[string]int{"antigravity": 2, "antigravity-cli": 1},
+	assert.Equal(3, stats.Anomalies.GenMetadataWithoutUsageTotal)
+	assert.Equal(map[string]int{"antigravity": 2, "antigravity-cli": 1},
 		stats.Anomalies.GenMetadataWithoutUsageByAgent)
-	assert.False(t, stats.Anomalies.IsZero())
+	assert.False(stats.Anomalies.IsZero())
 
 	// A fresh run starts from zero.
 	acc.reset()
 	var next SyncStats
 	acc.applyTo(&next)
-	assert.True(t, next.Anomalies.IsZero())
-	assert.Zero(t, next.Anomalies.GenMetadataWithoutUsageTotal)
-	assert.Nil(t, next.Anomalies.GenMetadataWithoutUsageByAgent)
+	assert.True(next.Anomalies.IsZero())
+	assert.Zero(next.Anomalies.GenMetadataWithoutUsageTotal)
+	assert.Nil(next.Anomalies.GenMetadataWithoutUsageByAgent)
 }
 
 func TestAnomalyAccumulator_Aggregate(t *testing.T) {
+	assert := assert.New(t)
+
 	var acc anomalyAccumulator
 	acc.reset()
 
@@ -280,17 +286,17 @@ func TestAnomalyAccumulator_Aggregate(t *testing.T) {
 	var stats SyncStats
 	acc.applyTo(&stats)
 
-	assert.Equal(t, 7, stats.Anomalies.MalformedLinesTotal)
-	assert.Equal(t, map[string]int{"claude": 6, "codex": 1},
+	assert.Equal(7, stats.Anomalies.MalformedLinesTotal)
+	assert.Equal(map[string]int{"claude": 6, "codex": 1},
 		stats.Anomalies.MalformedLinesByAgent)
-	assert.Equal(t, SanitizeStats{
+	assert.Equal(SanitizeStats{
 		ControlCharsStripped: 3,
 		ModelClamped:         2,
 		TokensClamped:        5,
 		RoleCoerced:          1,
 	}, stats.Anomalies.Sanitize)
-	assert.Equal(t, 11, stats.Anomalies.Sanitize.Total())
-	assert.False(t, stats.Anomalies.IsZero())
+	assert.Equal(11, stats.Anomalies.Sanitize.Total())
+	assert.False(stats.Anomalies.IsZero())
 }
 
 // TestAnomalyAccumulator_DedupesMalformedLinesPerSourceFile verifies a source
@@ -432,9 +438,12 @@ func TestProgress_Percent(t *testing.T) {
 // run with only malformed-line counts omits the empty nested "sanitize"
 // object. Plain omitempty cannot do this for struct-valued fields.
 func TestSyncStatsJSONOmitsZeroAnomalies(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	clean, err := json.Marshal(SyncStats{Synced: 3})
-	require.NoError(t, err)
-	assert.NotContains(t, string(clean), "anomalies",
+	require.NoError(err)
+	assert.NotContains(string(clean), "anomalies",
 		"a clean run must not emit an empty anomalies object")
 
 	malformedOnly, err := json.Marshal(SyncStats{
@@ -443,29 +452,32 @@ func TestSyncStatsJSONOmitsZeroAnomalies(t *testing.T) {
 			MalformedLinesTotal:   2,
 		},
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	got := string(malformedOnly)
-	assert.Contains(t, got, "malformed_lines_total",
+	assert.Contains(got, "malformed_lines_total",
 		"malformed counts must still serialize")
-	assert.NotContains(t, got, "sanitize",
+	assert.NotContains(got, "sanitize",
 		"malformed-only run must not emit an empty sanitize object")
 }
 
 func TestSyncStatsCwdUpdatedSurvivesWorkerJSONRoundTrip(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	stats := SyncStats{}
 	stats.RecordCwdUpdated(2)
-	require.True(t, stats.hasSessionChanges())
-	require.True(t, stats.shouldEmitSync())
+	require.True(stats.hasSessionChanges())
+	require.True(stats.shouldEmitSync())
 
 	payload, err := json.Marshal(stats)
-	require.NoError(t, err)
+	require.NoError(err)
 	var restored SyncStats
-	require.NoError(t, json.Unmarshal(payload, &restored))
+	require.NoError(json.Unmarshal(payload, &restored))
 
-	assert.Equal(t, 2, restored.CwdUpdated,
+	assert.Equal(2, restored.CwdUpdated,
 		"worker-process passes marshal SyncStats; cwd-only updates must survive")
-	assert.True(t, restored.hasSessionChanges())
-	assert.True(t, restored.shouldEmitSync())
+	assert.True(restored.hasSessionChanges())
+	assert.True(restored.shouldEmitSync())
 }
 
 func TestMergeReconciliationSyncStatsCarriesCwdUpdated(t *testing.T) {

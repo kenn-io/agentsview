@@ -34,14 +34,17 @@ func runProjectResolutionCases[C any](
 	t.Helper()
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			inc, exc, err := resolve(tt.projects, tt.exclude, tt.cfg)
 			if tt.wantErr {
-				require.Error(t, err)
+				require.Error(err)
 				return
 			}
-			require.NoError(t, err)
-			assert.Equal(t, tt.wantInclude, inc)
-			assert.Equal(t, tt.wantExclude, exc)
+			require.NoError(err)
+			assert.Equal(tt.wantInclude, inc)
+			assert.Equal(tt.wantExclude, exc)
 		})
 	}
 }

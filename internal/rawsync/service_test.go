@@ -54,6 +54,8 @@ func TestServiceFinalizeObjectOrdersCustodyBeforeRegistration(t *testing.T) {
 	t.Parallel()
 
 	t.Run("success", func(t *testing.T) {
+		assert := assert.New(t)
+
 		t.Parallel()
 		events := []string{}
 		object := serviceObject("body")
@@ -71,10 +73,10 @@ func TestServiceFinalizeObjectOrdersCustodyBeforeRegistration(t *testing.T) {
 			t.Context(), identity, parser.AgentCodex, object, bytes.NewBufferString("body"),
 		)
 		require.NoError(t, err)
-		assert.True(t, result.Created)
-		assert.Equal(t, []string{"put-object", "record-object"}, events)
-		assert.Equal(t, identity.TenantID, objects.putObjectTenant)
-		assert.Equal(t, object, metadata.recordedObjects[0])
+		assert.True(result.Created)
+		assert.Equal([]string{"put-object", "record-object"}, events)
+		assert.Equal(identity.TenantID, objects.putObjectTenant)
+		assert.Equal(object, metadata.recordedObjects[0])
 	})
 
 	t.Run("physical write failure", func(t *testing.T) {
@@ -153,6 +155,8 @@ func TestServiceRejectsObjectsLargerThanAnyManifestFile(t *testing.T) {
 }
 
 func TestServiceMissingObjectsUsesPhysicalCustody(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Parallel()
 
 	events := []string{}
@@ -165,12 +169,15 @@ func TestServiceMissingObjectsUsesPhysicalCustody(t *testing.T) {
 
 	missing, err := service.MissingObjects(t.Context(), identity, parser.AgentCodex, manifest.Objects)
 	require.NoError(t, err)
-	assert.Equal(t, manifest.Objects, missing)
-	assert.Equal(t, []string{"missing-objects"}, events)
-	assert.Equal(t, identity.TenantID, objects.missingTenant)
+	assert.Equal(manifest.Objects, missing)
+	assert.Equal([]string{"missing-objects"}, events)
+	assert.Equal(identity.TenantID, objects.missingTenant)
 }
 
 func TestServiceCommitVerifiesEveryObjectBeforeMetadataCommit(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	events := []string{}
@@ -186,23 +193,26 @@ func TestServiceCommitVerifiesEveryObjectBeforeMetadataCommit(t *testing.T) {
 	service := newTestService(t, objects, metadata)
 
 	result, err := service.CommitManifest(t.Context(), identity, manifest.Manifest)
-	require.NoError(t, err)
-	assert.NotEmpty(t, result.Receipt)
-	assert.Equal(t, []string{
+	require.NoError(err)
+	assert.NotEmpty(result.Receipt)
+	assert.Equal([]string{
 		"verify-objects", "record-objects", "put-manifest", "commit",
 	}, events)
-	assert.Equal(t, manifest.Objects, objects.verifiedObjects)
-	require.Len(t, metadata.committed, 1)
-	assert.Equal(t, manifest.ManifestID, metadata.committed[0].ManifestID)
-	assert.Equal(t, manifest.CanonicalJSON, metadata.committed[0].CanonicalJSON)
-	assert.Equal(t, "parser-data-17", metadata.processingVersion)
+	assert.Equal(manifest.Objects, objects.verifiedObjects)
+	require.Len(metadata.committed, 1)
+	assert.Equal(manifest.ManifestID, metadata.committed[0].ManifestID)
+	assert.Equal(manifest.CanonicalJSON, metadata.committed[0].CanonicalJSON)
+	assert.Equal("parser-data-17", metadata.processingVersion)
 }
 
 func TestServiceCommitUsesBoundedCallsAtMaximumObjectCardinality(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	identity, err := NewAuthIdentity("tenant-a", "device-a")
-	require.NoError(t, err)
+	require.NoError(err)
 	limits := DefaultManifestLimits()
 	limits.MaxCanonicalBytes = 4 << 20
 	objects := make([]ObjectRef, 0, limits.MaxObjects)
@@ -226,20 +236,20 @@ func TestServiceCommitUsesBoundedCallsAtMaximumObjectCardinality(t *testing.T) {
 		}},
 	}
 	canonical, err := ValidateAndCanonicalize(identity, manifest, limits)
-	require.NoError(t, err)
+	require.NoError(err)
 	events := []string{}
 	physical := &recordingObjectStore{events: &events}
 	metadata := &recordingMetadataStore{events: &events}
 	service, err := NewService(physical, metadata, limits, "parser-data-17")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	_, err = service.CommitManifest(t.Context(), identity, manifest)
-	require.NoError(t, err)
-	assert.Equal(t, []string{
+	require.NoError(err)
+	assert.Equal([]string{
 		"verify-objects", "record-objects", "put-manifest", "commit",
 	}, events)
-	assert.Equal(t, canonical.Objects, physical.verifiedObjects)
-	assert.Len(t, metadata.recordedObjects, limits.MaxObjects)
+	assert.Equal(canonical.Objects, physical.verifiedObjects)
+	assert.Len(metadata.recordedObjects, limits.MaxObjects)
 }
 
 func TestServiceCommitRejectsBeforeAcceptanceBoundary(t *testing.T) {
@@ -332,6 +342,8 @@ func TestServiceCommitRejectsBeforeAcceptanceBoundary(t *testing.T) {
 }
 
 func TestServiceCommitPreservesMetadataConflictAfterManifestCustody(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Parallel()
 
 	events := []string{}
@@ -342,11 +354,11 @@ func TestServiceCommitPreservesMetadataConflictAfterManifestCustody(t *testing.T
 	service := newTestService(t, objects, metadata)
 
 	_, err := service.CommitManifest(t.Context(), identity, manifest.Manifest)
-	assert.ErrorIs(t, err, ErrConflict)
+	assert.ErrorIs(err, ErrConflict)
 	var headConflict *HeadConflictError
-	assert.ErrorAs(t, err, &headConflict)
-	assert.Equal(t, int64(4), headConflict.CurrentGeneration)
-	assert.Equal(t, []string{
+	assert.ErrorAs(err, &headConflict)
+	assert.Equal(int64(4), headConflict.CurrentGeneration)
+	assert.Equal([]string{
 		"verify-objects", "record-objects", "put-manifest", "commit",
 	}, events)
 }

@@ -19,7 +19,7 @@ const (
 )
 
 func (s *Server) registerStartupProbeRoute() {
-	s.mux.HandleFunc("GET "+startupProbePath, s.handleStartupProbe)
+	s.handleHTTP(s.api.OpenAPI().Paths[startupProbePath].Get, s.handleStartupProbe)
 }
 
 // EnableStartupProbe creates a process-local secret for proving that startup

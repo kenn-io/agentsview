@@ -44,23 +44,26 @@ func TestResolveCursorWorkspaceDirDarwinPrivateVarContainment(t *testing.T) {
 }
 
 func TestResolveCursorWorkspaceDirInUniqueMissingAndAmbiguous(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	workspace := filepath.Join(root, "Users", "helix", "Code", "work-area")
-	require.NoError(t, os.MkdirAll(workspace, 0o755))
+	require.NoError(os.MkdirAll(workspace, 0o755))
 
 	got, ambiguous := ResolveCursorWorkspaceDirIn(root, "Users-helix-Code-work-area")
-	assert.False(t, ambiguous)
-	assert.Equal(t, normalizeCursorDir(workspace), got)
+	assert.False(ambiguous)
+	assert.Equal(normalizeCursorDir(workspace), got)
 
 	missing, ambiguous := ResolveCursorWorkspaceDirIn(root, "Users-helix-Code-missing")
-	assert.False(t, ambiguous)
-	assert.Empty(t, missing)
+	assert.False(ambiguous)
+	assert.Empty(missing)
 
 	other := filepath.Join(root, "Users", "helix", "Code-work-area")
-	require.NoError(t, os.MkdirAll(other, 0o755))
+	require.NoError(os.MkdirAll(other, 0o755))
 	ambiguousPath, ambiguous := ResolveCursorWorkspaceDirIn(root, "Users-helix-Code-work-area")
-	assert.True(t, ambiguous)
-	assert.NotEmpty(t, ambiguousPath)
+	assert.True(ambiguous)
+	assert.NotEmpty(ambiguousPath)
 }
 
 func TestResolveCursorWorkspaceDirInIssue1418Token(t *testing.T) {
@@ -76,30 +79,36 @@ func TestResolveCursorWorkspaceDirInIssue1418Token(t *testing.T) {
 }
 
 func TestResolveCursorWorkspaceDirHintOnlyDisambiguates(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	workspace := filepath.Join(root, "Users", "helix", "Code", "work-area")
 	outside := filepath.Join(root, "outside")
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "frontend"), 0o755))
-	require.NoError(t, os.MkdirAll(outside, 0o755))
+	require.NoError(os.MkdirAll(filepath.Join(workspace, "frontend"), 0o755))
+	require.NoError(os.MkdirAll(outside, 0o755))
 
-	assert.Equal(t, normalizeCursorDir(workspace), ResolveCursorWorkspaceDirHint(root,
+	assert.Equal(normalizeCursorDir(workspace), ResolveCursorWorkspaceDirHint(root,
 		"Users-helix-Code-work-area", filepath.Join(workspace, "frontend")))
-	assert.Equal(t, normalizeCursorDir(workspace), ResolveCursorWorkspaceDirHint(root,
+	assert.Equal(normalizeCursorDir(workspace), ResolveCursorWorkspaceDirHint(root,
 		"Users-helix-Code-work-area", outside),
 		"a stale hint cannot reject a unique real workspace")
 	other := filepath.Join(root, "Users", "helix", "Code-work-area")
-	require.NoError(t, os.MkdirAll(other, 0o755))
-	assert.Empty(t, ResolveCursorWorkspaceDirHint(root,
+	require.NoError(os.MkdirAll(other, 0o755))
+	assert.Empty(ResolveCursorWorkspaceDirHint(root,
 		"Users-helix-Code-work-area", outside),
 		"an outside hint cannot choose among ambiguous matches")
 }
 
 func TestResolveCursorWorkspaceDirFiltersNamesBeforeStat(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	workspace := filepath.Join(root, "Users", "helix", "Code", "app")
 	unmatched := filepath.Join(root, "unmatched-directory")
-	require.NoError(t, os.MkdirAll(workspace, 0o755))
-	require.NoError(t, os.MkdirAll(unmatched, 0o755))
+	require.NoError(os.MkdirAll(workspace, 0o755))
+	require.NoError(os.MkdirAll(unmatched, 0o755))
 
 	originalStat := osStat
 	t.Cleanup(func() { osStat = originalStat })
@@ -118,10 +127,10 @@ func TestResolveCursorWorkspaceDirFiltersNamesBeforeStat(t *testing.T) {
 	}
 
 	got, ambiguous := ResolveCursorWorkspaceDirIn(root, "Users-helix-Code-app")
-	assert.False(t, ambiguous)
-	assert.Equal(t, normalizeCursorDir(workspace), got)
-	assert.NotContains(t, policyPaths, filepath.Clean(unmatched))
-	assert.NotContains(t, statPaths, filepath.Clean(unmatched))
+	assert.False(ambiguous)
+	assert.Equal(normalizeCursorDir(workspace), got)
+	assert.NotContains(policyPaths, filepath.Clean(unmatched))
+	assert.NotContains(statPaths, filepath.Clean(unmatched))
 }
 
 func TestResolveCursorWorkspaceDirHonorsProbePolicy(t *testing.T) {
@@ -143,11 +152,14 @@ func TestResolveCursorWorkspaceDirHonorsProbePolicy(t *testing.T) {
 
 func TestResolveCursorWorkspaceDirAppliesProtectedAndAutomountPolicy(t *testing.T) {
 	t.Run("protected candidate", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		root := t.TempDir()
 		workspace := filepath.Join(root, "Documents", "app")
 		nonmatching := filepath.Join(root, "unmatched-directory")
-		require.NoError(t, os.MkdirAll(workspace, 0o755))
-		require.NoError(t, os.MkdirAll(nonmatching, 0o755))
+		require.NoError(os.MkdirAll(workspace, 0o755))
+		require.NoError(os.MkdirAll(nonmatching, 0o755))
 
 		originalProbe := probeGitRootForCwd
 		t.Cleanup(func() { probeGitRootForCwd = originalProbe })
@@ -158,18 +170,21 @@ func TestResolveCursorWorkspaceDirAppliesProtectedAndAutomountPolicy(t *testing.
 		}
 
 		got, ambiguous := ResolveCursorWorkspaceDirIn(root, "Documents-app")
-		assert.False(t, ambiguous)
-		assert.Empty(t, got)
-		assert.Contains(t, policyPaths, filepath.Clean(filepath.Join(root, "Documents")))
-		assert.NotContains(t, policyPaths, filepath.Clean(nonmatching))
+		assert.False(ambiguous)
+		assert.Empty(got)
+		assert.Contains(policyPaths, filepath.Clean(filepath.Join(root, "Documents")))
+		assert.NotContains(policyPaths, filepath.Clean(nonmatching))
 	})
 
 	t.Run("automount candidate", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		root := t.TempDir()
 		workspace := filepath.Join(root, "app")
 		nonmatching := filepath.Join(root, "unmatched-directory")
-		require.NoError(t, os.MkdirAll(workspace, 0o755))
-		require.NoError(t, os.MkdirAll(nonmatching, 0o755))
+		require.NoError(os.MkdirAll(workspace, 0o755))
+		require.NoError(os.MkdirAll(nonmatching, 0o755))
 
 		originalPrefixes := export.RegisteredAutomountPrefixes()
 		t.Cleanup(func() { export.RegisterAutomountPrefixes(originalPrefixes) })
@@ -184,17 +199,20 @@ func TestResolveCursorWorkspaceDirAppliesProtectedAndAutomountPolicy(t *testing.
 		}
 
 		got, ambiguous := ResolveCursorWorkspaceDirIn(root, "app")
-		assert.False(t, ambiguous)
-		assert.Empty(t, got)
-		assert.Contains(t, policyPaths, filepath.Clean(workspace))
-		assert.NotContains(t, policyPaths, filepath.Clean(nonmatching))
+		assert.False(ambiguous)
+		assert.Empty(got)
+		assert.Contains(policyPaths, filepath.Clean(workspace))
+		assert.NotContains(policyPaths, filepath.Clean(nonmatching))
 	})
 }
 
 func TestResolveCursorWorkspaceDirModesAndStates(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	workspace := filepath.Join(root, "Users", "helix", "Code", "app")
-	require.NoError(t, os.MkdirAll(workspace, 0o755))
+	require.NoError(os.MkdirAll(workspace, 0o755))
 
 	originalProbe := probeGitRootForCwd
 	t.Cleanup(func() { probeGitRootForCwd = originalProbe })
@@ -203,38 +221,41 @@ func TestResolveCursorWorkspaceDirModesAndStates(t *testing.T) {
 	passive := ResolveCursorWorkspaceDirResolution(
 		root, "Users-helix-Code-app", "", CursorResolvePassiveDiscovery,
 	)
-	assert.Equal(t, SourceCwdUnavailable, passive.State)
+	assert.Equal(SourceCwdUnavailable, passive.State)
 
 	explicit := ResolveCursorWorkspaceDirExplicit(
 		root, "Users-helix-Code-app", "",
 	)
-	assert.Equal(t, SourceCwdResolved, explicit.State)
-	assert.Equal(t, normalizeCursorDir(workspace), explicit.Path)
+	assert.Equal(SourceCwdResolved, explicit.State)
+	assert.Equal(normalizeCursorDir(workspace), explicit.Path)
 	probeGitRootForCwd = func(string) bool { return true }
 
 	missing := ResolveCursorWorkspaceDirResolution(
 		root, "Users-helix-Code-missing", "", CursorResolvePassiveDiscovery,
 	)
-	assert.Equal(t, SourceCwdNone, missing.State)
-	require.NoError(t, os.MkdirAll(filepath.Join(root, "Users", "helix", "Code-app"), 0o755))
+	assert.Equal(SourceCwdNone, missing.State)
+	require.NoError(os.MkdirAll(filepath.Join(root, "Users", "helix", "Code-app"), 0o755))
 	ambiguous := ResolveCursorWorkspaceDirResolution(
 		root, "Users-helix-Code-app", "", CursorResolvePassiveDiscovery,
 	)
-	assert.Equal(t, SourceCwdAmbiguous, ambiguous.State)
-	require.NoError(t, os.MkdirAll(filepath.Join(workspace, "src"), 0o755))
+	assert.Equal(SourceCwdAmbiguous, ambiguous.State)
+	require.NoError(os.MkdirAll(filepath.Join(workspace, "src"), 0o755))
 	hinted := ResolveCursorWorkspaceDirExplicit(
 		root, "Users-helix-Code-app", filepath.Join(workspace, "src"),
 	)
-	assert.Equal(t, SourceCwdResolved, hinted.State)
-	assert.Equal(t, normalizeCursorDir(workspace), hinted.Path)
+	assert.Equal(SourceCwdResolved, hinted.State)
+	assert.Equal(normalizeCursorDir(workspace), hinted.Path)
 }
 
 func TestResolveCursorWorkspaceDirClassifiesIncompleteTraversal(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	workspace := filepath.Join(root, "Users", "helix", "Code", "app")
 	other := filepath.Join(root, "Users", "helix", "Code-app")
-	require.NoError(t, os.MkdirAll(workspace, 0o755))
-	require.NoError(t, os.MkdirAll(other, 0o755))
+	require.NoError(os.MkdirAll(workspace, 0o755))
+	require.NoError(os.MkdirAll(other, 0o755))
 
 	originalReadDir := cursorReadDir
 	t.Cleanup(func() { cursorReadDir = originalReadDir })
@@ -248,18 +269,18 @@ func TestResolveCursorWorkspaceDirClassifiesIncompleteTraversal(t *testing.T) {
 	resolution := ResolveCursorWorkspaceDirResolution(
 		root, "Users-helix-Code-app", "", CursorResolvePassiveDiscovery,
 	)
-	assert.Equal(t, SourceCwdUnavailable, resolution.State)
+	assert.Equal(SourceCwdUnavailable, resolution.State)
 	explicit := ResolveCursorWorkspaceDirExplicit(
 		root, "Users-helix-Code-app", workspace,
 	)
-	assert.Equal(t, SourceCwdUnavailable, explicit.State,
+	assert.Equal(SourceCwdUnavailable, explicit.State,
 		"an explicit hint cannot establish uniqueness through an unreadable branch")
 	legacy, ambiguous := ResolveCursorWorkspaceDirIn(
 		root, "Users-helix-Code-app",
 	)
-	assert.Empty(t, legacy)
-	assert.False(t, ambiguous)
-	assert.Empty(t, ResolveCursorWorkspaceDirMatchesIn(
+	assert.Empty(legacy)
+	assert.False(ambiguous)
+	assert.Empty(ResolveCursorWorkspaceDirMatchesIn(
 		root, "Users-helix-Code-app", "", 2,
 	))
 }
@@ -286,6 +307,8 @@ func TestResolveCursorWorkspaceDirLimitCountsCanonicalTargets(t *testing.T) {
 }
 
 func TestResolveCursorWorkspaceDirPassiveCachesAcrossCalls(t *testing.T) {
+	assert := assert.New(t)
+
 	cursorPassiveResolutionsEnabled = true
 	t.Cleanup(func() { cursorPassiveResolutionsEnabled = false })
 	resetCursorPassiveResolutions()
@@ -306,12 +329,12 @@ func TestResolveCursorWorkspaceDirPassiveCachesAcrossCalls(t *testing.T) {
 		dirName = "C-no-such-cursor-cache-workspace"
 	}
 	first := ResolveCursorWorkspaceDirPassive(dirName)
-	assert.Equal(t, SourceCwdNone, first.State)
+	assert.Equal(SourceCwdNone, first.State)
 	require.Equal(t, 1, readDirCalls)
 
 	second := ResolveCursorWorkspaceDirPassive(dirName)
-	assert.Equal(t, first, second)
-	assert.Equal(t, 1, readDirCalls,
+	assert.Equal(first, second)
+	assert.Equal(1, readDirCalls,
 		"a cached passive resolution must not walk the filesystem again")
 
 	cursorPassiveResolutions.Lock()
@@ -320,30 +343,32 @@ func TestResolveCursorWorkspaceDirPassiveCachesAcrossCalls(t *testing.T) {
 	cursorPassiveResolutions.entries[dirName] = entry
 	cursorPassiveResolutions.Unlock()
 	expired := ResolveCursorWorkspaceDirPassive(dirName)
-	assert.Equal(t, first, expired)
-	assert.Equal(t, 2, readDirCalls,
+	assert.Equal(first, expired)
+	assert.Equal(2, readDirCalls,
 		"an expired entry must re-resolve against the filesystem")
 
 	resetCursorPassiveResolutions()
 	reset := ResolveCursorWorkspaceDirPassive(dirName)
-	assert.Equal(t, first, reset)
-	assert.Equal(t, 3, readDirCalls)
+	assert.Equal(first, reset)
+	assert.Equal(3, readDirCalls)
 }
 
 func TestResolveCursorWorkspaceDirRootedCallsBypassCache(t *testing.T) {
+	require := require.New(t)
+
 	cursorPassiveResolutionsEnabled = true
 	t.Cleanup(func() { cursorPassiveResolutionsEnabled = false })
 	resetCursorPassiveResolutions()
 	t.Cleanup(resetCursorPassiveResolutions)
 	root := t.TempDir()
 	workspace := filepath.Join(root, "Users", "helix", "Code", "app")
-	require.NoError(t, os.MkdirAll(workspace, 0o755))
+	require.NoError(os.MkdirAll(workspace, 0o755))
 
 	first := ResolveCursorWorkspaceDirResolution(
 		root, "Users-helix-Code-app", "", CursorResolvePassiveDiscovery,
 	)
-	require.Equal(t, SourceCwdResolved, first.State)
-	require.NoError(t, os.RemoveAll(workspace))
+	require.Equal(SourceCwdResolved, first.State)
+	require.NoError(os.RemoveAll(workspace))
 	second := ResolveCursorWorkspaceDirResolution(
 		root, "Users-helix-Code-app", "", CursorResolvePassiveDiscovery,
 	)
@@ -352,13 +377,16 @@ func TestResolveCursorWorkspaceDirRootedCallsBypassCache(t *testing.T) {
 }
 
 func TestResolveCursorWorkspaceDirIncompleteDominatesAmbiguity(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	first := filepath.Join(root, "Users", "helix", "Code", "app")
 	second := filepath.Join(root, "Users", "helix", "Code-app")
 	blocked := filepath.Join(root, "Users", "helix", "Code_app")
-	require.NoError(t, os.MkdirAll(first, 0o755))
-	require.NoError(t, os.MkdirAll(second, 0o755))
-	require.NoError(t, os.MkdirAll(blocked, 0o755))
+	require.NoError(os.MkdirAll(first, 0o755))
+	require.NoError(os.MkdirAll(second, 0o755))
+	require.NoError(os.MkdirAll(blocked, 0o755))
 
 	originalStat := osStat
 	t.Cleanup(func() { osStat = originalStat })
@@ -372,12 +400,12 @@ func TestResolveCursorWorkspaceDirIncompleteDominatesAmbiguity(t *testing.T) {
 	resolution := ResolveCursorWorkspaceDirResolution(
 		root, "Users-helix-Code-app", "", CursorResolvePassiveDiscovery,
 	)
-	assert.Equal(t, SourceCwdUnavailable, resolution.State,
+	assert.Equal(SourceCwdUnavailable, resolution.State,
 		"an unreadable branch must not let plural matches clear a preserved Cwd")
 
 	explicit := ResolveCursorWorkspaceDirExplicit(
 		root, "Users-helix-Code-app", first,
 	)
-	assert.Equal(t, SourceCwdUnavailable, explicit.State,
+	assert.Equal(SourceCwdUnavailable, explicit.State,
 		"a hint cannot pick among matches while traversal is incomplete")
 }

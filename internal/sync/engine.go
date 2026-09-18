@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -5876,7 +5877,7 @@ func (e *Engine) streamReconciliationCandidates(
 			}
 			var spoolErr error
 			err = discoverer.DiscoverEach(ctx, func(source parser.SourceRef) error {
-				candidate, ok := e.reconciliationCandidate(
+				candidate, ok := e.reconciliationCandidate(ctx,
 					provider, source, rankingRoots, watchRoots,
 				)
 				if !ok {
@@ -6102,7 +6103,7 @@ func (e *incompleteReconciliationError) ReconciliationRetryOverflow() bool {
 	return e.overflow
 }
 
-func (e *Engine) reconciliationCandidate(
+func (e *Engine) reconciliationCandidate(ctx context.Context,
 	provider parser.Provider, source parser.SourceRef, roots []string,
 	watchRoots []parser.WatchRoot,
 ) (reconciliationCandidate, bool) {
@@ -6196,7 +6197,7 @@ func (e *Engine) reconciliationCandidate(
 	}
 	var sourceState parser.ReconciliationSourceState
 	if stateProvider, ok := provider.(parser.ReconciliationSourceStateProvider); ok {
-		if state, stateOK := stateProvider.ReconciliationSourceState(source); stateOK {
+		if state, stateOK := stateProvider.ReconciliationSourceState(ctx, source); stateOK {
 			sourceState = state
 		}
 	}
@@ -6358,7 +6359,7 @@ func (e *Engine) rehydrateReconciliationPage(
 				return nil, fmt.Errorf("rehydrate %s source %s: %w", candidate.Provider, candidate.Path, err)
 			}
 			if found && reconciliationSourceIdentity(candidate.Provider, source) == candidate.Identity {
-				if e.applyReconciliationSourceStateIfValid(
+				if e.applyReconciliationSourceStateIfValid(ctx,
 					provider, &source, candidate.SourceState,
 					candidate.Provider, candidate.Path,
 				) {
@@ -6400,7 +6401,7 @@ func (e *Engine) rehydrateReconciliationPage(
 			return nil, fmt.Errorf("rehydrate %s source %s: canonical source not found", candidate.Provider, candidate.Path)
 		}
 		source := *matched
-		_ = e.applyReconciliationSourceStateIfValid(
+		_ = e.applyReconciliationSourceStateIfValid(ctx,
 			provider, &source, candidate.SourceState,
 			candidate.Provider, candidate.Path,
 		)
@@ -6478,7 +6479,7 @@ func (e *Engine) refreshReconciliationPageContainerCaptures(
 // virtual SQLite member to its canonical storage shadow, whose parse does
 // not depend on the container, and rejecting it here would send it to a
 // path-matching fallback that cannot match the promoted path.
-func (e *Engine) applyReconciliationSourceStateIfValid(
+func (e *Engine) applyReconciliationSourceStateIfValid(ctx context.Context,
 	provider parser.Provider,
 	source *parser.SourceRef,
 	state parser.ReconciliationSourceState,
@@ -6509,7 +6510,7 @@ func (e *Engine) applyReconciliationSourceStateIfValid(
 	if !ok {
 		return false
 	}
-	return stateProvider.ApplyReconciliationSourceState(source, state) == nil
+	return stateProvider.ApplyReconciliationSourceState(ctx, source, state) == nil
 }
 
 func canonicalReconciliationSourceIdentity(value string) string {
@@ -7491,7 +7492,7 @@ func (e *Engine) buildReconciliationReplacementIndex(
 		}
 	}()
 	err = discoverer.DiscoverEach(ctx, func(source parser.SourceRef) error {
-		candidate, admitted := e.reconciliationCandidate(
+		candidate, admitted := e.reconciliationCandidate(ctx,
 			provider, source, configuredRoots, watchRoots,
 		)
 		if !admitted {
@@ -8630,7 +8631,7 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	// Codex-format forks take the same branch: their fingerprint carries no
 	// index component, so the raw mtime is the same value at lower cost.
 	if isCodexFormatAgent(file.Agent) {
-		return discoveredFileMtime(file)
+		return discoveredFileMtime(ctx, file)
 	}
 	// S3 objects are discovered through the provider facade (so they carry a
 	// ProviderSource), but providers read local files and cannot Fingerprint an
@@ -8639,13 +8640,13 @@ func (e *Engine) discoveredFileEffectiveMtime(
 	// the incremental cutoff and reprocessing every old S3 object on each sync.
 	// The threaded object metadata (or a HEAD stat) gives the timestamp directly.
 	if isS3SourcePath(file.Path) {
-		return discoveredFileMtime(file)
+		return discoveredFileMtime(ctx, file)
 	}
 	// Copilot store changes must pass the cutoff even when the transcript is
 	// old. Parent timestamps expose deletions; ctime catches restored mtimes.
 	// Keep these stat-only signals separate from persisted session mtimes.
 	if file.Agent == parser.AgentCopilot {
-		mtime, err := discoveredFileMtime(file)
+		mtime, err := discoveredFileMtime(ctx, file)
 		if err != nil {
 			return 0, err
 		}
@@ -8770,7 +8771,7 @@ func (e *Engine) discoveredFileEffectiveMtime(
 			return mtime, nil
 		}
 	}
-	return discoveredFileMtime(file)
+	return discoveredFileMtime(ctx, file)
 }
 
 // providerSourceMtime resolves a provider-sourced file's effective mtime through
@@ -8822,7 +8823,7 @@ func (e *Engine) providerSourceMtime(
 	return fingerprint.MTimeNS, true, nil
 }
 
-func discoveredFileMtime(
+func discoveredFileMtime(ctx context.Context,
 	file parser.DiscoveredFile,
 ) (int64, error) {
 	if strings.HasPrefix(file.Path, "s3://") {
@@ -8837,13 +8838,13 @@ func discoveredFileMtime(
 	}
 	if file.Agent == parser.AgentKiro {
 		if _, _, ok := parseKiroSQLiteVirtualPath(file.Path); ok {
-			return parser.KiroSQLiteSourceMtime(file.Path)
+			return parser.KiroSQLiteSourceMtime(ctx, file.Path)
 		}
 	}
 	if isOpenCodeFormatStorageAgent(file.Agent) {
 		if isOpenCodeFormatSQLiteVirtualPath(file.Agent, file.Path) ||
 			isOpenCodeFormatStoragePath(file.Agent, file.Path) {
-			return openCodeFormatSourceMtime(
+			return openCodeFormatSourceMtime(ctx,
 				file.Agent, file.Path,
 			)
 		}
@@ -12990,7 +12991,7 @@ func (e *Engine) claudeRowlessFreshnessCacheKey(
 	return providerAgentSkipCacheKey(path, parser.AgentClaude) +
 		sourceHashSkipMarker + contentHash +
 		"&data_version=" + strconv.Itoa(db.CurrentDataVersion()) +
-		"&cwd_filter=" + fmt.Sprintf("%x", filterHash)
+		"&cwd_filter=" + hex.EncodeToString(filterHash[:])
 }
 
 func (e *Engine) cacheClaudeRowlessFreshness(
@@ -19566,18 +19567,18 @@ func resolveOpenCodeFormatSource(
 	}
 }
 
-func openCodeFormatSourceMtime(
+func openCodeFormatSourceMtime(ctx context.Context,
 	agent parser.AgentType, path string,
 ) (int64, error) {
 	switch agent {
 	case parser.AgentOpenCode:
-		return parser.OpenCodeSourceMtime(path)
+		return parser.OpenCodeSourceMtime(ctx, path)
 	case parser.AgentKilo:
-		return parser.KiloSourceMtime(path)
+		return parser.KiloSourceMtime(ctx, path)
 	case parser.AgentMiMoCode:
-		return parser.MiMoCodeSourceMtime(path)
+		return parser.MiMoCodeSourceMtime(ctx, path)
 	case parser.AgentIcodemate:
-		return parser.IcodemateSourceMtime(path)
+		return parser.IcodemateSourceMtime(ctx, path)
 	default:
 		return 0, fmt.Errorf("unknown OpenCode-format agent: %s", agent)
 	}
@@ -20408,7 +20409,7 @@ func providerOutcomeContainsSession(
 // session. Most file-based agents map directly to a single source
 // file, but OpenCode storage sessions derive their effective mtime
 // from the session JSON plus related message/part files.
-func (e *Engine) SourceMtime(sessionID string) int64 {
+func (e *Engine) SourceMtime(ctx context.Context, sessionID string) int64 {
 	host, rawID := parser.StripHostPrefix(sessionID)
 	if host != "" {
 		if fp := e.db.GetSessionFilePath(sessionID); isS3SourcePath(fp) {
@@ -20496,7 +20497,7 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 		return mtime
 	}
 	if isOpenCodeFormatStorageAgent(def.Type) {
-		mtime, err := openCodeFormatSourceMtime(def.Type, path)
+		mtime, err := openCodeFormatSourceMtime(ctx, def.Type, path)
 		if err != nil {
 			return 0
 		}
@@ -20591,7 +20592,7 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 	}
 	if def.Type == parser.AgentKiro {
 		if _, _, ok := parseKiroSQLiteVirtualPath(path); ok {
-			mtime, err := parser.KiroSQLiteSourceMtime(path)
+			mtime, err := parser.KiroSQLiteSourceMtime(ctx, path)
 			if err != nil {
 				return 0
 			}
@@ -20609,7 +20610,7 @@ func (e *Engine) SourceMtime(sessionID string) int64 {
 	}
 	if def.Type == parser.AgentShelley {
 		if _, _, ok := parser.ParseVirtualSourcePathForBase(path, shelleyDBFile); ok {
-			mtime, err := parser.ShelleySourceMtime(path)
+			mtime, err := parser.ShelleySourceMtime(ctx, path)
 			if err != nil {
 				return 0
 			}

@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -26,7 +25,7 @@ func BenchmarkGetAnalyticsToolsYearRange(b *testing.B) {
 	f := AnalyticsFilter{From: "2025-01-01", To: "2025-12-31", Timezone: "UTC"}
 	b.ResetTimer()
 	for b.Loop() {
-		resp, err := d.GetAnalyticsTools(context.Background(), f)
+		resp, err := d.GetAnalyticsTools(b.Context(), f)
 		require.NoError(b, err)
 		require.Equal(b, 10950, resp.TotalCalls)
 	}

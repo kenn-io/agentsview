@@ -25,6 +25,9 @@ func writeChatGPTFixture(
 
 // Basic 3-message conversation: user, assistant, user.
 func TestParseChatGPTExport(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	writeChatGPTFixture(t, dir, "conversations-001.json", `[
   {
@@ -97,39 +100,42 @@ func TestParseChatGPTExport(t *testing.T) {
 		results = append(results, r)
 		return nil
 	})
-	require.NoError(t, err)
-	require.Len(t, results, 1)
+	require.NoError(err)
+	require.Len(results, 1)
 
 	s := results[0].Session
-	assert.Equal(t, "chatgpt:abc-123", s.ID)
-	assert.Equal(t, "chatgpt.com", s.Project)
-	assert.Equal(t, "local", s.Machine)
-	assert.Equal(t, AgentChatGPT, s.Agent)
-	assert.Equal(t, "Hello Chat", s.SessionName)
-	assert.Equal(t, "What is Go?", s.FirstMessage)
-	assert.Equal(t, 3, s.MessageCount)
-	assert.Equal(t, 2, s.UserMessageCount)
+	assert.Equal("chatgpt:abc-123", s.ID)
+	assert.Equal("chatgpt.com", s.Project)
+	assert.Equal("local", s.Machine)
+	assert.Equal(AgentChatGPT, s.Agent)
+	assert.Equal("Hello Chat", s.SessionName)
+	assert.Equal("What is Go?", s.FirstMessage)
+	assert.Equal(3, s.MessageCount)
+	assert.Equal(2, s.UserMessageCount)
 
 	msgs := results[0].Messages
-	require.Len(t, msgs, 3)
+	require.Len(msgs, 3)
 
-	assert.Equal(t, 0, msgs[0].Ordinal)
-	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t, "What is Go?", msgs[0].Content)
+	assert.Equal(0, msgs[0].Ordinal)
+	assert.Equal(RoleUser, msgs[0].Role)
+	assert.Equal("What is Go?", msgs[0].Content)
 
-	assert.Equal(t, 1, msgs[1].Ordinal)
-	assert.Equal(t, RoleAssistant, msgs[1].Role)
-	assert.Equal(t, "Go is a programming language.", msgs[1].Content)
-	assert.Equal(t, "gpt-4", msgs[1].Model)
+	assert.Equal(1, msgs[1].Ordinal)
+	assert.Equal(RoleAssistant, msgs[1].Role)
+	assert.Equal("Go is a programming language.", msgs[1].Content)
+	assert.Equal("gpt-4", msgs[1].Model)
 
-	assert.Equal(t, 2, msgs[2].Ordinal)
-	assert.Equal(t, RoleUser, msgs[2].Role)
-	assert.Equal(t, "Thanks!", msgs[2].Content)
+	assert.Equal(2, msgs[2].Ordinal)
+	assert.Equal(RoleUser, msgs[2].Role)
+	assert.Equal("Thanks!", msgs[2].Content)
 }
 
 // Tool nodes (code_interpreter + execution_output) should
 // be attached to the preceding assistant message.
 func TestParseChatGPTExport_ToolCalls(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	writeChatGPTFixture(t, dir, "conversations-001.json", `[
   {
@@ -219,27 +225,30 @@ func TestParseChatGPTExport_ToolCalls(t *testing.T) {
 		results = append(results, r)
 		return nil
 	})
-	require.NoError(t, err)
-	require.Len(t, results, 1)
+	require.NoError(err)
+	require.Len(results, 1)
 
 	msgs := results[0].Messages
 	// Tool nodes are NOT separate messages.
-	require.Len(t, msgs, 2, "tool nodes should be attached, not separate")
+	require.Len(msgs, 2, "tool nodes should be attached, not separate")
 
 	asst := msgs[1]
-	assert.Equal(t, RoleAssistant, asst.Role)
-	assert.True(t, asst.HasToolUse)
-	require.Len(t, asst.ToolCalls, 1)
-	assert.Equal(t, "code_interpreter", asst.ToolCalls[0].ToolName)
-	assert.Equal(t, "Bash", asst.ToolCalls[0].Category)
+	assert.Equal(RoleAssistant, asst.Role)
+	assert.True(asst.HasToolUse)
+	require.Len(asst.ToolCalls, 1)
+	assert.Equal("code_interpreter", asst.ToolCalls[0].ToolName)
+	assert.Equal("Bash", asst.ToolCalls[0].Category)
 
 	// execution_output is paired as a result event.
-	require.Len(t, asst.ToolCalls[0].ResultEvents, 1)
-	assert.Contains(t, asst.ToolCalls[0].ResultEvents[0].Content, "42")
+	require.Len(asst.ToolCalls[0].ResultEvents, 1)
+	assert.Contains(asst.ToolCalls[0].ResultEvents[0].Content, "42")
 }
 
 // Thoughts content type should produce [Thinking] blocks.
 func TestParseChatGPTExport_Thinking(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	writeChatGPTFixture(t, dir, "conversations-001.json", `[
   {
@@ -299,24 +308,27 @@ func TestParseChatGPTExport_Thinking(t *testing.T) {
 		results = append(results, r)
 		return nil
 	})
-	require.NoError(t, err)
-	require.Len(t, results, 1)
+	require.NoError(err)
+	require.Len(results, 1)
 
 	msgs := results[0].Messages
-	require.Len(t, msgs, 2)
+	require.Len(msgs, 2)
 
 	asst := msgs[1]
-	assert.True(t, asst.HasThinking)
-	assert.Contains(t, asst.Content, "[Thinking]")
-	assert.Contains(t, asst.Content, "Let me think about recursion.")
-	assert.Contains(t, asst.Content, "It is a function calling itself.")
-	assert.Contains(t, asst.Content, "[/Thinking]")
-	assert.Equal(t, "o1-preview", asst.Model)
+	assert.True(asst.HasThinking)
+	assert.Contains(asst.Content, "[Thinking]")
+	assert.Contains(asst.Content, "Let me think about recursion.")
+	assert.Contains(asst.Content, "It is a function calling itself.")
+	assert.Contains(asst.Content, "[/Thinking]")
+	assert.Equal("o1-preview", asst.Model)
 }
 
 // System nodes should have IsSystem = true and count in
 // MessageCount.
 func TestParseChatGPTExport_SystemMessage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	writeChatGPTFixture(t, dir, "conversations-001.json", `[
   {
@@ -389,20 +401,20 @@ func TestParseChatGPTExport_SystemMessage(t *testing.T) {
 		results = append(results, r)
 		return nil
 	})
-	require.NoError(t, err)
-	require.Len(t, results, 1)
+	require.NoError(err)
+	require.Len(results, 1)
 
 	s := results[0].Session
-	assert.Equal(t, 3, s.MessageCount)
-	assert.Equal(t, 1, s.UserMessageCount)
+	assert.Equal(3, s.MessageCount)
+	assert.Equal(1, s.UserMessageCount)
 
 	msgs := results[0].Messages
-	require.Len(t, msgs, 3)
+	require.Len(msgs, 3)
 
-	assert.True(t, msgs[0].IsSystem)
-	assert.Equal(t, "You are a helpful assistant.", msgs[0].Content)
-	assert.False(t, msgs[1].IsSystem)
-	assert.Equal(t, RoleUser, msgs[1].Role)
+	assert.True(msgs[0].IsSystem)
+	assert.Equal("You are a helpful assistant.", msgs[0].Content)
+	assert.False(msgs[1].IsSystem)
+	assert.Equal(RoleUser, msgs[1].Role)
 }
 
 // Empty directory should produce no results and no error.
@@ -418,6 +430,9 @@ func TestParseChatGPTExport_EmptyDir(t *testing.T) {
 
 // Multiple conversation files should all be processed.
 func TestParseChatGPTExport_MultipleShards(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 
 	shard := func(id, title string) string {
@@ -464,16 +479,18 @@ func TestParseChatGPTExport_MultipleShards(t *testing.T) {
 		results = append(results, r)
 		return nil
 	})
-	require.NoError(t, err)
-	require.Len(t, results, 2)
+	require.NoError(err)
+	require.Len(results, 2)
 
-	assert.Equal(t, "chatgpt:conv-a", results[0].Session.ID)
-	assert.Equal(t, "chatgpt:conv-b", results[1].Session.ID)
+	assert.Equal("chatgpt:conv-a", results[0].Session.ID)
+	assert.Equal("chatgpt:conv-b", results[1].Session.ID)
 }
 
 // Verify DAG linearization walks from current_node to root and
 // reverses.
 func TestLinearizeDAG(t *testing.T) {
+	assert := assert.New(t)
+
 	parent := "root"
 	mapping := map[string]chatGPTNode{
 		"root": {
@@ -494,9 +511,9 @@ func TestLinearizeDAG(t *testing.T) {
 
 	nodes := linearizeDAG(mapping, "b")
 	require.Len(t, nodes, 3)
-	assert.Equal(t, "root", nodes[0].ID)
-	assert.Equal(t, "a", nodes[1].ID)
-	assert.Equal(t, "b", nodes[2].ID)
+	assert.Equal("root", nodes[0].ID)
+	assert.Equal("a", nodes[1].ID)
+	assert.Equal("b", nodes[2].ID)
 }
 
 func TestLinearizeDAG_EmptyCurrentNode(t *testing.T) {
@@ -655,6 +672,9 @@ func TestUnixFloatToTime(t *testing.T) {
 
 // Conversation with web_search tool nodes.
 func TestParseChatGPTExport_WebSearch(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	writeChatGPTFixture(t, dir, "conversations-001.json", `[
   {
@@ -729,17 +749,17 @@ func TestParseChatGPTExport_WebSearch(t *testing.T) {
 		results = append(results, r)
 		return nil
 	})
-	require.NoError(t, err)
-	require.Len(t, results, 1)
+	require.NoError(err)
+	require.Len(results, 1)
 
 	msgs := results[0].Messages
-	require.Len(t, msgs, 2)
+	require.Len(msgs, 2)
 
 	asst := msgs[1]
-	assert.True(t, asst.HasToolUse)
-	require.Len(t, asst.ToolCalls, 1)
-	assert.Equal(t, "web_search", asst.ToolCalls[0].ToolName)
-	assert.Equal(t, "Tool", asst.ToolCalls[0].Category)
+	assert.True(asst.HasToolUse)
+	require.Len(asst.ToolCalls, 1)
+	assert.Equal("web_search", asst.ToolCalls[0].ToolName)
+	assert.Equal("Tool", asst.ToolCalls[0].Category)
 }
 
 // --- helpers ---

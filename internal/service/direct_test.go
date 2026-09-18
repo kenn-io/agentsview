@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json/v2"
-	"errors"
 	"fmt"
 	"math"
 	"os"
@@ -92,7 +91,7 @@ func seedCursorAttributionDB(
 	require.NoError(t, err, "open cursor attribution db")
 	t.Cleanup(func() { _ = conn.Close() })
 
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		CREATE TABLE scored_commits (
 			commitHash TEXT PRIMARY KEY,
 			scoredAt INTEGER NOT NULL,
@@ -110,7 +109,7 @@ func seedCursorAttributionDB(
 		)
 	`)
 	require.NoError(t, err, "create scored_commits table")
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		CREATE TABLE conversation_summaries (
 			model TEXT NOT NULL,
 			mode TEXT NOT NULL,
@@ -120,7 +119,7 @@ func seedCursorAttributionDB(
 	require.NoError(t, err, "create conversation_summaries table")
 
 	for _, commit := range commits {
-		_, err := conn.Exec(`
+		_, err := conn.ExecContext(t.Context(), `
 			INSERT INTO scored_commits (
 				commitHash, scoredAt, commitDate,
 				linesAdded, linesDeleted,
@@ -140,7 +139,7 @@ func seedCursorAttributionDB(
 	}
 
 	for i, convo := range conversations {
-		_, err := conn.Exec(`
+		_, err := conn.ExecContext(t.Context(), `
 			INSERT INTO conversation_summaries (
 				model, mode, updatedAt
 			) VALUES (?, ?, ?)`,
@@ -157,13 +156,16 @@ func TestDirectBackend_Get_Roundtrip(t *testing.T) {
 	svc, env := newDirectTestSvc(t)
 	sessionID := env.InsertSession(t)
 
-	detail, err := svc.Get(context.Background(), sessionID)
+	detail, err := svc.Get(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, detail)
 	assert.Equal(t, sessionID, detail.ID)
 }
 
 func TestDirectBackend_Stats_CursorAttribution(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	svc, env := newDirectTestSvc(t)
 	now := time.Now().UTC()
 	startedAt := now.Add(-2 * time.Hour).Format(time.RFC3339)
@@ -215,22 +217,21 @@ func TestDirectBackend_Stats_CursorAttribution(t *testing.T) {
 	)
 	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", path)
 
-	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+	stats, err := svc.Stats(t.Context(), service.StatsFilter{
 		Since: "28d",
 		Agent: "cursor",
 	})
-	require.NoError(t, err)
-	require.NotNil(t, stats)
+	require.NoError(err)
+	require.NotNil(stats)
 	source := requireCursorAttributionSource(t, stats)
-	assert.Equal(t, "available", source.Status)
-	assert.Equal(t, "machine_local", source.Scope)
-	require.NotNil(t, source.Metrics)
-	assert.Equal(t, int64(2), source.Metrics.ScoredCommits)
-	assert.Equal(t, int64(18), source.Metrics.LinesAdded)
-	assert.InDelta(t, 10.0/18.0, source.Metrics.AIAuthoredPct, 1e-9)
-	require.Len(t, source.Metrics.ConversationCounts, 1)
+	assert.Equal("available", source.Status)
+	assert.Equal("machine_local", source.Scope)
+	require.NotNil(source.Metrics)
+	assert.Equal(int64(2), source.Metrics.ScoredCommits)
+	assert.Equal(int64(18), source.Metrics.LinesAdded)
+	assert.InDelta(10.0/18.0, source.Metrics.AIAuthoredPct, 1e-9)
+	require.Len(source.Metrics.ConversationCounts, 1)
 	assert.Equal(
-		t,
 		"claude-3.5-sonnet",
 		source.Metrics.ConversationCounts[0].Model,
 	)
@@ -239,64 +240,75 @@ func TestDirectBackend_Stats_CursorAttribution(t *testing.T) {
 func TestDirectBackend_Stats_CursorAttributionIgnoredForNonCursorFilter(
 	t *testing.T,
 ) {
+	require := require.New(t)
+
 	svc, _ := newDirectTestSvc(t)
 	badPath := filepath.Join(t.TempDir(), "ai-code-tracking.db")
-	require.NoError(t, os.WriteFile(badPath, []byte("not sqlite"), 0o600))
+	require.NoError(os.WriteFile(badPath, []byte("not sqlite"), 0o600))
 	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", badPath)
 
-	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+	stats, err := svc.Stats(t.Context(), service.StatsFilter{
 		Since: "28d",
 		Agent: "codex",
 	})
-	require.NoError(t, err)
-	require.NotNil(t, stats)
+	require.NoError(err)
+	require.NotNil(stats)
 	assert.Nil(t, stats.CodeAttribution)
 }
 
 func TestDirectBackend_Stats_CursorAttributionReportsMissingDB(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	svc, _ := newDirectTestSvc(t)
 	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB",
 		filepath.Join(t.TempDir(), "missing.db"))
 
-	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+	stats, err := svc.Stats(t.Context(), service.StatsFilter{
 		Since: "28d",
 		Agent: "cursor",
 	})
-	require.NoError(t, err)
-	require.NotNil(t, stats)
+	require.NoError(err)
+	require.NotNil(stats)
 	source := requireCursorAttributionSource(t, stats)
-	assert.Equal(t, "unavailable", source.Status)
-	assert.Equal(t, "machine_local", source.Scope)
-	assert.Nil(t, source.Metrics)
-	require.NotEmpty(t, source.Warnings)
-	assert.Contains(t, source.Warnings[0],
+	assert.Equal("unavailable", source.Status)
+	assert.Equal("machine_local", source.Scope)
+	assert.Nil(source.Metrics)
+	require.NotEmpty(source.Warnings)
+	assert.Contains(source.Warnings[0],
 		"Cursor attribution database is unavailable")
 }
 
 func TestDirectBackend_Stats_CursorAttributionReportsLoadError(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	svc, _ := newDirectTestSvc(t)
 	badPath := filepath.Join(t.TempDir(), "ai-code-tracking.db")
-	require.NoError(t, os.WriteFile(badPath, []byte("not sqlite"), 0o600))
+	require.NoError(os.WriteFile(badPath, []byte("not sqlite"), 0o600))
 	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", badPath)
 
-	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+	stats, err := svc.Stats(t.Context(), service.StatsFilter{
 		Since: "28d",
 		Agent: "cursor",
 	})
-	require.NoError(t, err)
-	require.NotNil(t, stats)
+	require.NoError(err)
+	require.NotNil(stats)
 	source := requireCursorAttributionSource(t, stats)
-	assert.Equal(t, "error", source.Status)
-	assert.Equal(t, "machine_local", source.Scope)
-	assert.Nil(t, source.Metrics)
-	require.NotEmpty(t, source.Warnings)
-	assert.Contains(t, source.Warnings[0],
+	assert.Equal("error", source.Status)
+	assert.Equal("machine_local", source.Scope)
+	assert.Nil(source.Metrics)
+	require.NotEmpty(source.Warnings)
+	assert.Contains(source.Warnings[0],
 		"failed to load Cursor attribution")
 }
 
 func TestDirectBackend_Stats_CursorAttributionReportsUnsupportedProjectFilters(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	svc, _ := newDirectTestSvc(t)
 	now := time.Now().UTC()
 	path := seedCursorAttributionDB(t,
@@ -317,15 +329,15 @@ func TestDirectBackend_Stats_CursorAttributionReportsUnsupportedProjectFilters(
 		{Since: "28d", Agent: "cursor", IncludeProjects: []string{"proj"}},
 		{Since: "28d", Agent: "cursor", ExcludeProjects: []string{"proj"}},
 	} {
-		stats, err := svc.Stats(context.Background(), filter)
-		require.NoError(t, err)
-		require.NotNil(t, stats)
+		stats, err := svc.Stats(t.Context(), filter)
+		require.NoError(err)
+		require.NotNil(stats)
 		source := requireCursorAttributionSource(t, stats)
-		assert.Equal(t, "unsupported_filter", source.Status)
-		assert.Equal(t, "machine_local", source.Scope)
-		assert.Nil(t, source.Metrics)
-		require.NotEmpty(t, source.Warnings)
-		assert.Contains(t, source.Warnings[0],
+		assert.Equal("unsupported_filter", source.Status)
+		assert.Equal("machine_local", source.Scope)
+		assert.Nil(source.Metrics)
+		require.NotEmpty(source.Warnings)
+		assert.Contains(source.Warnings[0],
 			"cannot be scoped by project filters")
 	}
 }
@@ -333,6 +345,9 @@ func TestDirectBackend_Stats_CursorAttributionReportsUnsupportedProjectFilters(
 func TestDirectBackend_Stats_CursorAttributionLoadedForAllAgentFilter(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	svc, env := newDirectTestSvc(t)
 	now := time.Now().UTC()
 	startedAt := now.Add(-45 * time.Minute).Format(time.RFC3339)
@@ -367,21 +382,24 @@ func TestDirectBackend_Stats_CursorAttributionLoadedForAllAgentFilter(
 	)
 	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", path)
 
-	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+	stats, err := svc.Stats(t.Context(), service.StatsFilter{
 		Since: "28d",
 		Agent: "all",
 	})
-	require.NoError(t, err)
-	require.NotNil(t, stats)
-	assert.Equal(t, 2, stats.Totals.SessionsAll)
+	require.NoError(err)
+	require.NotNil(stats)
+	assert.Equal(2, stats.Totals.SessionsAll)
 	source := requireCursorAttributionSource(t, stats)
-	require.NotNil(t, source.Metrics)
-	assert.Equal(t, int64(1), source.Metrics.ScoredCommits)
+	require.NotNil(source.Metrics)
+	assert.Equal(int64(1), source.Metrics.ScoredCommits)
 }
 
 func TestDirectBackend_Stats_CursorAttributionIgnoredWhenAllMixedWithNonCursorFilter(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	svc, env := newDirectTestSvc(t)
 	now := time.Now().UTC()
 	startedAt := now.Add(-45 * time.Minute).Format(time.RFC3339)
@@ -416,15 +434,15 @@ func TestDirectBackend_Stats_CursorAttributionIgnoredWhenAllMixedWithNonCursorFi
 	)
 	t.Setenv("AGENTSVIEW_CURSOR_ATTRIBUTION_DB", path)
 
-	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+	stats, err := svc.Stats(t.Context(), service.StatsFilter{
 		Since: "28d",
 		Agent: "all, codex",
 	})
-	require.NoError(t, err)
-	require.NotNil(t, stats)
-	assert.Equal(t, 1, stats.Totals.SessionsAll)
-	assert.Equal(t, "codex", stats.Filters.Agent)
-	assert.Nil(t, stats.CodeAttribution)
+	require.NoError(err)
+	require.NotNil(stats)
+	assert.Equal(1, stats.Totals.SessionsAll)
+	assert.Equal("codex", stats.Filters.Agent)
+	assert.Nil(stats.CodeAttribution)
 }
 
 func requireCursorAttributionSource(
@@ -442,6 +460,9 @@ func requireCursorAttributionSource(
 func TestDirectBackend_Get_HealthBreakdownIncludesHeuristics(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	svc, env := newDirectTestSvc(t)
 	sessionID := env.InsertSession(t)
@@ -469,59 +490,61 @@ func TestDirectBackend_Get_HealthBreakdownIncludesHeuristics(
 			},
 		},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	detail, err := svc.Get(context.Background(), sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, detail)
+	detail, err := svc.Get(t.Context(), sessionID)
+	require.NoError(err)
+	require.NotNil(detail)
 
-	assert.Contains(t, detail.HealthScoreBasis, "prompt_quality")
-	assert.Contains(t, detail.HealthScoreBasis, "context_quality")
-	assert.NotContains(t, detail.HealthPenalties, "repeated_prompts")
-	assert.NotContains(t, detail.HealthPenalties, "stuck_repeated_prompts")
-	assert.Equal(t, 4,
+	assert.Contains(detail.HealthScoreBasis, "prompt_quality")
+	assert.Contains(detail.HealthScoreBasis, "context_quality")
+	assert.NotContains(detail.HealthPenalties, "repeated_prompts")
+	assert.NotContains(detail.HealthPenalties, "stuck_repeated_prompts")
+	assert.Equal(4,
 		detail.HealthPenalties["code_task_without_context"])
 }
 
 func TestDirectBackend_List_Empty(t *testing.T) {
 	t.Parallel()
 	svc, _ := newDirectTestSvc(t)
-	list, err := svc.List(context.Background(), service.ListFilter{Limit: 10})
+	list, err := svc.List(t.Context(), service.ListFilter{Limit: 10})
 	require.NoError(t, err)
 	assert.Equal(t, 0, list.Total)
 }
 
 func TestDirectBackend_List_HidesStaleSecretIndicators(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 	svc, env := newDirectTestSvc(t)
 	for _, id := range []string{"current", "stale"} {
 		dbtest.SeedSession(t, env.db, id, "proj",
 			dbtest.WithMessageCounts(2, 2))
 	}
-	require.NoError(t, env.db.ReplaceSessionSecretFindings(
+	require.NoError(env.db.ReplaceSessionSecretFindings(
 		"current", nil, 2, secrets.RulesVersion()))
-	require.NoError(t, env.db.ReplaceSessionSecretFindings(
+	require.NoError(env.db.ReplaceSessionSecretFindings(
 		"stale", nil, 1, "old-rules"))
 
-	list, err := svc.List(context.Background(),
+	list, err := svc.List(t.Context(),
 		service.ListFilter{IncludeOneShot: true, Limit: 10})
-	require.NoError(t, err)
+	require.NoError(err)
 	counts := map[string]int{}
 	for _, s := range list.Sessions {
 		counts[s.ID] = s.SecretLeakCount
 	}
-	require.Equal(t, 2, counts["current"])
-	require.Equal(t, 0, counts["stale"])
+	require.Equal(2, counts["current"])
+	require.Equal(0, counts["stale"])
 
-	staleDetail, err := svc.Get(context.Background(), "stale")
-	require.NoError(t, err)
-	require.Equal(t, 0, staleDetail.SecretLeakCount)
+	staleDetail, err := svc.Get(t.Context(), "stale")
+	require.NoError(err)
+	require.Equal(0, staleDetail.SecretLeakCount)
 
-	hasSecret, err := svc.List(context.Background(),
+	hasSecret, err := svc.List(t.Context(),
 		service.ListFilter{IncludeOneShot: true, HasSecret: true, Limit: 10})
-	require.NoError(t, err)
-	require.Len(t, hasSecret.Sessions, 1)
-	require.Equal(t, "current", hasSecret.Sessions[0].ID)
+	require.NoError(err)
+	require.Len(hasSecret.Sessions, 1)
+	require.Equal("current", hasSecret.Sessions[0].ID)
 }
 
 func TestDirectBackend_List_InvalidDate(t *testing.T) {
@@ -551,11 +574,13 @@ func TestDirectBackend_List_InvalidDate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			list, err := svc.List(context.Background(), tc.filter)
+			assert := assert.New(t)
+
+			list, err := svc.List(t.Context(), tc.filter)
 			require.Error(t, err)
-			assert.Nil(t, list)
-			assert.Contains(t, err.Error(), tc.want)
-			assert.Contains(t, err.Error(), "YYYY-MM-DD")
+			assert.Nil(list)
+			assert.Contains(err.Error(), tc.want)
+			assert.Contains(err.Error(), "YYYY-MM-DD")
 		})
 	}
 }
@@ -564,7 +589,7 @@ func TestDirectBackend_List_DateFromAfterDateTo(t *testing.T) {
 	t.Parallel()
 	svc, _ := newDirectTestSvc(t)
 
-	list, err := svc.List(context.Background(), service.ListFilter{
+	list, err := svc.List(t.Context(), service.ListFilter{
 		DateFrom: "2024-12-01",
 		DateTo:   "2024-01-01",
 	})
@@ -574,23 +599,25 @@ func TestDirectBackend_List_DateFromAfterDateTo(t *testing.T) {
 }
 
 func TestDirectBackend_List_InvalidActiveSince(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Parallel()
 	svc, _ := newDirectTestSvc(t)
 
-	list, err := svc.List(context.Background(), service.ListFilter{
+	list, err := svc.List(t.Context(), service.ListFilter{
 		ActiveSince: "yesterday",
 	})
 	require.Error(t, err)
-	assert.Nil(t, list)
-	assert.Contains(t, err.Error(), `invalid active_since "yesterday"`)
-	assert.Contains(t, err.Error(), "RFC3339")
+	assert.Nil(list)
+	assert.Contains(err.Error(), `invalid active_since "yesterday"`)
+	assert.Contains(err.Error(), "RFC3339")
 }
 
 func TestDirectBackend_List_ValidDatesAccepted(t *testing.T) {
 	t.Parallel()
 	svc, _ := newDirectTestSvc(t)
 
-	list, err := svc.List(context.Background(), service.ListFilter{
+	list, err := svc.List(t.Context(), service.ListFilter{
 		Date:        "2024-06-15",
 		DateFrom:    "2024-01-01",
 		DateTo:      "2024-12-31",
@@ -601,6 +628,9 @@ func TestDirectBackend_List_ValidDatesAccepted(t *testing.T) {
 }
 
 func TestDirectBackend_List_TimezoneValidationAndUTCDefault(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	svc, env := newDirectTestSvc(t)
 	dbtest.SeedSession(t, env.db, "utc-only", "p1", func(s *db.Session) {
@@ -616,38 +646,38 @@ func TestDirectBackend_List_TimezoneValidationAndUTCDefault(t *testing.T) {
 		s.EndedAt = dbtest.Ptr("2024-06-16T06:00:00Z")
 	})
 
-	list, err := svc.List(context.Background(), service.ListFilter{
+	list, err := svc.List(t.Context(), service.ListFilter{
 		Date: "2024-06-16", Limit: 10,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, list)
+	require.NoError(err)
+	require.NotNil(list)
 	ids := make([]string, len(list.Sessions))
 	for i, session := range list.Sessions {
 		ids[i] = session.ID
 	}
-	assert.ElementsMatch(t, []string{"utc-only", "new-york-day"}, ids)
+	assert.ElementsMatch([]string{"utc-only", "new-york-day"}, ids)
 
-	list, err = svc.List(context.Background(), service.ListFilter{
+	list, err = svc.List(t.Context(), service.ListFilter{
 		Date: "2024-06-16", Timezone: "America/New_York", Limit: 10,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, list)
-	require.Len(t, list.Sessions, 1)
-	assert.Equal(t, "new-york-day", list.Sessions[0].ID)
+	require.NoError(err)
+	require.NotNil(list)
+	require.Len(list.Sessions, 1)
+	assert.Equal("new-york-day", list.Sessions[0].ID)
 
-	list, err = svc.List(context.Background(), service.ListFilter{
+	list, err = svc.List(t.Context(), service.ListFilter{
 		Timezone: "Fake/Zone",
 	})
-	require.Error(t, err)
-	assert.Nil(t, list)
-	assert.Contains(t, err.Error(), "invalid timezone: Fake/Zone")
+	require.Error(err)
+	assert.Nil(list)
+	assert.Contains(err.Error(), "invalid timezone: Fake/Zone")
 }
 
 func TestDirectSearchContentRejectsInvalidTimezone(t *testing.T) {
 	t.Parallel()
 	svc, _ := newDirectTestSvc(t)
 
-	_, err := svc.SearchContent(context.Background(), service.ContentSearchRequest{
+	_, err := svc.SearchContent(t.Context(), service.ContentSearchRequest{
 		Pattern: "test", Timezone: "Fake/Zone",
 	})
 	require.Error(t, err)
@@ -674,7 +704,7 @@ func TestDirectBackend_List_ClampsOverMaxLimit(t *testing.T) {
 		)
 	}
 
-	list, err := svc.List(context.Background(), service.ListFilter{
+	list, err := svc.List(t.Context(), service.ListFilter{
 		Limit:          db.MaxSessionLimit + 500,
 		IncludeOneShot: true, // seeded sessions have 1 message each
 	})
@@ -683,7 +713,7 @@ func TestDirectBackend_List_ClampsOverMaxLimit(t *testing.T) {
 	// If the clamp works, we get all nSessions back (since
 	// nSessions < MaxSessionLimit). Without the clamp, we would
 	// only get DefaultSessionLimit back.
-	assert.Equal(t, nSessions, len(list.Sessions),
+	assert.Len(t, list.Sessions, nSessions,
 		"limit should clamp to MaxSessionLimit, not reset to default")
 }
 
@@ -696,7 +726,7 @@ func TestDirectBackend_Sync_BothPathAndID(t *testing.T) {
 	engine := sync.NewEngine(d, sync.EngineConfig{Ephemeral: true})
 	svc := service.NewDirectBackend(d, engine)
 
-	_, err := svc.Sync(context.Background(), service.SyncInput{
+	_, err := svc.Sync(t.Context(), service.SyncInput{
 		Path: "/tmp/session.jsonl",
 		ID:   "abc123",
 	})
@@ -708,11 +738,11 @@ func TestDirectBackend_Sync_NilEngineIsReadOnly(t *testing.T) {
 	t.Parallel()
 	svc, _ := newDirectTestSvc(t)
 
-	_, err := svc.Sync(context.Background(), service.SyncInput{
+	_, err := svc.Sync(t.Context(), service.SyncInput{
 		Path: "/tmp/session.jsonl",
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, db.ErrReadOnly),
+	assert.ErrorIs(t, err, db.ErrReadOnly,
 		"expected db.ErrReadOnly, got %v", err)
 }
 
@@ -722,6 +752,9 @@ func TestDirectBackend_Sync_NilEngineIsReadOnly(t *testing.T) {
 // arbitrarily and instead returns an error naming every candidate
 // id, telling the caller to disambiguate via `session sync <id>`.
 func TestDirectBackend_Sync_AmbiguousPath_ReturnsListedIDs(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	// Ephemeral engine so SyncPaths is a no-op — the test only
@@ -731,7 +764,7 @@ func TestDirectBackend_Sync_AmbiguousPath_ReturnsListedIDs(t *testing.T) {
 
 	path := "/tmp/forked-session.jsonl"
 	for _, id := range []string{"fork-a", "fork-b"} {
-		require.NoError(t, d.UpsertSession(db.Session{
+		require.NoError(d.UpsertSession(db.Session{
 			ID:       id,
 			Project:  "proj",
 			Machine:  "local",
@@ -740,16 +773,16 @@ func TestDirectBackend_Sync_AmbiguousPath_ReturnsListedIDs(t *testing.T) {
 		}))
 	}
 
-	_, err := svc.Sync(context.Background(), service.SyncInput{
+	_, err := svc.Sync(t.Context(), service.SyncInput{
 		Path: path,
 	})
-	require.Error(t, err)
+	require.Error(err)
 	msg := err.Error()
-	assert.Contains(t, msg, "2 sessions found",
+	assert.Contains(msg, "2 sessions found",
 		"error should state the ambiguity count")
-	assert.Contains(t, msg, "fork-a")
-	assert.Contains(t, msg, "fork-b")
-	assert.Contains(t, msg, "session sync <id>",
+	assert.Contains(msg, "fork-a")
+	assert.Contains(msg, "fork-b")
+	assert.Contains(msg, "session sync <id>",
 		"error should tell the caller how to disambiguate")
 }
 
@@ -758,6 +791,8 @@ func TestDirectBackend_Sync_AmbiguousPath_ReturnsListedIDs(t *testing.T) {
 // file resolves the single session whose stored file_path is the
 // <traceFile>#<conversationID> virtual key for that trace.
 func TestDirectBackend_Sync_VSCopilotPhysicalPathResolvesSession(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(d, sync.EngineConfig{Ephemeral: true})
@@ -767,7 +802,7 @@ func TestDirectBackend_Sync_VSCopilotPhysicalPathResolvesSession(t *testing.T) {
 	convID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
 	virtual := tracePath + "#" + convID
 	sessionID := "visualstudio-copilot:" + convID
-	require.NoError(t, d.UpsertSession(db.Session{
+	require.NoError(d.UpsertSession(db.Session{
 		ID:       sessionID,
 		Project:  "visualstudio",
 		Machine:  "local",
@@ -775,11 +810,11 @@ func TestDirectBackend_Sync_VSCopilotPhysicalPathResolvesSession(t *testing.T) {
 		FilePath: &virtual,
 	}))
 
-	detail, err := svc.Sync(context.Background(), service.SyncInput{
+	detail, err := svc.Sync(t.Context(), service.SyncInput{
 		Path: tracePath,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, detail)
+	require.NoError(err)
+	require.NotNil(detail)
 	assert.Equal(t, sessionID, detail.ID)
 }
 
@@ -790,6 +825,8 @@ func TestDirectBackend_Sync_VSCopilotPhysicalPathResolvesSession(t *testing.T) {
 func TestDirectBackend_Sync_VSCopilotVS2026PhysicalPathResolvesSession(
 	t *testing.T,
 ) {
+	require := require.New(t)
+
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(d, sync.EngineConfig{Ephemeral: true})
@@ -802,7 +839,7 @@ func TestDirectBackend_Sync_VSCopilotVS2026PhysicalPathResolvesSession(
 	)
 	virtual := parser.VisualStudioCopilotVirtualPath(sessionPath, convID)
 	sessionID := "visualstudio-copilot:" + convID
-	require.NoError(t, d.UpsertSession(db.Session{
+	require.NoError(d.UpsertSession(db.Session{
 		ID:       sessionID,
 		Project:  "visualstudio",
 		Machine:  "local",
@@ -810,11 +847,11 @@ func TestDirectBackend_Sync_VSCopilotVS2026PhysicalPathResolvesSession(
 		FilePath: &virtual,
 	}))
 
-	detail, err := svc.Sync(context.Background(), service.SyncInput{
+	detail, err := svc.Sync(t.Context(), service.SyncInput{
 		Path: sessionPath,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, detail)
+	require.NoError(err)
+	require.NotNil(detail)
 	assert.Equal(t, sessionID, detail.ID)
 }
 
@@ -822,6 +859,9 @@ func TestDirectBackend_Sync_VSCopilotVS2026PhysicalPathResolvesSession(
 // physical trace file backing several conversations still yields the
 // disambiguation error rather than picking one arbitrarily.
 func TestDirectBackend_Sync_VSCopilotPhysicalPathAmbiguous(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(d, sync.EngineConfig{Ephemeral: true})
@@ -833,7 +873,7 @@ func TestDirectBackend_Sync_VSCopilotPhysicalPathAmbiguous(t *testing.T) {
 		"c0aca2e3-d1f2-4d28-bd5e-5dab29e2be28",
 	} {
 		virtual := tracePath + "#" + convID
-		require.NoError(t, d.UpsertSession(db.Session{
+		require.NoError(d.UpsertSession(db.Session{
 			ID:       "visualstudio-copilot:" + convID,
 			Project:  "visualstudio",
 			Machine:  "local",
@@ -842,16 +882,18 @@ func TestDirectBackend_Sync_VSCopilotPhysicalPathAmbiguous(t *testing.T) {
 		}))
 	}
 
-	_, err := svc.Sync(context.Background(), service.SyncInput{
+	_, err := svc.Sync(t.Context(), service.SyncInput{
 		Path: tracePath,
 	})
-	require.Error(t, err)
+	require.Error(err)
 	msg := err.Error()
-	assert.Contains(t, msg, "2 sessions found")
-	assert.Contains(t, msg, "session sync <id>")
+	assert.Contains(msg, "2 sessions found")
+	assert.Contains(msg, "session sync <id>")
 }
 
 func TestDirectBackend_Sync_WindsurfPhysicalDBPathResolvesSession(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(d, sync.EngineConfig{Ephemeral: true})
@@ -860,7 +902,7 @@ func TestDirectBackend_Sync_WindsurfPhysicalDBPathResolvesSession(t *testing.T) 
 	dbPath := filepath.Join("/profile", "Windsurf", "User", "workspaceStorage", "hash", "state.vscdb")
 	virtual := parser.VirtualSourcePath(dbPath, "windsurf-session")
 	sessionID := "windsurf:windsurf-session"
-	require.NoError(t, d.UpsertSession(db.Session{
+	require.NoError(d.UpsertSession(db.Session{
 		ID:       sessionID,
 		Project:  "windsurf",
 		Machine:  "local",
@@ -868,15 +910,18 @@ func TestDirectBackend_Sync_WindsurfPhysicalDBPathResolvesSession(t *testing.T) 
 		FilePath: &virtual,
 	}))
 
-	detail, err := svc.Sync(context.Background(), service.SyncInput{
+	detail, err := svc.Sync(t.Context(), service.SyncInput{
 		Path: dbPath,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, detail)
+	require.NoError(err)
+	require.NotNil(detail)
 	assert.Equal(t, sessionID, detail.ID)
 }
 
 func TestDirectBackend_Sync_WindsurfPhysicalDBPathAmbiguous(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(d, sync.EngineConfig{Ephemeral: true})
@@ -885,7 +930,7 @@ func TestDirectBackend_Sync_WindsurfPhysicalDBPathAmbiguous(t *testing.T) {
 	dbPath := filepath.Join("/profile", "Windsurf", "User", "workspaceStorage", "hash", "state.vscdb")
 	for _, sessionID := range []string{"windsurf:a", "windsurf:b"} {
 		virtual := parser.VirtualSourcePath(dbPath, strings.TrimPrefix(sessionID, "windsurf:"))
-		require.NoError(t, d.UpsertSession(db.Session{
+		require.NoError(d.UpsertSession(db.Session{
 			ID:       sessionID,
 			Project:  "windsurf",
 			Machine:  "local",
@@ -894,16 +939,19 @@ func TestDirectBackend_Sync_WindsurfPhysicalDBPathAmbiguous(t *testing.T) {
 		}))
 	}
 
-	_, err := svc.Sync(context.Background(), service.SyncInput{
+	_, err := svc.Sync(t.Context(), service.SyncInput{
 		Path: dbPath,
 	})
-	require.Error(t, err)
+	require.Error(err)
 	msg := err.Error()
-	assert.Contains(t, msg, "2 sessions found")
-	assert.Contains(t, msg, "session sync <id>")
+	assert.Contains(msg, "2 sessions found")
+	assert.Contains(msg, "session sync <id>")
 }
 
 func TestDirectBackend_Sync_VSCopilotIDRefreshesOnlyRequestedConversation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	tracesDir := t.TempDir()
 	tracePath := filepath.Join(
@@ -922,32 +970,35 @@ func TestDirectBackend_Sync_VSCopilotIDRefreshesOnlyRequestedConversation(t *tes
 		Machine: "local",
 	})
 	svc := service.NewDirectBackend(d, engine)
-	require.NotZero(t, engine.SyncAll(context.Background(), nil).Synced)
+	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
 
 	writeDirectVSCopilotTrace(t, tracePath, requestedID, untouchedID,
 		"After requested with more detail",
 		"After untouched with more detail",
 		time.Now().Add(time.Second))
 
-	detail, err := svc.Sync(context.Background(), service.SyncInput{
+	detail, err := svc.Sync(t.Context(), service.SyncInput{
 		ID: "visualstudio-copilot:" + requestedID,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, detail)
-	require.NotNil(t, detail.FirstMessage)
-	assert.Equal(t, "After requested with more detail", *detail.FirstMessage)
+	require.NoError(err)
+	require.NotNil(detail)
+	require.NotNil(detail.FirstMessage)
+	assert.Equal("After requested with more detail", *detail.FirstMessage)
 
 	untouched, err := svc.Get(
-		context.Background(), "visualstudio-copilot:"+untouchedID,
+		t.Context(), "visualstudio-copilot:"+untouchedID,
 	)
-	require.NoError(t, err)
-	require.NotNil(t, untouched)
-	require.NotNil(t, untouched.FirstMessage)
-	assert.Equal(t, "Before untouched", *untouched.FirstMessage,
+	require.NoError(err)
+	require.NotNil(untouched)
+	require.NotNil(untouched.FirstMessage)
+	assert.Equal("Before untouched", *untouched.FirstMessage,
 		"syncing by id must not refresh sibling conversations in the same trace")
 }
 
 func TestDirectBackend_Sync_VibeFallbackIDReturnsPromotedSession(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	vibeDir := t.TempDir()
 	d := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(d, sync.EngineConfig{
@@ -960,9 +1011,9 @@ func TestDirectBackend_Sync_VibeFallbackIDReturnsPromotedSession(t *testing.T) {
 
 	dirName := "session_20260616_083518_abc123"
 	sessionDir := filepath.Join(vibeDir, dirName)
-	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	require.NoError(os.MkdirAll(sessionDir, 0o755))
 	messagesPath := filepath.Join(sessionDir, "messages.jsonl")
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		messagesPath,
 		[]byte(`{"role":"user","content":"hello vibe"}`+"\n"),
 		0o644,
@@ -970,32 +1021,32 @@ func TestDirectBackend_Sync_VibeFallbackIDReturnsPromotedSession(t *testing.T) {
 
 	engine.SyncPaths([]string{messagesPath})
 	fallbackID := "vibe:" + dirName
-	fallback, err := d.GetSession(context.Background(), fallbackID)
-	require.NoError(t, err)
-	require.NotNil(t, fallback)
+	fallback, err := d.GetSession(t.Context(), fallbackID)
+	require.NoError(err)
+	require.NotNil(fallback)
 
 	sessionID := "abc123def-0000-0000-0000-000000000000"
 	metaPath := filepath.Join(sessionDir, "meta.json")
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		metaPath,
 		[]byte(`{"session_id":"`+sessionID+`","title":"Promoted"}`+"\n"),
 		0o644,
 	))
 	future := time.Now().Add(time.Hour)
-	require.NoError(t, os.Chtimes(metaPath, future, future))
+	require.NoError(os.Chtimes(metaPath, future, future))
 
-	detail, err := svc.Sync(context.Background(), service.SyncInput{
+	detail, err := svc.Sync(t.Context(), service.SyncInput{
 		ID: fallbackID,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, detail)
-	assert.Equal(t, "vibe:"+sessionID, detail.ID)
-	require.NotNil(t, detail.DisplayName)
-	assert.Equal(t, "Promoted", *detail.DisplayName)
+	require.NoError(err)
+	require.NotNil(detail)
+	assert.Equal("vibe:"+sessionID, detail.ID)
+	require.NotNil(detail.DisplayName)
+	assert.Equal("Promoted", *detail.DisplayName)
 
-	stale, err := d.GetSession(context.Background(), fallbackID)
-	require.NoError(t, err)
-	assert.Nil(t, stale)
+	stale, err := d.GetSession(t.Context(), fallbackID)
+	require.NoError(err)
+	assert.Nil(stale)
 }
 
 // TestDirectBackend_Sync_VibeCanonicalIDResolvesFallbackAfterMetaRemoved
@@ -1004,6 +1055,9 @@ func TestDirectBackend_Sync_VibeFallbackIDReturnsPromotedSession(t *testing.T) {
 // canonical ID resolves to that fallback session instead of reporting the
 // session as not found.
 func TestDirectBackend_Sync_VibeCanonicalIDResolvesFallbackAfterMetaRemoved(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	vibeDir := t.TempDir()
 	d := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(d, sync.EngineConfig{
@@ -1016,9 +1070,9 @@ func TestDirectBackend_Sync_VibeCanonicalIDResolvesFallbackAfterMetaRemoved(t *t
 
 	dirName := "session_20260616_083518_abc123"
 	sessionDir := filepath.Join(vibeDir, dirName)
-	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	require.NoError(os.MkdirAll(sessionDir, 0o755))
 	messagesPath := filepath.Join(sessionDir, "messages.jsonl")
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		messagesPath,
 		[]byte(`{"role":"user","content":"hello vibe"}`+"\n"),
 		0o644,
@@ -1026,7 +1080,7 @@ func TestDirectBackend_Sync_VibeCanonicalIDResolvesFallbackAfterMetaRemoved(t *t
 	sessionID := "abc123def-0000-0000-0000-000000000000"
 	canonicalID := "vibe:" + sessionID
 	metaPath := filepath.Join(sessionDir, "meta.json")
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		metaPath,
 		[]byte(`{"session_id":"`+sessionID+`","title":"Canonical"}`+"\n"),
 		0o644,
@@ -1034,30 +1088,33 @@ func TestDirectBackend_Sync_VibeCanonicalIDResolvesFallbackAfterMetaRemoved(t *t
 
 	// First sync stores the session under the canonical meta-derived ID.
 	engine.SyncPaths([]string{messagesPath})
-	canonical, err := d.GetSession(context.Background(), canonicalID)
-	require.NoError(t, err)
-	require.NotNil(t, canonical)
+	canonical, err := d.GetSession(t.Context(), canonicalID)
+	require.NoError(err)
+	require.NotNil(canonical)
 
 	// meta.json is removed, so the next sync demotes the session to the
 	// directory-name fallback ID. Bump the transcript mtime so the sync does
 	// not skip the otherwise-unchanged file.
-	require.NoError(t, os.Remove(metaPath))
+	require.NoError(os.Remove(metaPath))
 	future := time.Now().Add(time.Hour)
-	require.NoError(t, os.Chtimes(messagesPath, future, future))
+	require.NoError(os.Chtimes(messagesPath, future, future))
 
-	detail, err := svc.Sync(context.Background(), service.SyncInput{
+	detail, err := svc.Sync(t.Context(), service.SyncInput{
 		ID: canonicalID,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, detail)
-	assert.Equal(t, "vibe:"+dirName, detail.ID)
+	require.NoError(err)
+	require.NotNil(detail)
+	assert.Equal("vibe:"+dirName, detail.ID)
 
-	stale, err := d.GetSession(context.Background(), canonicalID)
-	require.NoError(t, err)
-	assert.Nil(t, stale)
+	stale, err := d.GetSession(t.Context(), canonicalID)
+	require.NoError(err)
+	assert.Nil(stale)
 }
 
 func TestDirectBackend_Sync_MissingNonVibeIDDoesNotReturnSamePathSession(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	claudeDir := t.TempDir()
 	d := dbtest.OpenTestDB(t)
 	engine := sync.NewEngine(d, sync.EngineConfig{
@@ -1069,25 +1126,25 @@ func TestDirectBackend_Sync_MissingNonVibeIDDoesNotReturnSamePathSession(t *test
 	svc := service.NewDirectBackend(d, engine)
 
 	projectDir := filepath.Join(claudeDir, "ClaudeProbe")
-	require.NoError(t, os.MkdirAll(projectDir, 0o755))
+	require.NoError(os.MkdirAll(projectDir, 0o755))
 	path := filepath.Join(projectDir, "requested.jsonl")
 	const usageCmd = "<command-name>/usage</command-name>\n" +
 		"            <command-message>usage</command-message>\n" +
 		"            <command-args></command-args>"
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		path,
 		[]byte(testjsonl.ClaudeUserJSON(usageCmd, "2026-06-17T12:00:00Z")+"\n"),
 		0o644,
 	))
 
-	require.NoError(t, d.UpsertSession(db.Session{
+	require.NoError(d.UpsertSession(db.Session{
 		ID:       "requested",
 		Project:  "proj",
 		Machine:  "local",
 		Agent:    "claude",
 		FilePath: &path,
 	}))
-	require.NoError(t, d.UpsertSession(db.Session{
+	require.NoError(d.UpsertSession(db.Session{
 		ID:       "unrelated",
 		Project:  "proj",
 		Machine:  "local",
@@ -1095,12 +1152,12 @@ func TestDirectBackend_Sync_MissingNonVibeIDDoesNotReturnSamePathSession(t *test
 		FilePath: &path,
 	}))
 
-	detail, err := svc.Sync(context.Background(), service.SyncInput{
+	detail, err := svc.Sync(t.Context(), service.SyncInput{
 		ID: "requested",
 	})
-	assert.Nil(t, detail)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), `sync: session "requested" was not found after sync`)
+	assert.Nil(detail)
+	require.Error(err)
+	assert.Contains(err.Error(), `sync: session "requested" was not found after sync`)
 }
 
 // TestDirectBackend_Watch_UnknownID_Errors verifies that Watch
@@ -1110,7 +1167,7 @@ func TestDirectBackend_Watch_UnknownID_Errors(t *testing.T) {
 	t.Parallel()
 	svc, _ := newDirectTestSvc(t)
 
-	_, err := svc.Watch(context.Background(), "does-not-exist")
+	_, err := svc.Watch(t.Context(), "does-not-exist")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "session not found")
 	assert.Contains(t, err.Error(), "does-not-exist")
@@ -1167,7 +1224,7 @@ func TestDirectBackend_Messages_InvalidDirection(t *testing.T) {
 	t.Parallel()
 	svc, _ := newDirectTestSvc(t)
 
-	_, err := svc.Messages(context.Background(), "sid",
+	_, err := svc.Messages(t.Context(), "sid",
 		service.MessageFilter{Direction: "backwards"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid direction")
@@ -1185,11 +1242,11 @@ func TestReadOnlyBackend_Sync_IsReadOnly(t *testing.T) {
 	var store db.Store = d
 	svc := service.NewReadOnlyBackend(store)
 
-	_, err := svc.Sync(context.Background(), service.SyncInput{
+	_, err := svc.Sync(t.Context(), service.SyncInput{
 		Path: "/tmp/session.jsonl",
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, db.ErrReadOnly),
+	assert.ErrorIs(t, err, db.ErrReadOnly,
 		"expected db.ErrReadOnly, got %v", err)
 }
 
@@ -1198,6 +1255,9 @@ func TestReadOnlyBackend_Sync_IsReadOnly(t *testing.T) {
 // filter's From pointer is nil, the backend promotes it to
 // MaxInt32 so a descending query returns the newest messages.
 func TestDirectBackend_Messages_DescOmittedFrom(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	svc, env := newDirectTestSvc(t)
 	sid := env.InsertSession(t)
@@ -1205,19 +1265,19 @@ func TestDirectBackend_Messages_DescOmittedFrom(t *testing.T) {
 	// Seed 5 user messages, ordinals 0..4.
 	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 5, "m%d")...)
 
-	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+	list, err := svc.Messages(t.Context(), sid, service.MessageFilter{
 		Direction: "desc",
 		Limit:     10,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, list)
-	require.Equal(t, 5, list.Count)
+	require.NoError(err)
+	require.NotNil(list)
+	require.Equal(5, list.Count)
 	for i, m := range list.Messages {
 		wantOrd := 4 - i
-		assert.Equal(t, wantOrd, m.Ordinal,
+		assert.Equal(wantOrd, m.Ordinal,
 			"desc iteration should return highest ordinal first")
 	}
-	assert.True(t, strings.HasPrefix(list.Messages[0].Content, "m4"))
+	assert.True(strings.HasPrefix(list.Messages[0].Content, "m4"))
 }
 
 // TestDirectBackend_Messages_DescExplicitZeroFrom verifies that an
@@ -1225,6 +1285,8 @@ func TestDirectBackend_Messages_DescOmittedFrom(t *testing.T) {
 // only the ordinal-0 message) rather than being treated as "omitted"
 // and promoted to MaxInt32.
 func TestDirectBackend_Messages_DescExplicitZeroFrom(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 	svc, env := newDirectTestSvc(t)
 	sid := env.InsertSession(t)
@@ -1232,14 +1294,14 @@ func TestDirectBackend_Messages_DescExplicitZeroFrom(t *testing.T) {
 	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 5, "m%d")...)
 
 	zero := 0
-	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+	list, err := svc.Messages(t.Context(), sid, service.MessageFilter{
 		Direction: "desc",
 		From:      &zero,
 		Limit:     10,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, list)
-	require.Equal(t, 1, list.Count,
+	require.NoError(err)
+	require.NotNil(list)
+	require.Equal(1, list.Count,
 		"explicit From=0 in desc should start at ordinal 0 and "+
 			"return only that message")
 	assert.Equal(t, 0, list.Messages[0].Ordinal)
@@ -1255,7 +1317,7 @@ func TestDirectBackend_Messages_AroundMutuallyExclusiveWithFrom(t *testing.T) {
 	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 5, "m%d")...)
 
 	around, from := 2, 1
-	_, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+	_, err := svc.Messages(t.Context(), sid, service.MessageFilter{
 		Around: &around,
 		From:   &from,
 	})
@@ -1273,7 +1335,7 @@ func TestDirectBackend_Messages_AroundMutuallyExclusiveWithDirection(t *testing.
 	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 5, "m%d")...)
 
 	around := 2
-	_, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+	_, err := svc.Messages(t.Context(), sid, service.MessageFilter{
 		Around:    &around,
 		Direction: "desc",
 	})
@@ -1290,7 +1352,7 @@ func TestDirectBackend_Messages_BeforeAfterRequireAround(t *testing.T) {
 	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 5, "m%d")...)
 
 	before := 2
-	_, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+	_, err := svc.Messages(t.Context(), sid, service.MessageFilter{
 		Before: &before,
 	})
 	require.Error(t, err)
@@ -1300,6 +1362,9 @@ func TestDirectBackend_Messages_BeforeAfterRequireAround(t *testing.T) {
 // TestDirectBackend_Messages_AroundDefaultsBeforeAfter verifies that Around
 // with Before/After both omitted defaults to 5 messages on each side.
 func TestDirectBackend_Messages_AroundDefaultsBeforeAfter(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	svc, env := newDirectTestSvc(t)
 	sid := env.InsertSession(t)
@@ -1307,21 +1372,24 @@ func TestDirectBackend_Messages_AroundDefaultsBeforeAfter(t *testing.T) {
 	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 12, "m%d")...)
 
 	around := 6
-	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+	list, err := svc.Messages(t.Context(), sid, service.MessageFilter{
 		Around: &around,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, list)
-	require.Equal(t, 11, list.Count, "default before=5/after=5 around ordinal 6 "+
+	require.NoError(err)
+	require.NotNil(list)
+	require.Equal(11, list.Count, "default before=5/after=5 around ordinal 6 "+
 		"spans ordinals 1..11 (only 5 exist after 6)")
-	assert.Equal(t, 1, list.Messages[0].Ordinal)
-	assert.Equal(t, 11, list.Messages[len(list.Messages)-1].Ordinal)
+	assert.Equal(1, list.Messages[0].Ordinal)
+	assert.Equal(11, list.Messages[len(list.Messages)-1].Ordinal)
 }
 
 // TestDirectBackend_Messages_AroundWithRoles verifies that Roles reaches
 // GetMessagesWindow: only messages matching a role in Roles are returned,
 // with the anchor always included.
 func TestDirectBackend_Messages_AroundWithRoles(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	svc, env := newDirectTestSvc(t)
 	sid := env.InsertSession(t)
@@ -1335,19 +1403,19 @@ func TestDirectBackend_Messages_AroundWithRoles(t *testing.T) {
 
 	around := 2
 	before, after := 1, 1
-	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+	list, err := svc.Messages(t.Context(), sid, service.MessageFilter{
 		Around: &around,
 		Before: &before,
 		After:  &after,
 		Roles:  []string{"user"},
 	})
-	require.NoError(t, err)
-	require.NotNil(t, list)
-	require.Equal(t, 3, list.Count)
+	require.NoError(err)
+	require.NotNil(list)
+	require.Equal(3, list.Count)
 	for _, m := range list.Messages {
-		assert.Equal(t, "user", m.Role)
+		assert.Equal("user", m.Role)
 	}
-	assert.Equal(t, []int{0, 2, 4}, []int{
+	assert.Equal([]int{0, 2, 4}, []int{
 		list.Messages[0].Ordinal, list.Messages[1].Ordinal, list.Messages[2].Ordinal,
 	})
 }
@@ -1356,28 +1424,31 @@ func TestDirectBackend_Messages_AroundWithRoles(t *testing.T) {
 // reports FirstOrdinal/LastOrdinal from the returned window (non-empty
 // case) and leaves them nil when the result is empty.
 func TestDirectBackend_Messages_ResponseWindowBounds(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	svc, env := newDirectTestSvc(t)
 	sid := env.InsertSession(t)
 	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 5, "m%d")...)
 
-	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+	list, err := svc.Messages(t.Context(), sid, service.MessageFilter{
 		Limit: 10,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, list)
-	require.NotNil(t, list.FirstOrdinal)
-	require.NotNil(t, list.LastOrdinal)
-	assert.Equal(t, 0, *list.FirstOrdinal)
-	assert.Equal(t, 4, *list.LastOrdinal)
+	require.NoError(err)
+	require.NotNil(list)
+	require.NotNil(list.FirstOrdinal)
+	require.NotNil(list.LastOrdinal)
+	assert.Equal(0, *list.FirstOrdinal)
+	assert.Equal(4, *list.LastOrdinal)
 
-	emptyList, err := svc.Messages(context.Background(), "no-such-session",
+	emptyList, err := svc.Messages(t.Context(), "no-such-session",
 		service.MessageFilter{Limit: 10})
-	require.NoError(t, err)
-	require.NotNil(t, emptyList)
-	assert.Equal(t, 0, emptyList.Count)
-	assert.Nil(t, emptyList.FirstOrdinal)
-	assert.Nil(t, emptyList.LastOrdinal)
+	require.NoError(err)
+	require.NotNil(emptyList)
+	assert.Equal(0, emptyList.Count)
+	assert.Nil(emptyList.FirstOrdinal)
+	assert.Nil(emptyList.LastOrdinal)
 }
 
 // TestDirectBackend_Messages_AroundOmittedBeforeAfterNoOtherFlags mirrors
@@ -1391,7 +1462,7 @@ func TestDirectBackend_Messages_AroundOmittedBeforeAfterNoOtherFlags(t *testing.
 	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, 12, "m%d")...)
 
 	around := 5
-	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+	list, err := svc.Messages(t.Context(), sid, service.MessageFilter{
 		Around: &around,
 	})
 	require.NoError(t, err)
@@ -1427,7 +1498,7 @@ func TestDirectBackend_Messages_AroundClampsOversizedBefore(t *testing.T) {
 	svc := service.NewReadOnlyBackend(store)
 
 	around, huge := 100, 1_000_000_000
-	_, err := svc.Messages(context.Background(), "sid", service.MessageFilter{
+	_, err := svc.Messages(t.Context(), "sid", service.MessageFilter{
 		Around: &around,
 		Before: &huge,
 	})
@@ -1447,7 +1518,7 @@ func TestDirectBackend_Messages_AroundClampsOversizedAfter(t *testing.T) {
 	svc := service.NewReadOnlyBackend(store)
 
 	around, huge := 100, 1_000_000_000
-	_, err := svc.Messages(context.Background(), "sid", service.MessageFilter{
+	_, err := svc.Messages(t.Context(), "sid", service.MessageFilter{
 		Around: &around,
 		After:  &huge,
 	})
@@ -1469,7 +1540,7 @@ func TestDirectBackend_Messages_AroundClampsCombinedOversizedWindow(t *testing.T
 	svc := service.NewReadOnlyBackend(store)
 
 	around, hugeBefore, hugeAfter := 100, 1_000_000_000, 1_000_000_000
-	_, err := svc.Messages(context.Background(), "sid", service.MessageFilter{
+	_, err := svc.Messages(t.Context(), "sid", service.MessageFilter{
 		Around: &around,
 		Before: &hugeBefore,
 		After:  &hugeAfter,
@@ -1500,17 +1571,20 @@ func TestDirectBackend_Messages_AroundClampsMaxIntOverflow(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			t.Parallel()
 			store := &capturingWindowStore{}
 			svc := service.NewReadOnlyBackend(store)
 
 			around := 100
-			_, err := svc.Messages(context.Background(), "sid", service.MessageFilter{
+			_, err := svc.Messages(t.Context(), "sid", service.MessageFilter{
 				Around: &around,
 				Before: &tc.before,
 				After:  &tc.after,
 			})
-			require.NoError(t, err)
+			require.NoError(err)
 
 			// Check each side against the bound individually, and with
 			// require (not assert), before ever adding them together:
@@ -1519,16 +1593,16 @@ func TestDirectBackend_Messages_AroundClampsMaxIntOverflow(t *testing.T) {
 			// catch, silently passing a LessOrEqual check against a
 			// wrapped-negative "total" regardless of whether the fix
 			// under test is applied.
-			require.LessOrEqual(t, store.captured.Before, db.MaxMessageLimit,
+			require.LessOrEqual(store.captured.Before, db.MaxMessageLimit,
 				"clamped before must never exceed MaxMessageLimit on its own")
-			require.LessOrEqual(t, store.captured.After, db.MaxMessageLimit,
+			require.LessOrEqual(store.captured.After, db.MaxMessageLimit,
 				"clamped after must never exceed MaxMessageLimit on its own")
-			assert.GreaterOrEqual(t, store.captured.Before, 0,
+			assert.GreaterOrEqual(store.captured.Before, 0,
 				"clamped before must never be negative")
-			assert.GreaterOrEqual(t, store.captured.After, 0,
+			assert.GreaterOrEqual(store.captured.After, 0,
 				"clamped after must never be negative")
 			total := store.captured.Before + store.captured.After + 1
-			assert.LessOrEqual(t, total, db.MaxMessageLimit,
+			assert.LessOrEqual(total, db.MaxMessageLimit,
 				"an overflow-inducing before/after must still be capped to MaxMessageLimit")
 		})
 	}
@@ -1540,6 +1614,9 @@ func TestDirectBackend_Messages_AroundClampsMaxIntOverflow(t *testing.T) {
 // db.MaxMessageLimit messages even though more than that many exist on
 // both sides of the anchor.
 func TestDirectBackend_Messages_AroundClampsOversizedWindowEndToEnd(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	svc, env := newDirectTestSvc(t)
 	sid := env.InsertSession(t)
@@ -1547,17 +1624,17 @@ func TestDirectBackend_Messages_AroundClampsOversizedWindowEndToEnd(t *testing.T
 	dbtest.SeedMessages(t, env.db, dbtest.UserMessagesf(sid, total, "m%d")...)
 
 	around, huge := total/2, 1_000_000_000
-	list, err := svc.Messages(context.Background(), sid, service.MessageFilter{
+	list, err := svc.Messages(t.Context(), sid, service.MessageFilter{
 		Around: &around,
 		Before: &huge,
 		After:  &huge,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, list)
-	assert.LessOrEqual(t, list.Count, db.MaxMessageLimit,
+	require.NoError(err)
+	require.NotNil(list)
+	assert.LessOrEqual(list.Count, db.MaxMessageLimit,
 		"the returned window must not exceed MaxMessageLimit even though "+
 			"more than that many messages exist on both sides of the anchor")
-	assert.Less(t, list.Count, total,
+	assert.Less(list.Count, total,
 		"the oversized request must actually be capped below what an "+
 			"unclamped window would have returned")
 }
@@ -1589,13 +1666,16 @@ func vsCopilotChatTraceLine(conversationID, spanID, prompt string) string {
 func TestDirectBackendSyncVisualStudioCopilotByIDFollowsConversationToSibling(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	tracesDir := t.TempDir()
 	conversationID := "4a8f63f6-7626-4416-a874-fc7bd2c3f005"
 	sessionID := "visualstudio-copilot:" + conversationID
 	primary := filepath.Join(
 		tracesDir, "20260611T145205_aaaa1111_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(t, os.WriteFile(primary, []byte(
+	require.NoError(os.WriteFile(primary, []byte(
 		vsCopilotChatTraceLine(conversationID, "a1", "First.")+"\n"), 0o644))
 
 	d := dbtest.OpenTestDB(t)
@@ -1605,7 +1685,7 @@ func TestDirectBackendSyncVisualStudioCopilotByIDFollowsConversationToSibling(
 		},
 		Machine: "local",
 	})
-	require.NotZero(t, engine.SyncAll(context.Background(), nil).Synced)
+	require.NotZero(engine.SyncAll(t.Context(), nil).Synced)
 	svc := service.NewDirectBackend(d, engine)
 
 	// The representative trace is deleted and the conversation reappears in a
@@ -1613,33 +1693,33 @@ func TestDirectBackendSyncVisualStudioCopilotByIDFollowsConversationToSibling(
 	// unrelated conversation that must not be created by a scoped single-session
 	// sync.
 	otherID := "c0aca2e3-d1f2-4d28-bd5e-5dab29e2be28"
-	require.NoError(t, os.Remove(primary))
+	require.NoError(os.Remove(primary))
 	sibling := filepath.Join(
 		tracesDir, "20260612T145205_bbbb2222_VSGitHubCopilot_traces.jsonl",
 	)
-	require.NoError(t, os.WriteFile(sibling, []byte(strings.Join([]string{
+	require.NoError(os.WriteFile(sibling, []byte(strings.Join([]string{
 		vsCopilotChatTraceLine(conversationID, "a1", "First."),
 		vsCopilotChatTraceLine(conversationID, "b1", "Second."),
 		vsCopilotChatTraceLine(otherID, "o1", "Unrelated conversation."),
 	}, "\n")+"\n"), 0o644))
 
 	_, err := svc.Sync(
-		context.Background(), service.SyncInput{ID: sessionID},
+		t.Context(), service.SyncInput{ID: sessionID},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	sess, err := d.GetSession(context.Background(), sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, sess)
-	assert.Equal(t, 2, sess.MessageCount,
+	sess, err := d.GetSession(t.Context(), sessionID)
+	require.NoError(err)
+	require.NotNil(sess)
+	assert.Equal(2, sess.MessageCount,
 		"sync by ID must follow the conversation to the sibling trace, not "+
 			"strip the virtual path to the deleted representative")
 
 	other, err := d.GetSession(
-		context.Background(), "visualstudio-copilot:"+otherID,
+		t.Context(), "visualstudio-copilot:"+otherID,
 	)
-	require.NoError(t, err)
-	assert.Nil(t, other,
+	require.NoError(err)
+	assert.Nil(other,
 		"a scoped single-session sync must not insert unrelated conversations "+
 			"from the same trace file")
 }

@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -186,8 +185,11 @@ func TestEvaluateGovernedSessions(t *testing.T) {
 // (production) and governed (this evaluator) share the same definition:
 // resolution succeeds, whether or not it changes the stored project.
 func TestEvaluateGovernedSessionsMatchesApplyEvaluator(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	machine := "differential.example"
 	root := t.TempDir()
 	prefix := filepath.Join(root, "foo")
@@ -196,7 +198,7 @@ func TestEvaluateGovernedSessionsMatchesApplyEvaluator(t *testing.T) {
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: machine, PathPrefix: prefix, Project: "alpha", Enabled: true,
 	})
-	require.NoError(t, err, "create mapping")
+	require.NoError(err, "create mapping")
 
 	type seed struct {
 		id       string
@@ -225,7 +227,7 @@ func TestEvaluateGovernedSessionsMatchesApplyEvaluator(t *testing.T) {
 			filePath := s.filePath
 			session.FilePath = &filePath
 		}
-		require.NoError(t, d.UpsertSession(session), "seed session %s", s.id)
+		require.NoError(d.UpsertSession(session), "seed session %s", s.id)
 		rows = append(rows, MappingEvaluationRow{
 			SessionID: s.id, Machine: machine, Project: s.project,
 			Cwd: s.cwd, FilePath: s.filePath,
@@ -233,17 +235,17 @@ func TestEvaluateGovernedSessionsMatchesApplyEvaluator(t *testing.T) {
 	}
 
 	applyResult, err := d.ApplyWorktreeProjectMappings(ctx, machine)
-	require.NoError(t, err, "apply worktree mappings")
+	require.NoError(err, "apply worktree mappings")
 
 	mappings, err := d.ListActiveWorktreeProjectMappings(ctx, machine)
-	require.NoError(t, err, "load active mappings")
+	require.NoError(err, "load active mappings")
 	evaluation := EvaluateGovernedSessions(
 		[]ArchiveMappings{{Mappings: mappings}}, rows,
 	)
 
-	assert.Equal(t, applyResult.MatchedSessions, evaluation.GovernedSessions,
+	assert.Equal(applyResult.MatchedSessions, evaluation.GovernedSessions,
 		"governed count must match production apply matched count")
-	assert.Equal(t, 5, evaluation.GovernedSessions,
+	assert.Equal(5, evaluation.GovernedSessions,
 		"in-fresh, in-samelabel, win-style, sibling-ref, empty-sibling are governed")
 }
 
@@ -258,19 +260,22 @@ func TestEvaluateGovernedSessionsMatchesApplyEvaluator(t *testing.T) {
 // ListAllWorktreeProjectMappings) into the candidate-row loader and asserts
 // it returns exactly the 3 "ws" rows.
 func TestGovernedEvaluationTouchesOnlyRuleMachines(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "ws", PathPrefix: "/work/repo", Project: "alpha", Enabled: true,
 	})
-	require.NoError(t, err, "create enabled mapping")
+	require.NoError(err, "create enabled mapping")
 
 	_, err = d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "disabled-host", PathPrefix: "/work/other", Project: "beta",
 		Enabled: false,
 	})
-	require.NoError(t, err, "create disabled mapping")
+	require.NoError(err, "create disabled mapping")
 
 	wantIDs := make([]string, 0, 3)
 	for i := range 3 {
@@ -295,22 +300,22 @@ func TestGovernedEvaluationTouchesOnlyRuleMachines(t *testing.T) {
 	}
 
 	mappings, err := d.ListAllWorktreeProjectMappings(ctx)
-	require.NoError(t, err, "list mappings")
+	require.NoError(err, "list mappings")
 
 	machines := governedCandidateMachines(mappings)
 	rows, err := d.projectInventoryCandidateRows(ctx, "archive-1", machines)
-	require.NoError(t, err, "load candidate rows")
-	require.Len(t, rows, 3,
+	require.NoError(err, "load candidate rows")
+	require.Len(rows, 3,
 		"fetch must be bounded by machines with an ENABLED rule, "+
 			"not by mapped machines or archive size")
 
 	gotIDs := make([]string, 0, len(rows))
 	for _, row := range rows {
-		assert.Equal(t, "ws", row.Machine)
-		assert.Equal(t, "archive-1", row.SourceArchiveID)
+		assert.Equal("ws", row.Machine)
+		assert.Equal("archive-1", row.SourceArchiveID)
 		gotIDs = append(gotIDs, row.SessionID)
 	}
-	assert.ElementsMatch(t, wantIDs, gotIDs)
+	assert.ElementsMatch(wantIDs, gotIDs)
 }
 
 // TestGovernedCandidateMachinesExcludesDisabledMappings is a narrow unit

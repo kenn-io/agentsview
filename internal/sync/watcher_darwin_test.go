@@ -86,6 +86,9 @@ func TestFSEventsFlagMapping(t *testing.T) {
 }
 
 func TestDarwinWatcherNativeSinkCollapsesBlockedConsumerOverflow(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	backend := newDarwinDirectTestBackend()
 	batches := make(chan WatchBatch, 3)
 	consumerEntered := make(chan struct{})
@@ -105,11 +108,11 @@ func TestDarwinWatcherNativeSinkCollapsesBlockedConsumerOverflow(t *testing.T) {
 		defaultWatchBatchMaxEntries,
 		defaultWatchBatchMaxPathBytes,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	watcher.Start()
 	t.Cleanup(watcher.Stop)
 
-	require.True(t, backend.emit([]backendEvent{{
+	require.True(backend.emit([]backendEvent{{
 		Path: "/sessions/first.jsonl",
 		Root: "/sessions",
 		Op:   backendOpWrite,
@@ -131,28 +134,30 @@ func TestDarwinWatcherNativeSinkCollapsesBlockedConsumerOverflow(t *testing.T) {
 	go func() {
 		nativeReturned <- backend.emit(events)
 	}()
-	assert.True(t, requireReceiveWithin(t, nativeReturned, time.Second),
+	assert.True(requireReceiveWithin(t, nativeReturned, time.Second),
 		"native sink must acquire the idle pending accumulator")
 
 	handoff := watcher.eventSink.handoff.Load()
-	require.NotNil(t, handoff)
-	assert.True(t, handoff.fullSync)
-	assert.LessOrEqual(t, len(handoff.strings), defaultWatchBatchMaxEntries)
-	assert.LessOrEqual(t, handoff.pathBytes, defaultWatchBatchMaxPathBytes)
+	require.NotNil(handoff)
+	assert.True(handoff.fullSync)
+	assert.LessOrEqual(len(handoff.strings), defaultWatchBatchMaxEntries)
+	assert.LessOrEqual(handoff.pathBytes, defaultWatchBatchMaxPathBytes)
 
 	first := requireReceiveWithin(t, batches, time.Second)
-	assert.Equal(t, WatchBatch{
+	assert.Equal(WatchBatch{
 		Paths:          []string{"/sessions/first.jsonl"},
 		Renames:        []WatchRename{},
 		ReconcileRoots: []string{},
 	}, first)
 	close(releaseConsumer)
 	second := requireReceiveWithin(t, batches, time.Second)
-	assert.Equal(t, WatchBatch{FullSync: true, LostEvents: true}, second)
-	assert.Never(t, func() bool { return len(batches) != 0 }, 100*time.Millisecond, 10*time.Millisecond)
+	assert.Equal(WatchBatch{FullSync: true, LostEvents: true}, second)
+	assert.Never(func() bool { return len(batches) != 0 }, 100*time.Millisecond, 10*time.Millisecond)
 }
 
 func TestDarwinWatcherNativeSinkContentionUsesBoundedHandoff(t *testing.T) {
+	assert := assert.New(t)
+
 	backend := newDarwinDirectTestBackend()
 	batches := make(chan WatchBatch, 1)
 	watcher, err := newWatcherWithBackend(
@@ -179,21 +184,24 @@ func TestDarwinWatcherNativeSinkContentionUsesBoundedHandoff(t *testing.T) {
 			Op:   backendOpWrite,
 		}})
 	}()
-	assert.True(t, requireReceiveWithin(t, nativeReturned, time.Second),
+	assert.True(requireReceiveWithin(t, nativeReturned, time.Second),
 		"a contended callback must not wait for accumulator ownership")
 	watcher.eventSink.mu.Unlock()
 
-	assert.Equal(t, WatchBatch{
+	assert.Equal(WatchBatch{
 		Paths:          []string{"/sessions/contended.jsonl"},
 		Renames:        []WatchRename{},
 		ReconcileRoots: []string{},
 	},
 		requireReceiveWithin(t, batches, time.Second))
-	assert.Zero(t, watcher.eventSink.overflows.Load(),
+	assert.Zero(watcher.eventSink.overflows.Load(),
 		"ordinary consumer mutex contention is not a capacity overflow")
 }
 
 func TestDarwinWatcherMeaningfulNativeDeliveryAdvancesKqueueTimer(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	const batchDelay = 300 * time.Millisecond
 	backend := newDarwinDirectTestBackend()
 	batches := make(chan WatchBatch, 1)
@@ -208,7 +216,7 @@ func TestDarwinWatcherMeaningfulNativeDeliveryAdvancesKqueueTimer(t *testing.T) 
 		defaultWatchBatchMaxEntries,
 		defaultWatchBatchMaxPathBytes,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	watcher.Start()
 	t.Cleanup(watcher.Stop)
 
@@ -219,18 +227,18 @@ func TestDarwinWatcherMeaningfulNativeDeliveryAdvancesKqueueTimer(t *testing.T) 
 	})
 	time.Sleep(20 * time.Millisecond)
 	nativeAt := time.Now()
-	require.True(t, backend.emit([]backendEvent{{
+	require.True(backend.emit([]backendEvent{{
 		Path: "/sessions/native.jsonl",
 		Root: "/sessions",
 		Op:   backendOpWrite,
 	}}))
 
 	batch := requireReceiveWithin(t, batches, 150*time.Millisecond)
-	assert.ElementsMatch(t, []string{
+	assert.ElementsMatch([]string{
 		"/sessions/kqueue.jsonl",
 		"/sessions/native.jsonl",
 	}, batch.Paths)
-	assert.Less(t, time.Since(nativeAt), 150*time.Millisecond)
+	assert.Less(time.Since(nativeAt), 150*time.Millisecond)
 }
 
 func TestWatchEventSinkFilteredNativeDeliveryDoesNotWakePendingKqueue(t *testing.T) {
@@ -255,6 +263,8 @@ func TestWatchEventSinkFilteredNativeDeliveryDoesNotWakePendingKqueue(t *testing
 }
 
 func TestDarwinWatcherFilteredNativeDeliveryPreservesKqueueTimer(t *testing.T) {
+	require := require.New(t)
+
 	const batchDelay = 180 * time.Millisecond
 	backend := newDarwinDirectTestBackend()
 	dispatched := make(chan time.Time, 1)
@@ -269,7 +279,7 @@ func TestDarwinWatcherFilteredNativeDeliveryPreservesKqueueTimer(t *testing.T) {
 		defaultWatchBatchMaxEntries,
 		defaultWatchBatchMaxPathBytes,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	watcher.Start()
 	t.Cleanup(watcher.Stop)
 
@@ -280,11 +290,11 @@ func TestDarwinWatcherFilteredNativeDeliveryPreservesKqueueTimer(t *testing.T) {
 		Op:   backendOpWrite,
 	})
 	time.Sleep(20 * time.Millisecond)
-	require.True(t, backend.emitFiltered())
+	require.True(backend.emitFiltered())
 
 	select {
 	case <-dispatched:
-		require.Fail(t, "filtered native delivery advanced the kqueue timer")
+		require.Fail("filtered native delivery advanced the kqueue timer")
 	case <-time.After(80 * time.Millisecond):
 	}
 	dispatchedAt := requireReceiveWithin(t, dispatched, 250*time.Millisecond)
@@ -292,50 +302,53 @@ func TestDarwinWatcherFilteredNativeDeliveryPreservesKqueueTimer(t *testing.T) {
 }
 
 func TestDarwinWatcherFileLifecycleAndNativeLatency(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	watcher, batches := newDarwinTestWatcher(t, root, nil, darwinFSEventsLatency)
 	watcher.Start()
 
 	path := filepath.Join(root, "session.jsonl")
 	createdAt := time.Now()
-	require.NoError(t, os.WriteFile(path, []byte("created"), 0o600))
+	require.NoError(os.WriteFile(path, []byte("created"), 0o600))
 	created := waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.Paths, path)
 	})
 	deliveryElapsed := time.Since(createdAt)
 	t.Logf("500ms FSEvents create delivery elapsed: %s", deliveryElapsed.Round(time.Millisecond))
-	assert.Less(t, deliveryElapsed, 900*time.Millisecond,
+	assert.Less(deliveryElapsed, 900*time.Millisecond,
 		"native latency must not be followed by the configured 500ms Go batch delay")
-	assert.False(t, created.FullSync)
+	assert.False(created.FullSync)
 
-	require.NoError(t, os.WriteFile(path, []byte("modified"), 0o600))
+	require.NoError(os.WriteFile(path, []byte("modified"), 0o600))
 	modified := waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.Paths, path)
 	})
-	assert.False(t, modified.FullSync)
+	assert.False(modified.FullSync)
 
 	renamedPath := filepath.Join(root, "renamed.jsonl")
-	require.NoError(t, os.Rename(path, renamedPath))
+	require.NoError(os.Rename(path, renamedPath))
 	renamed := waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.ContainsFunc(batch.Renames, func(rename WatchRename) bool {
 			return rename.Path == path || rename.Path == renamedPath
 		})
 	})
-	assert.False(t, renamed.FullSync)
-	assert.Empty(t, renamed.ReconcileRoots)
+	assert.False(renamed.FullSync)
+	assert.Empty(renamed.ReconcileRoots)
 	for _, rename := range renamed.Renames {
-		assert.Equal(t, ItemIsFile, rename.ItemType)
+		assert.Equal(ItemIsFile, rename.ItemType)
 	}
 
-	require.NoError(t, os.Remove(renamedPath))
+	require.NoError(os.Remove(renamedPath))
 	removed := waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.Paths, renamedPath) ||
 			slices.ContainsFunc(batch.Renames, func(rename WatchRename) bool {
 				return rename.Path == renamedPath
 			})
 	})
-	assert.False(t, removed.FullSync)
-	assert.Empty(t, removed.ReconcileRoots)
+	assert.False(removed.FullSync)
+	assert.Empty(removed.ReconcileRoots)
 }
 
 func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T) {
@@ -359,17 +372,20 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 		{name: "large", coldFiles: 300},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			root := t.TempDir()
 			activeDir := filepath.Join(root, "active")
-			require.NoError(t, os.Mkdir(activeDir, 0o700))
+			require.NoError(os.Mkdir(activeDir, 0o700))
 			changedPath := filepath.Join(activeDir, "changed-session.jsonl")
-			require.NoError(t, os.WriteFile(
+			require.NoError(os.WriteFile(
 				changedPath, []byte("{\"type\":\"user\"}\n"), 0o600,
 			))
 			for i := range tc.coldFiles {
 				dir := filepath.Join(root, fmt.Sprintf("cold-%03d", i))
-				require.NoError(t, os.Mkdir(dir, 0o700))
-				require.NoError(t, os.WriteFile(
+				require.NoError(os.Mkdir(dir, 0o700))
+				require.NoError(os.WriteFile(
 					filepath.Join(dir, fmt.Sprintf("cold-%03d.jsonl", i)),
 					[]byte("{\"type\":\"user\"}\n"),
 					0o600,
@@ -377,20 +393,20 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 			}
 
 			backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-			require.NoError(t, err)
+			require.NoError(err)
 			watcher, batches := newDarwinTestWatcherWithBackend(t, backend)
 			results := watcher.RegisterRoots([]WatchRoot{{
 				Path: root, Recursive: true, Exists: true,
 				Scopes: []WatchScope{{Agent: "claude", SyncDir: root}},
 			}}, 1)
-			require.Len(t, results, 1)
-			require.NoError(t, results[0].Err)
-			require.Equal(t, 1, results[0].Watched)
+			require.Len(results, 1)
+			require.NoError(results[0].Err)
+			require.Equal(1, results[0].Watched)
 			watcher.Start()
 			// A post-start barrier separates any filesystem history FSEvents was
 			// still coalescing from the append measured below.
 			barrierPath := filepath.Join(root, ".stream-ready")
-			require.NoError(t, os.WriteFile(barrierPath, []byte("ready"), 0o600))
+			require.NoError(os.WriteFile(barrierPath, []byte("ready"), 0o600))
 			waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 				return slices.Contains(batch.Paths, barrierPath)
 			})
@@ -404,17 +420,17 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 				nativeDescriptors: len(backend.kqueue.watcher.WatchList()),
 			}
 			backend.mu.Unlock()
-			assert.Equal(t, 1, got.streams)
-			assert.Equal(t, 1, got.roots)
-			assert.Equal(t, 1, got.logicalRoots)
-			assert.Zero(t, got.shallowRoots)
-			assert.Zero(t, got.nativeDescriptors,
+			assert.Equal(1, got.streams)
+			assert.Equal(1, got.roots)
+			assert.Equal(1, got.logicalRoots)
+			assert.Zero(got.shallowRoots)
+			assert.Zero(got.nativeDescriptors,
 				"recursive FSEvents coverage must not allocate per-file kqueue descriptors")
 
 			appendFile, err := os.OpenFile(changedPath, os.O_APPEND|os.O_WRONLY, 0)
-			require.NoError(t, err)
+			require.NoError(err)
 			_, err = appendFile.WriteString("{\"type\":\"assistant\"}\n")
-			require.NoError(t, err)
+			require.NoError(err)
 			var appendBatch WatchBatch
 			observedBeforeClose := false
 			observationTimer := time.NewTimer(750 * time.Millisecond)
@@ -437,7 +453,7 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 				default:
 				}
 			}
-			require.NoError(t, appendFile.Close())
+			require.NoError(appendFile.Close())
 			if !observedBeforeClose {
 				appendBatch = waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 					return slices.Contains(batch.Paths, changedPath)
@@ -445,49 +461,49 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 			}
 			t.Logf("recursive append observed before descriptor close: %t",
 				observedBeforeClose)
-			assert.False(t, appendBatch.FullSync)
-			assert.Empty(t, appendBatch.ReconcileRoots)
-			assert.Empty(t, appendBatch.Renames)
-			assert.Equal(t, []string{changedPath}, appendBatch.Paths)
+			assert.False(appendBatch.FullSync)
+			assert.Empty(appendBatch.ReconcileRoots)
+			assert.Empty(appendBatch.Renames)
+			assert.Equal([]string{changedPath}, appendBatch.Paths)
 			got.appendPaths = len(appendBatch.Paths)
 			got.appendRenames = len(appendBatch.Renames)
 
 			// Establish an after-close delivery barrier so any duplicate append
 			// notification cannot be mistaken for the atomic replacement below.
 			closedBarrier := filepath.Join(root, ".append-closed")
-			require.NoError(t, os.WriteFile(closedBarrier, []byte("closed"), 0o600))
+			require.NoError(os.WriteFile(closedBarrier, []byte("closed"), 0o600))
 			waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 				return slices.Contains(batch.Paths, closedBarrier)
 			})
 
 			tempPath := filepath.Join(activeDir, ".changed-session.tmp")
-			require.NoError(t, os.WriteFile(
+			require.NoError(os.WriteFile(
 				tempPath,
 				[]byte("{\"type\":\"user\",\"replacement\":true}\n"),
 				0o600,
 			))
-			require.NoError(t, os.Rename(tempPath, changedPath))
+			require.NoError(os.Rename(tempPath, changedPath))
 			replacementBatch := waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 				return slices.Contains(batch.Paths, changedPath) ||
 					slices.ContainsFunc(batch.Renames, func(rename WatchRename) bool {
 						return rename.Path == changedPath
 					})
 			})
-			assert.False(t, replacementBatch.FullSync)
-			assert.Empty(t, replacementBatch.ReconcileRoots,
+			assert.False(replacementBatch.FullSync)
+			assert.Empty(replacementBatch.ReconcileRoots,
 				"atomic file replacement must remain a changed-path sync")
 			got.replacementPaths = len(replacementBatch.Paths)
 			got.replacementRenames = len(replacementBatch.Renames)
-			assert.Positive(t, got.replacementPaths+got.replacementRenames,
+			assert.Positive(got.replacementPaths+got.replacementRenames,
 				"atomic replacement must emit bounded changed-path work")
-			assert.LessOrEqual(t, got.replacementPaths+got.replacementRenames, 2,
+			assert.LessOrEqual(got.replacementPaths+got.replacementRenames, 2,
 				"one atomic replacement must not fan out with cold archive cardinality")
 			for _, rename := range replacementBatch.Renames {
 				if rename.Path == changedPath {
-					assert.Equal(t, ItemIsFile, rename.ItemType)
+					assert.Equal(ItemIsFile, rename.ItemType)
 				}
 			}
-			assert.Never(t, func() bool {
+			assert.Never(func() bool {
 				select {
 				case batch := <-batches:
 					return batch.FullSync || len(batch.ReconcileRoots) > 0
@@ -498,11 +514,11 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 				"atomic file replacement must not queue reconciliation")
 
 			backend.mu.Lock()
-			assert.Equal(t, got.streams, len(backend.streams))
-			assert.Equal(t, got.roots, len(backend.roots.Load().roots))
-			assert.Equal(t, got.logicalRoots, len(backend.logical))
-			assert.Equal(t, got.shallowRoots, len(backend.shallow))
-			assert.Equal(t, got.nativeDescriptors, len(backend.kqueue.watcher.WatchList()))
+			assert.Len(backend.streams, got.streams)
+			assert.Len(backend.roots.Load().roots, got.roots)
+			assert.Len(backend.logical, got.logicalRoots)
+			assert.Len(backend.shallow, got.shallowRoots)
+			assert.Len(backend.kqueue.watcher.WatchList(), got.nativeDescriptors)
 			backend.mu.Unlock()
 			observations = append(observations, got)
 		})
@@ -513,18 +529,21 @@ func TestDarwinWatcherColdArchiveCardinalityUsesOneRecursiveStream(t *testing.T)
 }
 
 func TestDarwinWatcherDirectoryRenameCarriesFullSyncMetadata(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	watcher, batches := newDarwinTestWatcher(t, root, nil, 50*time.Millisecond)
 	watcher.Start()
 
 	dir := filepath.Join(root, "before")
-	require.NoError(t, os.Mkdir(dir, 0o700))
+	require.NoError(os.Mkdir(dir, 0o700))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.Paths, dir)
 	})
 
 	renamedDir := filepath.Join(root, "after")
-	require.NoError(t, os.Rename(dir, renamedDir))
+	require.NoError(os.Rename(dir, renamedDir))
 	batch := waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.ContainsFunc(batch.Renames, func(rename WatchRename) bool {
 			return rename.Path == renamedDir && rename.Root == root &&
@@ -532,8 +551,8 @@ func TestDarwinWatcherDirectoryRenameCarriesFullSyncMetadata(t *testing.T) {
 		})
 	})
 
-	assert.False(t, batch.FullSync)
-	assert.Empty(t, batch.ReconcileRoots)
+	assert.False(batch.FullSync)
+	assert.Empty(batch.ReconcileRoots)
 }
 
 func TestDarwinWatcherExcludesRecursiveEvents(t *testing.T) {
@@ -584,9 +603,11 @@ func TestDarwinWatcherKqueueLostEventsReachConsumer(t *testing.T) {
 // full-sync marker must therefore mark every active kqueue-backed root lost
 // so lifecycle recovery revalidates its watch or hands it to polling.
 func TestDarwinWatcherKqueueLostEventsInvalidateShallowRoots(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	backend.retryInitial = 5 * time.Millisecond
 	backend.retryMax = 10 * time.Millisecond
 	errorInput := make(chan error, 1)
@@ -607,14 +628,14 @@ func TestDarwinWatcherKqueueLostEventsInvalidateShallowRoots(t *testing.T) {
 			OnPollingReleased: func(string) error { return nil },
 		},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(watcher.Stop)
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Exists: true,
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: root}},
 	}}, 10)
-	require.Equal(t, []RecursiveWatchResult{{Watched: 1}}, results)
-	require.NoError(t, watcher.Start())
+	require.Equal([]RecursiveWatchResult{{Watched: 1}}, results)
+	require.NoError(watcher.Start())
 
 	errorInput <- fsnotify.ErrEventOverflow
 
@@ -712,6 +733,8 @@ func TestDarwinWatcherStopsMappingAfterAccumulatorOverflow(t *testing.T) {
 }
 
 func TestDarwinWatcherMostSpecificRecursiveRootOwnsRename(t *testing.T) {
+	assert := assert.New(t)
+
 	parent := t.TempDir()
 	nested := filepath.Join(parent, "nested")
 	renamedPath := filepath.Join(nested, "after.jsonl")
@@ -728,14 +751,14 @@ func TestDarwinWatcherMostSpecificRecursiveRootOwnsRename(t *testing.T) {
 	backend.consumeFSEvents(darwinWatchRoot{
 		logicalPath: parent, nativePath: parent, recursive: true,
 	}, event)
-	assert.Zero(t, sink.added, "the parent stream must not own a nested-root rename")
+	assert.Zero(sink.added, "the parent stream must not own a nested-root rename")
 	backend.consumeFSEvents(darwinWatchRoot{
 		logicalPath: nested, nativePath: nested, recursive: true,
 	}, event)
 
-	assert.True(t, sink.meaningful)
-	assert.Equal(t, 1, sink.added)
-	assert.Equal(t, backendEvent{
+	assert.True(sink.meaningful)
+	assert.Equal(1, sink.added)
+	assert.Equal(backendEvent{
 		Path: renamedPath, Root: nested, Op: backendOpRename, ItemType: backendItemFile,
 	}, sink.event)
 }
@@ -828,9 +851,12 @@ func setDarwinLifecycleRunningForTest(t *testing.T, backend *darwinWatchBackend)
 }
 
 func TestDarwinWatcherHybridRegistrationUsesShallowAndPendingCoverage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ancestor := t.TempDir()
 	shallow := filepath.Join(ancestor, "metadata")
-	require.NoError(t, os.Mkdir(shallow, 0o700))
+	require.NoError(os.Mkdir(shallow, 0o700))
 	pendingOne := filepath.Join(ancestor, "state", "sessions")
 	pendingTwo := filepath.Join(ancestor, "state", "archive")
 	var trace []string
@@ -842,13 +868,13 @@ func TestDarwinWatcherHybridRegistrationUsesShallowAndPendingCoverage(t *testing
 		{Path: pendingTwo, Recursive: true, Scopes: []WatchScope{{Agent: "agent-c", SyncDir: ancestor}}},
 	}, 10)
 
-	require.Len(t, results, 3)
-	assert.Equal(t, []RecursiveWatchResult{
+	require.Len(results, 3)
+	assert.Equal([]RecursiveWatchResult{
 		{Watched: 1},
 		{Watched: 1, MissingRootLifecycleOwned: true},
 		{Watched: 1, MissingRootLifecycleOwned: true},
 	}, results)
-	assert.Equal(t, []string{
+	assert.Equal([]string{
 		"shallow-add:" + shallow,
 		"shallow-add:" + ancestor,
 	}, trace, "an explicit shallow root never creates a stream and pending roots share one ancestor watch")
@@ -887,10 +913,13 @@ func TestDarwinWatcherRegistrationOwnsRootCreatedAfterCollection(t *testing.T) {
 }
 
 func TestDarwinWatcherPendingRootRetriesWithoutNativeKqueueDelivery(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ancestor := t.TempDir()
 	root := filepath.Join(ancestor, "state", "sessions")
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	backend.retryInitial = 10 * time.Millisecond
 	backend.retryMax = 20 * time.Millisecond
 	backend.startKqueue = func() error { return nil }
@@ -917,22 +946,25 @@ func TestDarwinWatcherPendingRootRetriesWithoutNativeKqueueDelivery(t *testing.T
 		Path: root, Recursive: true, Exists: true,
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
 	}}, 10)
-	require.Equal(t, []RecursiveWatchResult{{
+	require.Equal([]RecursiveWatchResult{{
 		Watched: 1, MissingRootLifecycleOwned: true,
 	}}, results)
 	watcher.Start()
 
 	requireReceiveWithin(t, missingChecked, time.Second)
-	require.NoError(t, os.MkdirAll(root, 0o700))
+	require.NoError(os.MkdirAll(root, 0o700))
 	requireReceiveWithin(t, streamStarted, time.Second)
 	batch := waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.ReconcileRoots, ancestor)
 	})
-	assert.Equal(t, []string{ancestor}, batch.ReconcileRoots)
-	assert.Empty(t, batch.Paths)
+	assert.Equal([]string{ancestor}, batch.ReconcileRoots)
+	assert.Empty(batch.Paths)
 }
 
 func TestDarwinWatcherMissingIntermediateMovesCoverageBeforeRelease(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ancestor := t.TempDir()
 	intermediate := filepath.Join(ancestor, "state")
 	root := filepath.Join(intermediate, "sessions")
@@ -942,25 +974,28 @@ func TestDarwinWatcherMissingIntermediateMovesCoverageBeforeRelease(t *testing.T
 		Path: root, Recursive: true,
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
 	}}, 10)
-	require.NoError(t, os.Mkdir(intermediate, 0o700))
+	require.NoError(os.Mkdir(intermediate, 0o700))
 
 	_, dispatch := backend.handleKqueueEvent(backendEvent{
 		Path: intermediate, Op: backendOpCreate, ItemType: backendItemDirectory,
 	})
 	backend.processLifecycleSignals()
 
-	assert.False(t, dispatch, "the scope reconciliation subsumes the component creation")
-	assert.Equal(t, []string{
+	assert.False(dispatch, "the scope reconciliation subsumes the component creation")
+	assert.Equal([]string{
 		"shallow-add:" + ancestor,
 		"shallow-add:" + intermediate,
 		"shallow-remove:" + ancestor,
 	}, trace)
 	batch, ok := watcher.eventSink.Take(watcher.agentsForRoot)
-	require.True(t, ok)
-	assert.Equal(t, []string{ancestor}, batch.ReconcileRoots)
+	require.True(ok)
+	assert.Equal([]string{ancestor}, batch.ReconcileRoots)
 }
 
 func TestDarwinWatcherMissingRootStartsCollectingBeforeReleaseAndDispatch(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ancestor := t.TempDir()
 	root := filepath.Join(ancestor, "sessions")
 	var trace []string
@@ -970,27 +1005,30 @@ func TestDarwinWatcherMissingRootStartsCollectingBeforeReleaseAndDispatch(t *tes
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
 	}}, 10)
 	setDarwinLifecycleRunningForTest(t, backend)
-	require.NoError(t, os.Mkdir(root, 0o700))
+	require.NoError(os.Mkdir(root, 0o700))
 
 	_, dispatch := backend.handleKqueueEvent(backendEvent{
 		Path: root, Op: backendOpCreate, ItemType: backendItemDirectory,
 	})
 	backend.processLifecycleSignals()
 
-	assert.False(t, dispatch)
-	assert.Equal(t, []string{
+	assert.False(dispatch)
+	assert.Equal([]string{
 		"shallow-add:" + ancestor,
 		"stream-new:" + root,
 		"stream-start:" + root,
 		"shallow-remove:" + ancestor,
 	}, trace)
 	batch, ok := watcher.eventSink.Take(watcher.agentsForRoot)
-	require.True(t, ok)
-	assert.Equal(t, []string{ancestor}, batch.ReconcileRoots,
+	require.True(ok)
+	assert.Equal([]string{ancestor}, batch.ReconcileRoots,
 		"transition reconciliation uses configured syncDir scopes")
 }
 
 func TestDarwinWatcherHybridHandoffRetainsWritesFromEveryPhase(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ancestor := t.TempDir()
 	root := filepath.Join(ancestor, "sessions")
 	paths := []string{
@@ -1015,7 +1053,7 @@ func TestDarwinWatcherHybridHandoffRetainsWritesFromEveryPhase(t *testing.T) {
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
 	}}, 10)
 	setDarwinLifecycleRunningForTest(t, backend)
-	require.NoError(t, os.Mkdir(root, 0o700))
+	require.NoError(os.Mkdir(root, 0o700))
 
 	backend.handleKqueueEvent(backendEvent{
 		Path: root, Op: backendOpCreate, ItemType: backendItemDirectory,
@@ -1023,15 +1061,18 @@ func TestDarwinWatcherHybridHandoffRetainsWritesFromEveryPhase(t *testing.T) {
 	backend.processLifecycleSignals()
 
 	batch, ok := watcher.eventSink.Take(watcher.agentsForRoot)
-	require.True(t, ok)
-	assert.ElementsMatch(t, paths, batch.Paths)
-	assert.Equal(t, []string{ancestor}, batch.ReconcileRoots)
+	require.True(ok)
+	assert.ElementsMatch(paths, batch.Paths)
+	assert.Equal([]string{ancestor}, batch.ReconcileRoots)
 }
 
 func TestDarwinWatcherRootDeletionBridgesTeardownAndRecreation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ancestor := t.TempDir()
 	root := filepath.Join(ancestor, "sessions")
-	require.NoError(t, os.Mkdir(root, 0o700))
+	require.NoError(os.Mkdir(root, 0o700))
 	var trace []string
 	backend, watcher := newDarwinLifecycleTestWatcher(t, &trace)
 	closed := make(chan struct{}, 1)
@@ -1053,7 +1094,7 @@ func TestDarwinWatcherRootDeletionBridgesTeardownAndRecreation(t *testing.T) {
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
 	}}, 10)
 	setDarwinLifecycleRunningForTest(t, backend)
-	require.NoError(t, os.Remove(root))
+	require.NoError(os.Remove(root))
 
 	backend.consumeFSEvents(darwinWatchRoot{
 		logicalPath: root, nativePath: root, recursive: true,
@@ -1063,11 +1104,10 @@ func TestDarwinWatcherRootDeletionBridgesTeardownAndRecreation(t *testing.T) {
 	requireReceiveWithin(t, closed, time.Second)
 	requireReceiveWithin(t, watcher.eventSink.wake, time.Second)
 	batch, ok := watcher.eventSink.Take(watcher.agentsForRoot)
-	require.True(t, ok)
-	assert.Equal(t, []string{ancestor}, batch.ReconcileRoots,
+	require.True(ok)
+	assert.Equal([]string{ancestor}, batch.ReconcileRoots,
 		"authoritative scope reconciliation tombstones the disappeared root")
-	assert.Less(t,
-		slices.Index(trace, "shallow-add:"+ancestor),
+	assert.Less(slices.Index(trace, "shallow-add:"+ancestor),
 		slices.Index(trace, "stream-close:"+root),
 		"ancestor coverage must precede stream teardown")
 	for _, token := range batch.lifecycleTokens {
@@ -1075,25 +1115,28 @@ func TestDarwinWatcherRootDeletionBridgesTeardownAndRecreation(t *testing.T) {
 	}
 	backend.processLifecycleSignals()
 
-	require.NoError(t, os.Mkdir(root, 0o700))
+	require.NoError(os.Mkdir(root, 0o700))
 	backend.handleKqueueEvent(backendEvent{
 		Path: root, Op: backendOpCreate, ItemType: backendItemDirectory,
 	})
 	backend.processLifecycleSignals()
 	batch, ok = watcher.eventSink.Take(watcher.agentsForRoot)
-	require.True(t, ok)
-	assert.Equal(t, []string{ancestor}, batch.ReconcileRoots)
+	require.True(ok)
+	assert.Equal([]string{ancestor}, batch.ReconcileRoots)
 	start := slices.Index(trace, "stream-start:"+root)
 	release := slices.Index(trace, "shallow-remove:"+ancestor)
-	assert.NotEqual(t, -1, start)
-	assert.NotEqual(t, -1, release)
-	assert.Less(t, start, release, "recreated root collects before ancestor release")
+	assert.NotEqual(-1, start)
+	assert.NotEqual(-1, release)
+	assert.Less(start, release, "recreated root collects before ancestor release")
 }
 
 func TestDarwinWatcherRootDeletionHandoffRetainsWrites(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ancestor := t.TempDir()
 	root := filepath.Join(ancestor, "sessions")
-	require.NoError(t, os.Mkdir(root, 0o700))
+	require.NoError(os.Mkdir(root, 0o700))
 	var trace []string
 	backend, watcher := newDarwinLifecycleTestWatcher(t, &trace)
 	paths := []string{
@@ -1116,7 +1159,7 @@ func TestDarwinWatcherRootDeletionHandoffRetainsWrites(t *testing.T) {
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
 	}}, 10)
 	setDarwinLifecycleRunningForTest(t, backend)
-	require.NoError(t, os.Remove(root))
+	require.NoError(os.Remove(root))
 
 	backend.consumeFSEvents(darwinWatchRoot{
 		logicalPath: root, nativePath: root, recursive: true,
@@ -1126,19 +1169,22 @@ func TestDarwinWatcherRootDeletionHandoffRetainsWrites(t *testing.T) {
 	requireReceiveWithin(t, closed, time.Second)
 	requireReceiveWithin(t, watcher.eventSink.wake, time.Second)
 	batch, ok := watcher.eventSink.Take(watcher.agentsForRoot)
-	require.True(t, ok)
-	assert.ElementsMatch(t, paths, batch.Paths)
-	assert.Equal(t, []string{ancestor}, batch.ReconcileRoots)
+	require.True(ok)
+	assert.ElementsMatch(paths, batch.Paths)
+	assert.Equal([]string{ancestor}, batch.ReconcileRoots)
 }
 
 func TestDarwinWatcherMissingRootAncestorAvoidsPerEntryWatch(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ancestor := t.TempDir()
 	for i := range 50 {
-		require.NoError(t, os.WriteFile(
+		require.NoError(os.WriteFile(
 			filepath.Join(ancestor, fmt.Sprintf("entry%02d", i)), nil, 0o644))
 	}
 	backend, err := newDarwinWatchBackend(nil, time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	defer backend.Stop()
 	var shallowAdds []string
 	backend.addShallow = func(path string) error {
@@ -1148,100 +1194,106 @@ func TestDarwinWatcherMissingRootAncestorAvoidsPerEntryWatch(t *testing.T) {
 	missing := filepath.Join(ancestor, "provider", "sessions")
 	results := backend.RegisterRoots(
 		[]WatchRoot{{Path: missing, Recursive: true}}, 1024)
-	require.Len(t, results, 1)
-	require.True(t, results[0].MissingRootLifecycleOwned)
-	assert.Empty(t, shallowAdds,
+	require.Len(results, 1)
+	require.True(results[0].MissingRootLifecycleOwned)
+	assert.Empty(shallowAdds,
 		"ancestor coverage must not use the per-entry kqueue shallow watch")
-	require.NotNil(t, backend.vnode)
-	assert.Equal(t, 1, backend.vnode.watchedCount())
+	require.NotNil(backend.vnode)
+	assert.Equal(1, backend.vnode.watchedCount())
 }
 
 func TestDarwinWatcherMissingRootRealCreationDeletionRecreation(t *testing.T) {
+	require := require.New(t)
+
 	ancestor := t.TempDir()
 	intermediate := filepath.Join(ancestor, "state")
 	root := filepath.Join(intermediate, "sessions")
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	watcher, batches := newDarwinTestWatcherWithBackend(t, backend)
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Recursive: true,
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
 	}}, 10)
-	require.Equal(t, RecursiveWatchResult{
+	require.Equal(RecursiveWatchResult{
 		Watched: 1, MissingRootLifecycleOwned: true,
 	}, results[0])
 	watcher.Start()
 
-	require.NoError(t, os.Mkdir(intermediate, 0o700))
+	require.NoError(os.Mkdir(intermediate, 0o700))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.ReconcileRoots, ancestor)
 	})
-	require.NoError(t, os.Mkdir(root, 0o700))
+	require.NoError(os.Mkdir(root, 0o700))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.ReconcileRoots, ancestor)
 	})
 	first := filepath.Join(root, "first.jsonl")
-	require.NoError(t, os.WriteFile(first, []byte("first"), 0o600))
+	require.NoError(os.WriteFile(first, []byte("first"), 0o600))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.Paths, first)
 	})
 
-	require.NoError(t, os.RemoveAll(root))
+	require.NoError(os.RemoveAll(root))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.ReconcileRoots, ancestor)
 	})
-	require.NoError(t, os.Mkdir(root, 0o700))
+	require.NoError(os.Mkdir(root, 0o700))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.ReconcileRoots, ancestor)
 	})
 	second := filepath.Join(root, "second.jsonl")
-	require.NoError(t, os.WriteFile(second, []byte("second"), 0o600))
+	require.NoError(os.WriteFile(second, []byte("second"), 0o600))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.Paths, second)
 	})
 }
 
 func TestDarwinWatcherRootShallowRenameAndRecreation(t *testing.T) {
+	require := require.New(t)
+
 	ancestor := t.TempDir()
 	root := filepath.Join(ancestor, "metadata")
-	require.NoError(t, os.Mkdir(root, 0o700))
+	require.NoError(os.Mkdir(root, 0o700))
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	watcher, batches := newDarwinTestWatcherWithBackend(t, backend)
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path:   root,
 		Exists: true,
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
 	}}, 10)
-	require.Equal(t, RecursiveWatchResult{Watched: 1}, results[0])
+	require.Equal(RecursiveWatchResult{Watched: 1}, results[0])
 	watcher.Start()
 
 	first := filepath.Join(root, "first.json")
-	require.NoError(t, os.WriteFile(first, []byte("first"), 0o600))
+	require.NoError(os.WriteFile(first, []byte("first"), 0o600))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.Paths, first)
 	})
 	moved := filepath.Join(ancestor, "metadata-old")
-	require.NoError(t, os.Rename(root, moved))
+	require.NoError(os.Rename(root, moved))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.ReconcileRoots, ancestor)
 	})
-	require.NoError(t, os.Mkdir(root, 0o700))
+	require.NoError(os.Mkdir(root, 0o700))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.ReconcileRoots, ancestor)
 	})
 	second := filepath.Join(root, "second.json")
-	require.NoError(t, os.WriteFile(second, []byte("second"), 0o600))
+	require.NoError(os.WriteFile(second, []byte("second"), 0o600))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.Paths, second)
 	})
 }
 
 func TestDarwinWatcherNativeCallbackDoesNotWaitForLifecycleLock(t *testing.T) {
+	require := require.New(t)
+
 	root := filepath.Join(t.TempDir(), "sessions")
-	require.NoError(t, os.Mkdir(root, 0o700))
+	require.NoError(os.Mkdir(root, 0o700))
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	var nativeSink func([]fsevents.Event)
 	backend.newStream = func(_ string, sink func([]fsevents.Event)) (darwinStream, error) {
 		nativeSink = sink
@@ -1252,8 +1304,8 @@ func TestDarwinWatcherNativeCallbackDoesNotWaitForLifecycleLock(t *testing.T) {
 		Path: root, Recursive: true, Exists: true,
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: filepath.Dir(root)}},
 	}}, 10)
-	require.Equal(t, RecursiveWatchResult{Watched: 1}, results[0])
-	require.NoError(t, os.Remove(root))
+	require.Equal(RecursiveWatchResult{Watched: 1}, results[0])
+	require.NoError(os.Remove(root))
 	var lifecycleCalls atomic.Int32
 	countCall := func(string) error {
 		lifecycleCalls.Add(1)
@@ -1282,11 +1334,14 @@ func TestDarwinWatcherNativeCallbackDoesNotWaitForLifecycleLock(t *testing.T) {
 		backend.mu.Unlock()
 	case <-time.After(100 * time.Millisecond):
 		backend.mu.Unlock()
-		require.FailNow(t, "native callback waited for lifecycle ownership")
+		require.FailNow("native callback waited for lifecycle ownership")
 	}
 }
 
 func TestDarwinWatcherHybridTransitionDoesNotSuppressOtherShallowRootEvent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	shallow := t.TempDir()
 	pending := filepath.Join(shallow, "sessions")
 	var trace []string
@@ -1295,18 +1350,18 @@ func TestDarwinWatcherHybridTransitionDoesNotSuppressOtherShallowRootEvent(t *te
 		{Path: shallow, Exists: true, Scopes: []WatchScope{{Agent: "agent-a", SyncDir: shallow}}},
 		{Path: pending, Recursive: true, Scopes: []WatchScope{{Agent: "agent-b", SyncDir: shallow}}},
 	}, 10)
-	require.Equal(t, []RecursiveWatchResult{
+	require.Equal([]RecursiveWatchResult{
 		{Watched: 1},
 		{Watched: 1, MissingRootLifecycleOwned: true},
 	}, results)
-	require.NoError(t, os.Mkdir(pending, 0o700))
+	require.NoError(os.Mkdir(pending, 0o700))
 
 	event, dispatch := backend.handleKqueueEvent(backendEvent{
 		Path: pending, Op: backendOpCreate, ItemType: backendItemDirectory,
 	})
 
-	assert.True(t, dispatch, "root B lifecycle work must not consume root A's ordinary event")
-	assert.Equal(t, shallow, event.Root)
+	assert.True(dispatch, "root B lifecycle work must not consume root A's ordinary event")
+	assert.Equal(shallow, event.Root)
 }
 
 func TestDarwinWatcherRootChangedRetiresRecursiveStreamAcrossABA(t *testing.T) {
@@ -1339,10 +1394,13 @@ func TestDarwinWatcherRootChangedRetiresRecursiveStreamAcrossABA(t *testing.T) {
 }
 
 func TestDarwinWatcherCollectingGateWaitsForSuccessfulReconciliation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ancestor := t.TempDir()
 	root := filepath.Join(ancestor, "sessions")
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	var nativeSink func([]fsevents.Event)
 	backend.newStream = func(_ string, sink func([]fsevents.Event)) (darwinStream, error) {
 		nativeSink = sink
@@ -1371,17 +1429,17 @@ func TestDarwinWatcherCollectingGateWaitsForSuccessfulReconciliation(t *testing.
 		},
 		backend, defaultWatchBatchMaxEntries, defaultWatchBatchMaxPathBytes,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(watcher.Stop)
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Recursive: true, Exists: true,
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
 	}}, 10)
-	require.Equal(t, RecursiveWatchResult{
+	require.Equal(RecursiveWatchResult{
 		Watched: 1, MissingRootLifecycleOwned: true,
 	}, results[0])
 	watcher.Start()
-	require.NoError(t, os.Mkdir(root, 0o700))
+	require.NoError(os.Mkdir(root, 0o700))
 	backend.handleKqueueEvent(backendEvent{
 		Path: root, Op: backendOpCreate, ItemType: backendItemDirectory,
 	})
@@ -1392,19 +1450,21 @@ func TestDarwinWatcherCollectingGateWaitsForSuccessfulReconciliation(t *testing.
 	close(releaseFirst)
 	_ = requireReceiveWithin(t, calls, time.Second)
 	second := requireReceiveWithin(t, calls, time.Second)
-	assert.Empty(t, second.Paths,
+	assert.Empty(second.Paths,
 		"ordinary paths must remain gated while exact reconciliation is retrying")
-	assert.Equal(t, []string{ancestor}, second.ReconcileRoots)
+	assert.Equal([]string{ancestor}, second.ReconcileRoots)
 	close(releaseSuccess)
 	requireReceiveWithin(t, successReturned, time.Second)
 }
 
 func TestDarwinWatcherRootChangedABAReplacesRecursiveCoverageAfterTombstone(t *testing.T) {
+	require := require.New(t)
+
 	ancestor := t.TempDir()
 	root := filepath.Join(ancestor, "sessions")
-	require.NoError(t, os.Mkdir(root, 0o700))
+	require.NoError(os.Mkdir(root, 0o700))
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	sinks := make(chan func([]fsevents.Event), 2)
 	closed := make(chan struct{}, 1)
 	backend.newStream = func(_ string, sink func([]fsevents.Event)) (darwinStream, error) {
@@ -1416,7 +1476,7 @@ func TestDarwinWatcherRootChangedABAReplacesRecursiveCoverageAfterTombstone(t *t
 		Path: root, Recursive: true, Exists: true,
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
 	}}, 10)
-	require.Equal(t, RecursiveWatchResult{Watched: 1}, results[0])
+	require.Equal(RecursiveWatchResult{Watched: 1}, results[0])
 	initialSink := requireReceiveWithin(t, sinks, time.Second)
 	watcher.Start()
 
@@ -1429,7 +1489,7 @@ func TestDarwinWatcherRootChangedABAReplacesRecursiveCoverageAfterTombstone(t *t
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.ReconcileRoots, ancestor)
 	})
-	require.Eventually(t, func() bool {
+	require.Eventually(func() bool {
 		backend.mu.Lock()
 		defer backend.mu.Unlock()
 		return backend.logical[root].open.Load()
@@ -1442,9 +1502,12 @@ func TestDarwinWatcherRootChangedABAReplacesRecursiveCoverageAfterTombstone(t *t
 }
 
 func TestDarwinWatcherShallowRenameABAReplacesCoverage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ancestor := t.TempDir()
 	root := filepath.Join(ancestor, "metadata")
-	require.NoError(t, os.Mkdir(root, 0o700))
+	require.NoError(os.Mkdir(root, 0o700))
 	var trace []string
 	backend, watcher := newDarwinLifecycleTestWatcher(t, &trace)
 	batches := make(chan WatchBatch, 8)
@@ -1457,7 +1520,7 @@ func TestDarwinWatcherShallowRenameABAReplacesCoverage(t *testing.T) {
 		Exists: true,
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
 	}}, 10)
-	require.Equal(t, RecursiveWatchResult{Watched: 1}, results[0])
+	require.Equal(RecursiveWatchResult{Watched: 1}, results[0])
 	initialGeneration := backend.logical[root].generation
 	watcher.Start()
 
@@ -1468,7 +1531,7 @@ func TestDarwinWatcherShallowRenameABAReplacesCoverage(t *testing.T) {
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.ReconcileRoots, ancestor)
 	})
-	require.Eventually(t, func() bool {
+	require.Eventually(func() bool {
 		backend.mu.Lock()
 		defer backend.mu.Unlock()
 		state := backend.logical[root]
@@ -1476,9 +1539,9 @@ func TestDarwinWatcherShallowRenameABAReplacesCoverage(t *testing.T) {
 			state.ancestor == root && state.active && state.open.Load()
 	}, 5*time.Second, time.Millisecond)
 	watcher.Stop()
-	assert.Contains(t, trace, "shallow-remove:"+root)
-	assert.Contains(t, trace, "shallow-add:"+ancestor)
-	assert.Contains(t, trace, "shallow-add:"+root)
+	assert.Contains(trace, "shallow-remove:"+root)
+	assert.Contains(trace, "shallow-add:"+ancestor)
+	assert.Contains(trace, "shallow-add:"+root)
 }
 
 type retryDarwinStream struct {
@@ -1492,10 +1555,12 @@ func (s *retryDarwinStream) Close() error { return nil }
 func TestDarwinWatcherRuntimeStreamAcquisitionFailureFallsBack(t *testing.T) {
 	for _, failure := range []string{"new", "start"} {
 		t.Run(failure, func(t *testing.T) {
+			require := require.New(t)
+
 			ancestor := t.TempDir()
 			root := filepath.Join(ancestor, "sessions")
 			backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-			require.NoError(t, err)
+			require.NoError(err)
 			backend.retryInitial = time.Millisecond
 			backend.retryMax = 5 * time.Millisecond
 			var attempts atomic.Int32
@@ -1520,31 +1585,31 @@ func TestDarwinWatcherRuntimeStreamAcquisitionFailureFallsBack(t *testing.T) {
 				}, backend, defaultWatchBatchMaxEntries, defaultWatchBatchMaxPathBytes,
 				WatcherOptions{OnCoverageDegraded: func([]string) error { return nil }},
 			)
-			require.NoError(t, err)
+			require.NoError(err)
 			t.Cleanup(watcher.Stop)
 			results := watcher.RegisterRoots([]WatchRoot{{
 				Path: root, Recursive: true,
 				Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
 			}}, 10)
-			require.Equal(t, RecursiveWatchResult{
+			require.Equal(RecursiveWatchResult{
 				Watched: 1, MissingRootLifecycleOwned: true,
 			}, results[0])
-			require.NoError(t, watcher.Start())
-			require.NoError(t, os.Mkdir(root, 0o700))
+			require.NoError(watcher.Start())
+			require.NoError(os.Mkdir(root, 0o700))
 			backend.signalLifecycle()
 
 			waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 				return batch.FullSync
 			})
-			require.Eventually(t, func() bool {
+			require.Eventually(func() bool {
 				return backend.fallbackPhaseValue() == darwinFallbackInactive
 			}, time.Second, time.Millisecond)
 			assert.Equal(t, int32(2), attempts.Load(), "native coverage is retried once")
-			require.Eventually(t, watcher.eventSink.Empty, time.Second, time.Millisecond,
+			require.Eventually(watcher.eventSink.Empty, time.Second, time.Millisecond,
 				"fallback handoff markers must drain before steady-state delivery")
 			path := filepath.Join(root, "after-retry.jsonl")
 			sink := latestSink.Load()
-			require.NotNil(t, sink)
+			require.NotNil(sink)
 			(*sink)([]fsevents.Event{{
 				Path: path, Flags: fseventFlagItemModified | fseventFlagItemIsFile,
 			}})
@@ -1556,9 +1621,12 @@ func TestDarwinWatcherRuntimeStreamAcquisitionFailureFallsBack(t *testing.T) {
 }
 
 func TestDarwinWatcherFallbackRecoversNativeStreamsAndReleasesPolling(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	backend.retryInitial = 5 * time.Millisecond
 	backend.retryMax = 10 * time.Millisecond
 
@@ -1597,35 +1665,35 @@ func TestDarwinWatcherFallbackRecoversNativeStreamsAndReleasesPolling(t *testing
 			},
 		},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(watcher.Stop)
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Recursive: true, Exists: true,
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: root}},
 	}}, 10)
-	require.Equal(t, []RecursiveWatchResult{{Watched: 1}}, results)
-	require.NoError(t, watcher.Start())
+	require.Equal([]RecursiveWatchResult{{Watched: 1}}, results)
+	require.NoError(watcher.Start())
 
 	sinksMu.Lock()
-	require.Len(t, sinks, 1)
+	require.Len(sinks, 1)
 	initialSink := sinks[0]
 	sinksMu.Unlock()
 	initialSink([]fsevents.Event{{Flags: fseventFlagKernelDropped}})
 
-	assert.Equal(t, PollingObligation{
+	assert.Equal(PollingObligation{
 		Key:    darwinFallbackPollingObligationKey(root),
 		Scopes: []PollingScope{{Agent: "agent-a", Root: root}},
 		Probe:  root,
 	}, requireReceiveWithin(t, polling, time.Second))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool { return batch.FullSync })
-	assert.Equal(t, darwinFallbackPollingObligationKey(root),
+	assert.Equal(darwinFallbackPollingObligationKey(root),
 		requireReceiveWithin(t, released, time.Second))
-	require.Eventually(t, func() bool {
+	require.Eventually(func() bool {
 		return backend.fallbackPhaseValue() == darwinFallbackInactive &&
 			darwinFallbackReason(backend.fallbackReason.Load()) == darwinFallbackReasonNone
 	}, time.Second, time.Millisecond)
 	sinksMu.Lock()
-	require.Len(t, sinks, 2)
+	require.Len(sinks, 2)
 	recoveredSink := sinks[1]
 	sinksMu.Unlock()
 	changed := filepath.Join(root, "after-recovery.jsonl")
@@ -1635,13 +1703,16 @@ func TestDarwinWatcherFallbackRecoversNativeStreamsAndReleasesPolling(t *testing
 	batch := waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.Paths, changed)
 	})
-	assert.Contains(t, batch.Paths, changed)
+	assert.Contains(batch.Paths, changed)
 }
 
 func TestDarwinWatcherFallbackKeepsPollingUntilNativeRetrySucceeds(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	backend.retryInitial = 40 * time.Millisecond
 	backend.retryMax = 40 * time.Millisecond
 
@@ -1675,17 +1746,17 @@ func TestDarwinWatcherFallbackKeepsPollingUntilNativeRetrySucceeds(t *testing.T)
 			},
 		},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(watcher.Stop)
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Recursive: true, Exists: true,
 		Scopes: []WatchScope{{SyncDir: root}},
 	}}, 10)
-	require.Equal(t, []RecursiveWatchResult{{Watched: 1}}, results)
-	require.NoError(t, watcher.Start())
+	require.Equal([]RecursiveWatchResult{{Watched: 1}}, results)
+	require.NoError(watcher.Start())
 
 	backend.requestFallback(darwinFallbackNativeDrop)
-	assert.Equal(t, PollingObligation{
+	assert.Equal(PollingObligation{
 		Key:    darwinFallbackPollingObligationKey(root),
 		Scopes: []PollingScope{{Root: root}},
 		Probe:  root,
@@ -1694,16 +1765,16 @@ func TestDarwinWatcherFallbackKeepsPollingUntilNativeRetrySucceeds(t *testing.T)
 	requireReceiveWithin(t, failedRecovery, time.Second)
 	select {
 	case key := <-released:
-		require.Fail(t, "polling released after failed native recovery", key)
+		require.Fail("polling released after failed native recovery", key)
 	default:
 	}
 
-	assert.Equal(t, darwinFallbackPollingObligationKey(root),
+	assert.Equal(darwinFallbackPollingObligationKey(root),
 		requireReceiveWithin(t, released, time.Second))
-	require.Eventually(t, func() bool {
+	require.Eventually(func() bool {
 		return backend.fallbackPhaseValue() == darwinFallbackInactive
 	}, time.Second, time.Millisecond)
-	assert.Equal(t, int32(3), attempts.Load())
+	assert.Equal(int32(3), attempts.Load())
 }
 
 // TestDarwinWatcherStopDuringRecoveryReleaseDoesNotPanic stops the watcher
@@ -1714,9 +1785,11 @@ func TestDarwinWatcherFallbackKeepsPollingUntilNativeRetrySucceeds(t *testing.T)
 // goroutine has exited; a premature close panics with a send on a closed
 // channel.
 func TestDarwinWatcherStopDuringRecoveryReleaseDoesNotPanic(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	backend.retryInitial = 5 * time.Millisecond
 	backend.retryMax = 10 * time.Millisecond
 
@@ -1748,14 +1821,14 @@ func TestDarwinWatcherStopDuringRecoveryReleaseDoesNotPanic(t *testing.T) {
 			},
 		},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(watcher.Stop)
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Recursive: true, Exists: true,
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: root}},
 	}}, 10)
-	require.Equal(t, []RecursiveWatchResult{{Watched: 1}}, results)
-	require.NoError(t, watcher.Start())
+	require.Equal([]RecursiveWatchResult{{Watched: 1}}, results)
+	require.NoError(watcher.Start())
 
 	backend.requestFallback(darwinFallbackNativeDrop)
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool { return batch.FullSync })
@@ -1771,12 +1844,15 @@ func TestDarwinWatcherStopDuringRecoveryReleaseDoesNotPanic(t *testing.T) {
 }
 
 func TestDarwinWatcherFallbackTransfersMissingRootPollingBeforeRecovery(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	parent := t.TempDir()
 	present := filepath.Join(parent, "present")
 	missing := filepath.Join(parent, "missing")
-	require.NoError(t, os.Mkdir(present, 0o700))
+	require.NoError(os.Mkdir(present, 0o700))
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	backend.retryInitial = 5 * time.Millisecond
 	backend.retryMax = 10 * time.Millisecond
 	backend.newStream = func(string, func([]fsevents.Event)) (darwinStream, error) {
@@ -1802,7 +1878,7 @@ func TestDarwinWatcherFallbackTransfersMissingRootPollingBeforeRecovery(t *testi
 			},
 		},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(watcher.Stop)
 	results := watcher.RegisterRoots([]WatchRoot{
 		{
@@ -1814,34 +1890,33 @@ func TestDarwinWatcherFallbackTransfersMissingRootPollingBeforeRecovery(t *testi
 			Scopes: []WatchScope{{SyncDir: missing}},
 		},
 	}, 10)
-	require.Equal(t, []RecursiveWatchResult{
+	require.Equal([]RecursiveWatchResult{
 		{Watched: 1},
 		{Watched: 1, MissingRootLifecycleOwned: true},
 	}, results)
-	require.NoError(t, watcher.Start())
+	require.NoError(watcher.Start())
 
 	backend.requestFallback(darwinFallbackNativeDrop)
-	assert.Equal(t, PollingObligation{
+	assert.Equal(PollingObligation{
 		Key:    darwinFallbackPollingObligationKey(missing),
 		Scopes: []PollingScope{{Root: missing}},
 		Probe:  missing,
 	}, requireReceiveWithin(t, polling, time.Second),
 		"each watch plan owns its own fallback obligation probed on its path")
-	assert.Equal(t, PollingObligation{
+	assert.Equal(PollingObligation{
 		Key:    darwinFallbackPollingObligationKey(present),
 		Scopes: []PollingScope{{Root: present}},
 		Probe:  present,
 	}, requireReceiveWithin(t, polling, time.Second))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool { return batch.FullSync })
-	assert.Equal(t,
-		PollingObligation{Key: missing, Scopes: []PollingScope{{Root: missing}}, Probe: missing},
+	assert.Equal(PollingObligation{Key: missing, Scopes: []PollingScope{{Root: missing}}, Probe: missing},
 		requireReceiveWithin(t, polling, time.Second),
 		"the skipped root must own polling before generic fallback polling is released")
-	assert.Equal(t, darwinFallbackPollingObligationKey(missing),
+	assert.Equal(darwinFallbackPollingObligationKey(missing),
 		requireReceiveWithin(t, released, time.Second))
-	assert.Equal(t, darwinFallbackPollingObligationKey(present),
+	assert.Equal(darwinFallbackPollingObligationKey(present),
 		requireReceiveWithin(t, released, time.Second))
-	require.Eventually(t, func() bool {
+	require.Eventually(func() bool {
 		backend.mu.Lock()
 		defer backend.mu.Unlock()
 		state := backend.logical[missing]
@@ -1849,21 +1924,24 @@ func TestDarwinWatcherFallbackTransfersMissingRootPollingBeforeRecovery(t *testi
 			state != nil && state.phase == darwinRootPending && state.ancestor == parent
 	}, time.Second, time.Millisecond)
 
-	require.NoError(t, os.Mkdir(missing, 0o700))
+	require.NoError(os.Mkdir(missing, 0o700))
 	backend.signalLifecycle()
-	assert.Equal(t, missing, requireReceiveWithin(t, released, time.Second),
+	assert.Equal(missing, requireReceiveWithin(t, released, time.Second),
 		"native activation releases the transferred root-specific polling obligation")
 }
 
 func TestDarwinWatcherStartupCreateFailureSelectsRecursiveFallbackOnce(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	parent := t.TempDir()
 	first := filepath.Join(parent, "first")
 	second := filepath.Join(parent, "second")
 	missing := filepath.Join(parent, "missing")
-	require.NoError(t, os.Mkdir(first, 0o700))
-	require.NoError(t, os.Mkdir(second, 0o700))
+	require.NoError(os.Mkdir(first, 0o700))
+	require.NoError(os.Mkdir(second, 0o700))
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	var creates atomic.Int32
 	backend.newStream = func(string, func([]fsevents.Event)) (darwinStream, error) {
 		creates.Add(1)
@@ -1873,7 +1951,7 @@ func TestDarwinWatcherStartupCreateFailureSelectsRecursiveFallbackOnce(t *testin
 		0, 0, func(context.Context, WatchBatch) error { return nil }, backend,
 		defaultWatchBatchMaxEntries, defaultWatchBatchMaxPathBytes, WatcherOptions{},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(watcher.Stop)
 
 	results := watcher.RegisterRoots([]WatchRoot{
@@ -1882,27 +1960,30 @@ func TestDarwinWatcherStartupCreateFailureSelectsRecursiveFallbackOnce(t *testin
 		{Path: missing, Recursive: true, Scopes: []WatchScope{{SyncDir: missing}}},
 	}, 1)
 
-	assert.Equal(t, []RecursiveWatchResult{
+	assert.Equal([]RecursiveWatchResult{
 		{Watched: 1},
 		{Watched: 1},
 		{Watched: 1},
 	}, results)
-	assert.Equal(t, int32(1), creates.Load(), "one failed stream selects global fallback")
-	assert.Equal(t, []darwinFallbackPollPlan{
+	assert.Equal(int32(1), creates.Load(), "one failed stream selects global fallback")
+	assert.Equal([]darwinFallbackPollPlan{
 		{path: first, scopes: []PollingScope{{Root: first}}},
 		{path: missing, scopes: []PollingScope{{Root: missing}}},
 		{path: second, scopes: []PollingScope{{Root: second}}},
 	}, backend.fallbackPollPlans)
-	assert.Equal(t, uint32(1), backend.fallbackActivations.Load())
+	assert.Equal(uint32(1), backend.fallbackActivations.Load())
 }
 
 func TestDarwinWatcherStartupFallbackRetainsMissingShallowRootLifecycle(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	parent := t.TempDir()
 	recursive := filepath.Join(parent, "recursive")
 	missingShallow := filepath.Join(parent, "metadata")
-	require.NoError(t, os.Mkdir(recursive, 0o700))
+	require.NoError(os.Mkdir(recursive, 0o700))
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	var creates atomic.Int32
 	backend.newStream = func(string, func([]fsevents.Event)) (darwinStream, error) {
 		if creates.Add(1) == 1 {
@@ -1922,7 +2003,7 @@ func TestDarwinWatcherStartupFallbackRetainsMissingShallowRootLifecycle(t *testi
 			return nil
 		}},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(watcher.Stop)
 	results := watcher.RegisterRoots([]WatchRoot{
 		{
@@ -1934,19 +2015,19 @@ func TestDarwinWatcherStartupFallbackRetainsMissingShallowRootLifecycle(t *testi
 			Scopes: []WatchScope{{SyncDir: missingShallow}},
 		},
 	}, 10)
-	assert.Equal(t, []RecursiveWatchResult{
+	assert.Equal([]RecursiveWatchResult{
 		{Watched: 1},
 		{Watched: 1, MissingRootLifecycleOwned: true},
 	}, results)
-	assert.Equal(t, 1, backend.ancestors[parent],
+	assert.Equal(1, backend.ancestors[parent],
 		"startup fallback must retain the missing shallow root's ancestor watch")
-	require.NoError(t, watcher.Start())
+	require.NoError(watcher.Start())
 	requireReceiveWithin(t, polling, time.Second)
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool { return batch.FullSync })
 
-	require.NoError(t, os.Mkdir(missingShallow, 0o700))
+	require.NoError(os.Mkdir(missingShallow, 0o700))
 	backend.signalLifecycle()
-	require.Eventually(t, func() bool {
+	require.Eventually(func() bool {
 		backend.mu.Lock()
 		defer backend.mu.Unlock()
 		state := backend.logical[missingShallow]
@@ -1963,13 +2044,16 @@ func TestDarwinWatcherStartupFallbackRetainsMissingShallowRootLifecycle(t *testi
 		return slices.Contains(batch.Paths, changed)
 	})
 	requireReceiveWithin(t, sent, time.Second)
-	assert.Contains(t, batch.Paths, changed)
+	assert.Contains(batch.Paths, changed)
 }
 
 func TestDarwinWatcherStartupStreamStartFailureFallsBack(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	var creates atomic.Int32
 	backend.newStream = func(string, func([]fsevents.Event)) (darwinStream, error) {
 		creates.Add(1)
@@ -1983,28 +2067,31 @@ func TestDarwinWatcherStartupStreamStartFailureFallsBack(t *testing.T) {
 		}, backend, defaultWatchBatchMaxEntries, defaultWatchBatchMaxPathBytes,
 		WatcherOptions{OnCoverageDegraded: func([]string) error { return nil }},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(watcher.Stop)
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Recursive: true, Exists: true,
 		Scopes: []WatchScope{{SyncDir: root}},
 	}}, 10)
-	require.Equal(t, []RecursiveWatchResult{{Watched: 1}}, results)
+	require.Equal([]RecursiveWatchResult{{Watched: 1}}, results)
 
 	watcher.Start()
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool { return batch.FullSync })
-	require.Eventually(t, func() bool {
+	require.Eventually(func() bool {
 		return backend.fallbackPhaseValue() == darwinFallbackOpen
 	}, time.Second, time.Millisecond)
-	assert.Eventually(t, func() bool { return creates.Load() >= 2 }, time.Second, time.Millisecond,
+	assert.Eventually(func() bool { return creates.Load() >= 2 }, time.Second, time.Millisecond,
 		"native stream start is retried while polling remains active")
-	assert.Equal(t, uint32(1), backend.fallbackActivations.Load())
+	assert.Equal(uint32(1), backend.fallbackActivations.Load())
 }
 
 func TestDarwinWatcherStartupFallbackKqueueFailurePollsEveryScope(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	backend.newStream = func(string, func([]fsevents.Event)) (darwinStream, error) {
 		return nil, errors.New("stream create unavailable")
 	}
@@ -2018,21 +2105,21 @@ func TestDarwinWatcherStartupFallbackKqueueFailurePollsEveryScope(t *testing.T) 
 			return nil
 		}},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(watcher.Stop)
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Recursive: true, Exists: true,
 		Scopes: []WatchScope{{SyncDir: root}},
 	}}, 10)
-	require.Equal(t, []RecursiveWatchResult{{Watched: 1}}, results)
+	require.Equal([]RecursiveWatchResult{{Watched: 1}}, results)
 
 	watcher.Start()
-	assert.Equal(t, []string{root}, requireReceiveWithin(t, coverage, time.Second))
-	require.Eventually(t, func() bool {
+	assert.Equal([]string{root}, requireReceiveWithin(t, coverage, time.Second))
+	require.Eventually(func() bool {
 		return backend.fallbackPhaseValue() == darwinFallbackOpen
 	}, time.Second, time.Millisecond)
 	_, retry := backend.nextLifecycleRetry()
-	assert.False(t, retry,
+	assert.False(retry,
 		"an unrecoverable kqueue start failure must not wake the lifecycle loop forever")
 }
 
@@ -2042,12 +2129,15 @@ func TestDarwinWatcherRuntimeFallbackOrdersCoverageAndRetainsReconciliation(t *t
 		context.Canceled,
 	} {
 		t.Run(reconcileErr.Error(), func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			root := filepath.Join(t.TempDir(), "sessions")
-			require.NoError(t, os.Mkdir(root, 0o700))
+			require.NoError(os.Mkdir(root, 0o700))
 			afterInvalidation := filepath.Join(root, "after-invalidation.jsonl")
 			duringReconcile := filepath.Join(root, "during-reconcile.jsonl")
 			backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-			require.NoError(t, err)
+			require.NoError(err)
 			backend.retryInitial = time.Second
 			backend.retryMax = time.Second
 			var nativeSink func([]fsevents.Event)
@@ -2100,14 +2190,14 @@ func TestDarwinWatcherRuntimeFallbackOrdersCoverageAndRetainsReconciliation(t *t
 					return nil
 				}},
 			)
-			require.NoError(t, err)
+			require.NoError(err)
 			t.Cleanup(watcher.Stop)
 			t.Cleanup(allowRetry)
 			results := watcher.RegisterRoots([]WatchRoot{{
 				Path: root, Recursive: true, Exists: true,
 				Scopes: []WatchScope{{Agent: "agent-a", SyncDir: root}},
 			}}, 10)
-			require.Equal(t, []RecursiveWatchResult{{Watched: 1}}, results)
+			require.Equal([]RecursiveWatchResult{{Watched: 1}}, results)
 			watcher.Start()
 
 			before := filepath.Join(root, "before-fallback.jsonl")
@@ -2121,43 +2211,46 @@ func TestDarwinWatcherRuntimeFallbackOrdersCoverageAndRetainsReconciliation(t *t
 			nativeSink([]fsevents.Event{{Flags: fseventFlagKernelDropped}})
 			requireReceiveWithin(t, firstReconcile, time.Second)
 			requireReceiveWithin(t, closed, time.Second)
-			assert.False(t, requireReceiveWithin(t, invalidationDispatch, time.Second))
-			assert.False(t, requireReceiveWithin(t, reconcileDispatch, time.Second))
+			assert.False(requireReceiveWithin(t, invalidationDispatch, time.Second))
+			assert.False(requireReceiveWithin(t, reconcileDispatch, time.Second))
 			retry := waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 				return batch.FullSync && attempts.Load() == 2
 			})
-			assert.True(t, retry.FullSync)
-			assert.Equal(t, darwinFallbackReconciling, backend.fallbackPhaseValue())
-			assert.Equal(t, int32(2), attempts.Load())
-			assert.Equal(t, int32(1), coverageCalls.Load())
+			assert.True(retry.FullSync)
+			assert.Equal(darwinFallbackReconciling, backend.fallbackPhaseValue())
+			assert.Equal(int32(2), attempts.Load())
+			assert.Equal(int32(1), coverageCalls.Load())
 			allowRetry()
-			require.Eventually(t, func() bool {
+			require.Eventually(func() bool {
 				return backend.fallbackPhaseValue() == darwinFallbackOpen
 			}, time.Second, time.Millisecond)
 
 			retained := waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 				return slices.Contains(batch.Paths, duringReconcile)
 			})
-			assert.ElementsMatch(t, []string{
+			assert.ElementsMatch([]string{
 				afterInvalidation,
 				duringReconcile,
 			}, retained.Paths)
-			assert.Equal(t, int32(2), attempts.Load(), "one retained marker retries until success")
-			assert.Equal(t, uint32(1), backend.fallbackActivations.Load())
-			assert.Equal(t, uint32(1), backend.nativeDrops.Load())
+			assert.Equal(int32(2), attempts.Load(), "one retained marker retries until success")
+			assert.Equal(uint32(1), backend.fallbackActivations.Load())
+			assert.Equal(uint32(1), backend.nativeDrops.Load())
 
 			gotOrder := make([]string, 0, 4)
 			for len(gotOrder) < 4 {
 				gotOrder = append(gotOrder, requireReceiveWithin(t, order, time.Second))
 			}
-			assert.Equal(t, []string{"poll", "invalidate", "reconcile", "reconcile"}, gotOrder)
+			assert.Equal([]string{"poll", "invalidate", "reconcile", "reconcile"}, gotOrder)
 		})
 	}
 }
 
 func TestDarwinWatcherFallbackLifecycleTokenSurvivesSinkContention(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(backend.Stop)
 	sink := newWatchEventSink(
 		defaultWatchBatchMaxEntries,
@@ -2172,24 +2265,27 @@ func TestDarwinWatcherFallbackLifecycleTokenSurvivesSinkContention(t *testing.T)
 	})
 	sink.mu.Unlock()
 
-	assert.True(t, nativeAccepted, "contended native delivery must remain nonblocking")
+	assert.True(nativeAccepted, "contended native delivery must remain nonblocking")
 	batch, ok := sink.Take(nil)
-	require.True(t, ok)
-	assert.True(t, batch.FullSync)
-	require.Len(t, batch.lifecycleTokens, 1)
-	assert.Same(t, backend, batch.lifecycleTokens[0].gate)
-	assert.Equal(t, uint64(1), batch.lifecycleTokens[0].generation)
+	require.True(ok)
+	assert.True(batch.FullSync)
+	require.Len(batch.lifecycleTokens, 1)
+	assert.Same(backend, batch.lifecycleTokens[0].gate)
+	assert.Equal(uint64(1), batch.lifecycleTokens[0].generation)
 	batch.lifecycleTokens[0].gate.acknowledgeLifecycle(
 		batch.lifecycleTokens[0].generation,
 	)
-	assert.Equal(t, uint64(1), backend.fallbackAcknowledged.Load())
+	assert.Equal(uint64(1), backend.fallbackAcknowledged.Load())
 }
 
 func TestDarwinWatcherRuntimeFallbackWaitsForPollingRegistration(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := filepath.Join(t.TempDir(), "sessions")
-	require.NoError(t, os.Mkdir(root, 0o700))
+	require.NoError(os.Mkdir(root, 0o700))
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	var nativeSink func([]fsevents.Event)
 	invalidated := make(chan struct{}, 1)
 	backend.newStream = func(_ string, sink func([]fsevents.Event)) (darwinStream, error) {
@@ -2211,7 +2307,7 @@ func TestDarwinWatcherRuntimeFallbackWaitsForPollingRegistration(t *testing.T) {
 			return nil
 		}},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(watcher.Stop)
 	watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Recursive: true, Exists: true,
@@ -2222,16 +2318,16 @@ func TestDarwinWatcherRuntimeFallbackWaitsForPollingRegistration(t *testing.T) {
 	watcher.Start()
 
 	nativeSink([]fsevents.Event{{Flags: fseventFlagUserDropped}})
-	assert.Equal(t, []string{root}, requireReceiveWithin(t, coverageCalls, time.Second))
-	assert.Equal(t, []string{root}, requireReceiveWithin(t, coverageCalls, time.Second))
+	assert.Equal([]string{root}, requireReceiveWithin(t, coverageCalls, time.Second))
+	assert.Equal([]string{root}, requireReceiveWithin(t, coverageCalls, time.Second))
 	select {
 	case <-invalidated:
-		require.FailNow(t, "FSEvents invalidated before polling owned the uncovered root")
+		require.FailNow("FSEvents invalidated before polling owned the uncovered root")
 	default:
 	}
 	close(allowPolling)
 	requireReceiveWithin(t, invalidated, time.Second)
-	assert.Equal(t, int32(2), attempts.Load())
+	assert.Equal(int32(2), attempts.Load())
 }
 
 func TestDarwinWatcherFallbackNativeCallbackDoesNotRunPolling(t *testing.T) {
@@ -2273,11 +2369,14 @@ func TestDarwinWatcherFallbackNativeCallbackDoesNotRunPolling(t *testing.T) {
 }
 
 func TestDarwinWatcherKqueueStartFailureFallbackPollsBeforeInvalidation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	shallow := filepath.Join(root, "shallow")
-	require.NoError(t, os.Mkdir(shallow, 0o700))
+	require.NoError(os.Mkdir(shallow, 0o700))
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	backend.startKqueue = func() error { return errors.New("kqueue unavailable") }
 	var nativeSink func([]fsevents.Event)
 	pollingOwned := atomic.Bool{}
@@ -2303,7 +2402,7 @@ func TestDarwinWatcherKqueueStartFailureFallbackPollsBeforeInvalidation(t *testi
 			return nil
 		}},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(watcher.Stop)
 	watcher.RegisterRoots([]WatchRoot{
 		{
@@ -2317,22 +2416,25 @@ func TestDarwinWatcherKqueueStartFailureFallbackPollsBeforeInvalidation(t *testi
 	}, 10)
 	watcher.Start()
 
-	require.NotNil(t, nativeSink)
-	assert.Equal(t, []string{root, shallow}, requireReceiveWithin(t, coverage, time.Second))
+	require.NotNil(nativeSink)
+	assert.Equal([]string{root, shallow}, requireReceiveWithin(t, coverage, time.Second))
 	requireReceiveWithin(t, invalidated, time.Second)
-	assert.True(t, requireReceiveWithin(t, invalidatedWithPolling, time.Second))
+	assert.True(requireReceiveWithin(t, invalidatedWithPolling, time.Second))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool { return batch.FullSync })
-	require.Eventually(t, func() bool {
+	require.Eventually(func() bool {
 		return backend.fallbackPhaseValue() == darwinFallbackOpen
 	}, time.Second, time.Millisecond)
 }
 
 func TestDarwinWatcherLifecycleFailureFallsBackToPolling(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ancestor := t.TempDir()
 	intermediate := filepath.Join(ancestor, "state")
 	root := filepath.Join(intermediate, "sessions")
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	backend.retryInitial = time.Millisecond
 	backend.retryMax = 5 * time.Millisecond
 	var attempts atomic.Int32
@@ -2355,35 +2457,37 @@ func TestDarwinWatcherLifecycleFailureFallsBackToPolling(t *testing.T) {
 			return nil
 		}},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(watcher.Stop)
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Recursive: true,
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
 	}}, 10)
-	require.Equal(t, RecursiveWatchResult{
+	require.Equal(RecursiveWatchResult{
 		Watched: 1, MissingRootLifecycleOwned: true,
 	}, results[0])
 	watcher.Start()
-	require.NoError(t, os.Mkdir(intermediate, 0o700))
+	require.NoError(os.Mkdir(intermediate, 0o700))
 	backend.signalLifecycle()
 
-	assert.Equal(t, []string{ancestor}, requireReceiveWithin(t, coverage, time.Second))
+	assert.Equal([]string{ancestor}, requireReceiveWithin(t, coverage, time.Second))
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return batch.FullSync
 	})
-	require.Eventually(t, func() bool {
+	require.Eventually(func() bool {
 		return backend.fallbackPhaseValue() == darwinFallbackOpen
 	}, time.Second, time.Millisecond)
-	assert.Equal(t, int32(1), attempts.Load())
+	assert.Equal(int32(1), attempts.Load())
 }
 
 func TestDarwinWatcherShallowLifecycleFailureFallbackPollsScope(t *testing.T) {
+	require := require.New(t)
+
 	ancestor := t.TempDir()
 	intermediate := filepath.Join(ancestor, "state")
 	root := filepath.Join(intermediate, "sessions")
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	backend.retryInitial = time.Millisecond
 	backend.retryMax = 5 * time.Millisecond
 	backend.addAncestor = func(path string) error {
@@ -2402,28 +2506,31 @@ func TestDarwinWatcherShallowLifecycleFailureFallbackPollsScope(t *testing.T) {
 			return nil
 		}},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(watcher.Stop)
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path:   root,
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
 	}}, 10)
-	require.Equal(t, RecursiveWatchResult{
+	require.Equal(RecursiveWatchResult{
 		Watched: 1, MissingRootLifecycleOwned: true,
 	}, results[0])
 	watcher.Start()
-	require.NoError(t, os.Mkdir(intermediate, 0o700))
+	require.NoError(os.Mkdir(intermediate, 0o700))
 	backend.signalLifecycle()
 
 	assert.Equal(t, []string{ancestor}, requireReceiveWithin(t, coverage, time.Second))
 }
 
 func TestDarwinWatcherMissingRecursiveSymlinkStaysPolled(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ancestor := t.TempDir()
 	root := filepath.Join(ancestor, "sessions")
 	target := t.TempDir()
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	backend.retryInitial = time.Millisecond
 	backend.retryMax = 5 * time.Millisecond
 	var streamCalls atomic.Int32
@@ -2443,13 +2550,13 @@ func TestDarwinWatcherMissingRecursiveSymlinkStaysPolled(t *testing.T) {
 			return nil
 		}},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(watcher.Stop)
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path: root, Recursive: true,
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
 	}}, 10)
-	require.Equal(t, RecursiveWatchResult{
+	require.Equal(RecursiveWatchResult{
 		Watched: 1, MissingRootLifecycleOwned: true,
 	}, results[0])
 	var firstRootInspection atomic.Bool
@@ -2463,29 +2570,30 @@ func TestDarwinWatcherMissingRecursiveSymlinkStaysPolled(t *testing.T) {
 	}
 	watcher.Start()
 	backend.signalLifecycle()
-	require.NoError(t, requireReceiveWithin(t, symlinkResult, time.Second))
+	require.NoError(requireReceiveWithin(t, symlinkResult, time.Second))
 
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.ReconcileRoots, ancestor)
 	})
-	assert.Equal(t,
-		PollingObligation{Key: root, Scopes: []PollingScope{{Agent: "agent-a", Root: ancestor}}, Probe: root},
+	assert.Equal(PollingObligation{Key: root, Scopes: []PollingScope{{Agent: "agent-a", Root: ancestor}}, Probe: root},
 		requireReceiveWithin(t, required, time.Second))
-	require.True(t, firstRootInspection.Load())
+	require.True(firstRootInspection.Load())
 	backend.mu.Lock()
 	phase := backend.logical[root].phase
 	backend.mu.Unlock()
-	assert.Equal(t, darwinRootPolling, phase)
-	assert.Zero(t, streamCalls.Load(),
+	assert.Equal(darwinRootPolling, phase)
+	assert.Zero(streamCalls.Load(),
 		"a recursive symlink is owned by configured polling, not a native stream")
 }
 
 func TestDarwinWatcherMissingShallowSymlinkActivatesAndRestoresCoverage(t *testing.T) {
+	require := require.New(t)
+
 	ancestor := t.TempDir()
 	root := filepath.Join(ancestor, "sessions")
 	target := t.TempDir()
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
-	require.NoError(t, err)
+	require.NoError(err)
 	backend.retryInitial = time.Millisecond
 	backend.retryMax = 5 * time.Millisecond
 	restored := make(chan []string, 1)
@@ -2500,24 +2608,24 @@ func TestDarwinWatcherMissingShallowSymlinkActivatesAndRestoresCoverage(t *testi
 			return nil
 		}},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(watcher.Stop)
 	results := watcher.RegisterRoots([]WatchRoot{{
 		Path:   root,
 		Scopes: []WatchScope{{Agent: "agent-a", SyncDir: ancestor}},
 	}}, 10)
-	require.Equal(t, RecursiveWatchResult{
+	require.Equal(RecursiveWatchResult{
 		Watched: 1, MissingRootLifecycleOwned: true,
 	}, results[0])
-	require.NoError(t, watcher.Start())
-	require.NoError(t, os.Symlink(target, root))
+	require.NoError(watcher.Start())
+	require.NoError(os.Symlink(target, root))
 	backend.signalLifecycle()
 
 	waitForDarwinBatch(t, batches, func(batch WatchBatch) bool {
 		return slices.Contains(batch.ReconcileRoots, ancestor)
 	})
 	assert.Equal(t, []string{root}, requireReceiveWithin(t, restored, time.Second))
-	require.Eventually(t, func() bool {
+	require.Eventually(func() bool {
 		backend.mu.Lock()
 		defer backend.mu.Unlock()
 		state := backend.logical[root]
@@ -2526,6 +2634,8 @@ func TestDarwinWatcherMissingShallowSymlinkActivatesAndRestoresCoverage(t *testi
 }
 
 func TestDarwinWatcherPendingLossWinsOverActivationAcknowledgement(t *testing.T) {
+	assert := assert.New(t)
+
 	ancestor := t.TempDir()
 	root := filepath.Join(ancestor, "sessions")
 	backend, err := newDarwinWatchBackend(nil, 20*time.Millisecond)
@@ -2559,10 +2669,9 @@ func TestDarwinWatcherPendingLossWinsOverActivationAcknowledgement(t *testing.T)
 
 	backend.processLifecycleSignals()
 
-	assert.Equal(t, darwinRootLossCollecting, state.phase)
-	assert.False(t, state.active)
-	assert.Equal(t,
-		PollingObligation{Key: root, Scopes: []PollingScope{{Agent: "agent-a", Root: ancestor}}, Probe: root},
+	assert.Equal(darwinRootLossCollecting, state.phase)
+	assert.False(state.active)
+	assert.Equal(PollingObligation{Key: root, Scopes: []PollingScope{{Agent: "agent-a", Root: ancestor}}, Probe: root},
 		requireReceiveWithin(t, required, time.Second))
 	requireReceiveWithin(t, closed, time.Second)
 }

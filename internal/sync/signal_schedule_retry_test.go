@@ -10,6 +10,8 @@ import (
 )
 
 func TestSignalSchedulerRetriesExhaustedSnapshotConflicts(t *testing.T) {
+	require := require.New(t)
+
 	database := openTestDB(t)
 	engine := NewEngine(database, EngineConfig{})
 	t.Cleanup(engine.Close)
@@ -19,7 +21,7 @@ func TestSignalSchedulerRetriesExhaustedSnapshotConflicts(t *testing.T) {
 		Session: session, ReplaceMessages: true,
 		Messages: []db.Message{{SessionID: sessionID, Ordinal: 0, Role: "assistant", Content: "initial"}},
 	}}, nil)
-	require.NoError(t, err)
+	require.NoError(err)
 	h := newSchedulerHarness(10*time.Second, 2*time.Second)
 	defer h.sched.stop()
 	runs, conflicts := 0, 0
@@ -35,28 +37,30 @@ func TestSignalSchedulerRetriesExhaustedSnapshotConflicts(t *testing.T) {
 				Session: session, ReplaceMessages: true,
 				Messages: []db.Message{{SessionID: sessionID, Ordinal: 0, Role: "assistant", Content: fmt.Sprintf("replacement %d", conflicts), IsCompactBoundary: conflicts == 3}},
 			}}, nil)
-			require.NoError(t, writeErr)
+			require.NoError(writeErr)
 		})
 		if err != nil {
 			h.sched.deferRetry(id)
 		}
 	}
 	h.sched.markDirty(sessionID)
-	require.Equal(t, 3, conflicts)
-	require.Equal(t, 1, runs, "a failed recompute must not recurse inline")
-	require.Equal(t, 1, h.armedCount())
+	require.Equal(3, conflicts)
+	require.Equal(1, runs, "a failed recompute must not recurse inline")
+	require.Equal(1, h.armedCount())
 	h.advance(2 * time.Second)
 	h.fireTimer(t)
-	require.Equal(t, 2, runs)
+	require.Equal(2, runs)
 	stored, err := database.GetSessionFull(t.Context(), sessionID)
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	require.Equal(t, db.CurrentQualitySignalVersion, stored.QualitySignalVersion)
-	require.Equal(t, 1, stored.CompactionCount, "signals must include the final upload's compact boundary")
-	require.Zero(t, h.armedCount(), "successful retry must leave no recurring timer")
+	require.NoError(err)
+	require.NotNil(stored)
+	require.Equal(db.CurrentQualitySignalVersion, stored.QualitySignalVersion)
+	require.Equal(1, stored.CompactionCount, "signals must include the final upload's compact boundary")
+	require.Zero(h.armedCount(), "successful retry must leave no recurring timer")
 }
 
 func TestSignalSchedulerDoesNotRetryFailedShutdownFlush(t *testing.T) {
+	require := require.New(t)
+
 	h := newSchedulerHarness(10*time.Second, 2*time.Second)
 	runs := 0
 	h.sched.run = func(id string) {
@@ -64,11 +68,11 @@ func TestSignalSchedulerDoesNotRetryFailedShutdownFlush(t *testing.T) {
 		h.sched.deferRetry(id)
 	}
 	h.sched.markDirty("session")
-	require.Equal(t, 1, runs)
-	require.Equal(t, 1, h.armedCount())
+	require.Equal(1, runs)
+	require.Equal(1, h.armedCount())
 	h.sched.stop()
-	require.Equal(t, 2, runs, "shutdown makes one final attempt")
-	require.Zero(t, h.armedCount())
+	require.Equal(2, runs, "shutdown makes one final attempt")
+	require.Zero(h.armedCount())
 	h.sched.flushAll()
-	require.Equal(t, 2, runs, "failed shutdown work must not remain queued")
+	require.Equal(2, runs, "failed shutdown work must not remain queued")
 }

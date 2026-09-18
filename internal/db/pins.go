@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -85,7 +86,7 @@ func (db *DB) PinMessage(
 		sessionID, messageID,
 	).Scan(&id)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return 0, nil
 		}
 		return 0, fmt.Errorf("retrieving pin id: %w", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -898,17 +899,15 @@ func newRecallImportCommand() *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !dryRun && !yes {
-				return fmt.Errorf(
-					"recall import writes to the active agentsview database; " +
-						"run --dry-run first, then pass --yes to import",
+				return errors.New("recall import writes to the active agentsview database; " +
+					"run --dry-run first, then pass --yes to import",
 				)
 			}
 			remote, _ := cmd.Flags().GetString("server")
 			if strings.TrimSpace(remote) != "" && !dryRun && !allowRemoteImport {
-				return fmt.Errorf(
-					"recall import --server writes to a remote daemon; " +
-						"run --dry-run first, then pass --yes " +
-						"--allow-remote-import to import",
+				return errors.New("recall import --server writes to a remote daemon; " +
+					"run --dry-run first, then pass --yes " +
+					"--allow-remote-import to import",
 				)
 			}
 			if strings.TrimSpace(remote) == "" && !allowProductionImport {
@@ -1170,9 +1169,8 @@ func applyRecallEntryCurrentScope(
 			strings.TrimSpace(*cwd) != "" ||
 			currentGitBranch ||
 			strings.TrimSpace(*gitBranch) != "" {
-			return fmt.Errorf(
-				"use --current-worktree without --cwd, --current-cwd, " +
-					"--git-branch, or --current-git-branch",
+			return errors.New("use --current-worktree without --cwd, --current-cwd, " +
+				"--git-branch, or --current-git-branch",
 			)
 		}
 		root, err := currentGitRoot()
@@ -1198,7 +1196,7 @@ func applyRecallEntryCurrentCWD(cwd *string, currentCWD bool) error {
 		return nil
 	}
 	if strings.TrimSpace(*cwd) != "" {
-		return fmt.Errorf("use either --cwd or --current-cwd, not both")
+		return errors.New("use either --cwd or --current-cwd, not both")
 	}
 	wd, err := os.Getwd()
 	if err != nil {
@@ -1213,7 +1211,7 @@ func applyRecallEntryCurrentGitBranch(gitBranch *string, currentGitBranch bool) 
 		return nil
 	}
 	if strings.TrimSpace(*gitBranch) != "" {
-		return fmt.Errorf("use either --git-branch or --current-git-branch, not both")
+		return errors.New("use either --git-branch or --current-git-branch, not both")
 	}
 	branch, err := currentGitBranchName()
 	if err != nil {
@@ -1231,7 +1229,7 @@ func currentGitBranchName() (string, error) {
 	}
 	branch := strings.TrimSpace(string(out))
 	if branch == "" {
-		return "", fmt.Errorf("resolving current git branch: empty branch name")
+		return "", errors.New("resolving current git branch: empty branch name")
 	}
 	return branch, nil
 }

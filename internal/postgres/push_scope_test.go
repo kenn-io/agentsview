@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -39,7 +38,7 @@ func TestProjectScopeMoveCandidatesStayBoundedByChangedBatch(t *testing.T) {
 		}))
 
 		sessions, err := listPGProjectScopeMoveCandidates(
-			context.Background(), local, lastPush,
+			t.Context(), local, lastPush,
 		)
 		require.NoError(t, err)
 		ids := make([]string, 0, len(sessions))

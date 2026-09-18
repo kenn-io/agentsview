@@ -9,6 +9,9 @@ import (
 )
 
 func TestDirectArchiveReportsResolveMachineAliases(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := newTestDB(t)
 	started, ended := "2026-06-15T10:00:00Z", "2026-06-15T10:05:00Z"
 	_, err := database.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
@@ -25,24 +28,24 @@ func TestDirectArchiveReportsResolveMachineAliases(t *testing.T) {
 		},
 		ReplaceMessages: true,
 	}})
-	require.NoError(t, err)
-	require.NoError(t, database.SetSyncState(db.MachineAliasKeyPrefix+"old-host", "installation-a"))
+	require.NoError(err)
+	require.NoError(database.SetSyncState(db.MachineAliasKeyPrefix+"old-host", "installation-a"))
 	backend := localArchiveQueryBackend{database: database, offline: true, skipFreshData: true}
 	usage, err := backend.DailyUsage(t.Context(), dailyUsageQuery{
 		Filter: db.UsageFilter{From: "2026-06-15", To: "2026-06-15", Machine: "old-host"},
 	})
-	require.NoError(t, err)
-	assert.Equal(t, 500, usage.Totals.OutputTokens)
+	require.NoError(err)
+	assert.Equal(500, usage.Totals.OutputTokens)
 	activity, err := backend.ActivityReport(t.Context(), ActivityReportConfig{
 		Preset: "day", Date: "2026-06-15", Timezone: "UTC", Machine: "old-host", Offline: true,
 	})
-	require.NoError(t, err)
-	assert.Equal(t, 500, activity.Totals.OutputTokens)
+	require.NoError(err)
+	assert.Equal(500, activity.Totals.OutputTokens)
 	pages, err := collectExportSessionPages(t.Context(), database, exportSessionsConfig{
 		Machine: "old-host", Limit: 10, Format: "json", IncludeOneShot: true,
 	})
-	require.NoError(t, err)
-	require.Len(t, pages, 1)
-	require.Len(t, pages[0].Rows, 1)
-	assert.Equal(t, "session-a", pages[0].Rows[0].ID)
+	require.NoError(err)
+	require.Len(pages, 1)
+	require.Len(pages[0].Rows, 1)
+	assert.Equal("session-a", pages[0].Rows[0].ID)
 }

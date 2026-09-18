@@ -116,19 +116,6 @@ func isMirrorLockConflictError(err error) bool {
 		strings.Contains(msg, "Conflicting lock")
 }
 
-// isMirrorOpenInSameProcessError reports whether err is duckdb-go's
-// same-process double-open rejection ("Can't open a connection to same
-// database file with a different configuration than existing connections"):
-// duckdb-go caches instances per literal DSN, so opening the same path with
-// a DIFFERENT access mode than an existing in-process handle is rejected. A
-// read-only probe hits it when the same process holds the mirror read-write
-// (a push in flight), and a push's write open hits it when the same process
-// holds the mirror read-only (a serving Store). Same-DSN opens share the
-// cached instance instead and never hit this.
-func isMirrorOpenInSameProcessError(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "same database file")
-}
-
 func probeOpenMirror(ctx context.Context, conn *sql.DB) MirrorProbe {
 	probe := MirrorProbe{FileExists: true}
 

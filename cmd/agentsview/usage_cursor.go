@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -66,7 +67,7 @@ func runUsageCursor(cfg UsageCursorConfig) error {
 
 	apiKey := strings.TrimSpace(appCfg.CursorAdminAPIKey)
 	if apiKey == "" {
-		return fmt.Errorf("missing Cursor admin API key")
+		return errors.New("missing Cursor admin API key")
 	}
 
 	email := strings.TrimSpace(cfg.Email)

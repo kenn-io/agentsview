@@ -26,12 +26,12 @@ func TestActivityReportCacheExpiresWithoutAnotherCacheOperation(t *testing.T) {
 		},
 	))
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- srv.Serve(listener) }()
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 		require.NoError(t, srv.Shutdown(ctx))
 		require.ErrorIs(t, <-serveDone, http.ErrServerClosed)
@@ -47,16 +47,18 @@ func TestActivityReportCacheExpiresWithoutAnotherCacheOperation(t *testing.T) {
 }
 
 func TestActivityReportCacheSlidesIdleExpiry(t *testing.T) {
+	require := require.New(t)
+
 	cache := newActivityReportCache()
 	now := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
 	cache.now = func() time.Time { return now }
-	require.True(t, cache.put("report", "digest", activity.CandidateArtifacts{}))
+	require.True(cache.put("report", "digest", activity.CandidateArtifacts{}))
 	now = now.Add(14 * time.Minute)
 	_, _, ok := cache.get("report")
-	require.True(t, ok)
+	require.True(ok)
 	now = now.Add(14 * time.Minute)
 	_, _, ok = cache.get("report")
-	require.True(t, ok, "successful access slides the idle deadline")
+	require.True(ok, "successful access slides the idle deadline")
 	now = now.Add(15 * time.Minute)
 	_, _, ok = cache.get("report")
 	assert.False(t, ok)
@@ -88,6 +90,9 @@ func TestActivityReportCacheRejectsSingleOversizeArtifact(t *testing.T) {
 }
 
 func TestActivityReportCacheEnforcesCumulativeRowAndByteBounds(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	cache := newActivityReportCache()
 	cache.maxRows = 3
 	cache.maxBytes = 1 << 20
@@ -96,13 +101,13 @@ func TestActivityReportCacheEnforcesCumulativeRowAndByteBounds(t *testing.T) {
 			SessionID: id, Title: title,
 		}}}
 	}
-	require.True(t, cache.put("one", "one", report("one", "")))
-	require.True(t, cache.put("two", "two", report("two", "")))
-	require.True(t, cache.put("three", "three", report("three", "")))
-	require.Equal(t, 3, cache.rows)
-	require.True(t, cache.put("four", "four", report("four", "")))
+	require.True(cache.put("one", "one", report("one", "")))
+	require.True(cache.put("two", "two", report("two", "")))
+	require.True(cache.put("three", "three", report("three", "")))
+	require.Equal(3, cache.rows)
+	require.True(cache.put("four", "four", report("four", "")))
 	_, _, oldestPresent := cache.get("one")
-	assert.False(t, oldestPresent, "cumulative row pressure evicts the LRU")
+	assert.False(oldestPresent, "cumulative row pressure evicts the LRU")
 
 	cache = newActivityReportCache()
 	small := report("small", "")
@@ -113,33 +118,36 @@ func TestActivityReportCacheEnforcesCumulativeRowAndByteBounds(t *testing.T) {
 		activity.EstimatedArtifactBytes(small),
 		activity.EstimatedArtifactBytes(replacement),
 	) + 1
-	require.True(t, cache.put("small", "small", small))
-	require.True(t, cache.put("replacement", "replacement", replacement))
+	require.True(cache.put("small", "small", small))
+	require.True(cache.put("replacement", "replacement", replacement))
 	_, _, oldestPresent = cache.get("small")
-	assert.False(t, oldestPresent, "cumulative byte pressure evicts the LRU")
-	assert.LessOrEqual(t, cache.bytes, cache.maxBytes)
+	assert.False(oldestPresent, "cumulative byte pressure evicts the LRU")
+	assert.LessOrEqual(cache.bytes, cache.maxBytes)
 }
 
 func TestActivityReportCacheAccountsAndReusesLazySortOrder(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	cache := newActivityReportCache()
 	artifacts := activity.CandidateArtifacts{Sessions: []activity.SessionRow{
 		{SessionID: "b", Project: "two"},
 		{SessionID: "a", Project: "one"},
 	}}
-	require.True(t, cache.put("report", "digest", artifacts))
+	require.True(cache.put("report", "digest", artifacts))
 	baseBytes := cache.bytes
 	options := activity.SessionPageOptions{
 		Sort: activity.SessionSortProject, Direction: "asc",
 	}
 	first, ok, err := cache.page("report", options)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Len(t, first.Sessions, 2)
-	assert.Equal(t, "a", first.Sessions[0].SessionID)
-	assert.Equal(t, baseBytes+16, cache.bytes)
+	require.NoError(err)
+	require.True(ok)
+	require.Len(first.Sessions, 2)
+	assert.Equal("a", first.Sessions[0].SessionID)
+	assert.Equal(baseBytes+16, cache.bytes)
 
 	_, ok, err = cache.page("report", options)
-	require.NoError(t, err)
-	require.True(t, ok)
-	assert.Equal(t, baseBytes+16, cache.bytes, "same permutation is retained once")
+	require.NoError(err)
+	require.True(ok)
+	assert.Equal(baseBytes+16, cache.bytes, "same permutation is retained once")
 }

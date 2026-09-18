@@ -3,7 +3,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -165,42 +164,48 @@ func webSearchUsageDBForAgent(
 }
 
 func TestSessionUsageBillsWebSearchRequests(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	d := webSearchUsageDB(t, "claude-websearch-test", 2)
 
 	usage, err := d.GetSessionUsage(ctx, "sess-ws", true)
-	require.NoError(t, err)
-	require.NotNil(t, usage)
-	require.True(t, usage.HasCost)
+	require.NoError(err)
+	require.NotNil(usage)
+	require.True(usage.HasCost)
 
 	// Two messages at $0.30 of tokens each, plus two searches at $0.01.
-	assert.Equal(t, money.MustParseDollars("0.62"), usage.Cost)
-	require.Len(t, usage.Breakdown, 2)
-	assert.Equal(t, 2, usage.Breakdown[0].WebSearchRequests)
-	assert.Equal(t, money.MustParseDollars("0.32"),
+	assert.Equal(money.MustParseDollars("0.62"), usage.Cost)
+	require.Len(usage.Breakdown, 2)
+	assert.Equal(2, usage.Breakdown[0].WebSearchRequests)
+	assert.Equal(money.MustParseDollars("0.32"),
 		usage.Breakdown[0].Cost)
-	assert.Zero(t, usage.Breakdown[1].WebSearchRequests)
-	assert.Equal(t, money.MustParseDollars("0.30"),
+	assert.Zero(usage.Breakdown[1].WebSearchRequests)
+	assert.Equal(money.MustParseDollars("0.30"),
 		usage.Breakdown[1].Cost)
 }
 
 func TestSessionUsageBreakdownOmitsAbsentWebSearchRequests(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	d := webSearchUsageDB(t, "claude-websearch-test", 0)
 
 	usage, err := d.GetSessionUsage(ctx, "sess-ws", true)
-	require.NoError(t, err)
-	require.NotNil(t, usage)
-	require.Len(t, usage.Breakdown, 2)
+	require.NoError(err)
+	require.NotNil(usage)
+	require.Len(usage.Breakdown, 2)
 
 	encoded, err := json.Marshal(usage.Breakdown[0])
-	require.NoError(t, err)
-	assert.NotContains(t, string(encoded), "web_search_requests")
-	assert.Equal(t, money.MustParseDollars("0.60"), usage.Cost)
+	require.NoError(err)
+	assert.NotContains(string(encoded), "web_search_requests")
+	assert.Equal(money.MustParseDollars("0.60"), usage.Cost)
 }
 
 func TestDailyUsageBillsWebSearchRequestsOnce(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d := webSearchUsageDB(t, "claude-websearch-test", 2)
 
 	result, err := d.GetDailyUsage(ctx, UsageFilter{
@@ -213,28 +218,31 @@ func TestDailyUsageBillsWebSearchRequestsOnce(t *testing.T) {
 }
 
 func TestPositUsagePremiumLeavesWebSearchFeeUnadjusted(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	d := webSearchUsageDBForAgent(
 		t, "claude-websearch-test", 2, "posit-assistant")
 
 	usage, err := d.GetSessionUsage(ctx, "sess-ws", true)
-	require.NoError(t, err)
-	require.NotNil(t, usage)
-	require.Len(t, usage.Breakdown, 2)
-	assert.Equal(t, money.MustParseDollars("0.68"), usage.Cost)
-	assert.Equal(t, money.MustParseDollars("0.35"), usage.Breakdown[0].Cost)
-	assert.Equal(t, money.MustParseDollars("0.33"), usage.Breakdown[1].Cost)
+	require.NoError(err)
+	require.NotNil(usage)
+	require.Len(usage.Breakdown, 2)
+	assert.Equal(money.MustParseDollars("0.68"), usage.Cost)
+	assert.Equal(money.MustParseDollars("0.35"), usage.Breakdown[0].Cost)
+	assert.Equal(money.MustParseDollars("0.33"), usage.Breakdown[1].Cost)
 
 	daily, err := d.GetDailyUsage(ctx, UsageFilter{
 		From: "2026-07-01", To: "2026-07-31", Timezone: "UTC",
 	})
-	require.NoError(t, err)
-	assert.Equal(t, money.MustParseDollars("0.68"), daily.Totals.TotalCost)
+	require.NoError(err)
+	assert.Equal(money.MustParseDollars("0.68"), daily.Totals.TotalCost)
 
 	report, err := d.GetActivityReport(ctx,
 		AnalyticsFilter{Timezone: "UTC"}, dayQuery(t, "2026-07-30", "UTC"))
-	require.NoError(t, err)
-	assert.Equal(t, money.MustParseDollars("0.68"), report.Totals.Cost)
+	require.NoError(err)
+	assert.Equal(money.MustParseDollars("0.68"), report.Totals.Cost)
 	t.Logf("observed Posit model cost: $%.6f at 11/10=1.1; fixed fee remains $0.02",
 		float64(usage.Breakdown[0].Cost.Microdollars)/1_000_000)
 }
@@ -242,7 +250,7 @@ func TestPositUsagePremiumLeavesWebSearchFeeUnadjusted(t *testing.T) {
 // A duplicate of the same Claude message must not double the fee, the same
 // way it must not double the tokens.
 func TestDailyUsageWebSearchFeeSurvivesDedup(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d := webSearchUsageDB(t, "claude-websearch-test", 2)
 
 	insertSession(t, d, "sess-ws-fork", "proj1", func(s *Session) {
@@ -275,7 +283,10 @@ func TestDailyUsageWebSearchFeeSurvivesDedup(t *testing.T) {
 }
 
 func TestAsymmetricClaudeSnapshotsPreserveWebSearchFee(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	d := webSearchUsageDB(t, "claude-websearch-test", 2)
 	insertMessages(t, d, Message{
 		SessionID: "sess-ws", Ordinal: 2,
@@ -292,64 +303,67 @@ func TestAsymmetricClaudeSnapshotsPreserveWebSearchFee(t *testing.T) {
 	})
 
 	usage, err := d.GetSessionUsage(ctx, "sess-ws", true)
-	require.NoError(t, err)
-	require.NotNil(t, usage)
-	assert.Equal(t, money.MustParseDollars("0.82"), usage.Cost)
-	require.Len(t, usage.Breakdown, 2)
-	assert.Equal(t, 2, usage.Breakdown[1].WebSearchRequests)
-	assert.Equal(t, money.MustParseDollars("0.52"),
+	require.NoError(err)
+	require.NotNil(usage)
+	assert.Equal(money.MustParseDollars("0.82"), usage.Cost)
+	require.Len(usage.Breakdown, 2)
+	assert.Equal(2, usage.Breakdown[1].WebSearchRequests)
+	assert.Equal(money.MustParseDollars("0.52"),
 		usage.Breakdown[1].Cost)
 
 	daily, err := d.GetDailyUsage(ctx, UsageFilter{
 		From: "2026-07-30", To: "2026-07-30", Timezone: "UTC",
 	})
-	require.NoError(t, err)
-	assert.Equal(t, money.MustParseDollars("0.82"),
+	require.NoError(err)
+	assert.Equal(money.MustParseDollars("0.82"),
 		daily.Totals.TotalCost)
 
 	report, err := d.GetActivityReport(ctx,
 		AnalyticsFilter{Timezone: "UTC"},
 		dayQuery(t, "2026-07-30", "UTC"))
-	require.NoError(t, err)
-	assert.Equal(t, money.MustParseDollars("0.82"), report.Totals.Cost)
+	require.NoError(err)
+	assert.Equal(money.MustParseDollars("0.82"), report.Totals.Cost)
 
 	rowSet, err := d.GetSessionUsageRows(ctx, []string{"sess-ws"})
-	require.NoError(t, err)
-	require.Len(t, rowSet.Rows, 2)
-	assert.Equal(t, 2, rowSet.Rows[1].WebSearchRequests)
-	assert.Equal(t, money.MustParseDollars("0.52"), rowSet.Rows[1].Cost)
+	require.NoError(err)
+	require.Len(rowSet.Rows, 2)
+	assert.Equal(2, rowSet.Rows[1].WebSearchRequests)
+	assert.Equal(money.MustParseDollars("0.52"), rowSet.Rows[1].Cost)
 }
 
 // An unpriced model still owes the flat fee: it is a known amount of real
 // spend that does not depend on token rates. The row stays unpriced so the
 // session is still reported as an incomplete estimate.
 func TestSessionUsageBillsWebSearchOnUnpricedModel(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	d := webSearchUsageDB(t, "some-unlisted-model", 2)
 
 	usage, err := d.GetSessionUsage(ctx, "sess-ws", true)
-	require.NoError(t, err)
-	require.NotNil(t, usage)
-	assert.False(t, usage.HasCost)
-	assert.Equal(t, []string{"some-unlisted-model"}, usage.UnpricedModels)
-	require.Len(t, usage.Breakdown, 2)
-	assert.Equal(t, money.MustParseDollars("0.02"),
+	require.NoError(err)
+	require.NotNil(usage)
+	assert.False(usage.HasCost)
+	assert.Equal([]string{"some-unlisted-model"}, usage.UnpricedModels)
+	require.Len(usage.Breakdown, 2)
+	assert.Equal(money.MustParseDollars("0.02"),
 		usage.Breakdown[0].Cost)
-	assert.False(t, usage.Breakdown[0].HasCost)
-	assert.Equal(t, 2, usage.Breakdown[0].WebSearchRequests)
-	assert.Equal(t, money.Money{}, usage.Breakdown[1].Cost)
+	assert.False(usage.Breakdown[0].HasCost)
+	assert.Equal(2, usage.Breakdown[0].WebSearchRequests)
+	assert.Equal(money.Money{}, usage.Breakdown[1].Cost)
 
 	result, err := d.GetDailyUsage(ctx, UsageFilter{
 		From: "2026-07-01",
 		To:   "2026-07-31",
 	})
-	require.NoError(t, err)
-	assert.Equal(t, money.MustParseDollars("0.02"),
+	require.NoError(err)
+	assert.Equal(money.MustParseDollars("0.02"),
 		result.Totals.TotalCost)
 }
 
 func TestActivityReportBillsWebSearchRequests(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d := webSearchUsageDB(t, "claude-websearch-test", 2)
 
 	report, err := d.GetActivityReport(ctx,
@@ -361,22 +375,27 @@ func TestActivityReportBillsWebSearchRequests(t *testing.T) {
 }
 
 func TestSessionUsageRowsCarryWebSearchRequests(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	d := webSearchUsageDB(t, "claude-websearch-test", 2)
 
 	rowSet, err := d.GetSessionUsageRows(ctx, []string{"sess-ws"})
-	require.NoError(t, err)
+	require.NoError(err)
 	rows := rowSet.Rows
-	require.Len(t, rows, 2)
-	assert.Equal(t, 2, rows[0].WebSearchRequests)
-	assert.Equal(t, money.MustParseDollars("0.32"), rows[0].Cost)
-	assert.Zero(t, rows[1].WebSearchRequests)
-	assert.Equal(t, money.MustParseDollars("0.30"), rows[1].Cost)
+	require.Len(rows, 2)
+	assert.Equal(2, rows[0].WebSearchRequests)
+	assert.Equal(money.MustParseDollars("0.32"), rows[0].Cost)
+	assert.Zero(rows[1].WebSearchRequests)
+	assert.Equal(money.MustParseDollars("0.30"), rows[1].Cost)
 }
 
 // A row that carries its own reported cost is authoritative for the whole
 // row, so the fee is not stacked on top of it.
 func TestSessionRowCostSkipsWebSearchFeeOnReportedCost(t *testing.T) {
+	assert := assert.New(t)
+
 	resolver := export.NewPricingResolver([]export.EffectivePricingRow{{
 		ModelPattern: "claude-websearch-test",
 		Rates: export.ModelRates{
@@ -393,7 +412,7 @@ func TestSessionRowCostSkipsWebSearchFeeOnReportedCost(t *testing.T) {
 	}
 	cost, priced, contributes, err := sessionRowCost(row, resolver)
 	require.NoError(t, err)
-	assert.True(t, priced)
-	assert.True(t, contributes)
-	assert.Equal(t, money.MustParseDollars("0.50"), cost)
+	assert.True(priced)
+	assert.True(contributes)
+	assert.Equal(money.MustParseDollars("0.50"), cost)
 }

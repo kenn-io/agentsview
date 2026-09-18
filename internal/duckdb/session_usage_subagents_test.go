@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"fmt"
 	"testing"
@@ -21,10 +20,13 @@ import (
 // parent and a subagent transcript, and the same tagged breakdown as the
 // SQLite archive it mirrors.
 func TestSessionUsageWithSubagentsMatchesSQLite(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	local := newLocalDB(t)
 
-	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
+	require.NoError(local.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",
 		InputPerMTok:  money.MustParseDollars("2.0"),
 		OutputPerMTok: money.MustParseDollars("10.0"),
@@ -119,32 +121,32 @@ func TestSessionUsageWithSubagentsMatchesSQLite(t *testing.T) {
 			DataVersion: 1, ReplaceMessages: true,
 		},
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	require.NoError(t, createSchema(ctx, syncer.DB()))
+	require.NoError(createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
-	require.NoError(t, err, "push to DuckDB")
+	require.NoError(err, "push to DuckDB")
 	duck := NewStoreFromDB(syncer.DB())
 	ids := []string{
 		parentID, childAID, childBID, latestChildID,
 	}
 	sqliteRows, err := local.GetSessionUsageRows(ctx, ids)
-	require.NoError(t, err)
+	require.NoError(err)
 	duckRows, err := duck.GetSessionUsageRows(ctx, ids)
-	require.NoError(t, err)
-	assert.Equal(t, sqliteRows.RawOutputTokensBySession,
+	require.NoError(err)
+	assert.Equal(sqliteRows.RawOutputTokensBySession,
 		duckRows.RawOutputTokensBySession,
 		"raw per-transcript output metadata matches SQLite")
-	assert.Equal(t, sqliteRows.DiscardedContributingSessions,
+	assert.Equal(sqliteRows.DiscardedContributingSessions,
 		duckRows.DiscardedContributingSessions,
 		"discarded contributing-row metadata matches SQLite")
-	assert.Equal(t, sqliteRows.CanonicalTokenCoverageBySession,
+	assert.Equal(sqliteRows.CanonicalTokenCoverageBySession,
 		duckRows.CanonicalTokenCoverageBySession,
 		"canonical per-source token coverage matches SQLite")
-	require.Len(t, sqliteRows.Rows, 3)
-	require.Len(t, duckRows.Rows, 3)
-	assert.Equal(t, []string{
+	require.Len(sqliteRows.Rows, 3)
+	require.Len(duckRows.Rows, 3)
+	assert.Equal([]string{
 		childAID, childBID, latestChildID,
 	}, []string{
 		duckRows.Rows[0].SourceSessionID,
@@ -154,34 +156,34 @@ func TestSessionUsageWithSubagentsMatchesSQLite(t *testing.T) {
 
 	sqliteGot, err := service.SessionUsageWithSubagents(
 		ctx, local, parentID, true)
-	require.NoError(t, err, "SQLite combined usage")
-	require.NotNil(t, sqliteGot)
+	require.NoError(err, "SQLite combined usage")
+	require.NotNil(sqliteGot)
 
 	duckGot, err := service.SessionUsageWithSubagents(ctx, duck, parentID, true)
-	require.NoError(t, err, "DuckDB combined usage")
-	require.NotNil(t, duckGot)
+	require.NoError(err, "DuckDB combined usage")
+	require.NotNil(duckGot)
 
-	assert.False(t, sqliteGot.HasCost,
+	assert.False(sqliteGot.HasCost,
 		"the output-only parent tokens make the combined cost incomplete")
-	assert.Zero(t, sqliteGot.Cost)
-	assert.Equal(t, sqliteGot.Cost, duckGot.Cost)
-	assert.Equal(t, sqliteGot.HasCost, duckGot.HasCost)
-	assert.Equal(t, sqliteGot.CostSource, duckGot.CostSource)
-	assert.Equal(t, sqliteGot.SubagentCount, duckGot.SubagentCount)
-	assert.Equal(t, sqliteGot.BreakdownCount, duckGot.BreakdownCount)
-	assert.Equal(t, sqliteGot.Models, duckGot.Models)
-	assert.Equal(t, sqliteGot.UnpricedModels, duckGot.UnpricedModels)
-	assert.Equal(t, 1800, sqliteGot.TotalOutputTokens,
+	assert.Zero(sqliteGot.Cost)
+	assert.Equal(sqliteGot.Cost, duckGot.Cost)
+	assert.Equal(sqliteGot.HasCost, duckGot.HasCost)
+	assert.Equal(sqliteGot.CostSource, duckGot.CostSource)
+	assert.Equal(sqliteGot.SubagentCount, duckGot.SubagentCount)
+	assert.Equal(sqliteGot.BreakdownCount, duckGot.BreakdownCount)
+	assert.Equal(sqliteGot.Models, duckGot.Models)
+	assert.Equal(sqliteGot.UnpricedModels, duckGot.UnpricedModels)
+	assert.Equal(1800, sqliteGot.TotalOutputTokens,
 		"output tokens are deduplicated without dropping the parent's "+
 			"output-only message")
-	assert.Equal(t, sqliteGot.TotalOutputTokens, duckGot.TotalOutputTokens)
-	assert.Equal(t, sqliteGot.HasTokenData, duckGot.HasTokenData)
-	assert.Equal(t, sqliteGot.PeakContextTokens, duckGot.PeakContextTokens)
+	assert.Equal(sqliteGot.TotalOutputTokens, duckGot.TotalOutputTokens)
+	assert.Equal(sqliteGot.HasTokenData, duckGot.HasTokenData)
+	assert.Equal(sqliteGot.PeakContextTokens, duckGot.PeakContextTokens)
 
-	require.Len(t, duckGot.Breakdown, 3)
-	assert.Equal(t, sqliteGot.Breakdown, duckGot.Breakdown,
+	require.Len(duckGot.Breakdown, 3)
+	assert.Equal(sqliteGot.Breakdown, duckGot.Breakdown,
 		"breakdown rows, ordering, and subagent tagging match SQLite")
-	assert.Equal(t, []string{childAID, childBID, latestChildID}, []string{
+	assert.Equal([]string{childAID, childBID, latestChildID}, []string{
 		duckGot.Breakdown[0].SubagentSessionID,
 		duckGot.Breakdown[1].SubagentSessionID,
 		duckGot.Breakdown[2].SubagentSessionID,
@@ -189,8 +191,8 @@ func TestSessionUsageWithSubagentsMatchesSQLite(t *testing.T) {
 
 	// The own-session path stays own-session on both backends.
 	duckOwn, err := duck.GetSessionUsage(ctx, parentID, true)
-	require.NoError(t, err)
-	require.NotNil(t, duckOwn)
-	assert.Equal(t, money.MustParseDollars("0.007"), duckOwn.Cost)
-	assert.Zero(t, duckOwn.SubagentCount)
+	require.NoError(err)
+	require.NotNil(duckOwn)
+	assert.Equal(money.MustParseDollars("0.007"), duckOwn.Cost)
+	assert.Zero(duckOwn.SubagentCount)
 }

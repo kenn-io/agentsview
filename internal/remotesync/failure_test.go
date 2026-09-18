@@ -173,13 +173,15 @@ func TestFailureSummary(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			got := FailureSummary(tt.err)
-			assert.Equal(t, tt.want, got)
-			assert.NotContains(t, got, "tailnet.ts.net",
+			assert.Equal(tt.want, got)
+			assert.NotContains(got, "tailnet.ts.net",
 				"summaries must not leak the remote URL")
-			assert.NotContains(t, got, "abc123",
+			assert.NotContains(got, "abc123",
 				"summaries must not leak response bodies")
-			assert.NotContains(t, got, "secret-token",
+			assert.NotContains(got, "secret-token",
 				"summaries must not leak raw error text")
 		})
 	}
@@ -272,7 +274,7 @@ func TestIsHostUnavailableWhenHTTPServerClosesBeforeHeaders(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	_, err := (HTTPSync{URL: server.URL}).fetchTargets(
-		context.Background(), server.Client(),
+		t.Context(), server.Client(),
 	)
 	require.NoError(t, <-serverResult)
 	require.Error(t, err)

@@ -18,11 +18,11 @@ func assertSQLiteMemoryPragmas(
 	t.Helper()
 
 	var got int
-	require.NoError(t, conn.QueryRow("PRAGMA cache_size").Scan(&got))
+	require.NoError(t, conn.QueryRowContext(t.Context(), "PRAGMA cache_size").Scan(&got))
 	assert.Equal(t, expectedSQLiteCacheSizeKiB, got)
 
 	var mmapSize int64
-	require.NoError(t, conn.QueryRow("PRAGMA mmap_size").Scan(&mmapSize))
+	require.NoError(t, conn.QueryRowContext(t.Context(), "PRAGMA mmap_size").Scan(&mmapSize))
 }
 
 func TestSQLiteConnectionMemoryPragmas(t *testing.T) {
@@ -78,28 +78,31 @@ func TestSQLiteConnectionMemoryPragmas(t *testing.T) {
 }
 
 func TestReaderPoolRetainsConfiguredBurstConnections(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "sessions.db")
 	database, err := Open(path)
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(func() {
-		require.NoError(t, database.Close())
+		require.NoError(database.Close())
 	})
 
 	reader := database.rawReader()
-	require.Equal(t, readerMaxOpenConns, reader.Stats().MaxOpenConnections)
+	require.Equal(readerMaxOpenConns, reader.Stats().MaxOpenConnections)
 
 	connections := make([]*sql.Conn, 0, readerMaxOpenConns)
 	for range readerMaxOpenConns {
 		conn, connErr := reader.Conn(t.Context())
-		require.NoError(t, connErr)
+		require.NoError(connErr)
 		connections = append(connections, conn)
 	}
-	assert.Equal(t, readerMaxOpenConns, reader.Stats().InUse)
+	assert.Equal(readerMaxOpenConns, reader.Stats().InUse)
 
 	for _, conn := range connections {
-		require.NoError(t, conn.Close())
+		require.NoError(conn.Close())
 	}
 	stats := reader.Stats()
-	assert.Equal(t, readerMaxOpenConns, stats.Idle)
-	assert.Zero(t, stats.MaxIdleClosed)
+	assert.Equal(readerMaxOpenConns, stats.Idle)
+	assert.Zero(stats.MaxIdleClosed)
 }

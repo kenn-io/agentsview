@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -189,7 +190,7 @@ func (s JSONLSourceSet) DiscoverEach(
 			continue
 		}
 		if !info.IsDir() {
-			err := fmt.Errorf("not a directory")
+			err := errors.New("not a directory")
 			incomplete = errors.Join(incomplete, incompleteDiscoveryError(
 				s.provider, "stat JSONL root "+root, err,
 			))
@@ -437,7 +438,7 @@ func (s JSONLSourceSet) Fingerprint(
 		return SourceFingerprint{}, err
 	}
 	if !ok {
-		return SourceFingerprint{}, fmt.Errorf("jsonl source path unavailable")
+		return SourceFingerprint{}, errors.New("jsonl source path unavailable")
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -525,7 +526,7 @@ func (s JSONLSourceSet) foldCompanionFingerprint(
 		folded = true
 	}
 	if hasher != nil && folded {
-		fingerprint.Hash = fmt.Sprintf("%x", hasher.Sum(nil))
+		fingerprint.Hash = hex.EncodeToString(hasher.Sum(nil))
 	}
 	return nil
 }
@@ -1085,7 +1086,7 @@ func hashJSONLSourceFileContext(
 	if _, err := io.Copy(h, checkedContextReader{ctx: ctx, reader: f}); err != nil {
 		return "", fmt.Errorf("hash %s: %w", path, err)
 	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 type checkedContextReader struct {

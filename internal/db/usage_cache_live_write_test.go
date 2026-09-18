@@ -3,7 +3,6 @@
 package db
 
 import (
-	"context"
 	"encoding/json"
 	"strconv"
 	"sync/atomic"
@@ -45,7 +44,7 @@ func appendLiveWriteMessage(
 
 func liveWriteDailyInput(t *testing.T, database *DB, project string) int {
 	t.Helper()
-	daily, err := database.GetDailyUsage(context.Background(), UsageFilter{
+	daily, err := database.GetDailyUsage(t.Context(), UsageFilter{
 		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
 		Project: project, SkipSessionCounts: true,
 	})
@@ -78,19 +77,22 @@ func TestUsageSummarySurvivesArchiveWriteDuringRollupBuild(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			database := testDB(t)
 			seedLiveWriteSession(t, database, "reported", "keep",
 				"2026-08-10T09:00:00Z", 0, 10)
 			seedLiveWriteSession(t, database, "other-project", "drop",
 				"2026-08-10T09:30:00Z", 0, 4)
-			require.Equal(t, 10, liveWriteDailyInput(t, database, "keep"))
+			require.Equal(10, liveWriteDailyInput(t, database, "keep"))
 
 			snapshot, err := database.captureUsageQuery(
-				context.Background(), UsageFilter{}, usageQueryKindToken)
-			require.NoError(t, err)
+				t.Context(), UsageFilter{}, usageQueryKindToken)
+			require.NoError(err)
 			cache, err := database.usageCache.Generation(
-				context.Background(), snapshot.DatabaseID)
-			require.NoError(t, err)
+				t.Context(), snapshot.DatabaseID)
+			require.NoError(err)
 			var written atomic.Bool
 			cache.rollup.observer.beforeEnsure = func() {
 				if written.Swap(true) {
@@ -99,12 +101,12 @@ func TestUsageSummarySurvivesArchiveWriteDuringRollupBuild(t *testing.T) {
 				appendLiveWriteMessage(t, database, testCase.writtenID,
 					"2026-08-10T09:45:00Z", 1, 7)
 			}
-			assert.Contains(t, testCase.wantDuring,
+			assert.Contains(testCase.wantDuring,
 				liveWriteDailyInput(t, database, "keep"))
-			assert.True(t, written.Load(), "the build seam never ran")
+			assert.True(written.Load(), "the build seam never ran")
 
 			cache.rollup.observer.beforeEnsure = nil
-			assert.Equal(t, testCase.wantAfterFill,
+			assert.Equal(testCase.wantAfterFill,
 				liveWriteDailyInput(t, database, "keep"))
 		})
 	}
@@ -114,6 +116,9 @@ func TestUsageSummarySurvivesArchiveWriteDuringRollupBuild(t *testing.T) {
 // archive moved underneath it. Facts now come from each session's own read
 // snapshot, so a pass finishes against a continuously written archive.
 func TestUsageCacheBackfillCompletesUnderConcurrentArchiveWrites(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := testDB(t)
 	for index := range 4 {
 		id := "churn-" + strconv.Itoa(index)
@@ -121,11 +126,11 @@ func TestUsageCacheBackfillCompletesUnderConcurrentArchiveWrites(t *testing.T) {
 			"2026-08-10T09:00:00Z", 0, 1)
 	}
 	snapshot, err := database.captureUsageQuery(
-		context.Background(), UsageFilter{}, usageQueryKindToken)
-	require.NoError(t, err)
+		t.Context(), UsageFilter{}, usageQueryKindToken)
+	require.NoError(err)
 	cache, err := database.usageCache.Generation(
-		context.Background(), snapshot.DatabaseID)
-	require.NoError(t, err)
+		t.Context(), snapshot.DatabaseID)
+	require.NoError(err)
 	// Write into the archive from both phases of the pass: while facts are
 	// being extracted, and while the rollups are being aggregated.
 	var appends atomic.Int32
@@ -137,16 +142,16 @@ func TestUsageCacheBackfillCompletesUnderConcurrentArchiveWrites(t *testing.T) {
 	cache.fill.observer.afterExtract = func([]usageSourceVersion) { churn() }
 	cache.rollup.observer.beforeEnsure = churn
 
-	require.NoError(t, database.StartUsageCacheBackfill(context.Background()))
-	require.NoError(t, database.WaitUsageCacheBackfill(context.Background()))
+	require.NoError(database.StartUsageCacheBackfill(t.Context()))
+	require.NoError(database.WaitUsageCacheBackfill(t.Context()))
 	written := int(appends.Load())
-	require.Positive(t, written)
-	assert.Equal(t, 4, usageCacheCount(t, cache, "usage_cached_sessions"))
-	assert.Equal(t, 4, usageCacheCount(t, cache, "usage_rollup_installs"))
+	require.Positive(written)
+	assert.Equal(4, usageCacheCount(t, cache, "usage_cached_sessions"))
+	assert.Equal(4, usageCacheCount(t, cache, "usage_rollup_installs"))
 
 	cache.fill.observer.afterExtract = nil
 	cache.rollup.observer.beforeEnsure = nil
 	// Every write the pass raced is still accounted for once the next
 	// request refills the session it touched.
-	assert.Equal(t, 4+written, liveWriteDailyInput(t, database, "project"))
+	assert.Equal(4+written, liveWriteDailyInput(t, database, "project"))
 }

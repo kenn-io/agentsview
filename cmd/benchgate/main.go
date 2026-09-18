@@ -264,9 +264,7 @@ func compare(
 	for _, name := range names {
 		oldUnits, ok := oldRes[name]
 		if !ok {
-			report = append(report, fmt.Sprintf(
-				"%s: new benchmark, no baseline to compare", name,
-			))
+			report = append(report, name+": new benchmark, no baseline to compare")
 			continue
 		}
 		parts, vs, is := compareUnits(gates, oldUnits, newRes[name])
@@ -291,10 +289,7 @@ func compare(
 	}
 	sort.Strings(removed)
 	for _, name := range removed {
-		report = append(report, fmt.Sprintf(
-			"%s: present in baseline but missing from candidate",
-			name,
-		))
+		report = append(report, name+": present in baseline but missing from candidate")
 	}
 	return report, violations, issues
 }
@@ -317,22 +312,15 @@ func compareUnits(
 		case !okOld:
 			// A baseline may legitimately lack a unit (older or
 			// partial base run): report, don't gate.
-			parts = append(parts, fmt.Sprintf(
-				"%s missing from baseline, not gated", g.unit,
-			))
+			parts = append(parts, g.unit+" missing from baseline, not gated")
 			continue
 		case !okNew:
 			// The candidate capture is under the workflow's
 			// control; losing a gated unit the baseline has (e.g.
 			// -benchmem dropped) would silently disable this gate,
 			// so it is a configuration error.
-			parts = append(parts, fmt.Sprintf(
-				"%s missing from candidate", g.unit,
-			))
-			is = append(is, configIssue{msg: fmt.Sprintf(
-				"%s present in baseline but missing from candidate capture (was -benchmem dropped?)",
-				g.unit,
-			)})
+			parts = append(parts, g.unit+" missing from candidate")
+			is = append(is, configIssue{msg: g.unit + " present in baseline but missing from candidate capture (was -benchmem dropped?)"})
 			continue
 		}
 		part, v, issue := evalGate(g, oldVals, newVals)
@@ -352,9 +340,7 @@ func compareUnits(
 	}
 	sort.Strings(custom)
 	for _, unit := range custom {
-		parts = append(parts, fmt.Sprintf(
-			"%s has no gate, not gated", unit,
-		))
+		parts = append(parts, unit+" has no gate, not gated")
 	}
 	return parts, vs, is
 }

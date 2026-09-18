@@ -3,7 +3,6 @@
 package service_test
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"testing"
 
@@ -20,10 +19,13 @@ import (
 // $0.007 and the subagent's costs $0.014; the subagent's two searches add
 // $0.02 on top.
 func TestSessionUsageWithSubagentsBillsSubagentWebSearches(t *testing.T) {
-	d := dbtest.OpenTestDB(t)
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
 
-	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
+	d := dbtest.OpenTestDB(t)
+	ctx := t.Context()
+
+	require.NoError(d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",
 		InputPerMTok:  money.MustParseDollars("2.0"),
 		OutputPerMTok: money.MustParseDollars("10.0"),
@@ -45,22 +47,22 @@ func TestSessionUsageWithSubagentsBillsSubagentWebSearches(t *testing.T) {
 	dbtest.SeedMessages(t, d, parentMsg, childMsg)
 
 	own, err := d.GetSessionUsage(ctx, parentID, true)
-	require.NoError(t, err)
-	require.NotNil(t, own)
-	assert.Equal(t, money.MustParseDollars("0.007"), own.Cost,
+	require.NoError(err)
+	require.NotNil(own)
+	assert.Equal(money.MustParseDollars("0.007"), own.Cost,
 		"the parent's own rows performed no web search")
 
 	got, err := service.SessionUsageWithSubagents(ctx, d, parentID, true)
-	require.NoError(t, err)
-	require.NotNil(t, got)
-	require.True(t, got.HasCost)
-	assert.Equal(t, money.MustParseDollars("0.041"), got.Cost,
+	require.NoError(err)
+	require.NotNil(got)
+	require.True(got.HasCost)
+	assert.Equal(money.MustParseDollars("0.041"), got.Cost,
 		"$0.007 parent + $0.014 subagent tokens + $0.02 for two searches")
 
-	require.Len(t, got.Breakdown, 2)
-	assert.Zero(t, got.Breakdown[0].WebSearchRequests)
-	assert.Equal(t, 2, got.Breakdown[1].WebSearchRequests)
-	assert.Equal(t, childID, got.Breakdown[1].SubagentSessionID)
-	assert.Equal(t, money.MustParseDollars("0.034"),
+	require.Len(got.Breakdown, 2)
+	assert.Zero(got.Breakdown[0].WebSearchRequests)
+	assert.Equal(2, got.Breakdown[1].WebSearchRequests)
+	assert.Equal(childID, got.Breakdown[1].SubagentSessionID)
+	assert.Equal(money.MustParseDollars("0.034"),
 		got.Breakdown[1].Cost)
 }

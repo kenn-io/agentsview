@@ -151,6 +151,9 @@ func TestUnwatchedPollIssuesOneGroupedReconcilePerPass(t *testing.T) {
 // authoritative pass for any other provider.
 func TestUnwatchedPollDoesNotDragUnrelatedProvidersThroughOneProvidersGap(t *testing.T) {
 	t.Run("main", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		parent := t.TempDir()
 		rootA := requireExistingPollRoot(t, parent, "root-a")
 		rootB := requireExistingPollRoot(t, parent, "root-b")
@@ -163,14 +166,14 @@ func TestUnwatchedPollDoesNotDragUnrelatedProvidersThroughOneProvidersGap(t *tes
 		)
 		t.Cleanup(coordinator.Stop)
 
-		require.NoError(t, coordinator.AddObligation(pollingObligation{
+		require.NoError(coordinator.AddObligation(pollingObligation{
 			Key: "degraded:agentA:" + rootA,
 			Scopes: []pollingScope{
 				{Agent: parser.AgentClaude, Root: rootA},
 			},
 			Probe: rootA,
 		}))
-		require.NoError(t, coordinator.AddObligation(pollingObligation{
+		require.NoError(coordinator.AddObligation(pollingObligation{
 			Key: "degraded:agentB:" + rootB,
 			Scopes: []pollingScope{
 				{Agent: parser.AgentOpenHands, Root: rootB},
@@ -183,7 +186,7 @@ func TestUnwatchedPollDoesNotDragUnrelatedProvidersThroughOneProvidersGap(t *tes
 		requirePollWithin(t, syncer.wake, time.Second)
 
 		calls := syncer.snapshot()
-		require.Len(t, calls, 2,
+		require.Len(calls, 2,
 			"each provider must get exactly one ReconcileProviderRoots call")
 		var agentACalls, agentBCalls []providerPollCall
 		for _, c := range calls {
@@ -194,11 +197,11 @@ func TestUnwatchedPollDoesNotDragUnrelatedProvidersThroughOneProvidersGap(t *tes
 				agentBCalls = append(agentBCalls, c)
 			}
 		}
-		require.Len(t, agentACalls, 1, "provider A must have exactly one call")
-		assert.Equal(t, []string{rootA}, agentACalls[0].Roots,
+		require.Len(agentACalls, 1, "provider A must have exactly one call")
+		assert.Equal([]string{rootA}, agentACalls[0].Roots,
 			"provider A's call must contain only A's root")
-		require.Len(t, agentBCalls, 1, "provider B must have exactly one call")
-		assert.Equal(t, []string{rootB}, agentBCalls[0].Roots,
+		require.Len(agentBCalls, 1, "provider B must have exactly one call")
+		assert.Equal([]string{rootB}, agentBCalls[0].Roots,
 			"provider B must not see provider A's root")
 	})
 
@@ -372,6 +375,9 @@ func (s *manualProviderPollSyncer) ReconcileProviderRootsGrouped(
 // TestUnwatchedPollAttemptsEveryProviderAfterOneFails asserts that when the
 // first provider group errors, subsequent groups are still attempted once.
 func TestUnwatchedPollAttemptsEveryProviderAfterOneFails(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	parent := t.TempDir()
 	rootA := requireExistingPollRoot(t, parent, "root-a")
 	rootB := requireExistingPollRoot(t, parent, "root-b")
@@ -392,15 +398,15 @@ func TestUnwatchedPollAttemptsEveryProviderAfterOneFails(t *testing.T) {
 	)
 	t.Cleanup(coordinator.Stop)
 
-	require.NoError(t, coordinator.AddObligation(pollingObligation{
+	require.NoError(coordinator.AddObligation(pollingObligation{
 		Key:    "agent-a-root",
 		Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: rootA}},
 	}))
-	require.NoError(t, coordinator.AddObligation(pollingObligation{
+	require.NoError(coordinator.AddObligation(pollingObligation{
 		Key:    "agent-b-root",
 		Scopes: []pollingScope{{Agent: parser.AgentOpenHands, Root: rootB}},
 	}))
-	require.NoError(t, coordinator.AddObligation(pollingObligation{
+	require.NoError(coordinator.AddObligation(pollingObligation{
 		Key:    "agent-c-root",
 		Scopes: []pollingScope{{Agent: parser.AgentDevin, Root: rootC}},
 	}))
@@ -412,26 +418,29 @@ func TestUnwatchedPollAttemptsEveryProviderAfterOneFails(t *testing.T) {
 	requirePollWithin(t, syncer.wake, time.Second)
 
 	calls := syncer.snapshot()
-	assert.Len(t, calls, 3,
+	assert.Len(calls, 3,
 		"all three providers must be attempted even when agent-a fails")
 
 	agents := make(map[parser.AgentType]bool)
 	for _, c := range calls {
 		agents[c.Agent] = true
 	}
-	assert.True(t, agents[parser.AgentClaude], "agent-a must be attempted")
-	assert.True(t, agents[parser.AgentOpenHands], "agent-b must be attempted even after agent-a's error")
-	assert.True(t, agents[parser.AgentDevin], "agent-c must be attempted even after agent-a's error")
+	assert.True(agents[parser.AgentClaude], "agent-a must be attempted")
+	assert.True(agents[parser.AgentOpenHands], "agent-b must be attempted even after agent-a's error")
+	assert.True(agents[parser.AgentDevin], "agent-c must be attempted even after agent-a's error")
 }
 
 // TestUnwatchedPollDefersOnlyTheProviderWhoseProbeIsMissing asserts that a
 // missing probe defers only its own provider; the healthy provider still polls.
 func TestUnwatchedPollDefersOnlyTheProviderWhoseProbeIsMissing(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		parent := t.TempDir()
 		sharedRoot := requireExistingPollRoot(t, parent, "shared")
 		probeA := filepath.Join(sharedRoot, "probe-a")
-		require.NoError(t, os.Mkdir(probeA, 0o755))
+		require.NoError(os.Mkdir(probeA, 0o755))
 		// probeB is intentionally absent — A's probe is missing.
 
 		syncer := &recordingProviderPollSyncer{wake: make(chan struct{}, 4)}
@@ -444,13 +453,13 @@ func TestUnwatchedPollDefersOnlyTheProviderWhoseProbeIsMissing(t *testing.T) {
 
 		// Provider A: probe is missing → must be deferred.
 		missingProbeA := filepath.Join(sharedRoot, "missing-probe-a")
-		require.NoError(t, coordinator.AddObligation(pollingObligation{
+		require.NoError(coordinator.AddObligation(pollingObligation{
 			Key:    "agent-a-root",
 			Scopes: []pollingScope{{Agent: parser.AgentClaude, Root: sharedRoot}},
 			Probe:  missingProbeA,
 		}))
 		// Provider B: probe is present → must be polled.
-		require.NoError(t, coordinator.AddObligation(pollingObligation{
+		require.NoError(coordinator.AddObligation(pollingObligation{
 			Key:    "agent-b-root",
 			Scopes: []pollingScope{{Agent: parser.AgentOpenHands, Root: sharedRoot}},
 			Probe:  probeA, // present
@@ -460,11 +469,11 @@ func TestUnwatchedPollDefersOnlyTheProviderWhoseProbeIsMissing(t *testing.T) {
 		requirePollWithin(t, syncer.wake, time.Second)
 
 		calls := syncer.snapshot()
-		require.Len(t, calls, 1,
+		require.Len(calls, 1,
 			"only the healthy provider must be called; the one with missing probe must be deferred")
-		assert.Equal(t, parser.AgentOpenHands, calls[0].Agent,
+		assert.Equal(parser.AgentOpenHands, calls[0].Agent,
 			"the call must be for the healthy provider")
-		assert.Equal(t, []string{sharedRoot}, calls[0].Roots)
+		assert.Equal([]string{sharedRoot}, calls[0].Roots)
 
 	})
 }

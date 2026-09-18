@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -257,7 +258,7 @@ func grokFingerprintSource(src singleFileSource) (SourceFingerprint, error) {
 	return SourceFingerprint{
 		Size:    size,
 		MTimeNS: mtime,
-		Hash:    fmt.Sprintf("%x", h.Sum(nil)),
+		Hash:    hex.EncodeToString(h.Sum(nil)),
 	}, nil
 }
 

@@ -13,12 +13,15 @@ import (
 )
 
 func TestDeviceAuthServiceEnrollmentTokenAndRevocation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	now := time.Date(2026, time.August, 19, 7, 30, 0, 0, time.UTC)
 	store := newMemoryDeviceAuthStore()
 	service, err := NewDeviceAuthService(store, time.Hour)
-	require.NoError(t, err)
+	require.NoError(err)
 	service.random = bytes.NewReader(append(
 		append(bytes.Repeat([]byte{0}, 16), bytes.Repeat([]byte{1}, 32)...),
 		bytes.Repeat([]byte{2}, 32)...,
@@ -26,56 +29,58 @@ func TestDeviceAuthServiceEnrollmentTokenAndRevocation(t *testing.T) {
 	service.now = func() time.Time { return now }
 
 	enrollment, err := service.EnrollDevice(t.Context(), "tenant-a", "work laptop")
-	require.NoError(t, err)
-	assert.Equal(t, AuthIdentity{
+	require.NoError(err)
+	assert.Equal(AuthIdentity{
 		TenantID: "tenant-a",
 		DeviceID: "dev_AAAAAAAAAAAAAAAAAAAAAA",
 	}, enrollment.Identity)
-	assert.Equal(t, "avdc_AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE", enrollment.Credential)
-	assert.Equal(t, "work laptop", enrollment.DisplayName)
-	assert.Equal(t, now, enrollment.CreatedAt)
+	assert.Equal("avdc_AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE", enrollment.Credential)
+	assert.Equal("work laptop", enrollment.DisplayName)
+	assert.Equal(now, enrollment.CreatedAt)
 
 	stored := store.devices[enrollment.Identity.DeviceID]
-	assert.Equal(t,
-		CredentialDigest(sha256.Sum256([]byte(enrollment.Credential))),
+	assert.Equal(CredentialDigest(sha256.Sum256([]byte(enrollment.Credential))),
 		stored.CredentialDigest,
 	)
-	assert.NotContains(t, string(stored.CredentialDigest[:]), enrollment.Credential)
+	assert.NotContains(string(stored.CredentialDigest[:]), enrollment.Credential)
 
 	issued, err := service.IssueToken(
 		t.Context(), enrollment.Identity.DeviceID, enrollment.Credential,
 		ScopeNegotiate|ScopeUpload,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, "avdt_AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI", issued.Token)
-	assert.Equal(t, enrollment.Identity, issued.Identity)
-	assert.Equal(t, ScopeNegotiate|ScopeUpload, issued.Scopes)
-	assert.Equal(t, now.Add(time.Hour), issued.ExpiresAt)
+	require.NoError(err)
+	assert.Equal("avdt_AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI", issued.Token)
+	assert.Equal(enrollment.Identity, issued.Identity)
+	assert.Equal(ScopeNegotiate|ScopeUpload, issued.Scopes)
+	assert.Equal(now.Add(time.Hour), issued.ExpiresAt)
 
 	identity, err := service.AuthenticateToken(t.Context(), issued.Token, ScopeUpload)
-	require.NoError(t, err)
-	assert.Equal(t, enrollment.Identity, identity)
+	require.NoError(err)
+	assert.Equal(enrollment.Identity, identity)
 
 	_, err = service.AuthenticateToken(t.Context(), issued.Token, ScopeCommit)
-	assert.ErrorIs(t, err, ErrUnauthorized)
-	assert.NotContains(t, err.Error(), issued.Token)
+	assert.ErrorIs(err, ErrUnauthorized)
+	assert.NotContains(err.Error(), issued.Token)
 
 	revoked, err := service.RevokeDevice(t.Context(), enrollment.Identity)
-	require.NoError(t, err)
-	assert.True(t, revoked)
+	require.NoError(err)
+	assert.True(revoked)
 
 	_, err = service.AuthenticateToken(t.Context(), issued.Token, ScopeUpload)
-	assert.ErrorIs(t, err, ErrUnauthorized)
-	assert.NotContains(t, err.Error(), issued.Token)
+	assert.ErrorIs(err, ErrUnauthorized)
+	assert.NotContains(err.Error(), issued.Token)
 }
 
 func TestDeviceAuthServiceCredentialAndExpiryFailuresStayOpaque(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	now := time.Date(2026, time.August, 19, 8, 0, 0, 0, time.UTC)
 	store := newMemoryDeviceAuthStore()
 	service, err := NewDeviceAuthService(store, 15*time.Minute)
-	require.NoError(t, err)
+	require.NoError(err)
 	service.random = bytes.NewReader(append(
 		append(
 			append(bytes.Repeat([]byte{3}, 16), bytes.Repeat([]byte{4}, 32)...),
@@ -86,62 +91,67 @@ func TestDeviceAuthServiceCredentialAndExpiryFailuresStayOpaque(t *testing.T) {
 	service.now = func() time.Time { return now }
 
 	enrollment, err := service.EnrollDevice(t.Context(), "tenant-b", "build host")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	_, err = service.IssueToken(
 		t.Context(), enrollment.Identity.DeviceID,
 		"avdc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", ScopeStatus,
 	)
-	assert.ErrorIs(t, err, ErrUnauthorized)
-	assert.NotContains(t, err.Error(), enrollment.Credential)
+	assert.ErrorIs(err, ErrUnauthorized)
+	assert.NotContains(err.Error(), enrollment.Credential)
 
 	issued, err := service.IssueToken(
 		t.Context(), enrollment.Identity.DeviceID, enrollment.Credential, ScopeStatus,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	now = issued.ExpiresAt
 	_, err = service.AuthenticateToken(t.Context(), issued.Token, ScopeStatus)
-	assert.ErrorIs(t, err, ErrUnauthorized)
-	assert.NotContains(t, err.Error(), issued.Token)
+	assert.ErrorIs(err, ErrUnauthorized)
+	assert.NotContains(err.Error(), issued.Token)
 }
 
 func TestDeviceAuthServiceAuthenticatesCredentialWithoutIssuingToken(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	store := newMemoryDeviceAuthStore()
 	service, err := NewDeviceAuthService(store, time.Hour)
-	require.NoError(t, err)
+	require.NoError(err)
 	service.random = bytes.NewReader(append(
 		bytes.Repeat([]byte{7}, deviceIDRandomSize),
 		bytes.Repeat([]byte{8}, secretRandomSize)...,
 	))
 
 	enrollment, err := service.EnrollDevice(t.Context(), "tenant-c", "uploader")
-	require.NoError(t, err)
+	require.NoError(err)
 	identity, err := service.AuthenticateCredential(
 		t.Context(), enrollment.Identity.DeviceID, enrollment.Credential,
 	)
-	require.NoError(t, err)
-	assert.Equal(t, enrollment.Identity, identity)
-	assert.Zero(t, store.issueCalls)
+	require.NoError(err)
+	assert.Equal(enrollment.Identity, identity)
+	assert.Zero(store.issueCalls)
 
 	_, err = service.AuthenticateCredential(
 		t.Context(), enrollment.Identity.DeviceID,
 		"avdc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 	)
-	assert.ErrorIs(t, err, ErrUnauthorized)
-	assert.NotContains(t, err.Error(), enrollment.Credential)
+	assert.ErrorIs(err, ErrUnauthorized)
+	assert.NotContains(err.Error(), enrollment.Credential)
 
 	_, err = service.RevokeDevice(t.Context(), enrollment.Identity)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = service.AuthenticateCredential(
 		t.Context(), enrollment.Identity.DeviceID, enrollment.Credential,
 	)
-	assert.ErrorIs(t, err, ErrUnauthorized)
+	assert.ErrorIs(err, ErrUnauthorized)
 }
 
 func TestDeviceAuthServiceRejectsInvalidScopeRequestsBeforeStoreAccess(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Parallel()
 
 	store := newMemoryDeviceAuthStore()
@@ -151,15 +161,15 @@ func TestDeviceAuthServiceRejectsInvalidScopeRequestsBeforeStoreAccess(t *testin
 	_, err = service.IssueToken(
 		t.Context(), "device-a", "avdc_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", 0,
 	)
-	assert.ErrorIs(t, err, ErrInvalid)
-	assert.Zero(t, store.issueCalls)
+	assert.ErrorIs(err, ErrInvalid)
+	assert.Zero(store.issueCalls)
 
 	_, err = service.AuthenticateToken(
 		t.Context(), "avdt_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
 		ScopeNegotiate|ScopeUpload,
 	)
-	assert.ErrorIs(t, err, ErrInvalid)
-	assert.Zero(t, store.authenticateCalls)
+	assert.ErrorIs(err, ErrInvalid)
+	assert.Zero(store.authenticateCalls)
 }
 
 func TestDeviceAuthServiceRejectsCredentialStoreIdentityMismatch(t *testing.T) {

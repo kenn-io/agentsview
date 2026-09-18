@@ -13,8 +13,11 @@ import (
 )
 
 func TestDiscoveryDiskMapGetDistinguishesAbsenceAndFailure(t *testing.T) {
-	index, err := newDiscoveryDiskMap()
-	require.NoError(t, err)
+	assert := assert.New(t)
+	require := require.New(t)
+
+	index, err := newDiscoveryDiskMap(t.Context())
+	require.NoError(err)
 	t.Cleanup(func() {
 		_ = os.Remove(index.path)
 		_ = os.Remove(index.path + "-wal")
@@ -22,23 +25,23 @@ func TestDiscoveryDiskMapGetDistinguishesAbsenceAndFailure(t *testing.T) {
 	})
 
 	value, found, err := index.get(t.Context(), "missing")
-	require.NoError(t, err)
-	assert.False(t, found)
-	assert.Empty(t, value)
+	require.NoError(err)
+	assert.False(found)
+	assert.Empty(value)
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, _, err = index.get(ctx, "missing")
-	assert.ErrorIs(t, err, context.Canceled)
+	assert.ErrorIs(err, context.Canceled)
 
-	require.NoError(t, index.db.Close())
+	require.NoError(index.db.Close())
 	_, _, err = index.get(t.Context(), "missing")
-	require.Error(t, err)
-	assert.NotErrorIs(t, err, context.Canceled)
+	require.Error(err)
+	assert.NotErrorIs(err, context.Canceled)
 }
 
 func TestDiscoveryDiskMapCloseReportsCleanupFailure(t *testing.T) {
-	index, err := newDiscoveryDiskMap()
+	index, err := newDiscoveryDiskMap(t.Context())
 	require.NoError(t, err)
 	injected := errors.New("remove discovery index failed")
 	index.remove = func(path string) error {
@@ -55,10 +58,13 @@ func TestDiscoveryDiskMapCloseReportsCleanupFailure(t *testing.T) {
 }
 
 func TestDiscoveryDiskMapAppendDoesNotRewriteAccumulatedValue(t *testing.T) {
-	index, err := newDiscoveryDiskMap()
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, index.close()) })
-	_, err = index.db.Exec(`
+	assert := assert.New(t)
+	require := require.New(t)
+
+	index, err := newDiscoveryDiskMap(t.Context())
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(index.close()) })
+	_, err = index.db.ExecContext(t.Context(), `
 		CREATE TABLE IF NOT EXISTS appended_entries (
 			ordinal INTEGER PRIMARY KEY,
 			key TEXT NOT NULL,
@@ -81,7 +87,7 @@ func TestDiscoveryDiskMapAppendDoesNotRewriteAccumulatedValue(t *testing.T) {
 			INSERT INTO append_write_cost VALUES (length(NEW.value));
 		END;
 	`)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	const spanCount = 64
 	values := make([]string, 0, spanCount)
@@ -90,93 +96,104 @@ func TestDiscoveryDiskMapAppendDoesNotRewriteAccumulatedValue(t *testing.T) {
 		value := fmt.Sprintf("%03d:%s", i, strings.Repeat("x", 256))
 		values = append(values, value)
 		inputBytes += int64(len(value))
-		require.NoError(t, index.append(t.Context(), "spans", value))
+		require.NoError(index.append(t.Context(), "spans", value))
 	}
 
 	got, found, err := index.get(t.Context(), "spans")
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Equal(t, values, strings.Split(got, "\n"),
+	require.NoError(err)
+	require.True(found)
+	assert.Equal(values, strings.Split(got, "\n"),
 		"append retrieval must preserve insertion order")
 	var writtenValueBytes int64
-	require.NoError(t, index.db.QueryRow(
+	require.NoError(index.db.QueryRowContext(t.Context(),
 		"SELECT COALESCE(SUM(bytes), 0) FROM append_write_cost",
 	).Scan(&writtenValueBytes))
-	assert.LessOrEqual(t, writtenValueBytes, inputBytes+spanCount-1,
+	assert.LessOrEqual(writtenValueBytes, inputBytes+spanCount-1,
 		"append work must stay linear in newly supplied value bytes")
-	assert.GreaterOrEqual(t, writtenValueBytes, inputBytes,
+	assert.GreaterOrEqual(writtenValueBytes, inputBytes,
 		"the measurement must account for every appended value")
 }
 
 func TestDiscoveryDiskMapPutAndAppendPreserveMapSemantics(t *testing.T) {
 	newIndex := func(t *testing.T) *discoveryDiskMap {
 		t.Helper()
-		index, err := newDiscoveryDiskMap()
+		index, err := newDiscoveryDiskMap(t.Context())
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, index.close()) })
 		return index
 	}
 
 	t.Run("put ignore keeps appended value", func(t *testing.T) {
+		require := require.New(t)
+
 		index := newIndex(t)
-		require.NoError(t, index.append(t.Context(), "key", "first"))
-		require.NoError(t, index.append(t.Context(), "key", "second"))
-		require.NoError(t, index.put(t.Context(), "key", "replacement", false))
+		require.NoError(index.append(t.Context(), "key", "first"))
+		require.NoError(index.append(t.Context(), "key", "second"))
+		require.NoError(index.put(t.Context(), "key", "replacement", false))
 
 		value, found, err := index.get(t.Context(), "key")
-		require.NoError(t, err)
-		require.True(t, found)
+		require.NoError(err)
+		require.True(found)
 		assert.Equal(t, "first\nsecond", value)
 	})
 
 	t.Run("put replace discards appended value", func(t *testing.T) {
+		require := require.New(t)
+
 		index := newIndex(t)
-		require.NoError(t, index.append(t.Context(), "key", "first"))
-		require.NoError(t, index.append(t.Context(), "key", "second"))
-		require.NoError(t, index.put(t.Context(), "key", "replacement", true))
+		require.NoError(index.append(t.Context(), "key", "first"))
+		require.NoError(index.append(t.Context(), "key", "second"))
+		require.NoError(index.put(t.Context(), "key", "replacement", true))
 
 		value, found, err := index.get(t.Context(), "key")
-		require.NoError(t, err)
-		require.True(t, found)
+		require.NoError(err)
+		require.True(found)
 		assert.Equal(t, "replacement", value)
 	})
 
 	t.Run("append extends put value", func(t *testing.T) {
+		require := require.New(t)
+
 		index := newIndex(t)
-		require.NoError(t, index.put(t.Context(), "key", "first", true))
-		require.NoError(t, index.append(t.Context(), "key", "second"))
+		require.NoError(index.put(t.Context(), "key", "first", true))
+		require.NoError(index.append(t.Context(), "key", "second"))
 
 		value, found, err := index.get(t.Context(), "key")
-		require.NoError(t, err)
-		require.True(t, found)
+		require.NoError(err)
+		require.True(found)
 		assert.Equal(t, "first\nsecond", value)
 	})
 
 	t.Run("put if absent sees appended value", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		index := newIndex(t)
-		require.NoError(t, index.append(t.Context(), "key", "first"))
-		require.NoError(t, index.append(t.Context(), "key", "second"))
+		require.NoError(index.append(t.Context(), "key", "first"))
+		require.NoError(index.append(t.Context(), "key", "second"))
 		inserted, err := index.putIfAbsent(t.Context(), "key", "replacement")
-		require.NoError(t, err)
-		assert.False(t, inserted)
+		require.NoError(err)
+		assert.False(inserted)
 
 		value, found, err := index.get(t.Context(), "key")
-		require.NoError(t, err)
-		require.True(t, found)
-		assert.Equal(t, "first\nsecond", value)
+		require.NoError(err)
+		require.True(found)
+		assert.Equal("first\nsecond", value)
 	})
 }
 
 func TestDiscoveryDiskMapForEachIncludesAppendedValuesInKeyOrder(t *testing.T) {
-	index, err := newDiscoveryDiskMap()
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, index.close()) })
-	require.NoError(t, index.append(t.Context(), "beta", "first"))
-	require.NoError(t, index.put(t.Context(), "alpha", "only", true))
-	require.NoError(t, index.append(t.Context(), "beta", "second"))
+	require := require.New(t)
+
+	index, err := newDiscoveryDiskMap(t.Context())
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(index.close()) })
+	require.NoError(index.append(t.Context(), "beta", "first"))
+	require.NoError(index.put(t.Context(), "alpha", "only", true))
+	require.NoError(index.append(t.Context(), "beta", "second"))
 
 	var got []string
-	require.NoError(t, index.forEach(t.Context(), func(key, value string) error {
+	require.NoError(index.forEach(t.Context(), func(key, value string) error {
 		got = append(got, key+"="+value)
 		return nil
 	}))
@@ -185,31 +202,33 @@ func TestDiscoveryDiskMapForEachIncludesAppendedValuesInKeyOrder(t *testing.T) {
 }
 
 func TestDiscoveryDiskMapForEachUsesStoredIndexOrder(t *testing.T) {
-	index, err := newDiscoveryDiskMap()
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, index.close()) })
+	require := require.New(t)
+
+	index, err := newDiscoveryDiskMap(t.Context())
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(index.close()) })
 	for i := range 256 {
 		key := fmt.Sprintf("key-%03d", i)
-		require.NoError(t, index.put(t.Context(), key, "base", true))
-		require.NoError(t, index.append(t.Context(), key, "appended"))
+		require.NoError(index.put(t.Context(), key, "base", true))
+		require.NoError(index.append(t.Context(), key, "appended"))
 	}
-	_, err = index.db.Exec("ANALYZE")
-	require.NoError(t, err)
+	_, err = index.db.ExecContext(t.Context(), "ANALYZE")
+	require.NoError(err)
 
-	rows, err := index.db.Query(
-		"EXPLAIN QUERY PLAN " + discoveryDiskMapForEachQuery,
+	rows, err := index.db.QueryContext(t.Context(),
+		"EXPLAIN QUERY PLAN "+discoveryDiskMapForEachQuery,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	defer rows.Close()
 	var details []string
 	for rows.Next() {
 		var id, parent, unused int
 		var detail string
-		require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
+		require.NoError(rows.Scan(&id, &parent, &unused, &detail))
 		details = append(details, detail)
 	}
-	require.NoError(t, rows.Err())
-	require.NotEmpty(t, details)
+	require.NoError(rows.Err())
+	require.NotEmpty(details)
 	assert.NotContains(t, strings.ToUpper(strings.Join(details, "\n")),
 		"USE TEMP B-TREE",
 		"archive-wide iteration must stream in stored index order")

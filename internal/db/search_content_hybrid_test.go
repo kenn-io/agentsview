@@ -1,8 +1,6 @@
 package db
 
 import (
-	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -17,11 +15,11 @@ func TestSearchContentHybridNoSearcherUnavailable(t *testing.T) {
 	d := testDB(t)
 	assert.False(t, d.HasSemantic(), "HasSemantic before wiring a searcher")
 
-	_, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	_, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "hello", Mode: "hybrid",
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, ErrSemanticUnavailable),
+	assert.ErrorIs(t, err, ErrSemanticUnavailable,
 		"expected ErrSemanticUnavailable, got %v", err)
 }
 
@@ -31,12 +29,12 @@ func TestSearchContentHybridCursorRejected(t *testing.T) {
 	d := testDB(t)
 	d.SetVectorSearcher(&fakeVectorSearcher{})
 
-	_, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	_, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "hello", Mode: "hybrid", Cursor: 1,
 	})
 	require.Error(t, err)
 	var inputErr *SearchInputError
-	assert.True(t, errors.As(err, &inputErr),
+	assert.ErrorAs(t, err, &inputErr,
 		"expected *SearchInputError, got %T: %v", err, err)
 }
 
@@ -52,11 +50,11 @@ func TestSearchContentHybridFTSUnavailable(t *testing.T) {
 	_, err := d.getWriter().Exec("DROP TABLE IF EXISTS messages_fts")
 	require.NoError(t, err, "drop messages_fts")
 
-	_, err = d.SearchContent(context.Background(), ContentSearchFilter{
+	_, err = d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "hello", Mode: "hybrid",
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, errFTSUnavailable),
+	assert.ErrorIs(t, err, errFTSUnavailable,
 		"expected errFTSUnavailable, got %v", err)
 }
 
@@ -65,6 +63,8 @@ func TestSearchContentHybridFTSUnavailable(t *testing.T) {
 // legs must fuse to a higher score than a document appearing in only one leg,
 // and must sort first.
 func TestSearchContentHybridBothLegsOutrankSingleLeg(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
 	if !d.HasFTS() {
 		t.Skip("fts5 not available")
@@ -80,16 +80,16 @@ func TestSearchContentHybridBothLegsOutrankSingleLeg(t *testing.T) {
 		{SessionID: "vec-only", Ordinal: 0, Score: 0.8, Snippet: "totally unrelated content"},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "needle", Mode: "hybrid", Limit: 50,
 	})
-	require.NoError(t, err, "SearchContent hybrid")
-	require.Len(t, page.Matches, 2, "matches")
+	require.NoError(err, "SearchContent hybrid")
+	require.Len(page.Matches, 2, "matches")
 
-	require.Equal(t, "both", page.Matches[0].SessionID, "double-leg hit ranks first")
-	require.Equal(t, "vec-only", page.Matches[1].SessionID, "single-leg hit ranks second")
-	require.NotNil(t, page.Matches[0].Score, "Score")
-	require.NotNil(t, page.Matches[1].Score, "Score")
+	require.Equal("both", page.Matches[0].SessionID, "double-leg hit ranks first")
+	require.Equal("vec-only", page.Matches[1].SessionID, "single-leg hit ranks second")
+	require.NotNil(page.Matches[0].Score, "Score")
+	require.NotNil(page.Matches[1].Score, "Score")
 	assert.Greater(t, *page.Matches[0].Score, *page.Matches[1].Score,
 		"double-leg fused score must exceed single-leg fused score")
 }
@@ -112,7 +112,7 @@ func TestSearchContentHybridVectorOnlyAndFTSOnlyBothAppear(t *testing.T) {
 		{SessionID: "vec-only", Ordinal: 0, Score: 0.9, Snippet: "totally unrelated content"},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "needle", Mode: "hybrid", Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent hybrid")
@@ -129,6 +129,8 @@ func TestSearchContentHybridVectorOnlyAndFTSOnlyBothAppear(t *testing.T) {
 // order the page strictly descending, with no inversions or unexpected ties
 // across a mix of a double-leg hit and single-leg (vector-only) hits.
 func TestSearchContentHybridScoresStrictlyDescending(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
 	if !d.HasFTS() {
 		t.Skip("fts5 not available")
@@ -148,15 +150,15 @@ func TestSearchContentHybridScoresStrictlyDescending(t *testing.T) {
 		{SessionID: "vec3", Ordinal: 0, Score: 0.7, Snippet: "yet more stuff"},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "needle", Mode: "hybrid", Limit: 50,
 	})
-	require.NoError(t, err, "SearchContent hybrid")
-	require.Len(t, page.Matches, 3, "matches")
+	require.NoError(err, "SearchContent hybrid")
+	require.Len(page.Matches, 3, "matches")
 
 	for i := 1; i < len(page.Matches); i++ {
-		require.NotNil(t, page.Matches[i-1].Score, "Score at %d", i-1)
-		require.NotNil(t, page.Matches[i].Score, "Score at %d", i)
+		require.NotNil(page.Matches[i-1].Score, "Score at %d", i-1)
+		require.NotNil(page.Matches[i].Score, "Score at %d", i)
 		assert.Greater(t, *page.Matches[i-1].Score, *page.Matches[i].Score,
 			"scores must be strictly descending at index %d", i)
 	}
@@ -183,7 +185,7 @@ func TestSearchContentHybridProjectFilterConstrainsBothLegs(t *testing.T) {
 		{SessionID: "out-of-scope", Ordinal: 0, Score: 0.8, Snippet: "needle in another haystack"},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "needle", Mode: "hybrid", Limit: 50, Project: "alpha",
 	})
 	require.NoError(t, err, "SearchContent hybrid")
@@ -198,6 +200,9 @@ func TestSearchContentHybridProjectFilterConstrainsBothLegs(t *testing.T) {
 // fragment in isolation would miss the secret entirely; hybrid must redact
 // against the message's full content the same way semantic mode does.
 func TestSearchContentHybridRedactsSecretPastChunkTruncation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	if !d.HasFTS() {
 		t.Skip("fts5 not available")
@@ -211,7 +216,7 @@ func TestSearchContentHybridRedactsSecretPastChunkTruncation(t *testing.T) {
 	})
 
 	cut := strings.Index(content, "MIIBSECRETKEYMATERIAL") + len("MIIBSECRETKEYMATERIAL") + 3
-	require.Less(t, cut, strings.Index(content, "-----END"),
+	require.Less(cut, strings.Index(content, "-----END"),
 		"test setup: cut must land before the END marker")
 	truncatedSnippet := content[:cut] + "…"
 
@@ -219,14 +224,14 @@ func TestSearchContentHybridRedactsSecretPastChunkTruncation(t *testing.T) {
 		{SessionID: "s1", Ordinal: 0, Score: 0.9, Snippet: truncatedSnippet},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "needle", Mode: "hybrid", Limit: 50,
 	})
-	require.NoError(t, err, "SearchContent hybrid")
-	require.Len(t, page.Matches, 1, "matches")
-	assert.NotContains(t, page.Matches[0].Snippet, "SECRETKEYMATERIAL",
+	require.NoError(err, "SearchContent hybrid")
+	require.Len(page.Matches, 1, "matches")
+	assert.NotContains(page.Matches[0].Snippet, "SECRETKEYMATERIAL",
 		"hybrid snippet leaked key material truncated out of the vector chunk")
-	assert.Contains(t, page.Matches[0].Snippet, "needle",
+	assert.Contains(page.Matches[0].Snippet, "needle",
 		"snippet lost the matched context")
 }
 
@@ -282,7 +287,10 @@ func TestRRFMergeOneLegSubordinatePenaltyReorders(t *testing.T) {
 func TestRRFMergeDeterministicTieBreak(t *testing.T) {
 	leg := []RankedUnit{
 		{Key: "zzz", Subordinate: true},
-		{Key: "m2"}, {Key: "m3"}, {Key: "m4"}, {Key: "m5"},
+		{Key: "m2"},
+		{Key: "m3"},
+		{Key: "m4"},
+		{Key: "m5"},
 		{Key: "aaa"},
 	}
 	for range 20 {
@@ -307,6 +315,9 @@ func TestRRFMergeLimitHonored(t *testing.T) {
 // FTS-matched message (overriding the vector leg's chunk anchor) and whose
 // snippet centers on the FTS-matched text.
 func TestSearchContentHybridFTSHitInsideRunFusesWithFTSAnchor(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	if !d.HasFTS() {
 		t.Skip("fts5 not available")
@@ -319,23 +330,25 @@ func TestSearchContentHybridFTSHitInsideRunFusesWithFTSAnchor(t *testing.T) {
 	// The run [1,2] anchors its semantic hit at ordinal 1; FTS matches
 	// ordinal 2.
 	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
-		{SessionID: "s1", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
-			Score: 0.9, Snippet: "first step of the answer"},
+		{
+			SessionID: "s1", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
+			Score: 0.9, Snippet: "first step of the answer",
+		},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "zebra", Mode: "hybrid", Limit: 50,
 	})
-	require.NoError(t, err, "SearchContent hybrid")
-	require.Len(t, page.Matches, 1,
+	require.NoError(err, "SearchContent hybrid")
+	require.Len(page.Matches, 1,
 		"the run's semantic hit and its FTS-matched member must fuse into one result")
 	m := page.Matches[0]
-	assert.Equal(t, "s1", m.SessionID)
-	assert.Equal(t, 2, m.Ordinal, "anchor overridden to the FTS-matched message")
-	assert.Equal(t, "assistant", m.Role, "role of the FTS-matched message")
-	assert.Contains(t, m.Snippet, "zebra", "FTS snippet wins for display")
-	require.NotNil(t, m.Score)
-	assert.InDelta(t, 2.0/61.0, *m.Score, 1e-9,
+	assert.Equal("s1", m.SessionID)
+	assert.Equal(2, m.Ordinal, "anchor overridden to the FTS-matched message")
+	assert.Equal("assistant", m.Role, "role of the FTS-matched message")
+	assert.Contains(m.Snippet, "zebra", "FTS snippet wins for display")
+	require.NotNil(m.Score)
+	assert.InDelta(2.0/61.0, *m.Score, 1e-9,
 		"fused score: rank 1 in both legs")
 }
 
@@ -347,6 +360,9 @@ func TestSearchContentHybridFTSHitInsideRunFusesWithFTSAnchor(t *testing.T) {
 // assistant run, so its range must span the run even though the mirror knows
 // nothing about the session.
 func TestSearchContentHybridNoUnitFTSHitKeepsMessageGranularity(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	if !d.HasFTS() {
 		t.Skip("fts5 not available")
@@ -365,24 +381,24 @@ func TestSearchContentHybridNoUnitFTSHitKeepsMessageGranularity(t *testing.T) {
 		{SessionID: "covered", Ordinal: 0, Score: 0.9, Snippet: "unrelated content"},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "zebra", Mode: "hybrid", Limit: 50,
 	})
-	require.NoError(t, err, "SearchContent hybrid")
-	require.Len(t, page.Matches, 2, "the unit-less FTS hit must not vanish")
+	require.NoError(err, "SearchContent hybrid")
+	require.Len(page.Matches, 2, "the unit-less FTS hit must not vanish")
 
 	byID := map[string]ContentMatch{}
 	for _, m := range page.Matches {
 		byID[m.SessionID] = m
 	}
 	uncovered, ok := byID["uncovered"]
-	require.True(t, ok, "no-unit FTS hit survives")
-	assert.Equal(t, 1, uncovered.Ordinal, "message-granularity ordinal kept")
-	assert.Equal(t, [2]int{1, 2}, uncovered.OrdinalRange,
+	require.True(ok, "no-unit FTS hit survives")
+	assert.Equal(1, uncovered.Ordinal, "message-granularity ordinal kept")
+	assert.Equal([2]int{1, 2}, uncovered.OrdinalRange,
 		"unit-less hit gets the derived run range, not a self-range")
-	assert.False(t, uncovered.Subordinate,
+	assert.False(uncovered.Subordinate,
 		"unit-less top-level non-sidechain hit stays non-subordinate")
-	assert.Contains(t, uncovered.Snippet, "zebra")
+	assert.Contains(uncovered.Snippet, "zebra")
 }
 
 // seedUnitlessSidechainFixture seeds one top-level session ("side") whose
@@ -398,12 +414,18 @@ func seedUnitlessSidechainFixture(t *testing.T, d *DB) *fakeVectorSearcher {
 		s.UserMessageCount = 2
 	})
 	require.NoError(t, d.ReplaceSessionMessages("side", []Message{
-		{SessionID: "side", Ordinal: 0, Role: "user",
-			Content: "the question", Timestamp: "2026-05-20T12:00:00Z"},
-		{SessionID: "side", Ordinal: 1, Role: "assistant", IsSidechain: true,
-			Content: "zebra zebra zebra zebra", Timestamp: "2026-05-20T12:00:01Z"},
-		{SessionID: "side", Ordinal: 2, Role: "assistant", IsSidechain: true,
-			Content: "sidechain elaboration", Timestamp: "2026-05-20T12:00:02Z"},
+		{
+			SessionID: "side", Ordinal: 0, Role: "user",
+			Content: "the question", Timestamp: "2026-05-20T12:00:00Z",
+		},
+		{
+			SessionID: "side", Ordinal: 1, Role: "assistant", IsSidechain: true,
+			Content: "zebra zebra zebra zebra", Timestamp: "2026-05-20T12:00:01Z",
+		},
+		{
+			SessionID: "side", Ordinal: 2, Role: "assistant", IsSidechain: true,
+			Content: "sidechain elaboration", Timestamp: "2026-05-20T12:00:02Z",
+		},
 	}))
 	seedSearchSession(t, d, "plain", "proj", [][2]string{
 		{"user", "zebra appears once here"},
@@ -418,68 +440,74 @@ func seedUnitlessSidechainFixture(t *testing.T, d *DB) *fakeVectorSearcher {
 // same anchor — and must be rank-penalized below an equal top-level hit at
 // the default (all) scope even though the FTS leg ranks it first.
 func TestSearchContentHybridUnitlessSidechainClassifiedSubordinate(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	if !d.HasFTS() {
 		t.Skip("fts5 not available")
 	}
 	d.SetVectorSearcher(seedUnitlessSidechainFixture(t, d))
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "zebra", Mode: "hybrid", Limit: 50,
 	})
-	require.NoError(t, err, "SearchContent hybrid")
-	require.Len(t, page.Matches, 2)
-	assert.Equal(t, "plain", page.Matches[0].SessionID,
+	require.NoError(err, "SearchContent hybrid")
+	require.Len(page.Matches, 2)
+	assert.Equal("plain", page.Matches[0].SessionID,
 		"subordinate penalty must drop the higher-FTS-ranked sidechain hit below top-level")
 	side := page.Matches[1]
-	require.Equal(t, "side", side.SessionID)
-	assert.True(t, side.Subordinate, "unit-less sidechain hit classified subordinate")
-	assert.True(t, side.Sidechain, "anchor message is_sidechain")
-	assert.Equal(t, 1, side.Ordinal, "message-granularity anchor kept")
-	assert.Equal(t, [2]int{1, 2}, side.OrdinalRange,
+	require.Equal("side", side.SessionID)
+	assert.True(side.Subordinate, "unit-less sidechain hit classified subordinate")
+	assert.True(side.Sidechain, "anchor message is_sidechain")
+	assert.Equal(1, side.Ordinal, "message-granularity anchor kept")
+	assert.Equal([2]int{1, 2}, side.OrdinalRange,
 		"derived sidechain-run range, not a self-range")
 
 	// Lexical parity: mode "fts" must classify the same anchor identically.
-	lexical, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	lexical, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "zebra", Mode: "fts", Sources: []string{"messages"}, Limit: 50,
 	})
-	require.NoError(t, err, "SearchContent fts")
+	require.NoError(err, "SearchContent fts")
 	var found bool
 	for _, m := range lexical.Matches {
 		if m.SessionID == "side" && m.Ordinal == 1 {
 			found = true
-			assert.Equal(t, side.Subordinate, m.Subordinate, "Subordinate parity")
-			assert.Equal(t, side.Sidechain, m.Sidechain, "Sidechain parity")
-			assert.Equal(t, side.OrdinalRange, m.OrdinalRange, "OrdinalRange parity")
+			assert.Equal(side.Subordinate, m.Subordinate, "Subordinate parity")
+			assert.Equal(side.Sidechain, m.Sidechain, "Sidechain parity")
+			assert.Equal(side.OrdinalRange, m.OrdinalRange, "OrdinalRange parity")
 		}
 	}
-	require.True(t, found, "lexical fts must also match the sidechain anchor")
+	require.True(found, "lexical fts must also match the sidechain anchor")
 }
 
 // TestSearchContentHybridUnitlessSidechainScopeFiltering pins that scope
 // filtering sees the derived classification of unit-less hits: scope=top
 // excludes the sidechain hit, scope=subordinate keeps only it.
 func TestSearchContentHybridUnitlessSidechainScopeFiltering(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	if !d.HasFTS() {
 		t.Skip("fts5 not available")
 	}
 	d.SetVectorSearcher(seedUnitlessSidechainFixture(t, d))
 
-	top, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	top, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "zebra", Mode: "hybrid", Scope: "top", Limit: 50,
 	})
-	require.NoError(t, err, "SearchContent hybrid scope=top")
-	require.Len(t, top.Matches, 1, "scope=top excludes the unit-less sidechain hit")
-	assert.Equal(t, "plain", top.Matches[0].SessionID)
+	require.NoError(err, "SearchContent hybrid scope=top")
+	require.Len(top.Matches, 1, "scope=top excludes the unit-less sidechain hit")
+	assert.Equal("plain", top.Matches[0].SessionID)
 
-	sub, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	sub, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "zebra", Mode: "hybrid", Scope: "subordinate", Limit: 50,
 	})
-	require.NoError(t, err, "SearchContent hybrid scope=subordinate")
-	require.Len(t, sub.Matches, 1, "scope=subordinate keeps only the sidechain hit")
-	assert.Equal(t, "side", sub.Matches[0].SessionID)
-	assert.True(t, sub.Matches[0].Subordinate)
+	require.NoError(err, "SearchContent hybrid scope=subordinate")
+	require.Len(sub.Matches, 1, "scope=subordinate keeps only the sidechain hit")
+	assert.Equal("side", sub.Matches[0].SessionID)
+	assert.True(sub.Matches[0].Subordinate)
 }
 
 // TestSearchContentHybridFTSLegSubordinateUnitPenalized pins the FTS-side
@@ -487,6 +515,9 @@ func TestSearchContentHybridUnitlessSidechainScopeFiltering(t *testing.T) {
 // in the merge, while a unit-less top-level FTS hit is not — so the
 // lower-FTS-ranked top-level message overtakes the subordinate unit.
 func TestSearchContentHybridFTSLegSubordinateUnitPenalized(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	if !d.HasFTS() {
 		t.Skip("fts5 not available")
@@ -501,18 +532,20 @@ func TestSearchContentHybridFTSLegSubordinateUnitPenalized(t *testing.T) {
 	// The vector leg is empty; the subordinate unit is known only to the
 	// resolver.
 	d.SetVectorSearcher(&fakeVectorSearcher{units: []UnitRef{
-		{DocKey: "r:subd:0", SessionID: "subd",
-			OrdinalStart: 0, OrdinalEnd: 0, Subordinate: true},
+		{
+			DocKey: "r:subd:0", SessionID: "subd",
+			OrdinalStart: 0, OrdinalEnd: 0, Subordinate: true,
+		},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "zebra", Mode: "hybrid", Limit: 50,
 	})
-	require.NoError(t, err, "SearchContent hybrid")
-	require.Len(t, page.Matches, 2)
-	assert.Equal(t, "plain", page.Matches[0].SessionID,
+	require.NoError(err, "SearchContent hybrid")
+	require.Len(page.Matches, 2)
+	assert.Equal("plain", page.Matches[0].SessionID,
 		"unpenalized message-granularity hit must overtake the subordinate unit")
-	assert.Equal(t, "subd", page.Matches[1].SessionID)
+	assert.Equal("subd", page.Matches[1].SessionID)
 }
 
 // TestSearchContentHybridMatchCarriesUnitRangeAndLineage pins the hybrid
@@ -521,6 +554,9 @@ func TestSearchContentHybridFTSLegSubordinateUnitPenalized(t *testing.T) {
 // UnitRef) plus the anchor's lineage, while Ordinal stays the FTS-overridden
 // anchor ordinal.
 func TestSearchContentHybridMatchCarriesUnitRangeAndLineage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	if !d.HasFTS() {
 		t.Skip("fts5 not available")
@@ -533,33 +569,41 @@ func TestSearchContentHybridMatchCarriesUnitRangeAndLineage(t *testing.T) {
 		s.ParentSessionID = Ptr("top")
 		s.RelationshipType = "subagent"
 	})
-	require.NoError(t, d.ReplaceSessionMessages("child", []Message{
-		{SessionID: "child", Ordinal: 0, Role: "user",
-			Content: "the question", Timestamp: "2026-05-20T12:00:00Z"},
-		{SessionID: "child", Ordinal: 1, Role: "assistant", IsSidechain: true,
-			Content: "first step of the answer", Timestamp: "2026-05-20T12:00:01Z"},
-		{SessionID: "child", Ordinal: 2, Role: "assistant", IsSidechain: true,
-			Content: "second step mentions zebra", Timestamp: "2026-05-20T12:00:02Z"},
+	require.NoError(d.ReplaceSessionMessages("child", []Message{
+		{
+			SessionID: "child", Ordinal: 0, Role: "user",
+			Content: "the question", Timestamp: "2026-05-20T12:00:00Z",
+		},
+		{
+			SessionID: "child", Ordinal: 1, Role: "assistant", IsSidechain: true,
+			Content: "first step of the answer", Timestamp: "2026-05-20T12:00:01Z",
+		},
+		{
+			SessionID: "child", Ordinal: 2, Role: "assistant", IsSidechain: true,
+			Content: "second step mentions zebra", Timestamp: "2026-05-20T12:00:02Z",
+		},
 	}))
 	// The run [1,2] anchors its semantic hit at ordinal 1; FTS matches
 	// ordinal 2 and overrides the anchor.
 	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
-		{SessionID: "child", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
-			Subordinate: true, Score: 0.9, Snippet: "first step of the answer"},
+		{
+			SessionID: "child", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
+			Subordinate: true, Score: 0.9, Snippet: "first step of the answer",
+		},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "zebra", Mode: "hybrid", Limit: 50,
 	})
-	require.NoError(t, err, "SearchContent hybrid")
-	require.Len(t, page.Matches, 1, "the two legs must fuse into one result")
+	require.NoError(err, "SearchContent hybrid")
+	require.Len(page.Matches, 1, "the two legs must fuse into one result")
 	m := page.Matches[0]
-	assert.Equal(t, 2, m.Ordinal, "Ordinal stays the FTS-overridden anchor")
-	assert.Equal(t, [2]int{1, 2}, m.OrdinalRange, "OrdinalRange spans the containing unit")
-	assert.True(t, m.Subordinate, "Subordinate carries the unit flag")
-	assert.Equal(t, "subagent", m.Relationship)
-	assert.Equal(t, "top", m.ParentSessionID)
-	assert.True(t, m.Sidechain, "anchor message is_sidechain")
+	assert.Equal(2, m.Ordinal, "Ordinal stays the FTS-overridden anchor")
+	assert.Equal([2]int{1, 2}, m.OrdinalRange, "OrdinalRange spans the containing unit")
+	assert.True(m.Subordinate, "Subordinate carries the unit flag")
+	assert.Equal("subagent", m.Relationship)
+	assert.Equal("top", m.ParentSessionID)
+	assert.True(m.Sidechain, "anchor message is_sidechain")
 }
 
 // TestSearchContentHybridFTSLegCollapseRefillsFromDeeperRanks pins the
@@ -586,11 +630,13 @@ func TestSearchContentHybridFTSLegCollapseRefillsFromDeeperRanks(t *testing.T) {
 	})
 	// The vector leg is empty; the resolver knows the whole run as one unit.
 	d.SetVectorSearcher(&fakeVectorSearcher{units: []UnitRef{
-		{DocKey: "r:bigrun:0", SessionID: "bigrun",
-			OrdinalStart: 0, OrdinalEnd: runLen - 1},
+		{
+			DocKey: "r:bigrun:0", SessionID: "bigrun",
+			OrdinalStart: 0, OrdinalEnd: runLen - 1,
+		},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "zebra", Mode: "hybrid", Limit: 10,
 	})
 	require.NoError(t, err, "SearchContent hybrid")
@@ -623,11 +669,13 @@ func TestSearchContentHybridFTSLegScopeExcludedRowsRefill(t *testing.T) {
 		{"user", "zebra appears once in a much longer subagent sentence"},
 	})
 	d.SetVectorSearcher(&fakeVectorSearcher{units: []UnitRef{
-		{DocKey: "u:sub:0", SessionID: "sub",
-			OrdinalStart: 0, OrdinalEnd: 0, Subordinate: true},
+		{
+			DocKey: "u:sub:0", SessionID: "sub",
+			OrdinalStart: 0, OrdinalEnd: 0, Subordinate: true,
+		},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "zebra", Mode: "hybrid", Scope: "subordinate", Limit: 10,
 	})
 	require.NoError(t, err, "SearchContent hybrid")
@@ -640,6 +688,9 @@ func TestSearchContentHybridFTSLegScopeExcludedRowsRefill(t *testing.T) {
 // vector-leg display path: a unit only the semantic leg found keeps its
 // chunk anchor and still exposes the unit range and subordinate flag.
 func TestSearchContentHybridVectorOnlyMatchCarriesUnitRange(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 	if !d.HasFTS() {
 		t.Skip("fts5 not available")
@@ -650,17 +701,19 @@ func TestSearchContentHybridVectorOnlyMatchCarriesUnitRange(t *testing.T) {
 		{"assistant", "second step of the answer"},
 	})
 	d.SetVectorSearcher(&fakeVectorSearcher{hits: []VectorHit{
-		{SessionID: "s1", Ordinal: 2, OrdinalStart: 1, OrdinalEnd: 2,
-			Score: 0.9, Snippet: "second step of the answer"},
+		{
+			SessionID: "s1", Ordinal: 2, OrdinalStart: 1, OrdinalEnd: 2,
+			Score: 0.9, Snippet: "second step of the answer",
+		},
 	}})
 
-	page, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	page, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "nomatchinfts", Mode: "hybrid", Limit: 50,
 	})
-	require.NoError(t, err, "SearchContent hybrid")
-	require.Len(t, page.Matches, 1, "vector-only hit survives fusion")
+	require.NoError(err, "SearchContent hybrid")
+	require.Len(page.Matches, 1, "vector-only hit survives fusion")
 	m := page.Matches[0]
-	assert.Equal(t, 2, m.Ordinal, "vector leg keeps its chunk anchor")
-	assert.Equal(t, [2]int{1, 2}, m.OrdinalRange)
-	assert.False(t, m.Subordinate)
+	assert.Equal(2, m.Ordinal, "vector leg keeps its chunk anchor")
+	assert.Equal([2]int{1, 2}, m.OrdinalRange)
+	assert.False(m.Subordinate)
 }

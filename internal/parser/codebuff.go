@@ -11,6 +11,7 @@ package parser
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -425,7 +426,7 @@ func containsSkillToken(lower, name string) bool {
 		return false
 	}
 	var buf []byte
-	for i := 0; i < len(lower); i++ {
+	for i := range len(lower) {
 		c := lower[i]
 		if c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_' {
 			buf = append(buf, c)
@@ -490,19 +491,19 @@ func IsCodebuffTimestamp(s string) bool {
 func parseCodebuffSessionDate(sessionID string) time.Time {
 	// Try full ISO format with milliseconds and Z suffix.
 	if ts, err := time.Parse("2006-01-02T15-04-05.999Z", sessionID); err == nil {
-		return ts.In(time.Local)
+		return ts.In(time.Local) //nolint:forbidigo // Codebuff combines local wall-clock message times with the session date.
 	}
 	// Try without milliseconds.
 	if ts, err := time.Parse("2006-01-02T15-04-05Z", sessionID); err == nil {
-		return ts.In(time.Local)
+		return ts.In(time.Local) //nolint:forbidigo // Codebuff combines local wall-clock message times with the session date.
 	}
 	// Try with milliseconds, no Z. Interpret as local time since
 	// codebuff records wall-clock timestamps without a UTC offset.
-	if ts, err := time.ParseInLocation("2006-01-02T15-04-05.999", sessionID, time.Local); err == nil {
+	if ts, err := time.ParseInLocation("2006-01-02T15-04-05.999", sessionID, time.Local); err == nil { //nolint:forbidigo // Codebuff combines local wall-clock message times with the session date.
 		return ts
 	}
 	// Try basic ISO date only.
-	if ts, err := time.ParseInLocation("2006-01-02", sessionID, time.Local); err == nil {
+	if ts, err := time.ParseInLocation("2006-01-02", sessionID, time.Local); err == nil { //nolint:forbidigo // Codebuff combines local wall-clock message times with the session date.
 		return ts
 	}
 	return time.Time{}
@@ -518,7 +519,7 @@ func parseCodebuffMessages(
 	root := gjson.ParseBytes(data)
 	if !root.IsArray() {
 		return nil, time.Time{}, time.Time{},
-			fmt.Errorf("chat-messages.json root is not an array")
+			errors.New("chat-messages.json root is not an array")
 	}
 
 	var (

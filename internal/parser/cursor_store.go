@@ -318,7 +318,7 @@ func loadCursorStoreMeta(
 ) (cursorStoreMetaJSON, error) {
 	var raw string
 	err := q.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, "0").Scan(&raw)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return cursorStoreMetaJSON{}, fmt.Errorf(
 			"%w: missing metadata key 0 for %s", errCursorStoreFormat, agentID,
 		)

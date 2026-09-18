@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -17,8 +16,10 @@ func branchInfoForTest(project, branch string) BranchInfo {
 }
 
 func TestGetDailyUsageGitBranchFilter(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seed := []struct {
 		id, project, branch string
@@ -37,7 +38,7 @@ func TestGetDailyUsageGitBranchFilter(t *testing.T) {
 			sess.StartedAt = new("2026-05-14T10:00:00Z")
 			sess.UserMessageCount = 2
 		})
-		require.NoError(t, d.ReplaceSessionUsageEvents(s.id, []UsageEvent{{
+		require.NoError(d.ReplaceSessionUsageEvents(s.id, []UsageEvent{{
 			SessionID:    s.id,
 			Source:       "session",
 			Model:        "gpt-5.4",
@@ -52,8 +53,8 @@ func TestGetDailyUsageGitBranchFilter(t *testing.T) {
 		To:        "2026-05-14",
 		GitBranch: EncodeBranchFilterToken("proj-a", "main"),
 	})
-	require.NoError(t, err, "GetDailyUsage")
-	require.Len(t, daily.Daily, 1, "one day")
+	require.NoError(err, "GetDailyUsage")
+	require.Len(daily.Daily, 1, "one day")
 	assert.Equal(t, 100, daily.Daily[0].InputTokens,
 		"usage filter uses scoped (project, branch), not branch name alone")
 }
@@ -105,6 +106,9 @@ func TestSplitBranchFilterTokens(t *testing.T) {
 }
 
 func TestGetBranches(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
 
 	insertSession(t, d, "s1", "alpha", func(s *Session) {
@@ -128,9 +132,9 @@ func TestGetBranches(t *testing.T) {
 		s.UserMessageCount = 1
 	})
 
-	all, err := d.GetBranches(context.Background(), false, false)
-	require.NoError(t, err, "GetBranches includeAll")
-	assert.Equal(t, []BranchInfo{
+	all, err := d.GetBranches(t.Context(), false, false)
+	require.NoError(err, "GetBranches includeAll")
+	assert.Equal([]BranchInfo{
 		branchInfoForTest("alpha", ""),
 		branchInfoForTest("alpha", "feat/x"),
 		branchInfoForTest("alpha", "main"),
@@ -138,9 +142,9 @@ func TestGetBranches(t *testing.T) {
 		branchInfoForTest("gamma", "solo"),
 	}, all, "distinct (project, branch) pairs, ordered, empty branch included")
 
-	filtered, err := d.GetBranches(context.Background(), true, false)
-	require.NoError(t, err, "GetBranches excludeOneShot")
-	assert.NotContains(t, filtered, branchInfoForTest("gamma", "solo"),
+	filtered, err := d.GetBranches(t.Context(), true, false)
+	require.NoError(err, "GetBranches excludeOneShot")
+	assert.NotContains(filtered, branchInfoForTest("gamma", "solo"),
 		"one-shot branch excluded when excludeOneShot is set")
 }
 

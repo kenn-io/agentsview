@@ -1,15 +1,15 @@
 package main
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
-	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -28,16 +28,19 @@ func TestParseDaemonPushSSE(t *testing.T) {
 		`data: {"SessionsPushed":10,"MessagesPushed":42}` + "\n\n"
 
 	t.Run("progress then done", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		var progress []postgres.PushProgress
 		result, err := consumeDaemonPushEvents[postgres.PushResult](daemonEventStream(strings.NewReader(stream(progressEvent, doneEvent))),
 			func(p postgres.PushProgress) { progress = append(progress, p) },
 		)
-		require.NoError(t, err)
-		assert.Equal(t, 10, result.SessionsPushed)
-		assert.Equal(t, 42, result.MessagesPushed)
-		require.Len(t, progress, 1)
-		assert.Equal(t, 3, progress[0].SessionsDone)
-		assert.Equal(t, 10, progress[0].SessionsTotal)
+		require.NoError(err)
+		assert.Equal(10, result.SessionsPushed)
+		assert.Equal(42, result.MessagesPushed)
+		require.Len(progress, 1)
+		assert.Equal(3, progress[0].SessionsDone)
+		assert.Equal(10, progress[0].SessionsTotal)
 	})
 
 	t.Run("nil onProgress is safe", func(t *testing.T) {
@@ -77,10 +80,13 @@ func TestParseDaemonPushSSE(t *testing.T) {
 // against a stub daemon that streams SSE: progress events reach the callback
 // and the done event becomes the returned result.
 func TestPostDaemonPushConsumesSSE(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	ts := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
-			require.Equal(t, "/api/v1/push/pg", r.URL.Path)
-			require.Contains(t, r.Header.Get("Accept"), "text/event-stream")
+			require.Equal("/api/v1/push/pg", r.URL.Path)
+			require.Contains(r.Header.Get("Accept"), "text/event-stream")
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = w.Write([]byte(
 				"event: progress\ndata: {\"SessionsDone\":1,\"SessionsTotal\":2}\n\n" +
@@ -90,14 +96,14 @@ func TestPostDaemonPushConsumesSSE(t *testing.T) {
 
 	var progress []postgres.PushProgress
 	result, err := postDaemonPush[postgres.PushResult](
-		context.Background(), transport{URL: ts.URL}, "", daemonPushPG,
+		t.Context(), transport{URL: ts.URL}, "", daemonPushPG,
 		apiclient.DaemonPushRequest{},
 		func(p postgres.PushProgress) { progress = append(progress, p) },
 	)
-	require.NoError(t, err)
-	assert.Equal(t, 2, result.SessionsPushed)
-	require.Len(t, progress, 1)
-	assert.Equal(t, 1, progress[0].SessionsDone)
+	require.NoError(err)
+	assert.Equal(2, result.SessionsPushed)
+	require.Len(progress, 1)
+	assert.Equal(1, progress[0].SessionsDone)
 }
 
 // TestPostDaemonPushJSONFallback pins compatibility with a daemon that
@@ -111,7 +117,7 @@ func TestPostDaemonPushJSONFallback(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	result, err := postDaemonPush[postgres.PushResult, postgres.PushProgress](
-		context.Background(), transport{URL: ts.URL}, "", daemonPushPG,
+		t.Context(), transport{URL: ts.URL}, "", daemonPushPG,
 		apiclient.DaemonPushRequest{}, nil,
 	)
 	require.NoError(t, err)

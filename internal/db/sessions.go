@@ -13,6 +13,7 @@ import (
 	pathpkg "path"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -474,11 +475,11 @@ func (db *DB) DecodeCursor(s string) (SessionCursor, error) {
 		// Legacy cursor (unsigned). Trust nothing about the Total.
 		data, err := base64.RawURLEncoding.DecodeString(parts[0])
 		if err != nil {
-			return SessionCursor{}, fmt.Errorf("%w: %v", ErrInvalidCursor, err)
+			return SessionCursor{}, fmt.Errorf("%w: %w", ErrInvalidCursor, err)
 		}
 		var c SessionCursor
 		if err := json.Unmarshal(data, &c); err != nil {
-			return SessionCursor{}, fmt.Errorf("%w: %v", ErrInvalidCursor, err)
+			return SessionCursor{}, fmt.Errorf("%w: %w", ErrInvalidCursor, err)
 		}
 		c.Total = 0 // Force re-computation
 		return c, nil
@@ -491,12 +492,12 @@ func (db *DB) DecodeCursor(s string) (SessionCursor, error) {
 
 	data, err := base64.RawURLEncoding.DecodeString(payload)
 	if err != nil {
-		return SessionCursor{}, fmt.Errorf("%w: invalid payload: %v", ErrInvalidCursor, err)
+		return SessionCursor{}, fmt.Errorf("%w: invalid payload: %w", ErrInvalidCursor, err)
 	}
 
 	sig, err := base64.RawURLEncoding.DecodeString(sigStr)
 	if err != nil {
-		return SessionCursor{}, fmt.Errorf("%w: invalid signature encoding: %v", ErrInvalidCursor, err)
+		return SessionCursor{}, fmt.Errorf("%w: invalid signature encoding: %w", ErrInvalidCursor, err)
 	}
 
 	db.cursorMu.RLock()
@@ -512,7 +513,7 @@ func (db *DB) DecodeCursor(s string) (SessionCursor, error) {
 
 	var c SessionCursor
 	if err := json.Unmarshal(data, &c); err != nil {
-		return SessionCursor{}, fmt.Errorf("%w: invalid json: %v", ErrInvalidCursor, err)
+		return SessionCursor{}, fmt.Errorf("%w: invalid json: %w", ErrInvalidCursor, err)
 	}
 	return c, nil
 }
@@ -1153,7 +1154,7 @@ func (db *DB) GetSession(
 	)
 
 	s, err := scanSessionRow(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -2247,7 +2248,7 @@ func migrateLegacySubagentParentRepairQueueTx(
 		"SELECT value FROM pg_sync_state WHERE key = ?",
 		subagentParentRepairQueueStateKey,
 	).Scan(&encoded)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}
 	if err != nil {
@@ -2720,7 +2721,7 @@ func (db *DB) GetSessionVersion(
 		return 0, 0, false
 	}
 	return count, SessionVersionMarker(
-		fmt.Sprintf("%d", fileMtime),
+		strconv.FormatInt(fileMtime, 10),
 		fileHash,
 		localModifiedAt,
 	), true
@@ -5397,7 +5398,7 @@ func (db *DB) FindPruneCandidates(
 	f PruneFilter,
 ) ([]Session, error) {
 	if !f.HasFilters() {
-		return nil, fmt.Errorf("at least one filter is required")
+		return nil, errors.New("at least one filter is required")
 	}
 
 	where := "deleted_at IS NULL"

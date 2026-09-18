@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -15,9 +14,11 @@ import (
 )
 
 func TestDuckListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) {
-	ctx := context.Background()
+	require := require.New(t)
+
+	ctx := t.Context()
 	database := openTestDuckDB(t)
-	require.NoError(t, EnsureSchema(ctx, database))
+	require.NoError(EnsureSchema(ctx, database))
 
 	// Cross the duckMaxSQLVars chunk boundary with duplicate labels that
 	// straddle it, and interleave two source archives across the label
@@ -48,7 +49,7 @@ func TestDuckListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) 
 			args = append(args, archive, label, observedAt)
 		}
 		_, err := database.ExecContext(ctx, sb.String(), args...)
-		require.NoError(t, err, "seed chunked observations %d-%d", start, end)
+		require.NoError(err, "seed chunked observations %d-%d", start, end)
 	}
 
 	store := NewStoreFromDB(database)
@@ -56,10 +57,10 @@ func TestDuckListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) 
 	// before partitioning into chunks.
 	slices.Reverse(labels)
 	got, err := store.ListProjectIdentityObservations(ctx, labels)
-	require.NoError(t, err)
+	require.NoError(err)
 	all, err := store.ListProjectIdentityObservations(ctx, nil)
-	require.NoError(t, err)
-	require.Len(t, all, labelCount)
+	require.NoError(err)
+	require.Len(all, labelCount)
 	assert.Equal(t, all, got,
 		"chunked label lookup must match the unfiltered scan, order included")
 }

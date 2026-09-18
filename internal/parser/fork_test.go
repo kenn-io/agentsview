@@ -41,6 +41,8 @@ func TestForkDetection_LinearSession(t *testing.T) {
 }
 
 func TestForkDetection_LargeGapFork(t *testing.T) {
+	assert := assert.New(t)
+
 	// Main branch: a->b->c->d->e->f->g->h (4+ user turns after fork)
 	// Fork from b: i->j
 	// Fork point is at node b, which has children c (first) and i.
@@ -81,15 +83,15 @@ func TestForkDetection_LargeGapFork(t *testing.T) {
 	main := results[0]
 	assertSessionMeta(t, &main.Session, "fork", "proj", AgentClaude)
 	assertMessageCount(t, len(main.Messages), 10)
-	assert.Empty(t, main.Session.ParentSessionID, "main ParentSessionID")
+	assert.Empty(main.Session.ParentSessionID, "main ParentSessionID")
 
 	// Fork session: entries on fork branch (i,j)
 	fork := results[1]
-	assert.Equal(t, "fork-i", fork.Session.ID, "fork session ID")
+	assert.Equal("fork-i", fork.Session.ID, "fork session ID")
 	assertMessageCount(t, len(fork.Messages), 2)
-	assert.Equal(t, "fork", fork.Session.ParentSessionID, "fork ParentSessionID")
-	assert.Equal(t, RelFork, fork.Session.RelationshipType, "fork RelationshipType")
-	assert.Equal(t, "fork q1", fork.Session.FirstMessage, "fork FirstMessage")
+	assert.Equal("fork", fork.Session.ParentSessionID, "fork ParentSessionID")
+	assert.Equal(RelFork, fork.Session.RelationshipType, "fork RelationshipType")
+	assert.Equal("fork q1", fork.Session.FirstMessage, "fork FirstMessage")
 }
 
 func TestForkDetection_SmallGapRetry(t *testing.T) {
@@ -218,6 +220,8 @@ func TestForkDetection_MixedUUIDs(t *testing.T) {
 }
 
 func TestForkDetection_NestedFork(t *testing.T) {
+	assert := assert.New(t)
+
 	// Main: a->b->c->d->e->f->g->h->k->l (5 user turns)
 	// Fork from b: m->n->o->p->q->r->s->t->u->v (5 user turns on fork branch)
 	//   Nested fork from n: w->x (fork within the fork branch)
@@ -260,20 +264,20 @@ func TestForkDetection_NestedFork(t *testing.T) {
 
 	// Nested fork from n (discovered first during depth-first walk): w,x = 2 messages
 	nested := results[1]
-	assert.Equal(t, "nested-fork-w", nested.Session.ID, "nested ID")
+	assert.Equal("nested-fork-w", nested.Session.ID, "nested ID")
 	assertMessageCount(t, len(nested.Messages), 2)
-	assert.Equal(t, RelFork, nested.Session.RelationshipType, "nested RelationshipType")
+	assert.Equal(RelFork, nested.Session.RelationshipType, "nested RelationshipType")
 	// Nested fork's parent should be the fork branch it split
 	// from, not the root session.
-	assert.Equal(t, "nested-fork-m", nested.Session.ParentSessionID, "nested ParentSessionID")
+	assert.Equal("nested-fork-m", nested.Session.ParentSessionID, "nested ParentSessionID")
 
 	// Fork from b: m,n,o,p,q,r,s,tt,u,v = 10 messages
 	fork := results[2]
-	assert.Equal(t, "nested-fork-m", fork.Session.ID, "fork ID")
+	assert.Equal("nested-fork-m", fork.Session.ID, "fork ID")
 	assertMessageCount(t, len(fork.Messages), 10)
-	assert.Equal(t, RelFork, fork.Session.RelationshipType, "fork RelationshipType")
+	assert.Equal(RelFork, fork.Session.RelationshipType, "fork RelationshipType")
 	// Fork from b's parent should be the root session.
-	assert.Equal(t, "nested-fork", fork.Session.ParentSessionID, "fork ParentSessionID")
+	assert.Equal("nested-fork", fork.Session.ParentSessionID, "fork ParentSessionID")
 }
 
 func TestForkDetection_MultipleRoots(t *testing.T) {

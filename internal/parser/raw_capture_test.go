@@ -82,6 +82,8 @@ func rawCaptureTestCapabilities() Capabilities {
 }
 
 func TestStreamRawCaptureSourcesUsesProviderStreamWithoutCollecting(t *testing.T) {
+	assert := assert.New(t)
+
 	provider := &streamingRawCaptureTestProvider{
 		sources: []SourceRef{
 			{Provider: AgentClaude, Key: "a"},
@@ -101,12 +103,14 @@ func TestStreamRawCaptureSourcesUsesProviderStreamWithoutCollecting(t *testing.T
 	)
 
 	require.NoError(t, err)
-	assert.True(t, complete)
-	assert.Equal(t, []string{"a", "b"}, got)
-	assert.Equal(t, 1, provider.streamCalls)
+	assert.True(complete)
+	assert.Equal([]string{"a", "b"}, got)
+	assert.Equal(1, provider.streamCalls)
 }
 
 func TestDiscoverRawCaptureSourcesCollectsProviderStream(t *testing.T) {
+	assert := assert.New(t)
+
 	provider := &streamingRawCaptureTestProvider{
 		sources: []SourceRef{
 			{Provider: AgentClaude, Key: "a"},
@@ -120,12 +124,12 @@ func TestDiscoverRawCaptureSourcesCollectsProviderStream(t *testing.T) {
 	discovery, err := DiscoverRawCaptureSources(t.Context(), provider)
 
 	require.NoError(t, err)
-	assert.True(t, discovery.Complete)
-	assert.Equal(t, []SourceRef{
+	assert.True(discovery.Complete)
+	assert.Equal([]SourceRef{
 		{Provider: AgentClaude, Key: "a"},
 		{Provider: AgentClaude, Key: "b"},
 	}, discovery.Sources)
-	assert.Equal(t, 1, provider.streamCalls)
+	assert.Equal(1, provider.streamCalls)
 }
 
 func canonicalRawCaptureTestPath(t *testing.T, path string) string {
@@ -136,6 +140,8 @@ func canonicalRawCaptureTestPath(t *testing.T, path string) string {
 }
 
 func TestResolveRawCapturePlanLeavesUnsupportedProviderUntouched(t *testing.T) {
+	assert := assert.New(t)
+
 	provider := &rawCaptureTestProvider{
 		Def: AgentDef{Type: AgentClaude}}
 
@@ -145,9 +151,9 @@ func TestResolveRawCapturePlanLeavesUnsupportedProviderUntouched(t *testing.T) {
 	})
 
 	require.NoError(t, err)
-	assert.False(t, ok)
-	assert.Empty(t, plan)
-	assert.False(t, provider.called, "unsupported capability must not invoke the planner")
+	assert.False(ok)
+	assert.Empty(plan)
+	assert.False(provider.called, "unsupported capability must not invoke the planner")
 }
 
 func TestResolveRawCapturePlanRequiresDeclaredInterface(t *testing.T) {
@@ -287,9 +293,12 @@ func TestResolveRawCapturePlanValidatesProviderOwnedPlan(t *testing.T) {
 }
 
 func TestResolveRawCapturePlanReturnsIndependentValidatedCopy(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	captureRoot := t.TempDir()
 	localPath := filepath.Join(captureRoot, "session.jsonl")
-	require.NoError(t, os.WriteFile(localPath, []byte("one\n"), 0o600))
+	require.NoError(os.WriteFile(localPath, []byte("one\n"), 0o600))
 	provider := &rawCaptureTestProvider{
 		Def:  AgentDef{Type: AgentClaude},
 		Caps: rawCaptureTestCapabilities(),
@@ -310,18 +319,21 @@ func TestResolveRawCapturePlanReturnsIndependentValidatedCopy(t *testing.T) {
 		Key:      "source-1",
 	})
 
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Len(t, plan.Entries, 1)
-	assert.Equal(t, "session.jsonl", plan.Entries[0].Path)
+	require.NoError(err)
+	require.True(ok)
+	require.Len(plan.Entries, 1)
+	assert.Equal("session.jsonl", plan.Entries[0].Path)
 	provider.plan.Entries[0].Path = "mutated.jsonl"
-	assert.Equal(t, "session.jsonl", plan.Entries[0].Path)
+	assert.Equal("session.jsonl", plan.Entries[0].Path)
 }
 
 func TestResolveRawCapturePlanRejectsUnknownAppendPolicy(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	captureRoot := t.TempDir()
 	localPath := filepath.Join(captureRoot, "session.jsonl")
-	require.NoError(t, os.WriteFile(localPath, []byte("one\n"), 0o600))
+	require.NoError(os.WriteFile(localPath, []byte("one\n"), 0o600))
 	capabilities := rawCaptureTestCapabilities()
 	capabilities.RawCapture.Append = RawCaptureAppendPolicy(99)
 	provider := &rawCaptureTestProvider{
@@ -344,21 +356,24 @@ func TestResolveRawCapturePlanRejectsUnknownAppendPolicy(t *testing.T) {
 		Key:      "source-1",
 	})
 
-	require.Error(t, err)
-	assert.False(t, supported)
-	assert.ErrorIs(t, err, ErrInvalidRawCapturePlan)
+	require.Error(err)
+	assert.False(supported)
+	assert.ErrorIs(err, ErrInvalidRawCapturePlan)
 }
 
 func TestClaudeProviderPlansAndParsesNestedToolResults(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "project", "session.jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(sourcePath), 0o755))
+	require.NoError(os.MkdirAll(filepath.Dir(sourcePath), 0o755))
 	toolResultPath := filepath.Join(
 		root, "project", "session", "tool-results", "batches", "result.txt",
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(toolResultPath), 0o755))
+	require.NoError(os.MkdirAll(filepath.Dir(toolResultPath), 0o755))
 	fullOutput := "full nested output\n"
-	require.NoError(t, os.WriteFile(toolResultPath, []byte(fullOutput), 0o600))
+	require.NoError(os.WriteFile(toolResultPath, []byte(fullOutput), 0o600))
 	resultPathJSON := mustJSONString(t, toolResultPath)
 	persistedContentJSON := mustJSONString(t,
 		"<persisted-output>\n"+
@@ -369,38 +384,41 @@ func TestClaudeProviderPlansAndParsesNestedToolResults(t *testing.T) {
 		`{"type":"assistant","timestamp":"2024-01-01T00:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_1","name":"Bash","input":{"command":"make logs"}}]}}`,
 		`{"type":"user","timestamp":"2024-01-01T00:00:02Z","uuid":"u2","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` + persistedContentJSON + `,"is_error":false}]},"toolUseResult":{"persistedOutputPath":` + resultPathJSON + `,"persistedOutputSize":19}}`,
 	}, "\n")
-	require.NoError(t, os.WriteFile(sourcePath, []byte(content), 0o600))
+	require.NoError(os.WriteFile(sourcePath, []byte(content), 0o600))
 	provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
+	require.True(ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	require.NoError(err)
+	require.Len(sources, 1)
 
 	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, sources[0])
 
-	require.NoError(t, err)
-	require.True(t, supported)
-	assert.Equal(t, canonicalRawCaptureTestPath(t, root), plan.ConfiguredRoot)
-	assert.Equal(t, canonicalRawCaptureTestPath(t, root), plan.CaptureRoot)
-	assert.Equal(t, sources[0].Key, plan.SourceKey)
-	require.Len(t, plan.Entries, 2)
-	assert.Equal(t, "project/session.jsonl", plan.Entries[0].Path)
-	assert.Equal(t, canonicalRawCaptureTestPath(t, sourcePath), plan.Entries[0].LocalPath)
-	assert.True(t, plan.Entries[0].Appendable)
-	assert.Equal(t, "project/session/tool-results/batches/result.txt", plan.Entries[1].Path)
-	assert.Equal(t, canonicalRawCaptureTestPath(t, toolResultPath), plan.Entries[1].LocalPath)
-	assert.False(t, plan.Entries[1].Appendable)
+	require.NoError(err)
+	require.True(supported)
+	assert.Equal(canonicalRawCaptureTestPath(t, root), plan.ConfiguredRoot)
+	assert.Equal(canonicalRawCaptureTestPath(t, root), plan.CaptureRoot)
+	assert.Equal(sources[0].Key, plan.SourceKey)
+	require.Len(plan.Entries, 2)
+	assert.Equal("project/session.jsonl", plan.Entries[0].Path)
+	assert.Equal(canonicalRawCaptureTestPath(t, sourcePath), plan.Entries[0].LocalPath)
+	assert.True(plan.Entries[0].Appendable)
+	assert.Equal("project/session/tool-results/batches/result.txt", plan.Entries[1].Path)
+	assert.Equal(canonicalRawCaptureTestPath(t, toolResultPath), plan.Entries[1].LocalPath)
+	assert.False(plan.Entries[1].Appendable)
 
 	parsed, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
-	require.NoError(t, err)
-	require.Len(t, parsed.Results, 1)
+	require.NoError(err)
+	require.Len(parsed.Results, 1)
 	messages := parsed.Results[0].Result.Messages
-	require.Len(t, messages, 3)
-	require.Len(t, messages[2].ToolResults, 1)
-	assert.Equal(t, fullOutput, DecodeContent(messages[2].ToolResults[0].ContentRaw))
+	require.Len(messages, 3)
+	require.Len(messages[2].ToolResults, 1)
+	assert.Equal(fullOutput, DecodeContent(messages[2].ToolResults[0].ContentRaw))
 }
 
 func TestCodexProviderPlansTranscriptWithOptionalIndex(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	base := t.TempDir()
 	root := filepath.Join(base, "sessions")
 	sourcePath := filepath.Join(
@@ -408,41 +426,44 @@ func TestCodexProviderPlansTranscriptWithOptionalIndex(t *testing.T) {
 		"2026", "08", "25",
 		"rollout-2026-08-25T10-00-00-11111111-1111-4111-8111-111111111111.jsonl",
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(sourcePath), 0o755))
-	require.NoError(t, os.WriteFile(sourcePath, []byte("{}\n"), 0o600))
+	require.NoError(os.MkdirAll(filepath.Dir(sourcePath), 0o755))
+	require.NoError(os.WriteFile(sourcePath, []byte("{}\n"), 0o600))
 	indexPath := filepath.Join(base, CodexSessionIndexFilename)
-	require.NoError(t, os.WriteFile(indexPath, []byte("{}\n"), 0o600))
+	require.NoError(os.WriteFile(indexPath, []byte("{}\n"), 0o600))
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
+	require.True(ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	require.NoError(err)
+	require.Len(sources, 1)
 
 	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, sources[0])
 
-	require.NoError(t, err)
-	require.True(t, supported)
-	assert.Equal(t, canonicalRawCaptureTestPath(t, root), plan.ConfiguredRoot)
-	assert.Equal(t, canonicalRawCaptureTestPath(t, base), plan.CaptureRoot)
-	assert.Equal(t, sources[0].Key, plan.SourceKey)
-	require.Len(t, plan.Entries, 2)
-	assert.Equal(t, "session_index.jsonl", plan.Entries[0].Path)
-	assert.Equal(t, canonicalRawCaptureTestPath(t, indexPath), plan.Entries[0].LocalPath)
-	assert.False(t, plan.Entries[0].Appendable)
-	assert.Equal(t, "sessions/2026/08/25/"+filepath.Base(sourcePath), plan.Entries[1].Path)
-	assert.Equal(t, canonicalRawCaptureTestPath(t, sourcePath), plan.Entries[1].LocalPath)
-	assert.True(t, plan.Entries[1].Appendable)
+	require.NoError(err)
+	require.True(supported)
+	assert.Equal(canonicalRawCaptureTestPath(t, root), plan.ConfiguredRoot)
+	assert.Equal(canonicalRawCaptureTestPath(t, base), plan.CaptureRoot)
+	assert.Equal(sources[0].Key, plan.SourceKey)
+	require.Len(plan.Entries, 2)
+	assert.Equal("session_index.jsonl", plan.Entries[0].Path)
+	assert.Equal(canonicalRawCaptureTestPath(t, indexPath), plan.Entries[0].LocalPath)
+	assert.False(plan.Entries[0].Appendable)
+	assert.Equal("sessions/2026/08/25/"+filepath.Base(sourcePath), plan.Entries[1].Path)
+	assert.Equal(canonicalRawCaptureTestPath(t, sourcePath), plan.Entries[1].LocalPath)
+	assert.True(plan.Entries[1].Appendable)
 
-	require.NoError(t, os.Remove(indexPath))
+	require.NoError(os.Remove(indexPath))
 	plan, supported, err = ResolveRawCapturePlan(t.Context(), provider, sources[0])
-	require.NoError(t, err)
-	require.True(t, supported)
-	require.Len(t, plan.Entries, 1)
-	assert.Equal(t, "sessions/2026/08/25/"+filepath.Base(sourcePath), plan.Entries[0].Path)
-	assert.True(t, plan.Entries[0].Appendable)
+	require.NoError(err)
+	require.True(supported)
+	require.Len(plan.Entries, 1)
+	assert.Equal("sessions/2026/08/25/"+filepath.Base(sourcePath), plan.Entries[0].Path)
+	assert.True(plan.Entries[0].Appendable)
 }
 
 func TestCodexProviderPlansForkWithReplayParent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "sessions")
 	const childID = "22222222-2222-4222-8222-222222222222"
@@ -454,27 +475,30 @@ func TestCodexProviderPlansForkWithReplayParent(t *testing.T) {
 			`{"type":"session_meta","payload":{"id":"`+childID+`","forked_from_id":"`+parentID+`"}}`+"\n",
 		))
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
+	require.True(ok)
 	child := requireCodexProviderSource(t, provider, childID)
 
 	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, child)
 
-	require.NoError(t, err)
-	require.True(t, supported)
-	require.Len(t, plan.Entries, 2)
+	require.NoError(err)
+	require.True(supported)
+	require.Len(plan.Entries, 2)
 	entries := make(map[string]RawCaptureEntry, len(plan.Entries))
 	for _, entry := range plan.Entries {
 		entries[entry.LocalPath] = entry
 	}
-	require.Contains(t, entries, parentPath)
-	require.Contains(t, entries, childPath)
-	assert.False(t, entries[parentPath].Appendable,
+	require.Contains(entries, parentPath)
+	require.Contains(entries, childPath)
+	assert.False(entries[parentPath].Appendable,
 		"the parent is an immutable parse input for this child generation")
-	assert.True(t, entries[childPath].Appendable,
+	assert.True(entries[childPath].Appendable,
 		"only the primary child transcript may extend the generation")
 }
 
 func TestCodexProviderPlansForkCaptureWithoutReplayParent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "sessions")
 	const childID = "22222222-2222-4222-8222-222222222222"
@@ -484,49 +508,55 @@ func TestCodexProviderPlansForkCaptureWithoutReplayParent(t *testing.T) {
 			`{"type":"session_meta","payload":{"id":"`+childID+`","forked_from_id":"`+parentID+`"}}`+"\n",
 		))
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
+	require.True(ok)
 	child := requireCodexProviderSource(t, provider, childID)
 
 	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, child)
 
-	require.NoError(t, err)
-	require.True(t, supported)
-	require.Len(t, plan.Entries, 1)
-	assert.Equal(t, childPath, plan.Entries[0].LocalPath)
-	assert.True(t, plan.Entries[0].Appendable)
+	require.NoError(err)
+	require.True(supported)
+	require.Len(plan.Entries, 1)
+	assert.Equal(childPath, plan.Entries[0].LocalPath)
+	assert.True(plan.Entries[0].Appendable)
 }
 
 func TestClaudeProviderPlansThroughSymlinkedRoot(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	base := t.TempDir()
 	realRoot := filepath.Join(base, "real-projects")
 	linkedRoot := filepath.Join(base, "linked-projects")
 	sourcePath := filepath.Join(realRoot, "project", "session.jsonl")
-	require.NoError(t, os.MkdirAll(filepath.Dir(sourcePath), 0o755))
-	require.NoError(t, os.WriteFile(sourcePath, []byte("{}\n"), 0o600))
+	require.NoError(os.MkdirAll(filepath.Dir(sourcePath), 0o755))
+	require.NoError(os.WriteFile(sourcePath, []byte("{}\n"), 0o600))
 	if err := os.Symlink(realRoot, linkedRoot); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 	provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{linkedRoot}})
-	require.True(t, ok)
+	require.True(ok)
 	linkedSource := filepath.Join(linkedRoot, "project", "session.jsonl")
 	sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path:      linkedSource,
 		WatchRoot: linkedRoot,
 		EventKind: "write",
 	})
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	require.NoError(err)
+	require.Len(sources, 1)
 
 	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, sources[0])
 
-	require.NoError(t, err)
-	require.True(t, supported)
-	require.Len(t, plan.Entries, 1)
-	assert.Equal(t, canonicalRawCaptureTestPath(t, realRoot), plan.ConfiguredRoot)
-	assert.Equal(t, canonicalRawCaptureTestPath(t, sourcePath), plan.Entries[0].LocalPath)
+	require.NoError(err)
+	require.True(supported)
+	require.Len(plan.Entries, 1)
+	assert.Equal(canonicalRawCaptureTestPath(t, realRoot), plan.ConfiguredRoot)
+	assert.Equal(canonicalRawCaptureTestPath(t, sourcePath), plan.Entries[0].LocalPath)
 }
 
 func TestCodexProviderPlansThroughSymlinkedRoot(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	base := t.TempDir()
 	realRoot := filepath.Join(base, "rollouts")
 	linkedRoot := filepath.Join(base, "sessions")
@@ -535,15 +565,15 @@ func TestCodexProviderPlansThroughSymlinkedRoot(t *testing.T) {
 		"2026", "08", "25",
 		"rollout-2026-08-25T10-00-00-11111111-1111-4111-8111-111111111111.jsonl",
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(realSource), 0o755))
-	require.NoError(t, os.WriteFile(realSource, []byte("{}\n"), 0o600))
+	require.NoError(os.MkdirAll(filepath.Dir(realSource), 0o755))
+	require.NoError(os.WriteFile(realSource, []byte("{}\n"), 0o600))
 	if err := os.Symlink(realRoot, linkedRoot); err != nil {
 		t.Skipf("symlink unavailable: %v", err)
 	}
 	indexPath := filepath.Join(base, CodexSessionIndexFilename)
-	require.NoError(t, os.WriteFile(indexPath, []byte("{}\n"), 0o600))
+	require.NoError(os.WriteFile(indexPath, []byte("{}\n"), 0o600))
 	provider, ok := NewProvider(AgentCodex, ProviderConfig{Roots: []string{linkedRoot}})
-	require.True(t, ok)
+	require.True(ok)
 	linkedSource := filepath.Join(
 		linkedRoot,
 		"2026", "08", "25",
@@ -554,40 +584,43 @@ func TestCodexProviderPlansThroughSymlinkedRoot(t *testing.T) {
 		WatchRoot: linkedRoot,
 		EventKind: "write",
 	})
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	require.NoError(err)
+	require.Len(sources, 1)
 
 	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, sources[0])
 
-	require.NoError(t, err)
-	require.True(t, supported)
-	assert.Equal(t, canonicalRawCaptureTestPath(t, realRoot), plan.ConfiguredRoot)
-	assert.Equal(t, canonicalRawCaptureTestPath(t, base), plan.CaptureRoot)
-	require.Len(t, plan.Entries, 2)
-	assert.Equal(t, canonicalRawCaptureTestPath(t, indexPath), plan.Entries[0].LocalPath)
-	assert.Equal(t, canonicalRawCaptureTestPath(t, realSource), plan.Entries[1].LocalPath)
+	require.NoError(err)
+	require.True(supported)
+	assert.Equal(canonicalRawCaptureTestPath(t, realRoot), plan.ConfiguredRoot)
+	assert.Equal(canonicalRawCaptureTestPath(t, base), plan.CaptureRoot)
+	require.Len(plan.Entries, 2)
+	assert.Equal(canonicalRawCaptureTestPath(t, indexPath), plan.Entries[0].LocalPath)
+	assert.Equal(canonicalRawCaptureTestPath(t, realSource), plan.Entries[1].LocalPath)
 }
 
 func TestTraeXProviderDoesNotOptIntoRawCapture(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	sourcePath := filepath.Join(
 		root,
 		"2026", "08", "25",
 		"rollout-2026-08-25T10-00-00-11111111-1111-4111-8111-111111111111.jsonl",
 	)
-	require.NoError(t, os.MkdirAll(filepath.Dir(sourcePath), 0o755))
-	require.NoError(t, os.WriteFile(sourcePath, []byte("{}\n"), 0o600))
+	require.NoError(os.MkdirAll(filepath.Dir(sourcePath), 0o755))
+	require.NoError(os.WriteFile(sourcePath, []byte("{}\n"), 0o600))
 	provider, ok := NewProvider(AgentTraeX, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
+	require.True(ok)
 	sources, err := provider.Discover(t.Context())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	require.NoError(err)
+	require.Len(sources, 1)
 
 	plan, supported, err := ResolveRawCapturePlan(t.Context(), provider, sources[0])
 
-	require.NoError(t, err)
-	assert.False(t, supported)
-	assert.Empty(t, plan)
+	require.NoError(err)
+	assert.False(supported)
+	assert.Empty(plan)
 }
 
 func TestResolveRawCapturePlanPropagatesProviderError(t *testing.T) {

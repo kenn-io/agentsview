@@ -3,6 +3,7 @@ package rawderive
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -116,7 +117,7 @@ func (p *ProviderParser) Parse(
 		return ParsedManifest{}, redactMaterializedError("discovering provider source", err, materialized.Root())
 	}
 	if !discovery.Complete {
-		return ParsedManifest{}, fmt.Errorf("provider raw-capture discovery is incomplete")
+		return ParsedManifest{}, errors.New("provider raw-capture discovery is incomplete")
 	}
 	source, err := matchProviderSource(ctx, provider, discovery.Sources, manifest, materialized)
 	if err != nil {
@@ -635,7 +636,7 @@ func rewriteParseOutcome(outcome *parser.ParseOutcome, paths *stablePathMap, roo
 		sourceErr := &outcome.SourceErrors[index]
 		sourceErr.SourceKey = paths.rewrite(sourceErr.SourceKey)
 		sourceErr.DisplayPath = paths.rewrite(sourceErr.DisplayPath)
-		if sourceErr.Err != nil && strings.Contains(sourceErr.Err.Error(), root) {
+		if sourceErr.Err != nil {
 			sourceErr.Err = redactedProviderError{
 				message: strings.ReplaceAll(sourceErr.Err.Error(), root, "<materialized>"),
 				cause:   sourceErr.Err,

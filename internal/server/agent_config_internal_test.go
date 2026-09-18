@@ -9,6 +9,8 @@ import (
 )
 
 func TestInsightAgentConfigMapsBinaryOverrides(t *testing.T) {
+	assert := assert.New(t)
+
 	got := insightAgentConfig(map[string]config.AgentConfig{
 		"claude": {Binary: "/opt/claude"},
 		"gemini": {
@@ -18,8 +20,8 @@ func TestInsightAgentConfigMapsBinaryOverrides(t *testing.T) {
 		},
 	})
 
-	assert.Equal(t, "/opt/claude", got["claude"].Binary)
-	assert.Equal(t, "/opt/gemini", got["gemini"].Binary)
-	assert.Equal(t, "sandbox-exec", got["gemini"].Sandbox)
-	assert.True(t, got["gemini"].AllowUnsafe)
+	assert.Equal("/opt/claude", got["claude"].Binary)
+	assert.Equal("/opt/gemini", got["gemini"].Binary)
+	assert.Equal("sandbox-exec", got["gemini"].Sandbox)
+	assert.True(got["gemini"].AllowUnsafe)
 }

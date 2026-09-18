@@ -15,18 +15,21 @@ import (
 // earlier root already watches natively costs nothing to share, so the shared
 // budget must fund the union of the roots rather than the sum of their walks.
 func TestRegisterRootsChargesSharedNativeWatchesOnce(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	backend := testFSNotifyBackend(t)
 	parent := t.TempDir()
 	nested := filepath.Join(parent, "nested")
-	require.NoError(t, os.Mkdir(nested, 0o755))
+	require.NoError(os.Mkdir(nested, 0o755))
 	sibling := filepath.Join(parent, "sibling")
-	require.NoError(t, os.Mkdir(sibling, 0o755))
+	require.NoError(os.Mkdir(sibling, 0o755))
 
 	watcher, err := newWatcherWithBackendOptions(
 		0, 0, func(context.Context, WatchBatch) error { return nil },
 		backend, 8, 1_000, WatcherOptions{},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// parent, nested, and sibling are three distinct directories, so three
 	// native watches cover both roots even though the walks visit four.
@@ -34,18 +37,18 @@ func TestRegisterRootsChargesSharedNativeWatchesOnce(t *testing.T) {
 		{Path: parent, Recursive: true, Exists: true},
 		{Path: nested, Recursive: true, Exists: true},
 	}, 3)
-	require.Len(t, results, 2)
+	require.Len(results, 2)
 
-	assert.Equal(t, 3, results[0].Allocated)
-	assert.Equal(t, 3, results[0].Watched)
-	assert.Zero(t, results[1].Allocated,
+	assert.Equal(3, results[0].Allocated)
+	assert.Equal(3, results[0].Watched)
+	assert.Zero(results[1].Allocated,
 		"the nested root reuses the watch the parent root installed")
-	assert.Equal(t, 1, results[1].Watched,
+	assert.Equal(1, results[1].Watched,
 		"reuse still reports the directory as covered")
-	assert.False(t, results[1].BudgetExhausted,
+	assert.False(results[1].BudgetExhausted,
 		"a root that installs nothing cannot exhaust the budget")
-	assert.NoError(t, results[1].Err)
-	assert.Contains(t, backend.watcher.WatchList(), nested)
+	assert.NoError(results[1].Err)
+	assert.Contains(backend.watcher.WatchList(), nested)
 }
 
 // TestRegisterRootsReusesNativeWatchesAfterTheBudgetIsSpent is the starvation
@@ -53,28 +56,31 @@ func TestRegisterRootsChargesSharedNativeWatchesOnce(t *testing.T) {
 // every directory it needs is one the first root watches. Refusing it would
 // report an uncovered root while the kernel is already delivering its events.
 func TestRegisterRootsReusesNativeWatchesAfterTheBudgetIsSpent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	backend := testFSNotifyBackend(t)
 	parent := t.TempDir()
 	nested := filepath.Join(parent, "nested")
-	require.NoError(t, os.Mkdir(nested, 0o755))
+	require.NoError(os.Mkdir(nested, 0o755))
 
 	watcher, err := newWatcherWithBackendOptions(
 		0, 0, func(context.Context, WatchBatch) error { return nil },
 		backend, 8, 1_000, WatcherOptions{},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	results := watcher.RegisterRoots([]WatchRoot{
 		{Path: parent, Recursive: true, Exists: true},
 		{Path: nested, Recursive: true, Exists: true},
 	}, 2)
-	require.Len(t, results, 2)
-	require.Zero(t, backend.runtimeBudget)
+	require.Len(results, 2)
+	require.Zero(backend.runtimeBudget)
 
-	assert.False(t, results[1].BudgetExhausted)
-	assert.Zero(t, results[1].Unwatched)
-	assert.Equal(t, 1, results[1].Watched)
-	assert.Contains(t, backend.watchOwners[nested], nested,
+	assert.False(results[1].BudgetExhausted)
+	assert.Zero(results[1].Unwatched)
+	assert.Equal(1, results[1].Watched)
+	assert.Contains(backend.watchOwners[nested], nested,
 		"the reusing root must own the shared watch, or removing the first "+
 			"root would drop coverage the second still needs")
 }
@@ -86,18 +92,21 @@ func TestRegisterRootsReusesNativeWatchesAfterTheBudgetIsSpent(t *testing.T) {
 // installed unconditionally, so refusing the merged root once the budget is
 // spent would silently drop coverage the shallow unit guaranteed.
 func TestRegisterRootsAlwaysWatchesARecursiveRootItself(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	backend := testFSNotifyBackend(t)
 	first := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(first, "child"), 0o755))
+	require.NoError(os.Mkdir(filepath.Join(first, "child"), 0o755))
 	shared := t.TempDir()
 	sharedChild := filepath.Join(shared, "child")
-	require.NoError(t, os.Mkdir(sharedChild, 0o755))
+	require.NoError(os.Mkdir(sharedChild, 0o755))
 
 	watcher, err := newWatcherWithBackendOptions(
 		0, 0, func(context.Context, WatchBatch) error { return nil },
 		backend, 8, 1_000, WatcherOptions{},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// The first root consumes the whole budget, so the merged root registers
 	// with nothing left to spend.
@@ -105,22 +114,22 @@ func TestRegisterRootsAlwaysWatchesARecursiveRootItself(t *testing.T) {
 		{Path: first, Recursive: true, Exists: true},
 		{Path: shared, Recursive: true, Exists: true},
 	}, 2)
-	require.Len(t, results, 2)
-	require.Equal(t, 2, results[0].Allocated,
+	require.Len(results, 2)
+	require.Equal(2, results[0].Allocated,
 		"the fixture must actually spend the budget, or the guard is vacuous")
-	require.False(t, results[0].BudgetExhausted)
-	require.Zero(t, backend.runtimeBudget)
+	require.False(results[0].BudgetExhausted)
+	require.Zero(backend.runtimeBudget)
 
-	assert.Contains(t, backend.watcher.WatchList(), shared,
+	assert.Contains(backend.watcher.WatchList(), shared,
 		"a recursive root must still watch its own directory")
-	assert.True(t, results[1].BudgetExhausted,
+	assert.True(results[1].BudgetExhausted,
 		"the subtree below it stays discretionary and hands off to polling")
-	assert.NotContains(t, backend.watcher.WatchList(), sharedChild)
+	assert.NotContains(backend.watcher.WatchList(), sharedChild)
 
 	// The mandatory watch is off the books like a shallow root's, so removing
 	// it must not hand back a slot the process never spent.
-	assert.Zero(t, results[1].Allocated)
-	require.NoError(t, backend.Remove(shared))
-	assert.Zero(t, backend.runtimeBudget,
+	assert.Zero(results[1].Allocated)
+	require.NoError(backend.Remove(shared))
+	assert.Zero(backend.runtimeBudget,
 		"an uncharged watch cannot refund budget above the cap")
 }

@@ -3,6 +3,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -119,7 +120,7 @@ func ParseSortSpec(spec string) ([]SortKey, error) {
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
-			return nil, fmt.Errorf("empty sort term")
+			return nil, errors.New("empty sort term")
 		}
 		key := part
 		var dir *bool

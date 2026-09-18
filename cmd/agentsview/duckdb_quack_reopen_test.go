@@ -21,11 +21,13 @@ import (
 // end-to-end by the duckdbtest-gated quack serve tests instead.
 
 func TestWaitForReplacementOrShutdownDetectsReplacement(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "m.duckdb")
-	require.NoError(t, os.WriteFile(path, []byte("v1"), 0o644))
+	require.NoError(os.WriteFile(path, []byte("v1"), 0o644))
 	info, err := os.Stat(path)
-	require.NoError(t, err)
+	require.NoError(err)
 	// Prime while the path still points at the original, per the
 	// PrimeFileIdentity contract. The replacement below deliberately has
 	// the SAME size, and on Windows both writes can land in the same
@@ -34,15 +36,15 @@ func TestWaitForReplacementOrShutdownDetectsReplacement(t *testing.T) {
 	// the rename beats the first poll tick.
 	duckdbsync.PrimeFileIdentity(info)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	done := make(chan bool, 1)
 	go func() {
 		done <- waitForReplacementOrShutdown(ctx, path, info, 10*time.Millisecond)
 	}()
 
 	replacement := filepath.Join(dir, "next.duckdb")
-	require.NoError(t, os.WriteFile(replacement, []byte("v2"), 0o644))
-	require.NoError(t, os.Rename(replacement, path))
+	require.NoError(os.WriteFile(replacement, []byte("v2"), 0o644))
+	require.NoError(os.Rename(replacement, path))
 
 	select {
 	case replaced := <-done:
@@ -59,7 +61,7 @@ func TestWaitForReplacementOrShutdownReturnsFalseOnShutdown(t *testing.T) {
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan bool, 1)
 	go func() {
 		done <- waitForReplacementOrShutdown(ctx, path, info, 10*time.Millisecond)
@@ -75,14 +77,16 @@ func TestWaitForReplacementOrShutdownReturnsFalseOnShutdown(t *testing.T) {
 }
 
 func TestWaitForReplacementOrShutdownTreatsMissingFileAsNoChangeYet(t *testing.T) {
+	require := require.New(t)
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "m.duckdb")
-	require.NoError(t, os.WriteFile(path, []byte("v1"), 0o644))
+	require.NoError(os.WriteFile(path, []byte("v1"), 0o644))
 	info, err := os.Stat(path)
-	require.NoError(t, err)
-	require.NoError(t, os.Remove(path))
+	require.NoError(err)
+	require.NoError(os.Remove(path))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 
 	replaced := waitForReplacementOrShutdown(ctx, path, info, 10*time.Millisecond)
@@ -91,7 +95,7 @@ func TestWaitForReplacementOrShutdownTreatsMissingFileAsNoChangeYet(t *testing.T
 }
 
 func TestSleepOrShutdownReturnsFalseWhenCancelled(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	start := time.Now()
@@ -102,7 +106,7 @@ func TestSleepOrShutdownReturnsFalseWhenCancelled(t *testing.T) {
 }
 
 func TestSleepOrShutdownReturnsTrueAfterDuration(t *testing.T) {
-	ok := sleepOrShutdown(context.Background(), 10*time.Millisecond)
+	ok := sleepOrShutdown(t.Context(), 10*time.Millisecond)
 	assert.True(t, ok)
 }
 
@@ -176,13 +180,15 @@ func TestDuckDBMirrorProbeFailureReason(t *testing.T) {
 			}
 			assert.Contains(t, got, tt.want)
 			t.Run("serve error remedy", func(t *testing.T) {
+				assert := assert.New(t)
+
 				err := duckDBMirrorServeProbeError(tt.probe)
 				require.Error(t, err)
 				if tt.probe.LockConflict {
-					assert.Contains(t, err.Error(), "holds the mirror read-write")
-					assert.NotContains(t, err.Error(), "push --full")
+					assert.Contains(err.Error(), "holds the mirror read-write")
+					assert.NotContains(err.Error(), "push --full")
 				} else {
-					assert.Contains(t, err.Error(), "push --full")
+					assert.Contains(err.Error(), "push --full")
 				}
 			})
 		})
@@ -191,18 +197,20 @@ func TestDuckDBMirrorProbeFailureReason(t *testing.T) {
 
 func TestProbeDuckDBMirrorForServeMissingFileIsActionable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing.duckdb")
-	err := probeDuckDBMirrorForServe(context.Background(), path)
+	err := probeDuckDBMirrorForServe(t.Context(), path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not exist")
 	assert.Contains(t, err.Error(), "agentsview duckdb push --full")
 }
 
 func TestProbeDuckDBMirrorForServeAcceptsCompatibleMirror(t *testing.T) {
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
 	conn, err := duckdbsync.Open(path)
-	require.NoError(t, err)
-	require.NoError(t, duckdbsync.EnsureSchema(context.Background(), conn))
-	require.NoError(t, conn.Close())
+	require.NoError(err)
+	require.NoError(duckdbsync.EnsureSchema(t.Context(), conn))
+	require.NoError(conn.Close())
 
-	assert.NoError(t, probeDuckDBMirrorForServe(context.Background(), path))
+	assert.NoError(t, probeDuckDBMirrorForServe(t.Context(), path))
 }

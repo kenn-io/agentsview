@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json/jsontext"
 	"os"
@@ -50,7 +49,7 @@ func newShelleyTestDB(t *testing.T) (string, string, *sql.DB) {
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "open shelley test db")
 	t.Cleanup(func() { db.Close() })
-	_, err = db.Exec(shelleySchema)
+	_, err = db.ExecContext(t.Context(), shelleySchema)
 	require.NoError(t, err, "create shelley schema")
 	return dir, path, db
 }
@@ -64,7 +63,7 @@ func newShelleyTestDBWithSchema(
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "open shelley test db")
 	t.Cleanup(func() { db.Close() })
-	_, err = db.Exec(schema)
+	_, err = db.ExecContext(t.Context(), schema)
 	require.NoError(t, err, "create shelley schema")
 	return dir, path, db
 }
@@ -75,7 +74,7 @@ func seedShelleyConversation(
 	createdAt, updatedAt string,
 ) {
 	t.Helper()
-	_, err := db.Exec(
+	_, err := db.ExecContext(t.Context(),
 		`INSERT INTO conversations
 			(conversation_id, slug, user_initiated, created_at,
 			 updated_at, cwd, parent_conversation_id, model)
@@ -92,7 +91,7 @@ func seedShelleyMessage(
 	llmData, userData, usageData, createdAt string,
 ) {
 	t.Helper()
-	_, err := db.Exec(
+	_, err := db.ExecContext(t.Context(),
 		`INSERT INTO messages
 			(message_id, conversation_id, sequence_id, generation,
 			 type, llm_data, user_data, usage_data, created_at)
@@ -167,93 +166,99 @@ func parseShelleyConversationDirectForTest(
 	t *testing.T, dbPath, rawID, machine string, _ os.FileInfo,
 ) (*ParseResult, error) {
 	t.Helper()
-	return shelleyParseMember(
+	return shelleyParseMember(t.Context(),
 		multiSessionSource{Container: dbPath, MemberID: rawID},
 		ParseRequest{Machine: machine},
 	)
 }
 
 func TestParseShelleyConversation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	_, dbPath, db := newShelleyTestDB(t)
 	seedShelleyMainConversation(t, db)
 
 	info, err := os.Stat(dbPath)
-	require.NoError(t, err, "stat db")
+	require.NoError(err, "stat db")
 
 	result, err := parseShelleyConversationDirectForTest(
 		t, dbPath, "cMAIN1", "test-machine", info,
 	)
-	require.NoError(t, err, "parseConversationDirect")
-	require.NotNil(t, result, "expected result")
+	require.NoError(err, "parseConversationDirect")
+	require.NotNil(result, "expected result")
 
 	sess := result.Session
-	assert.Equal(t, "shelley:cMAIN1", sess.ID, "ID")
-	assert.Equal(t, AgentShelley, sess.Agent, "Agent")
-	assert.Equal(t, "test-machine", sess.Machine, "Machine")
-	assert.Equal(t, "myapp", sess.Project, "Project")
-	assert.Equal(t, "/home/user/dev/myapp", sess.Cwd, "Cwd")
-	assert.Equal(t, "Add Shelley parser", sess.SessionName, "SessionName")
-	assert.Equal(t, "Add a Shelley parser", sess.FirstMessage, "FirstMessage")
-	assert.Equal(t, 5, sess.MessageCount, "MessageCount")
-	assert.Equal(t, 1, sess.UserMessageCount, "UserMessageCount")
-	assert.Equal(t, dbPath+"#cMAIN1", sess.File.Path, "File.Path")
-	assert.Empty(t, sess.ParentSessionID, "ParentSessionID")
+	assert.Equal("shelley:cMAIN1", sess.ID, "ID")
+	assert.Equal(AgentShelley, sess.Agent, "Agent")
+	assert.Equal("test-machine", sess.Machine, "Machine")
+	assert.Equal("myapp", sess.Project, "Project")
+	assert.Equal("/home/user/dev/myapp", sess.Cwd, "Cwd")
+	assert.Equal("Add Shelley parser", sess.SessionName, "SessionName")
+	assert.Equal("Add a Shelley parser", sess.FirstMessage, "FirstMessage")
+	assert.Equal(5, sess.MessageCount, "MessageCount")
+	assert.Equal(1, sess.UserMessageCount, "UserMessageCount")
+	assert.Equal(dbPath+"#cMAIN1", sess.File.Path, "File.Path")
+	assert.Empty(sess.ParentSessionID, "ParentSessionID")
 
 	// Session token aggregates: peak context is a MAX, total output a SUM.
-	assert.Equal(t, 1500, sess.PeakContextTokens, "PeakContextTokens")
-	assert.Equal(t, 510, sess.TotalOutputTokens, "TotalOutputTokens")
-	assert.True(t, sess.HasPeakContextTokens, "HasPeakContextTokens")
-	assert.True(t, sess.HasTotalOutputTokens, "HasTotalOutputTokens")
+	assert.Equal(1500, sess.PeakContextTokens, "PeakContextTokens")
+	assert.Equal(510, sess.TotalOutputTokens, "TotalOutputTokens")
+	assert.True(sess.HasPeakContextTokens, "HasPeakContextTokens")
+	assert.True(sess.HasTotalOutputTokens, "HasTotalOutputTokens")
 
 	msgs := result.Messages
-	require.Len(t, msgs, 5, "messages len")
+	require.Len(msgs, 5, "messages len")
 
 	// Ordinals come straight from sequence_id.
 	for i, m := range msgs {
-		assert.Equalf(t, i+1, m.Ordinal, "msg[%d].Ordinal", i)
+		assert.Equalf(i+1, m.Ordinal, "msg[%d].Ordinal", i)
 	}
 
 	// User message.
-	assert.Equal(t, RoleUser, msgs[0].Role, "msg[0].Role")
-	assert.Equal(t, "Add a Shelley parser", msgs[0].Content, "msg[0].Content")
+	assert.Equal(RoleUser, msgs[0].Role, "msg[0].Role")
+	assert.Equal("Add a Shelley parser", msgs[0].Content, "msg[0].Content")
 
 	// Agent message: text + thinking + tool call + tokens.
 	a := msgs[1]
-	assert.Equal(t, RoleAssistant, a.Role, "msg[1].Role")
-	assert.Equal(t, "On it.", a.Content, "msg[1].Content")
-	assert.True(t, a.HasThinking, "msg[1].HasThinking")
-	assert.Equal(t, "Plan it.", a.ThinkingText, "msg[1].ThinkingText")
-	assert.True(t, a.HasToolUse, "msg[1].HasToolUse")
-	require.Len(t, a.ToolCalls, 1, "msg[1].ToolCalls len")
-	assert.Equal(t, "bash", a.ToolCalls[0].ToolName, "tool name")
-	assert.Equal(t, "Bash", a.ToolCalls[0].Category, "tool category")
-	assert.Equal(t, "toolu_1", a.ToolCalls[0].ToolUseID, "tool use id")
-	assert.JSONEq(t, `{"cmd":"ls"}`, a.ToolCalls[0].InputJSON, "tool input")
-	assert.Equal(t, 1250, a.ContextTokens, "msg[1].ContextTokens")
-	assert.Equal(t, 300, a.OutputTokens, "msg[1].OutputTokens")
-	assert.True(t, a.HasContextTokens, "msg[1].HasContextTokens")
-	assert.True(t, a.HasOutputTokens, "msg[1].HasOutputTokens")
-	assert.Equal(t, "claude-sonnet-4-6", a.Model, "msg[1].Model")
-	assert.NotEmpty(t, a.TokenUsage, "msg[1].TokenUsage raw")
+	assert.Equal(RoleAssistant, a.Role, "msg[1].Role")
+	assert.Equal("On it.", a.Content, "msg[1].Content")
+	assert.True(a.HasThinking, "msg[1].HasThinking")
+	assert.Equal("Plan it.", a.ThinkingText, "msg[1].ThinkingText")
+	assert.True(a.HasToolUse, "msg[1].HasToolUse")
+	require.Len(a.ToolCalls, 1, "msg[1].ToolCalls len")
+	assert.Equal("bash", a.ToolCalls[0].ToolName, "tool name")
+	assert.Equal("Bash", a.ToolCalls[0].Category, "tool category")
+	assert.Equal("toolu_1", a.ToolCalls[0].ToolUseID, "tool use id")
+	assert.JSONEq(`{"cmd":"ls"}`, a.ToolCalls[0].InputJSON, "tool input")
+	assert.Equal(1250, a.ContextTokens, "msg[1].ContextTokens")
+	assert.Equal(300, a.OutputTokens, "msg[1].OutputTokens")
+	assert.True(a.HasContextTokens, "msg[1].HasContextTokens")
+	assert.True(a.HasOutputTokens, "msg[1].HasOutputTokens")
+	assert.Equal("claude-sonnet-4-6", a.Model, "msg[1].Model")
+	assert.NotEmpty(a.TokenUsage, "msg[1].TokenUsage raw")
 
 	// Tool result message: user role, empty content, paired by ToolUseID.
 	tr := msgs[2]
-	assert.Equal(t, RoleUser, tr.Role, "msg[2].Role")
-	assert.Empty(t, tr.Content, "msg[2].Content")
-	require.Len(t, tr.ToolResults, 1, "msg[2].ToolResults len")
-	assert.Equal(t, "toolu_1", tr.ToolResults[0].ToolUseID, "result tool use id")
-	assert.Equal(t, "file1\nfile2",
+	assert.Equal(RoleUser, tr.Role, "msg[2].Role")
+	assert.Empty(tr.Content, "msg[2].Content")
+	require.Len(tr.ToolResults, 1, "msg[2].ToolResults len")
+	assert.Equal("toolu_1", tr.ToolResults[0].ToolUseID, "result tool use id")
+	assert.Equal("file1\nfile2",
 		DecodeContent(tr.ToolResults[0].ContentRaw), "decoded tool result")
 
 	// Final first-generation agent message.
-	assert.Equal(t, "Done.", msgs[3].Content, "msg[3].Content")
-	assert.Equal(t, 120, msgs[3].OutputTokens, "msg[3].OutputTokens")
+	assert.Equal("Done.", msgs[3].Content, "msg[3].Content")
+	assert.Equal(120, msgs[3].OutputTokens, "msg[3].OutputTokens")
 
 	// Second-generation message is included in the history.
-	assert.Equal(t, "Continued after compaction.", msgs[4].Content, "msg[4].Content")
+	assert.Equal("Continued after compaction.", msgs[4].Content, "msg[4].Content")
 }
 
 func TestParseShelleySubagentRelationship(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	_, dbPath, db := newShelleyTestDB(t)
 	seedShelleyMainConversation(t, db)
 	seedShelleyConversation(
@@ -269,19 +274,22 @@ func TestParseShelleySubagentRelationship(t *testing.T) {
 		"", "", "2026-06-15T10:01:30Z")
 
 	info, err := os.Stat(dbPath)
-	require.NoError(t, err, "stat db")
+	require.NoError(err, "stat db")
 
 	result, err := parseShelleyConversationDirectForTest(
 		t, dbPath, "cSUB01", "test-machine", info,
 	)
-	require.NoError(t, err, "parse subagent")
-	require.NotNil(t, result, "expected subagent result")
-	assert.Equal(t, "shelley:cSUB01", result.Session.ID, "subagent ID")
-	assert.Equal(t, "shelley:cMAIN1", result.Session.ParentSessionID, "parent")
-	assert.Equal(t, RelSubagent, result.Session.RelationshipType, "relationship")
+	require.NoError(err, "parse subagent")
+	require.NotNil(result, "expected subagent result")
+	assert.Equal("shelley:cSUB01", result.Session.ID, "subagent ID")
+	assert.Equal("shelley:cMAIN1", result.Session.ParentSessionID, "parent")
+	assert.Equal(RelSubagent, result.Session.RelationshipType, "relationship")
 }
 
 func TestDiscoverAndFindShelley(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root, dbPath, db := newShelleyTestDB(t)
 	seedShelleyMainConversation(t, db)
 
@@ -289,72 +297,77 @@ func TestDiscoverAndFindShelley(t *testing.T) {
 	// physical DB still surfaces as a single source and a raw conversation
 	// ID resolves to its virtual path.
 	provider, ok := NewProvider(AgentShelley, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
+	require.True(ok)
 
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, sources, 1, "discovered sources")
-	assert.Equal(t, dbPath, sources[0].DisplayPath, "discovered db path")
-	assert.Equal(t, AgentShelley, sources[0].Provider, "discovered provider")
+	sources, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(sources, 1, "discovered sources")
+	assert.Equal(dbPath, sources[0].DisplayPath, "discovered db path")
+	assert.Equal(AgentShelley, sources[0].Provider, "discovered provider")
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "cMAIN1",
 	})
-	require.NoError(t, err)
-	require.True(t, ok, "find existing")
-	assert.Equal(t, dbPath+"#cMAIN1", found.DisplayPath, "find existing path")
+	require.NoError(err)
+	require.True(ok, "find existing")
+	assert.Equal(dbPath+"#cMAIN1", found.DisplayPath, "find existing path")
 
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "cNOPE0",
 	})
-	require.NoError(t, err)
-	assert.False(t, ok, "find missing")
+	require.NoError(err)
+	assert.False(ok, "find missing")
 
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "../escape",
 	})
-	require.NoError(t, err)
-	assert.False(t, ok, "reject path-like id")
+	require.NoError(err)
+	assert.False(ok, "reject path-like id")
 
-	assert.True(t, ShelleyConversationExists(dbPath, "cMAIN1"), "exists")
-	assert.False(t, ShelleyConversationExists(dbPath, "cNOPE0"), "not exists")
+	assert.True(ShelleyConversationExists(t.Context(), dbPath, "cMAIN1"), "exists")
+	assert.False(ShelleyConversationExists(t.Context(), dbPath, "cNOPE0"), "not exists")
 
 	// Empty root yields no discovery.
 	emptyProvider, ok := NewProvider(AgentShelley, ProviderConfig{Roots: []string{t.TempDir()}})
-	require.True(t, ok)
-	emptySources, err := emptyProvider.Discover(context.Background())
-	require.NoError(t, err)
-	assert.Empty(t, emptySources, "empty dir discovery")
+	require.True(ok)
+	emptySources, err := emptyProvider.Discover(t.Context())
+	require.NoError(err)
+	assert.Empty(emptySources, "empty dir discovery")
 }
 
 func TestParseShelleyVirtualPath(t *testing.T) {
+	assert := assert.New(t)
+
 	dbPath := "/home/user/.config/shelley/shelley.db"
 	got, id, ok := parseShelleyVirtualPath(dbPath + "#cABC123")
 	require.True(t, ok, "valid virtual path")
-	assert.Equal(t, dbPath, got, "db path")
-	assert.Equal(t, "cABC123", id, "conversation id")
+	assert.Equal(dbPath, got, "db path")
+	assert.Equal("cABC123", id, "conversation id")
 
 	_, _, ok = parseShelleyVirtualPath("/x/other.db#id")
-	assert.False(t, ok, "wrong db name")
+	assert.False(ok, "wrong db name")
 	_, _, ok = parseShelleyVirtualPath(dbPath)
-	assert.False(t, ok, "no separator")
+	assert.False(ok, "no separator")
 	_, _, ok = parseShelleyVirtualPath(dbPath + "#")
-	assert.False(t, ok, "empty id")
+	assert.False(ok, "empty id")
 }
 
 func TestAgentByPrefixShelley(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	def, ok := AgentByPrefix("shelley:cMAIN1")
-	require.True(t, ok, "shelley prefix matches")
-	assert.Equal(t, AgentShelley, def.Type, "shelley type")
+	require.True(ok, "shelley prefix matches")
+	assert.Equal(AgentShelley, def.Type, "shelley type")
 
 	def, ok = AgentByPrefix("host~shelley:cMAIN1")
-	require.True(t, ok, "host-prefixed shelley matches")
-	assert.Equal(t, AgentShelley, def.Type, "host-prefixed type")
+	require.True(ok, "host-prefixed shelley matches")
+	assert.Equal(AgentShelley, def.Type, "host-prefixed type")
 
 	// A colon-free ID must fall back to Claude, never Shelley.
 	def, ok = AgentByPrefix("cMAIN1")
-	require.True(t, ok, "colon-free id matches Claude fallback")
-	assert.Equal(t, AgentClaude, def.Type, "colon-free routes to Claude")
+	require.True(ok, "colon-free id matches Claude fallback")
+	assert.Equal(AgentClaude, def.Type, "colon-free routes to Claude")
 }
 
 func TestShelleyTokenCount(t *testing.T) {
@@ -383,6 +396,9 @@ func TestShelleyTokenCount(t *testing.T) {
 // timestamps. Shelley relies on SQLite's DEFAULT CURRENT_TIMESTAMP, so
 // stored values look like "2026-06-15 10:00:00".
 func TestParseShelleyTimestampFormats(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	_, dbPath, db := newShelleyTestDB(t)
 	seedShelleyConversation(
 		t, db, "cTIME1", "ts", "/home/user/dev/app",
@@ -394,19 +410,22 @@ func TestParseShelleyTimestampFormats(t *testing.T) {
 		"", "", "2026-06-15 10:00:00")
 
 	info, err := os.Stat(dbPath)
-	require.NoError(t, err, "stat db")
+	require.NoError(err, "stat db")
 	result, err := parseShelleyConversationDirectForTest(t, dbPath, "cTIME1", "m", info)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.False(t, result.Session.StartedAt.IsZero(), "StartedAt parsed")
-	assert.False(t, result.Session.EndedAt.IsZero(), "EndedAt parsed")
-	assert.Positive(t, result.Session.File.Mtime, "File.Mtime positive")
+	require.NoError(err)
+	require.NotNil(result)
+	assert.False(result.Session.StartedAt.IsZero(), "StartedAt parsed")
+	assert.False(result.Session.EndedAt.IsZero(), "EndedAt parsed")
+	assert.Positive(result.Session.File.Mtime, "File.Mtime positive")
 }
 
 // TestParseShelleyRobustContent verifies graceful handling of unknown
 // content types, redacted thinking, malformed llm_data, and token
 // capture on errored assistant turns (type="error").
 func TestParseShelleyRobustContent(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	_, dbPath, db := newShelleyTestDB(t)
 	seedShelleyConversation(
 		t, db, "cROB1", "robust", "/home/user/dev/app",
@@ -433,28 +452,31 @@ func TestParseShelleyRobustContent(t *testing.T) {
 		"2026-06-15T10:00:40Z")
 
 	info, err := os.Stat(dbPath)
-	require.NoError(t, err, "stat db")
+	require.NoError(err, "stat db")
 	result, err := parseShelleyConversationDirectForTest(t, dbPath, "cROB1", "m", info)
-	require.NoError(t, err, "must not error on robust content")
-	require.NotNil(t, result)
+	require.NoError(err, "must not error on robust content")
+	require.NotNil(result)
 
 	// user + agent(real text) + error message; the malformed row dropped.
-	require.Len(t, result.Messages, 3, "messages len")
+	require.Len(result.Messages, 3, "messages len")
 	agentMsg := result.Messages[1]
-	assert.Equal(t, "real text", agentMsg.Content, "unknown type ignored, text kept")
-	assert.Contains(t, agentMsg.ThinkingText, "redacted", "redacted thinking placeholder")
+	assert.Equal("real text", agentMsg.Content, "unknown type ignored, text kept")
+	assert.Contains(agentMsg.ThinkingText, "redacted", "redacted thinking placeholder")
 
 	errMsg := result.Messages[2]
-	assert.True(t, errMsg.IsSystem, "error message flagged system")
-	assert.Equal(t, "request failed", errMsg.Content, "error text preserved")
-	assert.Equal(t, 40, errMsg.OutputTokens, "errored-turn output tokens captured")
-	assert.Equal(t, 700, errMsg.ContextTokens, "errored-turn input tokens captured")
+	assert.True(errMsg.IsSystem, "error message flagged system")
+	assert.Equal("request failed", errMsg.Content, "error text preserved")
+	assert.Equal(40, errMsg.OutputTokens, "errored-turn output tokens captured")
+	assert.Equal(700, errMsg.ContextTokens, "errored-turn input tokens captured")
 
 	// Errored-turn tokens roll up into the session totals.
-	assert.Equal(t, 40, result.Session.TotalOutputTokens, "session output total")
+	assert.Equal(40, result.Session.TotalOutputTokens, "session output total")
 }
 
 func TestParseShelleyUsageOnlyRows(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	_, dbPath, db := newShelleyTestDB(t)
 	seedShelleyConversation(
 		t, db, "cUSG1", "usage only", "/home/user/dev/app",
@@ -470,22 +492,22 @@ func TestParseShelleyUsageOnlyRows(t *testing.T) {
 		"2026-06-15T10:00:40Z")
 
 	info, err := os.Stat(dbPath)
-	require.NoError(t, err, "stat db")
+	require.NoError(err, "stat db")
 	result, err := parseShelleyConversationDirectForTest(t, dbPath, "cUSG1", "m", info)
-	require.NoError(t, err, "must not error on usage-only row")
-	require.NotNil(t, result)
+	require.NoError(err, "must not error on usage-only row")
+	require.NotNil(result)
 
-	require.Len(t, result.Messages, 2, "messages len")
+	require.Len(result.Messages, 2, "messages len")
 	usageOnly := result.Messages[1]
-	assert.True(t, usageOnly.IsSystem, "usage-only row is metadata")
-	assert.Empty(t, usageOnly.Content, "usage-only content")
-	assert.Equal(t, 123, usageOnly.ContextTokens, "context tokens")
-	assert.Equal(t, 33, usageOnly.OutputTokens, "output tokens")
-	assert.True(t, usageOnly.HasContextTokens, "has context tokens")
-	assert.True(t, usageOnly.HasOutputTokens, "has output tokens")
-	assert.NotEmpty(t, usageOnly.TokenUsage, "raw token usage")
-	assert.Equal(t, 123, result.Session.PeakContextTokens, "session peak context")
-	assert.Equal(t, 33, result.Session.TotalOutputTokens, "session output total")
+	assert.True(usageOnly.IsSystem, "usage-only row is metadata")
+	assert.Empty(usageOnly.Content, "usage-only content")
+	assert.Equal(123, usageOnly.ContextTokens, "context tokens")
+	assert.Equal(33, usageOnly.OutputTokens, "output tokens")
+	assert.True(usageOnly.HasContextTokens, "has context tokens")
+	assert.True(usageOnly.HasOutputTokens, "has output tokens")
+	assert.NotEmpty(usageOnly.TokenUsage, "raw token usage")
+	assert.Equal(123, result.Session.PeakContextTokens, "session peak context")
+	assert.Equal(33, result.Session.TotalOutputTokens, "session output total")
 }
 
 // TestParseShelleyWebSearchToolResult verifies that a server-side web
@@ -494,6 +516,9 @@ func TestParseShelleyUsageOnlyRows(t *testing.T) {
 // web_search_result blocks (Type 9) carry Title/URL instead of Text is
 // stored with readable content rather than dropped empty.
 func TestParseShelleyWebSearchToolResult(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	_, dbPath, db := newShelleyTestDB(t)
 	seedShelleyConversation(
 		t, db, "cWEB1", "search the web", "/home/user/dev/app",
@@ -514,29 +539,28 @@ func TestParseShelleyWebSearchToolResult(t *testing.T) {
 		"", "", "2026-06-15T10:00:05Z")
 
 	info, err := os.Stat(dbPath)
-	require.NoError(t, err, "stat db")
+	require.NoError(err, "stat db")
 	result, err := parseShelleyConversationDirectForTest(t, dbPath, "cWEB1", "m", info)
-	require.NoError(t, err, "parse web search conversation")
-	require.NotNil(t, result, "expected result")
+	require.NoError(err, "parse web search conversation")
+	require.NotNil(result, "expected result")
 
-	require.Len(t, result.Messages, 2, "messages len")
+	require.Len(result.Messages, 2, "messages len")
 	agent := result.Messages[1]
 
 	// The server-side web_search call is captured as a tool call.
-	require.Len(t, agent.ToolCalls, 1, "web_search tool call captured")
-	assert.Equal(t, "web_search", agent.ToolCalls[0].ToolName, "tool name")
+	require.Len(agent.ToolCalls, 1, "web_search tool call captured")
+	assert.Equal("web_search", agent.ToolCalls[0].ToolName, "tool name")
 
 	// The web_search_tool_result is paired to the server tool call and its
 	// nested Title/URL result blocks are preserved, not stored empty.
-	require.Len(t, agent.ToolResults, 1, "web_search tool result captured")
-	assert.Equal(t, "srvtoolu_1",
+	require.Len(agent.ToolResults, 1, "web_search tool result captured")
+	assert.Equal("srvtoolu_1",
 		agent.ToolResults[0].ToolUseID, "result tool use id")
 	decoded := DecodeContent(agent.ToolResults[0].ContentRaw)
-	assert.Equal(t,
-		"Go iota explained https://go.dev/iota\n"+
-			"Effective Go https://go.dev/doc/effective_go",
+	assert.Equal("Go iota explained https://go.dev/iota\n"+
+		"Effective Go https://go.dev/doc/effective_go",
 		decoded, "web search result title/url preserved")
-	assert.Positive(t, agent.ToolResults[0].ContentLength,
+	assert.Positive(agent.ToolResults[0].ContentLength,
 		"content length nonzero")
 }
 
@@ -549,6 +573,9 @@ func TestParseShelleyWebSearchToolResult(t *testing.T) {
 // meta skip query must agree, or unchanged conversations would re-parse
 // forever.
 func TestShelleySameSecondChangeSignal(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	_, dbPath, db := newShelleyTestDB(t)
 	seedShelleyConversation(
 		t, db, "cSEC1", "same second", "/home/user/dev/app",
@@ -560,35 +587,35 @@ func TestShelleySameSecondChangeSignal(t *testing.T) {
 		"", "", "2026-06-15T10:00:00Z")
 
 	info, err := os.Stat(dbPath)
-	require.NoError(t, err, "stat db")
+	require.NoError(err, "stat db")
 
 	conn, err := OpenShelleyDB(dbPath)
-	require.NoError(t, err, "open shelley db")
+	require.NoError(err, "open shelley db")
 	defer conn.Close()
 
 	first, err := parseShelleyConversationDirectForTest(t, dbPath, "cSEC1", "m", info)
-	require.NoError(t, err)
-	require.NotNil(t, first)
+	require.NoError(err)
+	require.NotNil(first)
 	mtime1 := first.Session.File.Mtime
 	hash1 := first.Session.File.Hash
 
 	// File.Mtime is the conversation's real timestamp, so it stays a valid
 	// value for modified-between range queries (never a synthetic future).
 	base := parseTimestamp("2026-06-15T10:00:00Z").UnixNano()
-	assert.Equal(t, base, mtime1, "File.Mtime is the real updated_at")
-	assert.NotEmpty(t, hash1, "content fingerprint set")
+	assert.Equal(base, mtime1, "File.Mtime is the real updated_at")
+	assert.NotEmpty(hash1, "content fingerprint set")
 
 	metas1, err := ListShelleyConversationMetas(conn, dbPath)
-	require.NoError(t, err)
-	require.Len(t, metas1, 1)
-	assert.Equal(t, mtime1, metas1[0].FileMtime,
+	require.NoError(err)
+	require.Len(metas1, 1)
+	assert.Equal(mtime1, metas1[0].FileMtime,
 		"stored File.Mtime must match the meta skip timestamp")
-	assert.Equal(t, hash1, metas1[0].Fingerprint,
+	assert.Equal(hash1, metas1[0].Fingerprint,
 		"stored file_hash must match the meta skip fingerprint")
 
-	srcMtime1, err := ShelleySourceMtime(dbPath + "#cSEC1")
-	require.NoError(t, err)
-	assert.Positive(t, srcMtime1, "SourceMtime resolves the conversation")
+	srcMtime1, err := ShelleySourceMtime(t.Context(), dbPath+"#cSEC1")
+	require.NoError(err)
+	assert.Positive(srcMtime1, "SourceMtime resolves the conversation")
 
 	// Append a second message in the SAME second: updated_at is unchanged,
 	// sequence_id advances (1 -> 2) and the payload adds content bytes.
@@ -597,27 +624,30 @@ func TestShelleySameSecondChangeSignal(t *testing.T) {
 		"", "", "2026-06-15T10:00:00Z")
 
 	second, err := parseShelleyConversationDirectForTest(t, dbPath, "cSEC1", "m", info)
-	require.NoError(t, err)
-	require.NotNil(t, second)
+	require.NoError(err)
+	require.NotNil(second)
 
-	assert.Equal(t, mtime1, second.Session.File.Mtime,
+	assert.Equal(mtime1, second.Session.File.Mtime,
 		"same-second append leaves the real timestamp unchanged")
-	assert.NotEqual(t, hash1, second.Session.File.Hash,
+	assert.NotEqual(hash1, second.Session.File.Hash,
 		"a same-second append must change the content fingerprint")
 
 	metas2, err := ListShelleyConversationMetas(conn, dbPath)
-	require.NoError(t, err)
-	require.Len(t, metas2, 1)
-	assert.Equal(t, second.Session.File.Hash, metas2[0].Fingerprint,
+	require.NoError(err)
+	require.Len(metas2, 1)
+	assert.Equal(second.Session.File.Hash, metas2[0].Fingerprint,
 		"meta fingerprint tracks the same-second append")
 
-	srcMtime2, err := ShelleySourceMtime(dbPath + "#cSEC1")
-	require.NoError(t, err)
-	assert.NotEqual(t, srcMtime1, srcMtime2,
+	srcMtime2, err := ShelleySourceMtime(t.Context(), dbPath+"#cSEC1")
+	require.NoError(err)
+	assert.NotEqual(srcMtime1, srcMtime2,
 		"watcher SourceMtime tracks the same-second append")
 }
 
 func TestShelleyNumericUserInitiatedScans(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	schema := strings.Replace(
 		shelleySchema,
 		"user_initiated BOOLEAN NOT NULL DEFAULT TRUE",
@@ -636,33 +666,35 @@ func TestShelleyNumericUserInitiatedScans(t *testing.T) {
 		"", "", "2026-06-15T10:00:00Z")
 
 	info, err := os.Stat(dbPath)
-	require.NoError(t, err, "stat db")
+	require.NoError(err, "stat db")
 	result, err := parseShelleyConversationDirectForTest(
 		t, dbPath, "cNUM1", "m", info,
 	)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.Equal(t, RelSubagent, result.Session.RelationshipType,
+	require.NoError(err)
+	require.NotNil(result)
+	assert.Equal(RelSubagent, result.Session.RelationshipType,
 		"numeric false user_initiated should map to subagent")
 
 	conn, err := OpenShelleyDB(dbPath)
-	require.NoError(t, err, "open shelley db")
+	require.NoError(err, "open shelley db")
 	defer conn.Close()
 	metas, err := ListShelleyConversationMetas(conn, dbPath)
-	require.NoError(t, err)
-	require.Len(t, metas, 1)
-	assert.Equal(t, result.Session.File.Hash, metas[0].Fingerprint,
+	require.NoError(err)
+	require.Len(metas, 1)
+	assert.Equal(result.Session.File.Hash, metas[0].Fingerprint,
 		"parse and meta paths should convert user_initiated the same way")
 }
 
 func TestApplyShelleyUsageTolerant(t *testing.T) {
+	assert := assert.New(t)
+
 	var msg ParsedMessage
 	applyShelleyUsage(&msg,
 		`{"input_tokens":"-5","cache_read_input_tokens":"100",`+
 			`"output_tokens":"42","model":""}`, "fallback-model")
-	assert.Equal(t, 100, msg.ContextTokens, "ContextTokens (negative input clamped)")
-	assert.Equal(t, 42, msg.OutputTokens, "OutputTokens")
-	assert.True(t, msg.HasContextTokens, "HasContextTokens")
-	assert.True(t, msg.HasOutputTokens, "HasOutputTokens")
-	assert.Equal(t, "fallback-model", msg.Model, "falls back to conversation model")
+	assert.Equal(100, msg.ContextTokens, "ContextTokens (negative input clamped)")
+	assert.Equal(42, msg.OutputTokens, "OutputTokens")
+	assert.True(msg.HasContextTokens, "HasContextTokens")
+	assert.True(msg.HasOutputTokens, "HasOutputTokens")
+	assert.Equal("fallback-model", msg.Model, "falls back to conversation model")
 }

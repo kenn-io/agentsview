@@ -53,19 +53,22 @@ func TestWebSearchFeeIsExactMicrodollars(t *testing.T) {
 }
 
 func TestAddWebSearchFee(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	base := money.MustParseDollars("1.25")
 
 	unchanged, err := AddWebSearchFee(base, 0)
-	require.NoError(t, err)
-	assert.Equal(t, base, unchanged)
+	require.NoError(err)
+	assert.Equal(base, unchanged)
 
 	withFee, err := AddWebSearchFee(base, 3)
-	require.NoError(t, err)
-	assert.Equal(t, money.MustParseDollars("1.28"), withFee)
+	require.NoError(err)
+	assert.Equal(money.MustParseDollars("1.28"), withFee)
 
 	fromZero, err := AddWebSearchFee(money.Money{}, 2)
-	require.NoError(t, err)
-	assert.Equal(t, money.MustParseDollars("0.02"), fromZero)
+	require.NoError(err)
+	assert.Equal(money.MustParseDollars("0.02"), fromZero)
 }
 
 func TestAddWebSearchFeeReportsOverflow(t *testing.T) {

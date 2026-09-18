@@ -35,7 +35,7 @@ func (s *checkpointSpy) checkpointAfterPush(ctx context.Context, duck *sql.DB) e
 func mutateSessionStatColumns(t *testing.T, local *db.DB, sessionID string) {
 	t.Helper()
 	require.NoError(t, local.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+		_, err := tx.ExecContext(t.Context(),
 			`UPDATE sessions
 			 SET file_size = COALESCE(file_size, 0) + 1,
 			     file_inode = COALESCE(file_inode, 0) + 1
@@ -51,31 +51,34 @@ func mutateSessionStatColumns(t *testing.T, local *db.DB, sessionID string) {
 // change to a candidate session re-pushes it so the mirror's file_size/
 // file_inode copies stay current, instead of being skipped as unchanged.
 func TestSyncIncrementalStatOnlyChangeRefreshesMirrorRow(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(t, err)
+	require.NoError(err)
 	probe, err := ProbeMirror(ctx, path)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	setSessionSignalsTo(t, local, "sess-1", probe.LastPushCutoff)
 	mutateSessionStatColumns(t, local, "sess-1")
 
 	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total)
-	assert.Equal(t, 0, res.Diagnostics.SkippedUnchangedSessions.Total)
+	require.NoError(err)
+	assert.Equal(1, res.Diagnostics.PushedSessions.Total)
+	assert.Equal(0, res.Diagnostics.SkippedUnchangedSessions.Total)
 
 	conn, err := Open(path)
-	require.NoError(t, err)
+	require.NoError(err)
 	defer conn.Close()
 	var fileSize, fileInode int64
-	require.NoError(t, conn.QueryRowContext(ctx,
+	require.NoError(conn.QueryRowContext(ctx,
 		`SELECT file_size, file_inode FROM sessions WHERE id = ?`, "sess-1",
 	).Scan(&fileSize, &fileInode))
-	assert.Equal(t, int64(1), fileSize,
+	assert.Equal(int64(1), fileSize,
 		"the refreshed stat columns must reach the mirror")
-	assert.Equal(t, int64(1), fileInode)
+	assert.Equal(int64(1), fileInode)
 }
 
 // TestPushRepairsSessionDeletedDirectlyFromMirror is the required
@@ -89,25 +92,28 @@ func TestSyncIncrementalStatOnlyChangeRefreshesMirrorRow(t *testing.T) {
 // mirror row is corrupted is out of scope for self-healing and instead
 // requires 'duckdb push --full'.
 func TestPushRepairsSessionDeletedDirectlyFromMirror(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(t, err)
+	require.NoError(err)
 	probe, err := ProbeMirror(ctx, path)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	setSessionSignalsTo(t, local, "sess-1", probe.LastPushCutoff)
 
 	conn, err := Open(path)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = conn.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, "sess-1")
-	require.NoError(t, err)
-	require.NoError(t, conn.Close())
+	require.NoError(err)
+	require.NoError(conn.Close())
 
 	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(t, err)
-	assert.False(t, res.Diagnostics.Full)
-	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total)
+	require.NoError(err)
+	assert.False(res.Diagnostics.Full)
+	assert.Equal(1, res.Diagnostics.PushedSessions.Total)
 	assertMirrorMessageCount(t, path, "sess-1", 2)
 }
 
@@ -115,30 +121,33 @@ func TestPushRepairsSessionDeletedDirectlyFromMirror(t *testing.T) {
 // runs when a push actually wrote something (pushed a session or applied a
 // deletion), not on a push that leaves the mirror untouched.
 func TestSyncCheckpointPolicyRunsOnlyAfterMutatingPush(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	probe, err := ProbeMirror(ctx, path)
-	require.NoError(t, err)
+	require.NoError(err)
 	syncer := newTestSync(t, path, local, SyncOptions{})
 	spy := &checkpointSpy{}
 	syncer.maintenance = spy
 	_, err = syncer.runIncrementalPush(ctx, SyncOptions{}, probe, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 0, spy.calls, "no session changed, no deletions: no checkpoint")
-	require.NoError(t, syncer.Close())
+	require.NoError(err)
+	assert.Equal(0, spy.calls, "no session changed, no deletions: no checkpoint")
+	require.NoError(syncer.Close())
 
 	appendMessage(t, local, "sess-1")
 	probe, err = ProbeMirror(ctx, path)
-	require.NoError(t, err)
+	require.NoError(err)
 	syncer = newTestSync(t, path, local, SyncOptions{})
 	spy = &checkpointSpy{}
 	syncer.maintenance = spy
 	_, err = syncer.runIncrementalPush(ctx, SyncOptions{}, probe, nil)
-	require.NoError(t, err)
-	assert.Equal(t, 1, spy.calls, "session changed: checkpoint runs once")
+	require.NoError(err)
+	assert.Equal(1, spy.calls, "session changed: checkpoint runs once")
 }
 
 // TestSyncCheckpointFailureDoesNotAdvanceMirrorMetadata asserts that a push
@@ -147,28 +156,31 @@ func TestSyncCheckpointPolicyRunsOnlyAfterMutatingPush(t *testing.T) {
 // committed: a retry must see the same window again rather than silently
 // skipping it.
 func TestSyncCheckpointFailureDoesNotAdvanceMirrorMetadata(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(t, err)
+	require.NoError(err)
 	before, err := ProbeMirror(ctx, path)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	appendMessage(t, local, "sess-1")
 	probe, err := ProbeMirror(ctx, path)
-	require.NoError(t, err)
+	require.NoError(err)
 	syncer := newTestSync(t, path, local, SyncOptions{})
 	syncer.maintenance = &checkpointSpy{err: errors.New("checkpoint boom")}
 
 	_, err = syncer.runIncrementalPush(ctx, SyncOptions{}, probe, nil)
-	require.ErrorContains(t, err, "checkpoint boom")
-	require.NoError(t, syncer.Close())
+	require.ErrorContains(err, "checkpoint boom")
+	require.NoError(syncer.Close())
 
 	assertMirrorMessageCount(t, path, "sess-1", 3)
 	after, err := ProbeMirror(ctx, path)
-	require.NoError(t, err)
-	assert.Equal(t, before.LastPushCutoff, after.LastPushCutoff)
-	assert.Equal(t, before.LastPushAt, after.LastPushAt)
+	require.NoError(err)
+	assert.Equal(before.LastPushCutoff, after.LastPushCutoff)
+	assert.Equal(before.LastPushAt, after.LastPushAt)
 }
 
 // TestSyncCheckpointFailureAfterHardDeleteDoesNotAdvanceMirrorMetadata is
@@ -179,28 +191,31 @@ func TestSyncCheckpointFailureDoesNotAdvanceMirrorMetadata(t *testing.T) {
 func TestSyncCheckpointFailureAfterHardDeleteDoesNotAdvanceMirrorMetadata(
 	t *testing.T,
 ) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	local, path := newPushFixture(t, 2)
 	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
-	require.NoError(t, err)
+	require.NoError(err)
 	before, err := ProbeMirror(ctx, path)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.NoError(t, local.DeleteSession("sess-1"))
+	require.NoError(local.DeleteSession("sess-1"))
 	probe, err := ProbeMirror(ctx, path)
-	require.NoError(t, err)
+	require.NoError(err)
 	syncer := newTestSync(t, path, local, SyncOptions{})
 	syncer.maintenance = &checkpointSpy{err: errors.New("checkpoint boom")}
 
 	_, err = syncer.runIncrementalPush(ctx, SyncOptions{}, probe, nil)
-	require.ErrorContains(t, err, "checkpoint boom")
-	require.NoError(t, syncer.Close())
+	require.ErrorContains(err, "checkpoint boom")
+	require.NoError(syncer.Close())
 
 	assertMirrorSessionAbsent(t, path, "sess-1")
 	after, err := ProbeMirror(ctx, path)
-	require.NoError(t, err)
-	assert.Equal(t, before.LastPushCutoff, after.LastPushCutoff)
-	assert.Equal(t, before.DeletionRevision, after.DeletionRevision)
+	require.NoError(err)
+	assert.Equal(before.LastPushCutoff, after.LastPushCutoff)
+	assert.Equal(before.DeletionRevision, after.DeletionRevision)
 }
 
 // TestDuckCheckpointDecisionRequiresFreeBlockThreshold exercises the pure

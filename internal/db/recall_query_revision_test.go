@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -10,12 +9,14 @@ import (
 )
 
 func TestRecallQueryRevisionTracksEntryAndEvidenceMutations(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	insertSession(t, d, "query-revision-session", "project-a")
 
 	revision, err := d.RecallQueryRevision(ctx)
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.True(t, strings.HasPrefix(revision, recallQueryRevisionPrefix))
 
 	_, err = d.InsertRecallEntry(RecallEntry{
@@ -35,7 +36,7 @@ func TestRecallQueryRevisionTracksEntryAndEvidenceMutations(t *testing.T) {
 			Snippet:             "Original evidence.",
 		}},
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	revision = requireRecallQueryRevisionChanged(t, d, revision)
 
 	for _, update := range []string{
@@ -49,20 +50,20 @@ func TestRecallQueryRevisionTracksEntryAndEvidenceMutations(t *testing.T) {
 			WHERE entry_id = 'query-revision-entry'`,
 	} {
 		_, err = d.getWriter().Exec(update)
-		require.NoError(t, err)
+		require.NoError(err)
 		revision = requireRecallQueryRevisionChanged(t, d, revision)
 	}
 
 	_, err = d.getWriter().Exec(
 		`DELETE FROM recall_evidence WHERE entry_id = 'query-revision-entry'`,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	revision = requireRecallQueryRevisionChanged(t, d, revision)
 
 	_, err = d.getWriter().Exec(
 		`DELETE FROM recall_entries WHERE id = 'query-revision-entry'`,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	requireRecallQueryRevisionChanged(t, d, revision)
 }
 
@@ -72,7 +73,7 @@ func requireRecallQueryRevisionChanged(
 	previous string,
 ) string {
 	t.Helper()
-	revision, err := d.RecallQueryRevision(context.Background())
+	revision, err := d.RecallQueryRevision(t.Context())
 	require.NoError(t, err)
 	require.NotEqual(t, previous, revision)
 	return revision

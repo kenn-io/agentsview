@@ -182,10 +182,10 @@ func New(
 
 func validateSyncInputs(local *db.DB, machine string) error {
 	if local == nil {
-		return fmt.Errorf("local db is required")
+		return errors.New("local db is required")
 	}
 	if machine == "" {
-		return fmt.Errorf("machine name must not be empty")
+		return errors.New("machine name must not be empty")
 	}
 	return nil
 }
@@ -305,8 +305,7 @@ func Push(
 func deferredHeldMirrorPush() PushResult {
 	var result PushResult
 	result.Diagnostics.Deferred = true
-	result.Diagnostics.DeferredReason =
-		"mirror is held open by reader processes; deferring until write access is available"
+	result.Diagnostics.DeferredReason = "mirror is held open by reader processes; deferring until write access is available"
 	log.Printf("duckdbsync: %s", result.Diagnostics.DeferredReason)
 	return result
 }

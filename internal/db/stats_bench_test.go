@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -17,7 +16,7 @@ func BenchmarkGetStats(b *testing.B) {
 		SELECT 'session-' || i, 'project-' || (i % 100), 'machine-' || (i % 3),
 		'claude', 10, 5, '2026-01-01T00:00:00Z' FROM n`)
 	require.NoError(b, err)
-	ctx := context.Background()
+	ctx := b.Context()
 	b.ReportAllocs()
 	for b.Loop() {
 		stats, err := d.GetStats(ctx, false, false)

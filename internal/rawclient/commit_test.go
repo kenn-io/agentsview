@@ -47,17 +47,19 @@ func rawHTTPTestManifest() rawsync.Manifest {
 }
 
 func TestCommitManifestDecodesReceipt(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Parallel()
 	manifest := rawHTTPTestManifest()
 	manifestID := strings.Repeat("a", 64)
 	receipt := strings.Repeat("b", 64)
 	server := httptest.NewServer(withTokenRoute(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Handler goroutines use assert, never require/FailNow.
-		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "/api/v1/raw-sync/manifests", r.URL.Path)
+		assert.Equal(http.MethodPost, r.Method)
+		assert.Equal("/api/v1/raw-sync/manifests", r.URL.Path)
 		var sent rawsync.Manifest
-		if assert.NoError(t, json.UnmarshalRead(r.Body, &sent)) {
-			assert.Equal(t, manifest, sent)
+		if assert.NoError(json.UnmarshalRead(r.Body, &sent)) {
+			assert.Equal(manifest, sent)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"manifest_id":%q,"receipt":%q,"generation":2,"created":true}`,
@@ -68,10 +70,10 @@ func TestCommitManifestDecodesReceipt(t *testing.T) {
 
 	result, err := client.CommitManifest(t.Context(), manifest)
 	require.NoError(t, err)
-	assert.Equal(t, manifestID, result.ManifestID)
-	assert.Equal(t, receipt, result.Receipt)
-	assert.Equal(t, int64(2), result.Generation)
-	assert.True(t, result.Created)
+	assert.Equal(manifestID, result.ManifestID)
+	assert.Equal(receipt, result.Receipt)
+	assert.Equal(int64(2), result.Generation)
+	assert.True(result.Created)
 }
 
 func TestCommitManifestRejectsInvalidResult(t *testing.T) {
@@ -128,11 +130,14 @@ func TestCommitManifestRejectsInvalidResult(t *testing.T) {
 }
 
 func TestCommitManifestSurfacesHeadConflict(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	server := httptest.NewServer(withTokenRoute(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Handler goroutines use assert, never require/FailNow.
-		assert.Equal(t, http.MethodPost, r.Method)
-		assert.Equal(t, "/api/v1/raw-sync/manifests", r.URL.Path)
+		assert.Equal(http.MethodPost, r.Method)
+		assert.Equal("/api/v1/raw-sync/manifests", r.URL.Path)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusConflict)
 		io.WriteString(w, `{"code":"head_conflict","error":"raw source head changed",`+
@@ -142,14 +147,14 @@ func TestCommitManifestSurfacesHeadConflict(t *testing.T) {
 	client := newTestClient(t, server.URL, time.Minute)
 
 	_, err := client.CommitManifest(t.Context(), rawHTTPTestManifest())
-	require.Error(t, err)
+	require.Error(err)
 	var apiErr APIError
-	require.True(t, AsAPIError(err, &apiErr))
-	assert.Equal(t, http.StatusConflict, apiErr.Status)
-	assert.Equal(t, CodeHeadConflict, apiErr.Code)
-	assert.Equal(t, "rm_9", apiErr.CurrentManifestID)
-	assert.Equal(t, "rr_9", apiErr.CurrentReceipt)
-	assert.Equal(t, int64(7), apiErr.CurrentGeneration)
+	require.True(AsAPIError(err, &apiErr))
+	assert.Equal(http.StatusConflict, apiErr.Status)
+	assert.Equal(CodeHeadConflict, apiErr.Code)
+	assert.Equal("rm_9", apiErr.CurrentManifestID)
+	assert.Equal("rr_9", apiErr.CurrentReceipt)
+	assert.Equal(int64(7), apiErr.CurrentGeneration)
 }
 
 func TestCommitManifestPassesMissingObjectThrough(t *testing.T) {

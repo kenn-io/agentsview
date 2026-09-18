@@ -98,25 +98,29 @@ func TestDefaultOutputPathTargetsIgnoredSnapshot(t *testing.T) {
 }
 
 func TestDefaultSnapshotConstantsNonEmpty(t *testing.T) {
-	assert.NotEmpty(t, defaultSnapshotRef, "pinned ref must be set")
-	assert.Len(t, defaultSnapshotRef, 40, "pinned ref must be a full SHA-1")
-	assert.NotEmpty(t, defaultSnapshotSHA256, "pinned SHA256 must be set")
-	assert.Len(t, defaultSnapshotSHA256, 64, "pinned SHA256 must be a hex-encoded SHA-256")
-	assert.NotEmpty(t, defaultSnapshotBranch, "pinned branch must be set")
-	assert.NotEmpty(t, defaultSnapshotFile, "pinned file must be set")
-	assert.Len(t, defaultLiteLLMSourceRef, 40, "LiteLLM source must be a full commit SHA")
+	assert := assert.New(t)
+
+	assert.NotEmpty(defaultSnapshotRef, "pinned ref must be set")
+	assert.Len(defaultSnapshotRef, 40, "pinned ref must be a full SHA-1")
+	assert.NotEmpty(defaultSnapshotSHA256, "pinned SHA256 must be set")
+	assert.Len(defaultSnapshotSHA256, 64, "pinned SHA256 must be a hex-encoded SHA-256")
+	assert.NotEmpty(defaultSnapshotBranch, "pinned branch must be set")
+	assert.NotEmpty(defaultSnapshotFile, "pinned file must be set")
+	assert.Len(defaultLiteLLMSourceRef, 40, "LiteLLM source must be a full commit SHA")
 }
 
 func TestFileURLForPathUsesFileScheme(t *testing.T) {
+	assert := assert.New(t)
+
 	dir := t.TempDir()
 	abs, err := filepath.Abs(dir)
 	require.NoError(t, err)
 
 	got := fileURLForPath(dir)
-	assert.True(t, strings.HasPrefix(got, "file://"), got)
-	assert.NotContains(t, got, "\\")
+	assert.True(strings.HasPrefix(got, "file://"), got)
+	assert.NotContains(got, "\\")
 	if filepath.VolumeName(abs) != "" {
-		assert.True(t, strings.HasPrefix(got, "file:///"), got)
+		assert.True(strings.HasPrefix(got, "file:///"), got)
 	}
 }
 
@@ -194,13 +198,15 @@ func TestValidateSnapshotFileRejectsOversizedDecompressedPayload(t *testing.T) {
 }
 
 func TestRestoreSnapshotFileRestoresPinnedArtifact(t *testing.T) {
+	require := require.New(t)
+
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	runGit(t, repo, "config", "user.email", "test@example.com")
 	runGit(t, repo, "config", "user.name", "Test")
 
 	source := filepath.Join(repo, "litellm_snapshot.json.gz")
-	require.NoError(t, os.WriteFile(source, gzipSnapshot(t, []byte(`{
+	require.NoError(os.WriteFile(source, gzipSnapshot(t, []byte(`{
 		"version": "litellm-test",
 		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
 		"models": [{"ModelPattern": "test-model", "InputPerMTok": {"microdollars": 1000000}}]
@@ -210,14 +216,14 @@ func TestRestoreSnapshotFileRestoresPinnedArtifact(t *testing.T) {
 	ref := runGit(t, repo, "rev-parse", "HEAD")
 
 	cwd, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(repo))
+	require.NoError(err)
+	require.NoError(os.Chdir(repo))
 	defer func() {
-		require.NoError(t, os.Chdir(cwd))
+		require.NoError(os.Chdir(cwd))
 	}()
 
 	out := filepath.Join(repo, "out", "snapshot.json.gz")
-	require.NoError(t, restoreSnapshotFile(
+	require.NoError(restoreSnapshotFile(
 		out,
 		ref,
 		"litellm_snapshot.json.gz",
@@ -226,12 +232,14 @@ func TestRestoreSnapshotFileRestoresPinnedArtifact(t *testing.T) {
 		"",
 	))
 
-	require.FileExists(t, out)
-	require.NoError(t, validateSnapshotFile(out))
+	require.FileExists(out)
+	require.NoError(validateSnapshotFile(out))
 	assert.Equal(t, sha256FileForTest(t, source), sha256FileForTest(t, out))
 }
 
 func TestRestoreSnapshotFileFetchesPinnedArtifactAfterBranchAdvances(t *testing.T) {
+	require := require.New(t)
+
 	remote := t.TempDir()
 	runGit(t, remote, "init")
 	runGit(t, remote, "config", "user.email", "test@example.com")
@@ -239,7 +247,7 @@ func TestRestoreSnapshotFileFetchesPinnedArtifactAfterBranchAdvances(t *testing.
 	runGit(t, remote, "config", "uploadpack.allowReachableSHA1InWant", "true")
 
 	source := filepath.Join(remote, "litellm_snapshot.json.gz")
-	require.NoError(t, os.WriteFile(source, gzipSnapshot(t, []byte(`{
+	require.NoError(os.WriteFile(source, gzipSnapshot(t, []byte(`{
 		"version": "litellm-old",
 		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
 		"models": [{"ModelPattern": "old-model", "InputPerMTok": {"microdollars": 1000000}}]
@@ -249,7 +257,7 @@ func TestRestoreSnapshotFileFetchesPinnedArtifactAfterBranchAdvances(t *testing.
 	oldRef := runGit(t, remote, "rev-parse", "HEAD")
 	oldSHA := sha256FileForTest(t, source)
 
-	require.NoError(t, os.WriteFile(source, gzipSnapshot(t, []byte(`{
+	require.NoError(os.WriteFile(source, gzipSnapshot(t, []byte(`{
 		"version": "litellm-new",
 		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
 		"models": [{"ModelPattern": "new-model", "InputPerMTok": {"microdollars": 2000000}}]
@@ -261,14 +269,14 @@ func TestRestoreSnapshotFileFetchesPinnedArtifactAfterBranchAdvances(t *testing.
 	clone := filepath.Join(t.TempDir(), "clone")
 	runGit(t, "", "clone", "--depth=1", fileURLForPath(remote), clone)
 	cwd, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(clone))
+	require.NoError(err)
+	require.NoError(os.Chdir(clone))
 	t.Cleanup(func() {
-		require.NoError(t, os.Chdir(cwd))
+		require.NoError(os.Chdir(cwd))
 	})
 
 	out := filepath.Join(clone, "out", "snapshot.json.gz")
-	require.NoError(t, restoreSnapshotFile(
+	require.NoError(restoreSnapshotFile(
 		out,
 		oldRef,
 		"litellm_snapshot.json.gz",
@@ -281,8 +289,10 @@ func TestRestoreSnapshotFileFetchesPinnedArtifactAfterBranchAdvances(t *testing.
 }
 
 func TestRestoreSnapshotFileDownloadsPinnedArtifactWithoutGitCheckout(t *testing.T) {
+	require := require.New(t)
+
 	source := filepath.Join(t.TempDir(), "litellm_snapshot.json.gz")
-	require.NoError(t, os.WriteFile(source, gzipSnapshot(t, []byte(`{
+	require.NoError(os.WriteFile(source, gzipSnapshot(t, []byte(`{
 		"version": "litellm-url",
 		"source_ref": "551e5d097c11f08fd2400a25a651b1844fcf89c2",
 		"models": [{"ModelPattern": "url-model", "InputPerMTok": {"microdollars": 1000000}}]
@@ -297,14 +307,14 @@ func TestRestoreSnapshotFileDownloadsPinnedArtifactWithoutGitCheckout(t *testing
 
 	workspace := t.TempDir()
 	cwd, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(workspace))
+	require.NoError(err)
+	require.NoError(os.Chdir(workspace))
 	t.Cleanup(func() {
-		require.NoError(t, os.Chdir(cwd))
+		require.NoError(os.Chdir(cwd))
 	})
 
 	out := filepath.Join(workspace, "snapshot", "litellm_snapshot.json.gz")
-	require.NoError(t, restoreSnapshotFile(
+	require.NoError(restoreSnapshotFile(
 		out,
 		"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 		"litellm_snapshot.json.gz",
@@ -314,7 +324,7 @@ func TestRestoreSnapshotFileDownloadsPinnedArtifactWithoutGitCheckout(t *testing
 	))
 
 	assert.Equal(t, sourceSHA, sha256FileForTest(t, out))
-	require.NoError(t, validateSnapshotFile(out))
+	require.NoError(validateSnapshotFile(out))
 }
 
 func writeSnapshotFile(t *testing.T, data []byte) string {
@@ -339,7 +349,7 @@ func gzipSnapshot(t *testing.T, data []byte) []byte {
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git %v failed:\n%s", args, out)

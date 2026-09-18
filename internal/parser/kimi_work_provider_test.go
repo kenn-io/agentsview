@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,6 +36,9 @@ func kimiWorkFixtureAt(firstMessage string, timestamp int64) string {
 }
 
 func TestKimiWorkProviderDiscoveryFiltersAuxSessions(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	wd := "wd_agentsview_e901f41e2366"
 	mainPath := filepath.Join(
@@ -83,27 +85,27 @@ func TestKimiWorkProviderDiscoveryFiltersAuxSessions(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
+	require.True(ok)
 
-	plan, err := provider.WatchPlan(context.Background())
-	require.NoError(t, err)
-	require.Len(t, plan.Roots, 1)
-	assert.Equal(t, root, plan.Roots[0].Path)
-	assert.True(t, plan.Roots[0].Recursive)
+	plan, err := provider.WatchPlan(t.Context())
+	require.NoError(err)
+	require.Len(plan.Roots, 1)
+	assert.Equal(root, plan.Roots[0].Path)
+	assert.True(plan.Roots[0].Recursive)
 
-	discovered, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, discovered, 3)
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(discovered, 3)
 	for _, source := range discovered {
-		assert.Equal(t, AgentKimiWork, source.Provider)
-		assert.Contains(t, source.DisplayPath, "conv-")
-		assert.NotContains(t, source.DisplayPath, "ctitle-")
-		assert.NotContains(t, source.DisplayPath, "sklsum-")
-		assert.NotContains(t, source.DisplayPath, "dvlt-")
+		assert.Equal(AgentKimiWork, source.Provider)
+		assert.Contains(source.DisplayPath, "conv-")
+		assert.NotContains(source.DisplayPath, "ctitle-")
+		assert.NotContains(source.DisplayPath, "sklsum-")
+		assert.NotContains(source.DisplayPath, "dvlt-")
 	}
-	assert.Equal(t, "agentsview", discovered[0].ProjectHint)
-	assert.Equal(t, "agentsview", discovered[1].ProjectHint)
-	assert.Equal(t, "legacy", discovered[2].ProjectHint)
+	assert.Equal("agentsview", discovered[0].ProjectHint)
+	assert.Equal("agentsview", discovered[1].ProjectHint)
+	assert.Equal("legacy", discovered[2].ProjectHint)
 }
 
 func TestKimiWorkProviderFindSourceRoundTrip(t *testing.T) {
@@ -150,7 +152,7 @@ func TestKimiWorkProviderFindSourceRoundTrip(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			found, ok, err := provider.FindSource(context.Background(), tt.req)
+			found, ok, err := provider.FindSource(t.Context(), tt.req)
 			require.NoError(t, err)
 			require.True(t, ok)
 			assert.Equal(t, tt.want, found.DisplayPath)
@@ -168,7 +170,7 @@ func TestKimiWorkProviderFindSourceRoundTrip(t *testing.T) {
 		wd + ":main:conv-000000000000000000000000",
 		"invalid",
 	} {
-		_, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		_, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 			RawSessionID: rawID,
 		})
 		require.NoError(t, err)
@@ -177,6 +179,9 @@ func TestKimiWorkProviderFindSourceRoundTrip(t *testing.T) {
 }
 
 func TestKimiWorkProviderParse(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	wd := "wd_agentsview_e901f41e2366"
 	sessionDir := "conv-3fac68340656963a67a35ba9"
@@ -189,45 +194,48 @@ func TestKimiWorkProviderParse(t *testing.T) {
 		Roots:   []string{root},
 		Machine: "devbox",
 	})
-	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	require.True(ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(sources, 1)
 
-	fp, err := provider.Fingerprint(context.Background(), sources[0])
-	require.NoError(t, err)
-	assert.Equal(t, sourcePath, fp.Key)
-	assert.NotEmpty(t, fp.Hash)
+	fp, err := provider.Fingerprint(t.Context(), sources[0])
+	require.NoError(err)
+	assert.Equal(sourcePath, fp.Key)
+	assert.NotEmpty(fp.Hash)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fp,
 	})
-	require.NoError(t, err)
-	require.True(t, outcome.ResultSetComplete)
-	require.Len(t, outcome.Results, 1)
+	require.NoError(err)
+	require.True(outcome.ResultSetComplete)
+	require.Len(outcome.Results, 1)
 	result := outcome.Results[0].Result
-	assert.Equal(t, DataVersionCurrent, outcome.Results[0].DataVersion)
-	assert.Equal(t, "kimi-work:"+wd+":main:"+sessionDir, result.Session.ID)
-	assert.Equal(t, AgentKimiWork, result.Session.Agent)
-	assert.Equal(t, "agentsview", result.Session.Project)
-	assert.Equal(t, "devbox", result.Session.Machine)
-	assert.Equal(t, sourcePath, result.Session.File.Path)
-	assert.Equal(t, fp.Hash, result.Session.File.Hash)
-	require.Len(t, result.Messages, 2)
-	assert.Equal(t, RoleUser, result.Messages[0].Role)
-	assert.Equal(t, "provider question", result.Messages[0].Content)
-	assert.Equal(t, RoleAssistant, result.Messages[1].Role)
+	assert.Equal(DataVersionCurrent, outcome.Results[0].DataVersion)
+	assert.Equal("kimi-work:"+wd+":main:"+sessionDir, result.Session.ID)
+	assert.Equal(AgentKimiWork, result.Session.Agent)
+	assert.Equal("agentsview", result.Session.Project)
+	assert.Equal("devbox", result.Session.Machine)
+	assert.Equal(sourcePath, result.Session.File.Path)
+	assert.Equal(fp.Hash, result.Session.File.Hash)
+	require.Len(result.Messages, 2)
+	assert.Equal(RoleUser, result.Messages[0].Role)
+	assert.Equal("provider question", result.Messages[0].Content)
+	assert.Equal(RoleAssistant, result.Messages[1].Role)
 	// Session-level usage events (if any) must carry the rewritten
 	// kimi-work identity, not the parser's native kimi: prefix.
 	for _, ev := range result.Session.UsageEvents {
-		assert.Equal(t, result.Session.ID, ev.SessionID)
-		assert.Contains(t, ev.DedupKey, "kimi-work:session:")
-		assert.NotContains(t, ev.DedupKey, "kimi:session:")
+		assert.Equal(result.Session.ID, ev.SessionID)
+		assert.Contains(ev.DedupKey, "kimi-work:session:")
+		assert.NotContains(ev.DedupKey, "kimi:session:")
 	}
 }
 
 func TestKimiWorkProviderParseRetainsProviderCwd(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	root := t.TempDir()
 	wd := "wd_agentsview_e901f41e2366"
 	sessionDir := "conv-cwd"
@@ -238,19 +246,19 @@ func TestKimiWorkProviderParseRetainsProviderCwd(t *testing.T) {
 		kimiWorkSessionUsageFixture())
 
 	provider, ok := NewProvider(AgentKimiWork, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
+	require.True(ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(sources, 1)
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
+	require.NoError(err)
+	require.Len(outcome.Results, 1)
 	result := outcome.Results[0].Result
-	assert.Equal(t, "/Users/helix/Code/mcp-hub", result.Session.Cwd)
-	require.Len(t, result.Session.UsageEvents, 1)
-	assert.Equal(t, result.Session.ID, result.Session.UsageEvents[0].SessionID)
-	assert.Equal(t, "kimi-work:session:"+wd+":main:"+sessionDir, result.Session.UsageEvents[0].DedupKey)
-	assert.Equal(t, 42, result.Session.UsageEvents[0].OutputTokens)
+	assert.Equal("/Users/helix/Code/mcp-hub", result.Session.Cwd)
+	require.Len(result.Session.UsageEvents, 1)
+	assert.Equal(result.Session.ID, result.Session.UsageEvents[0].SessionID)
+	assert.Equal("kimi-work:session:"+wd+":main:"+sessionDir, result.Session.UsageEvents[0].DedupKey)
+	assert.Equal(42, result.Session.UsageEvents[0].OutputTokens)
 }
 
 func TestKimiWorkProviderMissingModelUsesDateAmbiguousAlias(t *testing.T) {
@@ -273,6 +281,9 @@ func TestKimiWorkProviderMissingModelUsesDateAmbiguousAlias(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			root := t.TempDir()
 			sourcePath := filepath.Join(
 				root, "wd_agentsview_e901f41e2366",
@@ -285,49 +296,56 @@ func TestKimiWorkProviderMissingModelUsesDateAmbiguousAlias(t *testing.T) {
 			provider, ok := NewProvider(AgentKimiWork, ProviderConfig{
 				Roots: []string{root},
 			})
-			require.True(t, ok)
-			sources, err := provider.Discover(context.Background())
-			require.NoError(t, err)
-			require.Len(t, sources, 1)
+			require.True(ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(err)
+			require.Len(sources, 1)
 
-			outcome, err := provider.Parse(context.Background(), ParseRequest{
+			outcome, err := provider.Parse(t.Context(), ParseRequest{
 				Source: sources[0],
 			})
-			require.NoError(t, err)
-			require.Len(t, outcome.Results, 1)
+			require.NoError(err)
+			require.Len(outcome.Results, 1)
 			result := outcome.Results[0].Result
-			assert.Equal(t, tt.wantStart, result.Session.StartedAt.UTC())
-			require.Len(t, result.Messages, 2)
-			assert.Equal(t, "daimon-kimi-code", result.Messages[1].Model)
+			assert.Equal(tt.wantStart, result.Session.StartedAt.UTC())
+			require.Len(result.Messages, 2)
+			assert.Equal("daimon-kimi-code", result.Messages[1].Model)
 		})
 	}
 }
 
 func TestKimiWorkProviderAgentByPrefix(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	def, ok := AgentByPrefix("kimi-work:wd_a_b:main:conv-1")
-	require.True(t, ok)
-	assert.Equal(t, AgentKimiWork, def.Type)
-	assert.Equal(t, "kimi-work:", def.IDPrefix)
+	require.True(ok)
+	assert.Equal(AgentKimiWork, def.Type)
+	assert.Equal("kimi-work:", def.IDPrefix)
 
 	// The kimi: prefix must not capture kimi-work IDs and vice versa.
 	def, ok = AgentByPrefix("kimi:abc123:uuid-1")
-	require.True(t, ok)
-	assert.Equal(t, AgentKimi, def.Type)
+	require.True(ok)
+	assert.Equal(AgentKimi, def.Type)
 }
 
 func TestKimiWorkRegistryEntry(t *testing.T) {
+	assert := assert.New(t)
+
 	def, ok := AgentByType(AgentKimiWork)
 	require.True(t, ok, "AgentKimiWork missing from Registry")
-	assert.Equal(t, "Kimi Work", def.DisplayName)
-	assert.Equal(t, "KIMI_WORK_DIR", def.EnvVar)
-	assert.Equal(t, "kimi_work_dirs", def.ConfigKey)
-	assert.Equal(t, "kimi-work:", def.IDPrefix)
-	assert.True(t, def.FileBased)
-	assert.Contains(t, def.DefaultDirs,
+	assert.Equal("Kimi Work", def.DisplayName)
+	assert.Equal("KIMI_WORK_DIR", def.EnvVar)
+	assert.Equal("kimi_work_dirs", def.ConfigKey)
+	assert.Equal("kimi-work:", def.IDPrefix)
+	assert.True(def.FileBased)
+	assert.Contains(def.DefaultDirs,
 		"Library/Application Support/kimi-desktop/daimon-share/daimon/runtime/kimi-code/home/sessions")
 }
 
 func TestKimiWorkProviderDiscoversSymlinkedWorkspaceDirectory(t *testing.T) {
+	require := require.New(t)
+
 	root := t.TempDir()
 	targetRoot := t.TempDir()
 	targetWorkspace := filepath.Join(targetRoot, "wd_agentsview_e901f41e2366")
@@ -345,9 +363,9 @@ func TestKimiWorkProviderDiscoversSymlinkedWorkspaceDirectory(t *testing.T) {
 	}
 
 	provider, ok := NewProvider(AgentKimiWork, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	discovered, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, discovered, 1)
+	require.True(ok)
+	discovered, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(discovered, 1)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 }

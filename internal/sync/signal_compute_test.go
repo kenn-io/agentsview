@@ -142,6 +142,8 @@ func TestExtractMostCommonModel(t *testing.T) {
 }
 
 func TestExtractLastMessageRole(t *testing.T) {
+	assert := assert.New(t)
+
 	msgs := []db.Message{
 		{Ordinal: 0, Role: "user", Content: "hi"},
 		{Ordinal: 1, Role: "assistant", Content: "hello"},
@@ -149,15 +151,18 @@ func TestExtractLastMessageRole(t *testing.T) {
 		{Ordinal: 3, Role: "user", Content: "system noise", IsSystem: true},
 	}
 	role, content := extractLastMessageRole(msgs)
-	assert.Equal(t, "user", role)
-	assert.Equal(t, "thanks", content)
+	assert.Equal("user", role)
+	assert.Equal("thanks", content)
 
 	role, content = extractLastMessageRole(nil)
-	assert.Empty(t, role, "nil case role")
-	assert.Empty(t, content, "nil case content")
+	assert.Empty(role, "nil case role")
+	assert.Empty(content, "nil case content")
 }
 
 func TestComputeSignalsFromMessages_Errors(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	// Session with a final tool failure: outcome should be
 	// "errored" (recent enough to be pending), penalties should
 	// reflect the failure streak, and HasToolCalls is true.
@@ -195,15 +200,15 @@ func TestComputeSignalsFromMessages_Errors(t *testing.T) {
 
 	got := computeSignalsFromMessages(sess, msgs)
 
-	assert.True(t, got.HasToolCalls, "HasToolCalls = false, want true")
-	assert.True(t, got.HasContextData, "HasContextData = false, want true")
-	assert.NotZero(t, got.ToolFailureSignalCount, "ToolFailureSignalCount = 0, want > 0")
-	assert.NotZero(t, got.FinalFailureStreak, "FinalFailureStreak = 0, want > 0")
-	require.NotNil(t, got.HealthScore, "HealthScore is nil; want a value")
-	assert.Less(t, *got.HealthScore, 100, "HealthScore = %d, want < 100", *got.HealthScore)
-	require.NotNil(t, got.HealthGrade, "HealthGrade = nil, want non-empty")
-	assert.NotEmpty(t, *got.HealthGrade, "HealthGrade = %v, want non-empty", got.HealthGrade)
-	assert.Equal(t, "assistant", got.EndedWithRole)
+	assert.True(got.HasToolCalls, "HasToolCalls = false, want true")
+	assert.True(got.HasContextData, "HasContextData = false, want true")
+	assert.NotZero(got.ToolFailureSignalCount, "ToolFailureSignalCount = 0, want > 0")
+	assert.NotZero(got.FinalFailureStreak, "FinalFailureStreak = 0, want > 0")
+	require.NotNil(got.HealthScore, "HealthScore is nil; want a value")
+	assert.Less(*got.HealthScore, 100, "HealthScore = %d, want < 100", *got.HealthScore)
+	require.NotNil(got.HealthGrade, "HealthGrade = nil, want non-empty")
+	assert.NotEmpty(*got.HealthGrade, "HealthGrade = %v, want non-empty", got.HealthGrade)
+	assert.Equal("assistant", got.EndedWithRole)
 }
 
 func TestComputeSignalsFromMessages_ExplicitBoundariesOverrideHeuristic(t *testing.T) {
@@ -221,16 +226,18 @@ func TestComputeSignalsFromMessages_ExplicitBoundariesOverrideHeuristic(t *testi
 }
 
 func TestSignalsIgnoreToolResultPrompts(t *testing.T) {
+	assert := assert.New(t)
+
 	messages := []db.Message{
 		{Ordinal: 0, Role: "user", Content: "help"},
 		{Ordinal: 1, Role: "assistant", Content: "Finished successfully."},
 		{Ordinal: 2, Role: "user", SourceSubtype: "tool_result", Content: "WHY IS THIS STILL BROKEN"},
 	}
 	got := computeSignalsFromMessages(db.Session{MessageCount: 3}, messages)
-	assert.Equal(t, "assistant", got.EndedWithRole)
-	assert.Equal(t, 1, got.QualitySignals.ShortPromptCount)
-	assert.Zero(t, signals.CountFrustrationMarkers(extractHeuristicMessages(messages)))
+	assert.Equal("assistant", got.EndedWithRole)
+	assert.Equal(1, got.QualitySignals.ShortPromptCount)
+	assert.Zero(signals.CountFrustrationMarkers(extractHeuristicMessages(messages)))
 	orphan := computeSignalsFromMessages(db.Session{MessageCount: 1}, messages[2:])
-	assert.Empty(t, orphan.EndedWithRole)
-	assert.Zero(t, orphan.QualitySignals.ShortPromptCount)
+	assert.Empty(orphan.EndedWithRole)
+	assert.Zero(orphan.QualitySignals.ShortPromptCount)
 }

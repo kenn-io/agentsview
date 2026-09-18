@@ -135,7 +135,7 @@ func shelleyProviderReadFixture(t *testing.T) sharedShelleyProviderFixture {
 			return
 		}
 		defer db.Close()
-		if _, err := db.Exec(shelleySchema); err != nil {
+		if _, err := db.ExecContext(t.Context(), shelleySchema); err != nil {
 			sharedShelleyProviderReadFixture.err = err
 			return
 		}

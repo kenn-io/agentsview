@@ -486,28 +486,35 @@ vet: pricing-snapshot ensure-embed-dir
 	go vet -tags fts5 ./...
 
 # Lint Go code and auto-fix where possible (local development)
-lint: check-timing-budgets lint-golangci nilaway
+lint: lint-config-check lint-sql check-timing-budgets lint-golangci nilaway
 
 # Run golangci-lint with auto-fixes for local development.
-lint-golangci: pricing-snapshot ensure-embed-dir
+lint-golangci: pricing-snapshot ensure-embed-dir nilaway-golangci-build
 	@if ! command -v golangci-lint >/dev/null 2>&1; then \
 		echo "golangci-lint not found. Install with: make lint-tools" >&2; \
 		exit 1; \
 	fi
-	golangci-lint run --fix ./...
+	$(CUSTOM_GCL) run --fix ./...
 
 # Lint Go code without fixing (for CI)
-lint-ci: check-timing-budgets lint-golangci-ci nilaway
+lint-ci: lint-config-check lint-sql check-timing-budgets lint-golangci-ci nilaway
 
 # Run golangci-lint without auto-fixes for CI.
-lint-golangci-ci: pricing-snapshot ensure-embed-dir
+lint-golangci-ci: pricing-snapshot ensure-embed-dir nilaway-golangci-build
 	@if ! command -v golangci-lint >/dev/null 2>&1; then \
 		echo "golangci-lint not found. Install with: make lint-tools" >&2; \
 		exit 1; \
 	fi
-	golangci-lint run ./...
+	$(CUSTOM_GCL) run ./...
 
-# Build a custom golangci-lint binary with the NilAway module plugin.
+.PHONY: lint-config-check lint-sql
+lint-sql:
+	go run go.kenn.io/kit/cmd/kennlint@v0.25.1-0.20260918025836-45765c649d05 sql internal/db/schema.sql
+
+lint-config-check:
+	go run go.kenn.io/kit/cmd/kennlint@v0.25.1-0.20260918025836-45765c649d05 config -check
+
+# Build a custom golangci-lint binary with the kit and NilAway module plugins.
 # Strip every repo-local Git env var (GIT_DIR, GIT_INDEX_FILE,
 # GIT_CONFIG_PARAMETERS, etc.) and disable VCS stamping so the inner
 # `git clone` and `go build` don't inherit the parent repo's state.

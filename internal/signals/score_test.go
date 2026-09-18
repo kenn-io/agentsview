@@ -353,25 +353,27 @@ func TestComputeHealthScore(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+
 			got := ComputeHealthScore(tt.input)
 
 			// Check score.
 			if tt.wantScore == nil {
-				assert.Nil(t, got.Score)
+				assert.Nil(got.Score)
 			} else {
 				require.NotNil(t, got.Score)
-				assert.Equal(t, *tt.wantScore, *got.Score)
+				assert.Equal(*tt.wantScore, *got.Score)
 			}
 
 			// Check grade.
-			assert.Equal(t, tt.wantGrade, got.Grade)
+			assert.Equal(tt.wantGrade, got.Grade)
 
 			// Check basis.
-			assert.True(t, slicesEqual(got.Basis, tt.wantBasis),
+			assert.True(slicesEqual(got.Basis, tt.wantBasis),
 				"Basis = %v, want %v", got.Basis, tt.wantBasis)
 
 			// Check penalties.
-			assert.True(t, mapsEqual(got.Penalties, tt.wantPenalties),
+			assert.True(mapsEqual(got.Penalties, tt.wantPenalties),
 				"Penalties = %v, want %v", got.Penalties, tt.wantPenalties)
 		})
 	}

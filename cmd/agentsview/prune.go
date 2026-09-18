@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -55,7 +56,7 @@ func parsePruneFlags(args []string) (PruneConfig, error) {
 	}
 
 	if *maxMessages < 0 && *maxMessages != -1 {
-		return PruneConfig{}, fmt.Errorf("max-messages must be >= 0")
+		return PruneConfig{}, errors.New("max-messages must be >= 0")
 	}
 
 	var mm *int
@@ -75,10 +76,9 @@ func parsePruneFlags(args []string) (PruneConfig, error) {
 	}
 
 	if !cfg.Filter.HasFilters() {
-		return PruneConfig{}, fmt.Errorf(
-			"at least one filter is required\n" +
-				"use --project, --max-messages, --before," +
-				" or --first-message",
+		return PruneConfig{}, errors.New("at least one filter is required\n" +
+			"use --project, --max-messages, --before," +
+			" or --first-message",
 		)
 	}
 
@@ -95,9 +95,8 @@ type Pruner struct {
 // Prune finds matching sessions and deletes them.
 func (p *Pruner) Prune(cfg PruneConfig) error {
 	if !cfg.Filter.HasFilters() {
-		return fmt.Errorf(
-			"at least one filter is required " +
-				"(refusing to prune all sessions)",
+		return errors.New("at least one filter is required " +
+			"(refusing to prune all sessions)",
 		)
 	}
 

@@ -222,10 +222,13 @@ func collectSemanticTestResult(
 func TestOmnigentWholeContainerCachePromotesAfterSuccessfulWrite(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := openTestDB(t)
 	root := t.TempDir()
 	container := filepath.Join(root, "chat.db")
-	require.NoError(t, os.WriteFile(container, []byte("container"), 0o600))
+	require.NoError(os.WriteFile(container, []byte("container"), 0o600))
 	fingerprint := parser.SourceFingerprint{
 		Key: container, Size: 9, MTimeNS: 1234, Hash: "container-hash",
 	}
@@ -248,29 +251,32 @@ func TestOmnigentWholeContainerCachePromotesAfterSuccessfulWrite(
 
 	result := engine.processFile(t.Context(), file)
 
-	require.NoError(t, result.err)
-	require.Len(t, result.results, 2)
-	assert.Empty(t, engine.SnapshotSkipCache(),
+	require.NoError(result.err)
+	require.Len(result.results, 2)
+	assert.Empty(engine.SnapshotSkipCache(),
 		"container cache must not be promoted before member writes")
 
 	stats := collectSemanticTestResult(engine, file, result)
 
-	assert.Zero(t, stats.Failed)
-	assert.Equal(t, 2, stats.Synced)
+	assert.Zero(stats.Failed)
+	assert.Equal(2, stats.Synced)
 	for _, id := range []string{"omnigent:one", "omnigent:two"} {
 		stored, err := database.GetSession(t.Context(), id)
-		require.NoError(t, err)
-		assert.NotNil(t, stored)
+		require.NoError(err)
+		assert.NotNil(stored)
 	}
 	wantKey := container + "?agent=omnigent?source_hash=container-hash&data_version=" +
 		strconv.Itoa(db.CurrentDataVersion())
-	assert.Equal(t, map[string]int64{wantKey: fingerprint.MTimeNS},
+	assert.Equal(map[string]int64{wantKey: fingerprint.MTimeNS},
 		engine.SnapshotSkipCache())
 }
 
 func TestOmnigentCachedStateRestorationReparsesChangedSource(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := openTestDB(t)
 	root := t.TempDir()
 	container := filepath.Join(root, "chat.db")
@@ -311,26 +317,26 @@ func TestOmnigentCachedStateRestorationReparsesChangedSource(
 
 	result := engine.processFile(t.Context(), file)
 
-	require.NoError(t, result.err)
-	assert.False(t, result.skip)
-	assert.Equal(t, 1, provider.restoreCalls)
-	assert.Equal(t, 1, provider.parseCalls)
-	require.Len(t, provider.parseRequests, 1)
-	assert.Equal(t, restored, provider.parseRequests[0].Fingerprint)
-	require.Len(t, result.results, 1)
-	assert.Empty(t, engine.SnapshotSkipCache(),
+	require.NoError(result.err)
+	assert.False(result.skip)
+	assert.Equal(1, provider.restoreCalls)
+	assert.Equal(1, provider.parseCalls)
+	require.Len(provider.parseRequests, 1)
+	assert.Equal(restored, provider.parseRequests[0].Fingerprint)
+	require.Len(result.results, 1)
+	assert.Empty(engine.SnapshotSkipCache(),
 		"stale pre-restoration cache entry must be cleared")
 
 	stats := collectSemanticTestResult(engine, file, result)
 
-	assert.Zero(t, stats.Failed)
+	assert.Zero(stats.Failed)
 	restoredKey := providerProcessCacheKey(
 		file,
 		source,
 		restored,
 		provider.Capabilities().Sync,
 	)
-	assert.Equal(t, map[string]int64{restoredKey: restored.MTimeNS},
+	assert.Equal(map[string]int64{restoredKey: restored.MTimeNS},
 		engine.SnapshotSkipCache())
 }
 
@@ -423,10 +429,13 @@ func TestSyncSemanticsDeclaredRowlessCacheFreshnessSkipsParse(t *testing.T) {
 func TestOmnigentCompleteResultOwnershipTombstonesAndRevivesMissingMember(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := openTestDB(t)
 	root := t.TempDir()
 	container := filepath.Join(root, "chat.db")
-	require.NoError(t, os.WriteFile(container, []byte("container"), 0o600))
+	require.NoError(os.WriteFile(container, []byte("container"), 0o600))
 	fingerprint := parser.SourceFingerprint{
 		Key: container, Size: 9, MTimeNS: 2222, Hash: "ownership-hash",
 	}
@@ -442,14 +451,14 @@ func TestOmnigentCompleteResultOwnershipTombstonesAndRevivesMissingMember(
 			Machine: "", FilePath: &missingPath,
 		},
 	} {
-		require.NoError(t, database.UpsertSession(seed))
+		require.NoError(database.UpsertSession(seed))
 	}
-	require.NoError(t, database.BaselineActiveSessionSourcePaths(
+	require.NoError(database.BaselineActiveSessionSourcePaths(
 		t.Context(), "devbox", []db.SessionSourcePath{{
 			Agent: string(parser.AgentOmnigent), FilePath: keptPath,
 		}},
 	))
-	require.NoError(t, database.BaselineActiveSessionSourcePaths(
+	require.NoError(database.BaselineActiveSessionSourcePaths(
 		t.Context(), "", []db.SessionSourcePath{{
 			Agent: string(parser.AgentOmnigent), FilePath: missingPath,
 		}},
@@ -470,16 +479,16 @@ func TestOmnigentCompleteResultOwnershipTombstonesAndRevivesMissingMember(
 	}
 
 	first := engine.processFile(t.Context(), file)
-	require.NoError(t, first.err)
+	require.NoError(first.err)
 	firstStats := collectSemanticTestResult(engine, file, first)
-	require.Zero(t, firstStats.Failed)
+	require.Zero(firstStats.Failed)
 
 	active, err := database.GetSession(t.Context(), "omnigent:missing")
-	require.NoError(t, err)
-	assert.NotNil(t, active)
+	require.NoError(err)
+	assert.NotNil(active)
 	archived, err := database.GetSessionFull(t.Context(), "omnigent:missing")
-	require.NoError(t, err)
-	assert.Empty(t, archived.Machine)
+	require.NoError(err)
+	assert.Empty(archived.Machine)
 	assertSourceMissingState(t, archived)
 
 	// The revived member re-appears through a real container change: the
@@ -498,25 +507,27 @@ func TestOmnigentCompleteResultOwnershipTombstonesAndRevivesMissingMember(
 		ForceReplace:      true,
 	}
 	second := engine.processFile(t.Context(), file)
-	require.NoError(t, second.err)
+	require.NoError(second.err)
 	secondStats := collectSemanticTestResult(engine, file, second)
-	require.Zero(t, secondStats.Failed)
+	require.Zero(secondStats.Failed)
 
 	revived, err := database.GetSession(t.Context(), "omnigent:missing")
-	require.NoError(t, err)
-	require.NotNil(t, revived)
-	assert.Empty(t, revived.Machine)
+	require.NoError(err)
+	require.NotNil(revived)
+	assert.Empty(revived.Machine)
 }
 
 func TestCompleteResultOwnershipReadFailureAbortsWithoutCaching(
 	t *testing.T,
 ) {
+	require := require.New(t)
+
 	database := openTestDB(t)
 	root := t.TempDir()
 	container := filepath.Join(root, "chat.db")
-	require.NoError(t, os.WriteFile(container, []byte("container"), 0o600))
+	require.NoError(os.WriteFile(container, []byte("container"), 0o600))
 	memberPath := container + "#stored"
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: "omnigent:stored", Agent: string(parser.AgentOmnigent),
 		Machine: "devbox", FilePath: &memberPath,
 	}))
@@ -530,7 +541,7 @@ func TestCompleteResultOwnershipReadFailureAbortsWithoutCaching(
 		},
 	)
 	provider.beforeParse = func() {
-		require.NoError(t, database.CloseConnections())
+		require.NoError(database.CloseConnections())
 	}
 	engine := newSemanticTestEngine(t, database, root, provider)
 	file := parser.DiscoveredFile{
@@ -540,23 +551,26 @@ func TestCompleteResultOwnershipReadFailureAbortsWithoutCaching(
 
 	result := engine.processFile(t.Context(), file)
 
-	require.NoError(t, database.Reopen())
-	require.Error(t, result.err)
+	require.NoError(database.Reopen())
+	require.Error(result.err)
 	assert.Empty(t, engine.SnapshotSkipCache())
 }
 
 func TestSyncSemanticsUnchangedResultPolicies(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := openTestDB(t)
 	path := filepath.Join(t.TempDir(), "shared.db#member")
 	size := int64(10)
 	mtime := int64(5678)
 	storedHash := "stored-hash"
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID: "semantic:member", Agent: string(semanticTestAgent),
 		Machine: "devbox", FilePath: &path, FileSize: &size,
 		FileMtime: &mtime, FileHash: &storedHash,
 	}))
-	require.NoError(t, database.SetSessionDataVersion(
+	require.NoError(database.SetSessionDataVersion(
 		"semantic:member", db.CurrentDataVersion(),
 	))
 	result := processFixtureResult(
@@ -581,16 +595,18 @@ func TestSyncSemanticsUnchangedResultPolicies(t *testing.T) {
 		file, []parser.ParseResult{result}, parser.UnchangedResultMTime,
 	)
 
-	assert.Empty(t, mtimeOnly)
-	require.Len(t, mtimeAndHash, 1)
-	assert.Equal(t, "semantic:member", mtimeAndHash[0].Session.ID)
-	require.Len(t, forced, 1)
-	assert.Equal(t, "semantic:member", forced[0].Session.ID)
+	assert.Empty(mtimeOnly)
+	require.Len(mtimeAndHash, 1)
+	assert.Equal("semantic:member", mtimeAndHash[0].Session.ID)
+	require.Len(forced, 1)
+	assert.Equal("semantic:member", forced[0].Session.ID)
 }
 
 func TestOmnigentDependentSourceExpansionPreservesEngineIDPrefixing(
 	t *testing.T,
 ) {
+	require := require.New(t)
+
 	database := openTestDB(t)
 	container := filepath.Join(t.TempDir(), "chat.db")
 	rootPath := parser.VirtualSourcePath(container, "root")
@@ -614,13 +630,13 @@ func TestOmnigentDependentSourceExpansionPreservesEngineIDPrefixing(
 		},
 	}
 	parentID := "remote~omnigent:root"
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID:       parentID,
 		Agent:    string(parser.AgentOmnigent),
 		Machine:  "",
 		FilePath: &rootPath,
 	}))
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(database.UpsertSession(db.Session{
 		ID:              "remote~omnigent:child",
 		Agent:           string(parser.AgentOmnigent),
 		Machine:         "",
@@ -637,7 +653,7 @@ func TestOmnigentDependentSourceExpansionPreservesEngineIDPrefixing(
 		t.Context(), provider, []parser.SourceRef{rootSource},
 	)
 
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.ElementsMatch(t, []parser.SourceRef{rootSource, childSource}, expanded)
 
 	canceled, cancel := context.WithCancel(t.Context())
@@ -645,7 +661,7 @@ func TestOmnigentDependentSourceExpansionPreservesEngineIDPrefixing(
 	_, err = engine.expandOmnigentInheritedMetadataSources(
 		canceled, provider, []parser.SourceRef{rootSource},
 	)
-	require.ErrorContains(t, err, "list omnigent parent session machines")
+	require.ErrorContains(err, "list omnigent parent session machines")
 }
 
 // TestBaselineFailureDoesNotPromoteSkipCache pins the omnigent-only cache
@@ -779,6 +795,9 @@ func testReconciliationBaselineFailureRejectsCache(
 // pre-omnigent timing: ordinary providers write rowless cache entries
 // immediately and a failed ownership baseline does not revoke them.
 func TestBaselineFailureKeepsRowlessCacheForOtherProviders(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	database := openTestDB(t)
 	path := filepath.Join(t.TempDir(), "container.db")
 	engine := NewEngine(database, EngineConfig{Machine: "local"})
@@ -792,15 +811,15 @@ func TestBaselineFailureKeepsRowlessCacheForOtherProviders(t *testing.T) {
 		mtime:     1234,
 	}
 	close(results)
-	require.NoError(t, database.CloseWriter())
+	require.NoError(database.CloseWriter())
 
 	stats := engine.collectAndBatch(
 		t.Context(), results, 1, 1, nil, syncWriteDefault,
 	)
 
-	require.NoError(t, database.ReopenWriter())
-	assert.Positive(t, stats.Failed)
-	assert.Equal(t, map[string]int64{path + "?complete": 1234},
+	require.NoError(database.ReopenWriter())
+	assert.Positive(stats.Failed)
+	assert.Equal(map[string]int64{path + "?complete": 1234},
 		engine.SnapshotSkipCache(),
 		"non-omnigent rowless cache writes stay immediate")
 }

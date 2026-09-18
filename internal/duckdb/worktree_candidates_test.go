@@ -65,7 +65,10 @@ func seedDuckCandidateSessionNoSnapshot(
 // archive-wideness: the snapshot group spans an old (2020) and a new (2025)
 // session, both of which must appear in the combined group.
 func TestDuckWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	local := newLocalDB(t)
 	const project = "candidate-project"
 
@@ -80,7 +83,7 @@ func TestDuckWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
 
 	seedDuckCandidateSessionNoSnapshot(t, ctx, local, "aggregate-session", project,
 		"/srv/checkouts/repo/docs", "2025-06-02T10:00:00Z")
-	require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+	require.NoError(local.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project: project, Machine: duckPushMachine,
 			RootPath: "/srv/checkouts/repo",
@@ -91,7 +94,7 @@ func TestDuckWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
 
 	seedDuckCandidateSession(t, local, "unavailable-session", project,
 		"", "2025-06-02T10:00:00Z")
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(local.UpsertSession(db.Session{
 		ID: "zero-message-session", Project: project, Machine: duckPushMachine,
 		Agent: "codex",
 	}), "seed zero-message session")
@@ -100,37 +103,40 @@ func TestDuckWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
 	pushDataReadMirror(t, ctx, syncer)
 
 	projects, err := local.BuildProjectIdentityMap(ctx, []string{project})
-	require.NoError(t, err, "local BuildProjectIdentityMap")
+	require.NoError(err, "local BuildProjectIdentityMap")
 	req := db.ArchiveWorktreeCandidateRequest{
 		ProjectLabel: export.SafeProjectDisplayLabel(project),
 		ProjectKey:   projects[project].ProjectKey,
 	}
 
 	localCandidates, err := local.ListArchiveWorktreeCandidates(ctx, req)
-	require.NoError(t, err, "local ListArchiveWorktreeCandidates")
+	require.NoError(err, "local ListArchiveWorktreeCandidates")
 
 	duckStore := NewStoreFromDB(syncer.DB())
 	duckCandidates, err := duckStore.ListArchiveWorktreeCandidates(ctx, req)
-	require.NoError(t, err, "duckdb ListArchiveWorktreeCandidates")
+	require.NoError(err, "duckdb ListArchiveWorktreeCandidates")
 
-	assert.Equal(t, localCandidates, duckCandidates,
+	assert.Equal(localCandidates, duckCandidates,
 		"duckdb archive-wide candidates must match SQLite exactly")
 
-	require.Len(t, localCandidates, 4,
+	require.Len(localCandidates, 4,
 		"snapshot, aggregate, fallback, and unavailable groups")
-	assert.Equal(t, "snapshot", localCandidates[0].EvidenceKind)
-	assert.Equal(t, 2, localCandidates[0].ContributingSessions,
+	assert.Equal("snapshot", localCandidates[0].EvidenceKind)
+	assert.Equal(2, localCandidates[0].ContributingSessions,
 		"archive-wide selection covers both the 2020 and 2025 sessions")
-	assert.Equal(t, "aggregate", localCandidates[1].EvidenceKind)
-	assert.Equal(t, "fallback", localCandidates[2].EvidenceKind)
-	assert.Equal(t, "unavailable", localCandidates[3].EvidenceKind)
-	assert.False(t, localCandidates[3].Available)
-	assert.Equal(t, 2, localCandidates[3].ContributingSessions,
+	assert.Equal("aggregate", localCandidates[1].EvidenceKind)
+	assert.Equal("fallback", localCandidates[2].EvidenceKind)
+	assert.Equal("unavailable", localCandidates[3].EvidenceKind)
+	assert.False(localCandidates[3].Available)
+	assert.Equal(2, localCandidates[3].ContributingSessions,
 		"DuckDB and SQLite include zero-message inventory sessions")
 }
 
 func TestDuckWorktreeCandidatesExcludeDifferentProjectKeys(t *testing.T) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	local := newLocalDB(t)
 	const (
 		primary = "current-project-name"
@@ -147,7 +153,7 @@ func TestDuckWorktreeCandidatesExcludeDifferentProjectKeys(t *testing.T) {
 			t, local, fixture.id, fixture.project, fixture.cwd,
 			"2025-06-02T10:00:00Z",
 		)
-		require.NoError(t, local.UpsertProjectIdentityObservation(ctx,
+		require.NoError(local.UpsertProjectIdentityObservation(ctx,
 			export.ProjectIdentityObservation{
 				SessionID: fixture.id, Project: fixture.project,
 				Machine:          duckPushMachine,
@@ -165,27 +171,26 @@ func TestDuckWorktreeCandidatesExcludeDifferentProjectKeys(t *testing.T) {
 	projects, err := local.BuildProjectIdentityMap(
 		ctx, []string{primary, alias},
 	)
-	require.NoError(t, err)
-	require.NotNil(t, projects[primary].Identity)
-	require.NotNil(t, projects[alias].Identity)
-	require.Equal(t, projects[primary].Identity.Key, projects[alias].Identity.Key)
-	require.NotEqual(t, projects[primary].ProjectKey, projects[alias].ProjectKey)
+	require.NoError(err)
+	require.NotNil(projects[primary].Identity)
+	require.NotNil(projects[alias].Identity)
+	require.Equal(projects[primary].Identity.Key, projects[alias].Identity.Key)
+	require.NotEqual(projects[primary].ProjectKey, projects[alias].ProjectKey)
 	request := db.ArchiveWorktreeCandidateRequest{
 		ProjectLabel: export.SafeProjectDisplayLabel(primary),
 		ProjectKey:   projects[primary].ProjectKey,
 	}
-	localCandidates, err :=
-		local.ListArchiveWorktreeCandidates(ctx, request)
-	require.NoError(t, err)
+	localCandidates, err := local.ListArchiveWorktreeCandidates(ctx, request)
+	require.NoError(err)
 	duckCandidates, err := NewStoreFromDB(syncer.DB()).
 		ListArchiveWorktreeCandidates(ctx, request)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.Equal(t, localCandidates, duckCandidates)
-	require.Len(t, duckCandidates, 1)
-	assert.Equal(t, 1, duckCandidates[0].ContributingSessions)
-	require.Len(t, duckCandidates[0].Examples, 1)
-	assert.Equal(t, "primary-session", duckCandidates[0].Examples[0].SessionID)
+	assert.Equal(localCandidates, duckCandidates)
+	require.Len(duckCandidates, 1)
+	assert.Equal(1, duckCandidates[0].ContributingSessions)
+	require.Len(duckCandidates[0].Examples, 1)
+	assert.Equal("primary-session", duckCandidates[0].Examples[0].SessionID)
 }
 
 // TestDuckListArchiveWorktreeCandidatesKeyMismatch verifies the DuckDB
@@ -193,7 +198,7 @@ func TestDuckWorktreeCandidatesExcludeDifferentProjectKeys(t *testing.T) {
 // a wrong project key returns an empty candidate list with no error, and an
 // empty project key is rejected outright.
 func TestDuckListArchiveWorktreeCandidatesKeyMismatch(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	const project = "mismatch-project"
 

@@ -14,6 +14,8 @@ import (
 )
 
 func TestManifestLoaderReadsAndVerifiesCanonicalEnvelope(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Parallel()
 	identity, canonical := canonicalTestManifest(t)
 	reader := &testVerifiedReader{Reader: bytes.NewReader(canonical.CanonicalJSON)}
@@ -22,8 +24,8 @@ func TestManifestLoaderReadsAndVerifiesCanonicalEnvelope(t *testing.T) {
 		gotIdentity rawsync.AuthIdentity,
 		gotManifestID string,
 	) (rawsync.ObjectInfo, rawsync.VerifiedObjectReader, error) {
-		assert.Equal(t, identity, gotIdentity)
-		assert.Equal(t, canonical.ManifestID, gotManifestID)
+		assert.Equal(identity, gotIdentity)
+		assert.Equal(canonical.ManifestID, gotManifestID)
 		return rawsync.ObjectInfo{Ref: rawsync.ObjectRef{
 			SHA256: canonical.ManifestID,
 			Length: int64(len(canonical.CanonicalJSON)),
@@ -35,9 +37,9 @@ func TestManifestLoaderReadsAndVerifiesCanonicalEnvelope(t *testing.T) {
 		Limits: rawsync.DefaultManifestLimits(),
 	}).Load(t.Context(), JobLease{Identity: identity, ManifestID: canonical.ManifestID})
 	require.NoError(t, err)
-	assert.Equal(t, canonical, got)
-	assert.True(t, reader.verified)
-	assert.True(t, reader.closed)
+	assert.Equal(canonical, got)
+	assert.True(reader.verified)
+	assert.True(reader.closed)
 }
 
 func TestManifestLoaderRejectsUnverifiedOrMismatchedObjects(t *testing.T) {

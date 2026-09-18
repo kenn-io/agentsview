@@ -80,6 +80,8 @@ func TestPGUsageRowWebSearchRequests(t *testing.T) {
 }
 
 func TestPGSessionRowCostBillsWebSearchRequests(t *testing.T) {
+	assert := assert.New(t)
+
 	resolver := webSearchResolver()
 	cost, priced, contributes, err := pgSessionRowCost(pgUsageScanRow{
 		usageSource: "message",
@@ -87,12 +89,14 @@ func TestPGSessionRowCostBillsWebSearchRequests(t *testing.T) {
 		tokenJSON:   webSearchTokenJSON("2"),
 	}, resolver)
 	require.NoError(t, err)
-	assert.True(t, priced)
-	assert.True(t, contributes)
-	assert.Equal(t, money.MustParseDollars("0.32"), cost)
+	assert.True(priced)
+	assert.True(contributes)
+	assert.Equal(money.MustParseDollars("0.32"), cost)
 }
 
 func TestPGSessionRowCostSkipsFeeOnReportedCost(t *testing.T) {
+	assert := assert.New(t)
+
 	resolver := webSearchResolver()
 	cost, priced, contributes, err := pgSessionRowCost(pgUsageScanRow{
 		usageSource: "message",
@@ -101,12 +105,14 @@ func TestPGSessionRowCostSkipsFeeOnReportedCost(t *testing.T) {
 		cost:        sql.NullInt64{Int64: 500_000, Valid: true},
 	}, resolver)
 	require.NoError(t, err)
-	assert.True(t, priced)
-	assert.True(t, contributes)
-	assert.Equal(t, money.MustParseDollars("0.50"), cost)
+	assert.True(priced)
+	assert.True(contributes)
+	assert.Equal(money.MustParseDollars("0.50"), cost)
 }
 
 func TestPGSessionRowCostBillsWebSearchOnUnpricedModel(t *testing.T) {
+	assert := assert.New(t)
+
 	resolver := webSearchResolver()
 	cost, priced, contributes, err := pgSessionRowCost(pgUsageScanRow{
 		usageSource: "message",
@@ -114,9 +120,9 @@ func TestPGSessionRowCostBillsWebSearchOnUnpricedModel(t *testing.T) {
 		tokenJSON:   webSearchTokenJSON("2"),
 	}, resolver)
 	require.NoError(t, err)
-	assert.False(t, priced)
-	assert.True(t, contributes)
-	assert.Equal(t, money.MustParseDollars("0.02"), cost)
+	assert.False(priced)
+	assert.True(contributes)
+	assert.Equal(money.MustParseDollars("0.02"), cost)
 }
 
 func TestPGDailyUsageAmountsBillWebSearchRequests(t *testing.T) {
@@ -131,6 +137,8 @@ func TestPGDailyUsageAmountsBillWebSearchRequests(t *testing.T) {
 }
 
 func TestPGActivityReportRowStatusBillsWebSearchRequests(t *testing.T) {
+	assert := assert.New(t)
+
 	resolver := webSearchResolver()
 	cost, priced, contributes, err := pgActivityReportRowStatus(
 		pgDailyUsageScanRow{
@@ -139,9 +147,9 @@ func TestPGActivityReportRowStatusBillsWebSearchRequests(t *testing.T) {
 			tokenJSON:   webSearchTokenJSON("2"),
 		}, resolver)
 	require.NoError(t, err)
-	assert.True(t, priced)
-	assert.True(t, contributes)
-	assert.Equal(t, money.MustParseDollars("0.32"), cost)
+	assert.True(priced)
+	assert.True(contributes)
+	assert.Equal(money.MustParseDollars("0.32"), cost)
 }
 
 func TestPGSessionUsageBreakdownEntryReportsWebSearchRequests(t *testing.T) {

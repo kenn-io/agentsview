@@ -30,8 +30,10 @@ var specs = []sessionSpec{
 	{"project-alpha", "small-2", 2, 2, "", "", ""},
 	{"project-alpha", "small-5", 5, 3, "", "", ""},
 	// One unclean session for e2e termination tests.
-	{"project-beta", "mixed-content-7", 7, 3, "", "",
-		"tool_call_pending"},
+	{
+		"project-beta", "mixed-content-7", 7, 3, "", "",
+		"tool_call_pending",
+	},
 	{"project-beta", "medium-8", 8, 4, "", "", ""},
 	{"project-beta", "medium-100", 100, 50, "", "", ""},
 	{"project-gamma", "large-200", 200, 100, "", "", ""},
@@ -40,12 +42,18 @@ var specs = []sessionSpec{
 
 	// Sub-agent and fork sessions: must NOT appear in session
 	// list, stats, or analytics summary counts.
-	{"project-alpha", "subagent-1", 12, 6,
-		"test-session-small-5", "subagent", ""},
-	{"project-alpha", "subagent-2", 8, 4,
-		"test-session-small-5", "subagent", ""},
-	{"project-beta", "fork-1", 15, 7,
-		"test-session-medium-8", "fork", ""},
+	{
+		"project-alpha", "subagent-1", 12, 6,
+		"test-session-small-5", "subagent", "",
+	},
+	{
+		"project-alpha", "subagent-2", 8, 4,
+		"test-session-small-5", "subagent", "",
+	},
+	{
+		"project-beta", "fork-1", 15, 7,
+		"test-session-medium-8", "fork", "",
+	},
 
 	// Empty session (0 messages): must also be excluded.
 	{"project-gamma", "empty-0", 0, 0, "", "", ""},
@@ -231,7 +239,7 @@ func createSessionFixture(
 	database *db.DB, spec sessionSpec,
 	index int, base time.Time,
 ) error {
-	sessionID := fmt.Sprintf("test-session-%s", spec.suffix)
+	sessionID := "test-session-" + spec.suffix
 	startedAt := base.Add(
 		time.Duration(index) * 24 * time.Hour,
 	)
@@ -258,7 +266,7 @@ func createSessionFixture(
 	}
 	if spec.msgCount > 0 {
 		sess.FirstMessage = new(
-			fmt.Sprintf("First message for %s", spec.project),
+			"First message for " + spec.project,
 		)
 	}
 	if err := database.UpsertSession(sess); err != nil {

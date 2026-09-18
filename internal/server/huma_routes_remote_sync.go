@@ -5,12 +5,13 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
-	"github.com/danielgtaylor/huma/v2"
 	"io"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/remotesync"
@@ -20,8 +21,8 @@ func (s *Server) registerRemoteSyncRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1/remote-sync")
 	configureRouteGroup(group, "RemoteSync")
 	s.get(group, "/targets", "Resolve remote sync targets", s.humaRemoteSyncTargets)
-	s.mux.HandleFunc("/api/v1/remote-sync/archive", s.remoteSyncArchiveHTTP)
-	s.mux.HandleFunc("/api/v1/remote-sync/manifest", s.remoteSyncManifestHTTP)
+	s.handleHTTP(s.api.OpenAPI().Paths["/api/v1/remote-sync/archive"].Post, s.remoteSyncArchiveHTTP)
+	s.handleHTTP(s.api.OpenAPI().Paths["/api/v1/remote-sync/manifest"].Post, s.remoteSyncManifestHTTP)
 }
 
 type remoteSyncTargetsInput struct {
@@ -173,7 +174,7 @@ func (s *Server) remoteSyncArchiveHTTP(w http.ResponseWriter, r *http.Request) {
 	if deltaMode {
 		err = remotesync.WriteArchiveFiles(out, allowed, files)
 	} else {
-		err = remotesync.WriteArchive(out, archiveTargets)
+		err = remotesync.WriteArchive(r.Context(), out, archiveTargets)
 	}
 	if err == nil && gz != nil {
 		err = gz.Close()

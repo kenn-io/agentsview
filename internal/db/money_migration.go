@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -126,9 +127,7 @@ func migrateMoneyColumnsLocked(w *writerHandle) error {
 			return fmt.Errorf("checking legacy pricing bands: %w", err)
 		}
 		if bandCount != 0 {
-			return fmt.Errorf(
-				"legacy model_pricing migration requires an empty model_pricing_bands table",
-			)
+			return errors.New("legacy model_pricing migration requires an empty model_pricing_bands table")
 		}
 		// schema.sql creates this child before the legacy parent is rebuilt.
 		// Keep its removal and recreation in the same transaction so a failed

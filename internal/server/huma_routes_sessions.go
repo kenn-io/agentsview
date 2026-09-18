@@ -1291,7 +1291,7 @@ func (s *Server) humaResumeSession(
 				},
 			}, nil
 		}
-		proc := exec.Command(termBin, termArgs...)
+		proc := exec.CommandContext(ctx, termBin, termArgs...)
 		proc.Stdout = nil
 		proc.Stderr = nil
 		proc.Stdin = nil
@@ -1410,7 +1410,7 @@ func (s *Server) humaResumeSession(
 			},
 		}, nil
 	}
-	proc := exec.Command(termBin, termArgs...)
+	proc := exec.CommandContext(ctx, termBin, termArgs...)
 	proc.Stdout = nil
 	proc.Stderr = nil
 	proc.Stdin = nil

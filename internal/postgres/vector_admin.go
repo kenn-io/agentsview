@@ -103,9 +103,7 @@ func vectorChunkCounts(
 	if !present {
 		return 0, 0, nil
 	}
-	if err := pg.QueryRowContext(ctx, fmt.Sprintf(
-		`SELECT count(DISTINCT doc_key), count(*) FROM %s`, table,
-	)).Scan(&docs, &chunks); err != nil {
+	if err := pg.QueryRowContext(ctx, "SELECT count(DISTINCT doc_key), count(*) FROM "+table).Scan(&docs, &chunks); err != nil {
 		return 0, 0, fmt.Errorf("counting chunks for generation %d: %w", genID, err)
 	}
 	return docs, chunks, nil
@@ -160,8 +158,7 @@ func DropVectorGeneration(ctx context.Context, pg *sql.DB, id int64) error {
 	err := pg.QueryRowContext(ctx,
 		`SELECT 1 FROM vector_generations WHERE id = $1`, id).Scan(&one)
 	if isUndefinedTable(err) {
-		return fmt.Errorf(
-			"no vector generations exist (pgvector not initialized for this target)")
+		return errors.New("no vector generations exist (pgvector not initialized for this target)")
 	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("vector generation %d does not exist", id)
@@ -197,7 +194,7 @@ func DropVectorGeneration(ctx context.Context, pg *sql.DB, id int64) error {
 // transactional, so a later step's failure rolls the DROP back with the rest.
 func dropVectorGenerationRows(ctx context.Context, tx *sql.Tx, id int64) error {
 	if _, err := tx.ExecContext(ctx,
-		fmt.Sprintf(`DROP TABLE IF EXISTS %s`, vectorChunkTable(id))); err != nil {
+		"DROP TABLE IF EXISTS "+vectorChunkTable(id)); err != nil {
 		return fmt.Errorf("dropping chunk table for generation %d: %w", id, err)
 	}
 	stmts := []struct {
@@ -271,8 +268,7 @@ func pruneUnreferencedVectorDocs(
 			" AND NOT EXISTS (SELECT 1 FROM %s c WHERE c.doc_key = d.doc_key)",
 			vectorChunkTable(id))
 	}
-	stmt := fmt.Sprintf(
-		`DELETE FROM vector_documents d WHERE true%s`, conds.String())
+	stmt := "DELETE FROM vector_documents d WHERE true" + conds.String()
 	if _, err := tx.ExecContext(ctx, stmt); err != nil {
 		return fmt.Errorf("pruning unreferenced vector docs: %w", err)
 	}

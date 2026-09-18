@@ -23,116 +23,128 @@ import (
 )
 
 func TestProjectObservationDatabaseIDIsCreatedAndStable(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	first, err := d.GetDatabaseID(ctx)
-	require.NoError(t, err)
-	assert.Regexp(t, regexp.MustCompile(
+	require.NoError(err)
+	assert.Regexp(regexp.MustCompile(
 		`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`,
 	), first)
 
 	second, err := d.GetOrCreateDatabaseID(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, first, second)
+	require.NoError(err)
+	assert.Equal(first, second)
 
-	require.NoError(t, d.SetDatabaseIDForTest(ctx, "test-database-id"))
+	require.NoError(d.SetDatabaseIDForTest(ctx, "test-database-id"))
 	overridden, err := d.GetOrCreateDatabaseID(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, "test-database-id", overridden)
+	require.NoError(err)
+	assert.Equal("test-database-id", overridden)
 }
 
 func TestProjectObservationArchiveIDIsCreatedAndStable(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	first, err := d.GetArchiveID(ctx)
-	require.NoError(t, err)
-	assert.Regexp(t, regexp.MustCompile(
+	require.NoError(err)
+	assert.Regexp(regexp.MustCompile(
 		`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`,
 	), first)
 
 	second, err := d.GetOrCreateArchiveID(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, first, second)
+	require.NoError(err)
+	assert.Equal(first, second)
 }
 
 func TestProjectIdentityPublicationRevisionTracksSnapshotChanges(t *testing.T) {
-	d := testDB(t)
-	ctx := context.Background()
-	before, err := d.ProjectIdentityPublicationRevision(ctx)
-	require.NoError(t, err)
+	assert := assert.New(t)
+	require := require.New(t)
 
-	require.NoError(t, d.UpsertSession(Session{
+	d := testDB(t)
+	ctx := t.Context()
+	before, err := d.ProjectIdentityPublicationRevision(ctx)
+	require.NoError(err)
+
+	require.NoError(d.UpsertSession(Session{
 		ID: "revision-session", Project: "app", Machine: "local", Agent: "codex",
 	}))
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			SessionID: "revision-session", Project: "app", Machine: "local",
 			RootPath: "/tmp/app", ObservedAt: time.Now().UTC(),
 		}))
 	afterInsert, err := d.ProjectIdentityPublicationRevision(ctx)
-	require.NoError(t, err)
-	assert.Greater(t, afterInsert, before)
+	require.NoError(err)
+	assert.Greater(afterInsert, before)
 
-	require.NoError(t, d.DeleteSession("revision-session"))
+	require.NoError(d.DeleteSession("revision-session"))
 	afterDelete, err := d.ProjectIdentityPublicationRevision(ctx)
-	require.NoError(t, err)
-	assert.Greater(t, afterDelete, afterInsert)
+	require.NoError(err)
+	assert.Greater(afterDelete, afterInsert)
 }
 
 func TestCopySessionMetadataPreservesRecordedMachineAttribution(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.db")
 	source := testDBAtPath(t, sourcePath, "source")
-	require.NoError(t, source.UpsertSession(Session{
+	require.NoError(source.UpsertSession(Session{
 		ID: "resynced-session", Project: "app",
 		Machine: "oldbox", Agent: "claude",
 	}))
-	require.NoError(t, source.UpsertProjectIdentityObservation(
+	require.NoError(source.UpsertProjectIdentityObservation(
 		t.Context(), export.ProjectIdentityObservation{
 			SessionID: "resynced-session", Project: "app", Machine: "oldbox",
 			RootPath: "/workspace/app", ObservedAt: time.Now().UTC(),
 		},
 	))
-	require.NoError(t, source.Close())
+	require.NoError(source.Close())
 
 	destinationPath := filepath.Join(dir, "destination.db")
 	destination := testDBAtPath(t, destinationPath, "destination")
 	t.Cleanup(func() { _ = destination.Close() })
-	require.NoError(t, destination.UpsertSession(Session{
+	require.NoError(destination.UpsertSession(Session{
 		ID: "resynced-session", Project: "app",
 		Machine: "newbox", Agent: "claude",
 	}))
-	require.NoError(t, destination.UpsertProjectIdentityObservation(
+	require.NoError(destination.UpsertProjectIdentityObservation(
 		t.Context(), export.ProjectIdentityObservation{
 			SessionID: "resynced-session", Project: "app", Machine: "newbox",
 			RootPath: "/workspace/app", ObservedAt: time.Now().UTC(),
 		},
 	))
 
-	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(destination.CopySessionMetadataFrom(sourcePath))
 
 	session, err := destination.GetSessionFull(
 		t.Context(), "resynced-session",
 	)
-	require.NoError(t, err)
-	require.NotNil(t, session)
-	assert.Equal(t, "newbox", session.Machine)
+	require.NoError(err)
+	require.NotNil(session)
+	assert.Equal("newbox", session.Machine)
 	snapshots, err := destination.ListSessionProjectIdentitySnapshots(
 		t.Context(),
 	)
-	require.NoError(t, err)
-	require.Len(t, snapshots, 1)
-	assert.Equal(t, "oldbox", snapshots[0].Machine)
+	require.NoError(err)
+	require.Len(snapshots, 1)
+	assert.Equal("oldbox", snapshots[0].Machine)
 	observations, err := destination.ListProjectIdentityObservations(
 		t.Context(), []string{"app"},
 	)
-	require.NoError(t, err)
-	require.Len(t, observations, 2)
-	assert.ElementsMatch(t, []string{"newbox", "oldbox"}, []string{
+	require.NoError(err)
+	require.Len(observations, 2)
+	assert.ElementsMatch([]string{"newbox", "oldbox"}, []string{
 		observations[0].Machine,
 		observations[1].Machine,
 	})
@@ -141,13 +153,16 @@ func TestCopySessionMetadataPreservesRecordedMachineAttribution(
 func TestSessionProjectIdentitySnapshotPreservesFirstRootKeyUntilRemoteEvidence(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
-	require.NoError(t, d.UpsertSession(Session{
+	ctx := t.Context()
+	require.NoError(d.UpsertSession(Session{
 		ID: "root-snapshot", Project: "app", Machine: "local", Agent: "codex",
 	}))
 	firstObservedAt := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			SessionID: "root-snapshot", Project: "app", Machine: "local",
 			RootPath: "/first/app", ObservedAt: firstObservedAt,
@@ -155,11 +170,11 @@ func TestSessionProjectIdentitySnapshotPreservesFirstRootKeyUntilRemoteEvidence(
 	first, err := d.listSessionProjectIdentitySnapshots(
 		ctx, []string{"root-snapshot"},
 	)
-	require.NoError(t, err)
-	require.Contains(t, first, "root-snapshot")
-	require.NotEmpty(t, first["root-snapshot"].Key)
+	require.NoError(err)
+	require.Contains(first, "root-snapshot")
+	require.NotEmpty(first["root-snapshot"].Key)
 
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			SessionID: "root-snapshot", Project: "app", Machine: "local",
 			RootPath: "/later/app", ObservedAt: firstObservedAt.Add(time.Hour),
@@ -167,12 +182,12 @@ func TestSessionProjectIdentitySnapshotPreservesFirstRootKeyUntilRemoteEvidence(
 	afterRoot, err := d.listSessionProjectIdentitySnapshots(
 		ctx, []string{"root-snapshot"},
 	)
-	require.NoError(t, err)
-	assert.Equal(t, "/first/app", afterRoot["root-snapshot"].RootPath)
-	assert.Equal(t, first["root-snapshot"].Key,
+	require.NoError(err)
+	assert.Equal("/first/app", afterRoot["root-snapshot"].RootPath)
+	assert.Equal(first["root-snapshot"].Key,
 		afterRoot["root-snapshot"].Key)
 
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			SessionID: "root-snapshot", Project: "app", Machine: "local",
 			RootPath: "/later/app", GitRemote: "https://example.com/example/app.git",
@@ -181,23 +196,23 @@ func TestSessionProjectIdentitySnapshotPreservesFirstRootKeyUntilRemoteEvidence(
 	afterRemote, err := d.listSessionProjectIdentitySnapshots(
 		ctx, []string{"root-snapshot"},
 	)
-	require.NoError(t, err)
-	assert.Equal(t, export.ProjectResolutionResolved,
+	require.NoError(err)
+	assert.Equal(export.ProjectResolutionResolved,
 		afterRemote["root-snapshot"].RemoteResolution)
-	assert.Equal(t, "https://example.com/example/app.git",
+	assert.Equal("https://example.com/example/app.git",
 		afterRemote["root-snapshot"].GitRemote)
-	assert.NotEqual(t, first["root-snapshot"].Key,
+	assert.NotEqual(first["root-snapshot"].Key,
 		afterRemote["root-snapshot"].Key)
 
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID: "ambiguous-snapshot", Project: "app", Machine: "local", Agent: "codex",
 	}))
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			SessionID: "ambiguous-snapshot", Project: "app", Machine: "local",
 			RootPath: "/first/ambiguous", ObservedAt: firstObservedAt,
 		}))
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			SessionID: "ambiguous-snapshot", Project: "app", Machine: "local",
 			RootPath: "/later/ambiguous", RemoteCandidateCount: 2,
@@ -207,25 +222,28 @@ func TestSessionProjectIdentitySnapshotPreservesFirstRootKeyUntilRemoteEvidence(
 	afterAmbiguous, err := d.listSessionProjectIdentitySnapshots(
 		ctx, []string{"ambiguous-snapshot"},
 	)
-	require.NoError(t, err)
-	assert.Equal(t, export.ProjectResolutionAmbiguous,
+	require.NoError(err)
+	assert.Equal(export.ProjectResolutionAmbiguous,
 		afterAmbiguous["ambiguous-snapshot"].RemoteResolution)
-	assert.Equal(t, 2,
+	assert.Equal(2,
 		afterAmbiguous["ambiguous-snapshot"].RemoteCandidateCount)
 }
 
 func TestLoadProjectIdentityPublicationDeltaReturnsRowsAndTombstones(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	observedAt := time.Date(2026, 7, 11, 12, 0, 0, 0, time.UTC)
 	for _, project := range []string{"alpha", "beta"} {
 		sessionID := "identity-" + project
-		require.NoError(t, d.UpsertSession(Session{
+		require.NoError(d.UpsertSession(Session{
 			ID: sessionID, Project: project, Machine: "local", Agent: "codex",
 		}))
-		require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+		require.NoError(d.UpsertProjectIdentityObservation(ctx,
 			export.ProjectIdentityObservation{
 				SessionID: sessionID, Project: project, Machine: "local",
 				RootPath:         "/workspace/" + project,
@@ -237,9 +255,9 @@ func TestLoadProjectIdentityPublicationDeltaReturnsRowsAndTombstones(
 		))
 	}
 	baseline, err := d.ProjectIdentityPublicationRevision(ctx)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			SessionID: "identity-alpha", Project: "alpha", Machine: "local",
 			RootPath:         "/workspace/alpha",
@@ -254,86 +272,92 @@ func TestLoadProjectIdentityPublicationDeltaReturnsRowsAndTombstones(
 		WHERE project = ? AND machine = ? AND root_path = ? AND git_remote = ?`,
 		"beta", "local", "/workspace/beta", "https://example.com/beta.git",
 	)
-	require.NoError(t, err)
-	require.NoError(t, d.DeleteSession("identity-alpha"))
+	require.NoError(err)
+	require.NoError(d.DeleteSession("identity-alpha"))
 	through, err := d.ProjectIdentityPublicationRevision(ctx)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	delta, err := d.LoadProjectIdentityPublicationDelta(
 		ctx, baseline, through, nil, nil,
 	)
-	require.NoError(t, err)
-	require.Len(t, delta.Observations, 1)
-	assert.Equal(t, "alpha", delta.Observations[0].Project)
-	assert.Equal(t, "upstream", delta.Observations[0].GitRemoteName)
-	assert.Equal(t, []ProjectIdentityObservationKey{{
+	require.NoError(err)
+	require.Len(delta.Observations, 1)
+	assert.Equal("alpha", delta.Observations[0].Project)
+	assert.Equal("upstream", delta.Observations[0].GitRemoteName)
+	assert.Equal([]ProjectIdentityObservationKey{{
 		Project: "beta", Machine: "local", RootPath: "/workspace/beta",
 		GitRemote: "https://example.com/beta.git",
 	}}, delta.ObservationDeletes)
-	assert.Empty(t, delta.Snapshots)
-	assert.Equal(t, []SessionProjectIdentitySnapshotKey{{
+	assert.Empty(delta.Snapshots)
+	assert.Equal([]SessionProjectIdentitySnapshotKey{{
 		SessionID: "identity-alpha", Project: "alpha",
 	}}, delta.SnapshotDeletes)
 
 	betaDelta, err := d.LoadProjectIdentityPublicationDelta(
 		ctx, baseline, through, []string{"beta"}, nil,
 	)
-	require.NoError(t, err)
-	assert.Empty(t, betaDelta.Observations)
-	assert.Equal(t, delta.ObservationDeletes, betaDelta.ObservationDeletes)
-	assert.Empty(t, betaDelta.Snapshots)
-	assert.Equal(t, delta.SnapshotDeletes, betaDelta.SnapshotDeletes,
+	require.NoError(err)
+	assert.Empty(betaDelta.Observations)
+	assert.Equal(delta.ObservationDeletes, betaDelta.ObservationDeletes)
+	assert.Empty(betaDelta.Snapshots)
+	assert.Equal(delta.SnapshotDeletes, betaDelta.SnapshotDeletes,
 		"snapshot tombstones must reach scopes selected by the live session project")
 }
 
 func TestCopyArchiveIdentityFromPreservesLogicalArchiveAndNewGeneration(
 	t *testing.T,
 ) {
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
+
+	ctx := t.Context()
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.db")
 	source, err := Open(sourcePath)
-	require.NoError(t, err)
-	require.NoError(t, source.SetDatabaseIDForTest(ctx, "source-generation"))
-	require.NoError(t, source.SetArchiveIdentityForTest(
+	require.NoError(err)
+	require.NoError(source.SetDatabaseIDForTest(ctx, "source-generation"))
+	require.NoError(source.SetArchiveIdentityForTest(
 		ctx, "stable-archive", strings.Repeat("a", 64),
 	))
-	require.NoError(t, source.Close())
+	require.NoError(source.Close())
 
 	target := testDB(t)
-	require.NoError(t, target.SetDatabaseIDForTest(ctx, "new-generation"))
-	require.NoError(t, target.SetArchiveIdentityForTest(
+	require.NoError(target.SetDatabaseIDForTest(ctx, "new-generation"))
+	require.NoError(target.SetArchiveIdentityForTest(
 		ctx, "temporary-archive", strings.Repeat("b", 64),
 	))
-	require.NoError(t, target.CopyArchiveIdentityFrom(sourcePath))
+	require.NoError(target.CopyArchiveIdentityFrom(sourcePath))
 
 	archiveID, err := target.GetArchiveID(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, "stable-archive", archiveID)
+	require.NoError(err)
+	assert.Equal("stable-archive", archiveID)
 	archiveSalt, err := target.GetArchiveSalt(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, strings.Repeat("a", 64), archiveSalt)
+	require.NoError(err)
+	assert.Equal(strings.Repeat("a", 64), archiveSalt)
 	databaseID, err := target.GetDatabaseID(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, "new-generation", databaseID)
+	require.NoError(err)
+	assert.Equal("new-generation", databaseID)
 }
 
 func TestProjectObservationArchiveSaltIsCreatedAndStable(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	first, err := d.GetArchiveSalt(ctx)
-	require.NoError(t, err)
-	assert.Regexp(t, regexp.MustCompile(`^[0-9a-f]{64}$`), first)
+	require.NoError(err)
+	assert.Regexp(regexp.MustCompile(`^[0-9a-f]{64}$`), first)
 
 	second, err := d.GetOrCreateArchiveSalt(ctx)
-	require.NoError(t, err)
-	assert.Equal(t, first, second)
+	require.NoError(err)
+	assert.Equal(first, second)
 }
 
 func TestProjectObservationArchiveSaltRejectsCorruptPersistedValue(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, d.SetArchiveIdentityForTest(ctx, "archive", "not-a-salt"))
 
 	_, err := d.GetArchiveSalt(ctx)
@@ -344,23 +368,28 @@ func TestProjectObservationArchiveSaltRejectsCorruptPersistedValue(t *testing.T)
 }
 
 func TestCopyArchiveIdentityFromRejectsCorruptSalt(t *testing.T) {
-	ctx := context.Background()
+	require := require.New(t)
+
+	ctx := t.Context()
 	sourcePath := filepath.Join(t.TempDir(), "source.db")
 	source, err := Open(sourcePath)
-	require.NoError(t, err)
-	require.NoError(t, source.SetArchiveIdentityForTest(
+	require.NoError(err)
+	require.NoError(source.SetArchiveIdentityForTest(
 		ctx, "archive", "truncated",
 	))
-	require.NoError(t, source.Close())
+	require.NoError(source.Close())
 
 	target := testDB(t)
 	err = target.CopyArchiveIdentityFrom(sourcePath)
-	require.ErrorIs(t, err, ErrArchiveSaltInvalid)
+	require.ErrorIs(err, ErrArchiveSaltInvalid)
 }
 
 func TestProjectIdentityObservationRoundTripsRepositoryContext(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	want := export.ProjectIdentityObservation{
 		SourceArchiveID:      "archive-source",
 		SourceArchiveSalt:    "archive-salt",
@@ -377,73 +406,82 @@ func TestProjectIdentityObservationRoundTripsRepositoryContext(t *testing.T) {
 		ObservedAt:           time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC),
 	}
 
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx, want))
+	require.NoError(d.UpsertProjectIdentityObservation(ctx, want))
 	got, err := d.ListProjectIdentityObservations(ctx, []string{"app"})
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, want.RepositoryPath, got[0].RepositoryPath)
-	assert.Equal(t, want.SourceArchiveID, got[0].SourceArchiveID)
-	assert.Equal(t, want.SourceArchiveSalt, got[0].SourceArchiveSalt)
-	assert.Equal(t, want.WorktreeRelationship, got[0].WorktreeRelationship)
-	assert.Equal(t, want.CheckoutState, got[0].CheckoutState)
-	assert.Equal(t, want.RemoteResolution, got[0].RemoteResolution)
-	assert.Equal(t, want.RemoteCandidateCount, got[0].RemoteCandidateCount)
+	require.NoError(err)
+	require.Len(got, 1)
+	assert.Equal(want.RepositoryPath, got[0].RepositoryPath)
+	assert.Equal(want.SourceArchiveID, got[0].SourceArchiveID)
+	assert.Equal(want.SourceArchiveSalt, got[0].SourceArchiveSalt)
+	assert.Equal(want.WorktreeRelationship, got[0].WorktreeRelationship)
+	assert.Equal(want.CheckoutState, got[0].CheckoutState)
+	assert.Equal(want.RemoteResolution, got[0].RemoteResolution)
+	assert.Equal(want.RemoteCandidateCount, got[0].RemoteCandidateCount)
 }
 
 func TestProjectObservationDatabaseIDInitializedForReadOnlyOpen(t *testing.T) {
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "test.db")
 	writable := testDBAtPath(t, path, "read-only database id seed")
-	seeded, err := writable.GetDatabaseID(context.Background())
-	require.NoError(t, err)
-	require.NotEmpty(t, seeded)
-	require.NoError(t, writable.Close())
+	seeded, err := writable.GetDatabaseID(t.Context())
+	require.NoError(err)
+	require.NotEmpty(seeded)
+	require.NoError(writable.Close())
 
 	readonly, err := OpenReadOnly(path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, readonly.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(readonly.Close()) })
 
-	got, err := readonly.GetDatabaseID(context.Background())
-	require.NoError(t, err)
+	got, err := readonly.GetDatabaseID(t.Context())
+	require.NoError(err)
 	assert.Equal(t, seeded, got)
 }
 
 func TestProjectObservationDatabaseIDReadOnlyExisting(t *testing.T) {
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "test.db")
 	writable := testDBAtPath(t, path, "read-only database id seed")
-	require.NoError(t, writable.SetDatabaseIDForTest(
-		context.Background(), "read-only-db-id"))
-	require.NoError(t, writable.Close())
+	require.NoError(writable.SetDatabaseIDForTest(
+		t.Context(), "read-only-db-id"))
+	require.NoError(writable.Close())
 
 	readonly, err := OpenReadOnly(path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, readonly.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(readonly.Close()) })
 
-	got, err := readonly.GetDatabaseID(context.Background())
-	require.NoError(t, err)
+	got, err := readonly.GetDatabaseID(t.Context())
+	require.NoError(err)
 	assert.Equal(t, "read-only-db-id", got)
 }
 
 func TestProjectObservationDatabaseIDMissingDoesNotCreate(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	_, err := d.rawWriter().Exec(`
+	_, err := d.rawWriter().ExecContext(t.Context(), `
 		DELETE FROM archive_metadata WHERE key = ?`,
 		archiveMetadataDatabaseIDKey,
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	_, err = d.GetDatabaseID(context.Background())
-	require.ErrorIs(t, err, ErrDatabaseIDMissing)
+	_, err = d.GetDatabaseID(t.Context())
+	require.ErrorIs(err, ErrDatabaseIDMissing)
 
 	var count int
-	require.NoError(t, d.rawReader().QueryRow(`
+	require.NoError(d.rawReader().QueryRowContext(t.Context(), `
 		SELECT COUNT(*) FROM archive_metadata
 		WHERE key = ?`, archiveMetadataDatabaseIDKey).Scan(&count))
 	assert.Zero(t, count)
 }
 
 func TestProjectObservationRawValuesAreAuthoritativeForExportKeys(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	obs := export.ProjectIdentityObservation{
 		Project:          "app",
 		Machine:          "laptop",
@@ -455,26 +493,29 @@ func TestProjectObservationRawValuesAreAuthoritativeForExportKeys(t *testing.T) 
 		KeySource:        "root_path",
 		Key:              "stale-key",
 	}
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx, obs))
+	require.NoError(d.UpsertProjectIdentityObservation(ctx, obs))
 
 	got, err := d.ListProjectIdentityObservations(ctx, []string{"app"})
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, "github.com:Org/Repo.git", got[0].GitRemote)
-	assert.Equal(t, "/tmp/app", got[0].RootPath)
+	require.NoError(err)
+	require.Len(got, 1)
+	assert.Equal("github.com:Org/Repo.git", got[0].GitRemote)
+	assert.Equal("/tmp/app", got[0].RootPath)
 
 	projects := export.BuildProjectsMap([]string{"app"}, got)
-	require.Equal(t, export.ProjectResolutionResolved, projects["app"].Resolution)
-	require.NotNil(t, projects["app"].Identity)
-	assert.Equal(t, "github.com/Org/Repo", projects["app"].Identity.NormalizedRemote)
-	assert.Equal(t, export.ProjectKindGitRemote, projects["app"].Identity.Kind)
-	assert.NotEmpty(t, projects["app"].Identity.Key)
+	require.Equal(export.ProjectResolutionResolved, projects["app"].Resolution)
+	require.NotNil(projects["app"].Identity)
+	assert.Equal("github.com/Org/Repo", projects["app"].Identity.NormalizedRemote)
+	assert.Equal(export.ProjectKindGitRemote, projects["app"].Identity.Kind)
+	assert.NotEmpty(projects["app"].Identity.Key)
 }
 
 func TestProjectObservationStripsGitRemoteCredentialsBeforeStorage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	ctx := t.Context()
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:       "app",
 			Machine:       "laptop",
@@ -485,17 +526,20 @@ func TestProjectObservationStripsGitRemoteCredentialsBeforeStorage(t *testing.T)
 	))
 
 	got, err := d.ListProjectIdentityObservations(ctx, []string{"app"})
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, "https://example.com/acme/app.git", got[0].GitRemote)
-	assert.Equal(t, "example.com/acme/app", got[0].NormalizedRemote)
-	assert.Equal(t, export.ProjectIdentityKeySourceGitRemote, got[0].KeySource)
+	require.NoError(err)
+	require.Len(got, 1)
+	assert.Equal("https://example.com/acme/app.git", got[0].GitRemote)
+	assert.Equal("example.com/acme/app", got[0].NormalizedRemote)
+	assert.Equal(export.ProjectIdentityKeySourceGitRemote, got[0].KeySource)
 }
 
 func TestProjectObservationMigrationStripsStoredGitRemoteCredentials(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	path := filepath.Join(t.TempDir(), "test.db")
 	d := testDBAtPath(t, path, "credential migration seed")
-	_, err := d.rawWriter().Exec(`
+	_, err := d.rawWriter().ExecContext(t.Context(), `
 		INSERT INTO project_identity_observations (
 			project, machine, root_path, git_remote, git_remote_name,
 			worktree_name, worktree_root_path, observed_at,
@@ -507,34 +551,37 @@ func TestProjectObservationMigrationStripsStoredGitRemoteCredentials(t *testing.
 		"example.com/acme/app", export.ProjectIdentityKeySourceGitRemote,
 		projectIdentitySHA("git_remote\n"+"example.com/acme/app"),
 	)
-	require.NoError(t, err)
-	_, err = d.rawWriter().Exec(`DELETE FROM stats WHERE key = ?`,
+	require.NoError(err)
+	_, err = d.rawWriter().ExecContext(t.Context(), `DELETE FROM stats WHERE key = ?`,
 		projectIdentityRemoteScrubCompletedKey)
-	require.NoError(t, err)
-	require.NoError(t, d.Close())
+	require.NoError(err)
+	require.NoError(d.Close())
 
 	reopened, err := Open(path)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(reopened.Close()) })
 
 	got, err := reopened.ListProjectIdentityObservations(
-		context.Background(), []string{"app"})
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, "https://example.com/acme/app.git", got[0].GitRemote)
-	assert.Equal(t, "example.com/acme/app", got[0].NormalizedRemote)
+		t.Context(), []string{"app"})
+	require.NoError(err)
+	require.Len(got, 1)
+	assert.Equal("https://example.com/acme/app.git", got[0].GitRemote)
+	assert.Equal("example.com/acme/app", got[0].NormalizedRemote)
 	var scrubbed string
-	require.NoError(t, reopened.getReader().QueryRowContext(
-		context.Background(), `SELECT value FROM stats WHERE key = ?`,
+	require.NoError(reopened.getReader().QueryRowContext(
+		t.Context(), `SELECT value FROM stats WHERE key = ?`,
 		projectIdentityRemoteScrubCompletedKey,
 	).Scan(&scrubbed))
-	assert.Equal(t, "1", scrubbed)
+	assert.Equal("1", scrubbed)
 }
 
 func TestProjectObservationListFiltersLabelsAndKeepsPersistedRemoteMachineRows(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	ctx := t.Context()
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:   "old-project",
 			Machine:   "remote-host",
@@ -542,7 +589,7 @@ func TestProjectObservationListFiltersLabelsAndKeepsPersistedRemoteMachineRows(t
 			GitRemote: "https://github.com/acme/old-project.git",
 		},
 	))
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:   "other",
 			Machine:   "remote-host",
@@ -552,31 +599,36 @@ func TestProjectObservationListFiltersLabelsAndKeepsPersistedRemoteMachineRows(t
 	))
 
 	got, err := d.ListProjectIdentityObservations(ctx, []string{"old-project"})
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, "remote-host", got[0].Machine)
-	assert.Equal(t, "remote-host:/srv/app", got[0].RootPath)
-	assert.Equal(t, "https://github.com/acme/old-project.git", got[0].GitRemote)
+	require.NoError(err)
+	require.Len(got, 1)
+	assert.Equal("remote-host", got[0].Machine)
+	assert.Equal("remote-host:/srv/app", got[0].RootPath)
+	assert.Equal("https://github.com/acme/old-project.git", got[0].GitRemote)
 }
 
 func TestProjectIdentityNilLabelsListAllButEmptyLabelsMapEmpty(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedProjectIdentityObservation(t, d, "observed-project")
 
 	all, err := d.ListProjectIdentityObservations(ctx, nil)
-	require.NoError(t, err)
-	require.Len(t, all, 1)
-	assert.Equal(t, "observed-project", all[0].Project)
+	require.NoError(err)
+	require.Len(all, 1)
+	assert.Equal("observed-project", all[0].Project)
 
 	empty, err := d.BuildProjectIdentityMap(ctx, []string{})
-	require.NoError(t, err)
-	assert.Empty(t, empty)
+	require.NoError(err)
+	assert.Empty(empty)
 }
 
 func TestListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Cross the maxSQLVars chunk boundary and include duplicate labels that
 	// straddle it, proving chunked queries return each row exactly once and
@@ -597,25 +649,28 @@ func TestListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) {
 		args = append(args, label)
 	}
 	_, err := d.getWriter().Exec(sb.String(), args...)
-	require.NoError(t, err, "seed chunked observations")
+	require.NoError(err, "seed chunked observations")
 
 	// Reverse the (duplicated) label list to prove the lookup sorts it
 	// before partitioning into chunks.
 	slices.Reverse(labels)
 	got, err := d.ListProjectIdentityObservations(ctx, labels)
-	require.NoError(t, err)
+	require.NoError(err)
 	all, err := d.ListProjectIdentityObservations(ctx, nil)
-	require.NoError(t, err)
-	require.Len(t, all, labelCount)
+	require.NoError(err)
+	require.Len(all, labelCount)
 	assert.Equal(t, all, got,
 		"chunked label lookup must match the unfiltered scan, order included")
 }
 
 func TestProjectIdentityGoldenFixtureObservationsAreDeterministic(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	observedAt := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:          "remote-project",
 			Machine:          "golden-host",
@@ -627,7 +682,7 @@ func TestProjectIdentityGoldenFixtureObservationsAreDeterministic(t *testing.T) 
 			ObservedAt:       observedAt,
 		},
 	))
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:              "path-project",
 			Machine:              "golden-host",
@@ -640,32 +695,35 @@ func TestProjectIdentityGoldenFixtureObservationsAreDeterministic(t *testing.T) 
 
 	got, err := d.BuildProjectIdentityMap(ctx,
 		[]string{"remote-project", "path-project", "unknown-project"})
-	require.NoError(t, err)
-	require.Equal(t, export.ProjectResolutionResolved,
+	require.NoError(err)
+	require.Equal(export.ProjectResolutionResolved,
 		got["remote-project"].Resolution)
-	require.NotNil(t, got["remote-project"].Identity)
-	assert.Equal(t, export.ProjectKindGitRemote, got["remote-project"].Identity.Kind)
-	assert.Equal(t, "github.com/acme/remote-project",
+	require.NotNil(got["remote-project"].Identity)
+	assert.Equal(export.ProjectKindGitRemote, got["remote-project"].Identity.Kind)
+	assert.Equal("github.com/acme/remote-project",
 		got["remote-project"].Identity.NormalizedRemote)
-	assert.NotEmpty(t, got["remote-project"].Identity.Key)
+	assert.NotEmpty(got["remote-project"].Identity.Key)
 
-	require.Equal(t, export.ProjectResolutionResolved,
+	require.Equal(export.ProjectResolutionResolved,
 		got["path-project"].Resolution)
-	require.NotNil(t, got["path-project"].Identity)
-	assert.Equal(t, export.ProjectKindMachineRoot, got["path-project"].Identity.Kind)
-	assert.Empty(t, got["path-project"].Identity.NormalizedRemote)
+	require.NotNil(got["path-project"].Identity)
+	assert.Equal(export.ProjectKindMachineRoot, got["path-project"].Identity.Kind)
+	assert.Empty(got["path-project"].Identity.NormalizedRemote)
 	encoded, err := json.Marshal(got["path-project"])
-	require.NoError(t, err)
-	assert.NotContains(t, string(encoded), "/fixtures/path-project")
+	require.NoError(err)
+	assert.NotContains(string(encoded), "/fixtures/path-project")
 
-	assert.Equal(t, export.ProjectResolutionUnknown,
+	assert.Equal(export.ProjectResolutionUnknown,
 		got["unknown-project"].Resolution)
-	assert.Nil(t, got["unknown-project"].Identity)
+	assert.Nil(got["unknown-project"].Identity)
 }
 
 func TestProjectObservationSessionBatchWritePersistsObservation(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	result, err := d.WriteSessionBatch([]SessionBatchWrite{{
 		Session: Session{
 			ID:      "batch-observation",
@@ -683,30 +741,33 @@ func TestProjectObservationSessionBatchWritePersistsObservation(t *testing.T) {
 		DataVersion:     CurrentDataVersion(),
 		ReplaceMessages: true,
 	}})
-	require.NoError(t, err)
-	assert.Equal(t, 1, result.WrittenSessions)
+	require.NoError(err)
+	assert.Equal(1, result.WrittenSessions)
 
 	got, err := d.ListProjectIdentityObservations(ctx, []string{"mapped-project"})
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, "/tmp/worktree", got[0].RootPath)
-	assert.Empty(t, got[0].GitRemote)
+	require.NoError(err)
+	require.Len(got, 1)
+	assert.Equal("/tmp/worktree", got[0].RootPath)
+	assert.Empty(got[0].GitRemote)
 	snapshots, err := d.ListSessionProjectIdentitySnapshots(ctx)
-	require.NoError(t, err)
-	require.Len(t, snapshots, 1)
-	assert.Equal(t, "mapped-project", snapshots[0].Project,
+	require.NoError(err)
+	require.Len(snapshots, 1)
+	assert.Equal("mapped-project", snapshots[0].Project,
 		"an omitted snapshot project keeps the legacy same-label default")
 
 	projects := export.BuildProjectsMap([]string{"mapped-project"}, got)
-	require.Equal(t, export.ProjectResolutionUnknown, projects["mapped-project"].Resolution)
-	assert.Nil(t, projects["mapped-project"].Identity)
+	require.Equal(export.ProjectResolutionUnknown, projects["mapped-project"].Resolution)
+	assert.Nil(projects["mapped-project"].Identity)
 }
 
 func TestProjectObservationSessionBatchExplicitEmptyProjectOmitsSnapshot(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	emptySourceProject := ""
 	result, err := d.WriteSessionBatch([]SessionBatchWrite{{
 		Session: Session{
@@ -725,24 +786,24 @@ func TestProjectObservationSessionBatchExplicitEmptyProjectOmitsSnapshot(
 		DataVersion:             CurrentDataVersion(),
 		ReplaceMessages:         true,
 	}})
-	require.NoError(t, err)
-	assert.Equal(t, 1, result.WrittenSessions)
+	require.NoError(err)
+	assert.Equal(1, result.WrittenSessions)
 
 	observations, err := d.ListProjectIdentityObservations(
 		ctx, []string{"mapped-project"},
 	)
-	require.NoError(t, err)
-	require.Len(t, observations, 1)
-	assert.Equal(t, "mapped-project", observations[0].Project)
+	require.NoError(err)
+	require.Len(observations, 1)
+	assert.Equal("mapped-project", observations[0].Project)
 
 	snapshots, err := d.ListSessionProjectIdentitySnapshots(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, snapshots,
+	require.NoError(err)
+	assert.Empty(snapshots,
 		"an explicit empty source must not become mapped snapshot evidence")
 }
 
 func TestSessionBatchWritesRejectMismatchedIdentityOwnership(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, tc := range []struct {
 		name       string
 		writeBatch func(*DB, []SessionBatchWrite) (SessionBatchResult, error)
@@ -767,13 +828,16 @@ func TestSessionBatchWritesRejectMismatchedIdentityOwnership(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			d := testDB(t)
 			recordedAt := time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC)
-			require.NoError(t, d.UpsertSession(Session{
+			require.NoError(d.UpsertSession(Session{
 				ID: "unrelated", Project: "unrelated-target",
 				Machine: "laptop", Agent: "codex", Cwd: "/tmp/unrelated",
 			}))
-			require.NoError(t, d.UpsertProjectIdentityObservationWithSnapshotProject(
+			require.NoError(d.UpsertProjectIdentityObservationWithSnapshotProject(
 				ctx,
 				export.ProjectIdentityObservation{
 					SessionID: "unrelated", Project: "unrelated-target",
@@ -783,8 +847,8 @@ func TestSessionBatchWritesRejectMismatchedIdentityOwnership(t *testing.T) {
 				"unrelated-source",
 			))
 			before, err := d.ListSessionProjectIdentitySnapshots(ctx)
-			require.NoError(t, err)
-			require.Len(t, before, 1)
+			require.NoError(err)
+			require.Len(before, 1)
 
 			candidateSource := "candidate-source"
 			result, err := tc.writeBatch(d, []SessionBatchWrite{{
@@ -802,23 +866,23 @@ func TestSessionBatchWritesRejectMismatchedIdentityOwnership(t *testing.T) {
 				ReplaceMessages:         true,
 			}})
 			if tc.wantErr {
-				assert.Error(t, err)
+				assert.Error(err)
 			} else {
-				require.NoError(t, err)
+				require.NoError(err)
 			}
-			assert.Equal(t, 1, result.FailedSessions)
-			assert.Equal(t, 0, result.WrittenSessions)
-			require.Len(t, result.Errors, 1)
-			assert.ErrorContains(t, result.Errors[0],
+			assert.Equal(1, result.FailedSessions)
+			assert.Equal(0, result.WrittenSessions)
+			require.Len(result.Errors, 1)
+			assert.ErrorContains(result.Errors[0],
 				"does not match session id")
 
 			candidate, getErr := d.GetSession(ctx, "candidate")
-			require.NoError(t, getErr)
-			assert.Nil(t, candidate,
+			require.NoError(getErr)
+			assert.Nil(candidate,
 				"invalid identity ownership must reject the session write")
 			after, listErr := d.ListSessionProjectIdentitySnapshots(ctx)
-			require.NoError(t, listErr)
-			assert.Equal(t, before, after,
+			require.NoError(listErr)
+			assert.Equal(before, after,
 				"invalid identity ownership must not relabel another session")
 		})
 	}
@@ -827,8 +891,11 @@ func TestSessionBatchWritesRejectMismatchedIdentityOwnership(t *testing.T) {
 func TestUpsertSessionWithProjectIdentityUsesCurrentTransactionInsertionState(
 	t *testing.T,
 ) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	session := Session{
 		ID:      "atomic-identity",
 		Project: "mapped-project",
@@ -843,42 +910,42 @@ func TestUpsertSessionWithProjectIdentityUsesCurrentTransactionInsertionState(
 		RootPath:  "/tmp/worktree",
 	}
 
-	require.NoError(t, d.UpsertSessionWithProjectIdentity(
+	require.NoError(d.UpsertSessionWithProjectIdentity(
 		session, observation, "",
 	))
 	snapshots, err := d.ListSessionProjectIdentitySnapshots(ctx)
-	require.NoError(t, err)
-	assert.Empty(t, snapshots,
+	require.NoError(err)
+	assert.Empty(snapshots,
 		"fresh empty source must remove its own trigger fallback")
 
-	require.NoError(t, d.UpsertSessionWithProjectIdentity(
+	require.NoError(d.UpsertSessionWithProjectIdentity(
 		session, observation, "source-project",
 	))
-	require.NoError(t, d.UpsertSessionWithProjectIdentity(
+	require.NoError(d.UpsertSessionWithProjectIdentity(
 		session, observation, "",
 	))
 
 	stored, err := d.GetSession(ctx, "atomic-identity")
-	require.NoError(t, err)
-	require.NotNil(t, stored)
-	assert.Equal(t, "mapped-project", stored.Project)
+	require.NoError(err)
+	require.NotNil(stored)
+	assert.Equal("mapped-project", stored.Project)
 	observations, err := d.ListProjectIdentityObservations(
 		ctx, []string{"mapped-project"},
 	)
-	require.NoError(t, err)
-	require.Len(t, observations, 1)
-	assert.Equal(t, "mapped-project", observations[0].Project)
+	require.NoError(err)
+	require.Len(observations, 1)
+	assert.Equal("mapped-project", observations[0].Project)
 	snapshots, err = d.ListSessionProjectIdentitySnapshots(ctx)
-	require.NoError(t, err)
-	require.Len(t, snapshots, 1)
-	assert.Equal(t, "source-project", snapshots[0].Project,
+	require.NoError(err)
+	require.Len(snapshots, 1)
+	assert.Equal("source-project", snapshots[0].Project,
 		"existing source evidence must survive an empty reparse")
 }
 
 func TestUpsertSessionWithProjectIdentityRejectsInvalidIdentityBeforeWrite(
 	t *testing.T,
 ) {
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, tc := range []struct {
 		name        string
 		sessionID   string
@@ -926,13 +993,16 @@ func TestUpsertSessionWithProjectIdentityRejectsInvalidIdentityBeforeWrite(
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			d := testDB(t)
 			recordedAt := time.Date(2026, 7, 17, 8, 0, 0, 0, time.UTC)
-			require.NoError(t, d.UpsertSession(Session{
+			require.NoError(d.UpsertSession(Session{
 				ID: "unrelated", Project: "unrelated-target",
 				Machine: "laptop", Agent: "codex", Cwd: "/tmp/unrelated",
 			}))
-			require.NoError(t, d.UpsertProjectIdentityObservationWithSnapshotProject(
+			require.NoError(d.UpsertProjectIdentityObservationWithSnapshotProject(
 				ctx,
 				export.ProjectIdentityObservation{
 					SessionID: "unrelated", Project: "unrelated-target",
@@ -943,8 +1013,8 @@ func TestUpsertSessionWithProjectIdentityRejectsInvalidIdentityBeforeWrite(
 				"unrelated-source",
 			))
 			before, err := d.ListSessionProjectIdentitySnapshots(ctx)
-			require.NoError(t, err)
-			require.Len(t, before, 1)
+			require.NoError(err)
+			require.Len(before, 1)
 
 			err = d.UpsertSessionWithProjectIdentity(
 				Session{
@@ -954,21 +1024,21 @@ func TestUpsertSessionWithProjectIdentityRejectsInvalidIdentityBeforeWrite(
 				tc.observation,
 				"",
 			)
-			assert.Error(t, err)
+			assert.Error(err)
 
 			candidate, getErr := d.GetSession(ctx, tc.sessionID)
-			require.NoError(t, getErr)
-			assert.Nil(t, candidate, "invalid input must not persist a session")
+			require.NoError(getErr)
+			assert.Nil(candidate, "invalid input must not persist a session")
 			after, listErr := d.ListSessionProjectIdentitySnapshots(ctx)
-			require.NoError(t, listErr)
-			assert.Equal(t, before, after,
+			require.NoError(listErr)
+			assert.Equal(before, after,
 				"invalid input must not alter unrelated immutable evidence")
 		})
 	}
 }
 
 func TestExplicitSnapshotProjectCorrectsOnlyLegacyProjectLabel(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	recordedAt := time.Date(2026, 7, 17, 9, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
 		name     string
@@ -1012,9 +1082,12 @@ func TestExplicitSnapshotProjectCorrectsOnlyLegacyProjectLabel(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			d := testDB(t)
 			sessionID := "legacy-" + strings.ReplaceAll(tc.name, " ", "-")
-			require.NoError(t, d.UpsertSession(Session{
+			require.NoError(d.UpsertSession(Session{
 				ID: sessionID, Project: "mapped-target", Machine: "laptop",
 				Agent: "codex", Cwd: "/legacy/worktree",
 			}))
@@ -1023,41 +1096,41 @@ func TestExplicitSnapshotProjectCorrectsOnlyLegacyProjectLabel(t *testing.T) {
 			existing.Project = "mapped-target"
 			existing.Machine = "laptop"
 			existing.ObservedAt = recordedAt
-			require.NoError(t, d.UpsertProjectIdentityObservation(ctx, existing))
+			require.NoError(d.UpsertProjectIdentityObservation(ctx, existing))
 
 			beforeByID, err := d.listSessionProjectIdentitySnapshots(
 				ctx, []string{sessionID},
 			)
-			require.NoError(t, err)
+			require.NoError(err)
 			before, ok := beforeByID[sessionID]
-			require.True(t, ok)
+			require.True(ok)
 
 			incoming := tc.incoming
 			incoming.SessionID = sessionID
 			incoming.Project = "mapped-target"
 			incoming.Machine = "laptop"
 			incoming.ObservedAt = recordedAt.Add(time.Hour)
-			require.NoError(t, d.UpsertProjectIdentityObservationWithSnapshotProject(
+			require.NoError(d.UpsertProjectIdentityObservationWithSnapshotProject(
 				ctx, incoming, "parser-source",
 			))
 
 			afterByID, err := d.listSessionProjectIdentitySnapshots(
 				ctx, []string{sessionID},
 			)
-			require.NoError(t, err)
+			require.NoError(err)
 			after, ok := afterByID[sessionID]
-			require.True(t, ok)
+			require.True(ok)
 			want := before
 			want.Project = "parser-source"
-			assert.Equal(t, want, after,
+			assert.Equal(want, after,
 				"explicit correction must preserve all immutable evidence fields")
 
-			require.NoError(t, d.UpsertProjectIdentityObservation(ctx, incoming))
+			require.NoError(d.UpsertProjectIdentityObservation(ctx, incoming))
 			legacyByID, err := d.listSessionProjectIdentitySnapshots(
 				ctx, []string{sessionID},
 			)
-			require.NoError(t, err)
-			assert.Equal(t, want, legacyByID[sessionID],
+			require.NoError(err)
+			assert.Equal(want, legacyByID[sessionID],
 				"legacy same-label publication must not relabel the snapshot")
 		})
 	}
@@ -1065,7 +1138,7 @@ func TestExplicitSnapshotProjectCorrectsOnlyLegacyProjectLabel(t *testing.T) {
 
 func seedProjectIdentityObservation(t *testing.T, d *DB, project string) {
 	t.Helper()
-	require.NoError(t, d.UpsertProjectIdentityObservation(context.Background(),
+	require.NoError(t, d.UpsertProjectIdentityObservation(t.Context(),
 		export.ProjectIdentityObservation{
 			Project:   project,
 			Machine:   "test-machine",
@@ -1076,17 +1149,20 @@ func seedProjectIdentityObservation(t *testing.T, d *DB, project string) {
 }
 
 func TestResyncKeepsMappedProjectForTrashedSession(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	dir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 	sourcePath := filepath.Join(dir, "source.db")
 	source, err := Open(sourcePath)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.NoError(t, source.UpsertSession(Session{
+	require.NoError(source.UpsertSession(Session{
 		ID: "trashed-mapped", Project: "parser-source", Machine: "local",
 		Agent: "codex", Cwd: "/workspace/repository/feature",
 	}))
-	require.NoError(t, source.UpsertProjectIdentityObservation(ctx,
+	require.NoError(source.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			SessionID: "trashed-mapped", Project: "parser-source",
 			Machine: "local", RootPath: "/workspace/repository",
@@ -1100,37 +1176,37 @@ func TestResyncKeepsMappedProjectForTrashedSession(t *testing.T) {
 		Layout: WorktreeMappingLayoutExplicit, Project: "mapped_project",
 		OriginalProject: "parser-source", Enabled: true,
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 	applied, err := source.ApplyWorktreeProjectMappings(ctx, "local")
-	require.NoError(t, err)
-	require.Equal(t, 1, applied.UpdatedSessions)
-	require.NoError(t, source.SoftDeleteSession("trashed-mapped"))
-	require.NoError(t, source.Close())
+	require.NoError(err)
+	require.Equal(1, applied.UpdatedSessions)
+	require.NoError(source.SoftDeleteSession("trashed-mapped"))
+	require.NoError(source.Close())
 
 	destination := testDB(t)
 	copied, err := destination.CopyTrashedDataFrom(sourcePath)
-	require.NoError(t, err)
-	require.Len(t, copied, 1)
-	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
+	require.NoError(err)
+	require.Len(copied, 1)
+	require.NoError(destination.CopySessionMetadataFrom(sourcePath))
 
 	restoredProjects, err :=
 		destination.RestoreSessionProjectsFromIdentitySnapshots(ctx)
-	require.NoError(t, err)
-	assert.Zero(t, restoredProjects,
+	require.NoError(err)
+	assert.Zero(restoredProjects,
 		"resync identity restore must leave trashed classifications untouched")
 	applied, err = destination.ApplyWorktreeProjectMappings(ctx, "local")
-	require.NoError(t, err)
-	assert.Zero(t, applied.UpdatedSessions,
+	require.NoError(err)
+	assert.Zero(applied.UpdatedSessions,
 		"mapping application intentionally excludes trashed sessions")
 
 	restored, err := destination.RestoreSession("trashed-mapped")
-	require.NoError(t, err)
-	require.Equal(t, int64(1), restored)
+	require.NoError(err)
+	require.Equal(int64(1), restored)
 	var project string
-	require.NoError(t, destination.getReader().QueryRowContext(ctx,
+	require.NoError(destination.getReader().QueryRowContext(ctx,
 		`SELECT project FROM sessions WHERE id = ?`, "trashed-mapped",
 	).Scan(&project))
-	assert.Equal(t, "mapped_project", project)
+	assert.Equal("mapped_project", project)
 }
 
 func TestSessionIdentityWritesReconcileChangedProject(t *testing.T) {
@@ -1187,8 +1263,11 @@ func TestSessionIdentityWritesReconcileChangedProject(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			d := testDB(t)
-			ctx := context.Background()
+			ctx := t.Context()
 			observation := export.ProjectIdentityObservation{
 				SessionID: sessionID, Project: targetProject, Machine: machine,
 				RootPath: root, GitRemote: remote,
@@ -1209,32 +1288,35 @@ func TestSessionIdentityWritesReconcileChangedProject(t *testing.T) {
 			stale, err := d.ListProjectIdentityObservations(
 				ctx, []string{targetProject},
 			)
-			require.NoError(t, err)
-			assert.Empty(t, stale,
+			require.NoError(err)
+			assert.Empty(stale,
 				"the former project must not retain the moved session's evidence")
 			current, err := d.ListProjectIdentityObservations(
 				ctx, []string{sourceProject},
 			)
-			require.NoError(t, err)
-			require.Len(t, current, 1)
-			assert.Equal(t, root, current[0].RootPath)
-			assert.Equal(t, remote, current[0].GitRemote)
+			require.NoError(err)
+			require.Len(current, 1)
+			assert.Equal(root, current[0].RootPath)
+			assert.Equal(remote, current[0].GitRemote)
 		})
 	}
 }
 
 func TestProjectObservationRemoteReplacesSameRootFallback(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := filepath.Join(t.TempDir(), "repo")
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:  "app",
 			Machine:  "laptop",
 			RootPath: root,
 		},
 	))
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:       "app",
 			Machine:       "laptop",
@@ -1245,21 +1327,23 @@ func TestProjectObservationRemoteReplacesSameRootFallback(t *testing.T) {
 	))
 
 	got, err := d.ListProjectIdentityObservations(ctx, []string{"app"})
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Equal(t, "https://github.com/acme/app.git", got[0].GitRemote)
+	require.NoError(err)
+	require.Len(got, 1)
+	assert.Equal("https://github.com/acme/app.git", got[0].GitRemote)
 
 	projects := export.BuildProjectsMap([]string{"app"}, got)
-	require.Equal(t, export.ProjectResolutionResolved, projects["app"].Resolution)
-	require.NotNil(t, projects["app"].Identity)
-	assert.Equal(t, "github.com/acme/app", projects["app"].Identity.NormalizedRemote)
+	require.Equal(export.ProjectResolutionResolved, projects["app"].Resolution)
+	require.NotNil(projects["app"].Identity)
+	assert.Equal("github.com/acme/app", projects["app"].Identity.NormalizedRemote)
 }
 
 func TestProjectObservationFallbackDoesNotRecreateSameRootWhenRemoteExists(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := filepath.Join(t.TempDir(), "repo")
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:       "app",
 			Machine:       "laptop",
@@ -1268,7 +1352,7 @@ func TestProjectObservationFallbackDoesNotRecreateSameRootWhenRemoteExists(t *te
 			GitRemoteName: "origin",
 		},
 	))
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:  "app",
 			Machine:  "laptop",
@@ -1277,22 +1361,25 @@ func TestProjectObservationFallbackDoesNotRecreateSameRootWhenRemoteExists(t *te
 	))
 
 	got, err := d.ListProjectIdentityObservations(ctx, []string{"app"})
-	require.NoError(t, err)
-	require.Len(t, got, 1)
+	require.NoError(err)
+	require.Len(got, 1)
 	assert.Equal(t, "https://github.com/acme/app.git", got[0].GitRemote)
 }
 
 func TestProjectObservationAmbiguousSupersedesResolvedAggregate(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := filepath.Join(t.TempDir(), "repo")
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project: "app", Machine: "laptop", RootPath: root,
 			GitRemote: "https://github.com/acme/app.git",
 		},
 	))
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project: "app", Machine: "laptop", RootPath: root,
 			RemoteResolution:     export.ProjectResolutionAmbiguous,
@@ -1301,23 +1388,26 @@ func TestProjectObservationAmbiguousSupersedesResolvedAggregate(t *testing.T) {
 	))
 
 	got, err := d.BuildProjectIdentityMap(ctx, []string{"app"})
-	require.NoError(t, err)
-	assert.Equal(t, export.ProjectResolutionAmbiguous, got["app"].Resolution)
-	assert.Nil(t, got["app"].Identity)
+	require.NoError(err)
+	assert.Equal(export.ProjectResolutionAmbiguous, got["app"].Resolution)
+	assert.Nil(got["app"].Identity)
 }
 
 func TestProjectObservationResolvedDoesNotDiscardAmbiguousEvidence(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := filepath.Join(t.TempDir(), "repo")
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project: "app", Machine: "laptop", RootPath: root,
 			RemoteResolution:     export.ProjectResolutionAmbiguous,
 			RemoteCandidateCount: 2,
 		},
 	))
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project: "app", Machine: "laptop", RootPath: root,
 			GitRemote: "https://github.com/acme/app.git",
@@ -1325,23 +1415,26 @@ func TestProjectObservationResolvedDoesNotDiscardAmbiguousEvidence(t *testing.T)
 	))
 
 	got, err := d.BuildProjectIdentityMap(ctx, []string{"app"})
-	require.NoError(t, err)
-	assert.Equal(t, export.ProjectResolutionAmbiguous, got["app"].Resolution)
-	assert.Nil(t, got["app"].Identity)
+	require.NoError(err)
+	assert.Equal(export.ProjectResolutionAmbiguous, got["app"].Resolution)
+	assert.Nil(got["app"].Identity)
 }
 
 func TestProjectObservationUnknownDoesNotReplaceAmbiguousEvidence(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := filepath.Join(t.TempDir(), "repo")
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project: "app", Machine: "laptop", RootPath: root,
 			RemoteResolution:     export.ProjectResolutionAmbiguous,
 			RemoteCandidateCount: 2,
 		},
 	))
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project: "app", Machine: "laptop", RootPath: root,
 			RemoteResolution: export.ProjectResolutionUnknown,
@@ -1349,14 +1442,17 @@ func TestProjectObservationUnknownDoesNotReplaceAmbiguousEvidence(t *testing.T) 
 	))
 
 	got, err := d.BuildProjectIdentityMap(ctx, []string{"app"})
-	require.NoError(t, err)
-	assert.Equal(t, export.ProjectResolutionAmbiguous, got["app"].Resolution)
-	assert.Nil(t, got["app"].Identity)
+	require.NoError(err)
+	assert.Equal(export.ProjectResolutionAmbiguous, got["app"].Resolution)
+	assert.Nil(got["app"].Identity)
 }
 
 func TestProjectObservationScrubDowngradesUnusableRemoteToFallback(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	root := filepath.Join(t.TempDir(), "repo")
 	_, err := d.getWriter().ExecContext(ctx, `
 		INSERT INTO project_identity_observations (
@@ -1367,25 +1463,27 @@ func TestProjectObservationScrubDowngradesUnusableRemoteToFallback(t *testing.T)
 		"app", "laptop", root, "file:///tmp/app.git", "origin",
 		"", "", "2026-07-03T12:00:00Z", "", "", "",
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	tx, err := d.getWriter().BeginTx(ctx, nil)
-	require.NoError(t, err)
-	require.NoError(t, scrubProjectIdentityGitRemoteCredentialsTx(ctx, tx))
-	require.NoError(t, tx.Commit())
+	require.NoError(err)
+	require.NoError(scrubProjectIdentityGitRemoteCredentialsTx(ctx, tx))
+	require.NoError(tx.Commit())
 
 	got, err := d.ListProjectIdentityObservations(ctx, []string{"app"})
-	require.NoError(t, err)
-	require.Len(t, got, 1)
-	assert.Empty(t, got[0].GitRemote)
-	assert.Equal(t, export.ProjectIdentityKeySourceRootPath, got[0].KeySource)
-	assert.NotEmpty(t, got[0].Key)
+	require.NoError(err)
+	require.Len(got, 1)
+	assert.Empty(got[0].GitRemote)
+	assert.Equal(export.ProjectIdentityKeySourceRootPath, got[0].KeySource)
+	assert.NotEmpty(got[0].Key)
 }
 
 func TestProjectObservationExportReadsDoNotMutateArchive(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	ctx := t.Context()
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:   "app",
 			Machine:   "laptop",
@@ -1396,15 +1494,15 @@ func TestProjectObservationExportReadsDoNotMutateArchive(t *testing.T) {
 
 	before := projectObservationRowCount(t, d)
 	_, err := d.ListProjectIdentityObservations(ctx, []string{"app"})
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = d.ListProjectIdentityObservations(ctx, []string{"missing"})
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Equal(t, before, projectObservationRowCount(t, d))
 }
 
 func TestProjectObservationDatabaseIDConcurrentCreateReturnsSingleID(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const workers = 64
 	var wg sync.WaitGroup
 	start := make(chan struct{})
@@ -1436,37 +1534,40 @@ func TestProjectObservationDatabaseIDConcurrentCreateReturnsSingleID(t *testing.
 }
 
 func TestProjectIdentityMapUsesPersistedFactsWithoutFilesystemInference(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	if runtime.GOOS == "windows" {
 		t.Skip("test uses POSIX-style temp git paths")
 	}
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	persistedRoot := filepath.Join(t.TempDir(), "persisted")
 	liveRoot := filepath.Join(t.TempDir(), "live")
 	mappedRoot := filepath.Join(t.TempDir(), "mapped")
 	fileParentRoot := filepath.Join(t.TempDir(), "file-parent")
-	require.NoError(t, os.MkdirAll(filepath.Join(persistedRoot, ".git"), 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(liveRoot, ".git"), 0o755))
-	require.NoError(t, os.MkdirAll(mappedRoot, 0o755))
-	require.NoError(t, os.MkdirAll(filepath.Join(fileParentRoot, ".git"), 0o755))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.MkdirAll(filepath.Join(persistedRoot, ".git"), 0o755))
+	require.NoError(os.MkdirAll(filepath.Join(liveRoot, ".git"), 0o755))
+	require.NoError(os.MkdirAll(mappedRoot, 0o755))
+	require.NoError(os.MkdirAll(filepath.Join(fileParentRoot, ".git"), 0o755))
+	require.NoError(os.WriteFile(
 		filepath.Join(persistedRoot, ".git", "config"),
 		[]byte("[remote \"origin\"]\n\turl = https://github.com/live/wrong.git\n"),
 		0o644,
 	))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(liveRoot, ".git", "config"),
 		[]byte("[remote \"origin\"]\n\turl = https://github.com/acme/live.git\n"),
 		0o644,
 	))
-	require.NoError(t, os.WriteFile(
+	require.NoError(os.WriteFile(
 		filepath.Join(fileParentRoot, ".git", "config"),
 		[]byte("[remote \"origin\"]\n\turl = https://github.com/acme/file-parent.git\n"),
 		0o644,
 	))
 
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:   "persisted",
 			Machine:   "laptop",
@@ -1474,21 +1575,21 @@ func TestProjectIdentityMapUsesPersistedFactsWithoutFilesystemInference(t *testi
 			GitRemote: "git@github.com:acme/persisted.git",
 		},
 	))
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:      "persisted-session",
 		Project: "persisted",
 		Machine: "laptop",
 		Agent:   "codex",
 		Cwd:     persistedRoot,
 	}))
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:      "live-session",
 		Project: "live",
 		Machine: "laptop",
 		Agent:   "codex",
 		Cwd:     liveRoot,
 	}))
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:      "mapped-session",
 		Project: "mapped",
 		Machine: "laptop",
@@ -1496,7 +1597,7 @@ func TestProjectIdentityMapUsesPersistedFactsWithoutFilesystemInference(t *testi
 		Cwd:     filepath.Join(mappedRoot, "feature"),
 	}))
 	fileParentPath := filepath.Join(fileParentRoot, "session.jsonl")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:       "file-parent-session",
 		Project:  "file-parent",
 		Machine:  "laptop",
@@ -1509,8 +1610,8 @@ func TestProjectIdentityMapUsesPersistedFactsWithoutFilesystemInference(t *testi
 		Project:    "mapped",
 		Enabled:    true,
 	})
-	require.NoError(t, err)
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(err)
+	require.NoError(d.UpsertSession(Session{
 		ID:      "remote-session",
 		Project: "remote",
 		Machine: "remote-host",
@@ -1522,47 +1623,50 @@ func TestProjectIdentityMapUsesPersistedFactsWithoutFilesystemInference(t *testi
 	got, err := d.BuildProjectIdentityMap(ctx,
 		[]string{"persisted", "live", "mapped", "file-parent", "remote", "unknown"},
 	)
-	require.NoError(t, err)
-	assert.Equal(t, before, projectObservationRowCount(t, d))
+	require.NoError(err)
+	assert.Equal(before, projectObservationRowCount(t, d))
 
-	require.Equal(t, export.ProjectResolutionResolved, got["persisted"].Resolution)
-	require.NotNil(t, got["persisted"].Identity)
-	assert.Equal(t, "github.com/acme/persisted", got["persisted"].Identity.NormalizedRemote)
+	require.Equal(export.ProjectResolutionResolved, got["persisted"].Resolution)
+	require.NotNil(got["persisted"].Identity)
+	assert.Equal("github.com/acme/persisted", got["persisted"].Identity.NormalizedRemote)
 
-	require.Equal(t, export.ProjectResolutionUnknown, got["live"].Resolution)
-	assert.Nil(t, got["live"].Identity)
+	require.Equal(export.ProjectResolutionUnknown, got["live"].Resolution)
+	assert.Nil(got["live"].Identity)
 
-	require.Equal(t, export.ProjectResolutionUnknown, got["mapped"].Resolution)
-	assert.Nil(t, got["mapped"].Identity)
+	require.Equal(export.ProjectResolutionUnknown, got["mapped"].Resolution)
+	assert.Nil(got["mapped"].Identity)
 
-	require.Equal(t, export.ProjectResolutionUnknown, got["file-parent"].Resolution)
-	assert.Nil(t, got["file-parent"].Identity)
+	require.Equal(export.ProjectResolutionUnknown, got["file-parent"].Resolution)
+	assert.Nil(got["file-parent"].Identity)
 
-	assert.Equal(t, export.ProjectResolutionUnknown, got["remote"].Resolution)
-	assert.Nil(t, got["remote"].Identity)
-	assert.Equal(t, export.ProjectResolutionUnknown, got["unknown"].Resolution)
-	assert.Nil(t, got["unknown"].Identity)
+	assert.Equal(export.ProjectResolutionUnknown, got["remote"].Resolution)
+	assert.Nil(got["remote"].Identity)
+	assert.Equal(export.ProjectResolutionUnknown, got["unknown"].Resolution)
+	assert.Nil(got["unknown"].Identity)
 }
 
 func TestProjectIdentityMapLegacyFallbackAcceptsWindowsDriveRoots(t *testing.T) {
-	d := testDB(t)
-	ctx := context.Background()
+	assert := assert.New(t)
+	require := require.New(t)
 
-	require.NoError(t, d.UpsertSession(Session{
+	d := testDB(t)
+	ctx := t.Context()
+
+	require.NoError(d.UpsertSession(Session{
 		ID:      "windows-backslash-session",
 		Project: "windows-backslash",
 		Machine: "windows-host",
 		Agent:   "codex",
 		Cwd:     `C:\repo\`,
 	}))
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:      "windows-slash-session",
 		Project: "windows-slash",
 		Machine: "windows-host",
 		Agent:   "codex",
 		Cwd:     "C:/repo/",
 	}))
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:      "remote-prefixed-session",
 		Project: "remote-prefixed",
 		Machine: "remote-host",
@@ -1573,32 +1677,34 @@ func TestProjectIdentityMapLegacyFallbackAcceptsWindowsDriveRoots(t *testing.T) 
 	got, err := d.BuildProjectIdentityMap(ctx,
 		[]string{"windows-backslash", "windows-slash", "remote-prefixed"},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	require.Equal(t, export.ProjectResolutionUnknown, got["windows-backslash"].Resolution)
-	assert.Nil(t, got["windows-backslash"].Identity)
+	require.Equal(export.ProjectResolutionUnknown, got["windows-backslash"].Resolution)
+	assert.Nil(got["windows-backslash"].Identity)
 
-	require.Equal(t, export.ProjectResolutionUnknown, got["windows-slash"].Resolution)
-	assert.Nil(t, got["windows-slash"].Identity)
+	require.Equal(export.ProjectResolutionUnknown, got["windows-slash"].Resolution)
+	assert.Nil(got["windows-slash"].Identity)
 
-	assert.Equal(t, export.ProjectResolutionUnknown, got["remote-prefixed"].Resolution)
-	assert.Nil(t, got["remote-prefixed"].Identity)
+	assert.Equal(export.ProjectResolutionUnknown, got["remote-prefixed"].Resolution)
+	assert.Nil(got["remote-prefixed"].Identity)
 }
 
 func TestProjectIdentityMapUnknownPersistedObservationUsesLegacyFallback(t *testing.T) {
-	d := testDB(t)
-	ctx := context.Background()
-	root := filepath.Join(t.TempDir(), "fallback")
-	require.NoError(t, os.MkdirAll(filepath.Join(root, ".git"), 0o755))
+	require := require.New(t)
 
-	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
+	d := testDB(t)
+	ctx := t.Context()
+	root := filepath.Join(t.TempDir(), "fallback")
+	require.NoError(os.MkdirAll(filepath.Join(root, ".git"), 0o755))
+
+	require.NoError(d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:    "fallback",
 			Machine:    "laptop",
 			RootPath:   "remote-host:/srv/app",
 			ObservedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
 		}), "upsert unresolved persisted observation")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:      "fallback-session",
 		Project: "fallback",
 		Machine: "laptop",
@@ -1607,21 +1713,23 @@ func TestProjectIdentityMapUnknownPersistedObservationUsesLegacyFallback(t *test
 	}))
 
 	got, err := d.BuildProjectIdentityMap(ctx, []string{"fallback"})
-	require.NoError(t, err)
-	require.Equal(t, export.ProjectResolutionUnknown,
+	require.NoError(err)
+	require.Equal(export.ProjectResolutionUnknown,
 		got["fallback"].Resolution)
 	assert.Nil(t, got["fallback"].Identity)
 }
 
 func TestProjectIdentityMapLegacyFallbackUsesNoRemoteGitRoot(t *testing.T) {
-	d := testDB(t)
-	ctx := context.Background()
-	repo := t.TempDir()
-	require.NoError(t, os.Mkdir(filepath.Join(repo, ".git"), 0o755))
-	subdir := filepath.Join(repo, "pkg", "feature")
-	require.NoError(t, os.MkdirAll(subdir, 0o755))
+	require := require.New(t)
 
-	require.NoError(t, d.UpsertSession(Session{
+	d := testDB(t)
+	ctx := t.Context()
+	repo := t.TempDir()
+	require.NoError(os.Mkdir(filepath.Join(repo, ".git"), 0o755))
+	subdir := filepath.Join(repo, "pkg", "feature")
+	require.NoError(os.MkdirAll(subdir, 0o755))
+
+	require.NoError(d.UpsertSession(Session{
 		ID:      "git-root-session",
 		Project: "git-root",
 		Machine: "laptop",
@@ -1630,15 +1738,17 @@ func TestProjectIdentityMapLegacyFallbackUsesNoRemoteGitRoot(t *testing.T) {
 	}))
 
 	got, err := d.BuildProjectIdentityMap(ctx, []string{"git-root"})
-	require.NoError(t, err)
-	require.Equal(t, export.ProjectResolutionUnknown,
+	require.NoError(err)
+	require.Equal(export.ProjectResolutionUnknown,
 		got["git-root"].Resolution)
 	assert.Nil(t, got["git-root"].Identity)
 }
 
 func TestProjectIdentityMapLegacyFallbackUsesRepoDotWorktreesMapping(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	parent := t.TempDir()
 	worktreesDir := filepath.Join(parent, "acme-app.worktrees")
 
@@ -1648,15 +1758,15 @@ func TestProjectIdentityMapLegacyFallbackUsesRepoDotWorktreesMapping(t *testing.
 		Layout:     WorktreeMappingLayoutRepoDotWorktrees,
 		Enabled:    true,
 	})
-	require.NoError(t, err)
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(err)
+	require.NoError(d.UpsertSession(Session{
 		ID:      "branch-a-session",
 		Project: "acme_app",
 		Machine: "laptop",
 		Agent:   "codex",
 		Cwd:     filepath.Join(worktreesDir, "branch-a"),
 	}))
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(d.UpsertSession(Session{
 		ID:      "branch-b-session",
 		Project: "acme_app",
 		Machine: "laptop",
@@ -1665,14 +1775,16 @@ func TestProjectIdentityMapLegacyFallbackUsesRepoDotWorktreesMapping(t *testing.
 	}))
 
 	got, err := d.BuildProjectIdentityMap(ctx, []string{"acme_app"})
-	require.NoError(t, err)
-	require.Equal(t, export.ProjectResolutionUnknown, got["acme_app"].Resolution)
+	require.NoError(err)
+	require.Equal(export.ProjectResolutionUnknown, got["acme_app"].Resolution)
 	assert.Nil(t, got["acme_app"].Identity)
 }
 
 func TestProjectIdentityMapLegacyFallbackClosesRowsBeforeMappingLookup(t *testing.T) {
+	require := require.New(t)
+
 	d := testDB(t)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	reader := d.rawReader()
 	oldMaxOpen := reader.Stats().MaxOpenConnections
@@ -1687,8 +1799,8 @@ func TestProjectIdentityMapLegacyFallbackClosesRowsBeforeMappingLookup(t *testin
 			Project:    "mapped",
 			Enabled:    true,
 		})
-	require.NoError(t, err, "CreateWorktreeProjectMapping")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(err, "CreateWorktreeProjectMapping")
+	require.NoError(d.UpsertSession(Session{
 		ID:      "mapped-session",
 		Project: "mapped",
 		Machine: "laptop",
@@ -1697,8 +1809,8 @@ func TestProjectIdentityMapLegacyFallbackClosesRowsBeforeMappingLookup(t *testin
 	}))
 
 	got, err := d.BuildProjectIdentityMap(ctx, []string{"mapped"})
-	require.NoError(t, err)
-	require.Equal(t, export.ProjectResolutionUnknown,
+	require.NoError(err)
+	require.Equal(export.ProjectResolutionUnknown,
 		got["mapped"].Resolution)
 	assert.Nil(t, got["mapped"].Identity)
 }

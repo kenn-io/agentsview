@@ -1,8 +1,6 @@
 package service_test
 
 import (
-	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -33,6 +31,9 @@ func seedSearchSession(t *testing.T, d *db.DB, id, project, content string) {
 }
 
 func TestDirectBackend_Search_Roundtrip(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
 	if !d.HasFTS() {
@@ -42,24 +43,24 @@ func TestDirectBackend_Search_Roundtrip(t *testing.T) {
 	seedSearchSession(t, d, "s2", "proj-b", "lazy dogs sleep")
 	be := service.NewDirectBackend(d, nil)
 
-	res, err := be.Search(context.Background(), service.SearchRequest{
+	res, err := be.Search(t.Context(), service.SearchRequest{
 		Query: "fox",
 		Limit: 10,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, res)
-	require.Len(t, res.Results, 1)
-	assert.Equal(t, "s1", res.Results[0].SessionID)
-	assert.Equal(t, "proj-a", res.Results[0].Project)
+	require.NoError(err)
+	require.NotNil(res)
+	require.Len(res.Results, 1)
+	assert.Equal("s1", res.Results[0].SessionID)
+	assert.Equal("proj-a", res.Results[0].Project)
 
 	// Project filter restricts results.
-	none, err := be.Search(context.Background(), service.SearchRequest{
+	none, err := be.Search(t.Context(), service.SearchRequest{
 		Query:   "fox",
 		Project: "proj-b",
 		Limit:   10,
 	})
-	require.NoError(t, err)
-	assert.Empty(t, none.Results)
+	require.NoError(err)
+	assert.Empty(none.Results)
 }
 
 func TestDirectBackend_Search_EmptyQuery(t *testing.T) {
@@ -67,10 +68,10 @@ func TestDirectBackend_Search_EmptyQuery(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	be := service.NewDirectBackend(d, nil)
 
-	_, err := be.Search(context.Background(), service.SearchRequest{Query: "   "})
+	_, err := be.Search(t.Context(), service.SearchRequest{Query: "   "})
 	require.Error(t, err)
 	var inputErr *db.SearchInputError
-	assert.True(t, errors.As(err, &inputErr),
+	assert.ErrorAs(t, err, &inputErr,
 		"empty query should be a SearchInputError, got %T", err)
 }
 
@@ -86,7 +87,7 @@ func TestDirectBackend_Search_PunctuationIsLiteral(t *testing.T) {
 	seedSearchSession(t, d, "s1", "proj", "deploying agentsview-mcp today")
 	be := service.NewDirectBackend(d, nil)
 
-	res, err := be.Search(context.Background(), service.SearchRequest{
+	res, err := be.Search(t.Context(), service.SearchRequest{
 		Query: "agentsview-mcp",
 		Limit: 10,
 	})
@@ -96,6 +97,8 @@ func TestDirectBackend_Search_PunctuationIsLiteral(t *testing.T) {
 }
 
 func TestHTTPBackend_Search_Roundtrip(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
 	d := env.DB
@@ -105,19 +108,21 @@ func TestHTTPBackend_Search_Roundtrip(t *testing.T) {
 	seedSearchSession(t, d, "s1", "proj-a", "the quick brown fox jumped")
 	svc := env.Backend("", false)
 
-	res, err := svc.Search(context.Background(), service.SearchRequest{
+	res, err := svc.Search(t.Context(), service.SearchRequest{
 		Query: "fox",
 		Limit: 10,
 	})
-	require.NoError(t, err)
-	require.NotNil(t, res)
-	require.Len(t, res.Results, 1)
+	require.NoError(err)
+	require.NotNil(res)
+	require.Len(res.Results, 1)
 	assert.Equal(t, "s1", res.Results[0].SessionID)
 }
 
 // The HTTP backend must forward all search params to the daemon's
 // /api/v1/search endpoint with the expected query-key names.
 func TestHTTPBackend_Search_SendsParams(t *testing.T) {
+	assert := assert.New(t)
+
 	t.Parallel()
 	var got url.Values
 	srv := httptest.NewServer(http.HandlerFunc(
@@ -129,15 +134,15 @@ func TestHTTPBackend_Search_SendsParams(t *testing.T) {
 	t.Cleanup(srv.Close)
 	svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
 
-	_, err := svc.Search(context.Background(), service.SearchRequest{
+	_, err := svc.Search(t.Context(), service.SearchRequest{
 		Query: "needle", Project: "proj", Sort: "recency", Cursor: 7, Limit: 5,
 	})
 	require.NoError(t, err)
-	assert.Equal(t, "needle", got.Get("q"))
-	assert.Equal(t, "proj", got.Get("project"))
-	assert.Equal(t, "recency", got.Get("sort"))
-	assert.Equal(t, "7", got.Get("cursor"))
-	assert.Equal(t, "5", got.Get("limit"))
+	assert.Equal("needle", got.Get("q"))
+	assert.Equal("proj", got.Get("project"))
+	assert.Equal("recency", got.Get("sort"))
+	assert.Equal("7", got.Get("cursor"))
+	assert.Equal("5", got.Get("limit"))
 }
 
 // A daemon without an FTS index responds 501; the HTTP backend maps that
@@ -151,9 +156,9 @@ func TestHTTPBackend_Search_Unavailable(t *testing.T) {
 	t.Cleanup(srv.Close)
 	svc := servicehttp.NewHTTPBackend(srv.URL, "", true, "")
 
-	_, err := svc.Search(context.Background(), service.SearchRequest{Query: "fox"})
+	_, err := svc.Search(t.Context(), service.SearchRequest{Query: "fox"})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, service.ErrSearchUnavailable),
+	assert.ErrorIs(t, err, service.ErrSearchUnavailable,
 		"501 should map to ErrSearchUnavailable, got %v", err)
 }
 
@@ -165,11 +170,11 @@ func TestDirectBackend_SearchContent_SemanticUnavailable(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	be := service.NewDirectBackend(d, nil)
 
-	_, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
+	_, err := be.SearchContent(t.Context(), service.ContentSearchRequest{
 		Pattern: "fox", Mode: "semantic",
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, service.ErrSemanticUnavailable),
+	assert.ErrorIs(t, err, service.ErrSemanticUnavailable,
 		"expected ErrSemanticUnavailable, got %v", err)
 }
 
@@ -185,10 +190,10 @@ func TestHTTPBackend_SearchContent_SemanticUnavailable(t *testing.T) {
 	t.Cleanup(srv.Close)
 	svc := servicehttp.NewHTTPBackend(srv.URL, "", true, "")
 
-	_, err := svc.SearchContent(context.Background(), service.ContentSearchRequest{
+	_, err := svc.SearchContent(t.Context(), service.ContentSearchRequest{
 		Pattern: "fox", Mode: "semantic",
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, service.ErrSemanticUnavailable),
+	assert.ErrorIs(t, err, service.ErrSemanticUnavailable,
 		"501 should map to ErrSemanticUnavailable, got %v", err)
 }

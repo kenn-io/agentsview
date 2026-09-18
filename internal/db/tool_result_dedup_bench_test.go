@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"runtime"
 	"strings"
@@ -88,7 +87,7 @@ func benchGetMessagesWithEvents(b *testing.B, eventsPerCall int) {
 	d := testDB(b)
 	const msgs, callsPerMsg = 200, 3
 	seedBenchToolResultSession(b, d, "bench-events", msgs, callsPerMsg, eventsPerCall)
-	ctx := context.Background()
+	ctx := b.Context()
 	b.ResetTimer()
 	for b.Loop() {
 		got, err := d.GetMessages(ctx, "bench-events", 0, msgs, true)
@@ -113,7 +112,7 @@ func BenchmarkRecallEvidenceWindowFiveAgentEventCalls(b *testing.B) {
 	d := testDB(b)
 	const msgs, callsPerMsg = 200, 3
 	seedBenchToolResultSession(b, d, "bench-recall", msgs, callsPerMsg, 5)
-	ctx := context.Background()
+	ctx := b.Context()
 	b.ResetTimer()
 	for b.Loop() {
 		w, err := d.BuildRecallEvidenceWindow(ctx, "bench-recall", 0, msgs-1)
@@ -130,7 +129,7 @@ func BenchmarkRecallEvidenceWindowSingleEventCallsColdPools(b *testing.B) {
 	d := testDB(b)
 	const msgs, callsPerMsg = 200, 3
 	seedBenchToolResultSession(b, d, "bench-recall-1", msgs, callsPerMsg, 1)
-	ctx := context.Background()
+	ctx := b.Context()
 	b.ResetTimer()
 	for b.Loop() {
 		// Two collections evict both the primary and victim sync.Pool

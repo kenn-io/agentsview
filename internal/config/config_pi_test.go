@@ -1,7 +1,6 @@
 package config
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -32,6 +31,9 @@ func TestPiDirectoryOverrides(t *testing.T) {
 		{name: "tilde sessions", sessionDir: "~/transcripts", want: "transcripts"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			dir := setupTestEnv(t)
 			home := canonicalTempDir(t)
 			setTestHome(t, home)
@@ -46,29 +48,29 @@ func TestPiDirectoryOverrides(t *testing.T) {
 			writeConfig(t, dir, settings)
 
 			cfg, err := LoadMinimal()
-			require.NoError(t, err)
+			require.NoError(err)
 			if tt.want == "" {
-				assert.Empty(t, cfg.ResolveDirs(parser.AgentPi))
+				assert.Empty(cfg.ResolveDirs(parser.AgentPi))
 				return
 			}
 			root := filepath.Join(home, filepath.FromSlash(tt.want))
-			assert.Equal(t, []string{root}, cfg.ResolveDirs(parser.AgentPi))
+			assert.Equal([]string{root}, cfg.ResolveDirs(parser.AgentPi))
 
 			// A real transcript must be discoverable through the resolved roots.
 			sessionPath := filepath.Join(root, "session-a.jsonl")
 			if tt.sessionDir == "" && tt.piDir == "" {
 				sessionPath = filepath.Join(root, "--project-a--", "session-a.jsonl")
 			}
-			require.NoError(t, os.MkdirAll(filepath.Dir(sessionPath), 0o755))
-			require.NoError(t, os.WriteFile(sessionPath, []byte(`{"type":"session","version":3,"id":"session-a","timestamp":"2026-09-01T12:00:00Z","cwd":"/project-a"}`+"\n"), 0o600))
+			require.NoError(os.MkdirAll(filepath.Dir(sessionPath), 0o755))
+			require.NoError(os.WriteFile(sessionPath, []byte(`{"type":"session","version":3,"id":"session-a","timestamp":"2026-09-01T12:00:00Z","cwd":"/project-a"}`+"\n"), 0o600))
 			provider, ok := parser.NewProvider(parser.AgentPi, parser.ProviderConfig{
 				Roots: cfg.ResolveDirs(parser.AgentPi), Machine: "host-a",
 			})
-			require.True(t, ok)
-			sources, err := provider.Discover(context.Background())
-			require.NoError(t, err)
-			require.Len(t, sources, 1)
-			assert.Equal(t, sessionPath, sources[0].DisplayPath)
+			require.True(ok)
+			sources, err := provider.Discover(t.Context())
+			require.NoError(err)
+			require.Len(sources, 1)
+			assert.Equal(sessionPath, sources[0].DisplayPath)
 		})
 	}
 }

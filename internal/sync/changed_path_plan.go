@@ -64,7 +64,7 @@ func (e *Engine) PlanChangedPathsContext(
 
 func normalizeChangedPhysicalPath(path string) (string, error) {
 	if path == "" || strings.IndexByte(path, 0) >= 0 || !filepath.IsAbs(path) {
-		return "", fmt.Errorf("changed path is not a trusted absolute physical path")
+		return "", errors.New("changed path is not a trusted absolute physical path")
 	}
 	return filepath.Clean(path), nil
 }

@@ -48,11 +48,11 @@ const pgUsageSessionEligibility = `s.deleted_at IS NULL`
 
 func usageLocation(f db.UsageFilter) *time.Location {
 	if f.Timezone == "" {
-		return time.Local
+		return time.Local //nolint:forbidigo // Usage reports group UTC timestamps into local calendar dates when no timezone is selected.
 	}
 	loc, err := time.LoadLocation(f.Timezone)
 	if err != nil {
-		return time.Local
+		return time.Local //nolint:forbidigo // Usage reports group UTC timestamps into local calendar dates when no timezone is selected.
 	}
 	return loc
 }

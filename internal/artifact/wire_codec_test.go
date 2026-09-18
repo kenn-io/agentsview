@@ -66,12 +66,15 @@ func TestWireRefMappings(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			canonical, err := NewRef(wireCodecTestOrigin, tt.kind, tt.canonicalName)
-			require.NoError(t, err)
+			require.NoError(err)
 
 			wire, err := ToWireRef(canonical)
-			require.NoError(t, err)
-			assert.Equal(t, WireRef{
+			require.NoError(err)
+			assert.Equal(WireRef{
 				Origin: wireCodecTestOrigin,
 				Kind:   tt.kind,
 				Name:   tt.wireName,
@@ -79,8 +82,8 @@ func TestWireRefMappings(t *testing.T) {
 			}, wire)
 
 			roundTrip, err := FromWireRef(wireCodecTestOrigin, tt.kind, tt.wireName)
-			require.NoError(t, err)
-			assert.Equal(t, canonical, roundTrip)
+			require.NoError(err)
+			assert.Equal(canonical, roundTrip)
 		})
 	}
 }
@@ -140,17 +143,19 @@ func TestWireCodecRoundTripsIdentityAndZstd(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			require := require.New(t)
+
 			wireRef, err := ToWireRef(tt.ref)
-			require.NoError(t, err)
+			require.NoError(err)
 			var encoded bytes.Buffer
-			require.NoError(t, EncodeWire(t.Context(), tt.ref, bytes.NewReader(tt.body), &encoded))
+			require.NoError(EncodeWire(t.Context(), tt.ref, bytes.NewReader(tt.body), &encoded))
 
 			var decoded bytes.Buffer
 			err = DecodeWire(t.Context(), wireRef, bytes.NewReader(encoded.Bytes()), &decoded, WireLimits{
 				MaxEncodedBytes: int64(encoded.Len()),
 				MaxDecodedBytes: int64(len(tt.body)),
 			})
-			require.NoError(t, err)
+			require.NoError(err)
 			assert.Equal(t, tt.body, decoded.Bytes())
 		})
 	}
@@ -200,11 +205,14 @@ func TestWireDecodePreservesSourceReadErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			wireRef, err := ToWireRef(tt.ref)
-			require.NoError(t, err)
+			require.NoError(err)
 			var encoded bytes.Buffer
 			body := []byte("valid artifact body")
-			require.NoError(t, EncodeWire(t.Context(), tt.ref, bytes.NewReader(body), &encoded))
+			require.NoError(EncodeWire(t.Context(), tt.ref, bytes.NewReader(body), &encoded))
 
 			networkReset := errors.New("connection reset by peer")
 			src := &failingWireReader{
@@ -216,9 +224,9 @@ func TestWireDecodePreservesSourceReadErrors(t *testing.T) {
 				MaxEncodedBytes: int64(encoded.Len()),
 				MaxDecodedBytes: int64(len(body)),
 			})
-			require.Error(t, err)
-			assert.ErrorIs(t, err, networkReset)
-			assert.NotErrorIs(t, err, ErrArtifactCorrupt)
+			require.Error(err)
+			assert.ErrorIs(err, networkReset)
+			assert.NotErrorIs(err, ErrArtifactCorrupt)
 		})
 	}
 }
@@ -262,11 +270,14 @@ func TestWireDecodePreservesDestinationWriteErrors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			wireRef, err := ToWireRef(tt.ref)
-			require.NoError(t, err)
+			require.NoError(err)
 			var encoded bytes.Buffer
 			body := []byte("valid artifact body")
-			require.NoError(t, EncodeWire(t.Context(), tt.ref, bytes.NewReader(body), &encoded))
+			require.NoError(EncodeWire(t.Context(), tt.ref, bytes.NewReader(body), &encoded))
 
 			diskFull := errors.New("disk full")
 			err = DecodeWire(t.Context(), wireRef, bytes.NewReader(encoded.Bytes()),
@@ -274,14 +285,17 @@ func TestWireDecodePreservesDestinationWriteErrors(t *testing.T) {
 					MaxEncodedBytes: int64(encoded.Len()),
 					MaxDecodedBytes: int64(len(body)),
 				})
-			require.Error(t, err)
-			assert.ErrorIs(t, err, diskFull)
-			assert.NotErrorIs(t, err, ErrArtifactCorrupt)
+			require.Error(err)
+			assert.ErrorIs(err, diskFull)
+			assert.NotErrorIs(err, ErrArtifactCorrupt)
 		})
 	}
 }
 
 func TestWireZstdEncodingIsDeterministic(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	ref := Ref{
@@ -292,10 +306,10 @@ func TestWireZstdEncodingIsDeterministic(t *testing.T) {
 	body := bytes.Repeat([]byte("deterministic canonical record\n"), 1024)
 	var first, second bytes.Buffer
 
-	require.NoError(t, EncodeWire(t.Context(), ref, bytes.NewReader(body), &first))
-	require.NoError(t, EncodeWire(t.Context(), ref, bytes.NewReader(body), &second))
-	assert.Equal(t, first.Bytes(), second.Bytes())
-	assert.NotEqual(t, body, first.Bytes())
+	require.NoError(EncodeWire(t.Context(), ref, bytes.NewReader(body), &first))
+	require.NoError(EncodeWire(t.Context(), ref, bytes.NewReader(body), &second))
+	assert.Equal(first.Bytes(), second.Bytes())
+	assert.NotEqual(body, first.Bytes())
 }
 
 func TestWireDecodeEnforcesEncodedAndDecodedLimits(t *testing.T) {
@@ -327,29 +341,35 @@ func TestWireDecodeEnforcesEncodedAndDecodedLimits(t *testing.T) {
 	})
 
 	t.Run("decoded ceiling exceeded", func(t *testing.T) {
+		assert := assert.New(t)
+		require := require.New(t)
+
 		ref := Ref{
 			Origin: wireCodecTestOrigin,
 			Kind:   KindSegments,
 			Name:   strings.Repeat("b", 64) + ".ndjson",
 		}
 		wireRef, err := ToWireRef(ref)
-		require.NoError(t, err)
+		require.NoError(err)
 		body := bytes.Repeat([]byte("x"), 1024)
 		var encoded bytes.Buffer
-		require.NoError(t, EncodeWire(t.Context(), ref, bytes.NewReader(body), &encoded))
+		require.NoError(EncodeWire(t.Context(), ref, bytes.NewReader(body), &encoded))
 
 		var decoded bytes.Buffer
 		err = DecodeWire(t.Context(), wireRef, bytes.NewReader(encoded.Bytes()), &decoded, WireLimits{
 			MaxEncodedBytes: int64(encoded.Len()),
 			MaxDecodedBytes: int64(len(body) - 1),
 		})
-		require.Error(t, err)
-		assert.ErrorIs(t, err, ErrArtifactCorrupt)
-		assert.Contains(t, err.Error(), "decoded canonical output exceeds 1023-byte limit")
+		require.Error(err)
+		assert.ErrorIs(err, ErrArtifactCorrupt)
+		assert.Contains(err.Error(), "decoded canonical output exceeds 1023-byte limit")
 	})
 }
 
 func TestWireDecodeRejectsLargeZstdWindow(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	body := bytes.Repeat([]byte("windowed-record\n"), 700_000)
@@ -359,10 +379,10 @@ func TestWireDecodeRejectsLargeZstdWindow(t *testing.T) {
 		zstd.WithWindowSize(16<<20),
 		zstd.WithEncoderConcurrency(1),
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = enc.Write(body)
-	require.NoError(t, err)
-	require.NoError(t, enc.Close())
+	require.NoError(err)
+	require.NoError(enc.Close())
 	wireRef := requireWireRef(t, Ref{
 		Origin: wireCodecTestOrigin,
 		Kind:   KindSegments,
@@ -373,9 +393,9 @@ func TestWireDecodeRejectsLargeZstdWindow(t *testing.T) {
 		MaxEncodedBytes: int64(encoded.Len()),
 		MaxDecodedBytes: int64(len(body)),
 	})
-	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrArtifactCorrupt)
-	assert.Contains(t, err.Error(), "window size exceeded")
+	require.Error(err)
+	require.ErrorIs(err, ErrArtifactCorrupt)
+	assert.Contains(err.Error(), "window size exceeded")
 }
 
 func TestWireDecodeRejectsCorruptAndTruncatedZstd(t *testing.T) {
@@ -458,7 +478,7 @@ func TestWireDecodeRejectsNonPositiveLimits(t *testing.T) {
 				t.Context(), wireRef, strings.NewReader("x"), io.Discard, tt.limits,
 			)
 			require.Error(t, err)
-			assert.ErrorIs(t, err, ErrArtifactInvalid)
+			require.ErrorIs(t, err, ErrArtifactInvalid)
 			assert.Contains(t, err.Error(), "wire limits must be positive")
 		})
 	}
@@ -486,7 +506,7 @@ func TestWireCodecHonorsCancellation(t *testing.T) {
 			Name:   strings.Repeat("b", 64),
 		}
 		err := EncodeWire(ctx, rawRef, src, io.Discard)
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 		assert.Less(t, src.read, int64(1<<20))
 	})
 
@@ -502,7 +522,7 @@ func TestWireCodecHonorsCancellation(t *testing.T) {
 			Name:   strings.Repeat("c", 64),
 		}
 		err := EncodeWire(ctx, rawRef, src, io.Discard)
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 	})
 
 	t.Run("encode", func(t *testing.T) {
@@ -513,7 +533,7 @@ func TestWireCodecHonorsCancellation(t *testing.T) {
 			perRead:   1024,
 		}
 		err := EncodeWire(ctx, ref, src, io.Discard)
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 		assert.Less(t, src.read, int64(1<<20))
 	})
 
@@ -593,9 +613,12 @@ func TestWireCodecDetectsCancellationDuringFinalSuccessfulWrite(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			count := &cancelOnSuccessfulWrite{writer: io.Discard}
-			require.NoError(t, tt.run(t.Context(), count))
-			require.Positive(t, count.writes)
+			require.NoError(tt.run(t.Context(), count))
+			require.Positive(count.writes)
 
 			ctx, cancel := context.WithCancel(t.Context())
 			dst := &cancelOnSuccessfulWrite{
@@ -604,14 +627,17 @@ func TestWireCodecDetectsCancellationDuringFinalSuccessfulWrite(t *testing.T) {
 				cancelOn: count.writes,
 			}
 			err := tt.run(ctx, dst)
-			assert.ErrorIs(t, err, context.Canceled)
-			assert.Equal(t, count.writes, dst.writes,
+			require.ErrorIs(err, context.Canceled)
+			assert.Equal(count.writes, dst.writes,
 				"cancellation must occur during the operation's final full write")
 		})
 	}
 }
 
 func TestWireCodecStreamsMultiMegabyteArtifactsWithBoundedBuffers(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	const size = int64(6 << 20)
@@ -626,17 +652,17 @@ func TestWireCodecStreamsMultiMegabyteArtifactsWithBoundedBuffers(t *testing.T) 
 		maxRequest: 128 << 10,
 	}
 	encoded, err := os.CreateTemp(t.TempDir(), "wire-*.zst")
-	require.NoError(t, err)
+	require.NoError(err)
 	t.Cleanup(func() { _ = encoded.Close() })
 
 	err = EncodeWire(t.Context(), ref, io.TeeReader(src, canonicalHash), encoded)
-	require.NoError(t, err)
-	assert.LessOrEqual(t, src.largestRequest, 128<<10)
+	require.NoError(err)
+	assert.LessOrEqual(src.largestRequest, 128<<10)
 	encodedSize, err := encoded.Seek(0, io.SeekCurrent)
-	require.NoError(t, err)
-	require.Positive(t, encodedSize)
+	require.NoError(err)
+	require.Positive(encodedSize)
 	_, err = encoded.Seek(0, io.SeekStart)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	decodedHash := sha256.New()
 	dst := &boundedWriteObserver{writer: decodedHash, maxWrite: 128 << 10}
@@ -644,10 +670,10 @@ func TestWireCodecStreamsMultiMegabyteArtifactsWithBoundedBuffers(t *testing.T) 
 		MaxEncodedBytes: encodedSize,
 		MaxDecodedBytes: size,
 	})
-	require.NoError(t, err)
-	assert.Equal(t, size, dst.written)
-	assert.LessOrEqual(t, dst.largestWrite, 128<<10)
-	assert.Equal(t, canonicalHash.Sum(nil), decodedHash.Sum(nil))
+	require.NoError(err)
+	assert.Equal(size, dst.written)
+	assert.LessOrEqual(dst.largestWrite, 128<<10)
+	assert.Equal(canonicalHash.Sum(nil), decodedHash.Sum(nil))
 }
 
 func TestWireCodecAllocatedBytesStayBoundedAsArtifactsGrow(t *testing.T) {
@@ -686,7 +712,7 @@ func TestWireCodecAllocatedBytesStayBoundedAsArtifactsGrow(t *testing.T) {
 			maxGrowth: identityMaxAllocationGrowth,
 			factory: func(_ *testing.T, size int64) func() error {
 				return func() error {
-					return EncodeWire(context.Background(), rawRef, newWireBenchmarkReader(size), io.Discard)
+					return EncodeWire(t.Context(), rawRef, newWireBenchmarkReader(size), io.Discard)
 				}
 			},
 		},
@@ -696,7 +722,7 @@ func TestWireCodecAllocatedBytesStayBoundedAsArtifactsGrow(t *testing.T) {
 			factory: func(t *testing.T, size int64) func() error {
 				requireIncompressibleWireFixture(t, zstdRef, size)
 				return func() error {
-					return EncodeWire(context.Background(), zstdRef, newWireBenchmarkReader(size), io.Discard)
+					return EncodeWire(t.Context(), zstdRef, newWireBenchmarkReader(size), io.Discard)
 				}
 			},
 		},
@@ -706,7 +732,7 @@ func TestWireCodecAllocatedBytesStayBoundedAsArtifactsGrow(t *testing.T) {
 			factory: func(_ *testing.T, size int64) func() error {
 				return func() error {
 					return DecodeWire(
-						context.Background(), rawWire, newWireBenchmarkReader(size), io.Discard,
+						t.Context(), rawWire, newWireBenchmarkReader(size), io.Discard,
 						WireLimits{MaxEncodedBytes: size, MaxDecodedBytes: size},
 					)
 				}
@@ -719,7 +745,7 @@ func TestWireCodecAllocatedBytesStayBoundedAsArtifactsGrow(t *testing.T) {
 				encoded := requireIncompressibleWireFixture(t, zstdRef, size)
 				return func() error {
 					return DecodeWire(
-						context.Background(), zstdWire, bytes.NewReader(encoded), io.Discard,
+						t.Context(), zstdWire, bytes.NewReader(encoded), io.Discard,
 						WireLimits{
 							MaxEncodedBytes: int64(len(encoded)),
 							MaxDecodedBytes: size,

@@ -15,6 +15,9 @@ func TestActivityReportTerminalLookupIndex(t *testing.T) {
 			name = "existing archive"
 		}
 		t.Run(name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			d := testDB(t)
 			for _, status := range []string{"completed", "errored", "started"} {
 				insertSession(t, d, status, "project", func(s *Session) {
@@ -26,12 +29,12 @@ func TestActivityReportTerminalLookupIndex(t *testing.T) {
 			}
 			if upgrade {
 				_, err := d.getWriter().Exec("DROP INDEX IF EXISTS idx_tool_result_events_terminal")
-				require.NoError(t, err)
+				require.NoError(err)
 				path := d.Path()
-				require.NoError(t, d.Close())
+				require.NoError(d.Close())
 				d, err = OpenIsolated(path)
-				require.NoError(t, err)
-				t.Cleanup(func() { require.NoError(t, d.Close()) })
+				require.NoError(err)
+				t.Cleanup(func() { require.NoError(d.Close()) })
 			}
 
 			// The report's terminal-event lookup must seek by date as well as
@@ -43,22 +46,22 @@ func TestActivityReportTerminalLookupIndex(t *testing.T) {
 					AND tre.timestamp IS NOT NULL AND tre.timestamp != ''
 					AND agentsview_timestamp_unix_micro(tre.timestamp) IS NOT NULL
 					AND tre.timestamp >= ?`, "completed", "2026-06-16T00:00:00Z")
-			require.NoError(t, err)
+			require.NoError(err)
 			var details []string
 			for rows.Next() {
 				var id, parent, unused int
 				var detail string
-				require.NoError(t, rows.Scan(&id, &parent, &unused, &detail))
+				require.NoError(rows.Scan(&id, &parent, &unused, &detail))
 				details = append(details, detail)
 			}
-			require.NoError(t, rows.Err())
-			require.NoError(t, rows.Close())
-			assert.Contains(t, strings.Join(details, "\n"), "(session_id=? AND timestamp>?)")
+			require.NoError(rows.Err())
+			require.NoError(rows.Close())
+			assert.Contains(strings.Join(details, "\n"), "(session_id=? AND timestamp>?)")
 
 			_, ids, err := d.activityReportSessions(t.Context(), AnalyticsFilter{},
 				"2026-06-16T00:00:00Z", "2026-06-17T00:00:00Z")
-			require.NoError(t, err)
-			assert.Equal(t, []string{"completed", "errored"}, ids)
+			require.NoError(err)
+			assert.Equal([]string{"completed", "errored"}, ids)
 		})
 	}
 }

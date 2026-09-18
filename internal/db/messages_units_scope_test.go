@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -163,7 +162,7 @@ func TestScanEmbeddableUnitsSinceOrdering(t *testing.T) {
 func explainQueryPlan(t *testing.T, d *DB, query string, args ...any) []string {
 	t.Helper()
 	rows, err := d.getReader().QueryContext(
-		context.Background(), "EXPLAIN QUERY PLAN "+query, args...)
+		t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
 	require.NoError(t, err)
 	defer rows.Close()
 

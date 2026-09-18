@@ -44,15 +44,18 @@ func TestNewAuthIdentityValidatesOpaqueIDs(t *testing.T) {
 }
 
 func TestNewObjectRefRequiresCanonicalSHA256AndNonNegativeLength(t *testing.T) {
+	parentAssert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	ref, err := NewObjectRef(strings.Repeat("a", 64), 12)
-	require.NoError(t, err)
-	assert.Equal(t, ObjectRef{SHA256: strings.Repeat("a", 64), Length: 12}, ref)
+	require.NoError(err)
+	parentAssert.Equal(ObjectRef{SHA256: strings.Repeat("a", 64), Length: 12}, ref)
 
 	empty, err := NewObjectRef(strings.Repeat("b", 64), 0)
-	require.NoError(t, err)
-	assert.Zero(t, empty.Length)
+	require.NoError(err)
+	parentAssert.Zero(empty.Length)
 
 	for _, tc := range []struct {
 		name   string
@@ -74,103 +77,115 @@ func TestNewObjectRefRequiresCanonicalSHA256AndNonNegativeLength(t *testing.T) {
 }
 
 func TestValidateAndCanonicalizeProducesAuthenticatedStableEnvelope(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	manifest := validManifest()
 	identity, err := NewAuthIdentity("tenant-a", "device-a")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	got, err := ValidateAndCanonicalize(identity, manifest, DefaultManifestLimits())
-	require.NoError(t, err)
+	require.NoError(err)
 
 	wantJSON := `{"schema_version":1,"tenant_id":"tenant-a","device_id":"device-a","provider":"codex","configured_root_id":"root-a","source_key":"sessions/demo.jsonl#main","capture_id":"capture-a","captured_at":"2026-08-13T12:34:56Z","kind":"snapshot","entries":[{"path":"a.jsonl","type":"file","length":3,"objects":[{"sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","length":3}]},{"path":"z.jsonl","type":"file","length":8,"objects":[{"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","length":4},{"sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","length":4}]}]}` + "\n"
-	assert.Equal(t, wantJSON, string(got.CanonicalJSON))
+	assert.JSONEq(wantJSON, string(got.CanonicalJSON))
 	wantSum := sha256.Sum256([]byte(wantJSON))
-	assert.Equal(t, hex.EncodeToString(wantSum[:]), got.ManifestID)
-	assert.Equal(t, []string{"a.jsonl", "z.jsonl"}, []string{
+	assert.Equal(hex.EncodeToString(wantSum[:]), got.ManifestID)
+	assert.Equal([]string{"a.jsonl", "z.jsonl"}, []string{
 		got.Manifest.Entries[0].Path,
 		got.Manifest.Entries[1].Path,
 	})
-	assert.Equal(t, []ObjectRef{
+	assert.Equal([]ObjectRef{
 		{SHA256: strings.Repeat("a", 64), Length: 4},
 		{SHA256: strings.Repeat("b", 64), Length: 3},
 	}, got.Objects)
-	assert.Len(t, got.Manifest.Entries[1].Objects, 2,
+	assert.Len(got.Manifest.Entries[1].Objects, 2,
 		"repeated chunks must remain in reconstruction order")
-	assert.Equal(t, "z.jsonl", manifest.Entries[0].Path,
+	assert.Equal("z.jsonl", manifest.Entries[0].Path,
 		"canonicalization must not mutate the caller's manifest")
 }
 
 func TestValidateAndCanonicalizeBindsAuthenticatedIdentity(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	manifest := validManifest()
 	a, err := NewAuthIdentity("tenant-a", "device-a")
-	require.NoError(t, err)
+	require.NoError(err)
 	b, err := NewAuthIdentity("tenant-b", "device-a")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	first, err := ValidateAndCanonicalize(a, manifest, DefaultManifestLimits())
-	require.NoError(t, err)
+	require.NoError(err)
 	again, err := ValidateAndCanonicalize(a, manifest, DefaultManifestLimits())
-	require.NoError(t, err)
+	require.NoError(err)
 	otherTenant, err := ValidateAndCanonicalize(b, manifest, DefaultManifestLimits())
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.Equal(t, first.ManifestID, again.ManifestID)
-	assert.Equal(t, first.CanonicalJSON, again.CanonicalJSON)
-	assert.NotEqual(t, first.ManifestID, otherTenant.ManifestID)
+	assert.Equal(first.ManifestID, again.ManifestID)
+	assert.Equal(first.CanonicalJSON, again.CanonicalJSON)
+	assert.NotEqual(first.ManifestID, otherTenant.ManifestID)
 }
 
 func TestParseCanonicalManifestAcceptsOnlyExactAuthenticatedEnvelope(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	identity, err := NewAuthIdentity("tenant-a", "device-a")
-	require.NoError(t, err)
+	require.NoError(err)
 	canonical, err := ValidateAndCanonicalize(identity, validManifest(), DefaultManifestLimits())
-	require.NoError(t, err)
+	require.NoError(err)
 
 	parsed, err := ParseCanonicalManifest(
 		identity, canonical.ManifestID, canonical.CanonicalJSON, DefaultManifestLimits(),
 	)
-	require.NoError(t, err)
-	assert.Equal(t, canonical, parsed)
+	require.NoError(err)
+	assert.Equal(canonical, parsed)
 
 	otherIdentity, err := NewAuthIdentity("tenant-b", "device-a")
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = ParseCanonicalManifest(
 		otherIdentity, canonical.ManifestID, canonical.CanonicalJSON, DefaultManifestLimits(),
 	)
-	assert.ErrorIs(t, err, ErrInvalid)
+	assert.ErrorIs(err, ErrInvalid)
 
 	noncanonical := append([]byte(" "), canonical.CanonicalJSON...)
 	_, err = ParseCanonicalManifest(
 		identity, canonical.ManifestID, noncanonical, DefaultManifestLimits(),
 	)
-	assert.ErrorIs(t, err, ErrInvalid)
+	assert.ErrorIs(err, ErrInvalid)
 
 	_, err = ParseCanonicalManifest(
 		identity, strings.Repeat("0", 64), canonical.CanonicalJSON, DefaultManifestLimits(),
 	)
-	assert.ErrorIs(t, err, ErrInvalid)
+	assert.ErrorIs(err, ErrInvalid)
 }
 
 func TestValidateAndCanonicalizeNormalizesCapturedInstantToUTC(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	identity, err := NewAuthIdentity("tenant-a", "device-a")
-	require.NoError(t, err)
+	require.NoError(err)
 	utc := validManifest()
 	offset := cloneManifest(utc)
 	offset.CapturedAt = utc.CapturedAt.In(time.FixedZone("offset", 2*60*60))
 
 	first, err := ValidateAndCanonicalize(identity, utc, DefaultManifestLimits())
-	require.NoError(t, err)
+	require.NoError(err)
 	second, err := ValidateAndCanonicalize(identity, offset, DefaultManifestLimits())
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.Equal(t, first.ManifestID, second.ManifestID)
-	assert.Equal(t, first.CanonicalJSON, second.CanonicalJSON)
+	assert.Equal(first.ManifestID, second.ManifestID)
+	assert.Equal(first.CanonicalJSON, second.CanonicalJSON)
 }
 
 func TestValidateAndCanonicalizeRejectsMalformedManifest(t *testing.T) {
@@ -229,18 +244,21 @@ func TestValidateAndCanonicalizeRejectsMalformedManifest(t *testing.T) {
 }
 
 func TestValidateAndCanonicalizeAcceptsEmptyTombstone(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	identity, err := NewAuthIdentity("tenant-a", "device-a")
-	require.NoError(t, err)
+	require.NoError(err)
 	manifest := validManifest()
 	manifest.Kind = ManifestTombstone
 	manifest.Entries = nil
 
 	got, err := ValidateAndCanonicalize(identity, manifest, DefaultManifestLimits())
-	require.NoError(t, err)
-	assert.Empty(t, got.Objects)
-	assert.Empty(t, got.Manifest.Entries)
+	require.NoError(err)
+	assert.Empty(got.Objects)
+	assert.Empty(got.Manifest.Entries)
 }
 
 func TestValidateManifestForUploadAllowsProvisionalParentReceipt(t *testing.T) {
@@ -265,6 +283,8 @@ func TestValidateManifestForUploadEnforcesProspectiveObjectLimit(t *testing.T) {
 }
 
 func TestValidateManifestForUploadReservesWorstCaseEscapedAuthenticationIDs(t *testing.T) {
+	require := require.New(t)
+
 	t.Parallel()
 
 	manifest := validManifest()
@@ -275,31 +295,34 @@ func TestValidateManifestForUploadReservesWorstCaseEscapedAuthenticationIDs(t *t
 		strings.Repeat("t", maxOpaqueIDBytes),
 		strings.Repeat("d", maxOpaqueIDBytes),
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	ascii, err := ValidateAndCanonicalize(
 		asciiIdentity, prospective, DefaultManifestLimits(),
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	limits := DefaultManifestLimits()
 	limits.MaxCanonicalBytes = len(ascii.CanonicalJSON)
 	escapedIdentity, err := NewAuthIdentity(
 		strings.Repeat(`"`, maxOpaqueIDBytes),
 		strings.Repeat(`"`, maxOpaqueIDBytes),
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	_, err = ValidateAndCanonicalize(escapedIdentity, prospective, limits)
-	require.ErrorIs(t, err, ErrInvalid, "test limit must reject valid escaped IDs")
+	require.ErrorIs(err, ErrInvalid, "test limit must reject valid escaped IDs")
 
 	err = ValidateManifestForUpload(manifest, limits)
 
-	require.ErrorIs(t, err, ErrInvalid)
+	require.ErrorIs(err, ErrInvalid)
 }
 
 func TestValidateAndCanonicalizeCarriesEntryModTimeBackwardCompatibly(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 
 	identity, err := NewAuthIdentity("tenant-a", "device-a")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// A canonical manifest written before entry modification times existed
 	// must parse and revalidate byte-for-byte.
@@ -308,31 +331,31 @@ func TestValidateAndCanonicalizeCarriesEntryModTimeBackwardCompatibly(t *testing
 	legacy, err := ParseCanonicalManifest(
 		identity, hex.EncodeToString(legacyDigest[:]), legacyJSON, DefaultManifestLimits(),
 	)
-	require.NoError(t, err)
-	require.NoError(t, ValidateCanonicalManifest(legacy))
-	require.Len(t, legacy.Manifest.Entries, 1)
-	assert.Equal(t, int64(0), legacy.Manifest.Entries[0].ModTimeNS)
-	assert.NotContains(t, string(legacy.CanonicalJSON), "mod_time_ns")
+	require.NoError(err)
+	require.NoError(ValidateCanonicalManifest(legacy))
+	require.Len(legacy.Manifest.Entries, 1)
+	assert.Equal(int64(0), legacy.Manifest.Entries[0].ModTimeNS)
+	assert.NotContains(string(legacy.CanonicalJSON), "mod_time_ns")
 
 	zeroValued, err := ValidateAndCanonicalize(identity, validManifest(), DefaultManifestLimits())
-	require.NoError(t, err)
-	assert.NotContains(t, string(zeroValued.CanonicalJSON), "mod_time_ns",
+	require.NoError(err)
+	assert.NotContains(string(zeroValued.CanonicalJSON), "mod_time_ns",
 		"zero-valued entry mod times must re-canonicalize to the legacy encoding")
 
 	manifest := validManifest()
 	manifest.Entries[0].ModTimeNS = 1691929296741012507
 	canonical, err := ValidateAndCanonicalize(identity, manifest, DefaultManifestLimits())
-	require.NoError(t, err)
-	assert.Contains(t, string(canonical.CanonicalJSON), `"mod_time_ns":1691929296741012507`)
+	require.NoError(err)
+	assert.Contains(string(canonical.CanonicalJSON), `"mod_time_ns":1691929296741012507`)
 	parsed, err := ParseCanonicalManifest(
 		identity, canonical.ManifestID, canonical.CanonicalJSON, DefaultManifestLimits(),
 	)
-	require.NoError(t, err)
-	require.Len(t, parsed.Manifest.Entries, 2)
-	assert.Equal(t, "a.jsonl", parsed.Manifest.Entries[0].Path)
-	assert.Equal(t, int64(0), parsed.Manifest.Entries[0].ModTimeNS)
-	assert.Equal(t, "z.jsonl", parsed.Manifest.Entries[1].Path)
-	assert.Equal(t, int64(1691929296741012507), parsed.Manifest.Entries[1].ModTimeNS)
+	require.NoError(err)
+	require.Len(parsed.Manifest.Entries, 2)
+	assert.Equal("a.jsonl", parsed.Manifest.Entries[0].Path)
+	assert.Equal(int64(0), parsed.Manifest.Entries[0].ModTimeNS)
+	assert.Equal("z.jsonl", parsed.Manifest.Entries[1].Path)
+	assert.Equal(int64(1691929296741012507), parsed.Manifest.Entries[1].ModTimeNS)
 }
 
 func validManifest() Manifest {
@@ -433,9 +456,12 @@ func TestValidateAndCanonicalizeRejectsConflictingEntryPathsInAnyOrder(t *testin
 }
 
 func TestValidateAndCanonicalizeAcceptsDistinctSiblingAndNestedEntryPaths(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	t.Parallel()
 	identity, err := NewAuthIdentity("tenant-a", "device-a")
-	require.NoError(t, err)
+	require.NoError(err)
 
 	// "a.jsonl" shares no path component boundary with "a/b.jsonl": the
 	// near-miss between a file and a directory name must stay valid.
@@ -443,17 +469,17 @@ func TestValidateAndCanonicalizeAcceptsDistinctSiblingAndNestedEntryPaths(t *tes
 		identity, manifestWithEntryPaths("a.jsonl", "a/b.jsonl", "a/c/d.jsonl", "z.jsonl"),
 		DefaultManifestLimits(),
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	reversed, err := ValidateAndCanonicalize(
 		identity, manifestWithEntryPaths("z.jsonl", "a/c/d.jsonl", "a/b.jsonl", "a.jsonl"),
 		DefaultManifestLimits(),
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.Equal(t, forward.ManifestID, reversed.ManifestID,
+	assert.Equal(forward.ManifestID, reversed.ManifestID,
 		"entry ordering must not influence the canonical manifest")
-	assert.Equal(t, forward.CanonicalJSON, reversed.CanonicalJSON)
-	assert.Equal(t, []string{"a.jsonl", "a/b.jsonl", "a/c/d.jsonl", "z.jsonl"}, entryPaths(forward))
+	assert.Equal(forward.CanonicalJSON, reversed.CanonicalJSON)
+	assert.Equal([]string{"a.jsonl", "a/b.jsonl", "a/c/d.jsonl", "z.jsonl"}, entryPaths(forward))
 }
 
 func TestValidateCanonicalManifestRejectsNoncanonicalValues(t *testing.T) {

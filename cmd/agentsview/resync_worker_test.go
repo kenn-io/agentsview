@@ -20,21 +20,24 @@ import (
 // flag. The worker build-and-swap mechanism is covered by the engine split tests
 // and the resync-build worker mode test.
 func TestForegroundResyncRunnerFallsBackInProcess(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	cfg := testConfigWithClaudeFixture(t)
 	database, err := db.Open(cfg.DBPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(database.Close()) })
 	engine := sync.NewEngine(database, workerEngineConfig(cfg))
 	t.Cleanup(engine.Close)
-	require.Equal(t, 3, engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(3, engine.SyncAll(t.Context(), nil).Synced)
 
-	runner := newForegroundResyncRunner(context.Background(), cfg, engine, database)
-	stats, err := runner(context.Background(), nil)
+	runner := newForegroundResyncRunner(t.Context(), cfg, engine, database)
+	stats, err := runner(t.Context(), nil)
 
-	require.NoError(t, err)
-	assert.False(t, stats.Aborted)
-	assert.Equal(t, 3, stats.Synced, "in-process resync fallback rebuilds the archive")
-	assert.False(t, database.NeedsResync())
+	require.NoError(err)
+	assert.False(stats.Aborted)
+	assert.Equal(3, stats.Synced, "in-process resync fallback rebuilds the archive")
+	assert.False(database.NeedsResync())
 }
 
 // requireStartupMaintenanceReleased asserts that RunStartupMaintenance is no
@@ -75,8 +78,8 @@ func TestForegroundResyncRunnerReleasesStartupMaintenance(t *testing.T) {
 	engine := sync.NewEngine(database, engineCfg)
 	t.Cleanup(engine.Close)
 
-	runner := newForegroundResyncRunner(context.Background(), cfg, engine, database)
-	_, err = runner(context.Background(), nil)
+	runner := newForegroundResyncRunner(t.Context(), cfg, engine, database)
+	_, err = runner(t.Context(), nil)
 
 	require.NoError(t, err)
 	require.True(t, engine.StartupReconciled(),
@@ -101,9 +104,9 @@ func TestForegroundResyncRunnerAbortedResyncFallsBackIncremental(t *testing.T) {
 	t.Cleanup(engine.Close)
 
 	runner := newForegroundResyncRunner(
-		context.Background(), config.Config{}, engine, database,
+		t.Context(), config.Config{}, engine, database,
 	)
-	stats, err := runner(context.Background(), nil)
+	stats, err := runner(t.Context(), nil)
 
 	require.NoError(t, err)
 	assert.False(t, stats.Aborted,
@@ -126,7 +129,7 @@ func TestSyncAllReleasingStartupMaintenance(t *testing.T) {
 		})
 		t.Cleanup(engine.Close)
 
-		syncAllReleasingStartupMaintenance(context.Background(), engine, nil)
+		syncAllReleasingStartupMaintenance(t.Context(), engine, nil)
 
 		requireStartupMaintenanceReleased(t, engine)
 	})
@@ -139,7 +142,7 @@ func TestSyncAllReleasingStartupMaintenance(t *testing.T) {
 		t.Cleanup(engine.Close)
 		// A completed pass closes the startup-reconciliation gate (SyncAll
 		// records it internally but never releases maintenance) ...
-		engine.SyncAll(context.Background(), nil)
+		engine.SyncAll(t.Context(), nil)
 		require.True(t, engine.StartupReconciled(),
 			"a completed pass must close the reconciliation gate")
 
@@ -147,7 +150,7 @@ func TestSyncAllReleasingStartupMaintenance(t *testing.T) {
 		// The deferred startup fallback skips on the closed reconciliation
 		// gate without releasing, so the helper must release here or
 		// archive-wide backfills stay gated until shutdown.
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		syncAllReleasingStartupMaintenance(ctx, engine, nil)
 
@@ -160,14 +163,14 @@ func TestSyncAllReleasingStartupMaintenance(t *testing.T) {
 			DeferStartupMaintenance: true,
 		})
 		t.Cleanup(engine.Close)
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 
 		syncAllReleasingStartupMaintenance(ctx, engine, nil)
 
 		maintenanceErr := make(chan error, 1)
 		blockedCtx, blockedCancel := context.WithTimeout(
-			context.Background(), 100*time.Millisecond,
+			t.Context(), 100*time.Millisecond,
 		)
 		defer blockedCancel()
 		go func() {

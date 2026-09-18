@@ -120,11 +120,10 @@ func (p *pgPusher) pushAfterSync(
 		p.reset()
 		return fmt.Errorf("push: %w", err)
 	}
-	p.vectorReconcileNeeded, p.lastReconciledVectorGeneration =
-		nextVectorReconcile(
-			p.vectorReconcileNeeded,
-			p.lastReconciledVectorGeneration, scoped, res,
-		)
+	p.vectorReconcileNeeded, p.lastReconciledVectorGeneration = nextVectorReconcile(
+		p.vectorReconcileNeeded,
+		p.lastReconciledVectorGeneration, scoped, res,
+	)
 	if res.Errors > 0 {
 		logPGWatchPushResult(res, reason)
 		log.Printf(
@@ -242,7 +241,7 @@ func resolveWatchTargets(
 	}
 	if target.PG.URL == "" {
 		return pgTargetSelection{}, nil, nil,
-			fmt.Errorf("url not configured")
+			errors.New("url not configured")
 	}
 	projects, exclude, err = resolvePushProjects(target.PG, cfg)
 	if err != nil {

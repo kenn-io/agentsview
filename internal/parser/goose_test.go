@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -109,7 +108,7 @@ func newGooseTestFixture(t *testing.T) *gooseTestFixture {
 	database, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	_, err = database.Exec(gooseTestSchema)
+	_, err = database.ExecContext(t.Context(), gooseTestSchema)
 	require.NoError(t, err)
 	return &gooseTestFixture{
 		pathRoot: pathRoot, sessionDir: sessionDir,
@@ -121,7 +120,7 @@ func (fixture *gooseTestFixture) insertSession(
 	t *testing.T, id, name, sessionType, parentID string,
 ) {
 	t.Helper()
-	_, err := fixture.database.Exec(`
+	_, err := fixture.database.ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, name, description, session_type, working_dir,
 			created_at, updated_at, provider_name, model_config_json,
@@ -141,7 +140,7 @@ func (fixture *gooseTestFixture) insertMessage(
 	t *testing.T, sessionID, role, content string, created int64,
 ) {
 	t.Helper()
-	_, err := fixture.database.Exec(`
+	_, err := fixture.database.ExecContext(t.Context(), `
 		INSERT INTO messages (
 			message_id, session_id, role, content_json,
 			created_timestamp, metadata_json
@@ -156,7 +155,7 @@ func (fixture *gooseTestFixture) insertUsage(
 	cost float64, costSource string, compaction bool,
 ) {
 	t.Helper()
-	_, err := fixture.database.Exec(`
+	_, err := fixture.database.ExecContext(t.Context(), `
 		INSERT INTO usage_ledger (
 			session_id, created_timestamp, model,
 			input_tokens, output_tokens, total_tokens,
@@ -170,6 +169,9 @@ func (fixture *gooseTestFixture) insertUsage(
 }
 
 func TestGooseProviderParsesTranscriptToolsRelationshipsAndUsage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	fixture := newGooseTestFixture(t)
 	fixture.insertSession(t, "child", "Auth review", "sub_agent", "parent")
 	fixture.insertMessage(t, "child", "user", `[
@@ -190,7 +192,7 @@ func TestGooseProviderParsesTranscriptToolsRelationshipsAndUsage(t *testing.T) {
 		{"type":"systemNotification","message":"Finished review."},
 		{"type":"futureContent","secret":"ignored"}
 	]`, 1_700_000_002)
-	_, err := fixture.database.Exec(`
+	_, err := fixture.database.ExecContext(t.Context(), `
 		INSERT INTO messages (
 			message_id, session_id, role, content_json,
 			created_timestamp, metadata_json
@@ -200,7 +202,7 @@ func TestGooseProviderParsesTranscriptToolsRelationshipsAndUsage(t *testing.T) {
 			1700000003, '{"userVisible":false,"agentVisible":true}'
 		)
 	`)
-	require.NoError(t, err)
+	require.NoError(err)
 	fixture.insertUsage(
 		t, "child", "claude-sonnet-4-6",
 		1_700_000_010, 100, 20, 30, 10,
@@ -215,90 +217,93 @@ func TestGooseProviderParsesTranscriptToolsRelationshipsAndUsage(t *testing.T) {
 	provider, ok := NewProvider(AgentGoose, ProviderConfig{
 		Roots: []string{fixture.pathRoot}, Machine: "devbox",
 	})
-	require.True(t, ok)
-	plan, err := provider.WatchPlan(context.Background())
-	require.NoError(t, err)
-	require.Len(t, plan.Roots, 1)
-	assert.Equal(t, fixture.sessionDir, plan.Roots[0].Path)
-	assert.Contains(t, plan.Roots[0].IncludeGlobs, GooseDBName)
-	assert.Contains(t, plan.Roots[0].IncludeGlobs, GooseDBName+"-*")
+	require.True(ok)
+	plan, err := provider.WatchPlan(t.Context())
+	require.NoError(err)
+	require.Len(plan.Roots, 1)
+	assert.Equal(fixture.sessionDir, plan.Roots[0].Path)
+	assert.Contains(plan.Roots[0].IncludeGlobs, GooseDBName)
+	assert.Contains(plan.Roots[0].IncludeGlobs, GooseDBName+"-*")
 
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	assert.Equal(t, fixture.dbPath+"#child", sources[0].DisplayPath)
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
-	require.NoError(t, err)
-	assert.NotZero(t, fingerprint.MTimeNS)
-	assert.Len(t, fingerprint.Hash, 64)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(sources, 1)
+	assert.Equal(fixture.dbPath+"#child", sources[0].DisplayPath)
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+	require.NoError(err)
+	assert.NotZero(fingerprint.MTimeNS)
+	assert.Len(fingerprint.Hash, 64)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0], Fingerprint: fingerprint, Machine: "devbox",
 	})
-	require.NoError(t, err)
-	require.Len(t, outcome.Results, 1)
+	require.NoError(err)
+	require.Len(outcome.Results, 1)
 	result := outcome.Results[0].Result
 	session := result.Session
-	assert.Equal(t, "goose:child", session.ID)
-	assert.Equal(t, AgentGoose, session.Agent)
-	assert.Equal(t, "acme_app", session.Project)
-	assert.Equal(t, "Auth review", session.SessionName)
-	assert.Equal(t, "Inspect the authentication flow.", session.FirstMessage)
-	assert.Equal(t, "goose:parent", session.ParentSessionID)
-	assert.Equal(t, RelSubagent, session.RelationshipType)
-	assert.Equal(t, "goose-sqlite-v15", session.SourceVersion)
-	assert.Equal(t, 4, session.MessageCount)
-	assert.Equal(t, 1, session.UserMessageCount)
-	assert.Equal(t, fixture.dbPath+"#child", session.File.Path)
-	assert.Equal(t, fingerprint.Hash, session.File.Hash)
-	assert.Equal(t, 25, session.TotalOutputTokens)
-	assert.Equal(t, 140, session.PeakContextTokens)
+	assert.Equal("goose:child", session.ID)
+	assert.Equal(AgentGoose, session.Agent)
+	assert.Equal("acme_app", session.Project)
+	assert.Equal("Auth review", session.SessionName)
+	assert.Equal("Inspect the authentication flow.", session.FirstMessage)
+	assert.Equal("goose:parent", session.ParentSessionID)
+	assert.Equal(RelSubagent, session.RelationshipType)
+	assert.Equal("goose-sqlite-v15", session.SourceVersion)
+	assert.Equal(4, session.MessageCount)
+	assert.Equal(1, session.UserMessageCount)
+	assert.Equal(fixture.dbPath+"#child", session.File.Path)
+	assert.Equal(fingerprint.Hash, session.File.Hash)
+	assert.Equal(25, session.TotalOutputTokens)
+	assert.Equal(140, session.PeakContextTokens)
 
-	require.Len(t, result.Messages, 4)
+	require.Len(result.Messages, 4)
 	assistant := result.Messages[1]
-	assert.Equal(t, RoleAssistant, assistant.Role)
-	assert.Equal(t, "claude-sonnet-4-6", assistant.Model)
-	assert.True(t, assistant.HasThinking)
-	assert.Equal(t, "I should inspect auth.go first.", assistant.ThinkingText)
-	assert.Contains(t, assistant.Content, "[Thinking]")
-	assert.NotContains(t, assistant.Content, "opaque")
-	require.Len(t, assistant.ToolCalls, 1)
-	assert.Equal(t, "call-read", assistant.ToolCalls[0].ToolUseID)
-	assert.Equal(t, "Read", assistant.ToolCalls[0].Category)
-	assert.JSONEq(t, `{"file_path":"auth.go"}`, assistant.ToolCalls[0].InputJSON)
-	require.Len(t, result.Messages[2].ToolResults, 1)
-	assert.Equal(t, "package auth", DecodeContent(result.Messages[2].ToolResults[0].ContentRaw))
-	assert.Contains(t, result.Messages[2].Content, "Approve the proposed edit.")
-	assert.True(t, result.Messages[3].HasThinking)
-	assert.Equal(t, "[Image]\nFinished review.", result.Messages[3].Content)
-	assert.NotContains(t, result.Messages[3].Content, "do-not-display")
-	assert.NotContains(t, result.Messages[3].Content, "ignored")
-	assert.NotContains(t, result.Messages[3].Content, "internal context")
+	assert.Equal(RoleAssistant, assistant.Role)
+	assert.Equal("claude-sonnet-4-6", assistant.Model)
+	assert.True(assistant.HasThinking)
+	assert.Equal("I should inspect auth.go first.", assistant.ThinkingText)
+	assert.Contains(assistant.Content, "[Thinking]")
+	assert.NotContains(assistant.Content, "opaque")
+	require.Len(assistant.ToolCalls, 1)
+	assert.Equal("call-read", assistant.ToolCalls[0].ToolUseID)
+	assert.Equal("Read", assistant.ToolCalls[0].Category)
+	assert.JSONEq(`{"file_path":"auth.go"}`, assistant.ToolCalls[0].InputJSON)
+	require.Len(result.Messages[2].ToolResults, 1)
+	assert.Equal("package auth", DecodeContent(result.Messages[2].ToolResults[0].ContentRaw))
+	assert.Contains(result.Messages[2].Content, "Approve the proposed edit.")
+	assert.True(result.Messages[3].HasThinking)
+	assert.Equal("[Image]\nFinished review.", result.Messages[3].Content)
+	assert.NotContains(result.Messages[3].Content, "do-not-display")
+	assert.NotContains(result.Messages[3].Content, "ignored")
+	assert.NotContains(result.Messages[3].Content, "internal context")
 
-	require.Len(t, result.UsageEvents, 2)
+	require.Len(result.UsageEvents, 2)
 	firstUsage := result.UsageEvents[0]
-	assert.Nil(t, firstUsage.MessageOrdinal)
-	assert.Equal(t, "goose-request", firstUsage.Source)
-	assert.Equal(t, 100, firstUsage.InputTokens)
-	assert.Equal(t, 20, firstUsage.OutputTokens)
-	assert.Equal(t, 30, firstUsage.CacheReadInputTokens)
-	assert.Equal(t, 10, firstUsage.CacheCreationInputTokens)
-	require.NotNil(t, firstUsage.Cost)
-	assert.Equal(t, money.Money{Microdollars: 12_500}, *firstUsage.Cost)
-	assert.Equal(t, "exact", firstUsage.CostStatus)
-	assert.Equal(t, "goose-provider-reported", firstUsage.CostSource)
-	assert.Contains(t, firstUsage.DedupKey, "ledger_id=1")
-	assert.Equal(t, "estimated", result.UsageEvents[1].CostStatus)
-	assert.Equal(t, "goose-estimated", result.UsageEvents[1].CostSource)
-	assert.Contains(t, result.UsageEvents[1].DedupKey, "is_compaction=true")
+	assert.Nil(firstUsage.MessageOrdinal)
+	assert.Equal("goose-request", firstUsage.Source)
+	assert.Equal(100, firstUsage.InputTokens)
+	assert.Equal(20, firstUsage.OutputTokens)
+	assert.Equal(30, firstUsage.CacheReadInputTokens)
+	assert.Equal(10, firstUsage.CacheCreationInputTokens)
+	require.NotNil(firstUsage.Cost)
+	assert.Equal(money.Money{Microdollars: 12_500}, *firstUsage.Cost)
+	assert.Equal("exact", firstUsage.CostStatus)
+	assert.Equal("goose-provider-reported", firstUsage.CostSource)
+	assert.Contains(firstUsage.DedupKey, "ledger_id=1")
+	assert.Equal("estimated", result.UsageEvents[1].CostStatus)
+	assert.Equal("goose-estimated", result.UsageEvents[1].CostSource)
+	assert.Contains(result.UsageEvents[1].DedupKey, "is_compaction=true")
 }
 
 func TestGooseUsesAccumulatedUsageWhenLedgerIsUnavailable(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	fixture := newGooseTestFixture(t)
-	_, err := fixture.database.Exec(`DROP TABLE usage_ledger`)
-	require.NoError(t, err)
+	_, err := fixture.database.ExecContext(t.Context(), `DROP TABLE usage_ledger`)
+	require.NoError(err)
 	fixture.insertSession(t, "legacy", "Legacy", "user", "")
-	_, err = fixture.database.Exec(`
+	_, err = fixture.database.ExecContext(t.Context(), `
 		UPDATE sessions SET
 			accumulated_input_tokens = 90,
 			accumulated_output_tokens = 10,
@@ -308,26 +313,29 @@ func TestGooseUsesAccumulatedUsageWhenLedgerIsUnavailable(t *testing.T) {
 			accumulated_cost = 0.02
 		WHERE id = 'legacy'
 	`)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	result, err := parseGooseSession(t.Context(), fixture.dbPath, "legacy", "devbox", false)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Len(t, result.UsageEvents, 1)
+	require.NoError(err)
+	require.NotNil(result)
+	require.Len(result.UsageEvents, 1)
 	event := result.UsageEvents[0]
-	assert.Equal(t, "session", event.Source)
-	assert.Equal(t, 90, event.InputTokens)
-	assert.Equal(t, 10, event.OutputTokens)
-	assert.Equal(t, 8, event.CacheReadInputTokens)
-	assert.Equal(t, 2, event.CacheCreationInputTokens)
-	require.NotNil(t, event.Cost)
-	assert.Equal(t, money.Money{Microdollars: 20_000}, *event.Cost)
-	assert.Equal(t, "goose-accumulated", event.CostSource)
+	assert.Equal("session", event.Source)
+	assert.Equal(90, event.InputTokens)
+	assert.Equal(10, event.OutputTokens)
+	assert.Equal(8, event.CacheReadInputTokens)
+	assert.Equal(2, event.CacheCreationInputTokens)
+	require.NotNil(event.Cost)
+	assert.Equal(money.Money{Microdollars: 20_000}, *event.Cost)
+	assert.Equal("goose-accumulated", event.CostSource)
 }
 
 func TestGooseChangedPathWorkStaysProportionalToNewRows(t *testing.T) {
 	for _, sessionCount := range []int{2, 200} {
 		t.Run(strconv.Itoa(sessionCount), func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			fixture := newGooseTestFixture(t)
 			for i := range sessionCount {
 				id := fmt.Sprintf("session-%03d", i)
@@ -335,15 +343,15 @@ func TestGooseChangedPathWorkStaysProportionalToNewRows(t *testing.T) {
 				fixture.insertMessage(t, id, "user", `[{"type":"text","text":"seed"}]`, 1_700_000_000)
 			}
 			factory, ok := ProviderFactoryByType(AgentGoose)
-			require.True(t, ok)
+			require.True(ok)
 			provider := factory.NewProvider(ProviderConfig{
 				Roots: []string{fixture.pathRoot}, Machine: "devbox",
 			})
 			scans := 0
-			ctx := WithSharedContainerScanObserver(context.Background(), func() { scans++ })
+			ctx := WithSharedContainerScanObserver(t.Context(), func() { scans++ })
 			_, err := provider.Discover(ctx)
-			require.NoError(t, err)
-			require.Equal(t, 1, scans, "discovery must report its full container scan")
+			require.NoError(err)
+			require.Equal(1, scans, "discovery must report its full container scan")
 			scans = 0
 
 			fixture.insertMessage(t, "session-000", "assistant", `[{"type":"text","text":"changed"}]`, 1_700_000_001)
@@ -355,10 +363,10 @@ func TestGooseChangedPathWorkStaysProportionalToNewRows(t *testing.T) {
 					Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
 				},
 			)
-			require.NoError(t, err)
-			require.Len(t, sources, 1)
-			assert.Equal(t, fixture.dbPath+"#session-000", sources[0].DisplayPath)
-			assert.Zero(t, scans, "a warm watcher event must not enumerate the container")
+			require.NoError(err)
+			require.Len(sources, 1)
+			assert.Equal(fixture.dbPath+"#session-000", sources[0].DisplayPath)
+			assert.Zero(scans, "a warm watcher event must not enumerate the container")
 		})
 	}
 }
@@ -372,7 +380,7 @@ func TestGooseTailDeletionWatcherWorkStaysBounded(t *testing.T) {
 			name: "session",
 			delete: func(t *testing.T, fixture *gooseTestFixture) {
 				t.Helper()
-				_, err := fixture.database.Exec(`DELETE FROM sessions WHERE id = 'session-tail'`)
+				_, err := fixture.database.ExecContext(t.Context(), `DELETE FROM sessions WHERE id = 'session-tail'`)
 				require.NoError(t, err)
 			},
 		},
@@ -380,7 +388,7 @@ func TestGooseTailDeletionWatcherWorkStaysBounded(t *testing.T) {
 			name: "message",
 			delete: func(t *testing.T, fixture *gooseTestFixture) {
 				t.Helper()
-				_, err := fixture.database.Exec(`DELETE FROM messages WHERE session_id = 'session-tail'`)
+				_, err := fixture.database.ExecContext(t.Context(), `DELETE FROM messages WHERE session_id = 'session-tail'`)
 				require.NoError(t, err)
 			},
 		},
@@ -388,7 +396,7 @@ func TestGooseTailDeletionWatcherWorkStaysBounded(t *testing.T) {
 			name: "usage",
 			delete: func(t *testing.T, fixture *gooseTestFixture) {
 				t.Helper()
-				_, err := fixture.database.Exec(`DELETE FROM usage_ledger WHERE session_id = 'session-tail'`)
+				_, err := fixture.database.ExecContext(t.Context(), `DELETE FROM usage_ledger WHERE session_id = 'session-tail'`)
 				require.NoError(t, err)
 			},
 		},
@@ -397,8 +405,11 @@ func TestGooseTailDeletionWatcherWorkStaysBounded(t *testing.T) {
 	for _, sessionCount := range []int{2, 200} {
 		for _, test := range tests {
 			t.Run(fmt.Sprintf("%d/%s", sessionCount, test.name), func(t *testing.T) {
+				assert := assert.New(t)
+				require := require.New(t)
+
 				fixture := newGooseTestFixture(t)
-				for i := 0; i < sessionCount-1; i++ {
+				for i := range sessionCount - 1 {
 					id := fmt.Sprintf("session-%03d", i)
 					fixture.insertSession(t, id, id, "user", "")
 					fixture.insertMessage(t, id, "user", `[{"type":"text","text":"seed"}]`, 1_700_000_000)
@@ -411,12 +422,12 @@ func TestGooseTailDeletionWatcherWorkStaysBounded(t *testing.T) {
 				provider, ok := NewProvider(AgentGoose, ProviderConfig{
 					Roots: []string{fixture.pathRoot}, Machine: "devbox",
 				})
-				require.True(t, ok)
+				require.True(ok)
 				scans := 0
-				ctx := WithSharedContainerScanObserver(context.Background(), func() { scans++ })
+				ctx := WithSharedContainerScanObserver(t.Context(), func() { scans++ })
 				_, err := provider.Discover(ctx)
-				require.NoError(t, err)
-				require.Equal(t, 1, scans)
+				require.NoError(err)
+				require.Equal(1, scans)
 				scans = 0
 
 				test.delete(t, fixture)
@@ -425,16 +436,18 @@ func TestGooseTailDeletionWatcherWorkStaysBounded(t *testing.T) {
 						Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
 					},
 				)
-				require.NoError(t, err)
-				assert.Empty(t, sources,
+				require.NoError(err)
+				assert.Empty(sources,
 					"tail deletion must wait for reconciliation instead of enumerating the archive")
-				assert.Zero(t, scans)
+				assert.Zero(scans)
 			})
 		}
 	}
 }
 
 func TestGooseTailDeleteKeepsInsertsFromOtherTablesInSameWindow(t *testing.T) {
+	require := require.New(t)
+
 	fixture := newGooseTestFixture(t)
 	fixture.insertSession(t, "session-keep", "keep", "user", "")
 	fixture.insertMessage(t, "session-keep", "user", `[{"type":"text","text":"seed"}]`, 1_700_000_000)
@@ -443,28 +456,30 @@ func TestGooseTailDeleteKeepsInsertsFromOtherTablesInSameWindow(t *testing.T) {
 	provider, ok := NewProvider(AgentGoose, ProviderConfig{
 		Roots: []string{fixture.pathRoot}, Machine: "devbox",
 	})
-	require.True(t, ok)
-	_, err := provider.Discover(context.Background())
-	require.NoError(t, err)
+	require.True(ok)
+	_, err := provider.Discover(t.Context())
+	require.NoError(err)
 
 	// One debounce window: the newest session row disappears (sessions cursor
 	// invalidates) while another session gains a message.
-	_, err = fixture.database.Exec(`DELETE FROM sessions WHERE id = 'session-tail'`)
-	require.NoError(t, err)
+	_, err = fixture.database.ExecContext(t.Context(), `DELETE FROM sessions WHERE id = 'session-tail'`)
+	require.NoError(err)
 	fixture.insertMessage(t, "session-keep", "assistant", `[{"type":"text","text":"new"}]`, 1_700_000_001)
 
 	sources, err := provider.SourcesForChangedPath(
-		context.Background(), ChangedPathRequest{
+		t.Context(), ChangedPathRequest{
 			Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
 		},
 	)
-	require.NoError(t, err)
-	require.Len(t, sources, 1,
+	require.NoError(err)
+	require.Len(sources, 1,
 		"inserts on tables with intact cursors must survive another table's tail delete")
 	assert.Equal(t, fixture.dbPath+"#session-keep", sources[0].DisplayPath)
 }
 
 func TestGooseColdWatcherEventCommitsCursorAfterFullEnumeration(t *testing.T) {
+	require := require.New(t)
+
 	fixture := newGooseTestFixture(t)
 	fixture.insertSession(t, "session-a", "a", "user", "")
 	fixture.insertSession(t, "session-b", "b", "user", "")
@@ -475,122 +490,129 @@ func TestGooseColdWatcherEventCommitsCursorAfterFullEnumeration(t *testing.T) {
 	provider, ok := NewProvider(AgentGoose, ProviderConfig{
 		Roots: []string{fixture.pathRoot}, Machine: "devbox",
 	})
-	require.True(t, ok)
+	require.True(ok)
 	sources, err := provider.SourcesForChangedPath(
-		context.Background(), ChangedPathRequest{
+		t.Context(), ChangedPathRequest{
 			Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
 		},
 	)
-	require.NoError(t, err)
-	require.Len(t, sources, 2)
+	require.NoError(err)
+	require.Len(sources, 2)
 
 	// The successful cold pass published its watermark, so the next event is
 	// bounded to the newly inserted rows.
 	fixture.insertMessage(t, "session-b", "assistant", `[{"type":"text","text":"new"}]`, 1_700_000_001)
 	sources, err = provider.SourcesForChangedPath(
-		context.Background(), ChangedPathRequest{
+		t.Context(), ChangedPathRequest{
 			Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
 		},
 	)
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	require.NoError(err)
+	require.Len(sources, 1)
 	assert.Equal(t, fixture.dbPath+"#session-b", sources[0].DisplayPath)
 }
 
 func TestGooseDiscoveryWatermarkDoesNotRetreatWatcherCursor(t *testing.T) {
+	require := require.New(t)
+
 	fixture := newGooseTestFixture(t)
 	fixture.insertSession(t, "session", "Race", "user", "")
 	fixture.insertMessage(t, "session", "user", `[{"type":"text","text":"seed"}]`, 1_700_000_000)
-	_, err := fixture.database.Exec("PRAGMA journal_mode=WAL")
-	require.NoError(t, err)
+	_, err := fixture.database.ExecContext(t.Context(), "PRAGMA journal_mode=WAL")
+	require.NoError(err)
 
 	provider, ok := NewProvider(AgentGoose, ProviderConfig{
 		Roots: []string{fixture.pathRoot}, Machine: "devbox",
 	})
-	require.True(t, ok)
-	_, err = provider.Discover(context.Background())
-	require.NoError(t, err)
+	require.True(ok)
+	_, err = provider.Discover(t.Context())
+	require.NoError(err)
 
 	// A watcher event lands mid-discovery: the row it processes must not be
 	// re-listed after the older discovery watermark is stored.
 	discoverer, ok := provider.(StreamingDiscoverer)
-	require.True(t, ok)
-	err = discoverer.DiscoverEach(context.Background(), func(SourceRef) error {
+	require.True(ok)
+	err = discoverer.DiscoverEach(t.Context(), func(SourceRef) error {
 		fixture.insertMessage(t, "session", "assistant", `[{"type":"text","text":"mid"}]`, 1_700_000_001)
 		sources, err := provider.SourcesForChangedPath(
-			context.Background(), ChangedPathRequest{
+			t.Context(), ChangedPathRequest{
 				Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
 			},
 		)
-		require.NoError(t, err)
-		require.Len(t, sources, 1)
+		require.NoError(err)
+		require.Len(sources, 1)
 		return nil
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	sources, err := provider.SourcesForChangedPath(
-		context.Background(), ChangedPathRequest{
+		t.Context(), ChangedPathRequest{
 			Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
 		},
 	)
-	require.NoError(t, err)
+	require.NoError(err)
 	assert.Empty(t, sources,
 		"rows already delivered to the watcher must not be re-listed after discovery stores its watermark")
 }
 
 func TestGooseDiscoveryLeavesConcurrentRowsForWatcherProcessing(t *testing.T) {
+	require := require.New(t)
+
 	fixture := newGooseTestFixture(t)
 	fixture.insertSession(t, "session", "Race", "user", "")
 	fixture.insertMessage(t, "session", "user", `[
 		{"type":"text","text":"Initial prompt"}
 	]`, 1_700_000_000)
-	_, err := fixture.database.Exec("PRAGMA journal_mode=WAL")
-	require.NoError(t, err)
+	_, err := fixture.database.ExecContext(t.Context(), "PRAGMA journal_mode=WAL")
+	require.NoError(err)
 
 	provider, ok := NewProvider(AgentGoose, ProviderConfig{
 		Roots: []string{fixture.pathRoot}, Machine: "devbox",
 	})
-	require.True(t, ok)
+	require.True(ok)
 	discoverer, ok := provider.(StreamingDiscoverer)
-	require.True(t, ok)
-	err = discoverer.DiscoverEach(context.Background(), func(SourceRef) error {
+	require.True(ok)
+	err = discoverer.DiscoverEach(t.Context(), func(SourceRef) error {
 		fixture.insertMessage(t, "session", "assistant", `[
 			{"type":"text","text":"Committed during discovery"}
 		]`, 1_700_000_001)
 		return nil
 	})
-	require.NoError(t, err)
+	require.NoError(err)
 
 	sources, err := provider.SourcesForChangedPath(
-		context.Background(), ChangedPathRequest{
+		t.Context(), ChangedPathRequest{
 			Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
 		},
 	)
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
+	require.NoError(err)
+	require.Len(sources, 1)
 	assert.Equal(t, fixture.dbPath+"#session", sources[0].DisplayPath)
 }
 
 func TestGooseFailedDiscoveryDoesNotPublishWatermark(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	fixture := newGooseTestFixture(t)
 	fixture.insertSession(t, "session-a", "a", "user", "")
 	fixture.insertSession(t, "session-b", "b", "user", "")
 	provider, ok := NewProvider(AgentGoose, ProviderConfig{Roots: []string{fixture.pathRoot}})
-	require.True(t, ok)
+	require.True(ok)
 	discoverer, ok := provider.(StreamingDiscoverer)
-	require.True(t, ok)
+	require.True(ok)
 	stop := errors.New("consumer stopped discovery")
-	err := discoverer.DiscoverEach(context.Background(), func(SourceRef) error { return stop })
-	require.ErrorIs(t, err, stop)
+	err := discoverer.DiscoverEach(t.Context(), func(SourceRef) error { return stop })
+	require.ErrorIs(err, stop)
 
 	// A failed enumeration must leave the next event cold, even without new rows.
-	sources, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
 	})
-	require.NoError(t, err)
-	require.Len(t, sources, 2)
-	assert.Equal(t, fixture.dbPath+"#session-a", sources[0].DisplayPath)
-	assert.Equal(t, fixture.dbPath+"#session-b", sources[1].DisplayPath)
+	require.NoError(err)
+	require.Len(sources, 2)
+	assert.Equal(fixture.dbPath+"#session-a", sources[0].DisplayPath)
+	assert.Equal(fixture.dbPath+"#session-b", sources[1].DisplayPath)
 }
 
 func TestGooseChangedSchemaReenumeratesOnce(t *testing.T) {
@@ -599,57 +621,65 @@ func TestGooseChangedSchemaReenumeratesOnce(t *testing.T) {
 		{"optional usage table", "DROP TABLE usage_ledger"},
 	} {
 		t.Run(change.name, func(t *testing.T) {
+			assert := assert.New(t)
+			require := require.New(t)
+
 			fixture := newGooseTestFixture(t)
 			fixture.insertSession(t, "session-a", "a", "user", "")
 			fixture.insertSession(t, "session-b", "b", "user", "")
 			provider, ok := NewProvider(AgentGoose, ProviderConfig{Roots: []string{fixture.pathRoot}})
-			require.True(t, ok)
-			_, err := provider.Discover(context.Background())
-			require.NoError(t, err)
-			_, err = fixture.database.Exec(change.sql)
-			require.NoError(t, err)
+			require.True(ok)
+			_, err := provider.Discover(t.Context())
+			require.NoError(err)
+			_, err = fixture.database.ExecContext(t.Context(), change.sql)
+			require.NoError(err)
 			scans := 0
-			ctx := WithSharedContainerScanObserver(context.Background(), func() { scans++ })
+			ctx := WithSharedContainerScanObserver(t.Context(), func() { scans++ })
 			req := ChangedPathRequest{Path: fixture.dbPath, WatchRoot: fixture.sessionDir}
 			sources, err := provider.SourcesForChangedPath(ctx, req)
-			require.NoError(t, err)
-			require.Len(t, sources, 2)
-			assert.Equal(t, 1, scans)
+			require.NoError(err)
+			require.Len(sources, 2)
+			assert.Equal(1, scans)
 
 			fixture.insertMessage(t, "session-b", "user", `[{"type":"text","text":"new"}]`, 1_700_000_001)
 			sources, err = provider.SourcesForChangedPath(ctx, req)
-			require.NoError(t, err)
-			require.Len(t, sources, 1)
-			assert.Equal(t, fixture.dbPath+"#session-b", sources[0].DisplayPath)
-			assert.Equal(t, 1, scans, "the new schema's cursor must keep later events bounded")
+			require.NoError(err)
+			require.Len(sources, 1)
+			assert.Equal(fixture.dbPath+"#session-b", sources[0].DisplayPath)
+			assert.Equal(1, scans, "the new schema's cursor must keep later events bounded")
 		})
 	}
 }
 
 func TestGooseDiscoveryRejectsUnsupportedMessagesSchema(t *testing.T) {
+	require := require.New(t)
+
 	fixture := newGooseTestFixture(t)
 	fixture.insertSession(t, "session", "Old", "user", "")
-	_, err := fixture.database.Exec(`ALTER TABLE messages DROP COLUMN metadata_json`)
-	require.NoError(t, err)
+	_, err := fixture.database.ExecContext(t.Context(), `ALTER TABLE messages DROP COLUMN metadata_json`)
+	require.NoError(err)
 
 	provider, ok := NewProvider(AgentGoose, ProviderConfig{
 		Roots: []string{fixture.pathRoot}, Machine: "devbox",
 	})
-	require.True(t, ok)
-	_, err = provider.Discover(context.Background())
-	require.ErrorContains(t, err, "unsupported goose messages schema")
+	require.True(ok)
+	_, err = provider.Discover(t.Context())
+	require.ErrorContains(err, "unsupported goose messages schema")
 	assert.ErrorContains(t, err, "metadata_json")
 }
 
 func TestGooseParsesSessionsSchemaWithoutOptionalColumns(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	pathRoot := t.TempDir()
 	sessionDir := filepath.Join(pathRoot, "data", "sessions")
-	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
+	require.NoError(os.MkdirAll(sessionDir, 0o755))
 	dbPath := filepath.Join(sessionDir, GooseDBName)
 	database, err := sql.Open("sqlite3", dbPath)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	_, err = database.Exec(`
+	require.NoError(err)
+	t.Cleanup(func() { require.NoError(database.Close()) })
+	_, err = database.ExecContext(t.Context(), `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
 			working_dir TEXT NOT NULL,
@@ -672,32 +702,35 @@ func TestGooseParsesSessionsSchemaWithoutOptionalColumns(t *testing.T) {
 		INSERT INTO messages (session_id, role, content_json, created_timestamp)
 		VALUES ('bare', 'user', '[{"type":"text","text":"Old schema prompt."}]', 1700000000);
 	`)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	provider, ok := NewProvider(AgentGoose, ProviderConfig{
 		Roots: []string{pathRoot}, Machine: "devbox",
 	})
-	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.Len(t, sources, 1)
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
-	require.NoError(t, err)
-	assert.Len(t, fingerprint.Hash, 64)
+	require.True(ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.Len(sources, 1)
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
+	require.NoError(err)
+	assert.Len(fingerprint.Hash, 64)
 
 	result, err := parseGooseSession(t.Context(), dbPath, "bare", "devbox", false)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.Equal(t, "goose:bare", result.Session.ID)
-	assert.Equal(t, "Old schema prompt.", result.Session.FirstMessage)
-	assert.Equal(t, "goose-sqlite-v0", result.Session.SourceVersion)
-	assert.Empty(t, result.Session.ParentSessionID)
-	assert.Empty(t, result.UsageEvents)
-	require.Len(t, result.Messages, 1)
-	assert.Equal(t, "Old schema prompt.", result.Messages[0].Content)
+	require.NoError(err)
+	require.NotNil(result)
+	assert.Equal("goose:bare", result.Session.ID)
+	assert.Equal("Old schema prompt.", result.Session.FirstMessage)
+	assert.Equal("goose-sqlite-v0", result.Session.SourceVersion)
+	assert.Empty(result.Session.ParentSessionID)
+	assert.Empty(result.UsageEvents)
+	require.Len(result.Messages, 1)
+	assert.Equal("Old schema prompt.", result.Messages[0].Content)
 }
 
 func TestGooseUnknownToolResponseStatusIsNotAHumanMessage(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	fixture := newGooseTestFixture(t)
 	fixture.insertSession(t, "session", "Pending", "user", "")
 	fixture.insertMessage(t, "session", "user", `[{"type":"text","text":"Run the tool."}]`, 1_700_000_000)
@@ -706,39 +739,42 @@ func TestGooseUnknownToolResponseStatusIsNotAHumanMessage(t *testing.T) {
 	]`, 1_700_000_001)
 
 	result, err := parseGooseSession(t.Context(), fixture.dbPath, "session", "devbox", false)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	assert.Equal(t, 1, result.Session.UserMessageCount,
+	require.NoError(err)
+	require.NotNil(result)
+	assert.Equal(1, result.Session.UserMessageCount,
 		"a tool-response carrier with an unknown status must not count as a human message")
-	require.Len(t, result.Messages, 2)
-	require.Len(t, result.Messages[1].ToolResults, 1)
-	assert.Equal(t, "call-1", result.Messages[1].ToolResults[0].ToolUseID)
+	require.Len(result.Messages, 2)
+	require.Len(result.Messages[1].ToolResults, 1)
+	assert.Equal("call-1", result.Messages[1].ToolResults[0].ToolUseID)
 }
 
 func TestGooseLedgerModelFallsBackToSessionModel(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	fixture := newGooseTestFixture(t)
 	fixture.insertSession(t, "session", "Carried", "user", "")
 	fixture.insertMessage(t, "session", "user", `[{"type":"text","text":"hi"}]`, 1_700_000_000)
 	// Upstream inserts carried_forward rows without a model.
-	_, err := fixture.database.Exec(`
+	_, err := fixture.database.ExecContext(t.Context(), `
 		INSERT INTO usage_ledger (
 			session_id, created_timestamp, model, input_tokens, output_tokens,
 			total_tokens, cache_read_tokens, cache_write_tokens,
 			cost, cost_source, is_compaction
 		) VALUES ('session', 1700000010, NULL, 50, 5, 55, 0, 0, 0.01, 'carried_forward', 0)
 	`)
-	require.NoError(t, err)
+	require.NoError(err)
 
 	result, err := parseGooseSession(t.Context(), fixture.dbPath, "session", "devbox", false)
-	require.NoError(t, err)
-	require.NotNil(t, result)
-	require.Len(t, result.UsageEvents, 1)
+	require.NoError(err)
+	require.NotNil(result)
+	require.Len(result.UsageEvents, 1)
 	event := result.UsageEvents[0]
-	assert.Equal(t, "claude-sonnet-4-6", event.Model,
+	assert.Equal("claude-sonnet-4-6", event.Model,
 		"model-less ledger rows must inherit the session model so aggregates keep them")
-	assert.Equal(t, "unknown", event.CostStatus)
-	assert.Equal(t, "goose-carried-forward", event.CostSource)
-	assert.Equal(t, 50, event.InputTokens)
+	assert.Equal("unknown", event.CostStatus)
+	assert.Equal("goose-carried-forward", event.CostSource)
+	assert.Equal(50, event.InputTokens)
 }
 
 func nullableGooseTestString(value string) any {
@@ -755,32 +791,35 @@ func TestGooseTimestampAcceptsSecondsMillisecondsAndSQLiteText(t *testing.T) {
 }
 
 func TestGooseObservedSessionsDatabase(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	sourceDB := os.Getenv("GOOSE_SOURCE_DB")
 	if sourceDB == "" {
 		t.Skip("set GOOSE_SOURCE_DB to an isolated Goose sessions.db copy")
 	}
 	raw, err := os.ReadFile(sourceDB)
-	require.NoError(t, err)
+	require.NoError(err)
 	dbPath := filepath.Join(t.TempDir(), GooseDBName)
-	require.NoError(t, os.WriteFile(dbPath, raw, 0o600))
+	require.NoError(os.WriteFile(dbPath, raw, 0o600))
 	provider, ok := NewProvider(AgentGoose, ProviderConfig{
 		Roots: []string{filepath.Dir(dbPath)}, Machine: "observed-fixture",
 	})
-	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
-	require.NotEmpty(t, sources)
+	require.True(ok)
+	sources, err := provider.Discover(t.Context())
+	require.NoError(err)
+	require.NotEmpty(sources)
 	for _, source := range sources {
-		fingerprint, err := provider.Fingerprint(context.Background(), source)
-		require.NoError(t, err)
-		outcome, err := provider.Parse(context.Background(), ParseRequest{
+		fingerprint, err := provider.Fingerprint(t.Context(), source)
+		require.NoError(err)
+		outcome, err := provider.Parse(t.Context(), ParseRequest{
 			Source: source, Fingerprint: fingerprint, Machine: "observed-fixture",
 		})
-		require.NoError(t, err)
-		require.Len(t, outcome.Results, 1)
+		require.NoError(err)
+		require.Len(outcome.Results, 1)
 		result := outcome.Results[0].Result
-		assert.Equal(t, AgentGoose, result.Session.Agent)
-		assert.Equal(t, len(result.Messages), result.Session.MessageCount)
-		assert.NotEmpty(t, result.Session.SourceSessionID)
+		assert.Equal(AgentGoose, result.Session.Agent)
+		assert.Equal(len(result.Messages), result.Session.MessageCount)
+		assert.NotEmpty(result.Session.SourceSessionID)
 	}
 }

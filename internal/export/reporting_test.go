@@ -58,6 +58,9 @@ func TestParseReportingDateAcceptsOnlyCanonicalUTCDates(t *testing.T) {
 }
 
 func TestFinalizeReportingHourCanonicalizesOrderingAndIgnoresInputDigest(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	hour := reportingHourFixture("2026-07-29-13")
 	reversed := hour
 	reversed.Digest = "sha256:stale-derived-field"
@@ -70,42 +73,48 @@ func TestFinalizeReportingHourCanonicalizesOrderingAndIgnoresInputDigest(t *test
 	slices.Reverse(reversed.Usage.ByProject)
 
 	finalized, canonical, err := FinalizeReportingHour(hour)
-	require.NoError(t, err)
+	require.NoError(err)
 	reversedFinalized, reversedCanonical, err := FinalizeReportingHour(reversed)
-	require.NoError(t, err)
+	require.NoError(err)
 
-	assert.Equal(t, finalized, reversedFinalized)
-	assert.Equal(t, canonical, reversedCanonical)
-	assert.Regexp(t, `^sha256:[0-9a-f]{64}$`, finalized.Digest)
-	assert.Equal(t, []string{"agent-a", "agent-z"}, []string{
+	assert.Equal(finalized, reversedFinalized)
+	assert.Equal(canonical, reversedCanonical)
+	assert.Regexp(`^sha256:[0-9a-f]{64}$`, finalized.Digest)
+	assert.Equal([]string{"agent-a", "agent-z"}, []string{
 		finalized.Activity.ByAgent[0].Key,
 		finalized.Activity.ByAgent[1].Key,
 	})
-	assert.Equal(t, []string{"model-a", "model-z"}, []string{
+	assert.Equal([]string{"model-a", "model-z"}, []string{
 		finalized.Usage.ByModel[0].Key,
 		finalized.Usage.ByModel[1].Key,
 	})
 
 	var decoded map[string]any
-	require.NoError(t, json.Unmarshal(canonical, &decoded))
-	assert.Equal(t, finalized.Digest, decoded["digest"])
+	require.NoError(json.Unmarshal(canonical, &decoded))
+	assert.Equal(finalized.Digest, decoded["digest"])
 }
 
 func TestFinalizeReportingHourDigestVector(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	hour := quietReportingHourFixture("2026-07-28-00")
 	hour.Digest = "sha256:stale-derived-field"
 
 	finalized, _, err := FinalizeReportingHour(hour)
-	require.NoError(t, err)
-	assert.Equal(t, "sha256:fc06eb3fbe7e2bab1434f2147891cf3b900d3d9da5ec0c9637822f5ae71bac73", finalized.Digest)
+	require.NoError(err)
+	assert.Equal("sha256:fc06eb3fbe7e2bab1434f2147891cf3b900d3d9da5ec0c9637822f5ae71bac73", finalized.Digest)
 
 	hour.Digest = "sha256:different-stale-derived-field"
 	repeated, _, err := FinalizeReportingHour(hour)
-	require.NoError(t, err)
-	assert.Equal(t, finalized.Digest, repeated.Digest)
+	require.NoError(err)
+	assert.Equal(finalized.Digest, repeated.Digest)
 }
 
 func TestFinalizeReportingDayGivesCompletedEmptyDateCanonicalDigest(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
 	hours := make([]ReportingHour, 24)
 	for i := range hours {
 		hours[i] = quietReportingHourFixture(
@@ -117,12 +126,12 @@ func TestFinalizeReportingDayGivesCompletedEmptyDateCanonicalDigest(t *testing.T
 		Date:          "2026-07-28", Complete: true, HasData: true,
 		Digest: "sha256:stale-derived-field", Hours: hours,
 	})
-	require.NoError(t, err)
-	assert.False(t, finalized.HasData)
-	assert.Equal(t, "sha256:308989b5c0df16c9d2d06fd050f3268632327d9faf9088f6dfb85ad9b221fc4c", finalized.Digest)
-	require.Len(t, finalized.Hours, 24)
-	assert.Equal(t, "sha256:fc06eb3fbe7e2bab1434f2147891cf3b900d3d9da5ec0c9637822f5ae71bac73", finalized.Hours[0].Digest)
-	assert.Contains(t, string(canonical), `"has_data":false`)
+	require.NoError(err)
+	assert.False(finalized.HasData)
+	assert.Equal("sha256:308989b5c0df16c9d2d06fd050f3268632327d9faf9088f6dfb85ad9b221fc4c", finalized.Digest)
+	require.Len(finalized.Hours, 24)
+	assert.Equal("sha256:fc06eb3fbe7e2bab1434f2147891cf3b900d3d9da5ec0c9637822f5ae71bac73", finalized.Hours[0].Digest)
+	assert.Contains(string(canonical), `"has_data":false`)
 }
 
 func reportingHourFixture(period string) ReportingHour {
