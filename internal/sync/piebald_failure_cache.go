@@ -251,12 +251,11 @@ func piebaldFailureIsTransient(ctx context.Context, err error) bool {
 		return true
 	}
 
-	var sqliteErr sqlite3.Error
-	if errors.As(err, &sqliteErr) {
+	if sqliteErr, ok := errors.AsType[sqlite3.Error](err); ok {
 		return piebaldSQLiteErrorIsTransient(sqliteErr)
 	}
-	var sqliteErrPtr *sqlite3.Error
-	if errors.As(err, &sqliteErrPtr) && sqliteErrPtr != nil {
+	if sqliteErrPtr, ok := errors.AsType[*sqlite3.Error](err); ok &&
+		sqliteErrPtr != nil {
 		return piebaldSQLiteErrorIsTransient(*sqliteErrPtr)
 	}
 	return false
