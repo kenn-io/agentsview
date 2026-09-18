@@ -712,6 +712,16 @@ func TestParseDiffPiebaldFailureBypassesMemo(t *testing.T) {
 	assert.Equal(t, 1, report.Totals.ParseErrors)
 	assert.Len(t, engine.piebaldFailureMemo, 1)
 	require.Len(t, provider.parseRequests, 1)
+	warm := engine.piebaldFailureMemo[key]
+	provider.parseErr = nil
+	provider.outcome = parser.ParseOutcome{ResultSetComplete: true}
+	report, err = engine.ParseDiff(t.Context(), ParseDiffOptions{
+		Agents: []parser.AgentType{parser.AgentPiebald},
+	})
+	require.NoError(t, err)
+	assert.Zero(t, report.Totals.ParseErrors)
+	assert.Equal(t, warm, engine.piebaldFailureMemo[key])
+	require.Len(t, provider.parseRequests, 2)
 }
 
 func TestPiebaldFailureMemoClearsOnCacheInvalidation(t *testing.T) {

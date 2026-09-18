@@ -12101,7 +12101,7 @@ func (e *Engine) processProviderFile(
 			retentionLease: lease,
 		}, true
 	}
-	if file.Agent == parser.AgentPiebald {
+	if file.Agent == parser.AgentPiebald && !e.forceParse {
 		e.clearPiebaldFailure(source)
 	}
 	if err := validateProviderOutcome(
