@@ -60,11 +60,13 @@ func seedFixture(t *testing.T) (*db.DB, Target) {
 				fixtureMessage(fixtureAlphaID, 0, "user", "alpha first", "2026-01-10T00:00:00.000Z"),
 				fixtureMessage(fixtureAlphaID, 1, "assistant", fixtureSecret, "2026-01-10T00:01:00.000Z",
 					db.ToolCall{
-						ToolName:  "search",
-						Category:  "search",
-						SkillName: "ch-search",
-						ToolUseID: "tool-alpha",
-						InputJSON: `{"query":"clickhouse"}`,
+						ToolName:            "search",
+						Category:            "search",
+						SkillName:           "ch-search",
+						ToolUseID:           "tool-alpha",
+						InputJSON:           `{"query":"clickhouse"}`,
+						ResultContent:       "clickhouse result",
+						ResultContentLength: len("clickhouse result"),
 						ResultEvents: []db.ToolResultEvent{{
 							Source:        "tool",
 							Status:        "complete",

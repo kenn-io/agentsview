@@ -722,10 +722,19 @@ func messageRow(m db.Message, version uint64) []any {
 }
 
 func toolCallRow(m db.Message, tc db.ToolCall, callIndex int, version uint64) []any {
+	stored := db.DedupToolCallResultSummary(tc.ResultContent, tc.ResultEvents)
+	length := tc.ResultContentLength
+	if length == 0 {
+		if stored != "" {
+			length = len(stored)
+		} else if len(tc.ResultEvents) == 1 {
+			length = len(tc.ResultEvents[0].Content)
+		}
+	}
 	return []any{
 		m.ID, int64(m.Ordinal), m.SessionID, tc.ToolName, tc.Category, int64(callIndex),
-		tc.ToolUseID, tc.InputJSON, tc.SkillName, int64(tc.ResultContentLength),
-		db.DedupToolCallResultSummary(tc.ResultContent, tc.ResultEvents),
+		tc.ToolUseID, tc.InputJSON, tc.SkillName, int64(length),
+		stored,
 		tc.SubagentSessionID, tc.FilePath,
 		version,
 	}
