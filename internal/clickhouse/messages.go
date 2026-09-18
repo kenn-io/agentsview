@@ -389,7 +389,10 @@ func (s *Store) GetSessionTiming(ctx context.Context, sessionID string) (*db.Ses
 
 func (s *Store) queryTurnRows(ctx context.Context, sess *db.Session) ([]db.TurnRow, error) {
 	rows, err := s.queryContext(ctx, `
-		SELECT id, ordinal, timestamp, has_tool_use
+		SELECT id, ordinal, timestamp, has_tool_use,
+			role, is_system,
+			CASE WHEN `+db.ClickHouseSystemPrefixSQL("content", "role")+` THEN false ELSE true END,
+			COALESCE(source_subtype, ''), content_length
 		FROM messages
 		WHERE session_id = ?
 		ORDER BY ordinal`, sess.ID)
@@ -402,7 +405,10 @@ func (s *Store) queryTurnRows(ctx context.Context, sess *db.Session) ([]db.TurnR
 	for rows.Next() {
 		var r db.TurnRow
 		var ts any
-		if err := rows.Scan(&r.MessageID, &r.Ordinal, &ts, &r.HasToolUse); err != nil {
+		if err := rows.Scan(
+			&r.MessageID, &r.Ordinal, &ts, &r.HasToolUse,
+			&r.Role, &r.IsSystem, &r.IsSystemPrefixed, &r.SourceSubtype, &r.ContentLength,
+		); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse timing turn: %w", err)
 		}
 		r.Timestamp = formatDBTime(ts)
@@ -466,7 +472,6 @@ func (s *Store) queryCallRows(ctx context.Context, sessionID string) ([]db.CallR
 	defer rows.Close()
 
 	var out []db.CallRow
-	now := time.Now().UTC().Format(time.RFC3339)
 	for rows.Next() {
 		var r db.CallRow
 		var skill, sub string
@@ -483,15 +488,11 @@ func (s *Store) queryCallRows(ctx context.Context, sessionID string) ([]db.CallR
 		}
 		if sub != "" {
 			r.SubagentSessionID = &sub
-			if dur, ok := timingMillis(formatDBTime(startedAt), firstNonEmpty(formatDBTime(endedAt), now)); ok {
-				r.DurationMs = &dur
-			}
-		} else if completedAt := formatDBTime(executionCompleted); completedAt != "" {
-			if dur, ok := timingMillis(formatDBTime(executionStarted), completedAt); ok {
-				r.DurationMs = &dur
-				r.CompletedAt = completedAt
-			}
 		}
+		r.ExecutionStart = formatDBTime(executionStarted)
+		r.ExecutionEnd = formatDBTime(executionCompleted)
+		r.SubagentStart = formatDBTime(startedAt)
+		r.SubagentEnd = formatDBTime(endedAt)
 		out = append(out, r)
 	}
 	return out, rows.Err()
