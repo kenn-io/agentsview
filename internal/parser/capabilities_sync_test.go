@@ -47,6 +47,11 @@ func TestProviderSyncSemanticsDeclarations(t *testing.T) {
 			FingerprintHashInCacheKey:           true,
 			FingerprintHashRequiredForFreshness: true,
 		},
+		// Augure Desktop shares the Hermes provider, so it must share its
+		// semantics.
+		AgentAugureDesktop: {
+			FingerprintHashRequiredForFreshness: true,
+		},
 		AgentHermes: {
 			FingerprintHashRequiredForFreshness: true,
 		},
