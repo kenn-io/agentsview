@@ -138,6 +138,56 @@ func TestAbortedResyncPreservesFailureSkipCache(t *testing.T) {
 	}
 }
 
+func TestCanceledResyncDoesNotPersistFailureSkipCache(t *testing.T) {
+	engine, database, provider, root, path := newResyncFailureEngine(t)
+	ordinaryPath := filepath.Join(root, "ordinary-skip.jsonl")
+	engine.cacheSkip(ordinaryPath, 42)
+	require.Equal(t, 1, engine.persistSkipCache())
+	provider.parseErr = errors.New("malformed source")
+	ctx, cancel := context.WithCancel(context.Background())
+	provider.parseCancel = cancel
+
+	_, stats, err := engine.ResyncBuild(ctx, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.True(t, stats.Aborted)
+
+	persisted, err := database.LoadSkippedFiles()
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), persisted[ordinaryPath])
+	_, failure := decodeSkipFailureMtime(
+		persisted[providerAgentSkipCacheKey(path, provider.Def.Type)],
+	)
+	assert.False(t, failure,
+		"cancellation must not persist a rebuild-only failure marker")
+}
+
+func TestResyncSwapFailurePreservesFailureSkipCache(t *testing.T) {
+	engine, database, provider, root, path := newResyncFailureEngine(t)
+	ordinaryPath := filepath.Join(root, "ordinary-skip.jsonl")
+	engine.cacheSkip(ordinaryPath, 42)
+	require.Equal(t, 1, engine.persistSkipCache())
+	failureKey := providerAgentSkipCacheKey(path, provider.Def.Type)
+	var removed atomic.Bool
+
+	stats := engine.ResyncAll(context.Background(), func(p Progress) {
+		if p.Phase == PhaseSwappingDatabase &&
+			removed.CompareAndSwap(false, true) {
+			engine.cacheFailure(failureKey, 42)
+			require.NoError(t, os.Remove(engine.ResyncTempPath()))
+		}
+	})
+	require.True(t, removed.Load())
+	assert.True(t, stats.Aborted)
+
+	persisted, err := database.LoadSkippedFiles()
+	require.NoError(t, err)
+	assert.Equal(t, int64(42), persisted[ordinaryPath])
+	value, ok := persisted[failureKey]
+	require.True(t, ok)
+	_, failure := decodeSkipFailureMtime(value)
+	assert.True(t, failure)
+}
+
 // TestResyncBuildThenSwapMatchesResyncAll drives the split resync path
 // end-to-end: build the replacement, swap it in, reset caches. It must preserve
 // an orphan session whose source file was deleted, clean up the temp file, and

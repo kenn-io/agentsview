@@ -1064,6 +1064,7 @@ type directStreamingProvider struct {
 	discoverRelease  <-chan struct{}
 	parseStarted     chan<- struct{}
 	parseRelease     <-chan struct{}
+	parseCancel      context.CancelFunc
 	parseForce       atomic.Bool
 	source           *parser.SourceRef
 	parseErr         error
@@ -1147,6 +1148,9 @@ func (provider *directStreamingProvider) Parse(
 		}
 	}
 	provider.parseForce.Store(req.ForceParse)
+	if provider.parseCancel != nil {
+		provider.parseCancel()
+	}
 	return provider.parseOutcome, provider.parseErr
 }
 
