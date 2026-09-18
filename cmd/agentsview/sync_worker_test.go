@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -189,6 +190,25 @@ func TestWorkerResultPreservesTombstonesAcrossProtocol(t *testing.T) {
 		"the terminal summary must carry committed tombstones")
 	assert.Equal(t, 2, statsFromWorkerResult(decoded).Tombstoned,
 		"the daemon-side stats must retain tombstones after JSON decoding")
+}
+
+func TestWorkerFailureSkipCacheChunksCrossProtocol(t *testing.T) {
+	entries := make(map[string]int64, 8_000)
+	for i := range 8_000 {
+		entries[fmt.Sprintf("/archive/%04d-%s.jsonl", i, strings.Repeat("x", 120))] = int64(i)
+	}
+	var wire bytes.Buffer
+	emitFailureSkipCache(func(line workerLine) {
+		require.NoError(t, json.MarshalWrite(&wire, line))
+		wire.WriteByte('\n')
+	}, entries)
+	result := workerResult{Status: "aborted"}
+	require.NoError(t, json.MarshalWrite(&wire, workerLine{Result: &result}))
+	wire.WriteByte('\n')
+
+	decoded, err := readWorkerResult(&wire, nil)
+	require.NoError(t, err)
+	assert.Equal(t, entries, decoded.FailureSkipCache)
 }
 
 func TestSyncWorkerFailsWhenWriteLockHeld(t *testing.T) {

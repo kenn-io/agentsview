@@ -34,8 +34,9 @@ func runningAsSyncWorker() bool {
 // parse stdout strictly. A run streams zero or more Progress lines followed by
 // exactly one Result line.
 type workerLine struct {
-	Progress *sync.Progress `json:"progress,omitempty"`
-	Result   *workerResult  `json:"result,omitempty"`
+	Progress         *sync.Progress   `json:"progress,omitempty"`
+	Result           *workerResult    `json:"result,omitempty"`
+	FailureSkipCache map[string]int64 `json:"failureSkipCache,omitempty"`
 }
 
 // workerResult is the single terminal record a sync-worker run emits. Status is
@@ -275,8 +276,8 @@ func runSyncWorkerResyncBuild(
 	defer engine.Close()
 
 	_, stats, buildErr := engine.ResyncBuild(ctx, onProgress)
+	emitFailureSkipCache(emit, engine.SnapshotFailureSkipCache())
 	result := resyncBuildResultFromStats(ctx, stats, buildErr)
-	result.FailureSkipCache = engine.SnapshotFailureSkipCache()
 	emit(workerLine{Result: &result})
 	if result.Status != "ok" || !result.DiscoveryComplete {
 		if buildErr != nil {
@@ -285,6 +286,14 @@ func runSyncWorkerResyncBuild(
 		return fmt.Errorf("sync worker %s: %s", mode, result.Status)
 	}
 	return nil
+}
+
+func emitFailureSkipCache(
+	emit func(workerLine), entries map[string]int64,
+) {
+	for key, value := range entries {
+		emit(workerLine{FailureSkipCache: map[string]int64{key: value}})
+	}
 }
 
 // resyncBuildResultFromStats maps a resync build outcome to a terminal result.
