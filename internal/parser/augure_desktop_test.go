@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -231,6 +232,49 @@ func TestAugureDesktopProjectRelabel(t *testing.T) {
 	assert.Equal(t, "hermes-tools", relabel("hermes-tools", false))
 	assert.Equal(t, "my-project", relabel("my-project", false))
 	assert.Equal(t, "", relabel("", false))
+}
+
+// TestAugureDesktopTranscriptProjectRelabel covers the transcript parse
+// paths' own synthesis fallbacks: without a hint, the project is
+// synthesized from the session platform ("hermes-<platform>") or bare
+// "hermes", and the relabel must rebrand those exactly like the state-DB
+// path; an explicit hint survives untouched.
+func TestAugureDesktopTranscriptProjectRelabel(t *testing.T) {
+	const jsonBody = `{
+		"session_start":"2026-05-14T10:00:00Z",
+		"last_updated":"2026-05-14T10:20:00Z",
+		"messages":[
+			{"role":"user","content":"hello","timestamp":"2026-05-14T10:01:00Z"},
+			{"role":"assistant","content":"reply","timestamp":"2026-05-14T10:02:00Z"}
+		]
+	}`
+	build := func(t *testing.T, platform string, hint string) string {
+		t.Helper()
+		body := jsonBody
+		if platform != "" {
+			body = fmt.Sprintf(`{"platform":%q,"session_start":"2026-05-14T10:00:00Z",`+
+				`"last_updated":"2026-05-14T10:20:00Z","messages":[`+
+				`{"role":"user","content":"hello","timestamp":"2026-05-14T10:01:00Z"},`+
+				`{"role":"assistant","content":"reply","timestamp":"2026-05-14T10:02:00Z"}]}`, platform)
+		}
+		path := createTestFile(t, "session_20260910_075655_ca54ab.json", body)
+		provider, ok := NewProvider(AgentAugureDesktop, ProviderConfig{
+			Roots: []string{t.TempDir()}, Machine: "devbox",
+		})
+		require.True(t, ok)
+		hp, ok := provider.(*hermesProvider)
+		require.True(t, ok)
+		sess, msgs, err := hp.parseSession(path, hint, "devbox")
+		require.NoError(t, err)
+		require.NotNil(t, sess)
+		result := &ParseResult{Session: *sess, Messages: msgs}
+		relabelHermesResultAsAugureDesktop(result)
+		return result.Session.Project
+	}
+
+	assert.Equal(t, "augure-desktop-discord", build(t, "discord", ""))
+	assert.Equal(t, "augure-desktop", build(t, "", ""))
+	assert.Equal(t, "hermes-tools", build(t, "discord", "hermes-tools"))
 }
 
 // TestAugureDesktopSessionIDRelabel guards the prefix swap semantics shared
