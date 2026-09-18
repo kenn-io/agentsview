@@ -16,7 +16,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use tauri::async_runtime::Receiver;
-use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+use tauri::menu::{
+    MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder, HELP_SUBMENU_ID,
+    WINDOW_SUBMENU_ID,
+};
 use tauri::plugin::Builder as PluginBuilder;
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use tauri::tray::TrayIconBuilder;
@@ -2297,31 +2300,71 @@ fn setup_menu(app: &mut App) -> Result<(), DynError> {
     let check_updates =
         MenuItemBuilder::with_id(CHECK_UPDATES_MENU_ID, "Check for Updates...").build(app)?;
 
-    let builder = SubmenuBuilder::new(app, "File")
+    #[cfg(target_os = "macos")]
+    let app_submenu = SubmenuBuilder::new(app, "AgentsView")
         .item(&about)
         .separator()
         .item(&open_logs_folder)
         .item(&check_updates)
-        .separator();
-
-    #[cfg(target_os = "macos")]
-    let builder = builder.hide().hide_others().separator();
-
-    let app_submenu = builder.quit().build()?;
-
-    let edit_submenu = SubmenuBuilder::new(app, "Edit")
-        .undo()
-        .redo()
         .separator()
-        .cut()
-        .copy()
-        .paste()
-        .select_all()
+        .item(&PredefinedMenuItem::services(app, None)?)
+        .separator()
+        .item(&PredefinedMenuItem::hide(app, None)?)
+        .item(&PredefinedMenuItem::hide_others(app, None)?)
+        .item(&PredefinedMenuItem::show_all(app, None)?)
+        .separator()
+        .item(&PredefinedMenuItem::quit(app, None)?)
         .build()?;
 
+    #[cfg(not(target_os = "macos"))]
+    let file_submenu = SubmenuBuilder::new(app, "File")
+        .item(&about)
+        .separator()
+        .item(&open_logs_folder)
+        .item(&check_updates)
+        .separator()
+        .item(&PredefinedMenuItem::close_window(app, None)?)
+        .separator()
+        .item(&PredefinedMenuItem::quit(app, None)?)
+        .build()?;
+
+    #[cfg(target_os = "macos")]
+    let file_submenu = SubmenuBuilder::new(app, "File")
+        .item(&PredefinedMenuItem::close_window(app, None)?)
+        .build()?;
+
+    let edit_submenu = SubmenuBuilder::new(app, "Edit")
+        .item(&PredefinedMenuItem::undo(app, None)?)
+        .item(&PredefinedMenuItem::redo(app, None)?)
+        .separator()
+        .item(&PredefinedMenuItem::cut(app, None)?)
+        .item(&PredefinedMenuItem::copy(app, None)?)
+        .item(&PredefinedMenuItem::paste(app, None)?)
+        .item(&PredefinedMenuItem::select_all(app, None)?)
+        .build()?;
+
+    #[cfg(target_os = "macos")]
+    let window_submenu = SubmenuBuilder::with_id(app, WINDOW_SUBMENU_ID, "Window")
+        .item(&PredefinedMenuItem::minimize(app, None)?)
+        .item(&PredefinedMenuItem::maximize(app, None)?)
+        .build()?;
+
+    let help_submenu = SubmenuBuilder::with_id(app, HELP_SUBMENU_ID, "Help").build()?;
+
+    #[cfg(target_os = "macos")]
     let menu = MenuBuilder::new(app)
         .item(&app_submenu)
+        .item(&file_submenu)
         .item(&edit_submenu)
+        .item(&window_submenu)
+        .item(&help_submenu)
+        .build()?;
+
+    #[cfg(not(target_os = "macos"))]
+    let menu = MenuBuilder::new(app)
+        .item(&file_submenu)
+        .item(&edit_submenu)
+        .item(&help_submenu)
         .build()?;
     app.set_menu(menu)?;
     Ok(())
