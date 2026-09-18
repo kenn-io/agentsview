@@ -2855,6 +2855,15 @@ func (e *Engine) resyncAllWithOptionsLocked(
 	// double-closed or prematurely reopened.
 	ownedBarrier := false
 	swapStageReached := false
+	// Registered first so it runs after the recovery below reopens the writer.
+	// A build that was discarded flushed its source failures only into the
+	// replacement; this makes them survive a restart. It writes nothing after
+	// a successful swap, which already reloaded the cache from the new archive.
+	defer func() {
+		if ctx.Err() == nil {
+			e.flushFailureCache()
+		}
+	}()
 	defer func() {
 		// The successful swap's Reopen already restored the writer and cleared
 		// the barrier; recover here only when we still own a closed writer
@@ -3083,6 +3092,10 @@ func (e *Engine) resyncBuildLocked(
 	e.skipCacheDirty = true
 	e.skipHashKeys = make(map[string]string)
 	e.skipMu.Unlock()
+	// A resync parses every source again, so the failures it records replace
+	// the old ones. They describe source files, not archive rows, and stay
+	// valid when the build is discarded; they are not restored with the rest.
+	e.failures.Reset()
 
 	restoreSkipCache := func() {
 		e.skipMu.Lock()
@@ -3090,6 +3103,9 @@ func (e *Engine) resyncBuildLocked(
 		e.skipCacheDirty = true
 		e.skipHashKeys = savedSkipHashKeys
 		e.skipMu.Unlock()
+		if ctx.Err() == nil {
+			e.flushFailureCacheInto(origDB)
+		}
 	}
 
 	// 2. Open a fresh DB at the temp path.
@@ -13181,7 +13197,8 @@ func (e *Engine) claudeRowlessFreshnessMarked(
 	defer e.skipMu.RUnlock()
 	for _, path := range paths {
 		key := e.claudeRowlessFreshnessCacheKey(path, contentHash)
-		if key != "" && e.skipCache[key] == mtime {
+		cachedMtime, cached := e.skipCache[key]
+		if key != "" && cached && cachedMtime == mtime {
 			return true
 		}
 	}
@@ -14143,6 +14160,7 @@ func (e *Engine) clearSkip(path string) int {
 }
 
 func (e *Engine) clearSkipInMemory(path string) int {
+	e.failures.Clear(path)
 	e.skipMu.Lock()
 	defer e.skipMu.Unlock()
 	before := len(e.skipCache)
@@ -14215,11 +14233,13 @@ func (e *Engine) clearWatcherOverflowCaches() {
 	e.skipFingerprints = make(map[string]string)
 	e.skipHashKeys = make(map[string]string)
 	e.skipMu.Unlock()
+	e.failures.Reset()
 	if !e.ephemeral {
 		if err := e.db.ReplaceSkippedFiles(map[string]int64{}); err != nil {
 			log.Printf("clearing skipped files after watcher overflow: %v", err)
 		}
 	}
+	e.flushFailureCache()
 	e.clearTrustedOpenCodeStorageSessions()
 	e.clearTrustedSQLiteContainers()
 	e.clearVerifiedSources()
@@ -14310,7 +14330,9 @@ func (e *Engine) flushFailureCache() {
 }
 
 func (e *Engine) flushFailureCacheInto(target *db.DB) {
-	if e.ephemeral {
+	// An unwritable target is not an error: the cache stays in memory and the
+	// next flush to a writable archive carries it.
+	if e.ephemeral || target.ReadOnly() || target.WriterClosed() {
 		return
 	}
 	if err := e.failures.Flush(target); err != nil {
@@ -21106,6 +21128,9 @@ func (e *Engine) processAndWriteSessionFile(
 		}
 		return false, sessionsChanged, res.err
 	}
+	// A forced refresh that got past a cached failure removed it; make that
+	// removal durable so a restart does not suppress the source again.
+	e.flushFailureCache()
 	if res.sourceCwdResolution.State != parser.SourceCwdUnspecified {
 		changed, reconcileErr := e.reconcileFilteredSourceCwd(
 			res.results,

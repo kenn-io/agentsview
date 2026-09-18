@@ -20,6 +20,9 @@ type Identity = db.SourceFailure
 // they stay valid whichever archive database is live. Flush makes them survive
 // a restart.
 type Cache struct {
+	// flushMu serializes whole flushes so an older snapshot cannot land after
+	// a newer one.
+	flushMu  sync.Mutex
 	mu       sync.Mutex
 	entries  map[string]Identity
 	revision uint64
@@ -90,9 +93,23 @@ func (c *Cache) Clear(key string) {
 	c.revision++
 }
 
+// Reset forgets every entry. The engine calls it wherever it discards all other
+// freshness shortcuts, so the following pass parses every source again.
+func (c *Cache) Reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.entries) == 0 {
+		return
+	}
+	c.entries = nil
+	c.revision++
+}
+
 // Flush persists the cache into target. It writes nothing when target already
 // holds the current contents.
 func (c *Cache) Flush(target *db.DB) error {
+	c.flushMu.Lock()
+	defer c.flushMu.Unlock()
 	c.mu.Lock()
 	if target == c.flushedTo && c.revision == c.flushedRevision {
 		c.mu.Unlock()

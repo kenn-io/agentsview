@@ -103,7 +103,7 @@ func newResyncFailureEngine(t *testing.T) (
 func TestAbortedResyncKeepsSourceFailures(t *testing.T) {
 	for _, useBuild := range []bool{false, true} {
 		t.Run(map[bool]string{false: "resync-all", true: "resync-build"}[useBuild], func(t *testing.T) {
-			engine, _, provider, _, path := newResyncFailureEngine(t)
+			engine, database, provider, root, path := newResyncFailureEngine(t)
 			provider.parseErr = errors.New("malformed source")
 
 			var stats SyncStats
@@ -125,6 +125,25 @@ func TestAbortedResyncKeepsSourceFailures(t *testing.T) {
 			assert.True(t, next.cachedFailure)
 			assert.Equal(t, parsed, provider.parseCalls.Load(),
 				"the pass after an aborted resync must not reparse the broken source")
+
+			restarted := NewEngine(database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{provider.Def.Type: {root}},
+				Machine:   "local",
+				ProviderFactories: []parser.ProviderFactory{
+					directStreamingFactory{provider: provider},
+				},
+				ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+					provider.Def.Type: parser.ProviderMigrationProviderAuthoritative,
+				},
+			})
+			t.Cleanup(restarted.Close)
+			afterRestart := restarted.processFile(t.Context(), parser.DiscoveredFile{
+				Path: path, Agent: provider.Def.Type,
+				ProviderSource: provider.source, ProviderProcess: true,
+			})
+			require.Error(t, afterRestart.err)
+			assert.True(t, afterRestart.cachedFailure,
+				"the failure must survive a restart after the aborted resync")
 		})
 	}
 }

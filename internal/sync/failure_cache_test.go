@@ -369,3 +369,94 @@ func TestSourceParseFailureCacheableClassifiesTransientErrors(t *testing.T) {
 		})
 	}
 }
+
+// A resync is how a parser upgrade reaches sources that never produced a
+// session row, so it must retry sources that failed under the old parser.
+func TestResyncRetriesCachedSourceFailure(t *testing.T) {
+	engine, database, provider, _, path := newResyncFailureEngine(t)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	engine.failures.Record(
+		providerAgentSkipCacheKey(path, provider.Def.Type),
+		db.SourceFailure{MTimeNS: info.ModTime().UnixNano()},
+	)
+	engine.flushFailureCache()
+	parsed := provider.parseCalls.Load()
+
+	stats := engine.ResyncAll(t.Context(), nil)
+	require.False(t, stats.Aborted)
+	assert.Equal(t, parsed+1, provider.parseCalls.Load())
+	persisted, err := database.LoadSourceFailures()
+	require.NoError(t, err)
+	assert.Empty(t, persisted)
+}
+
+func TestWatcherOverflowRetriesCachedSourceFailure(t *testing.T) {
+	const agent parser.AgentType = "overflow-failure"
+
+	database, engine, provider, _, path := newChangedPathOutcomeEngine(
+		t, agent, func(string) parser.ParseOutcome {
+			return parser.ParseOutcome{ResultSetComplete: true}
+		},
+	)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	provider.fingerprint = parser.SourceFingerprint{
+		Key: path, MTimeNS: info.ModTime().UnixNano(),
+	}
+	engine.failures.Record(
+		providerAgentSkipCacheKey(path, agent),
+		db.SourceFailure{MTimeNS: info.ModTime().UnixNano()},
+	)
+	engine.flushFailureCache()
+
+	engine.clearWatcherOverflowCaches()
+
+	retried := engine.processFile(t.Context(), parser.DiscoveredFile{
+		Path: path, Agent: agent,
+		ProviderSource: provider.source, ProviderProcess: true,
+	})
+	require.NoError(t, retried.err)
+	assert.Equal(t, int32(1), provider.parseCalls.Load())
+	persisted, err := database.LoadSourceFailures()
+	require.NoError(t, err)
+	assert.Empty(t, persisted)
+}
+
+func TestSuccessfulSingleSessionRefreshForgetsFailureDurably(t *testing.T) {
+	const sessionID = "single-session-recovered"
+
+	database, engine, provider, _, path := newChangedPathOutcomeEngine(
+		t, parser.AgentClaude, func(string) parser.ParseOutcome {
+			return parser.ParseOutcome{ResultSetComplete: true}
+		},
+	)
+	provider.allowFindSource = true
+	seedActiveBaselineSource(t, database, parser.AgentClaude, sessionID, path)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	provider.fingerprint = parser.SourceFingerprint{
+		Key: path, MTimeNS: info.ModTime().UnixNano(),
+	}
+	provider.parseErr = errors.New("malformed source")
+	require.Error(t, engine.SyncSingleSessionContext(t.Context(), sessionID))
+	persisted, err := database.LoadSourceFailures()
+	require.NoError(t, err)
+	require.Len(t, persisted, 1)
+
+	provider.parseErr = nil
+	require.NoError(t, engine.SyncSingleSessionContext(t.Context(), sessionID))
+	persisted, err = database.LoadSourceFailures()
+	require.NoError(t, err)
+	assert.Empty(t, persisted)
+}
+
+// An epoch mtime is a real value, so an absent marker must not match it.
+func TestClaudeRowlessFreshnessRequiresMarkerForEpochMtime(t *testing.T) {
+	_, engine, _, _, path := newChangedPathOutcomeEngine(
+		t, parser.AgentClaude, func(string) parser.ParseOutcome {
+			return parser.ParseOutcome{}
+		},
+	)
+	assert.False(t, engine.claudeRowlessFreshnessMarked(path, path, "hash", 0))
+}
