@@ -987,6 +987,8 @@ func TestUpgradeExportSchemaInPlaceRejectsUnsupportedExistingTableGap(t *testing
 
 	conn, err := sql.Open("sqlite3", path)
 	requireNoError(t, err, "open incomplete export table fixture")
+	_, err = conn.Exec(`DROP TRIGGER conversation_project_update`)
+	requireNoError(t, err, "remove dependent conversation trigger from incomplete fixture")
 	_, err = conn.Exec(
 		`ALTER TABLE session_project_identity_snapshots DROP COLUMN git_branch`)
 	requireNoError(t, err, "remove unsupported snapshot column")

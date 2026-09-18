@@ -494,6 +494,10 @@ type Message struct {
 	Ordinal   int    `json:"ordinal"`
 	Role      string `json:"role"`
 	Content   string `json:"content"`
+	// Parser-proven conversation fields are stored only in the local export
+	// projection. They are not part of message, artifact, or mirror wire formats.
+	VisibleText          *string `json:"-"`
+	ConversationSourceID string  `json:"-"`
 	// ThinkingText holds the concatenated text of all thinking
 	// blocks for this message; "" if none.
 	ThinkingText      string         `json:"thinking_text"`
@@ -1443,6 +1447,11 @@ func (db *DB) insertMessages(
 	defer func() { _ = tx.Rollback() }()
 
 	if len(msgs) > 0 {
+		for _, sessionID := range messageSessionIDs(msgs) {
+			if err := reconcileConversationMessagesTx(tx, sessionID, messagesForSession(msgs, sessionID), false); err != nil {
+				return err
+			}
+		}
 		ids, err := insertMessagesTx(tx, msgs)
 		if err != nil {
 			return err
@@ -1676,6 +1685,9 @@ func (db *DB) writeSessionIncremental(
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, false); err != nil {
+		return false, err
+	}
 	if err := writeMessagesTx(tx, msgs); err != nil {
 		return false, err
 	}
@@ -1935,6 +1947,9 @@ func (db *DB) replaceSessionMessages(
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
+	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, true); err != nil {
+		return err
+	}
 	if useDiff {
 		if err := applySessionMessageDiffTx(tx, sessionID, plan); err != nil {
 			return err
@@ -2322,6 +2337,9 @@ func (db *DB) replaceSessionContent(
 	}
 	var pendingRecallRevocations recallEvidenceRevocationEvents
 
+	if err := reconcileConversationMessagesTx(tx, sessionID, msgs, true); err != nil {
+		return err
+	}
 	if useDiff {
 		if err := applySessionMessageDiffTx(tx, sessionID, plan); err != nil {
 			return err
