@@ -208,6 +208,31 @@ func TestAugureDesktopDefaultRootSpelling(t *testing.T) {
 		spec.DefaultDirs)
 }
 
+// TestAugureDesktopProjectRelabel pins the project-rebrand contract: only
+// the state-DB-synthesized names ("hermes", "hermes-<source>") are rebranded
+// to the fork's producer name; explicit project hints pass through
+// untouched.
+func TestAugureDesktopProjectRelabel(t *testing.T) {
+	relabel := func(project string, synthesized bool) string {
+		result := &ParseResult{Session: ParsedSession{
+			ID:                         "hermes:abc",
+			Agent:                      AgentHermes,
+			Project:                    project,
+			projectSynthesizedByHermes: synthesized,
+		}}
+		relabelHermesResultAsAugureDesktop(result)
+		return result.Session.Project
+	}
+
+	assert.Equal(t, "augure-desktop", relabel("hermes", true))
+	assert.Equal(t, "augure-desktop-desktop", relabel("hermes-desktop", true))
+	assert.Equal(t, "augure-desktop-work", relabel("hermes-work", true))
+	// Explicit hints survive verbatim, including hermes-prefixed names.
+	assert.Equal(t, "hermes-tools", relabel("hermes-tools", false))
+	assert.Equal(t, "my-project", relabel("my-project", false))
+	assert.Equal(t, "", relabel("", false))
+}
+
 // TestAugureDesktopSessionIDRelabel guards the prefix swap semantics shared
 // with the TraeX and Augure CLI relabels.
 func TestAugureDesktopSessionIDRelabel(t *testing.T) {

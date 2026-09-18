@@ -1009,8 +1009,10 @@ func applyHermesStateMetadata(
 		sess.Project = project
 	} else if ss.source != "" {
 		sess.Project = "hermes-" + ss.source
+		sess.projectSynthesizedByHermes = true
 	} else if sess.Project == "" {
 		sess.Project = "hermes"
+		sess.projectSynthesizedByHermes = true
 	}
 	if !ss.startedAt.IsZero() {
 		sess.StartedAt = ss.startedAt

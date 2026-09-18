@@ -26,11 +26,13 @@ func relabelHermesResultAsAugureDesktop(result *ParseResult) {
 		augureDesktopIDPrefix,
 	)
 	result.Session.Agent = AgentAugureDesktop
-	// applyHermesStateMetadata prefixes the project with the producer name;
-	// the fork must not advertise itself as a Hermes project.
-	result.Session.Project = strings.Replace(
-		result.Session.Project, "hermes", "augure-desktop", 1,
-	)
+	// applyHermesStateMetadata synthesizes the project from the producer
+	// name ("hermes" / "hermes-<source>"); the fork must not advertise
+	// itself as a Hermes project. Explicit project hints pass through
+	// untouched.
+	if result.Session.projectSynthesizedByHermes {
+		result.Session.Project = augureDesktopProject(result.Session.Project)
+	}
 	for i := range result.UsageEvents {
 		result.UsageEvents[i].SessionID = augureDesktopSessionID(
 			result.UsageEvents[i].SessionID,
@@ -61,4 +63,13 @@ func augureDesktopSessionID(id string) string {
 		return id
 	}
 	return strings.Replace(id, hermesIDPrefix, augureDesktopIDPrefix, 1)
+}
+
+// augureDesktopProject rebrands a synthesized Hermes project name
+// ("hermes" or "hermes-<source>") to the fork's producer name.
+func augureDesktopProject(project string) string {
+	if project == "hermes" {
+		return "augure-desktop"
+	}
+	return "augure-desktop-" + strings.TrimPrefix(project, "hermes-")
 }

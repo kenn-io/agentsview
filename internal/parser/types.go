@@ -1403,6 +1403,12 @@ type ParsedSession struct {
 	// aggregateTokenPresenceKnown marks session aggregate token
 	// coverage as parser-owned and authoritative.
 	aggregateTokenPresenceKnown bool
+
+	// projectSynthesizedByHermes marks Session.Project as synthesized by
+	// the Hermes state-DB metadata ("hermes" / "hermes-<source>") rather
+	// than a caller-supplied project hint, so fork relabels can rebrand
+	// the producer name without touching explicit hints.
+	projectSynthesizedByHermes bool
 }
 
 // ParsedToolCall holds a single tool invocation extracted from
