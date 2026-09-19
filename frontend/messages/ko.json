@@ -1453,7 +1453,6 @@
   "recall_page_generation_retire_message": "{model} ({fingerprint})을(를) 폐기하시겠습니까? 자동 항목은 보관 상태로 유지됩니다.",
   "recall_page_generation_action_error": "추출 세대를 업데이트할 수 없습니다: {error}",
   "session_vitals_title": "분석",
-  "session_vitals_subtitle": "세션 바이탈 사인",
   "session_vitals_close": "세션 분석 닫기",
   "session_vitals_resize": "세션 분석 패널 크기 조정",
   "session_vitals_session": "세션",
