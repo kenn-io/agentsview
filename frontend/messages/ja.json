@@ -1516,7 +1516,6 @@
   "recall_page_generation_retire_message": "{model} ({fingerprint}) を廃止しますか？ 自動エントリはアーカイブとして残ります。",
   "recall_page_generation_action_error": "抽出世代を更新できませんでした: {error}",
   "session_vitals_title": "分析",
-  "session_vitals_subtitle": "セッションのバイタルサイン",
   "session_vitals_close": "セッション分析を閉じる",
   "session_vitals_resize": "セッション分析パネルのサイズを変更する",
   "session_vitals_session": "セッション",
