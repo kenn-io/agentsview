@@ -137,6 +137,11 @@ func TestClassifyToolOutcome(t *testing.T) {
 			want: ToolOutcomeUnknown,
 		},
 		{
+			name: "direct inline image with blank lines",
+			call: ToolCallRow{ToolName: "Read", ResultContent: "[\n\n{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,AAEC\"}\n]"},
+			want: ToolOutcomeUnknown,
+		},
+		{
 			name: "direct projected image",
 			call: ToolCallRow{ToolName: "Read", ResultContent: projectedImage},
 			want: ToolOutcomeUnknown,
@@ -159,9 +164,25 @@ func TestClassifyToolOutcome(t *testing.T) {
 			name: "labeled offload reference",
 			call: ToolCallRow{
 				ToolName:      "Read",
-				ResultContent: "agent-a:\n" + offloadedImage,
+				ResultContent: "agent-a:\n![Image: image/png, 3 bytes](asset://abc.png)",
 			},
 			want: ToolOutcomeUnknown,
+		},
+		{
+			name: "labeled inline image with blank lines",
+			call: ToolCallRow{
+				ToolName:      "Read",
+				ResultContent: "agent-a:\n[\n\n{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,AAEC\"}\n]",
+			},
+			want: ToolOutcomeUnknown,
+		},
+		{
+			name: "offload reference followed by text",
+			call: ToolCallRow{
+				ToolName:      "Read",
+				ResultContent: "![Image: image/png, 3 bytes](asset://abc.png)\nFound target in src/main.go (line 12)",
+			},
+			want: ToolOutcomeContent,
 		},
 		{
 			name: "mixed image and text",
@@ -172,16 +193,13 @@ func TestClassifyToolOutcome(t *testing.T) {
 			want: ToolOutcomeContent,
 		},
 		{
-			name: "blank restored summary",
-			call: ToolCallRow{
-				ToolName: "Read", EventStatus: "completed",
-				ResultContent: "restored event text", ResultContentLength: 18,
-			},
+			name: "bash no matches is content",
+			call: ToolCallRow{ToolName: "Bash", ResultContent: "No matches found"},
 			want: ToolOutcomeContent,
 		},
 		{
-			name: "bash no matches is content",
-			call: ToolCallRow{ToolName: "Bash", ResultContent: "No matches found"},
+			name: "embedded no matches is content",
+			call: ToolCallRow{ToolName: "Grep", ResultContent: "No matches found\n\nFound 3 total occurrences across 2 files."},
 			want: ToolOutcomeContent,
 		},
 		{

@@ -254,6 +254,17 @@ func isStagedMarker(line string) bool {
 }
 
 func isImageOnlySummary(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if isImageOnlyJSON(trimmed) || isOffloadedImageReference(trimmed) {
+		return true
+	}
+	if firstLine, rest, found := strings.Cut(trimmed, "\n"); found &&
+		strings.HasSuffix(strings.TrimSpace(firstLine), ":") {
+		body := strings.TrimSpace(rest)
+		if isImageOnlyJSON(body) || isOffloadedImageReference(body) {
+			return true
+		}
+	}
 	sections := summarySections(content)
 	if len(sections) == 0 {
 		return false
@@ -268,9 +279,14 @@ func isImageOnlySummary(content string) bool {
 }
 
 func isOffloadedImageReference(content string) bool {
-	return strings.HasPrefix(content, "![Image:") &&
-		strings.Contains(content, "](asset://") &&
-		strings.HasSuffix(content, ")")
+	content = strings.TrimSpace(content)
+	if strings.ContainsAny(content, "\r\n") ||
+		!strings.HasPrefix(content, "![Image:") ||
+		!strings.HasSuffix(content, ")") {
+		return false
+	}
+	open := strings.LastIndex(content, "](asset://")
+	return open > 0 && !strings.ContainsAny(content[open+2:len(content)-1], "()")
 }
 
 func summarySections(content string) []string {
