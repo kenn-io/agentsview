@@ -257,6 +257,9 @@ func isStagedMarker(line string) bool {
 
 func isImageOnlySummary(content string) bool {
 	trimmed := strings.TrimSpace(content)
+	if trimmed == "[binary content]" {
+		return true
+	}
 	if isImageOnlyJSON(trimmed) || isOffloadedImageReference(trimmed) {
 		return true
 	}
@@ -402,7 +405,7 @@ func classifyResultBlock(raw jsontext.Value) (image, text, ok bool) {
 		}
 	}
 	switch kind {
-	case "input_image", "agentsview_image":
+	case "image", "input_image", "agentsview_image":
 		return true, false, true
 	case "input_text", "output_text", "text":
 		var value string

@@ -147,6 +147,19 @@ func TestClassifyToolOutcome(t *testing.T) {
 			want: ToolOutcomeUnknown,
 		},
 		{
+			name: "Amp binary placeholder",
+			call: ToolCallRow{ToolName: "Read", ResultContent: "[binary content]"},
+			want: ToolOutcomeUnknown,
+		},
+		{
+			name: "Amp image block",
+			call: ToolCallRow{
+				ToolName:      "Read",
+				ResultContent: `[{"type":"image","data":"..."}]`,
+			},
+			want: ToolOutcomeUnknown,
+		},
+		{
 			name: "image with empty Codex input text",
 			call: ToolCallRow{
 				ToolName:      "Read",
@@ -405,6 +418,15 @@ func TestExtractToolSequences_Endings(t *testing.T) {
 		Start: 0, End: 3, ToolChanged: true,
 		Ending: ToolSequenceEndingRecovered,
 	}}, activeUnknownRecovered.Sequences)
+
+	ampImage := ExtractToolSequences([]ToolCallRow{
+		empty,
+		{ToolName: "Read", ResultContent: "[binary content]"},
+	}, true)
+	assert.Equal(t, []ToolSequence{{
+		Start: 0, End: 2, ToolChanged: true,
+		Ending: ToolSequenceEndingAbandoned,
+	}}, ampImage.Sequences)
 }
 
 func TestExtractToolSequences_Invariants(t *testing.T) {
