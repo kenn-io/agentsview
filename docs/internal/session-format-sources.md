@@ -423,16 +423,17 @@ add an archived or maintained mirror without replacing the original identity.
   legacy fallback, and `session_id` identifies the root or tree rather than
   the parent.
 
-- **Automation (reverified 2026-09-19):** `session_meta.payload.thread_source`
-  of `roborev` is durable producer evidence of a roborev
-  `codex exec --thread-source roborev` invocation. Agentsview persists that
-  tag as `session_kind = roborev` so the session is automated without
-  depending on first-message prefixes. `originator=codex_exec` and
-  `source=exec` still identify non-interactive Codex, but they are not enough
-  on their own: a human `codex exec` uses the same originator. Native
-  `spawn_agent` children still use `source.subagent` plus `parent_thread_id`
-  for `relationship_type = subagent`; do not pass `--thread-source subagent`
-  from roborev. Reverified against an isolated
+- **Automation (reverified 2026-09-19):** `session_meta.payload.originator` of
+  `codex_exec` is durable producer evidence of a non-interactive `codex exec`
+  invocation. Agentsview persists that as `session_kind = non-interactive` so
+  every exec session is automated, including one-shots whose first message
+  does not match a built-in prefix. When `thread_source` is `roborev` (from
+  `codex exec --thread-source roborev`), Agentsview stores
+  `session_kind = roborev` instead so roborev reviews stay identifiable as
+  code review while remaining automated. Native `spawn_agent` children still
+  use `source.subagent` plus `parent_thread_id` for
+  `relationship_type = subagent`; do not pass `--thread-source subagent` from
+  roborev. Reverified against an isolated
   `codex-proxy exec --thread-source roborev` rollout.
 
 - **Evidence:** `source`.

@@ -581,7 +581,7 @@ func TestParseCodexSession_ExecOriginator(t *testing.T) {
 		sess, msgs := runCodexParserTest(t, "test.jsonl", execContent, false)
 		require.NotNil(t, sess)
 		assert.Equal(t, "codex:abc", sess.ID)
-		assert.Empty(t, sess.SessionKind)
+		assert.Equal(t, SessionKindNonInteractive, sess.SessionKind)
 		assert.Equal(t, 1, len(msgs))
 	})
 
@@ -589,7 +589,7 @@ func TestParseCodexSession_ExecOriginator(t *testing.T) {
 		sess, msgs := runCodexParserTest(t, "test.jsonl", execContent, true)
 		require.NotNil(t, sess)
 		assert.Equal(t, "codex:abc", sess.ID)
-		assert.Empty(t, sess.SessionKind)
+		assert.Equal(t, SessionKindNonInteractive, sess.SessionKind)
 		assert.Equal(t, 1, len(msgs))
 	})
 
