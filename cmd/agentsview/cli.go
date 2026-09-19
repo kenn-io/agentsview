@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/activity"
+	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
@@ -670,6 +671,10 @@ func newPGCommand() *cobra.Command {
 	return newReplicaCommand(
 		pgReplica{}, newPGVectorsCommand(), newPGServiceCommand(),
 	)
+}
+
+func newClickHouseCommand() *cobra.Command {
+	return newReplicaCommand(clickhouse.Backend{}, newClickHouseServiceCommand())
 }
 
 func newDuckDBCommand() *cobra.Command {

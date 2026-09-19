@@ -144,7 +144,7 @@ func TestLocalPGWatchPusherUsesBackendPricingEnsure(t *testing.T) {
 	pusher := backend.newReplicaPusher(
 		pgReplica{},
 		func(context.Context) error { return nil },
-		func() (storage.Pusher, error) { return target, nil },
+		func(context.Context) (storage.Pusher, error) { return target, nil },
 	)
 
 	require.NoError(t, pusher.push(
@@ -634,7 +634,7 @@ func (h *pushWatchOwnerHarness) hooks() *archivePushWatchHooks {
 					h.mu.Unlock()
 					return nil
 				},
-				connect: func() (storage.Pusher, error) { return target, nil },
+				connect: func(context.Context) (storage.Pusher, error) { return target, nil },
 			}
 		},
 		newDuckDBPusher: func(*syncpkg.Engine) *duckDBPusher {
@@ -1462,7 +1462,7 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		newReplicaPusher: func(*syncpkg.Engine) *replicaPusher {
 			return &replicaPusher{
 				localSync: func(context.Context) error { return nil },
-				connect:   func() (storage.Pusher, error) { return noopPGTarget{}, nil },
+				connect:   func(context.Context) (storage.Pusher, error) { return noopPGTarget{}, nil },
 			}
 		},
 		newUnwatchedPoller: func(

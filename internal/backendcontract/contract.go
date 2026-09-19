@@ -28,6 +28,9 @@ var (
 	_ storage.Replica      = postgresstore.Backend{}
 	_ storage.Pusher       = (*postgresstore.Sync)(nil)
 	_ storage.ReplicaStore = (*postgresstore.Store)(nil)
+	_ storage.Replica      = clickhousestore.Backend{}
+	_ storage.Pusher       = (*clickhousestore.Sync)(nil)
+	_ storage.ReplicaStore = (*clickhousestore.Store)(nil)
 )
 
 // Derived mirror: local rebuild and Quack serve.

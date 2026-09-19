@@ -13,6 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 const (
@@ -189,7 +190,7 @@ func fixtureMessage(
 }
 
 // newTestSync runs EnsureSchema so tests can push immediately.
-func newTestSync(t *testing.T, local *db.DB, target Target, opts SyncOptions) *Sync {
+func newTestSync(t *testing.T, local *db.DB, target Target, opts storage.PusherOptions) *Sync {
 	t.Helper()
 	ctx := context.Background()
 	s, err := New(ctx, target, local, fixtureMachine, opts)
@@ -226,7 +227,7 @@ func newPushedStore(t *testing.T) (*Store, *Sync, *db.DB) {
 	t.Helper()
 	ctx := context.Background()
 	local, target := seedFixture(t)
-	syncer := newTestSync(t, local, target, SyncOptions{})
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	store, err := NewStore(ctx, target)

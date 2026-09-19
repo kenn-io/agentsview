@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // fingerprintProgressStride bounds how often the preparing phase reports.
@@ -20,7 +21,7 @@ const fingerprintProgressStride = 200
 // mirror stores the hash on the session row; a later push skips sessions
 // whose hash is unchanged.
 func (s *Sync) sessionFingerprints(
-	ctx context.Context, sessions []db.Session, onProgress func(PushProgress),
+	ctx context.Context, sessions []db.Session, onProgress func(storage.PushProgress),
 ) (map[string]string, error) {
 	usage, err := s.local.UsageEventFingerprints(sessionIDs(sessions))
 	if err != nil {
@@ -69,7 +70,7 @@ func (s *Sync) sessionFingerprints(
 		sum := sha256.Sum256(data)
 		out[sess.ID] = hex.EncodeToString(sum[:])
 		if onProgress != nil && (i+1)%fingerprintProgressStride == 0 {
-			onProgress(PushProgress{Phase: "preparing", SessionsDone: i + 1, SessionsTotal: len(sessions)})
+			onProgress(storage.PushProgress{Phase: "preparing", SessionsDone: i + 1, SessionsTotal: len(sessions)})
 		}
 	}
 	return out, nil

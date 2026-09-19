@@ -18,6 +18,7 @@ import (
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/duckdb"
@@ -160,7 +161,7 @@ func missingEnvRef(tb testing.TB, name string) string {
 func testServerWithConfig(cfg config.Config) *Server {
 	return &Server{
 		cfg:      cfg,
-		replicas: []storage.Replica{postgres.Backend{}},
+		replicas: []storage.Replica{postgres.Backend{}, clickhouse.Backend{}},
 		mirror:   duckdb.Mirror{},
 	}
 }
@@ -219,26 +220,36 @@ func TestPGPushConfigRequestOverrideSkipsDaemonEnvResolution(t *testing.T) {
 	assert.Equal(t, "laptop", got.MachineName)
 }
 
-func TestClickHousePushConfigRequestOverride(t *testing.T) {
+func TestClickHousePushTargetRequestOverride(t *testing.T) {
 	s := testServerWithConfig(config.Config{
 		ClickHouse: config.ClickHouseConfig{URL: "clickhouse://from-config"},
 	})
-	got, err := s.clickHousePushConfig(daemonPushRequest{
-		ClickHouse: &config.ClickHouseConfig{
+	got, err := s.replicaPushTarget(clickhouse.Backend{}, daemonPushRequest{
+		Replica: &storage.ReplicaTarget{
 			URL:         "clickhouse://from-request",
-			Database:    "mirrordb",
+			Schema:      "mirrordb",
 			MachineName: "laptop",
 		},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "clickhouse://from-request", got.URL)
-	assert.Equal(t, "mirrordb", got.Database)
+	assert.Equal(t, "mirrordb", got.Schema)
 	assert.Equal(t, "laptop", got.MachineName)
+}
+
+func TestClickHousePushTargetDefaultsToDaemonConfig(t *testing.T) {
+	s := testServerWithConfig(config.Config{
+		ClickHouse: config.ClickHouseConfig{URL: "clickhouse://from-config", Database: "agentsview"},
+	})
+	got, err := s.replicaPushTarget(clickhouse.Backend{}, daemonPushRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, "clickhouse://from-config", got.URL)
+	assert.Equal(t, "agentsview", got.Schema)
 }
 
 func TestClickHousePushRejectsIncludeAndExcludeProjects(t *testing.T) {
 	s := testServerWithConfig(config.Config{})
-	_, err := s.humaClickHousePush(t.Context(), &daemonPushInput{
+	_, err := s.humaReplicaPush(t.Context(), clickhouse.Backend{}, &daemonPushInput{
 		Body: daemonPushRequest{
 			Projects:        []string{"alpha"},
 			ExcludeProjects: []string{"beta"},
@@ -248,7 +259,7 @@ func TestClickHousePushRejectsIncludeAndExcludeProjects(t *testing.T) {
 	var statusErr interface{ GetStatus() int }
 	require.ErrorAs(t, err, &statusErr)
 	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
-	assert.Contains(t, err.Error(), "projects and exclude_projects cannot both be set")
+	assert.Contains(t, err.Error(), "projects and exclude_projects are mutually exclusive")
 }
 
 func TestPGPushRejectsIncludeAndExcludeProjects(t *testing.T) {

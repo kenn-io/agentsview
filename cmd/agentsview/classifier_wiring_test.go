@@ -29,13 +29,19 @@ var triggerCalls = map[string]struct{}{
 	"postgres.NewStore":     {},
 	"postgres.New":          {},
 	"postgres.EnsureSchema": {},
+	// Replica backends open their stores through the storage.Replica
+	// contract. The CLI always holds the backend in a variable named
+	// backend, which is what this selector match keys on.
+	"backend.NewPusher":      {},
+	"backend.OpenStore":      {},
+	"backend.OpenServeStore": {},
 }
 
 const wiringHelper = "applyClassifierConfig"
 
 var inheritedWiringFuncs = map[string]struct{}{
-	"runPGPushTarget":   {},
-	"runPGStatusTarget": {},
+	"runReplicaPushTarget":   {},
+	"runReplicaStatusTarget": {},
 }
 
 // TestEveryStoreOpenPathIsWired enforces the rule documented

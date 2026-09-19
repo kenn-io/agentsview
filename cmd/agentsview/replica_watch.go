@@ -31,7 +31,7 @@ type replicaPusher struct {
 		func() error,
 	) error
 	ensurePricing func(context.Context) error
-	connect       func() (storage.Pusher, error)
+	connect       func(context.Context) (storage.Pusher, error)
 	target        storage.Pusher
 	// vectorReconcileNeeded is true until a generation-wide vector
 	// reconciliation succeeds in this watch process, and again after
@@ -92,7 +92,7 @@ func (p *replicaPusher) pushAfterSync(
 		return err
 	}
 	if p.target == nil {
-		t, err := p.connect()
+		t, err := p.connect(ctx)
 		if err != nil {
 			return fmt.Errorf("connect: %w", err)
 		}

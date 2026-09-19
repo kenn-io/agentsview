@@ -283,6 +283,12 @@ func writeReplicaPushSummary(
 		errSuffix,
 		dur,
 	)
+	if result.SkippedUnchanged > 0 {
+		fmt.Fprintf(w, "Skipped %d unchanged session(s)\n", result.SkippedUnchanged)
+	}
+	if result.DeletedStale > 0 {
+		fmt.Fprintf(w, "Removed %d stale session(s)\n", result.DeletedStale)
+	}
 	writeReplicaVectorPushSummary(w, displayName, result.Vectors)
 }
 
@@ -420,29 +426,26 @@ func runReplicaStatusTarget(
 	)
 	defer stop()
 
-	lastPush := ""
-	if database != nil {
-		lastPush, err = backend.LastPushAt(
-			ctx, database, target.ReplicaTargetRef, projects, excludeProjects,
-		)
-		if err != nil {
-			log.Printf(
-				"warning: reading last_push_at: %v", err,
-			)
-			lastPush = ""
-		}
-	}
-	status, err := backend.Status(ctx, target.Target, lastPush)
+	status, err := backend.Status(
+		ctx, database, target, projects, excludeProjects,
+	)
 	if err != nil {
 		return err
 	}
-	tag := replicaFlagTag(backend)
-	fmt.Printf("Machine:     %s\n", status.Machine)
-	fmt.Printf("Last push:   %s\n",
-		valueOrNever(status.LastPushAt))
-	fmt.Printf("%s sessions: %d\n", tag, status.Sessions)
-	fmt.Printf("%s messages: %d\n", tag, status.Messages)
+	writeReplicaStatus(os.Stdout, status)
 	return nil
+}
+
+// writeReplicaStatus prints one label/value row per line with the values
+// aligned one column past the widest label.
+func writeReplicaStatus(w io.Writer, status storage.ReplicaStatus) {
+	width := 0
+	for _, row := range status.Rows {
+		width = max(width, len(row.Label))
+	}
+	for _, row := range status.Rows {
+		fmt.Fprintf(w, "%-*s %s\n", width, row.Label, row.Value)
+	}
 }
 
 func loadReplicaServeConfig(cmd *cobra.Command) (config.Config, string, error) {

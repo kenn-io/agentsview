@@ -8,8 +8,8 @@
 //     Codex checkpoints, and every local-only write stay here. The archive
 //     has no interface beyond db.Store because there is exactly one.
 //   - Replica: a remote database the archive pushes into and that serves the
-//     web UI read-only (PostgreSQL and CockroachDB today). Replica is the
-//     contract a new remote SQL backend implements.
+//     web UI read-only (PostgreSQL, CockroachDB, and ClickHouse today). Replica
+//     is the contract a new remote SQL backend implements.
 //   - Mirror: a disposable local derived file rebuilt from the archive (DuckDB
 //     today). Mirror is not a replica and a remote backend must not use it.
 //

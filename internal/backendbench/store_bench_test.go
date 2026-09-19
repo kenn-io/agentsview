@@ -20,6 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 const (
@@ -240,7 +241,7 @@ func openDuckDBStore(ctx context.Context, b *testing.B, local *db.DB) db.Store {
 	b.Helper()
 
 	path := filepath.Join(b.TempDir(), "sessions.duckdb")
-	result, err := duckdb.Push(ctx, path, local, benchmarkMachine, duckdb.SyncOptions{}, true, nil)
+	result, err := duckdb.Push(ctx, path, local, benchmarkMachine, storage.MirrorPushOptions{}, true, nil)
 	if err != nil {
 		b.Fatalf("push duckdb fixture: %v", err)
 	}
@@ -301,7 +302,7 @@ func openPostgresStore(ctx context.Context, b *testing.B, local *db.DB) db.Store
 		local,
 		benchmarkMachine,
 		true,
-		postgres.SyncOptions{},
+		storage.PusherOptions{},
 	)
 	if err != nil {
 		b.Fatalf("open postgres sync: %v", err)

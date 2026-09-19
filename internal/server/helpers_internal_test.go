@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
@@ -50,7 +51,7 @@ func testServer(
 		Machine: "test",
 	})
 	opts = append([]Option{
-		WithReplicas(postgres.Backend{}), WithMirror(duckdb.Mirror{}),
+		WithReplicas(postgres.Backend{}, clickhouse.Backend{}), WithMirror(duckdb.Mirror{}),
 	}, opts...)
 	return New(cfg, database, engine, opts...)
 }

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // sessionPushBatchSize bounds how many sessions share one set of insert
@@ -41,10 +42,11 @@ func newPushVersion() uint64 {
 // stars and pins, and advances this archive's cursor only when every
 // session succeeded.
 func (s *Sync) PushWithOptions(
-	ctx context.Context, opts PushOptions, onProgress func(PushProgress),
-) (PushResult, error) {
+	ctx context.Context, opts storage.PushOptions, onProgress func(storage.PushProgress),
+) (storage.PushResult, error) {
 	start := time.Now()
-	var result PushResult
+	var result storage.PushResult
+	result.Vectors.Skipped = true
 	if err := s.EnsureSchema(ctx); err != nil {
 		return result, err
 	}
@@ -53,7 +55,7 @@ func (s *Sync) PushWithOptions(
 		return result, err
 	}
 	if onProgress != nil {
-		onProgress(PushProgress{Phase: "preparing"})
+		onProgress(storage.PushProgress{Phase: "preparing"})
 	}
 	version := newPushVersion()
 	cutoff := time.Now().UTC().Format(localSyncTimestampLayout)
@@ -190,7 +192,7 @@ func (s *Sync) archiveKey(base string) string {
 	return archiveMetadataKey(base, s.archiveID)
 }
 
-func (s *Sync) decideFull(opts PushOptions, storedCutoff, storedScope string) (bool, string) {
+func (s *Sync) decideFull(opts storage.PushOptions, storedCutoff, storedScope string) (bool, string) {
 	switch {
 	case opts.Full:
 		return true, "requested"
@@ -240,7 +242,7 @@ func sessionIDs(sessions []db.Session) []string {
 // failed earlier push without a separate repair pass.
 func (s *Sync) selectChangedSessions(
 	ctx context.Context, candidates []db.Session, fingerprints map[string]string,
-	result *PushResult,
+	result *storage.PushResult,
 ) ([]db.Session, error) {
 	stored, err := s.readMirrorFingerprints(ctx, sessionIDs(candidates))
 	if err != nil {
@@ -351,7 +353,7 @@ func inArgs(values []string) (string, []any) {
 
 // deleteResidentSessions removes the given sessions from every table when
 // they are currently mirrored, and counts them as stale deletions.
-func (s *Sync) deleteResidentSessions(ctx context.Context, ids []string, result *PushResult) error {
+func (s *Sync) deleteResidentSessions(ctx context.Context, ids []string, result *storage.PushResult) error {
 	if len(ids) == 0 {
 		return nil
 	}
@@ -395,7 +397,7 @@ func (s *Sync) deleteMirrorSessions(ctx context.Context, ids []string) error {
 // a tombstone records the session's last project, which may already be
 // out of scope; out-of-scope tombstones are applied only when the session
 // is still mirrored.
-func (s *Sync) applyDeletionDelta(ctx context.Context, after, through int64, result *PushResult) error {
+func (s *Sync) applyDeletionDelta(ctx context.Context, after, through int64, result *storage.PushResult) error {
 	if after >= through {
 		return nil
 	}
@@ -424,7 +426,7 @@ func (s *Sync) applyDeletionDelta(ctx context.Context, after, through int64, res
 
 // deleteSessionsMissingLocally removes this archive's mirror sessions that
 // a full push did not see locally.
-func (s *Sync) deleteSessionsMissingLocally(ctx context.Context, keep []string, result *PushResult) error {
+func (s *Sync) deleteSessionsMissingLocally(ctx context.Context, keep []string, result *storage.PushResult) error {
 	rows, err := s.conn.QueryContext(ctx,
 		"SELECT id FROM sessions WHERE source_archive_id = ?", s.archiveID)
 	if err != nil {
@@ -462,8 +464,8 @@ func (s *Sync) deleteSessionsMissingLocally(ctx context.Context, keep []string, 
 // ones that still fail.
 func (s *Sync) pushBatchWithRetry(
 	ctx context.Context, batch []db.Session, fingerprints map[string]string,
-	version uint64, offset, total int, result *PushResult,
-	onProgress func(PushProgress),
+	version uint64, offset, total int, result *storage.PushResult,
+	onProgress func(storage.PushProgress),
 ) error {
 	counts, err := s.pushSessionBatch(ctx, batch, fingerprints, version)
 	if err == nil {
@@ -510,11 +512,11 @@ func fatalPushError(ctx context.Context, err error) error {
 	return nil
 }
 
-func reportProgress(done, total int, result *PushResult, onProgress func(PushProgress)) {
+func reportProgress(done, total int, result *storage.PushResult, onProgress func(storage.PushProgress)) {
 	if onProgress == nil {
 		return
 	}
-	onProgress(PushProgress{
+	onProgress(storage.PushProgress{
 		SessionsDone: done, SessionsTotal: total,
 		MessagesDone: result.MessagesPushed, Errors: result.Errors,
 	})

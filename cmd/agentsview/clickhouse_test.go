@@ -6,22 +6,24 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
-func TestResolveClickHouseTargetSelections_LegacyNamedLookup(t *testing.T) {
+func TestClickHouseTargets_LegacyNamedLookup(t *testing.T) {
 	appCfg := config.Config{
 		ClickHouse: config.ClickHouseConfig{
 			URL:         "clickhouse://legacy",
 			MachineName: "legacybox",
 		},
 	}
-	_, err := resolveClickHouseTargetSelections(appCfg, "archive", false)
+	_, err := storage.SelectTargets(clickhouse.Backend{}, appCfg, "archive", false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "single legacy [clickhouse] block")
 }
 
-func TestResolveClickHouseTargetSelections_DefaultAndAll(t *testing.T) {
+func TestClickHouseTargets_DefaultAndAll(t *testing.T) {
 	appCfg := config.Config{
 		DefaultClickHouse: "work",
 		ClickHouseTargets: map[string]config.ClickHouseConfig{
@@ -30,73 +32,56 @@ func TestResolveClickHouseTargetSelections_DefaultAndAll(t *testing.T) {
 		},
 	}
 
-	defaultTarget, err := resolveClickHouseTargetSelections(appCfg, "", false)
+	defaultTarget, err := storage.SelectTargets(clickhouse.Backend{}, appCfg, "", false)
 	require.NoError(t, err)
 	require.Len(t, defaultTarget, 1)
 	assert.Equal(t, "work", defaultTarget[0].Name)
 	assert.True(t, defaultTarget[0].IsDefault)
 
-	allTargets, err := resolveClickHouseTargetSelections(appCfg, "", true)
+	allTargets, err := storage.SelectTargets(clickhouse.Backend{}, appCfg, "", true)
 	require.NoError(t, err)
 	require.Len(t, allTargets, 2)
 	assert.Equal(t, "work", allTargets[0].Name)
 	assert.Equal(t, "archive", allTargets[1].Name)
+
+	resolved, err := clickhouse.Backend{}.ResolveTarget(appCfg, allTargets[1])
+	require.NoError(t, err)
+	assert.Equal(t, "clickhouse://archive", resolved.Target.URL)
+	assert.Equal(t, "archivebox", resolved.Target.MachineName)
+	assert.False(t, resolved.Target.PushVectors, "ClickHouse has no vector phase")
 }
 
-func TestResolveClickHouseTargetSelections_RejectsTargetWithAll(t *testing.T) {
+func TestClickHouseTargets_RejectsTargetWithAll(t *testing.T) {
 	appCfg := config.Config{
 		DefaultClickHouse: "work",
 		ClickHouseTargets: map[string]config.ClickHouseConfig{
 			"work": {URL: "clickhouse://work"},
 		},
 	}
-	_, err := resolveClickHouseTargetSelections(appCfg, "work", true)
+	_, err := storage.SelectTargets(clickhouse.Backend{}, appCfg, "work", true)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cannot be combined with --all")
 }
 
-func TestResolveClickHouseTargetSelections_UnknownName(t *testing.T) {
+func TestClickHouseTargets_UnknownName(t *testing.T) {
 	appCfg := config.Config{
 		DefaultClickHouse: "work",
 		ClickHouseTargets: map[string]config.ClickHouseConfig{
 			"work": {URL: "clickhouse://work"},
 		},
 	}
-	_, err := resolveClickHouseTargetSelections(appCfg, "missing", false)
+	_, err := storage.SelectTargets(clickhouse.Backend{}, appCfg, "missing", false)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `clickhouse target "missing" is not configured`)
 }
 
-func TestResolveClickHousePushProjects_FlagExclusivity(t *testing.T) {
-	chCfg := config.ClickHouseConfig{Projects: []string{"from-config"}}
-	_, _, err := resolveClickHousePushProjects(chCfg, ClickHousePushConfig{
-		ProjectsFlag:    "alpha",
-		ExcludeProjects: "beta",
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--projects and --exclude-projects are mutually exclusive")
-
-	_, _, err = resolveClickHousePushProjects(chCfg, ClickHousePushConfig{
-		AllProjects:  true,
-		ProjectsFlag: "alpha",
-	})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "--all-projects cannot be combined")
-
-	projects, exclude, err := resolveClickHousePushProjects(chCfg, ClickHousePushConfig{
-		ProjectsFlag: "alpha, beta",
-	})
-	require.NoError(t, err)
-	assert.Equal(t, []string{"alpha", "beta"}, projects)
-	assert.Empty(t, exclude)
-}
-
 func TestNewClickHousePushCommandRejectsAllWatch(t *testing.T) {
-	cmd := newClickHousePushCommand()
+	cmd := newReplicaPushCommand(clickhouse.Backend{})
 	cmd.SetArgs([]string{"--all", "--watch"})
 	err := cmd.Execute()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "--all cannot be combined with --watch")
+	assert.Contains(t, err.Error(), "clickhouse push --watch:")
 }
 
 func TestBuildServiceSpec_ClickHouseLogAndURL(t *testing.T) {
@@ -112,4 +97,27 @@ func TestBuildServiceSpec_ClickHouseLogAndURL(t *testing.T) {
 	assert.Equal(t, dataDir, spec.DataDir)
 	assert.Equal(t, filepath.Join(dataDir, "clickhouse-watch.log"), spec.LogPath)
 	assert.Equal(t, clickHouseServiceKind.Label, spec.Kind.Label)
+}
+
+// TestReplicaBackendsHaveDaemonPushOperations fails when a registered
+// replica has no generated daemon operation, which means the OpenAPI
+// document and clients were not regenerated after adding the backend.
+func TestReplicaBackendsHaveDaemonPushOperations(t *testing.T) {
+	for _, backend := range replicaBackends {
+		_, err := replicaPushOperation(backend.Name())
+		assert.NoError(t, err, backend.Name())
+	}
+}
+
+// TestReplicaBackendsHaveServiceKinds pins that every registered replica can
+// be installed as a background push service.
+func TestReplicaBackendsHaveCommands(t *testing.T) {
+	root := newRootCommand()
+	for _, backend := range replicaBackends {
+		cmd, _, err := root.Find([]string{backend.Name(), "push"})
+		require.NoError(t, err, backend.Name())
+		assert.Equal(t, "push [target]", cmd.Use)
+		_, err = replicaBackendNamed(backend.Name())
+		assert.NoError(t, err)
+	}
 }

@@ -3,7 +3,6 @@ package clickhouse
 import (
 	"context"
 	"database/sql"
-	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -11,10 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"time"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/jsonutil"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // localSyncTimestampLayout is the layout ListSessionsForMirrorWindow
@@ -55,63 +53,6 @@ type pushHooks struct {
 	beforeSessionRows func(batch []db.Session) error
 }
 
-// SyncOptions holds optional push-scope filters.
-type SyncOptions struct {
-	Projects        []string
-	ExcludeProjects []string
-}
-
-// PushOptions controls one push.
-type PushOptions struct {
-	// Full re-pushes every in-scope session regardless of its stored
-	// fingerprint and removes this archive's mirror sessions that no
-	// longer exist locally.
-	Full bool
-}
-
-// PushResult summarizes a push.
-//
-//nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
-type PushResult struct {
-	SessionsPushed   int
-	MessagesPushed   int
-	SkippedUnchanged int
-	DeletedStale     int
-	Errors           int
-	Duration         time.Duration
-	// Full reports whether the push re-pushed every in-scope session
-	// (requested, first push, or scope change).
-	Full bool
-	// FullReason is the human-readable reason a full push ran.
-	FullReason string
-}
-
-type pushResultJSON PushResult
-
-func (r PushResult) MarshalJSONTo(out *jsontext.Encoder) error {
-	return jsonutil.MarshalDurationFields(out, pushResultJSON(r))
-}
-
-func (r *PushResult) UnmarshalJSONFrom(in *jsontext.Decoder) error {
-	var decoded pushResultJSON
-	if err := jsonutil.UnmarshalDurationFields(in, &decoded); err != nil {
-		return err
-	}
-	*r = PushResult(decoded)
-	return nil
-}
-
-// PushProgress is reported while a push runs.
-type PushProgress struct {
-	// Phase is "preparing" while candidates are fingerprinted and empty
-	// while sessions are written.
-	Phase         string
-	SessionsDone  int
-	SessionsTotal int
-	MessagesDone  int
-	Errors        int
-}
-
 // SyncStatus summarizes a mirror from its own metadata.
 type SyncStatus struct {
 	Machine         string `json:"machine"`
@@ -131,7 +72,7 @@ type SyncStatus struct {
 // the first push) creates the database and tables, then connects.
 func New(
 	ctx context.Context, target Target, local *db.DB, machine string,
-	opts SyncOptions,
+	opts storage.PusherOptions,
 ) (*Sync, error) {
 	if local == nil {
 		return nil, errors.New("clickhouse sync requires a local archive")
@@ -193,9 +134,9 @@ func (s *Sync) Close() error {
 
 // Push runs one push. full forces every in-scope session to be rewritten.
 func (s *Sync) Push(
-	ctx context.Context, full bool, onProgress func(PushProgress),
-) (PushResult, error) {
-	return s.PushWithOptions(ctx, PushOptions{Full: full}, onProgress)
+	ctx context.Context, full bool, onProgress func(storage.PushProgress),
+) (storage.PushResult, error) {
+	return s.PushWithOptions(ctx, storage.PushOptions{Full: full}, onProgress)
 }
 
 func (s *Sync) isFiltered() bool {
@@ -309,13 +250,4 @@ func statusInPlaceholders(values []string) (string, []any) {
 		args[i] = v
 	}
 	return strings.TrimSuffix(strings.Repeat("?,", len(values)), ","), args
-}
-
-// ValidateProjectFilters rejects a push that both includes and excludes
-// projects, matching the PostgreSQL push.
-func ValidateProjectFilters(projects, excludeProjects []string) error {
-	if len(projects) > 0 && len(excludeProjects) > 0 {
-		return errors.New("projects and exclude_projects cannot both be set")
-	}
-	return nil
 }

@@ -3,6 +3,8 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"log"
+	"strconv"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -76,7 +78,8 @@ func ReplicaTarget(pg config.PGConfig) storage.ReplicaTarget {
 }
 
 func (Backend) NewPusher(
-	target storage.ReplicaTarget, local *db.DB, opts storage.PusherOptions,
+	_ context.Context, target storage.ReplicaTarget, local *db.DB,
+	opts storage.PusherOptions,
 ) (storage.Pusher, error) {
 	s, err := New(
 		target.URL, target.Schema, local,
@@ -140,30 +143,55 @@ func prepareServeStore(ctx context.Context, store *Store, schema string) error {
 	return nil
 }
 
-func (Backend) Status(
-	ctx context.Context, target storage.ReplicaTarget, lastPush string,
+// Status reads the PostgreSQL counters and echoes the archive-side watermark.
+// A watermark read failure is a warning, not a status failure: the
+// watermark is informational while the PostgreSQL query proves connectivity.
+func (b Backend) Status(
+	ctx context.Context, local *db.DB, target storage.ConfiguredReplica,
+	projects, excludeProjects []string,
 ) (storage.ReplicaStatus, error) {
+	lastPush := ""
+	if local != nil {
+		var err error
+		lastPush, err = b.LastPushAt(ctx, local, target, projects, excludeProjects)
+		if err != nil {
+			log.Printf("warning: reading last_push_at: %v", err)
+			lastPush = ""
+		}
+	}
 	status, err := ReadStatus(
-		ctx, target.URL, target.Schema, target.MachineName,
-		target.AllowInsecure, lastPush,
+		ctx, target.Target.URL, target.Target.Schema, target.Target.MachineName,
+		target.Target.AllowInsecure, lastPush,
 	)
 	if err != nil {
 		return storage.ReplicaStatus{}, err
 	}
-	return storage.ReplicaStatus{
-		Machine:    status.Machine,
-		LastPushAt: status.LastPushAt,
-		Sessions:   status.PGSessions,
-		Messages:   status.PGMessages,
-	}, nil
+	return storage.ReplicaStatus{Rows: []storage.StatusRow{
+		{Label: "Machine:", Value: status.Machine},
+		{Label: "Last push:", Value: valueOrNever(status.LastPushAt)},
+		{Label: "PG sessions:", Value: strconv.Itoa(status.PGSessions)},
+		{Label: "PG messages:", Value: strconv.Itoa(status.PGMessages)},
+	}}, nil
 }
 
+// LastPushAt reads the per-target watermark PostgreSQL pushes keep in the
+// archive's sync state.
 func (Backend) LastPushAt(
-	ctx context.Context, local storage.SyncStateStore, target storage.ReplicaTargetRef,
+	ctx context.Context, local *db.DB, target storage.ConfiguredReplica,
 	projects, excludeProjects []string,
 ) (string, error) {
+	if local == nil {
+		return "", nil
+	}
 	return ReadLastPushAt(
 		ctx, local, target.SyncStateTarget(), projects, excludeProjects,
 		target.MigrateLegacySyncState(),
 	)
+}
+
+func valueOrNever(v string) string {
+	if v == "" {
+		return "never"
+	}
+	return v
 }

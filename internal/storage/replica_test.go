@@ -31,7 +31,7 @@ func (stubReplica) ResolveTarget(
 	}, nil
 }
 
-func (stubReplica) NewPusher(ReplicaTarget, *db.DB, PusherOptions) (Pusher, error) {
+func (stubReplica) NewPusher(context.Context, ReplicaTarget, *db.DB, PusherOptions) (Pusher, error) {
 	return nil, nil
 }
 func (stubReplica) OpenStore(ReplicaTarget) (ReplicaStore, error) { return nil, nil }
@@ -39,11 +39,11 @@ func (stubReplica) OpenServeStore(context.Context, ReplicaTarget) (ReplicaStore,
 	return nil, nil
 }
 
-func (stubReplica) Status(context.Context, ReplicaTarget, string) (ReplicaStatus, error) {
+func (stubReplica) Status(context.Context, *db.DB, ConfiguredReplica, []string, []string) (ReplicaStatus, error) {
 	return ReplicaStatus{}, nil
 }
 
-func (stubReplica) LastPushAt(context.Context, SyncStateStore, ReplicaTargetRef, []string, []string) (string, error) {
+func (stubReplica) LastPushAt(context.Context, *db.DB, ConfiguredReplica, []string, []string) (string, error) {
 	return "", nil
 }
 

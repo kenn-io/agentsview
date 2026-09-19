@@ -66,7 +66,7 @@ func TestBackendTargetsNamedDefaultFirst(t *testing.T) {
 
 func TestBackendNewPusherRejectsReservedMachine(t *testing.T) {
 	_, err := Backend{}.NewPusher(
-		storage.ReplicaTarget{URL: "postgres://x", MachineName: "local"},
+		t.Context(), storage.ReplicaTarget{URL: "postgres://x", MachineName: "local"},
 		nil, storage.PusherOptions{},
 	)
 	require.Error(t, err)

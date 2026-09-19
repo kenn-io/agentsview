@@ -108,12 +108,16 @@ type ReplicaStore interface {
 	Close() error
 }
 
-// ReplicaStatus summarizes a replica for the `<backend> status` command.
+// ReplicaStatus is what `<backend> status` prints for one target: ordered
+// label/value rows the CLI aligns. Each backend decides which rows it has.
 type ReplicaStatus struct {
-	Machine    string
-	LastPushAt string
-	Sessions   int
-	Messages   int
+	Rows []StatusRow
+}
+
+// StatusRow is one line of `<backend> status` output.
+type StatusRow struct {
+	Label string
+	Value string
 }
 
 // SyncStateStore is the archive-side key/value store that holds push
@@ -139,9 +143,12 @@ type Replica interface {
 	// ResolveTarget applies defaults and environment overrides to one
 	// configured target.
 	ResolveTarget(cfg config.Config, ref ReplicaTargetRef) (ConfiguredReplica, error)
-	// NewPusher connects to target and prepares a push session from local.
+	// NewPusher prepares a push session from local into target. It
+	// validates the target and may connect; EnsureSchema must run before
+	// the first push.
 	NewPusher(
-		target ReplicaTarget, local *db.DB, opts PusherOptions,
+		ctx context.Context, target ReplicaTarget, local *db.DB,
+		opts PusherOptions,
 	) (Pusher, error)
 	// OpenStore connects for CLI reads without touching the schema.
 	OpenStore(target ReplicaTarget) (ReplicaStore, error)
@@ -149,15 +156,18 @@ type Replica interface {
 	// current when the role may write, verifies compatibility, and probes
 	// optional capabilities such as insight generation.
 	OpenServeStore(ctx context.Context, target ReplicaTarget) (ReplicaStore, error)
-	// Status reads replica-side counters. lastPush is the archive-side
-	// watermark the caller wants echoed back.
+	// Status reads the rows `<backend> status` prints for target under the
+	// effective project filters. local is the archive when it could be
+	// opened read-only, else nil; a backend that keeps its watermark in
+	// the archive reads it from there.
 	Status(
-		ctx context.Context, target ReplicaTarget, lastPush string,
+		ctx context.Context, local *db.DB, target ConfiguredReplica,
+		projects, excludeProjects []string,
 	) (ReplicaStatus, error)
-	// LastPushAt reads the archive-side watermark for target under the
-	// effective project filters.
+	// LastPushAt reads the last push watermark for target under the
+	// effective project filters, from wherever the backend keeps it.
 	LastPushAt(
-		ctx context.Context, local SyncStateStore, target ReplicaTargetRef,
+		ctx context.Context, local *db.DB, target ConfiguredReplica,
 		projects, excludeProjects []string,
 	) (string, error)
 }

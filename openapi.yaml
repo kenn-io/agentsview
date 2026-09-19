@@ -586,31 +586,6 @@ components:
         - priorTotalCost
         - deltaPct
       type: object
-    ConfigClickHouseConfig:
-      additionalProperties: false
-      properties:
-        allow_insecure:
-          type: boolean
-        database:
-          type: string
-        exclude_projects:
-          items:
-            type: string
-          type: array
-        machine_name:
-          type: string
-        projects:
-          items:
-            type: string
-          type: array
-        url:
-          type: string
-      required:
-        - url
-        - database
-        - machine_name
-        - allow_insecure
-      type: object
     ConfigDuckDBConfig:
       additionalProperties: false
       properties:
@@ -641,33 +616,6 @@ components:
         - machine_name
         - allow_insecure
       type: object
-    ConfigPGConfig:
-      additionalProperties: false
-      properties:
-        allow_insecure:
-          type: boolean
-        exclude_projects:
-          items:
-            type: string
-          type: array
-        machine_name:
-          type: string
-        projects:
-          items:
-            type: string
-          type: array
-        push_vectors:
-          type: boolean
-        schema:
-          type: string
-        url:
-          type: string
-      required:
-        - url
-        - schema
-        - machine_name
-        - allow_insecure
-      type: object
     ConfigRemoteHost:
       additionalProperties: false
       properties:
@@ -693,8 +641,6 @@ components:
       properties:
         automatic:
           type: boolean
-        clickhouse:
-          $ref: "#/components/schemas/ConfigClickHouseConfig"
         duckdb:
           $ref: "#/components/schemas/ConfigDuckDBConfig"
         exclude_projects:
@@ -710,12 +656,12 @@ components:
           type: boolean
         no_vectors:
           type: boolean
-        pg:
-          $ref: "#/components/schemas/ConfigPGConfig"
         projects:
           items:
             type: string
           type: array
+        replica:
+          $ref: "#/components/schemas/StorageReplicaTarget"
         scope_vectors_to_changed_sessions:
           type: boolean
         sync_state_target:
@@ -6676,6 +6622,23 @@ components:
           type: array
       required:
         - session_ids
+      type: object
+    StorageReplicaTarget:
+      additionalProperties: false
+      properties:
+        allow_insecure:
+          type: boolean
+        machine_name:
+          type: string
+        push_vectors:
+          type: boolean
+        schema:
+          type: string
+        url:
+          type: string
+      required:
+        - url
+        - machine_name
       type: object
     SyncAnomalyStats:
       additionalProperties: false

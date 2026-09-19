@@ -14,6 +14,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/clickhouse/chtest"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestEnsureSchemaCreatesMissingDatabase(t *testing.T) {
@@ -40,7 +41,7 @@ func TestEnsureSchemaCreatesMissingDatabase(t *testing.T) {
 func TestPushMirrorsEveryTableAndSkipsUnchanged(t *testing.T) {
 	ctx := context.Background()
 	local, target := seedFixture(t)
-	s := newTestSync(t, local, target, SyncOptions{})
+	s := newTestSync(t, local, target, storage.PusherOptions{})
 
 	first, err := s.Push(ctx, false, nil)
 	require.NoError(t, err)
@@ -98,7 +99,7 @@ func TestPushMirrorsEveryTableAndSkipsUnchanged(t *testing.T) {
 func TestPushReplacesChangedSessionsWithoutLeavingOldRows(t *testing.T) {
 	ctx := context.Background()
 	local, target := seedFixture(t)
-	s := newTestSync(t, local, target, SyncOptions{})
+	s := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := s.Push(ctx, false, nil)
 	require.NoError(t, err)
 
@@ -136,7 +137,7 @@ func TestPushReplacesChangedSessionsWithoutLeavingOldRows(t *testing.T) {
 func TestPushRemovesHardDeletedSessions(t *testing.T) {
 	ctx := context.Background()
 	local, target := seedFixture(t)
-	s := newTestSync(t, local, target, SyncOptions{})
+	s := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := s.Push(ctx, false, nil)
 	require.NoError(t, err)
 
@@ -158,7 +159,7 @@ func TestPushRemovesHardDeletedSessions(t *testing.T) {
 func TestPushRecoversFromFailureBeforeSessionRows(t *testing.T) {
 	ctx := context.Background()
 	local, target := seedFixture(t)
-	s := newTestSync(t, local, target, SyncOptions{})
+	s := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := s.Push(ctx, false, nil)
 	require.NoError(t, err)
 
@@ -198,7 +199,7 @@ func TestPushRecoversFromFailureBeforeSessionRows(t *testing.T) {
 func TestPushHonorsProjectScopeAndRemovesMovedSessions(t *testing.T) {
 	ctx := context.Background()
 	local, target := seedFixture(t)
-	s := newTestSync(t, local, target, SyncOptions{Projects: []string{"alpha"}})
+	s := newTestSync(t, local, target, storage.PusherOptions{Projects: []string{"alpha"}})
 	res, err := s.Push(ctx, false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 2, res.SessionsPushed, "alpha and its child")
@@ -228,7 +229,7 @@ func TestPushHonorsProjectScopeAndRemovesMovedSessions(t *testing.T) {
 	assert.Zero(t, chtest.Count(t, conn, "messages", "session_id = ?", fixtureChildID))
 
 	// Changing the scope forces a full push.
-	wider := newTestSync(t, local, target, SyncOptions{})
+	wider := newTestSync(t, local, target, storage.PusherOptions{})
 	res, err = wider.Push(ctx, false, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Full)
@@ -239,7 +240,7 @@ func TestPushHonorsProjectScopeAndRemovesMovedSessions(t *testing.T) {
 func TestPushRefreshesCurationWithoutContentChange(t *testing.T) {
 	ctx := context.Background()
 	local, target := seedFixture(t)
-	s := newTestSync(t, local, target, SyncOptions{})
+	s := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := s.Push(ctx, false, nil)
 	require.NoError(t, err)
 

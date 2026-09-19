@@ -18347,19 +18347,6 @@ func (c Comparison) Validate() error {
 	return errors
 }
 
-type ConfigClickHouseConfig struct {
-	AllowInsecure   bool     `json:"allow_insecure"`
-	Database        string   `json:"database" validate:"required"`
-	ExcludeProjects []string `json:"exclude_projects,omitempty"`
-	MachineName     string   `json:"machine_name" validate:"required"`
-	Projects        []string `json:"projects,omitempty"`
-	URL             string   `json:"url" validate:"required"`
-}
-
-func (c ConfigClickHouseConfig) Validate() error {
-	return runtime.ConvertValidatorError(typesValidator.Struct(c))
-}
-
 type ConfigDuckDBConfig struct {
 	AllowInsecure   bool     `json:"allow_insecure"`
 	AttachTimeout   *int64   `json:"attach_timeout,omitempty"`
@@ -18372,20 +18359,6 @@ type ConfigDuckDBConfig struct {
 }
 
 func (c ConfigDuckDBConfig) Validate() error {
-	return runtime.ConvertValidatorError(typesValidator.Struct(c))
-}
-
-type ConfigPGConfig struct {
-	AllowInsecure   bool     `json:"allow_insecure"`
-	ExcludeProjects []string `json:"exclude_projects,omitempty"`
-	MachineName     string   `json:"machine_name" validate:"required"`
-	Projects        []string `json:"projects,omitempty"`
-	PushVectors     *bool    `json:"push_vectors,omitempty"`
-	Schema          string   `json:"schema" validate:"required"`
-	URL             string   `json:"url" validate:"required"`
-}
-
-func (c ConfigPGConfig) Validate() error {
 	return runtime.ConvertValidatorError(typesValidator.Struct(c))
 }
 
@@ -18404,15 +18377,14 @@ func (c ConfigRemoteHost) Validate() error {
 
 type DaemonPushRequest struct {
 	Automatic                      *bool                   `json:"automatic,omitempty"`
-	Clickhouse                     *ConfigClickHouseConfig `json:"clickhouse,omitempty"`
 	Duckdb                         *ConfigDuckDBConfig     `json:"duckdb,omitempty"`
 	ExcludeProjects                []string                `json:"exclude_projects,omitempty"`
 	Full                           bool                    `json:"full"`
 	LastReconciledVectorGeneration *int64                  `json:"last_reconciled_vector_generation,omitempty"`
 	MigrateLegacySyncState         *bool                   `json:"migrate_legacy_sync_state,omitempty"`
 	NoVectors                      *bool                   `json:"no_vectors,omitempty"`
-	Replica                        *StorageReplicaTarget   `json:"replica,omitempty"`
 	Projects                       []string                `json:"projects,omitempty"`
+	Replica                        *StorageReplicaTarget   `json:"replica,omitempty"`
 	ScopeVectorsToChangedSessions  *bool                   `json:"scope_vectors_to_changed_sessions,omitempty"`
 	SyncStateTarget                *string                 `json:"sync_state_target,omitempty"`
 	WatchBatch                     *SyncWatchBatch         `json:"watch_batch,omitempty"`
@@ -18421,17 +18393,17 @@ type DaemonPushRequest struct {
 
 func (d DaemonPushRequest) Validate() error {
 	var errors runtime.ValidationErrors
-	if d.Clickhouse != nil {
-		if v, ok := any(d.Clickhouse).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("Clickhouse", err)
-			}
-		}
-	}
 	if d.Duckdb != nil {
 		if v, ok := any(d.Duckdb).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
 				errors = errors.Append("Duckdb", err)
+			}
+		}
+	}
+	if d.Replica != nil {
+		if v, ok := any(d.Replica).(runtime.Validator); ok {
+			if err := v.Validate(); err != nil {
+				errors = errors.Append("Replica", err)
 			}
 		}
 	}
@@ -20330,6 +20302,18 @@ func (s SessionUsageResponse) Validate() error {
 	return errors
 }
 
+type StorageReplicaTarget struct {
+	AllowInsecure *bool   `json:"allow_insecure,omitempty"`
+	MachineName   string  `json:"machine_name" validate:"required"`
+	PushVectors   *bool   `json:"push_vectors,omitempty"`
+	Schema        *string `json:"schema,omitempty"`
+	URL           string  `json:"url" validate:"required"`
+}
+
+func (s StorageReplicaTarget) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(s))
+}
+
 type SyncAnomalyStats struct {
 	GenMetadataWithoutUsageByAgent  map[string]int64   `json:"gen_metadata_without_usage_by_agent,omitempty"`
 	GenMetadataWithoutUsageTotal    *int64             `json:"gen_metadata_without_usage_total,omitempty"`
@@ -20631,13 +20615,4 @@ var typesValidator *validator.Validate
 func init() {
 	typesValidator = validator.New(validator.WithRequiredStructEnabled())
 	runtime.RegisterCustomTypeFunc(typesValidator)
-}
-
-// StorageReplicaTarget is a temporary hand patch; regenerate the client.
-type StorageReplicaTarget struct {
-	AllowInsecure *bool   `json:"allow_insecure,omitempty"`
-	MachineName   string  `json:"machine_name" validate:"required"`
-	PushVectors   *bool   `json:"push_vectors,omitempty"`
-	Schema        *string `json:"schema,omitempty"`
-	URL           string  `json:"url" validate:"required"`
 }

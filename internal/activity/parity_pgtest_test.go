@@ -467,7 +467,7 @@ func pushParityClickHouse(
 	dsn, database := chtest.FreshDatabase(t)
 	target := clickhousestore.Target{URL: dsn, Database: database}
 	syncer, err := clickhousestore.New(
-		ctx, target, local, "parity-machine", clickhousestore.SyncOptions{},
+		ctx, target, local, "parity-machine", storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating clickhouse sync")
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })

@@ -58,9 +58,21 @@ type PushResult struct {
 	SessionsPushed   int
 	MessagesPushed   int
 	SkippedConflicts int
-	Errors           int
-	Duration         time.Duration
-	Vectors          VectorPushResult
+	// SkippedUnchanged counts in-scope sessions whose fingerprint already
+	// matched the replica. Backends that skip silently leave it zero.
+	SkippedUnchanged int
+	// DeletedStale counts replica sessions removed because they no longer
+	// exist locally or left the push scope.
+	DeletedStale int
+	Errors       int
+	Duration     time.Duration
+	// Full reports whether the push rewrote every in-scope session, and
+	// FullReason says why when the caller did not ask for it.
+	Full       bool
+	FullReason string
+	// Vectors summarizes the vector phase. A backend without one reports
+	// Skipped with an empty reason.
+	Vectors VectorPushResult
 }
 
 type pushResultJSON PushResult

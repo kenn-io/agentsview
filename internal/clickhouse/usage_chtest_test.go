@@ -11,12 +11,13 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestClickHouseUsageCostFromFixture(t *testing.T) {
 	ctx := context.Background()
 	local, target := seedFixture(t)
-	syncer := newTestSync(t, local, target, SyncOptions{})
+	syncer := newTestSync(t, local, target, storage.PusherOptions{})
 	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	require.NoError(t, syncer.syncModelPricing(ctx))

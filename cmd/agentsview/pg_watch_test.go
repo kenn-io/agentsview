@@ -227,7 +227,7 @@ func newTestReplicaPusher(targets ...*fakeTarget) (*replicaPusher, *pusherRecord
 		displayName:   "PostgreSQL",
 		localSync:     func(context.Context) error { return nil },
 		ensurePricing: func(context.Context) error { return nil },
-		connect: func() (storage.Pusher, error) {
+		connect: func(context.Context) (storage.Pusher, error) {
 			tgt := targets[rec.connects]
 			rec.connects++
 			return tgt, nil
@@ -381,7 +381,7 @@ func TestPGPusherEnsuresPricingAfterLocalSyncBeforeConnect(t *testing.T) {
 			events = append(events, "pricing ensure")
 			return nil
 		},
-		connect: func() (storage.Pusher, error) {
+		connect: func(context.Context) (storage.Pusher, error) {
 			events = append(events, "connect")
 			return target, nil
 		},
@@ -403,7 +403,7 @@ func TestPGPusherPricingFailureWarnsAndContinues(t *testing.T) {
 		label: "pg watch", displayName: "PostgreSQL",
 		localSync:     func(context.Context) error { return nil },
 		ensurePricing: func(context.Context) error { return wantErr },
-		connect:       func() (storage.Pusher, error) { return target, nil },
+		connect:       func(context.Context) (storage.Pusher, error) { return target, nil },
 	}
 
 	require.NoError(t, pusher.push(
@@ -425,7 +425,7 @@ func TestPGPusherCanceledPricingStopsBeforeConnect(t *testing.T) {
 			cancel()
 			return got.Err()
 		},
-		connect: func() (storage.Pusher, error) {
+		connect: func(context.Context) (storage.Pusher, error) {
 			connectCalled = true
 			return &fakeTarget{}, nil
 		},
@@ -470,7 +470,7 @@ func TestPgPusher_ConnectErrorSurfaced(t *testing.T) {
 	p := &replicaPusher{
 		label: "pg watch", displayName: "PostgreSQL",
 		localSync: func(context.Context) error { return nil },
-		connect: func() (storage.Pusher, error) {
+		connect: func(context.Context) (storage.Pusher, error) {
 			return nil, errors.New("dial timeout")
 		},
 	}
@@ -482,7 +482,7 @@ func TestPgPusher_LocalSyncErrorSkipsConnect(t *testing.T) {
 	p := &replicaPusher{
 		label: "pg watch", displayName: "PostgreSQL",
 		localSync: func(context.Context) error { return errors.New("disk") },
-		connect: func() (storage.Pusher, error) {
+		connect: func(context.Context) (storage.Pusher, error) {
 			connects++
 			return &fakeTarget{}, nil
 		},

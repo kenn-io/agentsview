@@ -130,6 +130,70 @@ when the cache reaches its entry or byte limit, and process exit clears them.
 `{dataDir}/assets` remains the durable image store and backup target. Cache
 eviction never changes it, and the browser's own cache policy is separate.
 
+## Backend Roles and Contract
+
+Adding a remote database means implementing Go interfaces, not copying the
+PostgreSQL command, config, push, and serve code. `internal/storage` names the
+three roles and holds the contract; `internal/backendcontract` asserts every
+backend at compile time, so a missing method fails `go build`.
+
+| Role    | Today                  | Contract                                   |
+| ------- | ---------------------- | ------------------------------------------ |
+| Archive | SQLite `*db.DB`        | `db.Store`; the only writable ingest store |
+| Replica | PostgreSQL, ClickHouse | `db.Store` plus `storage.Replica`          |
+| Mirror  | DuckDB                 | `db.Store` plus `storage.Mirror`           |
+
+A replica is a remote database the archive pushes into and that serves the web
+UI read-only. A replica may keep its push cursor in the archive sync state
+(PostgreSQL) or in its own metadata (ClickHouse); the contract does not care. A
+mirror is a disposable local derived file. A new remote SQL backend is a
+replica. Do not model it on DuckDB, and do not add a fourth role.
+
+### How to add a replica backend
+
+1. Create `internal/<name>` with a `Store` that implements `db.Store` with
+   `ReadOnly() bool` returning true, a `Sync` (or similar) that implements
+   `storage.Pusher`, and a `Backend` struct that implements `storage.Replica`.
+   Use `internal/postgres/backend.go` and `internal/clickhouse/backend.go` as
+   the two worked examples. The push returns `storage.PushResult` and reports
+   progress as `storage.PushProgress`; a backend without a vector phase sets
+   `Vectors.Skipped`. Write the backend's own SQL; the contract is Go, not a
+   shared query string.
+1. Add the config section and its resolvers in `internal/config` the way
+   `[pg]`/`[pg.NAME]` and `[clickhouse]` work: a struct, `Resolve<Name>`,
+   `Resolve<Name>Target`, and `<Name>TargetNames`. `Backend.Targets` and
+   `Backend.ResolveTarget` map them onto `storage.ReplicaTargetRef` and
+   `storage.ConfiguredReplica`.
+1. Register the backend in `cmd/agentsview/backends.go` (`replicaBackends`) and
+   add the compile-time assertions in `internal/backendcontract/contract.go`.
+1. Add the CLI verb in `cmd/agentsview/cli.go` with
+   `newReplicaCommand(<name>.Backend{}, extra...)`. That gives `<name> push`,
+   `<name> push --watch`, `<name> status`, and `<name> serve` from
+   `replica.go` and `replica_watch.go` with no new command code. Backend-only
+   verbs (like `pg vectors`) are the `extra` commands. A background service
+   needs a `serviceKind` entry in `pg_service_manager.go`.
+1. Regenerate the OpenAPI document and clients with
+   `cd frontend && npm run generate:api`, then add the backend's generated
+   daemon operation to `replicaPushOperations` in
+   `cmd/agentsview/daemon_push.go`. The daemon route `/api/v1/push/<name>`
+   comes from the registry; `internal/server` needs no change.
+   `TestReplicaBackendsHaveDaemonPushOperations` fails until the entry exists.
+1. Add tests: a `Backend` unit test for target mapping (no database), the
+   backend's own tagged integration tests, and an entry in the classifier
+   wiring guard (`classifier_wiring_test.go`) if the backend opens stores
+   through a variable not named `backend`.
+
+What a new backend does not touch: `internal/server` HTTP handlers,
+`archive_write_backend.go`, `replica.go`, `replica_watch.go`, or the PostgreSQL
+and DuckDB packages. `pg serve` extras (raw-upload ingestion, pgvector search)
+live in `cmd/agentsview/pg.go` behind the optional `replicaServeExtras`
+interface; a backend with no extras implements nothing.
+
+Known limits: `pg vectors`, the CLI direct-read transport that selects
+PostgreSQL, and `clearPGClassifierHash` remain PostgreSQL-specific. The daemon
+push request carries a backend-neutral `replica` target, so a CLI and daemon
+must run the same `server.APIVersion`, which the CLI already enforces.
+
 ## Backend Parity
 
 Reporting project-label keys are not repository identities. The reporting
@@ -323,7 +387,11 @@ to recover the text.
 - Replace a file only after identifying it as an agentsview DuckDB mirror. Fail
   closed for unknown files.
 
-## ClickHouse Mirror
+## ClickHouse Replica
+
+ClickHouse is a replica in the `storage.Replica` sense: the archive pushes into
+it and `clickhouse serve` reads from it. Its push cursor lives in the mirror's
+own metadata, which is why the docs below call the database a mirror.
 
 - SQLite is the archive. `clickhouse push` writes ClickHouse. `clickhouse serve`
   queries ClickHouse for the HTTP API and UI. Dashboard writes (rename, trash,
