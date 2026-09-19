@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -80,7 +81,7 @@ func TestUploaderRetriesPostCommitAcknowledgementWithoutRecommitting(t *testing.
 	checkpoint, err := sql.Open("sqlite3", filepath.Join(base, "checkpoint.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, checkpoint.Close()) })
-	_, err = checkpoint.Exec(`CREATE TRIGGER fail_acknowledgement
+	_, err = checkpoint.ExecContext(t.Context(), `CREATE TRIGGER fail_acknowledgement
 		BEFORE UPDATE OF head_capture_id ON raw_sources
 		BEGIN SELECT RAISE(FAIL, 'forced acknowledgement failure'); END`)
 	require.NoError(t, err)
@@ -97,7 +98,7 @@ func TestUploaderRetriesPostCommitAcknowledgementWithoutRecommitting(t *testing.
 	require.NoError(t, err)
 	assert.False(t, uploaded, "post-commit acknowledgement failures must honor backoff")
 	assert.Equal(t, 1, transport.commitCalls)
-	_, err = checkpoint.Exec(`DROP TRIGGER fail_acknowledgement`)
+	_, err = checkpoint.ExecContext(t.Context(), `DROP TRIGGER fail_acknowledgement`)
 	require.NoError(t, err)
 
 	now = now.Add(transientRetryDelay)
@@ -286,7 +287,7 @@ func TestUploaderPersistsPermanentRejectionAndSuppressesRetry(t *testing.T) {
 	_, found, err := New(store, transport, "device-a").UploadNext(t.Context())
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrPermanentFailure)
+	require.ErrorIs(t, err, ErrPermanentFailure)
 	require.True(t, found)
 	require.NoError(t, store.Close())
 	store, err = rawcheckpoint.OpenWithOptions(
@@ -400,7 +401,7 @@ func TestMissingObjectNegotiationUsesBoundedBatches(t *testing.T) {
 
 func objectRefFor(content string) rawsync.ObjectRef {
 	digest := sha256.Sum256([]byte(content))
-	ref, err := rawsync.NewObjectRef(fmt.Sprintf("%x", digest), int64(len(content)))
+	ref, err := rawsync.NewObjectRef(hex.EncodeToString(digest[:]), int64(len(content)))
 	if err != nil {
 		panic(err)
 	}
@@ -410,6 +411,8 @@ func objectRefFor(content string) rawsync.ObjectRef {
 func queuedUploadTestGeneration(
 	t *testing.T,
 ) (*rawcheckpoint.Store, rawcheckpoint.CapturedGeneration) {
+	t.Helper()
+
 	return queuedUploadTestGenerationWithNow(t, nil)
 }
 
@@ -430,6 +433,7 @@ func queuedUploadTestGenerationAt(
 	now func() time.Time,
 ) (*rawcheckpoint.Store, rawcheckpoint.CapturedGeneration) {
 	t.Helper()
+
 	store, err := rawcheckpoint.OpenWithOptions(
 		t.Context(), filepath.Join(base, "checkpoint.db"),
 		rawcheckpoint.Options{

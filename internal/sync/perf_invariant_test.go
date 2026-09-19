@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"encoding/json/v2"
 	"fmt"
 	"os"
@@ -45,6 +44,7 @@ type coworkCorpusSession struct {
 // per-session Claude-format transcript) and returns their identifiers.
 func writeCoworkCorpus(t *testing.T, root string, n int) []coworkCorpusSession {
 	t.Helper()
+
 	workspaceDir := filepath.Join(root, "org", "workspace")
 	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
 	sessions := make([]coworkCorpusSession, 0, n)
@@ -115,7 +115,7 @@ func TestScheduledReconcileWorkIsClaudeCardinalityIndependent(t *testing.T) {
 			writeClaudeCorpus(t, claudeDir, claudeCount)
 
 			database := openTestDB(t)
-			engine := NewEngine(database, EngineConfig{
+			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentCowork: {coworkDir},
 					parser.AgentClaude: {claudeDir},
@@ -124,12 +124,11 @@ func TestScheduledReconcileWorkIsClaudeCardinalityIndependent(t *testing.T) {
 			})
 			t.Cleanup(engine.Close)
 			require.Equal(t, coworkCount+claudeCount,
-				engine.SyncAll(context.Background(), nil).Synced)
+				engine.SyncAll(t.Context(), nil).Synced)
 
 			require.NoError(t, engine.ReconcileProviderRoots(
-				context.Background(), parser.AgentCowork, []string{coworkDir}))
-			observed[claudeCount] =
-				engine.LastReconciliationResult().Metrics.MaxRehydratedSources
+				t.Context(), parser.AgentCowork, []string{coworkDir}))
+			observed[claudeCount] = engine.LastReconciliationResult().Metrics.MaxRehydratedSources
 		})
 	}
 	assert.Equal(t, observed[5], observed[500],
@@ -145,7 +144,7 @@ func TestScheduledReconcileWorkIsClaudeCardinalityIndependent(t *testing.T) {
 		claudeIDs := writeClaudeCorpus(t, claudeDir, coworkCount)
 
 		database := openTestDB(t)
-		engine := NewEngine(database, EngineConfig{
+		engine := NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentCowork: {coworkDir},
 				parser.AgentClaude: {claudeDir},
@@ -154,19 +153,19 @@ func TestScheduledReconcileWorkIsClaudeCardinalityIndependent(t *testing.T) {
 		})
 		t.Cleanup(engine.Close)
 		require.Equal(t, 2*coworkCount,
-			engine.SyncAll(context.Background(), nil).Synced)
+			engine.SyncAll(t.Context(), nil).Synced)
 
 		require.NoError(t, os.RemoveAll(cowork[2].sessionDir))
 		require.NoError(t, os.Remove(cowork[2].metaPath))
 
 		require.NoError(t, engine.ReconcileProviderRoots(
-			context.Background(), parser.AgentCowork, []string{coworkDir}))
+			t.Context(), parser.AgentCowork, []string{coworkDir}))
 
-		deleted, err := database.GetSessionFull(context.Background(), cowork[2].id)
+		deleted, err := database.GetSessionFull(t.Context(), cowork[2].id)
 		require.NoError(t, err)
 		assertSourceMissingState(t, deleted)
 		for _, id := range claudeIDs {
-			active, err := database.GetSession(context.Background(), id)
+			active, err := database.GetSession(t.Context(), id)
 			require.NoError(t, err)
 			assert.NotNil(t, active,
 				"Cowork-scoped pass must not tombstone Claude sources")
@@ -183,7 +182,7 @@ func TestSourceHashSkipMutationWorkIsArchiveCardinalityIndependent(t *testing.T)
 	for _, cacheSize := range []int{8, 8000} {
 		t.Run(fmt.Sprintf("%d_entries", cacheSize), func(t *testing.T) {
 			database := openTestDB(t)
-			engine := NewEngine(database, EngineConfig{})
+			engine := NewEngine(t.Context(), database, EngineConfig{})
 			t.Cleanup(engine.Close)
 			entries := make(map[string]int64, cacheSize)
 			for i := range cacheSize {
@@ -195,9 +194,9 @@ func TestSourceHashSkipMutationWorkIsArchiveCardinalityIndependent(t *testing.T)
 
 			const base = "/archive/session-00000.jsonl?source_hash="
 			insertWork := engine.cacheSkip(base+"new", 2)
-			removeWork := engine.clearSkip(base + "new")
+			removeWork := engine.clearSkip(t.Context(), base+"new")
 
-			assert.Equal(t, cacheSize-1, len(engine.SnapshotSkipCache()))
+			assert.Len(t, engine.SnapshotSkipCache(), cacheSize-1)
 			observed[cacheSize] = workCounts{
 				insert: insertWork,
 				remove: removeWork,
@@ -229,7 +228,7 @@ func TestWarmFullSyncDoesNoBulkWriteWork(t *testing.T) {
 		)
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	first := fx.engine.SyncAll(ctx, nil)
 	require.Equal(t, n, first.Synced,
 		"first sync parses and stores every session")
@@ -288,7 +287,7 @@ func TestRebuildLocalAndRemoteContributorsBulkWriteDiscoveredCount(t *testing.T)
 			writeSessions(remoteRoot, "remote")
 
 			database := openTestDB(t)
-			engine := NewEngine(database, EngineConfig{
+			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {localRoot}},
 				Machine:   "local",
 			})
@@ -298,7 +297,7 @@ func TestRebuildLocalAndRemoteContributorsBulkWriteDiscoveredCount(t *testing.T)
 			remoteStarted := false
 			localDiscovered := 0
 			remoteDiscovered := 0
-			stats, err := engine.ResyncAllWithOptions(context.Background(), func(p Progress) {
+			stats, err := engine.ResyncAllWithOptions(t.Context(), func(p Progress) {
 				progressMu.Lock()
 				defer progressMu.Unlock()
 				if !remoteStarted && p.SessionsTotal > localDiscovered {
@@ -415,7 +414,7 @@ func TestWarmFullSyncDoesNotRehashClaudeArchive(t *testing.T) {
 			writeClaudeCorpus(t, claudeDir, claudeCount)
 
 			database := openTestDB(t)
-			engine := NewEngine(database, EngineConfig{
+			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentClaude: {claudeDir},
 				},
@@ -425,7 +424,7 @@ func TestWarmFullSyncDoesNotRehashClaudeArchive(t *testing.T) {
 
 			// Cold pass: populates the archive and earns verified-source trust.
 			require.Equal(t, claudeCount,
-				engine.SyncAll(context.Background(), nil).Synced)
+				engine.SyncAll(t.Context(), nil).Synced)
 
 			var mu gosync.Mutex
 			reads := 0
@@ -445,7 +444,7 @@ func TestWarmFullSyncDoesNotRehashClaudeArchive(t *testing.T) {
 				mu.Lock()
 				reads = 0
 				mu.Unlock()
-				engine.SyncAll(context.Background(), nil)
+				engine.SyncAll(t.Context(), nil)
 				mu.Lock()
 				defer mu.Unlock()
 				return reads

@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -13,19 +12,19 @@ import (
 )
 
 func parseWorkBuddyTestSession(
-	t testing.TB,
+	tb testing.TB,
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, error) {
-	t.Helper()
+	tb.Helper()
 	return parseWorkBuddySession(path, project, machine)
 }
 
-func discoverWorkBuddyTestSessions(t testing.TB, root string) []DiscoveredFile {
-	t.Helper()
+func discoverWorkBuddyTestSessions(tb testing.TB, root string) []DiscoveredFile {
+	tb.Helper()
 	provider, ok := NewProvider(AgentWorkBuddy, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
-	require.NoError(t, err)
+	require.True(tb, ok)
+	sources, err := provider.Discover(tb.Context())
+	require.NoError(tb, err)
 
 	files := make([]DiscoveredFile, 0, len(sources))
 	for _, source := range sources {
@@ -38,15 +37,15 @@ func discoverWorkBuddyTestSessions(t testing.TB, root string) []DiscoveredFile {
 	return files
 }
 
-func findWorkBuddyTestSourceFile(t testing.TB, root, rawID string) string {
-	t.Helper()
+func findWorkBuddyTestSourceFile(tb testing.TB, root, rawID string) string {
+	tb.Helper()
 	provider, ok := NewProvider(AgentWorkBuddy, ProviderConfig{Roots: []string{root}})
-	require.True(t, ok)
+	require.True(tb, ok)
 	source, found, err := provider.FindSource(
-		context.Background(),
+		tb.Context(),
 		FindSourceRequest{RawSessionID: rawID},
 	)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	if !found {
 		return ""
 	}
@@ -74,7 +73,6 @@ func TestDiscoverWorkBuddySessions(t *testing.T) {
 }
 
 func TestParseWorkBuddySession(t *testing.T) {
-
 	tmp := t.TempDir()
 	cwd := filepath.Join(tmp, "cwd", "proj")
 	require.NoError(t, os.MkdirAll(cwd, 0o755))
@@ -132,7 +130,6 @@ func TestParseWorkBuddySessionDoesNotDoubleCountOpenAICachedTokens(t *testing.T)
 }
 
 func TestParseWorkBuddySessionUsesCwdProjectAndFileSessionID(t *testing.T) {
-
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "stored-project", "22222222-2222-4222-8222-222222222222.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))

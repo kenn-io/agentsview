@@ -34,8 +34,8 @@ func (s *checkpointSpy) checkpointAfterPush(ctx context.Context, duck *sql.DB) e
 // an incremental push and stays stale until the next full rebuild.
 func mutateSessionStatColumns(t *testing.T, local *db.DB, sessionID string) {
 	t.Helper()
-	require.NoError(t, local.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	require.NoError(t, local.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			`UPDATE sessions
 			 SET file_size = COALESCE(file_size, 0) + 1,
 			     file_inode = COALESCE(file_inode, 0) + 1
@@ -51,7 +51,7 @@ func mutateSessionStatColumns(t *testing.T, local *db.DB, sessionID string) {
 // change to a candidate session re-pushes it so the mirror's file_size/
 // file_inode copies stay current, instead of being skipped as unchanged.
 func TestSyncIncrementalStatOnlyChangeRefreshesMirrorRow(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 	require.NoError(t, err)
@@ -66,7 +66,7 @@ func TestSyncIncrementalStatOnlyChangeRefreshesMirrorRow(t *testing.T) {
 	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total)
 	assert.Equal(t, 0, res.Diagnostics.SkippedUnchangedSessions.Total)
 
-	conn, err := Open(path)
+	conn, err := Open(ctx, path)
 	require.NoError(t, err)
 	defer conn.Close()
 	var fileSize, fileInode int64
@@ -89,7 +89,7 @@ func TestSyncIncrementalStatOnlyChangeRefreshesMirrorRow(t *testing.T) {
 // mirror row is corrupted is out of scope for self-healing and instead
 // requires 'duckdb push --full'.
 func TestPushRepairsSessionDeletedDirectlyFromMirror(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 	require.NoError(t, err)
@@ -98,7 +98,7 @@ func TestPushRepairsSessionDeletedDirectlyFromMirror(t *testing.T) {
 
 	setSessionSignalsTo(t, local, "sess-1", probe.LastPushCutoff)
 
-	conn, err := Open(path)
+	conn, err := Open(ctx, path)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(ctx, `DELETE FROM sessions WHERE id = ?`, "sess-1")
 	require.NoError(t, err)
@@ -115,7 +115,7 @@ func TestPushRepairsSessionDeletedDirectlyFromMirror(t *testing.T) {
 // runs when a push actually wrote something (pushed a session or applied a
 // deletion), not on a push that leaves the mirror untouched.
 func TestSyncCheckpointPolicyRunsOnlyAfterMutatingPush(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 	require.NoError(t, err)
@@ -147,7 +147,7 @@ func TestSyncCheckpointPolicyRunsOnlyAfterMutatingPush(t *testing.T) {
 // committed: a retry must see the same window again rather than silently
 // skipping it.
 func TestSyncCheckpointFailureDoesNotAdvanceMirrorMetadata(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 	require.NoError(t, err)
@@ -179,14 +179,14 @@ func TestSyncCheckpointFailureDoesNotAdvanceMirrorMetadata(t *testing.T) {
 func TestSyncCheckpointFailureAfterHardDeleteDoesNotAdvanceMirrorMetadata(
 	t *testing.T,
 ) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, path := newPushFixture(t, 2)
 	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
 	require.NoError(t, err)
 	before, err := ProbeMirror(ctx, path)
 	require.NoError(t, err)
 
-	require.NoError(t, local.DeleteSession("sess-1"))
+	require.NoError(t, local.DeleteSession(ctx, "sess-1"))
 	probe, err := ProbeMirror(ctx, path)
 	require.NoError(t, err)
 	syncer := newTestSync(t, path, local, SyncOptions{})

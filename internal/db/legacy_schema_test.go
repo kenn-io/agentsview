@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"path/filepath"
@@ -148,12 +147,12 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 			require.NoError(t, err)
 			conn.SetMaxOpenConns(1)
 
-			_, err = conn.Exec(tc.schema)
+			_, err = conn.ExecContext(t.Context(), tc.schema)
 			require.NoError(t, err)
-			_, err = conn.Exec(legacyArchiveRows)
+			_, err = conn.ExecContext(t.Context(), legacyArchiveRows)
 			require.NoError(t, err)
 			if tc.wantInsightDate != "" {
-				_, err = conn.Exec(`
+				_, err = conn.ExecContext(t.Context(), `
 					INSERT INTO insights (
 						id, type, date_from, date_to, project,
 						agent, model, prompt, content
@@ -164,13 +163,13 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 					)`)
 				require.NoError(t, err)
 			}
-			_, err = conn.Exec(fmt.Sprintf(
+			_, err = conn.ExecContext(t.Context(), fmt.Sprintf(
 				"PRAGMA user_version = %d", dataVersion,
 			))
 			require.NoError(t, err)
 			require.NoError(t, conn.Close())
 
-			d, err := Open(path)
+			d, err := Open(t.Context(), path)
 			require.NoError(t, err)
 			assert.True(t, d.NeedsResync())
 
@@ -180,7 +179,7 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 			assert.Equal(t, "archived prompt", *session.FirstMessage)
 
 			messages, err := d.GetMessages(
-				context.Background(), "legacy-session", 0, 10, true,
+				t.Context(), "legacy-session", 0, 10, true,
 			)
 			require.NoError(t, err)
 			require.Len(t, messages, 1)
@@ -189,14 +188,14 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 
 			if tc.wantInsightDate != "" {
 				var dateFrom, dateTo string
-				err = d.getReader().QueryRow(`
+				err = d.getReader().QueryRow(t.Context(), `
 					SELECT date_from, date_to FROM insights WHERE id = 1
 				`).Scan(&dateFrom, &dateTo)
 				require.NoError(t, err)
 				assert.Equal(t, tc.wantInsightDate, dateFrom)
 				assert.Equal(t, tc.wantInsightDate, dateTo)
 
-				id, err := d.InsertInsight(Insight{
+				id, err := d.InsertInsight(t.Context(), Insight{
 					Type:     "daily",
 					DateFrom: "2026-07-14",
 					DateTo:   "2026-07-14",
@@ -204,7 +203,7 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 					Content:  "new insight",
 				})
 				require.NoError(t, err)
-				inserted, err := d.GetInsight(context.Background(), id)
+				inserted, err := d.GetInsight(t.Context(), id)
 				require.NoError(t, err)
 				require.NotNil(t, inserted)
 				assert.Equal(t, "2026-07-14", inserted.DateFrom)
@@ -219,7 +218,7 @@ func TestOpenLegacySchemasPreservesArchiveAndRequestsResync(t *testing.T) {
 			requireLegacyRepairIndexes(t, d)
 			require.NoError(t, d.Close())
 
-			reopened, err := Open(path)
+			reopened, err := Open(t.Context(), path)
 			require.NoError(t, err)
 			defer reopened.Close()
 			require.True(t, reopened.NeedsResync())
@@ -233,27 +232,27 @@ func TestParserParentSessionIDMigrationBackfillsCurrentParent(t *testing.T) {
 	require.NoError(t, err)
 	conn.SetMaxOpenConns(1)
 
-	_, err = conn.Exec(v06LegacySchema)
+	_, err = conn.ExecContext(t.Context(), v06LegacySchema)
 	require.NoError(t, err, "create legacy schema")
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, project, machine, agent, parent_session_id
 		) VALUES (
 			'kid', 'project-a', 'local', 'claude', 'parsed-parent'
 		)`)
 	require.NoError(t, err, "insert legacy child")
-	_, err = conn.Exec(fmt.Sprintf(
+	_, err = conn.ExecContext(t.Context(), fmt.Sprintf(
 		"PRAGMA user_version = %d", dataVersion,
 	))
 	require.NoError(t, err, "set current data version")
 	require.NoError(t, conn.Close(), "close legacy database")
 
-	d, err := Open(path)
+	d, err := Open(t.Context(), path)
 	require.NoError(t, err, "open migrated database")
 	defer d.Close()
 
 	var got sql.NullString
-	err = d.getReader().QueryRow(`
+	err = d.getReader().QueryRow(t.Context(), `
 		SELECT parser_parent_session_id FROM sessions WHERE id = 'kid'
 	`).Scan(&got)
 	require.NoError(t, err, "query migrated parser parent")
@@ -267,9 +266,9 @@ func TestParserParentSessionIDMigrationRollsBackWhenBackfillFails(t *testing.T) 
 	require.NoError(t, err)
 	conn.SetMaxOpenConns(1)
 
-	_, err = conn.Exec(v06LegacySchema)
+	_, err = conn.ExecContext(t.Context(), v06LegacySchema)
 	require.NoError(t, err, "create legacy schema")
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, project, machine, agent, parent_session_id
 		) VALUES (
@@ -280,13 +279,13 @@ func TestParserParentSessionIDMigrationRollsBackWhenBackfillFails(t *testing.T) 
 			SELECT RAISE(ABORT, 'injected parser parent backfill failure');
 		END;`)
 	require.NoError(t, err, "prepare failing legacy migration")
-	_, err = conn.Exec(fmt.Sprintf(
+	_, err = conn.ExecContext(t.Context(), fmt.Sprintf(
 		"PRAGMA user_version = %d", dataVersion,
 	))
 	require.NoError(t, err, "set current data version")
 	require.NoError(t, conn.Close(), "close legacy database")
 
-	d, err := Open(path)
+	d, err := Open(t.Context(), path)
 	require.ErrorContains(t, err, "injected parser parent backfill failure")
 	require.Nil(t, d)
 
@@ -294,22 +293,22 @@ func TestParserParentSessionIDMigrationRollsBackWhenBackfillFails(t *testing.T) 
 	require.NoError(t, err, "reopen failed migration")
 	conn.SetMaxOpenConns(1)
 	var columnCount int
-	err = conn.QueryRow(`
+	err = conn.QueryRowContext(t.Context(), `
 		SELECT count(*) FROM pragma_table_info('sessions')
 		WHERE name = 'parser_parent_session_id'
 	`).Scan(&columnCount)
 	require.NoError(t, err, "inspect schema after failed migration")
 	assert.Zero(t, columnCount, "failed migration must roll back added column")
-	_, err = conn.Exec(`DROP TRIGGER fail_parser_parent_backfill`)
+	_, err = conn.ExecContext(t.Context(), `DROP TRIGGER fail_parser_parent_backfill`)
 	require.NoError(t, err, "remove injected migration failure")
 	require.NoError(t, conn.Close(), "close failed migration database")
 
-	d, err = Open(path)
+	d, err = Open(t.Context(), path)
 	require.NoError(t, err, "retry migration")
 	defer d.Close()
 
 	var got sql.NullString
-	err = d.getReader().QueryRow(`
+	err = d.getReader().QueryRow(t.Context(), `
 		SELECT parser_parent_session_id FROM sessions WHERE id = 'kid'
 	`).Scan(&got)
 	require.NoError(t, err, "query retried parser parent")
@@ -322,15 +321,15 @@ func TestLegacySchemaAddsArtifactImportAuthorityNonDestructively(t *testing.T) {
 	conn, err := sql.Open("sqlite3", makeDSN(path, false))
 	require.NoError(t, err)
 	conn.SetMaxOpenConns(1)
-	_, err = conn.Exec(preParentLegacySchema)
+	_, err = conn.ExecContext(t.Context(), preParentLegacySchema)
 	require.NoError(t, err)
-	_, err = conn.Exec(legacyArchiveRows)
+	_, err = conn.ExecContext(t.Context(), legacyArchiveRows)
 	require.NoError(t, err)
-	_, err = conn.Exec(fmt.Sprintf("PRAGMA user_version = %d", dataVersion))
+	_, err = conn.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", dataVersion))
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 
-	database, err := Open(path)
+	database, err := Open(t.Context(), path)
 	require.NoError(t, err)
 	defer database.Close()
 	requireSessionExists(t, database, "legacy-session")
@@ -341,7 +340,7 @@ func TestLegacySchemaAddsArtifactImportAuthorityNonDestructively(t *testing.T) {
 		"artifact_peer_checkpoint_heads",
 	} {
 		var count int
-		err := database.getReader().QueryRow(`
+		err := database.getReader().QueryRow(t.Context(), `
 			SELECT count(*) FROM sqlite_master
 			WHERE type = 'table' AND name = ?
 		`, table).Scan(&count)
@@ -354,7 +353,8 @@ func requireIndexColumns(
 	t *testing.T, d *DB, index string, want []string,
 ) {
 	t.Helper()
-	rows, err := d.getReader().Query(`
+
+	rows, err := d.getReader().Query(t.Context(), `
 		SELECT name FROM pragma_index_info(?) ORDER BY seqno
 	`, index)
 	require.NoError(t, err)
@@ -380,7 +380,7 @@ func requireLegacyRepairIndexes(t *testing.T, d *DB) {
 		"idx_insights_lookup",
 	} {
 		var count int
-		err := d.getReader().QueryRow(`
+		err := d.getReader().QueryRow(t.Context(), `
 			SELECT count(*) FROM sqlite_master
 			WHERE type = 'index' AND name = ?
 		`, name).Scan(&count)
@@ -393,7 +393,7 @@ func TestToolResultMetadataMigrationPreservesArchivedEvents(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "legacy.db")
 	conn, err := sql.Open("sqlite3", makeDSN(path, false))
 	require.NoError(t, err)
-	_, err = conn.Exec(preParentLegacySchema + `
+	_, err = conn.ExecContext(t.Context(), preParentLegacySchema+`
  CREATE TABLE tool_result_events (
  id INTEGER PRIMARY KEY, session_id TEXT NOT NULL,
  tool_call_message_ordinal INTEGER NOT NULL, call_index INTEGER NOT NULL DEFAULT 0,
@@ -406,12 +406,12 @@ func TestToolResultMetadataMigrationPreservesArchivedEvents(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	for range 2 {
-		d, err := Open(path)
+		d, err := Open(t.Context(), path)
 		require.NoError(t, err)
 		var content string
 		var digest []byte
 		var participates *bool
-		require.NoError(t, d.Reader().QueryRow(`SELECT content, raw_content_digest, summary_participates FROM tool_result_events WHERE session_id='s1'`).Scan(&content, &digest, &participates))
+		require.NoError(t, d.Reader().QueryRow(t.Context(), `SELECT content, raw_content_digest, summary_participates FROM tool_result_events WHERE session_id='s1'`).Scan(&content, &digest, &participates))
 		assert.Equal(t, "archived", content)
 		assert.Nil(t, digest, "migration cannot recover the original bytes")
 		assert.Nil(t, participates, "missing raw metadata remains explicit")

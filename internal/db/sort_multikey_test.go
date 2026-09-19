@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -183,7 +182,6 @@ func TestResolveSort(t *testing.T) {
 // id tie-breaker following the last term's direction. Both the structured Sort
 // field and the OrderBy string spell out the same ordering and must agree.
 func TestListSessions_MultiKeySort(t *testing.T) {
-
 	asc, desc := false, true
 	d := testDB(t)
 	insertSession(t, d, "mk-a", "p", func(s *Session) {
@@ -213,7 +211,6 @@ func TestListSessions_MultiKeySort(t *testing.T) {
 	want := []string{"mk-e", "mk-a", "mk-b", "mk-d", "mk-c"}
 
 	t.Run("structured Sort", func(t *testing.T) {
-
 		got := listSortedIDs(t, d, filterWith(func(f *SessionFilter) {
 			f.Sort = []SortKey{
 				{Key: "messages", Descending: &asc},
@@ -224,7 +221,6 @@ func TestListSessions_MultiKeySort(t *testing.T) {
 	})
 
 	t.Run("OrderBy string", func(t *testing.T) {
-
 		got := listSortedIDs(t, d, filterWith(func(f *SessionFilter) {
 			f.OrderBy = "messages:asc,started:desc"
 		}))
@@ -281,7 +277,7 @@ func TestListSessions_MultiKeyPaginationWalk(t *testing.T) {
 	cursor := ""
 	for pages := 0; ; pages++ {
 		require.LessOrEqual(t, pages, len(rows)+1, "pagination did not terminate")
-		page, err := d.ListSessions(context.Background(), SessionFilter{
+		page, err := d.ListSessions(t.Context(), SessionFilter{
 			Limit:  1,
 			Sort:   sortKeys,
 			Cursor: cursor,
@@ -316,7 +312,7 @@ func TestListSessions_MultiKeyCursorMismatch(t *testing.T) {
 		{Key: "messages", Descending: &asc},
 		{Key: "started", Descending: &desc},
 	}
-	page, err := d.ListSessions(context.Background(), SessionFilter{Limit: 2, Sort: base})
+	page, err := d.ListSessions(t.Context(), SessionFilter{Limit: 2, Sort: base})
 	require.NoError(t, err)
 	require.NotEmpty(t, page.NextCursor)
 	cursor := page.NextCursor
@@ -339,7 +335,7 @@ func TestListSessions_MultiKeyCursorMismatch(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := d.ListSessions(context.Background(), SessionFilter{
+			_, err := d.ListSessions(t.Context(), SessionFilter{
 				Limit: 2, Sort: tc.sort, Cursor: cursor,
 			})
 			if tc.ok {

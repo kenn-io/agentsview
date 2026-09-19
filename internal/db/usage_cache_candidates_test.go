@@ -3,7 +3,6 @@
 package db
 
 import (
-	"context"
 	"encoding/json"
 	"sort"
 	"strings"
@@ -21,7 +20,7 @@ func TestCaptureUsageQueryBoundedCandidatesAndMetadata(t *testing.T) {
 	}
 
 	snapshot, err := database.captureUsageQuery(
-		context.Background(), filter, usageQueryKindToken,
+		t.Context(), filter, usageQueryKindToken,
 	)
 	require.NoError(t, err)
 	require.NoError(t, snapshot.Close())
@@ -63,13 +62,12 @@ func TestCaptureUsageQueryBoundedCandidatesAndMetadata(t *testing.T) {
 		assert.NotEmpty(t, version.SyncMarker)
 		assert.NotEmpty(t, version.TranscriptRevision)
 	}
-	assert.Equal(t,
-		"false|0|7:session|7:model-x|0:|1|2|0|0|0|false|0|0:|0:|20:2026-08-10T12:00:00Z|2:e1;",
+	assert.Equal(t, "false|0|7:session|7:model-x|0:|1|2|0|0|0|false|0|0:|0:|20:2026-08-10T12:00:00Z|2:e1;",
 		versionByID["event"].UsageEventFingerprint)
 	assert.Empty(t, versionByID["inside-message"].UsageEventFingerprint)
 
 	// The returned value owns no live archive transaction.
-	require.NoError(t, database.RenameSession("inside-message", new("renamed")))
+	require.NoError(t, database.RenameSession(t.Context(), "inside-message", new("renamed")))
 }
 
 func TestCaptureUsageQueryRelaxedAndAllHistoryCandidates(t *testing.T) {
@@ -79,7 +77,7 @@ func TestCaptureUsageQueryRelaxedAndAllHistoryCandidates(t *testing.T) {
 	}
 
 	relaxed, err := database.captureUsageQuery(
-		context.Background(), filter, usageQueryKindActivity,
+		t.Context(), filter, usageQueryKindActivity,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, []string{
@@ -88,7 +86,7 @@ func TestCaptureUsageQueryRelaxedAndAllHistoryCandidates(t *testing.T) {
 	}, usageQuerySessionIDs(relaxed.Sessions))
 
 	allHistory, err := database.captureUsageQuery(
-		context.Background(), UsageFilter{}, usageQueryKindToken,
+		t.Context(), UsageFilter{}, usageQueryKindToken,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, []string{
@@ -122,12 +120,12 @@ func TestUsageCandidateDiscoveryCoversOppositeDateLineOffsets(t *testing.T) {
 	insertSession(t, database, "date-line", "project", func(session *Session) {
 		session.StartedAt = &started
 	})
-	require.NoError(t, database.InsertMessages([]Message{{
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
 		SessionID: "date-line", Ordinal: 0, Role: "assistant",
 		Timestamp: started, Model: "model",
 		TokenUsage: json.RawMessage(`{"input_tokens":1}`),
 	}}))
-	snapshot, err := database.captureUsageQuery(context.Background(), UsageFilter{
+	snapshot, err := database.captureUsageQuery(t.Context(), UsageFilter{
 		From: "2026-08-10", To: "2026-08-10", Timezone: "Pacific/Kiritimati",
 	}, usageQueryKindToken)
 	require.NoError(t, err)
@@ -136,6 +134,7 @@ func TestUsageCandidateDiscoveryCoversOppositeDateLineOffsets(t *testing.T) {
 
 func usageCandidateFixture(t *testing.T) *DB {
 	t.Helper()
+
 	database := testDB(t)
 	seedSession := func(
 		id, project, started string, userMessages int, name string,
@@ -149,7 +148,7 @@ func usageCandidateFixture(t *testing.T) *DB {
 			session.UserMessageCount = userMessages
 			session.SessionName = &name
 		})
-		_, err := database.getWriter().Exec(
+		_, err := database.getWriter().Exec(t.Context(),
 			`UPDATE sessions SET created_at = '2026-08-01T00:00:00.000Z' WHERE id = ?`, id)
 		require.NoError(t, err)
 	}
@@ -167,7 +166,7 @@ func usageCandidateFixture(t *testing.T) *DB {
 	seedSession("blank-message", "keep", "2026-08-10T09:00:00Z", 2, "Blank")
 	insertMessages(t, database, tokenMessage("blank-message", "", "model-x"))
 	seedSession("event", "keep", "2026-08-01T00:00:00Z", 2, "Event")
-	require.NoError(t, database.ReplaceSessionUsageEvents("event", []UsageEvent{{
+	require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "event", []UsageEvent{{
 		Source: "session", Model: "model-x", InputTokens: 1, OutputTokens: 2,
 		OccurredAt: "2026-08-10T12:00:00Z", DedupKey: "e1",
 	}}))
@@ -194,11 +193,11 @@ func usageCandidateFixture(t *testing.T) *DB {
 	seedSession("deleted", "keep", "2026-08-10T06:00:00Z", 2, "Deleted")
 	insertMessages(t, database,
 		tokenMessage("deleted", "2026-08-10T06:00:00Z", "model-x"))
-	_, err := database.getWriter().Exec(
+	_, err := database.getWriter().Exec(t.Context(),
 		`UPDATE sessions SET deleted_at = '2026-08-10T14:00:00Z' WHERE id = 'deleted'`)
 	require.NoError(t, err)
 
-	require.NoError(t, database.InsertCursorUsageEvents([]CursorUsageEvent{{
+	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{
 		OccurredAt: "2026-08-10T15:00:00Z", Model: "cursor-model", DedupKey: "cursor-1",
 	}}))
 	return database
@@ -224,7 +223,8 @@ func explainUsageCandidatePlan(
 	t *testing.T, database *DB, query string, args []any,
 ) string {
 	t.Helper()
-	rows, err := database.getReader().Query("EXPLAIN QUERY PLAN "+query, args...)
+
+	rows, err := database.getReader().Query(t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
 	require.NoError(t, err)
 	defer rows.Close()
 	var details []string

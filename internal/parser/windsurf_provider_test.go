@@ -23,7 +23,7 @@ func TestWindsurfProviderDiscoversAndParsesWorkspaceSQLiteChat(t *testing.T) {
 	))
 	provider := newTestWindsurfProvider(root)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	source := sources[0]
@@ -31,13 +31,13 @@ func TestWindsurfProviderDiscoversAndParsesWorkspaceSQLiteChat(t *testing.T) {
 	assert.Equal(t, "demo-workspace", source.ProjectHint)
 	assert.Equal(t, dbPath+"#windsurf-session-1", source.DisplayPath)
 
-	fp, err := provider.Fingerprint(context.Background(), source)
+	fp, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	require.NotZero(t, fp.Size)
 	require.NotZero(t, fp.MTimeNS)
 	require.NotEmpty(t, fp.Hash)
 
-	out, err := provider.Parse(context.Background(), ParseRequest{
+	out, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      source,
 		Fingerprint: fp,
 		Machine:     "machine-a",
@@ -147,15 +147,15 @@ func TestWindsurfProviderFingerprintHashIsContentBased(t *testing.T) {
 	providerA := newTestWindsurfProvider(rootA)
 	providerB := newTestWindsurfProvider(rootB)
 
-	sourcesA, err := providerA.Discover(context.Background())
+	sourcesA, err := providerA.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sourcesA, 1)
-	sourcesB, err := providerB.Discover(context.Background())
+	sourcesB, err := providerB.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sourcesB, 1)
-	fpA, err := providerA.Fingerprint(context.Background(), sourcesA[0])
+	fpA, err := providerA.Fingerprint(t.Context(), sourcesA[0])
 	require.NoError(t, err)
-	fpB, err := providerB.Fingerprint(context.Background(), sourcesB[0])
+	fpB, err := providerB.Fingerprint(t.Context(), sourcesB[0])
 	require.NoError(t, err)
 
 	require.NotEmpty(t, fpA.Hash)
@@ -169,20 +169,20 @@ func TestWindsurfProviderFingerprintIgnoresSHM(t *testing.T) {
 		"Use chat data only.",
 	))
 	provider := newTestWindsurfProvider(root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	require.NoError(t, os.WriteFile(dbPath+"-shm", []byte("first"), 0o644))
 	firstTime := mustParseTestTime(t, "2026-06-28T12:00:00Z")
 	require.NoError(t, os.Chtimes(dbPath+"-shm", firstTime, firstTime))
 
-	before, err := provider.Fingerprint(context.Background(), sources[0])
+	before, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 
 	require.NoError(t, os.WriteFile(dbPath+"-shm", []byte("second"), 0o644))
 	secondTime := mustParseTestTime(t, "2026-06-28T13:00:00Z")
 	require.NoError(t, os.Chtimes(dbPath+"-shm", secondTime, secondTime))
-	after, err := provider.Fingerprint(context.Background(), sources[0])
+	after, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 
 	assert.Equal(t, before.Hash, after.Hash)
@@ -203,11 +203,11 @@ func TestWindsurfProviderParsesTabContainerChatData(t *testing.T) {
 	}`)
 	provider := newTestWindsurfProvider(root)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	out, err := provider.Parse(context.Background(), ParseRequest{
+	out, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0],
 	})
 	require.NoError(t, err)
@@ -223,7 +223,7 @@ func TestWindsurfProviderMalformedChatDataReturnsError(t *testing.T) {
 	root, dbPath := windsurfProviderFixture(t, `{"tabs":`)
 	provider := newTestWindsurfProvider(root)
 
-	_, err := provider.Parse(context.Background(), ParseRequest{
+	_, err := provider.Parse(t.Context(), ParseRequest{
 		Source: SourceRef{
 			Provider:       AgentWindsurf,
 			DisplayPath:    dbPath + "#corrupt-session",
@@ -247,11 +247,11 @@ func TestWindsurfProviderParsesNumericTabBubbleTypes(t *testing.T) {
 	}`)
 	provider := newTestWindsurfProvider(root)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	out, err := provider.Parse(context.Background(), ParseRequest{
+	out, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0],
 	})
 	require.NoError(t, err)
@@ -283,7 +283,7 @@ func TestWindsurfProviderFallbackSessionIDUsesWorkspaceIdentity(t *testing.T) {
 	writeWindsurfStateDB(t, dbB, payload)
 	provider := newTestWindsurfProvider(root)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
 	assert.ElementsMatch(t, []string{
@@ -293,7 +293,7 @@ func TestWindsurfProviderFallbackSessionIDUsesWorkspaceIdentity(t *testing.T) {
 
 	var ids []string
 	for _, source := range sources {
-		out, err := provider.Parse(context.Background(), ParseRequest{
+		out, err := provider.Parse(t.Context(), ParseRequest{
 			Source: source,
 		})
 		require.NoError(t, err)
@@ -314,14 +314,14 @@ func TestWindsurfProviderFindSourceAndChangedPath(t *testing.T) {
 	))
 	provider := newTestWindsurfProvider(root)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "windsurf-session-lookup",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, dbPath+"#windsurf-session-lookup", found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID:      "windsurf:windsurf-session-lookup",
 		StoredFilePath:     dbPath + "#windsurf-session-lookup",
 		RequireFreshSource: true,
@@ -330,7 +330,7 @@ func TestWindsurfProviderFindSourceAndChangedPath(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, dbPath+"#windsurf-session-lookup", found.DisplayPath)
 
-	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path:      dbPath + "-wal",
 		EventKind: "write",
 		WatchRoot: filepath.Join(
@@ -342,7 +342,7 @@ func TestWindsurfProviderFindSourceAndChangedPath(t *testing.T) {
 	require.Len(t, changed, 1)
 	assert.Equal(t, dbPath+"#windsurf-session-lookup", changed[0].DisplayPath)
 
-	manifestChanged, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	manifestChanged, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: filepath.Join(
 			filepath.Dir(dbPath),
 			"workspace.json",
@@ -373,7 +373,7 @@ func TestWindsurfProviderDeletedDBChangedPathPreservesStoredArchive(t *testing.T
 	}
 	require.NoError(t, os.Remove(dbPath))
 
-	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path:              dbPath,
 		EventKind:         "remove",
 		WatchRoot:         filepath.Join(root, "workspaceStorage"),
@@ -382,12 +382,12 @@ func TestWindsurfProviderDeletedDBChangedPathPreservesStoredArchive(t *testing.T
 	require.NoError(t, err)
 	assert.Empty(t, changed)
 
-	fp, err := provider.Fingerprint(context.Background(), source)
+	fp, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	assert.Equal(t, source.FingerprintKey, fp.Key)
 	assert.Empty(t, fp.Hash)
 
-	out, err := provider.Parse(context.Background(), ParseRequest{
+	out, err := provider.Parse(t.Context(), ParseRequest{
 		Source: source,
 	})
 	require.NoError(t, err)
@@ -413,7 +413,7 @@ func TestSplitWindsurfVirtualPathRequiresStateDB(t *testing.T) {
 func TestWindsurfProviderWatchPlan(t *testing.T) {
 	provider := newTestWindsurfProvider(filepath.Join(t.TempDir(), "Windsurf", "User"))
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	root := plan.Roots[0]
@@ -434,12 +434,12 @@ func TestWindsurfProviderAcceptsWorkspaceStorageRoot(t *testing.T) {
 	))
 	provider := newTestWindsurfProvider(filepath.Join(root, "workspaceStorage"))
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, dbPath+"#workspace-root-session", sources[0].DisplayPath)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, filepath.Join(root, "workspaceStorage"), plan.Roots[0].Path)
@@ -471,12 +471,12 @@ func TestWriteSanitizedWindsurfStateDBCopiesOnlyChatKeys(t *testing.T) {
 	insertWindsurfStateRow(t, dbPath, "extension.secret", "TOP-SECRET")
 	outPath := filepath.Join(t.TempDir(), "state.vscdb")
 
-	require.NoError(t, WriteSanitizedWindsurfStateDB(outPath, dbPath))
+	require.NoError(t, WriteSanitizedWindsurfStateDB(t.Context(), outPath, dbPath))
 
 	conn, err := sql.Open("sqlite3", outPath)
 	require.NoError(t, err)
 	defer conn.Close()
-	rows, err := conn.Query(`SELECT key, value FROM ItemTable ORDER BY key`)
+	rows, err := conn.QueryContext(t.Context(), `SELECT key, value FROM ItemTable ORDER BY key`)
 	require.NoError(t, err)
 	defer rows.Close()
 	got := make(map[string]string)
@@ -513,12 +513,13 @@ func windsurfProviderFixture(t *testing.T, payload string) (string, string) {
 
 func writeWindsurfStateDB(t *testing.T, dbPath, payload string) {
 	t.Helper()
+
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	defer conn.Close()
-	_, err = conn.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
+	_, err = conn.ExecContext(t.Context(), `CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
 	require.NoError(t, err)
-	_, err = conn.Exec(
+	_, err = conn.ExecContext(t.Context(),
 		`INSERT INTO ItemTable (key, value) VALUES (?, ?)`,
 		"workbench.panel.aichat.view.aichat.chatdata",
 		payload,
@@ -531,7 +532,7 @@ func insertWindsurfStateRow(t *testing.T, dbPath, key, value string) {
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	defer conn.Close()
-	_, err = conn.Exec(
+	_, err = conn.ExecContext(t.Context(),
 		`INSERT INTO ItemTable (key, value) VALUES (?, ?)`,
 		key,
 		value,

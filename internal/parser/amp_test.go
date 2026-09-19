@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -33,7 +32,7 @@ func parseAmpTestSession(
 	})
 	require.True(t, ok)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: SourceRef{
 			Provider:       AgentAmp,
 			Key:            path,
@@ -100,7 +99,7 @@ func TestAmpProviderParsesBasic(t *testing.T) {
 	wantEnd := time.Date(2024, 1, 1, 0, 0, 5, 0, time.UTC)
 	assertTimestamp(t, sess.EndedAt, wantEnd)
 
-	require.Equal(t, 2, len(msgs))
+	require.Len(t, msgs, 2)
 	assertMessage(t, msgs[0], RoleUser, "Migrate the DB schema.")
 	assertMessage(t, msgs[1], RoleAssistant, "Sure, I will help.")
 	assert.Equal(t, 0, msgs[0].Ordinal)
@@ -145,14 +144,14 @@ func TestAmpProviderParsesToolUseAndThinking(t *testing.T) {
 	assert.Contains(t, msgs[1].Content, "Let me plan this.")
 	assert.Contains(t, msgs[1].Content, "[Read: main.go]")
 
-	require.Equal(t, 1, len(msgs[1].ToolCalls))
+	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Equal(t, "Read", msgs[1].ToolCalls[0].ToolName)
 	assert.Equal(t, "Read", msgs[1].ToolCalls[0].Category)
 	assert.Equal(t, "tu1", msgs[1].ToolCalls[0].ToolUseID)
 
 	// tool_result message: content should be empty (no text blocks),
 	// but tool results are recorded.
-	assert.Equal(t, 1, len(msgs[2].ToolResults))
+	assert.Len(t, msgs[2].ToolResults, 1)
 	assert.Equal(t, "tu1", msgs[2].ToolResults[0].ToolUseID)
 
 	// EndTime absent (empty traces) → zero.
@@ -199,7 +198,7 @@ func TestSerializeAmpResult(t *testing.T) {
 	}
 
 	t.Run("not exists", func(t *testing.T) {
-		assert.Equal(t, "", serializeAmpResult(gjson.Result{}))
+		assert.Empty(t, serializeAmpResult(gjson.Result{}))
 	})
 }
 
@@ -345,7 +344,7 @@ func TestExtractAmpToolResults(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := extractAmpToolResults(gjson.Parse(tt.input))
-			assert.Equal(t, tt.wantN, len(got))
+			assert.Len(t, got, tt.wantN)
 			if tt.wantN == 0 {
 				return
 			}
@@ -421,7 +420,7 @@ func TestAmpProviderParsesNoEnv(t *testing.T) {
 
 	// No env → project falls back to "amp".
 	assert.Equal(t, "amp", sess.Project)
-	require.Equal(t, 1, len(msgs))
+	require.Len(t, msgs, 1)
 }
 
 func TestAmpProviderParsesNoTitle(t *testing.T) {
@@ -510,7 +509,7 @@ func TestAmpProviderParsesFirstMessageTruncation(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	// truncate clips at 300 chars + 3 ellipsis chars = 303.
-	assert.Equal(t, 303, len(sess.FirstMessage))
+	assert.Len(t, sess.FirstMessage, 303)
 }
 
 func TestAmpProviderParsesInvalidCreated(t *testing.T) {
@@ -599,7 +598,7 @@ func TestAmpProviderParsesErrors(t *testing.T) {
 		content := `{"v":1,"created":1704067200000,"messages":[]}`
 		path := createTestFile(t, "bad-name.json", content)
 		_, _, err := parseAmpTestSession(t, path, "local")
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "missing or invalid id")
 	})
 }
@@ -666,7 +665,7 @@ func TestAmpThreadID(t *testing.T) {
 	data := []byte(`{"id":"T-abc123","v":1}`)
 	assert.Equal(t, "T-abc123", AmpThreadID(data))
 
-	assert.Equal(t, "", AmpThreadID([]byte(`{"v":1}`)))
+	assert.Empty(t, AmpThreadID([]byte(`{"v":1}`)))
 }
 
 func ampUsageThread(t *testing.T, messages string) []ParsedMessage {
@@ -693,7 +692,7 @@ func TestAmpProviderParsesOpenAIFamilyUsage(t *testing.T) {
 			"maxInputTokens": 272000, "totalInputTokens": 18621,
 			"cacheReadInputTokens": 0, "cacheCreationInputTokens": 18621}}`)
 
-	require.Equal(t, 2, len(msgs))
+	require.Len(t, msgs, 2)
 	assistant := msgs[1]
 
 	assert.Equal(t, "gpt-5.6-sol", assistant.Model)
@@ -720,7 +719,7 @@ func TestAmpProviderParsesAnthropicFamilyUsage(t *testing.T) {
 			"totalInputTokens": 16050, "cacheReadInputTokens": 15863,
 			"cacheCreationInputTokens": 180}}`)
 
-	require.Equal(t, 2, len(msgs))
+	require.Len(t, msgs, 2)
 	assistant := msgs[1]
 
 	assert.Equal(t, "claude-sonnet-4-20250514", assistant.Model)
@@ -744,7 +743,7 @@ func TestAmpProviderParsesUsageWithoutModel(t *testing.T) {
 			"thinkingBudget": 4000, "totalInputTokens": 13267,
 			"cacheReadInputTokens": 0, "cacheCreationInputTokens": 13258}}`)
 
-	require.Equal(t, 2, len(msgs))
+	require.Len(t, msgs, 2)
 	assistant := msgs[1]
 
 	assert.Empty(t, assistant.Model)
@@ -815,7 +814,7 @@ func TestAmpProviderParsesMessageWithoutUsage(t *testing.T) {
 		{"role": "user", "content": [{"type": "text", "text": "hi"}]},
 		{"role": "assistant", "content": [{"type": "text", "text": "hello"}]}`)
 
-	require.Equal(t, 2, len(msgs))
+	require.Len(t, msgs, 2)
 	assistant := msgs[1]
 
 	assert.Empty(t, assistant.Model)
@@ -846,7 +845,7 @@ func TestAmpProviderParsesMixedModelsAndAggregates(t *testing.T) {
 
 	sess, msgs, err := runAmpParserTest(t, content)
 	require.NoError(t, err)
-	require.Equal(t, 4, len(msgs))
+	require.Len(t, msgs, 4)
 
 	assert.Equal(t, "gpt-5.6-sol", msgs[1].Model)
 	assert.Equal(t, "claude-sonnet-4-20250514", msgs[3].Model)
@@ -881,7 +880,7 @@ func TestAmpProviderParsesPerInferenceTimestamps(t *testing.T) {
 			"inputTokens": 0, "outputTokens": 20, "cacheReadInputTokens": 50,
 			"cacheCreationInputTokens": 10}}`)
 
-	require.Equal(t, 4, len(msgs))
+	require.Len(t, msgs, 4)
 	assertTimestamp(t, msgs[1].Timestamp,
 		time.Date(2026, 8, 7, 19, 25, 30, 151000000, time.UTC))
 	assertTimestamp(t, msgs[3].Timestamp,

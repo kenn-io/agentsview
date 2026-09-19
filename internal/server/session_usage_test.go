@@ -1,7 +1,6 @@
 package server_test
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"net/http"
@@ -76,7 +75,7 @@ func TestHandleSessionUsage_PricedSession(t *testing.T) {
 
 	got = map[string]any{}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Equal(t, float64(1), got["breakdown_count"], "breakdown_count")
+	assert.InDelta(t, float64(1), got["breakdown_count"], 0, "breakdown_count")
 	assert.Equal(t, []any{
 		map[string]any{
 			"ordinal":                     float64(1),
@@ -122,7 +121,7 @@ func TestHandleSessionUsage_RollsUpExplicitSubagents(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Equal(t, float64(1), got["rollup_subagent_count"])
+	assert.InDelta(t, float64(1), got["rollup_subagent_count"], 0)
 	assert.Equal(t, true, got["has_rollup_cost"])
 	assert.Equal(t, map[string]any{"microdollars": float64(21000)},
 		got["rollup_cost"])
@@ -142,7 +141,7 @@ func TestHandleSessionUsage_RollupUsesCopilotReportedSessionCost(t *testing.T) {
 	})
 	reportedRootCost := money.MustParseDollars("0.03")
 	reportedChildCost := money.MustParseDollars("0.02")
-	require.NoError(t, te.db.ReplaceSessionUsageEvents("copilot-rollup-root", []db.UsageEvent{
+	require.NoError(t, te.db.ReplaceSessionUsageEvents(t.Context(), "copilot-rollup-root", []db.UsageEvent{
 		{
 			Source: "shutdown", Model: controlledSessionUsageModel,
 			InputTokens: 1000, OutputTokens: 500,
@@ -156,7 +155,7 @@ func TestHandleSessionUsage_RollupUsesCopilotReportedSessionCost(t *testing.T) {
 			OccurredAt: tsSeed, DedupKey: "final",
 		},
 	}))
-	require.NoError(t, te.db.ReplaceSessionUsageEvents("copilot-rollup-child", []db.UsageEvent{{
+	require.NoError(t, te.db.ReplaceSessionUsageEvents(t.Context(), "copilot-rollup-child", []db.UsageEvent{{
 		Source: "provider", Model: controlledSessionUsageModel,
 		Cost: &reportedChildCost, CostStatus: "exact", CostSource: "provider",
 		OccurredAt: tsSeed, DedupKey: "child",
@@ -199,8 +198,8 @@ func TestHandleSessionUsage_RollupBreakdownIncludesRootRows(t *testing.T) {
 
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Equal(t, float64(1), got["rollup_subagent_count"])
-	assert.Equal(t, float64(1), got["breakdown_count"])
+	assert.InDelta(t, float64(1), got["rollup_subagent_count"], 0)
+	assert.InDelta(t, float64(1), got["breakdown_count"], 0)
 	assert.Len(t, got["breakdown"], 1)
 }
 
@@ -237,7 +236,7 @@ func TestHandleSessionUsage_RollupTraversesContinuationAndDedupesSharedRows(t *t
 	assertStatus(t, w, http.StatusOK)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Equal(t, float64(1), got["rollup_subagent_count"])
+	assert.InDelta(t, float64(1), got["rollup_subagent_count"], 0)
 	assert.Equal(t, true, got["has_rollup_cost"])
 	assert.Equal(t, map[string]any{"microdollars": float64(21000)},
 		got["rollup_cost"])
@@ -270,7 +269,7 @@ func TestHandleSessionUsage_RollupIncludesUntimedSubagentUsage(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Equal(t, float64(1), got["rollup_subagent_count"])
+	assert.InDelta(t, float64(1), got["rollup_subagent_count"], 0)
 	assert.Equal(t, true, got["has_rollup_cost"])
 	assert.Equal(t, map[string]any{"microdollars": float64(21000)},
 		got["rollup_cost"])
@@ -302,7 +301,7 @@ func TestHandleSessionUsage_RollupPrefersRootForSharedDuplicateAtSameTimestamp(t
 	assertStatus(t, w, http.StatusOK)
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Equal(t, float64(1), got["rollup_subagent_count"])
+	assert.InDelta(t, float64(1), got["rollup_subagent_count"], 0)
 	assert.Equal(t, false, got["has_rollup_cost"])
 	_, hasRollupCost := got["rollup_cost"]
 	assert.False(t, hasRollupCost)
@@ -335,7 +334,7 @@ func TestHandleSessionUsage_IncompleteRollupOmitsPartialCost(t *testing.T) {
 
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Equal(t, float64(1), got["rollup_subagent_count"])
+	assert.InDelta(t, float64(1), got["rollup_subagent_count"], 0)
 	assert.Equal(t, false, got["has_rollup_cost"])
 	_, hasRollupCost := got["rollup_cost"]
 	assert.False(t, hasRollupCost)
@@ -398,7 +397,7 @@ func TestHandleSessionUsage_BreakdownOrderingAndDedup(t *testing.T) {
 			}
 		})
 	ordinal := 1
-	require.NoError(t, te.db.ReplaceSessionUsageEvents(
+	require.NoError(t, te.db.ReplaceSessionUsageEvents(t.Context(),
 		"codex:usage-breakdown",
 		[]db.UsageEvent{{
 			SessionID:                "codex:usage-breakdown",
@@ -414,7 +413,7 @@ func TestHandleSessionUsage_BreakdownOrderingAndDedup(t *testing.T) {
 		}},
 	), "ReplaceSessionUsageEvents")
 
-	usage, err := te.db.GetSessionUsage(context.Background(),
+	usage, err := te.db.GetSessionUsage(t.Context(),
 		"codex:usage-breakdown", true)
 	require.NoError(t, err, "GetSessionUsage")
 	require.NotNil(t, usage, "usage is nil")
@@ -532,7 +531,7 @@ func TestHandleSessionUsage_SubagentsParamCombinesInPlace(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &own))
 	assert.Equal(t, map[string]any{"microdollars": float64(10500)},
 		own["cost"])
-	assert.Equal(t, float64(1), own["breakdown_count"])
+	assert.InDelta(t, float64(1), own["breakdown_count"], 0)
 	assert.NotContains(t, own, "subagent_count",
 		"a request without the param must not gain the new field")
 
@@ -543,10 +542,10 @@ func TestHandleSessionUsage_SubagentsParamCombinesInPlace(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Equal(t, map[string]any{"microdollars": float64(21000)},
 		got["cost"], "cost covers the root and its subagent")
-	assert.Equal(t, 0.021, got["cost_usd"],
+	assert.InDelta(t, 0.021, got["cost_usd"], 0,
 		"cost_usd must reflect the combined subagent-inclusive cost")
-	assert.Equal(t, float64(1), got["subagent_count"])
-	assert.Equal(t, float64(2), got["breakdown_count"])
+	assert.InDelta(t, float64(1), got["subagent_count"], 0)
+	assert.InDelta(t, float64(2), got["breakdown_count"], 0)
 	assert.NotContains(t, got, "rollup_cost",
 		"subagents=true must not emit the rollup fields the SPA reads")
 
@@ -577,7 +576,7 @@ func TestHandleSessionUsage_SubagentsRefreshesNewLocalTranscript(t *testing.T) {
 		0o644,
 	))
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, te.engine.SyncSingleSessionContext(ctx, "parent-uuid"))
 	require.NoError(t, os.WriteFile(
 		filepath.Join(subagentsDir, "agent-worker1.jsonl"),
@@ -602,7 +601,7 @@ func TestHandleSessionUsage_SubagentsRefreshesNewLocalTranscript(t *testing.T) {
 	assert.Nil(t, child, "usage GET unexpectedly synced the subagent transcript")
 
 	body := `{"id":"parent-uuid","subagents":true}`
-	foreign := httptest.NewRequest(
+	foreign := httptest.NewRequestWithContext(ctx,
 		http.MethodPost, "/api/v1/sessions/sync", strings.NewReader(body))
 	foreign.Header.Set("Content-Type", "application/json")
 	foreign.Header.Set("Origin", "http://evil-site.com")
@@ -621,7 +620,7 @@ func TestHandleSessionUsage_SubagentsRefreshesNewLocalTranscript(t *testing.T) {
 	assertStatus(t, w, http.StatusOK)
 	got = nil
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
-	assert.Equal(t, float64(1), got["subagent_count"])
+	assert.InDelta(t, float64(1), got["subagent_count"], 0)
 
 	child, err = te.db.GetSession(ctx, "agent-worker1")
 	require.NoError(t, err)
@@ -651,7 +650,7 @@ func TestHandleSessionUsage_SubagentRefreshFailureUsesArchivedUsage(t *testing.T
 	var got map[string]any
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &got))
 	assert.Equal(t, "missing-parent", got["session_id"])
-	assert.Equal(t, float64(1), got["breakdown_count"])
+	assert.InDelta(t, float64(1), got["breakdown_count"], 0)
 }
 
 // TestHandleSessionUsage_BreakdownRoundTripsWebSearchRequests pins that the
@@ -693,7 +692,7 @@ func TestHandleSessionUsage_BreakdownRoundTripsWebSearchRequests(t *testing.T) {
 
 	searchedRow, ok := rows[0].(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, float64(3), searchedRow["web_search_requests"],
+	assert.InDelta(t, float64(3), searchedRow["web_search_requests"], 0,
 		"a row with billed web searches must round-trip the count")
 
 	noSearchRow, ok := rows[1].(map[string]any)

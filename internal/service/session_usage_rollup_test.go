@@ -118,7 +118,7 @@ func TestGetSessionUsageRollupIncludesOnlyPricedSubagentsOnce(t *testing.T) {
 		},
 	}
 
-	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
+	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
 	require.NoError(t, err)
 	require.Equal(t, 3, got.SubagentCount)
 	require.Zero(t, got.Cost)
@@ -138,7 +138,7 @@ func TestGetSessionUsageRollupIncludesNestedPricedSubagents(t *testing.T) {
 		},
 	}
 
-	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
+	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
 	require.NoError(t, err)
 	require.Equal(t, 2, got.SubagentCount)
 	require.Equal(t, money.MustParseDollars("7"), got.Cost)
@@ -169,7 +169,7 @@ func TestSessionUsageWithSubagentsFallbackMarksRowlessTokensIncomplete(
 	}
 
 	got, err := service.SessionUsageWithSubagents(
-		context.Background(), store, "root", false)
+		t.Context(), store, "root", false)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, 700, got.TotalOutputTokens)
@@ -188,7 +188,7 @@ func TestGetSessionUsageRollupCountsEmptySubagentAndTerminatesCycle(t *testing.T
 		},
 	}
 
-	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
+	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
 	require.NoError(t, err)
 	require.Equal(t, 1, got.SubagentCount)
 	require.False(t, got.HasCost)
@@ -205,7 +205,7 @@ func TestGetSessionUsageRollupRequiresContributingSubagentForHasCost(t *testing.
 		},
 	}
 
-	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
+	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
 	require.NoError(t, err)
 	require.Equal(t, 1, got.SubagentCount)
 	require.Zero(t, got.Cost)
@@ -222,7 +222,7 @@ func TestGetSessionUsageRollupReturnsChildSessionError(t *testing.T) {
 		},
 	}
 
-	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
+	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
 	require.Nil(t, got)
 	require.EqualError(t, err, "child lookup failed")
 }
@@ -240,7 +240,7 @@ func TestGetSessionUsageRollupReturnsChildUsageError(t *testing.T) {
 		},
 	}
 
-	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
+	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
 	require.Nil(t, got)
 	require.EqualError(t, err, "child usage failed")
 }
@@ -261,7 +261,7 @@ func TestGetSessionUsageRollupTraversesNonSubagentAndDedupesRowsAcrossSessions(t
 		},
 	}
 
-	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
+	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
 	require.NoError(t, err)
 	require.Equal(t, 1, got.SubagentCount)
 	require.True(t, got.HasCost)
@@ -291,7 +291,7 @@ func TestGetSessionUsageRollupIncludesForkInsideSubagentTree(t *testing.T) {
 	}
 
 	got, err := service.GetSessionUsageRollup(
-		context.Background(), store, "root", false)
+		t.Context(), store, "root", false)
 	require.NoError(t, err)
 	require.Equal(t, 1, got.SubagentCount)
 	require.True(t, got.HasCost)
@@ -330,7 +330,7 @@ func TestGetSessionUsageRollupCombinesProvenanceAcrossSessions(t *testing.T) {
 		},
 	}
 
-	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
+	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
 	require.NoError(t, err)
 	require.True(t, got.HasCost)
 	require.Equal(t, money.MustParseDollars("3"), got.Cost)
@@ -351,7 +351,7 @@ func TestGetSessionUsageRollupDoesNotLabelDedupedRootCostAsTotal(t *testing.T) {
 		},
 	}
 
-	got, err := service.GetSessionUsageRollup(context.Background(), store, "root", false)
+	got, err := service.GetSessionUsageRollup(t.Context(), store, "root", false)
 	require.NoError(t, err)
 	require.Equal(t, 1, got.SubagentCount)
 	require.False(t, got.HasCost)

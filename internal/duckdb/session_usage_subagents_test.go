@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"fmt"
 	"testing"
@@ -21,7 +20,7 @@ import (
 // parent and a subagent transcript, and the same tagged breakdown as the
 // SQLite archive it mirrors.
 func TestSessionUsageWithSubagentsMatchesSQLite(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
@@ -76,7 +75,7 @@ func TestSessionUsageWithSubagentsMatchesSQLite(t *testing.T) {
 
 	parentRef := parentID
 	parentSession := session(parentID, nil, "", 700)
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
 		{
 			Session: parentSession,
 			Messages: []db.Message{

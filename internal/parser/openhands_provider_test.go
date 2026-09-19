@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"encoding/json/v2"
 	"fmt"
 	"os"
@@ -28,14 +27,14 @@ func TestOpenHandsProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.False(t, plan.Roots[0].Recursive)
 	assert.NotEmpty(t, plan.Roots[0].DebounceKey)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, AgentOpenHands, discovered[0].Provider)
@@ -44,21 +43,21 @@ func TestOpenHandsProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, sessionDir, discovered[0].FingerprintKey)
 	assert.Empty(t, discovered[0].ProjectHint)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "remote~openhands:" + sessionID,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, sessionDir, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: dirName,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, sessionDir, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: sessionDir,
 	})
 	require.NoError(t, err)
@@ -67,7 +66,7 @@ func TestOpenHandsProviderSourceMethods(t *testing.T) {
 
 	snapshot, err := OpenHandsSnapshot(sessionDir)
 	require.NoError(t, err)
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, sessionDir, fingerprint.Key)
 	assert.Equal(t, snapshot.Size, fingerprint.Size)
@@ -81,7 +80,7 @@ func TestOpenHandsProviderSourceMethods(t *testing.T) {
 		filepath.Join(sessionDir, "events", "event-00000-user.json"),
 	} {
 		changed, err := provider.SourcesForChangedPath(
-			context.Background(),
+			t.Context(),
 			ChangedPathRequest{Path: changedPath, EventKind: "write", WatchRoot: root},
 		)
 		require.NoError(t, err)
@@ -90,7 +89,7 @@ func TestOpenHandsProviderSourceMethods(t *testing.T) {
 	}
 
 	ignored, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      filepath.Join(sessionDir, "events", "notes.txt"),
 			EventKind: "write",
@@ -101,7 +100,7 @@ func TestOpenHandsProviderSourceMethods(t *testing.T) {
 	assert.Empty(t, ignored)
 
 	wrongRoot, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      sessionDir,
 			EventKind: "write",
@@ -123,13 +122,13 @@ func TestOpenHandsProviderParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fingerprint,
 	})
@@ -209,6 +208,7 @@ func openHandsProviderWriteSession(
 	firstMessage string,
 ) string {
 	t.Helper()
+
 	sessionDir := filepath.Join(root, dirName)
 	eventsDir := filepath.Join(sessionDir, "events")
 	require.NoError(t, os.MkdirAll(eventsDir, 0o755))

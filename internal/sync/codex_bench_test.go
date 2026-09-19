@@ -37,12 +37,12 @@ var (
 // full-source fingerprint plus prefix re-hash pipeline.
 func BenchmarkCodexCheckpointAppendResume(b *testing.B) {
 	routeBenchLogs(b)
-	ctx := context.Background()
+	ctx := b.Context()
 	root, path, prefix, tail, startOrdinal := writeCodexSyncBenchmarkTranscript(b)
 
-	database, err := db.Open(filepath.Join(b.TempDir(), "bench.db"))
+	database, err := db.Open(ctx, filepath.Join(b.TempDir(), "bench.db"))
 	require.NoError(b, err)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(ctx, database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -51,17 +51,17 @@ func BenchmarkCodexCheckpointAppendResume(b *testing.B) {
 	b.Cleanup(func() {
 		engine.Close()
 		if err := database.Close(); err != nil {
-			b.Errorf("close bench db: %v", err)
+			assert.Failf(b, "test failed", "close bench db: %v", err)
 		}
 	})
 	first := engine.SyncAll(ctx, nil)
 	require.Equal(b, 1, first.Synced)
 	require.Zero(b, first.Failed)
 	sessionID := "codex:" + codexSyncBenchmarkUUID
-	cp, ok, err := database.GetParserCheckpoint(sessionID)
+	cp, ok, err := database.GetParserCheckpoint(ctx, sessionID)
 	require.NoError(b, err)
 	require.True(b, ok, "the full sync must persist a checkpoint")
-	blobs, ok, err := database.GetParserCheckpointBlobs(sessionID)
+	blobs, ok, err := database.GetParserCheckpointBlobs(ctx, sessionID)
 	require.NoError(b, err)
 	require.True(b, ok)
 
@@ -254,6 +254,7 @@ func writeCodexSyncBenchmarkTranscript(
 
 func appendCodexSyncBenchmarkTail(b *testing.B, path, tail string) {
 	b.Helper()
+
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	require.NoError(b, err)
 	_, err = f.WriteString(tail)
@@ -282,12 +283,12 @@ const (
 // always runs with a fixed -benchtime=Nx).
 func BenchmarkCodexLateToolOutputDebouncedBurst(b *testing.B) {
 	routeBenchLogs(b)
-	ctx := context.Background()
+	ctx := b.Context()
 	root, path, _ := writeCodexLateToolBenchmarkTranscript(b)
 
-	database, err := db.Open(filepath.Join(b.TempDir(), "bench.db"))
+	database, err := db.Open(ctx, filepath.Join(b.TempDir(), "bench.db"))
 	require.NoError(b, err)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(ctx, database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -296,7 +297,7 @@ func BenchmarkCodexLateToolOutputDebouncedBurst(b *testing.B) {
 	b.Cleanup(func() {
 		engine.Close()
 		if err := database.Close(); err != nil {
-			b.Errorf("close bench db: %v", err)
+			assert.Failf(b, "test failed", "close bench db: %v", err)
 		}
 	})
 
@@ -339,11 +340,11 @@ func BenchmarkCodexLateToolOutputDebouncedBurst(b *testing.B) {
 	b.ResetTimer()
 	for i := range b.N {
 		if _, err := f.WriteString(lines[i]); err != nil {
-			b.Fatalf("append: %v", err)
+			require.FailNowf(b, "test failed", "append: %v", err)
 		}
 		stats := engine.SyncAll(ctx, nil)
 		if stats.Failed != 0 {
-			b.Fatalf("sync failed for appended output: %+v", stats)
+			require.FailNowf(b, "test failed", "sync failed for appended output: %+v", stats)
 		}
 	}
 	b.StopTimer()
@@ -385,10 +386,10 @@ func codexLateToolBenchmarkTS(i int) string {
 }
 
 func writeCodexLateToolBenchmarkTranscript(
-	b testing.TB,
+	tb testing.TB,
 ) (root, path, prefix string) {
-	b.Helper()
-	root = filepath.Join(b.TempDir(), "sessions")
+	tb.Helper()
+	root = filepath.Join(tb.TempDir(), "sessions")
 	path = filepath.Join(
 		root,
 		"2026",
@@ -396,7 +397,7 @@ func writeCodexLateToolBenchmarkTranscript(
 		"10",
 		"rollout-2026-07-10T07-12-15-"+codexLateToolBenchmarkUUID+".jsonl",
 	)
-	require.NoError(b, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(tb, os.MkdirAll(filepath.Dir(path), 0o755))
 
 	fixture := testjsonl.NewSessionBuilder().
 		AddCodexMeta(
@@ -445,6 +446,6 @@ func writeCodexLateToolBenchmarkTranscript(
 		codexLateToolBenchmarkTS(0),
 	))
 	prefix = fixture.String()
-	require.NoError(b, os.WriteFile(path, []byte(prefix), 0o644))
+	require.NoError(tb, os.WriteFile(path, []byte(prefix), 0o644))
 	return root, path, prefix
 }

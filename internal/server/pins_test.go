@@ -1,7 +1,6 @@
 package server_test
 
 import (
-	"context"
 	"encoding/json/v2"
 	"net/http"
 	"testing"
@@ -16,10 +15,11 @@ import (
 // directly and returns the message ID used.
 func pinSessionMessage(t *testing.T, te *testEnv, sessionID string) {
 	t.Helper()
-	msgs, err := te.db.GetMessages(context.Background(), sessionID, 0, 1, true)
+
+	msgs, err := te.db.GetMessages(t.Context(), sessionID, 0, 1, true)
 	require.NoError(t, err, "pinSessionMessage: GetMessages for session %s", sessionID)
 	require.NotEmpty(t, msgs, "pinSessionMessage: no messages in session %s", sessionID)
-	id, err := te.db.PinMessage(sessionID, msgs[0].ID, nil)
+	id, err := te.db.PinMessage(t.Context(), sessionID, msgs[0].ID, nil)
 	require.NoError(t, err, "pinSessionMessage: PinMessage for session %s", sessionID)
 	require.NotZero(t, id, "pinSessionMessage: PinMessage returned 0 id for session %s", sessionID)
 }

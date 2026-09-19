@@ -60,16 +60,17 @@ func createCursorIDEStateDB(
 	t *testing.T, dbPath string, composers []cursorIDESyncComposer,
 ) {
 	t.Helper()
+
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	defer db.Close()
-	_, err = db.Exec(
+	_, err = db.ExecContext(t.Context(),
 		`CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)`,
 	)
 	require.NoError(t, err)
 	for _, c := range composers {
-		_, err = db.Exec(
+		_, err = db.ExecContext(t.Context(),
 			`INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`,
 			"composerData:"+c.id, cursorIDEComposerJSON(t, c),
 		)
@@ -79,7 +80,7 @@ func createCursorIDEStateDB(
 				"type": b.bubbleType, "text": b.text, "createdAt": b.createdAt,
 			})
 			require.NoError(t, err)
-			_, err = db.Exec(
+			_, err = db.ExecContext(t.Context(),
 				`INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`,
 				"bubbleId:"+c.id+":"+b.id, raw,
 			)
@@ -93,7 +94,7 @@ func newCursorIDESyncEngine(
 ) (*sync.Engine, *db.DB) {
 	t.Helper()
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCursorIDE: {root},
 		},
@@ -136,7 +137,7 @@ func TestSyncPathsCursorIDEDeletedComposerTombstonesSession(t *testing.T) {
 	for _, key := range []string{
 		"composerData:deleted-composer", "bubbleId:deleted-composer:b1",
 	} {
-		_, err = writer.Exec(`DELETE FROM cursorDiskKV WHERE key = ?`, key)
+		_, err = writer.ExecContext(t.Context(), `DELETE FROM cursorDiskKV WHERE key = ?`, key)
 		require.NoError(t, err)
 	}
 	require.NoError(t, writer.Close())
@@ -210,7 +211,7 @@ func TestReconcileWatchRootsCursorIDEDeletedMemberTombstonesSession(t *testing.T
 	for _, key := range []string{
 		"composerData:deleted-composer", "bubbleId:deleted-composer:b1",
 	} {
-		_, err = writer.Exec(`DELETE FROM cursorDiskKV WHERE key = ?`, key)
+		_, err = writer.ExecContext(t.Context(), `DELETE FROM cursorDiskKV WHERE key = ?`, key)
 		require.NoError(t, err)
 	}
 	require.NoError(t, writer.Close())
@@ -259,7 +260,7 @@ func TestSyncAllCursorIDEAddedBubbleWithUnchangedTimestampReparses(t *testing.T)
 	})
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 		cursorIDEComposerJSON(t, composer), "composerData:edited-composer",
 	)
@@ -268,7 +269,7 @@ func TestSyncAllCursorIDEAddedBubbleWithUnchangedTimestampReparses(t *testing.T)
 		"type": 2, "text": "world", "createdAt": "2026-06-21T07:27:31.522Z",
 	})
 	require.NoError(t, err)
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`,
 		"bubbleId:edited-composer:b2", raw,
 	)
@@ -315,7 +316,7 @@ func TestSyncAllCursorIDEBubbleContentEditWithUnchangedComposerDocReparses(
 	require.NoError(t, err)
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 		raw, "bubbleId:edited-composer:b1",
 	)
@@ -348,7 +349,7 @@ func TestSyncAllCursorIDEEmptiedContainerRetiresAllMembers(t *testing.T) {
 
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(`DELETE FROM cursorDiskKV`)
+	_, err = writer.ExecContext(t.Context(), `DELETE FROM cursorDiskKV`)
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
@@ -381,7 +382,7 @@ func TestSyncAllCursorIDERenamedComposerWithUnchangedTimestampReparses(
 	composer.name = "New name"
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 		cursorIDEComposerJSON(t, composer), "composerData:renamed-composer",
 	)
@@ -428,7 +429,7 @@ func TestSyncAllCursorIDESameSizeSameMtimeRewriteReparses(t *testing.T) {
 	require.NoError(t, err)
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 		raw, "bubbleId:rewritten-composer:b1",
 	)
@@ -476,7 +477,7 @@ func TestSyncAllCursorIDEWipedBubblesMarkSourceMissingAndPreserveTranscript(
 	// the archived session must stay browsable and intact.
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`DELETE FROM cursorDiskKV WHERE key = ?`, "bubbleId:wiped-composer:b1",
 	)
 	require.NoError(t, err)
@@ -514,7 +515,7 @@ func TestSyncAllCursorIDEPartialBubbleWipeKeepsArchivedTranscript(t *testing.T) 
 	// archived fuller transcript.
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`DELETE FROM cursorDiskKV WHERE key = ?`, "bubbleId:partial-composer:b2",
 	)
 	require.NoError(t, err)
@@ -545,7 +546,7 @@ func TestSyncAllCursorIDEGappedComposerSurfacesAndKeepsGrowing(t *testing.T) {
 	// database wiped before agentsview ever saw it would be.
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`DELETE FROM cursorDiskKV WHERE key = ?`, "bubbleId:gappy-composer:missing",
 	)
 	require.NoError(t, err)
@@ -567,7 +568,7 @@ func TestSyncAllCursorIDEGappedComposerSurfacesAndKeepsGrowing(t *testing.T) {
 	})
 	writer, err = sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 		cursorIDEComposerJSON(t, composer), "composerData:gappy-composer",
 	)
@@ -576,7 +577,7 @@ func TestSyncAllCursorIDEGappedComposerSurfacesAndKeepsGrowing(t *testing.T) {
 		"type": 2, "text": "reply", "createdAt": "2026-06-21T07:27:31.522Z",
 	})
 	require.NoError(t, err)
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`,
 		"bubbleId:gappy-composer:b2", raw,
 	)
@@ -620,7 +621,7 @@ func TestSyncAllCursorIDEEarlierBubbleWipeWithGrowthKeepsArchive(t *testing.T) {
 	)
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 		cursorIDEComposerJSON(t, composer), "composerData:masked-composer",
 	)
@@ -630,13 +631,13 @@ func TestSyncAllCursorIDEEarlierBubbleWipeWithGrowthKeepsArchive(t *testing.T) {
 			"type": b.bubbleType, "text": b.text, "createdAt": b.createdAt,
 		})
 		require.NoError(t, err)
-		_, err = writer.Exec(
+		_, err = writer.ExecContext(t.Context(),
 			`INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`,
 			"bubbleId:masked-composer:"+b.id, raw,
 		)
 		require.NoError(t, err)
 	}
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`DELETE FROM cursorDiskKV WHERE key = ?`, "bubbleId:masked-composer:b1",
 	)
 	require.NoError(t, err)
@@ -672,7 +673,7 @@ func TestSourceMtimeCursorIDEResolvesVirtualMemberPath(t *testing.T) {
 	// token; a "state.vscdb#<composer>" virtual path cannot be stat'ed, so
 	// it must resolve through the member fingerprint instead of returning
 	// zero and disabling change detection.
-	token := engine.SourceMtime("cursor-ide:watched-composer")
+	token := engine.SourceMtime(t.Context(), "cursor-ide:watched-composer")
 	require.NotZero(t, token,
 		"the watcher token must resolve through the member fingerprint")
 
@@ -685,14 +686,14 @@ func TestSourceMtimeCursorIDEResolvesVirtualMemberPath(t *testing.T) {
 	require.NoError(t, err)
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 		raw, "bubbleId:watched-composer:b1",
 	)
 	require.NoError(t, err)
 	require.NoError(t, writer.Close())
 
-	edited := engine.SourceMtime("cursor-ide:watched-composer")
+	edited := engine.SourceMtime(t.Context(), "cursor-ide:watched-composer")
 	require.NotZero(t, edited)
 	assert.NotEqual(t, token, edited,
 		"an edit that leaves lastUpdatedAt untouched must still move the token")
@@ -733,7 +734,7 @@ func TestResyncAllCursorIDEKeepsArchivedTranscriptOverGapResult(t *testing.T) {
 	// never rescue the fuller original.
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`DELETE FROM cursorDiskKV WHERE key = ?`, "bubbleId:resync-composer:b2",
 	)
 	require.NoError(t, err)
@@ -772,7 +773,7 @@ func TestSyncAllCursorIDEEmptiedBubbleKeepsArchivedTranscript(t *testing.T) {
 	// still references it, so the transcript is incomplete, not edited.
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 		[]byte(`{}`), "bubbleId:emptied-composer:b2",
 	)
@@ -871,13 +872,13 @@ func TestSyncAllCursorIDENullValueRowsDoNotFailThePass(t *testing.T) {
 	require.NoError(t, err)
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(string(fixture))
+	_, err = writer.ExecContext(t.Context(), string(fixture))
 	require.NoError(t, err)
 	// Confirm the fixture's own UPDATE actually matched sibling A's
 	// nullvalue-1 bubble, so this test cannot silently regress to proving
 	// only the NULL-composer half again.
 	var nulledValue sql.NullString
-	require.NoError(t, writer.QueryRow(
+	require.NoError(t, writer.QueryRowContext(t.Context(),
 		`SELECT value FROM cursorDiskKV WHERE key = ?`,
 		"bubbleId:sibling-a-composer:nullvalue-1",
 	).Scan(&nulledValue))
@@ -940,7 +941,7 @@ func TestSyncAllCursorIDENullComposerKeepsArchivedTranscript(t *testing.T) {
 
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`UPDATE cursorDiskKV SET value = NULL WHERE key = ?`,
 		"composerData:goes-null-composer",
 	)
@@ -956,6 +957,6 @@ func TestSyncAllCursorIDENullComposerKeepsArchivedTranscript(t *testing.T) {
 	assertSourceMissingState(t, archived)
 	assert.Equal(t, before.MessageCount, archived.MessageCount,
 		"a NULL composer value must not truncate the archived transcript")
-	assert.False(t, database.IsSessionExcluded("cursor-ide:goes-null-composer"),
+	assert.False(t, database.IsSessionExcluded(t.Context(), "cursor-ide:goes-null-composer"),
 		"the archived session must not be permanently deleted")
 }

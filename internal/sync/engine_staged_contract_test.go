@@ -1,10 +1,11 @@
 package sync
 
 import (
-	"go.kenn.io/agentsview/internal/testjsonl"
 	"os"
 	"path/filepath"
 	"testing"
+
+	"go.kenn.io/agentsview/internal/testjsonl"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,7 +16,7 @@ func TestStagedImportHonorsDisabledSignalRecomputation(t *testing.T) {
 	const uuid = "019eb791-cf7d-75c1-8439-9ed74c122e01"
 	database := openTestDB(t)
 	root := writeCodexTranscriptRoot(t, uuid, codexParityTranscript(uuid))
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
 		Machine:   "local", Ephemeral: true,
 		StagedCodexParseMinBytes: 1, DisableSignalRecomputation: true,
@@ -33,7 +34,7 @@ func TestStagedImportHonorsDisabledSignalRecomputation(t *testing.T) {
 	findings, err := database.SessionSecretFindings(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	assert.Empty(t, findings)
-	_, hasState, err := database.GetSessionSignalState("codex:" + uuid)
+	_, hasState, err := database.GetSessionSignalState(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	assert.False(t, hasState)
 	msgs, err := database.GetAllMessages(t.Context(), "codex:"+uuid)
@@ -48,19 +49,19 @@ func TestClaudeImportDoesNotBuildCodexSignalState(t *testing.T) {
 	require.NoError(t, os.MkdirAll(project, 0o755))
 	fixture := testjsonl.NewSessionBuilder().AddClaudeUser("2026-07-10T07:00:00Z", "hello").AddClaudeAssistant("2026-07-10T07:00:01Z", "finished")
 	require.NoError(t, os.WriteFile(filepath.Join(project, "session-a.jsonl"), []byte(fixture.String()), 0o600))
-	engine := NewEngine(database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", Ephemeral: true, DisableFilesystemProjectDiscovery: true})
+	engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}, Machine: "local", Ephemeral: true, DisableFilesystemProjectDiscovery: true})
 	t.Cleanup(engine.Close)
 	stats := engine.SyncAll(t.Context(), nil)
 	require.Zero(t, stats.Failed)
 	require.Equal(t, 1, stats.Synced)
 	var sessionID string
-	require.NoError(t, database.Reader().QueryRow("SELECT id FROM sessions").Scan(&sessionID))
-	_, exists, err := database.GetSessionSignalState(sessionID)
+	require.NoError(t, database.Reader().QueryRow(t.Context(), "SELECT id FROM sessions").Scan(&sessionID))
+	_, exists, err := database.GetSessionSignalState(t.Context(), sessionID)
 	require.NoError(t, err)
 	assert.False(t, exists, "only checkpoint-backed Codex appends consume compact state")
 	_, err = engine.recomputeSignalsFromDB(t.Context(), sessionID)
 	require.NoError(t, err)
-	_, exists, err = database.GetSessionSignalState(sessionID)
+	_, exists, err = database.GetSessionSignalState(t.Context(), sessionID)
 	require.NoError(t, err)
 	assert.False(t, exists)
 	sess, err := database.GetSessionFull(t.Context(), sessionID)

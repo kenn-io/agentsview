@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json/v2"
 	"fmt"
 	"strings"
@@ -62,7 +63,7 @@ func localSessionDependencyPushFingerprint(
 	usageEventFingerprint string,
 	usageKnown bool,
 ) (string, error) {
-	msgFP, err := localPushMessageFingerprint(
+	msgFP, err := localPushMessageFingerprint(ctx,
 		local, sessionID, usageEventFingerprint, usageKnown,
 	)
 	if err != nil {
@@ -101,7 +102,7 @@ func hashLocalDependencyPayload(
 		return "", fmt.Errorf("encoding local dependency fingerprint: %w", err)
 	}
 	sum := sha256.Sum256(data)
-	return fmt.Sprintf("%x", sum), nil
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // localPushDependencyState holds one chunk's worth of prefetched local
@@ -130,42 +131,42 @@ func readLocalPushDependencyState(
 ) (*localPushDependencyState, error) {
 	st := &localPushDependencyState{}
 	var err error
-	if st.contentAgg, err = local.MessageContentFingerprints(sessionIDs); err != nil {
+	if st.contentAgg, err = local.MessageContentFingerprints(ctx, sessionIDs); err != nil {
 		return nil, fmt.Errorf("computing local content fingerprints: %w", err)
 	}
-	if st.contentHashFP, err = local.MessageContentHashFingerprints(sessionIDs); err != nil {
+	if st.contentHashFP, err = local.MessageContentHashFingerprints(ctx, sessionIDs); err != nil {
 		return nil, fmt.Errorf("computing local content hash fingerprints: %w", err)
 	}
-	if st.roleTimeFP, err = local.MessageRoleTimeFingerprintsWithTimestampNormalizer(
+	if st.roleTimeFP, err = local.MessageRoleTimeFingerprintsWithTimestampNormalizer(ctx,
 		sessionIDs, pgPushTimestampFingerprintText,
 	); err != nil {
 		return nil, fmt.Errorf("computing local role/time fingerprints: %w", err)
 	}
-	if st.flagsFP, err = local.MessageFlagsFingerprints(sessionIDs); err != nil {
+	if st.flagsFP, err = local.MessageFlagsFingerprints(ctx, sessionIDs); err != nil {
 		return nil, fmt.Errorf(
 			"computing local message flags fingerprints: %w", err,
 		)
 	}
-	if st.systemFP, err = local.SystemMessageFingerprints(sessionIDs); err != nil {
+	if st.systemFP, err = local.SystemMessageFingerprints(ctx, sessionIDs); err != nil {
 		return nil, fmt.Errorf(
 			"computing local system message fingerprints: %w", err,
 		)
 	}
-	if st.tokenFP, err = local.MessageTokenFingerprints(sessionIDs); err != nil {
+	if st.tokenFP, err = local.MessageTokenFingerprints(ctx, sessionIDs); err != nil {
 		return nil, fmt.Errorf("computing local token fingerprints: %w", err)
 	}
-	if st.toolCallCount, err = local.ToolCallCounts(sessionIDs); err != nil {
+	if st.toolCallCount, err = local.ToolCallCounts(ctx, sessionIDs); err != nil {
 		return nil, fmt.Errorf("counting local tool_calls: %w", err)
 	}
-	if st.toolCallSum, err = local.ToolCallContentFingerprints(sessionIDs); err != nil {
+	if st.toolCallSum, err = local.ToolCallContentFingerprints(ctx, sessionIDs); err != nil {
 		return nil, fmt.Errorf(
 			"computing local tool_call content fingerprints: %w", err,
 		)
 	}
-	if st.toolCallFP, err = local.ToolCallFingerprints(sessionIDs); err != nil {
+	if st.toolCallFP, err = local.ToolCallFingerprints(ctx, sessionIDs); err != nil {
 		return nil, fmt.Errorf("computing local tool_call fingerprints: %w", err)
 	}
-	if st.toolResultFP, err = local.ToolResultEventFingerprintsWithTimestampNormalizer(
+	if st.toolResultFP, err = local.ToolResultEventFingerprintsWithTimestampNormalizer(ctx,
 		sessionIDs, pgPushTimestampFingerprintText,
 	); err != nil {
 		return nil, fmt.Errorf(
@@ -224,7 +225,7 @@ func (st *localPushDependencyState) dependencyFingerprint(
 	)
 }
 
-func localPushMessageFingerprint(
+func localPushMessageFingerprint(ctx context.Context,
 	local *db.DB,
 	sessionID string,
 	usageEventFingerprint string,
@@ -232,43 +233,43 @@ func localPushMessageFingerprint(
 ) (pushLocalMessageFingerprint, error) {
 	fp := pushLocalMessageFingerprint{}
 	var err error
-	fp.Sum, fp.Max, fp.Min, err = local.MessageContentFingerprint(sessionID)
+	fp.Sum, fp.Max, fp.Min, err = local.MessageContentFingerprint(ctx, sessionID)
 	if err != nil {
 		return fp, fmt.Errorf("computing local content fingerprint: %w", err)
 	}
-	fp.ContentHashFP, err = local.MessageContentHashFingerprint(sessionID)
+	fp.ContentHashFP, err = local.MessageContentHashFingerprint(ctx, sessionID)
 	if err != nil {
 		return fp, fmt.Errorf("computing local content hash fingerprint: %w", err)
 	}
-	fp.RoleTimeFP, err = localMessageRoleTimePGFingerprint(local, sessionID)
+	fp.RoleTimeFP, err = localMessageRoleTimePGFingerprint(ctx, local, sessionID)
 	if err != nil {
 		return fp, fmt.Errorf("computing local role/time fingerprint: %w", err)
 	}
-	fp.FlagsFP, err = local.MessageFlagsFingerprint(sessionID)
+	fp.FlagsFP, err = local.MessageFlagsFingerprint(ctx, sessionID)
 	if err != nil {
 		return fp, fmt.Errorf("computing local message flags fingerprint: %w", err)
 	}
-	fp.SystemFP, err = local.SystemMessageFingerprint(sessionID)
+	fp.SystemFP, err = local.SystemMessageFingerprint(ctx, sessionID)
 	if err != nil {
 		return fp, fmt.Errorf("computing local system message fingerprint: %w", err)
 	}
-	fp.ToolCallCount, err = local.ToolCallCount(sessionID)
+	fp.ToolCallCount, err = local.ToolCallCount(ctx, sessionID)
 	if err != nil {
 		return fp, fmt.Errorf("counting local tool_calls: %w", err)
 	}
-	fp.ToolCallSum, err = local.ToolCallContentFingerprint(sessionID)
+	fp.ToolCallSum, err = local.ToolCallContentFingerprint(ctx, sessionID)
 	if err != nil {
 		return fp, fmt.Errorf("computing local tool_call content fingerprint: %w", err)
 	}
-	fp.ToolCallFP, err = local.ToolCallFingerprint(sessionID)
+	fp.ToolCallFP, err = local.ToolCallFingerprint(ctx, sessionID)
 	if err != nil {
 		return fp, fmt.Errorf("computing local tool_call fingerprint: %w", err)
 	}
-	fp.ToolResultFP, err = localToolResultEventPGFingerprint(local, sessionID)
+	fp.ToolResultFP, err = localToolResultEventPGFingerprint(ctx, local, sessionID)
 	if err != nil {
 		return fp, fmt.Errorf("computing local tool_result_event fingerprint: %w", err)
 	}
-	fp.TokenFP, err = local.MessageTokenFingerprint(sessionID)
+	fp.TokenFP, err = local.MessageTokenFingerprint(ctx, sessionID)
 	if err != nil {
 		return fp, fmt.Errorf("computing local token fingerprint: %w", err)
 	}
@@ -904,10 +905,10 @@ func loadPushToolResultEventFingerprints(
 	return nil
 }
 
-func localToolResultEventPGFingerprint(
+func localToolResultEventPGFingerprint(ctx context.Context,
 	local *db.DB, sessionID string,
 ) (string, error) {
-	return local.ToolResultEventFingerprintWithTimestampNormalizer(
+	return local.ToolResultEventFingerprintWithTimestampNormalizer(ctx,
 		sessionID,
 		pgPushTimestampFingerprintText,
 	)

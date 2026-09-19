@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -59,7 +60,7 @@ func (s *icodemateCLISourceSet) Parse(
 	}
 	path, ok := s.pathFromSource(req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("icodemate cli source path unavailable")
+		return ParseOutcome{}, errors.New("icodemate cli source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine)
 	project := claudeProviderProject(ctx, firstNonEmptyJSONLString(
@@ -124,7 +125,7 @@ func (s claudeSourceSet) sourcesForToolResultPath(
 	rel, err := filepath.Rel(root, changedPath)
 	if err != nil || rel == ".." ||
 		strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return nil, nil
+		return nil, nil //nolint:nilerr // A path outside the provider root is not a source candidate.
 	}
 	parts := strings.Split(rel, string(filepath.Separator))
 	toolResultsAt := slices.Index(parts, "tool-results")
@@ -205,7 +206,7 @@ func claudeLayoutCompositeFingerprint(
 			filepath.ToSlash(relativePath), sidecarHash,
 		)
 	}
-	return fmt.Sprintf("%x", h.Sum(nil)), size, mtime, nil
+	return hex.EncodeToString(h.Sum(nil)), size, mtime, nil
 }
 
 // ClaudeLayoutCompositeFileInfo reports the same aggregate size and mtime used
@@ -384,10 +385,9 @@ func applyIcodemateCLIIdentity(results []ParseResult) {
 					call.SubagentSessionID,
 				)
 				for n := range call.ResultEvents {
-					call.ResultEvents[n].SubagentSessionID =
-						icodemateCLISessionID(
-							call.ResultEvents[n].SubagentSessionID,
-						)
+					call.ResultEvents[n].SubagentSessionID = icodemateCLISessionID(
+						call.ResultEvents[n].SubagentSessionID,
+					)
 				}
 			}
 		}

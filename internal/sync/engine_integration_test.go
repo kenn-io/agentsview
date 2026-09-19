@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -173,7 +174,7 @@ func setupTestEnv(t *testing.T, opts ...TestEnvOption) *testEnv {
 		env.kiroDir = kiroDirs[0]
 	}
 
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude:         claudeDirs,
 			parser.AgentCodex:          codexDirs,
@@ -213,7 +214,7 @@ func setupFocusedTestEnv(t *testing.T, agents ...parser.AgentType) *testEnv {
 		agentDirs[agent] = []string{dir}
 	}
 
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: agentDirs,
 		Machine:   "local",
 	})
@@ -236,7 +237,7 @@ func setupSingleAgentTestEnvWithDirs(
 
 	env := &testEnv{db: dbtest.OpenTestDB(t)}
 	assignFocusedAgentDir(t, env, agent, dirs[0])
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			agent: dirs,
 		},
@@ -283,7 +284,7 @@ func assignFocusedAgentDir(
 	case parser.AgentAntigravityCLI:
 		env.antigravityCLIDir = dir
 	default:
-		t.Fatalf("unsupported focused test fixture for %s", agent)
+		require.FailNowf(t, "test failed", "unsupported focused test fixture for %s", agent)
 	}
 }
 
@@ -321,17 +322,17 @@ func TestGrokSummaryCountsSurviveSync(t *testing.T) {
 	), []byte(`{"params":{"update":{"usage":{"inputTokens":131966,"outputTokens":326,"totalTokens":132292,"cachedReadTokens":131456,"reasoningTokens":122,"modelCalls":1,"apiDurationMs":7493,"costUsdTicks":424128000,"modelUsage":{"grok-4.5-build":{"inputTokens":131966,"outputTokens":326,"totalTokens":132292,"cachedReadTokens":131456,"reasoningTokens":122,"modelCalls":1,"apiDurationMs":7493,"costUsdTicks":424128000}},"numTurns":1}}}}`+"\n"), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentGrok: {root},
 		},
 		Machine: "local",
 	})
 
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	require.GreaterOrEqual(t, stats.Synced, 1)
 
-	sess, err := database.GetSession(context.Background(), "grok:sess-1")
+	sess, err := database.GetSession(t.Context(), "grok:sess-1")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, 6, sess.MessageCount)
@@ -339,7 +340,7 @@ func TestGrokSummaryCountsSurviveSync(t *testing.T) {
 	assert.True(t, sess.HasPeakContextTokens)
 	assert.Equal(t, 4096, sess.PeakContextTokens)
 
-	promptSearch, err := database.Search(context.Background(), db.SearchFilter{
+	promptSearch, err := database.Search(t.Context(), db.SearchFilter{
 		Query: "resume the build",
 		Limit: 5,
 	})
@@ -347,7 +348,7 @@ func TestGrokSummaryCountsSurviveSync(t *testing.T) {
 	require.Len(t, promptSearch.Results, 1)
 	assert.Equal(t, "grok:sess-1", promptSearch.Results[0].SessionID)
 
-	nameSearch, err := database.Search(context.Background(), db.SearchFilter{
+	nameSearch, err := database.Search(t.Context(), db.SearchFilter{
 		Query: "Preserve Grok counts",
 		Limit: 5,
 	})
@@ -355,7 +356,7 @@ func TestGrokSummaryCountsSurviveSync(t *testing.T) {
 	require.Len(t, nameSearch.Results, 1)
 	assert.Equal(t, "grok:sess-1", nameSearch.Results[0].SessionID)
 
-	daily, err := database.GetDailyUsage(context.Background(), db.UsageFilter{
+	daily, err := database.GetDailyUsage(t.Context(), db.UsageFilter{
 		From: "2026-07-08", To: "2026-07-08", Agent: "grok",
 	})
 	require.NoError(t, err)
@@ -365,7 +366,7 @@ func TestGrokSummaryCountsSurviveSync(t *testing.T) {
 	assert.Equal(t, money.Money{Microdollars: 42_413}, daily.Totals.TotalCost)
 
 	usage, err := database.GetSessionUsage(
-		context.Background(), "grok:sess-1", true,
+		t.Context(), "grok:sess-1", true,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
@@ -380,7 +381,7 @@ func TestGrokSummaryCountsSurviveSync(t *testing.T) {
 	assert.Equal(t, money.Money{Microdollars: 42_413}, usage.Breakdown[0].Cost)
 
 	events, err := database.GetUsageEvents(
-		context.Background(), "grok:sess-1",
+		t.Context(), "grok:sess-1",
 	)
 	require.NoError(t, err)
 	require.Len(t, events, 1)
@@ -389,7 +390,7 @@ func TestGrokSummaryCountsSurviveSync(t *testing.T) {
 	assert.Equal(t, money.Money{Microdollars: 42_413}, *events[0].Cost)
 
 	exported, err := database.ExportSessionSummaries(
-		context.Background(),
+		t.Context(),
 		db.SessionExportOptions{
 			Filter: db.SessionFilter{Agent: "grok"},
 			Limit:  10,
@@ -400,9 +401,7 @@ func TestGrokSummaryCountsSurviveSync(t *testing.T) {
 	require.Len(t, exported.Rows, 1)
 	require.NotNil(t, exported.Rows[0].ModelUsage)
 	assert.Equal(t, 122, exported.Rows[0].ModelUsage.ReasoningTokens)
-	require.Contains(t,
-		exported.Rows[0].ModelUsage.ByModel, "grok-4.5-build",
-	)
+	require.Contains(t, exported.Rows[0].ModelUsage.ByModel, "grok-4.5-build")
 	assert.Equal(t, 122,
 		exported.Rows[0].ModelUsage.ByModel["grok-4.5-build"].ReasoningTokens,
 	)
@@ -445,15 +444,15 @@ func TestGrokToolCompletionContributesToActivity(t *testing.T) {
 	))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentGrok: {root}},
 		Machine:   "test-machine",
 	})
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Synced)
 
 	messages, err := database.GetMessages(
-		context.Background(), "grok:session-tool-completion", 0, 100, true,
+		t.Context(), "grok:session-tool-completion", 0, 100, true,
 	)
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
@@ -469,7 +468,7 @@ func TestGrokToolCompletionContributesToActivity(t *testing.T) {
 	}, time.Date(2030, time.January, 1, 0, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
 	report, err := database.GetActivityReport(
-		context.Background(), db.AnalyticsFilter{Timezone: "UTC"}, query,
+		t.Context(), db.AnalyticsFilter{Timezone: "UTC"}, query,
 	)
 	require.NoError(t, err)
 	require.Len(t, report.BySession, 1)
@@ -513,15 +512,15 @@ func TestGrokBackendToolCompletionContributesToActivity(t *testing.T) {
 	))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentGrok: {root}},
 		Machine:   "test-machine",
 	})
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Synced)
 
 	messages, err := database.GetMessages(
-		context.Background(), "grok:session-backend-tool", 0, 100, true,
+		t.Context(), "grok:session-backend-tool", 0, 100, true,
 	)
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
@@ -535,7 +534,7 @@ func TestGrokBackendToolCompletionContributesToActivity(t *testing.T) {
 	}, time.Date(2030, time.January, 1, 0, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
 	report, err := database.GetActivityReport(
-		context.Background(), db.AnalyticsFilter{Timezone: "UTC"}, query,
+		t.Context(), db.AnalyticsFilter{Timezone: "UTC"}, query,
 	)
 	require.NoError(t, err)
 	require.Len(t, report.BySession, 1)
@@ -578,7 +577,7 @@ func newOpenCodeFamilySQLiteTestEngine(
 	database *db.DB,
 ) *sync.Engine {
 	t.Helper()
-	return sync.NewEngine(database, sync.EngineConfig{
+	return sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			agent: {root},
 		},
@@ -617,9 +616,10 @@ func openCodeLocalModifiedSnapshot(
 	sessionIDs ...string,
 ) map[string]string {
 	t.Helper()
+
 	out := make(map[string]string, len(sessionIDs))
 	for _, sessionID := range sessionIDs {
-		sess, err := database.GetSessionFull(context.Background(), sessionID)
+		sess, err := database.GetSessionFull(t.Context(), sessionID)
 		require.NoError(t, err, "GetSessionFull(%q)", sessionID)
 		require.NotNil(t, sess, "session %q not found", sessionID)
 		require.NotNil(t, sess.LocalModifiedAt,
@@ -635,7 +635,7 @@ func openCodeStoredSession(
 	sessionID string,
 ) *db.Session {
 	t.Helper()
-	sess, err := database.GetSessionFull(context.Background(), sessionID)
+	sess, err := database.GetSessionFull(t.Context(), sessionID)
 	require.NoError(t, err, "GetSessionFull(%q)", sessionID)
 	require.NotNil(t, sess, "session %q not found", sessionID)
 	return sess
@@ -670,19 +670,19 @@ func TestSyncPathsContextCancelledAbortsWithoutWriting(t *testing.T) {
 		"cancelled sync reply", 1704067201000,
 	)
 
-	cancelled, cancel := context.WithCancel(context.Background())
+	cancelled, cancel := context.WithCancel(t.Context())
 	cancel()
 	env.engine.SyncPathsContext(cancelled, []string{sessionPath})
 
 	sess, err := env.db.GetSessionFull(
-		context.Background(), "opencode:"+sessionID,
+		t.Context(), "opencode:"+sessionID,
 	)
 	require.NoError(t, err, "GetSessionFull after cancelled sync")
 	assert.Nil(t, sess,
 		"a cancelled watcher sync must not write the session")
 
 	env.engine.SyncPathsContext(
-		context.Background(), []string{sessionPath},
+		t.Context(), []string{sessionPath},
 	)
 	assertMessageContent(
 		t, env.db, "opencode:"+sessionID, "cancelled sync reply",
@@ -714,7 +714,7 @@ func TestSyncEngineOpenCodeFamilySQLiteDropsUnchangedContainerSessions(
 				"second prompt", "second answer",
 			)
 
-			stats := engine.SyncAll(context.Background(), nil)
+			stats := engine.SyncAll(t.Context(), nil)
 			require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
 			assert.Equal(t, 2, stats.Synced, "first sync writes both sessions")
 
@@ -726,8 +726,7 @@ func TestSyncEngineOpenCodeFamilySQLiteDropsUnchangedContainerSessions(
 				t, database, sessionIDs...,
 			)
 
-			time.Sleep(20 * time.Millisecond)
-			stats = engine.SyncAll(context.Background(), nil)
+			stats = engine.SyncAll(t.Context(), nil)
 			require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
 			assert.Equal(t, 0, stats.Synced,
 				"unchanged %s SQLite container sessions must be dropped", tt.name)
@@ -758,7 +757,7 @@ func TestSyncEngineOpenCodeSQLiteDropsOnlyUnchangedContainerRows(
 		"stable prompt", "stable answer",
 	)
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
 	assert.Equal(t, 2, stats.Synced, "first sync writes both sessions")
 
@@ -768,7 +767,6 @@ func TestSyncEngineOpenCodeSQLiteDropsOnlyUnchangedContainerRows(
 		t, env.db, changedID, stableID,
 	)
 
-	time.Sleep(20 * time.Millisecond)
 	oc.updateSessionTime(t, "changed-session", 1779015630000)
 	oc.replaceTextContent(
 		t, "changed-session",
@@ -776,7 +774,7 @@ func TestSyncEngineOpenCodeSQLiteDropsOnlyUnchangedContainerRows(
 		1779015600000,
 	)
 
-	stats = env.engine.SyncAll(context.Background(), nil)
+	stats = env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced,
 		"only the changed OpenCode SQLite row should be rewritten")
@@ -808,7 +806,7 @@ func TestSyncEngineOpenCodeSQLiteSameMtimeContentChangeUsesFingerprint(
 		"original prompt", "original answer",
 	)
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced, "first sync writes the SQLite session")
 	sessionID := "opencode:same-mtime-sqlite"
@@ -835,7 +833,7 @@ func TestSyncEngineOpenCodeSQLiteSameMtimeContentChangeUsesFingerprint(
 
 	// A fresh engine has no recent verification watermark, so this pass is due
 	// for full-digest discovery without waiting for the interval.
-	stats = newOpenCodeTestEngine(t, env).SyncAll(context.Background(), nil)
+	stats = newOpenCodeTestEngine(t, env).SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced,
 		"same-mtime SQLite fingerprint changes must be rewritten")
@@ -882,11 +880,11 @@ func TestSyncEngineOpenCodeSQLiteUntouchedContainerSkipsReparse(
 		"second prompt", "second answer",
 	)
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
 	assert.Equal(t, 2, stats.Synced, "first sync writes both sessions")
 
-	stats = env.engine.SyncAll(context.Background(), nil)
+	stats = env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
 	assert.Equal(t, 0, stats.Synced,
 		"untouched container must not re-emit sessions")
@@ -921,7 +919,7 @@ func TestSyncEngineOpenCodeSQLiteStatIdenticalContentChangeStillReemits(
 		"original prompt", "original answer",
 	)
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced, "first sync writes the session")
 
@@ -945,7 +943,7 @@ func TestSyncEngineOpenCodeSQLiteStatIdenticalContentChangeStillReemits(
 
 	// A fresh engine has no recent verification watermark, so this pass is due
 	// for full-digest discovery without waiting for the interval.
-	stats = newOpenCodeTestEngine(t, env).SyncAll(context.Background(), nil)
+	stats = newOpenCodeTestEngine(t, env).SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced,
 		"stat-identical content change must still be re-emitted")
@@ -971,7 +969,7 @@ func TestSyncEngineOpenCodeSQLiteWALOnlyChangeStillReemits(t *testing.T) {
 		"original prompt", "original answer",
 	)
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced, "first sync writes the session")
 
@@ -979,7 +977,6 @@ func TestSyncEngineOpenCodeSQLiteWALOnlyChangeStillReemits(t *testing.T) {
 	before, err := os.Stat(dbPath)
 	require.NoError(t, err, "stat opencode.db")
 
-	time.Sleep(20 * time.Millisecond)
 	oc.updateSessionTime(t, "wal-session", 1779015630000)
 	oc.replaceTextContent(
 		t, "wal-session",
@@ -995,7 +992,7 @@ func TestSyncEngineOpenCodeSQLiteWALOnlyChangeStillReemits(t *testing.T) {
 	require.Equal(t, before.ModTime(), after.ModTime(),
 		"main DB file mtime must stay untouched by a WAL-mode commit")
 
-	stats = env.engine.SyncAll(context.Background(), nil)
+	stats = env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced,
 		"a WAL-only container change must still be re-emitted")
@@ -1019,7 +1016,7 @@ func TestSyncEngineOpenCodeSQLiteCwdFilteredContainerStaysUntrusted(
 	}
 	root := t.TempDir()
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOpenCode: {root},
 		},
@@ -1040,11 +1037,11 @@ func TestSyncEngineOpenCodeSQLiteCwdFilteredContainerStaysUntrusted(
 		"drop prompt", "drop answer",
 	)
 
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced, "only the allowed session is written")
 
-	stats = engine.SyncAll(context.Background(), nil)
+	stats = engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
 	// Exactly one skip: the persisted allowed session rides its own
 	// per-session freshness check. The vetoed session was never written, so
@@ -1057,12 +1054,12 @@ func TestSyncEngineOpenCodeSQLiteCwdFilteredContainerStaysUntrusted(
 			"per-session freshness")
 
 	kept, err := database.GetSessionFull(
-		context.Background(), "opencode:keep-session",
+		t.Context(), "opencode:keep-session",
 	)
 	require.NoError(t, err)
 	assert.NotNil(t, kept, "allowed session must be archived")
 	dropped, err := database.GetSessionFull(
-		context.Background(), "opencode:drop-session",
+		t.Context(), "opencode:drop-session",
 	)
 	require.NoError(t, err)
 	assert.Nil(t, dropped, "vetoed session must stay out of the archive")
@@ -1085,11 +1082,11 @@ func TestSyncEngineOpenCodeSQLiteCutoffPassMustNotTrustContainer(
 	)
 
 	future := time.Now().Add(24 * time.Hour)
-	stats := env.engine.SyncAllSince(context.Background(), future, nil)
+	stats := env.engine.SyncAllSince(t.Context(), future, nil)
 	require.False(t, stats.Aborted, "cutoff sync aborted: %+v", stats)
 	assert.Equal(t, 0, stats.Synced, "future cutoff filters every source")
 
-	stats = env.engine.SyncAll(context.Background(), nil)
+	stats = env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "full sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced,
 		"a cutoff-filtered pass must not mark the container verified")
@@ -1126,7 +1123,7 @@ func TestSyncEngineOpenCodeStorageUntouchedSessionSkipsReparse(
 		"gated storage reply", 1704067201000,
 	)
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced, "first sync writes the session")
 
@@ -1137,7 +1134,7 @@ func TestSyncEngineOpenCodeStorageUntouchedSessionSkipsReparse(
 		_ = os.Chmod(partPath, 0o644)
 	})
 
-	stats = env.engine.SyncAll(context.Background(), nil)
+	stats = env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "gated sync aborted: %+v", stats)
 	assert.Equal(t, 0, stats.Failed,
 		"gated pass must not re-read message or part files")
@@ -1172,10 +1169,10 @@ func TestSyncEngineOpenCodeStorageAppendedMessageReemitsSession(
 		"first storage reply", 1704067201000,
 	)
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced, "first sync writes the session")
-	stats = env.engine.SyncAll(context.Background(), nil)
+	stats = env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
 	assert.Equal(t, 0, stats.Synced, "verification pass drops the unchanged session")
 
@@ -1188,7 +1185,7 @@ func TestSyncEngineOpenCodeStorageAppendedMessageReemitsSession(
 		"second storage reply", 1704067202000,
 	)
 
-	stats = env.engine.SyncAll(context.Background(), nil)
+	stats = env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "append sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced,
 		"appended message must re-emit the session")
@@ -1225,10 +1222,18 @@ func TestSyncEngineOpenCodeStorageWatcherEventDoesNotRewriteUnchanged(
 		"steady storage reply", 1704067201000,
 	)
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced, "first sync writes the session")
 	fullID := "opencode:" + sessionID
+	// Fix the initial watermark so a rewrite differs even within one millisecond.
+	require.NoError(t, env.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
+			"UPDATE sessions SET local_modified_at = ? WHERE id = ?",
+			"2000-01-01T00:00:00.000Z", fullID,
+		)
+		return err
+	}))
 	before := openCodeLocalModifiedSnapshot(t, env.db, fullID)
 
 	env.engine.SyncPaths([]string{partPath})
@@ -1240,9 +1245,6 @@ func TestSyncEngineOpenCodeStorageWatcherEventDoesNotRewriteUnchanged(
 		t, env.db, fullID, "steady storage reply",
 	)
 
-	// SQLite stamps local_modified_at with millisecond %f. Two rewrites in
-	// the same millisecond compare equal on a fast Windows runner.
-	time.Sleep(2 * time.Millisecond)
 	storage.addTextPart(
 		t, sessionID, "msg-a1", "part-a1",
 		"updated storage reply", 1704067203000,
@@ -1304,7 +1306,7 @@ func (p *crushParseCountingProvider) DiscoverEach(
 ) error {
 	discoverer, ok := p.Provider.(parser.StreamingDiscoverer)
 	if !ok {
-		return fmt.Errorf("Crush provider does not support streaming discovery")
+		return errors.New("Crush provider does not support streaming discovery")
 	}
 	return discoverer.DiscoverEach(ctx, yield)
 }
@@ -1336,7 +1338,7 @@ func TestSyncAllCrushSkipsUnchangedSessionBeforeParse(t *testing.T) {
 	source, err := sql.Open("sqlite3", crushPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, source.Close()) })
-	_, err = source.Exec(`
+	_, err = source.ExecContext(t.Context(), `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
 			parent_session_id TEXT,
@@ -1378,7 +1380,7 @@ func TestSyncAllCrushSkipsUnchangedSessionBeforeParse(t *testing.T) {
 	})
 	counting := &crushParseCountingProvider{Provider: inner}
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCrush: {root},
 		},
@@ -1440,7 +1442,7 @@ func TestSyncAllOpenCodeStorageColdStartSkipsUnchangedParse(t *testing.T) {
 		Machine: "local",
 	})
 	counting := &openCodeStorageParseCountingProvider{Provider: inner}
-	restarted := sync.NewEngine(env.db, sync.EngineConfig{
+	restarted := sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOpenCode: {env.opencodeDir},
 		},
@@ -1493,10 +1495,10 @@ func TestSyncEngineOpenCodeStorageStatIdenticalEventStillReemits(
 		"stat twin reply AAAA", 1704067201000,
 	)
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced, "first sync writes the session")
-	stats = env.engine.SyncAll(context.Background(), nil)
+	stats = env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
 	assert.Equal(t, 0, stats.Synced, "verification pass drops the unchanged session")
 
@@ -1533,7 +1535,7 @@ func TestSyncEngineOpenCodeSQLiteSameMtimeMetadataChangeUsesFingerprint(
 		"stable prompt", "stable answer",
 	)
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced, "first sync writes the SQLite session")
 	sessionID := "opencode:same-mtime-metadata"
@@ -1545,12 +1547,11 @@ func TestSyncEngineOpenCodeSQLiteSameMtimeMetadataChangeUsesFingerprint(
 	assert.Equal(t, "/home/user/code/original-app", before.Cwd)
 	assert.Equal(t, "original_app", before.Project)
 
-	time.Sleep(20 * time.Millisecond)
 	oc.updateProjectWorktree(
 		t, "proj", "/home/user/code/renamed-app", 1779015630000,
 	)
 
-	stats = env.engine.SyncAll(context.Background(), nil)
+	stats = env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced,
 		"same-mtime SQLite metadata changes must be rewritten")
@@ -1602,7 +1603,7 @@ func TestSyncEngineOpenCodeStorageSameMtimeContentChangeUsesFingerprint(
 		"original answer", 1779012000001,
 	)
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced, "first sync writes the storage session")
 	sessionID := "opencode:same-mtime-hash"
@@ -1615,7 +1616,6 @@ func TestSyncEngineOpenCodeStorageSameMtimeContentChangeUsesFingerprint(
 	require.NotNil(t, before.LocalModifiedAt,
 		"local_modified_at before rewrite")
 
-	time.Sleep(20 * time.Millisecond)
 	storage.addSession(
 		t, "proj", "same-mtime-hash",
 		"/home/user/code/opencode-app",
@@ -1630,7 +1630,7 @@ func TestSyncEngineOpenCodeStorageSameMtimeContentChangeUsesFingerprint(
 	setFileMtime(t, sessionPath, *before.FileMtime)
 	setFileMtime(t, userPartPath, *before.FileMtime)
 
-	stats = env.engine.SyncAll(context.Background(), nil)
+	stats = env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "second sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced,
 		"same-mtime storage fingerprint changes must be rewritten")
@@ -1668,7 +1668,7 @@ func TestWatcherOverflowReverifiesSameStatOpenCodeStorage(t *testing.T) {
 		"original prompt", 1779012000000,
 	)
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted)
 	require.Equal(t, 1, stats.Synced)
 	const sessionID = "opencode:overflow-same-stat"
@@ -1686,7 +1686,7 @@ func TestWatcherOverflowReverifiesSameStatOpenCodeStorage(t *testing.T) {
 	require.Equal(t, partInfo.Size(), rewrittenInfo.Size())
 	require.Equal(t, partInfo.ModTime(), rewrittenInfo.ModTime())
 
-	err = env.engine.ReconcileWatchRootsAfterLostEvents(context.Background(), nil, true)
+	err = env.engine.ReconcileWatchRootsAfterLostEvents(t.Context(), nil, true)
 	require.NoError(t, err)
 	result := env.engine.LastReconciliationResult()
 	assert.True(t, result.Complete)
@@ -1724,10 +1724,10 @@ func TestSyncEngineKiroSQLiteUpdatePaths(t *testing.T) {
 	})
 	assertSessionProject(t, env.db, "kiro:full-sync-session", "kiro_app")
 	assertSessionMessageCount(t, env.db, "kiro:full-sync-session", 4)
-	source := env.engine.FindSourceFile("kiro:full-sync-session")
+	source := env.engine.FindSourceFile(t.Context(), "kiro:full-sync-session")
 	want := filepath.Join(env.kiroDir, "data.sqlite3") + "#full-sync-session"
 	require.Equal(t, want, source)
-	got, wantMtime := env.engine.SourceMtime("kiro:full-sync-session"), updatedAt*1_000_000
+	got, wantMtime := env.engine.SourceMtime(t.Context(), "kiro:full-sync-session"), updatedAt*1_000_000
 	require.Equal(t, wantMtime, got)
 	assertMessageContent(t, env.db, "kiro:physical-path-session",
 		"Build the Kiro parser",
@@ -1812,7 +1812,7 @@ func TestSyncEngineKiroSQLiteCurrentStoreShadowsLegacy(t *testing.T) {
 		TotalSessions: 1, Synced: 0, Skipped: 0,
 	})
 	sess, err := env.db.GetSessionFull(
-		context.Background(), "kiro:overlap-session",
+		t.Context(), "kiro:overlap-session",
 	)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, sess, "expected sqlite-backed session")
@@ -1822,7 +1822,7 @@ func TestSyncEngineKiroSQLiteCurrentStoreShadowsLegacy(t *testing.T) {
 	legacyPath := filepath.Join(env.kiroDir, "overlap-session.jsonl")
 	env.engine.SyncPaths([]string{legacyPath})
 	sess, err = env.db.GetSessionFull(
-		context.Background(), "kiro:overlap-session",
+		t.Context(), "kiro:overlap-session",
 	)
 	require.NoError(t, err, "GetSessionFull after legacy event")
 	require.NotNil(t, sess, "legacy event replaced sqlite-backed session")
@@ -1864,9 +1864,9 @@ func TestSyncEngineKiroSameStatMetadataRewriteIsDetected(t *testing.T) {
 	require.NoError(t, os.Chtimes(path, stamp, stamp))
 	require.NoError(t, os.Chtimes(sidecar, stamp, stamp))
 
-	initial := env.engine.SyncAll(context.Background(), nil)
+	initial := env.engine.SyncAll(t.Context(), nil)
 	require.False(t, initial.Aborted)
-	before, err := env.db.GetSessionFull(context.Background(), "kiro:"+rawID)
+	before, err := env.db.GetSessionFull(t.Context(), "kiro:"+rawID)
 	require.NoError(t, err)
 	require.NotNil(t, before)
 	require.NotNil(t, before.SessionName)
@@ -1874,9 +1874,9 @@ func TestSyncEngineKiroSameStatMetadataRewriteIsDetected(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(sidecar, []byte(`{"title":"B"}`), 0o644))
 	require.NoError(t, os.Chtimes(sidecar, stamp, stamp))
-	updated := env.engine.SyncAll(context.Background(), nil)
+	updated := env.engine.SyncAll(t.Context(), nil)
 	require.False(t, updated.Aborted)
-	after, err := env.db.GetSessionFull(context.Background(), "kiro:"+rawID)
+	after, err := env.db.GetSessionFull(t.Context(), "kiro:"+rawID)
 	require.NoError(t, err)
 	require.NotNil(t, after)
 	require.NotNil(t, after.SessionName)
@@ -1900,7 +1900,7 @@ func TestSyncEngineKiroEmptyCurrentRewritePreservesArchive(t *testing.T) {
 	require.NoError(t, os.Chtimes(path, future, future))
 	env.engine.SyncPaths([]string{path})
 
-	active, err := env.db.GetSession(context.Background(), "kiro:"+rawID)
+	active, err := env.db.GetSession(t.Context(), "kiro:"+rawID)
 	require.NoError(t, err)
 	assert.NotNil(t, active, "an empty current rewrite must preserve the archive")
 	assertMessageContent(t, env.db, "kiro:"+rawID, "keep this")
@@ -1925,7 +1925,7 @@ func TestSyncRootsSinceKiroLegacyShadowedBySQLiteOutsideScope(t *testing.T) {
 	)
 
 	stats := env.engine.SyncRootsSince(
-		context.Background(), []string{legacyRoot}, time.Time{}, nil,
+		t.Context(), []string{legacyRoot}, time.Time{}, nil,
 	)
 	assert.Equal(t, 0, stats.TotalSessions, "total sessions")
 }
@@ -1945,31 +1945,31 @@ func TestSyncEngineKiroPartialSQLitePreservesShadowedAndMarksRemovedSourceMissin
 	partial.addSession(t, "/home/user/code/partial", "shadowed", fixture, 1779015600000, 1779015610000)
 	partial.addSession(t, "/home/user/code/partial", "removed", fixture, 1779015600000, 1779015610000)
 
-	initial := env.engine.SyncAll(context.Background(), nil)
+	initial := env.engine.SyncAll(t.Context(), nil)
 	require.Zero(t, initial.Failed)
-	activeShadowed, err := env.db.GetSession(context.Background(), "kiro:shadowed")
+	activeShadowed, err := env.db.GetSession(t.Context(), "kiro:shadowed")
 	require.NoError(t, err)
 	require.NotNil(t, activeShadowed)
-	activeRemoved, err := env.db.GetSession(context.Background(), "kiro:removed")
+	activeRemoved, err := env.db.GetSession(t.Context(), "kiro:removed")
 	require.NoError(t, err)
 	require.NotNil(t, activeRemoved)
 
-	_, err = partial.db.Exec(
+	_, err = partial.db.ExecContext(t.Context(),
 		`DELETE FROM conversations_v2 WHERE conversation_id = ?`, "removed",
 	)
 	require.NoError(t, err)
 	env.engine.SyncPaths([]string{partial.path})
 
-	activeRemoved, err = env.db.GetSession(context.Background(), "kiro:removed")
+	activeRemoved, err = env.db.GetSession(t.Context(), "kiro:removed")
 	require.NoError(t, err)
 	assert.NotNil(t, activeRemoved,
 		"a removed member must remain browsable")
 	archivedRemoved, err := env.db.GetSessionFull(
-		context.Background(), "kiro:removed",
+		t.Context(), "kiro:removed",
 	)
 	require.NoError(t, err)
 	assertSourceMissingState(t, archivedRemoved)
-	activeShadowed, err = env.db.GetSession(context.Background(), "kiro:shadowed")
+	activeShadowed, err = env.db.GetSession(t.Context(), "kiro:shadowed")
 	require.NoError(t, err)
 	assert.NotNil(t, activeShadowed)
 }
@@ -1997,21 +1997,21 @@ func TestSyncRootsSinceKiroPreservesOutOfScopeWinnerAfterSQLiteRemoval(
 		0o644,
 	))
 
-	initial := env.engine.SyncAll(context.Background(), nil)
+	initial := env.engine.SyncAll(t.Context(), nil)
 	require.Zero(t, initial.Failed)
-	active, err := env.db.GetSession(context.Background(), "kiro:"+rawID)
+	active, err := env.db.GetSession(t.Context(), "kiro:"+rawID)
 	require.NoError(t, err)
 	require.NotNil(t, active)
 
-	_, err = partial.db.Exec(
+	_, err = partial.db.ExecContext(t.Context(),
 		`DELETE FROM conversations_v2 WHERE conversation_id = ?`, rawID,
 	)
 	require.NoError(t, err)
 	env.engine.SyncRootsSince(
-		context.Background(), []string{partialRoot}, time.Time{}, nil,
+		t.Context(), []string{partialRoot}, time.Time{}, nil,
 	)
 
-	active, err = env.db.GetSession(context.Background(), "kiro:"+rawID)
+	active, err = env.db.GetSession(t.Context(), "kiro:"+rawID)
 	require.NoError(t, err)
 	assert.NotNil(t, active,
 		"an out-of-scope current winner must preserve a removed DB member")
@@ -2037,12 +2037,12 @@ func TestSyncRootsSinceKiroArbitratesAcrossConfiguredRootsBeforeProcessing(
 		), 0o644))
 	}
 
-	initial := env.engine.SyncAll(context.Background(), nil)
+	initial := env.engine.SyncAll(t.Context(), nil)
 	require.False(t, initial.Aborted)
 	assertMessageContent(t, env.db, "kiro:"+rawID, "configured winner")
 
 	stats := env.engine.SyncRootsSince(
-		context.Background(), []string{partialRoot}, time.Time{}, nil,
+		t.Context(), []string{partialRoot}, time.Time{}, nil,
 	)
 	require.False(t, stats.Aborted)
 	assertMessageContent(t, env.db, "kiro:"+rawID, "configured winner")
@@ -2063,27 +2063,27 @@ func TestSyncRootsSinceKiroMarksRemovedAllShadowedMemberSourceMissing(
 	partial.addSession(t, "/home/user/code/partial", "shadowed", fixture, 1779015600000, 1779015610000)
 	partial.addSession(t, "/home/user/code/partial", "removed", fixture, 1779015600000, 1779015610000)
 
-	initial := env.engine.SyncAll(context.Background(), nil)
+	initial := env.engine.SyncAll(t.Context(), nil)
 	require.Zero(t, initial.Failed)
-	removed, err := env.db.GetSession(context.Background(), "kiro:removed")
+	removed, err := env.db.GetSession(t.Context(), "kiro:removed")
 	require.NoError(t, err)
 	require.NotNil(t, removed)
 
-	_, err = partial.db.Exec(
+	_, err = partial.db.ExecContext(t.Context(),
 		`DELETE FROM conversations_v2 WHERE conversation_id = ?`, "removed",
 	)
 	require.NoError(t, err)
 	stats := env.engine.SyncRootsSince(
-		context.Background(), []string{partialRoot}, time.Time{}, nil,
+		t.Context(), []string{partialRoot}, time.Time{}, nil,
 	)
 	require.False(t, stats.Aborted)
 
-	active, err := env.db.GetSession(context.Background(), "kiro:removed")
+	active, err := env.db.GetSession(t.Context(), "kiro:removed")
 	require.NoError(t, err)
 	assert.NotNil(t, active,
 		"a removed member must remain browsable even when all remaining DB rows are shadowed")
 	archived, err := env.db.GetSessionFull(
-		context.Background(), "kiro:removed",
+		t.Context(), "kiro:removed",
 	)
 	require.NoError(t, err)
 	assertSourceMissingState(t, archived)
@@ -2104,11 +2104,11 @@ func TestSyncRootsSinceKiroOverlappingRootsKeepInScopeWinner(t *testing.T) {
 	), 0o644))
 
 	stats := env.engine.SyncRootsSince(
-		context.Background(), []string{child}, time.Time{}, nil,
+		t.Context(), []string{child}, time.Time{}, nil,
 	)
 	require.False(t, stats.Aborted)
 
-	active, err := env.db.GetSession(context.Background(), "kiro:"+rawID)
+	active, err := env.db.GetSession(t.Context(), "kiro:"+rawID)
 	require.NoError(t, err)
 	assert.NotNil(t, active,
 		"a physically in-scope winner attributed to an overlapping ancestor root must stay admitted")
@@ -2324,7 +2324,7 @@ func TestSyncEngineIntegration(t *testing.T) {
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 0 + 1, Synced: 0, Skipped: 1})
 
 	// FindSourceFile
-	src := env.engine.FindSourceFile("test-session")
+	src := env.engine.FindSourceFile(t.Context(), "test-session")
 	assert.NotEmpty(t, src, "FindSourceFile returned empty")
 }
 
@@ -2393,7 +2393,7 @@ func TestReconcileWatchRootsFullExcludesAndPreservesRemoteRoots(t *testing.T) {
 		String()
 	env.writeClaudeSession(t, "local-project", "local-session.jsonl", localContent)
 	remotePath := remoteRoot + "/project/remote-session.jsonl"
-	require.NoError(t, env.db.UpsertSession(db.Session{
+	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{
 		ID: "remote-session", Agent: string(parser.AgentClaude),
 		Project: "remote-project", Machine: "remote", FilePath: &remotePath,
 	}))
@@ -2429,7 +2429,7 @@ func TestReconcileWatchRootsPreservesSameIDReplacementAtNewPath(t *testing.T) {
 	active, err := env.db.GetSession(t.Context(), "moved-session")
 	require.NoError(t, err)
 	require.NotNil(t, active)
-	assert.Equal(t, newPath, env.db.GetSessionFilePath("moved-session"))
+	assert.Equal(t, newPath, env.db.GetSessionFilePath(t.Context(), "moved-session"))
 	assertSessionMessageCount(t, env.db, "moved-session", 2)
 }
 
@@ -2467,7 +2467,7 @@ func TestReconcileWatchRootsClaudeDiscoversSymlinkedProjectAndSubagent(t *testin
 	}
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
 		Machine:   "local",
 	})
@@ -2480,8 +2480,8 @@ func TestReconcileWatchRootsClaudeDiscoversSymlinkedProjectAndSubagent(t *testin
 	subagentSession, err := database.GetSession(t.Context(), "agent-linked")
 	require.NoError(t, err)
 	require.NotNil(t, subagentSession)
-	assert.Equal(t, mainPath, database.GetSessionFilePath("session-main"))
-	assert.Equal(t, subagentPath, database.GetSessionFilePath("agent-linked"))
+	assert.Equal(t, mainPath, database.GetSessionFilePath(t.Context(), "session-main"))
+	assert.Equal(t, subagentPath, database.GetSessionFilePath(t.Context(), "agent-linked"))
 }
 
 func TestReconcileWatchRootsPreservesPersistentClaudeDuplicatePreference(t *testing.T) {
@@ -2500,7 +2500,7 @@ func TestReconcileWatchRootsPreservesPersistentClaudeDuplicatePreference(t *test
 	require.NoError(t, os.Chtimes(livePath, older, older))
 	require.NoError(t, os.Chtimes(archivePath, newer, newer))
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	assert.Equal(t, archivePath, env.db.GetSessionFilePath("persistent-duplicate"))
+	assert.Equal(t, archivePath, env.db.GetSessionFilePath(t.Context(), "persistent-duplicate"))
 
 	require.NoError(t, os.Remove(archivePath))
 	require.NoError(t, env.engine.ReconcileWatchRoots(
@@ -2510,7 +2510,7 @@ func TestReconcileWatchRootsPreservesPersistentClaudeDuplicatePreference(t *test
 	active, err := env.db.GetSession(t.Context(), "persistent-duplicate")
 	require.NoError(t, err)
 	require.NotNil(t, active)
-	assert.Equal(t, livePath, env.engine.FindSourceFile("persistent-duplicate"),
+	assert.Equal(t, livePath, env.engine.FindSourceFile(t.Context(), "persistent-duplicate"),
 		"the surviving duplicate remains the resolvable preferred source")
 }
 
@@ -2522,10 +2522,12 @@ func TestReconcileWatchRootsClaudeStoredPreferenceRequiresExactCurrentContent(t 
 		{
 			name: "hash mismatch",
 			invalidate: func(t *testing.T, _ *testEnv, path string, mtime time.Time) {
+				t.Helper()
+
 				raw, err := os.ReadFile(path)
 				require.NoError(t, err)
 				changed := bytes.Replace(raw, []byte("duplicate"), []byte("changed!!"), 1)
-				require.Equal(t, len(raw), len(changed))
+				require.Len(t, changed, len(raw))
 				require.NoError(t, os.WriteFile(path, changed, 0o600))
 				require.NoError(t, os.Chtimes(path, mtime, mtime))
 			},
@@ -2533,7 +2535,9 @@ func TestReconcileWatchRootsClaudeStoredPreferenceRequiresExactCurrentContent(t 
 		{
 			name: "stale data version",
 			invalidate: func(t *testing.T, env *testEnv, _ string, _ time.Time) {
-				require.NoError(t, env.db.SetSessionDataVersion("exact-current", 0))
+				t.Helper()
+
+				require.NoError(t, env.db.SetSessionDataVersion(t.Context(), "exact-current", 0))
 			},
 		},
 	} {
@@ -2553,7 +2557,7 @@ func TestReconcileWatchRootsClaudeStoredPreferenceRequiresExactCurrentContent(t 
 			archiveMtime := base.Add(time.Second)
 			require.NoError(t, os.Chtimes(archivePath, archiveMtime, archiveMtime))
 			require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-			assert.Equal(t, archivePath, env.db.GetSessionFilePath("exact-current"))
+			assert.Equal(t, archivePath, env.db.GetSessionFilePath(t.Context(), "exact-current"))
 
 			tc.invalidate(t, env, archivePath, archiveMtime)
 			newLiveMtime := archiveMtime.Add(time.Second)
@@ -2562,7 +2566,7 @@ func TestReconcileWatchRootsClaudeStoredPreferenceRequiresExactCurrentContent(t 
 				t.Context(), []string{liveDir, archiveDir}, false,
 			))
 
-			assert.Equal(t, livePath, env.db.GetSessionFilePath("exact-current"))
+			assert.Equal(t, livePath, env.db.GetSessionFilePath(t.Context(), "exact-current"))
 		})
 	}
 }
@@ -2587,7 +2591,7 @@ func TestReconcileWatchRootsPreservesCodexLiveDuplicatePreference(t *testing.T) 
 		t.Context(), []string{env.codexDir}, false,
 	))
 
-	assert.Equal(t, livePath, env.db.GetSessionFilePath("codex:"+uuid))
+	assert.Equal(t, livePath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid))
 }
 
 func TestReconcileWatchRootsOpenClawUsesCanonicalArchiveOrdering(t *testing.T) {
@@ -2614,7 +2618,7 @@ func TestReconcileWatchRootsOpenClawUsesCanonicalArchiveOrdering(t *testing.T) {
 	require.NoError(t, os.Chtimes(filenameNewer, mtimeNewer, mtimeNewer))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentOpenClaw: {root}},
 		Machine:   "local",
 	})
@@ -2622,7 +2626,7 @@ func TestReconcileWatchRootsOpenClawUsesCanonicalArchiveOrdering(t *testing.T) {
 
 	require.NoError(t, engine.ReconcileWatchRoots(t.Context(), []string{root}, false))
 	assert.Equal(t, filenameNewer,
-		database.GetSessionFilePath("openclaw:main:archive-order"))
+		database.GetSessionFilePath(t.Context(), "openclaw:main:archive-order"))
 }
 
 func TestReconcileWatchRootsOpenCodeHybridPrefersCanonicalStorageSource(t *testing.T) {
@@ -2652,7 +2656,7 @@ func TestReconcileWatchRootsOpenCodeHybridPrefersCanonicalStorageSource(t *testi
 		t.Context(), []string{env.opencodeDir}, false,
 	))
 
-	assert.Equal(t, storagePath, env.db.GetSessionFilePath("opencode:"+sessionID))
+	assert.Equal(t, storagePath, env.db.GetSessionFilePath(t.Context(), "opencode:"+sessionID))
 	assertMessageContent(t, env.db, "opencode:"+sessionID, "canonical storage content")
 }
 
@@ -2700,7 +2704,7 @@ func TestReconcileWatchRootsOpenCodeHybridUnreadableSQLiteWithholdsTombstones(
 	assert.False(t, result.Complete)
 	assert.True(t, result.Aborted)
 	assert.Positive(t, result.ProviderFailures)
-	assert.Equal(t, storagePath, env.db.GetSessionFilePath("opencode:"+storageID),
+	assert.Equal(t, storagePath, env.db.GetSessionFilePath(t.Context(), "opencode:"+storageID),
 		"storage candidates yielded before the SQLite failure must still commit")
 	assertMessageContent(t, env.db, "opencode:"+storageID, "partial storage content")
 	prior, getErr := env.db.GetSessionFull(t.Context(), "opencode:"+priorID)
@@ -2762,7 +2766,7 @@ func TestReconcileWatchRootsOpenCodeHybridCardinalityAndIdleGate(t *testing.T) {
 	assert.True(t, first.Complete)
 	assert.Equal(t, rows-1, first.Metrics.OpenCodeSQLiteParses,
 		"the storage-shadowed row must not be parsed from SQLite")
-	assert.Equal(t, shadowPath, env.db.GetSessionFilePath("opencode:hybrid-0000"))
+	assert.Equal(t, shadowPath, env.db.GetSessionFilePath(t.Context(), "opencode:hybrid-0000"))
 	assertMessageContent(t, env.db, "opencode:hybrid-0000", "canonical storage content")
 
 	require.NoError(t, env.engine.ReconcileWatchRoots(
@@ -2819,7 +2823,7 @@ func TestReconcileWatchRootsBoundsDiscoveryPagesAcrossArchiveCardinality(t *test
 			content := testjsonl.NewSessionBuilder().
 				AddClaudeUser(tsEarly, "bounded reconciliation").
 				String()
-			for i := 0; i < tc.count; i++ {
+			for i := range tc.count {
 				env.writeClaudeSession(
 					t, "project", fmt.Sprintf("bounded-%04d.jsonl", i), content,
 				)
@@ -2953,15 +2957,14 @@ func TestColdArchiveChangedPathAndReconciliationAreCardinalityBounded(t *testing
 			assert.LessOrEqual(t, result.Metrics.MaxWorkerResults, 25)
 			assert.LessOrEqual(t, result.Metrics.MaxPendingWrites, 100)
 			assert.Equal(t, 1, result.Metrics.GlobalLinkPasses)
-			assert.Equal(t,
-				filepath.Join(newDir, "directory-move.jsonl"),
-				env.db.GetSessionFilePath("directory-move"),
+			assert.Equal(t, filepath.Join(newDir, "directory-move.jsonl"),
+				env.db.GetSessionFilePath(t.Context(), "directory-move"),
 			)
-			oldRenamePrefix, err := env.db.HasActiveSessionSourceBelow(
+			oldRenamePrefix, err := env.db.HasActiveSessionSourceBelow(t.Context(),
 				string(parser.AgentClaude), oldDir,
 			)
 			require.NoError(t, err)
-			newRenamePrefix, err := env.db.HasActiveSessionSourceBelow(
+			newRenamePrefix, err := env.db.HasActiveSessionSourceBelow(t.Context(),
 				string(parser.AgentClaude), newDir,
 			)
 			require.NoError(t, err)
@@ -3168,9 +3171,9 @@ func TestSyncEngineWorktreesShareProject(t *testing.T) {
 	assertSessionProject(t, env.db, "main-repo", "agentsview")
 	assertSessionProject(t, env.db, "worktree-repo", "agentsview")
 
-	projects, err := env.db.GetProjects(context.Background(), false, false)
+	projects, err := env.db.GetProjects(t.Context(), false, false)
 	require.NoError(t, err, "GetProjects")
-	require.Equal(t, 1, len(projects), "len(projects) = %d, want 1", len(projects))
+	require.Len(t, projects, 1, "len(projects) = %d, want 1", len(projects))
 	require.Equal(t, "agentsview", projects[0].Name, "project name = %q, want %q", projects[0].Name, "agentsview")
 	require.Equal(t, 2, projects[0].SessionCount, "session_count = %d, want 2", projects[0].SessionCount)
 }
@@ -3235,7 +3238,7 @@ func TestSyncEngineMappingPreservesParserProjectIdentitySnapshot(t *testing.T) {
 	worktreePrefix := filepath.Join(root, "my-app.worktrees")
 	sessionCwd := filepath.Join(worktreePrefix, "feature-login")
 	_, err := env.db.CreateWorktreeProjectMapping(
-		context.Background(),
+		t.Context(),
 		db.WorktreeProjectMapping{
 			Machine:    "local",
 			PathPrefix: worktreePrefix,
@@ -3266,7 +3269,7 @@ func TestSyncEngineMappingPreservesParserProjectIdentitySnapshot(t *testing.T) {
 	)
 
 	observations, err := env.db.ListProjectIdentityObservations(
-		context.Background(), []string{"canonical_app"},
+		t.Context(), []string{"canonical_app"},
 	)
 	require.NoError(t, err, "ListProjectIdentityObservations")
 	require.Len(t, observations, 1)
@@ -3274,7 +3277,7 @@ func TestSyncEngineMappingPreservesParserProjectIdentitySnapshot(t *testing.T) {
 	assert.Equal(t, filepath.ToSlash(sessionCwd), observations[0].RootPath)
 
 	snapshots, err := env.db.ListSessionProjectIdentitySnapshots(
-		context.Background(),
+		t.Context(),
 	)
 	require.NoError(t, err, "ListSessionProjectIdentitySnapshots")
 	require.Len(t, snapshots, 1)
@@ -3285,7 +3288,7 @@ func TestSyncEngineMappingPreservesParserProjectIdentitySnapshot(t *testing.T) {
 
 func TestDeletedLinkedWorktreeProjectSurvivesReparseAndResync(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentCodex)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	root := t.TempDir()
 	mainRoot := filepath.Join(root, "code", "asset-library")
@@ -3337,8 +3340,7 @@ func TestDeletedLinkedWorktreeProjectSurvivesReparseAndResync(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, initialSnapshots, 1)
 	assert.Equal(t, "asset_library", initialSnapshots[0].Project)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		"https://github.com/example/asset-library.git",
 		initialSnapshots[0].GitRemote,
 	)
@@ -3365,8 +3367,7 @@ func TestDeletedLinkedWorktreeProjectSurvivesReparseAndResync(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, snapshots, 1)
 	assert.Equal(t, "asset_library", snapshots[0].Project)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		"https://github.com/example/asset-library.git",
 		snapshots[0].GitRemote,
 	)
@@ -3391,7 +3392,7 @@ func TestResyncAllUpgradeKeepsFreshProjectSnapshotAndDropsLegacyOrphan(
 		targetProject     = "canonical_app"
 		sourceProject     = "feature_login"
 	)
-	ctx := context.Background()
+	ctx := t.Context()
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	root := t.TempDir()
@@ -3417,7 +3418,7 @@ func TestResyncAllUpgradeKeepsFreshProjectSnapshotAndDropsLegacyOrphan(
 		TotalSessions: 1,
 		Synced:        1,
 	})
-	require.NoError(t, env.db.UpsertSessionWithProjectIdentity(
+	require.NoError(t, env.db.UpsertSessionWithProjectIdentity(ctx,
 		db.Session{
 			ID: orphanSessionID, Project: targetProject,
 			Machine: "local", Agent: "claude", Cwd: "/archived/worktree",
@@ -3430,7 +3431,7 @@ func TestResyncAllUpgradeKeepsFreshProjectSnapshotAndDropsLegacyOrphan(
 	))
 
 	dbPath := env.db.Path()
-	require.NoError(t, env.db.CloseConnections(), "CloseConnections")
+	require.NoError(t, env.db.CloseConnections(ctx), "CloseConnections")
 	raw, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open legacy archive")
 	require.Less(t, legacyDataVersion, db.CurrentDataVersion(),
@@ -3477,7 +3478,7 @@ func TestSyncSingleSessionAppliesWorktreeProjectMapping(t *testing.T) {
 	worktreePrefix := filepath.Join(root, "my-app.worktrees")
 	sessionCwd := filepath.Join(worktreePrefix, "feature-login")
 	_, err := env.db.CreateWorktreeProjectMapping(
-		context.Background(),
+		t.Context(),
 		db.WorktreeProjectMapping{
 			Machine:    "local",
 			PathPrefix: worktreePrefix,
@@ -3531,7 +3532,7 @@ func TestSyncSingleSessionSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 		Skipped:       0,
 	})
 	before, err := env.db.GetSession(
-		context.Background(), "mapped-worktree-single-skip",
+		t.Context(), "mapped-worktree-single-skip",
 	)
 	require.NoError(t, err, "GetSession before mapping")
 	require.NotNil(t, before, "session missing before mapping")
@@ -3539,7 +3540,7 @@ func TestSyncSingleSessionSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 	require.Nil(t, before.LocalModifiedAt, "local_modified_at before mapping = %v, want nil", before.LocalModifiedAt)
 
 	_, err = env.db.CreateWorktreeProjectMapping(
-		context.Background(),
+		t.Context(),
 		db.WorktreeProjectMapping{
 			Machine:    "local",
 			PathPrefix: worktreePrefix,
@@ -3555,7 +3556,7 @@ func TestSyncSingleSessionSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 	require.NoError(t, err, "SyncSingleSession")
 
 	after, err := env.db.GetSession(
-		context.Background(), "mapped-worktree-single-skip",
+		t.Context(), "mapped-worktree-single-skip",
 	)
 	require.NoError(t, err, "GetSession after skipped sync")
 	require.NotNil(t, after, "session missing after skipped sync")
@@ -3586,13 +3587,13 @@ func TestSyncAllSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 		Skipped:       0,
 	})
 	before, err := env.db.GetSession(
-		context.Background(), "mapped-worktree-syncall-skip",
+		t.Context(), "mapped-worktree-syncall-skip",
 	)
 	require.NoError(t, err, "GetSession before mapping")
 	require.NotNil(t, before, "session missing before mapping")
 	require.NotEqual(t, "canonical_app", before.Project, "project before mapping = %q, want stale project", before.Project)
 	_, err = env.db.CreateWorktreeProjectMapping(
-		context.Background(),
+		t.Context(),
 		db.WorktreeProjectMapping{
 			Machine:    "local",
 			PathPrefix: worktreePrefix,
@@ -3609,7 +3610,7 @@ func TestSyncAllSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 	})
 
 	after, err := env.db.GetSession(
-		context.Background(), "mapped-worktree-syncall-skip",
+		t.Context(), "mapped-worktree-syncall-skip",
 	)
 	require.NoError(t, err, "GetSession after skipped sync")
 	require.NotNil(t, after, "session missing after skipped sync")
@@ -3640,18 +3641,18 @@ func TestSyncPathsSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 		Skipped:       0,
 	})
 	before, err := env.db.GetSession(
-		context.Background(), "mapped-worktree-syncpaths-skip",
+		t.Context(), "mapped-worktree-syncpaths-skip",
 	)
 	require.NoError(t, err, "GetSession before mapping")
 	require.NotNil(t, before, "session missing before mapping")
 	require.NotEqual(t, "canonical_app", before.Project, "project before mapping = %q, want stale project", before.Project)
 	beforeFull, err := env.db.GetSessionFull(
-		context.Background(), "mapped-worktree-syncpaths-skip",
+		t.Context(), "mapped-worktree-syncpaths-skip",
 	)
 	require.NoError(t, err, "GetSessionFull before mapping")
 
 	_, err = env.db.CreateWorktreeProjectMapping(
-		context.Background(),
+		t.Context(),
 		db.WorktreeProjectMapping{
 			Machine:    "local",
 			PathPrefix: worktreePrefix,
@@ -3664,13 +3665,12 @@ func TestSyncPathsSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 	env.engine.SyncPaths([]string{path})
 
 	after, err := env.db.GetSessionFull(
-		context.Background(),
+		t.Context(),
 		"mapped-worktree-syncpaths-skip",
 	)
 	require.NoError(t, err, "GetSessionFull after skipped path sync")
 	require.Equal(t, beforeFull.Project, after.Project, "project after skipped path sync = %q, want %q", after.Project, beforeFull.Project)
-	require.Equal(t,
-		testStringPtrValue(beforeFull.LocalModifiedAt),
+	require.Equal(t, testStringPtrValue(beforeFull.LocalModifiedAt),
 		testStringPtrValue(after.LocalModifiedAt),
 		"local_modified_at after skipped path sync = %v, want %v",
 		after.LocalModifiedAt,
@@ -3679,11 +3679,11 @@ func TestSyncPathsSkippedClaudeDoesNotApplyWorktreeProjectMapping(
 }
 
 func TestRunExclusiveSerializesWorktreeReclassification(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	ctx := context.Background()
-	require.NoError(t, database.UpsertSession(db.Session{
+	ctx := t.Context()
+	require.NoError(t, database.UpsertSession(ctx, db.Session{
 		ID: "session", Machine: "archive.example", Agent: "claude",
 		Project: "branch", Cwd: "/worktrees/service/branch",
 	}))
@@ -3693,7 +3693,7 @@ func TestRunExclusiveSerializesWorktreeReclassification(t *testing.T) {
 	}
 	preview, err := database.PreviewWorktreeReclassification(ctx, draft)
 	require.NoError(t, err)
-	engine := sync.NewEngine(database, sync.EngineConfig{Machine: "archive.example"})
+	engine := sync.NewEngine(ctx, database, sync.EngineConfig{Machine: "archive.example"})
 
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -3755,13 +3755,13 @@ func TestSyncSingleSessionIncrementalAppliesWorktreeProjectMapping(
 		Skipped:       0,
 	})
 	before, err := env.db.GetSession(
-		context.Background(), "mapped-worktree-single-incremental",
+		t.Context(), "mapped-worktree-single-incremental",
 	)
 	require.NoError(t, err, "GetSession before mapping")
 	require.NotNil(t, before, "session missing before mapping")
 	require.NotEqual(t, "canonical_app", before.Project, "project before mapping = %q, want stale project", before.Project)
 	_, err = env.db.CreateWorktreeProjectMapping(
-		context.Background(),
+		t.Context(),
 		db.WorktreeProjectMapping{
 			Machine:    "local",
 			PathPrefix: worktreePrefix,
@@ -3812,13 +3812,13 @@ func TestSyncAllIncrementalAppliesWorktreeProjectMapping(
 		Skipped:       0,
 	})
 	before, err := env.db.GetSession(
-		context.Background(), "mapped-worktree-syncall-incremental",
+		t.Context(), "mapped-worktree-syncall-incremental",
 	)
 	require.NoError(t, err, "GetSession before mapping")
 	require.NotNil(t, before, "session missing before mapping")
 	require.NotEqual(t, "canonical_app", before.Project, "project before mapping = %q, want stale project", before.Project)
 	_, err = env.db.CreateWorktreeProjectMapping(
-		context.Background(),
+		t.Context(),
 		db.WorktreeProjectMapping{
 			Machine:    "local",
 			PathPrefix: worktreePrefix,
@@ -3856,7 +3856,7 @@ func TestResyncAllAppliesWorktreeProjectMappingDuringBulkWrites(
 	worktreePrefix := filepath.Join(root, "my-app.worktrees")
 	sessionCwd := filepath.Join(worktreePrefix, "feature-login")
 	_, err := env.db.CreateWorktreeProjectMapping(
-		context.Background(),
+		t.Context(),
 		db.WorktreeProjectMapping{
 			Machine:    "local",
 			PathPrefix: worktreePrefix,
@@ -3876,7 +3876,7 @@ func TestResyncAllAppliesWorktreeProjectMappingDuringBulkWrites(
 		"mapped-worktree-resync.jsonl", content,
 	)
 
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "ResyncAll aborted: %+v", stats)
 	require.Equal(t, 1, stats.Synced, "ResyncAll synced = %d, want 1: %+v", stats.Synced, stats)
 
@@ -3899,12 +3899,12 @@ func TestResyncAllWithOptionsIngestsContributors(t *testing.T) {
 	olderPath := filepath.Join(localRoot, "archived", "older-active.jsonl")
 	dbtest.WriteTestFile(t, olderPath, []byte(testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsEarly, "older active archive message").String()))
-	require.Equal(t, 2, env.engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 2, env.engine.SyncAll(t.Context(), nil).Synced)
 	require.NoError(t, os.Remove(olderPath))
 	observedBeforeSwap := false
 
 	stats, err := env.engine.ResyncAllWithOptions(
-		context.Background(), nil, sync.RebuildOptions{Contributors: []sync.RebuildContributor{{
+		t.Context(), nil, sync.RebuildOptions{Contributors: []sync.RebuildContributor{{
 			Name: "remote-host",
 			Config: sync.EngineConfig{
 				AgentDirs:    map[parser.AgentType][]string{parser.AgentClaude: {remoteRoot}},
@@ -3918,23 +3918,23 @@ func TestResyncAllWithOptionsIngestsContributors(t *testing.T) {
 				assert.NotEqual(t, env.db.Path(), tempDB.Path())
 				assert.Equal(t, env.db.Path()+"-resync", tempDB.Path())
 
-				older, getErr := env.db.GetSession(context.Background(), "older-active")
+				older, getErr := env.db.GetSession(t.Context(), "older-active")
 				require.NoError(t, getErr)
 				require.NotNil(t, older, "active archive lost old row before swap")
 				assertMessageContent(t, env.db, "older-active", "older active archive message")
-				page, searchErr := env.db.Search(context.Background(), db.SearchFilter{
+				page, searchErr := env.db.Search(t.Context(), db.SearchFilter{
 					Query: "older active archive message", Limit: 5,
 				})
 				require.NoError(t, searchErr)
 				require.Len(t, page.Results, 1, "active search changed before swap")
-				remote, getErr := env.db.GetSession(context.Background(), "remote~remote-session")
+				remote, getErr := env.db.GetSession(t.Context(), "remote~remote-session")
 				require.NoError(t, getErr)
 				assert.Nil(t, remote, "contributor row reached active DB before swap")
 
-				remote, getErr = tempDB.GetSession(context.Background(), "remote~remote-session")
+				remote, getErr = tempDB.GetSession(t.Context(), "remote~remote-session")
 				require.NoError(t, getErr)
 				require.NotNil(t, remote, "contributor row missing from temporary DB")
-				older, getErr = tempDB.GetSession(context.Background(), "older-active")
+				older, getErr = tempDB.GetSession(t.Context(), "older-active")
 				require.NoError(t, getErr)
 				assert.Nil(t, older, "orphan copy ran before contributor callback")
 				return nil
@@ -3947,21 +3947,21 @@ func TestResyncAllWithOptionsIngestsContributors(t *testing.T) {
 	assert.Equal(t, 2, stats.Synced)
 	assert.Equal(t, 1, stats.OrphanedCopied)
 
-	local, err := env.db.GetSession(context.Background(), "local-session")
+	local, err := env.db.GetSession(t.Context(), "local-session")
 	require.NoError(t, err)
 	require.NotNil(t, local)
 	assert.Equal(t, "local", local.Machine)
-	remote, err := env.db.GetSession(context.Background(), "remote~remote-session")
+	remote, err := env.db.GetSession(t.Context(), "remote~remote-session")
 	require.NoError(t, err)
 	require.NotNil(t, remote)
 	assert.Equal(t, "remote-host", remote.Machine)
-	assert.Equal(t, "remote:"+remotePath, env.db.GetSessionFilePath(remote.ID))
-	older, err := env.db.GetSession(context.Background(), "older-active")
+	assert.Equal(t, "remote:"+remotePath, env.db.GetSessionFilePath(t.Context(), remote.ID))
+	older, err := env.db.GetSession(t.Context(), "older-active")
 	require.NoError(t, err)
 	require.NotNil(t, older)
 
 	for _, query := range []string{"local rebuild message", "remote rebuild message"} {
-		page, searchErr := env.db.Search(context.Background(), db.SearchFilter{Query: query, Limit: 5})
+		page, searchErr := env.db.Search(t.Context(), db.SearchFilter{Query: query, Limit: 5})
 		require.NoError(t, searchErr)
 		assert.Len(t, page.Results, 1, query)
 	}
@@ -3980,7 +3980,7 @@ func TestResyncContributorFailureLeavesArchiveUnchanged(t *testing.T) {
 	oldPath := filepath.Join(localRoot, "old-project", "old-session.jsonl")
 	dbtest.WriteTestFile(t, oldPath, []byte(testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "durable old archive message").String()))
-	require.Equal(t, 1, env.engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
 	require.NoError(t, os.Remove(oldPath))
 	newPath := filepath.Join(localRoot, "new-project", "new-session.jsonl")
 	dbtest.WriteTestFile(t, newPath, []byte(testjsonl.NewSessionBuilder().
@@ -3993,7 +3993,7 @@ func TestResyncContributorFailureLeavesArchiveUnchanged(t *testing.T) {
 	afterFailureErr := errors.New("after failure failed")
 	var failureDB *db.DB
 	var failureWriterClosed bool
-	stats, err := env.engine.ResyncAllWithOptions(context.Background(), nil,
+	stats, err := env.engine.ResyncAllWithOptions(t.Context(), nil,
 		sync.RebuildOptions{Contributors: []sync.RebuildContributor{{
 			Name: "broken-remote",
 			Config: sync.EngineConfig{
@@ -4006,7 +4006,7 @@ func TestResyncContributorFailureLeavesArchiveUnchanged(t *testing.T) {
 			AfterFailure: func(_ *sync.Engine, activeDB *db.DB) error {
 				failureDB = activeDB
 				failureWriterClosed = activeDB.WriterClosed()
-				if persistErr := activeDB.ReplaceRemoteSkippedFiles(
+				if persistErr := activeDB.ReplaceRemoteSkippedFiles(t.Context(),
 					"broken-remote", map[string]int64{"retry.jsonl": 42},
 				); persistErr != nil {
 					return errors.Join(afterFailureErr, persistErr)
@@ -4017,26 +4017,26 @@ func TestResyncContributorFailureLeavesArchiveUnchanged(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, stats.Aborted)
 	var contributorErr *sync.RebuildContributorError
-	require.True(t, errors.As(err, &contributorErr))
+	require.ErrorAs(t, err, &contributorErr)
 	assert.Equal(t, "broken-remote", contributorErr.Contributor)
-	assert.ErrorIs(t, err, afterSyncErr)
-	assert.ErrorIs(t, err, afterFailureErr)
+	require.ErrorIs(t, err, afterSyncErr)
+	require.ErrorIs(t, err, afterFailureErr)
 	assert.Contains(t, stats.Warnings,
 		`resync contributor "broken-remote" failed: after sync failed`)
 	assert.Same(t, env.db, failureDB)
 	assert.False(t, failureWriterClosed,
 		"AfterFailure must receive a writable active archive")
-	retryState, loadErr := env.db.LoadRemoteSkippedFiles("broken-remote")
+	retryState, loadErr := env.db.LoadRemoteSkippedFiles(t.Context(), "broken-remote")
 	require.NoError(t, loadErr)
 	assert.Equal(t, map[string]int64{"retry.jsonl": 42}, retryState)
 
-	oldSession, getErr := env.db.GetSession(context.Background(), "old-session")
+	oldSession, getErr := env.db.GetSession(t.Context(), "old-session")
 	require.NoError(t, getErr)
 	require.NotNil(t, oldSession)
-	newSession, getErr := env.db.GetSession(context.Background(), "new-session")
+	newSession, getErr := env.db.GetSession(t.Context(), "new-session")
 	require.NoError(t, getErr)
 	assert.Nil(t, newSession)
-	page, searchErr := env.db.Search(context.Background(), db.SearchFilter{
+	page, searchErr := env.db.Search(t.Context(), db.SearchFilter{
 		Query: "durable old archive message", Limit: 5,
 	})
 	require.NoError(t, searchErr)
@@ -4054,7 +4054,7 @@ func TestResyncEmptyContributorDoesNotAbortNonEmptyLocalRebuild(t *testing.T) {
 		[]byte(testjsonl.NewSessionBuilder().
 			AddClaudeUser(tsZero, "nonempty local rebuild").String()))
 
-	stats, err := env.engine.ResyncAllWithOptions(context.Background(), nil,
+	stats, err := env.engine.ResyncAllWithOptions(t.Context(), nil,
 		sync.RebuildOptions{Contributors: []sync.RebuildContributor{{
 			Name: "empty",
 			Config: sync.EngineConfig{
@@ -4088,7 +4088,7 @@ func TestResyncAllExcludesExistingClaudeUsageProbe(t *testing.T) {
 	mtime := time.Now().Add(-time.Hour).UnixNano()
 	firstMessage := "/usage"
 	startedAt := tsEarly
-	require.NoError(t, env.db.UpsertSession(db.Session{
+	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{
 		ID:               sessionID,
 		Project:          "ClaudeProbe",
 		Machine:          "local",
@@ -4102,19 +4102,19 @@ func TestResyncAllExcludesExistingClaudeUsageProbe(t *testing.T) {
 		FileSize:         &size,
 		FileMtime:        &mtime,
 	}), "seed stale /usage probe row")
-	require.NoError(t, env.db.SetSessionDataVersion(
+	require.NoError(t, env.db.SetSessionDataVersion(t.Context(),
 		sessionID, db.CurrentDataVersion()-1,
 	), "seed stale data_version")
 
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "ResyncAll aborted: %+v", stats)
 	assert.Equal(t, 0, stats.OrphanedCopied,
 		"usage probe must not be copied back as an orphan")
 
-	got, err := env.db.GetSession(context.Background(), sessionID)
+	got, err := env.db.GetSession(t.Context(), sessionID)
 	require.NoError(t, err, "GetSession after ResyncAll")
 	assert.Nil(t, got, "stale /usage probe row must be excluded")
-	assert.False(t, env.db.IsSessionExcluded(sessionID),
+	assert.False(t, env.db.IsSessionExcluded(t.Context(), sessionID),
 		"parser exclusions must not become permanent user deletions")
 }
 
@@ -4154,7 +4154,7 @@ func TestResyncAllTombstonesOmittedStaleClaudeFork(t *testing.T) {
 	}})
 	require.NoError(t, err)
 	require.Equal(t, 1, result.WrittenSessions)
-	require.NoError(t, env.db.SetSessionDataVersion(staleID, 0))
+	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), staleID, 0))
 	require.NoError(t, env.db.BaselineActiveSessionSourceOwnerships(
 		t.Context(), []db.SessionSourceOwnership{{
 			ID: staleID, Machine: "local", Agent: "claude", FilePath: forkPath,
@@ -4189,7 +4189,7 @@ func TestResyncContributorTombstonesOmittedStaleClaudeFork(t *testing.T) {
 
 	parentID := "remote~fork-remote"
 	staleID := parentID + "-11111111-2222-4333-8444-555555555555"
-	require.NoError(t, env.db.UpsertSession(db.Session{
+	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{
 		ID:               staleID,
 		Project:          "remote",
 		Machine:          "remote",
@@ -4198,14 +4198,14 @@ func TestResyncContributorTombstonesOmittedStaleClaudeFork(t *testing.T) {
 		RelationshipType: "fork",
 		FilePath:         &storedPath,
 	}))
-	require.NoError(t, env.db.SetSessionDataVersion(staleID, 0))
+	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), staleID, 0))
 	require.NoError(t, env.db.BaselineActiveSessionSourceOwnerships(
 		t.Context(), []db.SessionSourceOwnership{{
 			ID: staleID, Machine: "remote", Agent: "claude", FilePath: storedPath,
 		}},
 	))
 
-	stats, err := env.engine.ResyncAllWithOptions(context.Background(), nil,
+	stats, err := env.engine.ResyncAllWithOptions(t.Context(), nil,
 		sync.RebuildOptions{Contributors: []sync.RebuildContributor{{
 			Name: "remote",
 			Config: sync.EngineConfig{
@@ -4241,14 +4241,14 @@ func TestResyncContributorExclusionIsNotRestoredAsOrphan(t *testing.T) {
 	mtime := time.Now().Add(-time.Hour).UnixNano()
 	firstMessage := "/usage"
 	startedAt := tsEarly
-	require.NoError(t, env.db.UpsertSession(db.Session{
+	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{
 		ID: storedID, Project: "remote", Machine: "remote", Agent: string(parser.AgentClaude),
 		FirstMessage: &firstMessage, StartedAt: &startedAt, EndedAt: &startedAt,
 		MessageCount: 1, UserMessageCount: 1, FilePath: &storedPath,
 		FileSize: &size, FileMtime: &mtime,
 	}))
 
-	stats, err := env.engine.ResyncAllWithOptions(context.Background(), nil,
+	stats, err := env.engine.ResyncAllWithOptions(t.Context(), nil,
 		sync.RebuildOptions{Contributors: []sync.RebuildContributor{{
 			Name: "remote",
 			Config: sync.EngineConfig{
@@ -4260,7 +4260,7 @@ func TestResyncContributorExclusionIsNotRestoredAsOrphan(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, stats.Aborted, "resync aborted: %+v", stats)
 	assert.Zero(t, stats.OrphanedCopied)
-	got, getErr := env.db.GetSession(context.Background(), storedID)
+	got, getErr := env.db.GetSession(t.Context(), storedID)
 	require.NoError(t, getErr)
 	assert.Nil(t, got)
 }
@@ -4280,23 +4280,23 @@ func TestResyncContributorPreservesPinnedAndTrashedRemoteState(t *testing.T) {
 		Machine:   "remote", IDPrefix: "remote~", Ephemeral: true,
 		PathRewriter: func(path string) string { return "remote:" + path },
 	}
-	remoteEngine := sync.NewEngine(env.db, remoteConfig)
-	require.Equal(t, 1, remoteEngine.SyncAll(context.Background(), nil).Synced)
+	remoteEngine := sync.NewEngine(t.Context(), env.db, remoteConfig)
+	require.Equal(t, 1, remoteEngine.SyncAll(t.Context(), nil).Synced)
 	remoteEngine.Close()
 	msgs := fetchMessages(t, env.db, "remote~remote-trash")
 	require.Len(t, msgs, 2)
 	note := "keep this remote message"
-	_, err := env.db.PinMessage("remote~remote-trash", msgs[1].ID, &note)
+	_, err := env.db.PinMessage(t.Context(), "remote~remote-trash", msgs[1].ID, &note)
 	require.NoError(t, err)
-	require.NoError(t, env.db.SoftDeleteSession("remote~remote-trash"))
+	require.NoError(t, env.db.SoftDeleteSession(t.Context(), "remote~remote-trash"))
 
-	stats, err := env.engine.ResyncAllWithOptions(context.Background(), nil,
+	stats, err := env.engine.ResyncAllWithOptions(t.Context(), nil,
 		sync.RebuildOptions{Contributors: []sync.RebuildContributor{{
 			Name: "remote", Config: remoteConfig,
 		}}})
 	require.NoError(t, err)
 	require.False(t, stats.Aborted, "resync aborted: %+v", stats)
-	full, err := env.db.GetSessionFull(context.Background(), "remote~remote-trash")
+	full, err := env.db.GetSessionFull(t.Context(), "remote~remote-trash")
 	require.NoError(t, err)
 	require.NotNil(t, full)
 	assert.NotNil(t, full.DeletedAt)
@@ -4304,7 +4304,7 @@ func TestResyncContributorPreservesPinnedAndTrashedRemoteState(t *testing.T) {
 	require.Len(t, preservedMessages, 2)
 	assert.Equal(t, "preserved remote prompt", preservedMessages[0].Content)
 	assert.Equal(t, "preserved remote reply", preservedMessages[1].Content)
-	pins, err := env.db.ListPinnedMessages(context.Background(), "remote~remote-trash", "")
+	pins, err := env.db.ListPinnedMessages(t.Context(), "remote~remote-trash", "")
 	require.NoError(t, err)
 	require.Len(t, pins, 1)
 	require.NotNil(t, pins[0].Note)
@@ -4403,7 +4403,7 @@ func TestReclassificationSurvivesRemoteResyncLifecycle(t *testing.T) {
 		root          = "/srv/custom-worktrees/sample-branch"
 		orphanRoot    = "/srv/custom-worktrees/orphan-branch"
 	)
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, tc := range []struct {
 		name          string
 		mappingAction string
@@ -4459,7 +4459,7 @@ func TestReclassificationSurvivesRemoteResyncLifecycle(t *testing.T) {
 					parser.AgentCowork: parser.ProviderMigrationProviderAuthoritative,
 				},
 			}
-			remoteEngine := sync.NewEngine(database, remoteConfig)
+			remoteEngine := sync.NewEngine(ctx, database, remoteConfig)
 			require.Equal(t, 3, remoteEngine.SyncAll(ctx, nil).Synced)
 			remoteEngine.Close()
 
@@ -4489,7 +4489,7 @@ func TestReclassificationSurvivesRemoteResyncLifecycle(t *testing.T) {
 				newResult("live-empty-cwd", ""),
 				newResult("live-evidence", root),
 			}
-			engine := sync.NewEngine(database, sync.EngineConfig{Machine: "local"})
+			engine := sync.NewEngine(ctx, database, sync.EngineConfig{Machine: "local"})
 			t.Cleanup(engine.Close)
 			stats, err := engine.ResyncAllWithOptions(ctx, nil,
 				sync.RebuildOptions{Contributors: []sync.RebuildContributor{{
@@ -4599,7 +4599,7 @@ func TestResyncContributorPersistsEquivalentUsageEvents(t *testing.T) {
 		filepath.Join(remoteRoot, "usage-equivalent.fixture"), "remote",
 	)
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCowork: {localRoot}},
 		Machine:   "local",
 		ProviderFactories: []parser.ProviderFactory{
@@ -4611,7 +4611,7 @@ func TestResyncContributorPersistsEquivalentUsageEvents(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	stats, err := engine.ResyncAllWithOptions(context.Background(), nil,
+	stats, err := engine.ResyncAllWithOptions(t.Context(), nil,
 		sync.RebuildOptions{Contributors: []sync.RebuildContributor{{
 			Name: "remote",
 			Config: sync.EngineConfig{
@@ -4628,10 +4628,10 @@ func TestResyncContributorPersistsEquivalentUsageEvents(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, stats.Aborted, "resync aborted: %+v", stats)
 
-	localEvents, err := database.GetUsageEvents(context.Background(), "usage-equivalent")
+	localEvents, err := database.GetUsageEvents(t.Context(), "usage-equivalent")
 	require.NoError(t, err)
 	require.Len(t, localEvents, 1)
-	remoteEvents, err := database.GetUsageEvents(context.Background(), "remote~usage-equivalent")
+	remoteEvents, err := database.GetUsageEvents(t.Context(), "remote~usage-equivalent")
 	require.NoError(t, err)
 	require.Len(t, remoteEvents, 1)
 
@@ -4676,38 +4676,38 @@ func TestResyncContributorPreservesAnnotationsOrphansAndOtherHosts(t *testing.T)
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {remoteRoot}},
 		Machine:   "remote", IDPrefix: "remote~", Ephemeral: true,
 	}
-	remoteEngine := sync.NewEngine(env.db, remoteConfig)
-	require.Equal(t, 2, remoteEngine.SyncAll(context.Background(), nil).Synced)
+	remoteEngine := sync.NewEngine(t.Context(), env.db, remoteConfig)
+	require.Equal(t, 2, remoteEngine.SyncAll(t.Context(), nil).Synced)
 	remoteEngine.Close()
 	annotation := "user annotation survives"
-	require.NoError(t, env.db.RenameSession("remote~annotated", &annotation))
+	require.NoError(t, env.db.RenameSession(t.Context(), "remote~annotated", &annotation))
 	require.NoError(t, os.Remove(remoteOrphan))
 
 	otherPath := filepath.Join(otherRoot, "other", "other-host.jsonl")
 	dbtest.WriteTestFile(t, otherPath, []byte(testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsEarlyS5, "other host archive").String()))
-	otherEngine := sync.NewEngine(env.db, sync.EngineConfig{
+	otherEngine := sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {otherRoot}},
 		Machine:   "other", IDPrefix: "other~", Ephemeral: true,
 	})
-	require.Equal(t, 1, otherEngine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 1, otherEngine.SyncAll(t.Context(), nil).Synced)
 	otherEngine.Close()
 	require.NoError(t, os.Remove(otherPath))
 
-	stats, err := env.engine.ResyncAllWithOptions(context.Background(), nil,
+	stats, err := env.engine.ResyncAllWithOptions(t.Context(), nil,
 		sync.RebuildOptions{Contributors: []sync.RebuildContributor{{
 			Name: "remote", Config: remoteConfig,
 		}}})
 	require.NoError(t, err)
 	require.False(t, stats.Aborted, "resync aborted: %+v", stats)
 	assert.Equal(t, 2, stats.OrphanedCopied)
-	annotated, err := env.db.GetSession(context.Background(), "remote~annotated")
+	annotated, err := env.db.GetSession(t.Context(), "remote~annotated")
 	require.NoError(t, err)
 	require.NotNil(t, annotated)
 	require.NotNil(t, annotated.DisplayName)
 	assert.Equal(t, annotation, *annotated.DisplayName)
 	for _, id := range []string{"remote~remote-orphan", "other~other-host"} {
-		session, getErr := env.db.GetSession(context.Background(), id)
+		session, getErr := env.db.GetSession(t.Context(), id)
 		require.NoError(t, getErr)
 		assert.NotNil(t, session, id)
 	}
@@ -4780,7 +4780,7 @@ func TestSyncEngineCodexSubagentLineage(t *testing.T) {
 	})
 
 	var linkedID sql.NullString
-	err := env.db.Reader().QueryRow(`
+	err := env.db.Reader().QueryRow(t.Context(), `
 		SELECT subagent_session_id
 		FROM tool_calls
 		WHERE session_id = ? AND tool_use_id = ?`,
@@ -4802,7 +4802,7 @@ func TestSyncEngineCodexSubagentLineage(t *testing.T) {
 
 	env.engine.SyncPaths([]string{parentPath})
 
-	err = env.db.Reader().QueryRow(`
+	err = env.db.Reader().QueryRow(t.Context(), `
 		SELECT subagent_session_id
 		FROM tool_calls
 		WHERE session_id = ? AND tool_use_id = ?`,
@@ -4847,7 +4847,7 @@ func TestSyncEngineProgress(t *testing.T) {
 	var last sync.Progress
 	var events []sync.Progress
 	var seenCurrent sync.Progress
-	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
+	env.engine.SyncAll(t.Context(), func(p sync.Progress) {
 		progressCalls++
 		if firstTotal == 0 {
 			firstTotal = p.SessionsTotal
@@ -4878,7 +4878,7 @@ func TestSyncEngineProgress(t *testing.T) {
 	firstTotal = 0
 	last = sync.Progress{}
 	events = nil
-	env.engine.SyncAll(context.Background(), func(p sync.Progress) {
+	env.engine.SyncAll(t.Context(), func(p sync.Progress) {
 		progressCalls++
 		if firstTotal == 0 {
 			firstTotal = p.SessionsTotal
@@ -4898,7 +4898,7 @@ func TestSyncEngineProgress(t *testing.T) {
 	assert.False(t, ok, "CurrentProgress should be cleared after SyncPaths")
 
 	var resyncEvents []sync.Progress
-	stats := env.engine.ResyncAll(context.Background(), func(p sync.Progress) {
+	stats := env.engine.ResyncAll(t.Context(), func(p sync.Progress) {
 		resyncEvents = append(resyncEvents, p)
 	})
 	require.False(t, stats.Aborted, "resync aborted: %+v", stats.Warnings)
@@ -4930,7 +4930,7 @@ func TestSyncEngineProgress(t *testing.T) {
 		"Finalizing sync: saving the skip cache",
 	}, finalizingDetails)
 
-	if env.db.HasFTS() {
+	if env.db.HasFTS(t.Context()) {
 		var fts sync.Progress
 		for _, event := range resyncEvents {
 			if event.Phase == sync.PhaseRebuildingSearch {
@@ -4949,9 +4949,10 @@ func TestSyncEngineProgress(t *testing.T) {
 
 func requireProgressDoneOnce(t *testing.T, events []sync.Progress, wantTotal int) {
 	t.Helper()
+
 	require.NotEmpty(t, events, "expected progress callbacks")
 	var doneCount int
-	var firstDoneIdx = -1
+	firstDoneIdx := -1
 	for i, e := range events {
 		if e.Phase == sync.PhaseDone {
 			doneCount++
@@ -4977,6 +4978,7 @@ func requireProgressDoneOnce(t *testing.T, events []sync.Progress, wantTotal int
 
 func requireDiscoveryBeforeSyncing(t *testing.T, events []sync.Progress, wantResync bool) {
 	t.Helper()
+
 	discoveryIdx, syncingIdx := -1, -1
 	for i, event := range events {
 		if event.Phase == sync.PhaseDiscovering && discoveryIdx == -1 {
@@ -5012,7 +5014,7 @@ func TestSyncEngineHashSkip(t *testing.T) {
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1 + 0, Synced: 1, Skipped: 0})
 
 	// Verify file metadata was stored
-	size, mtime, ok := env.db.GetSessionFileInfo("hash-test")
+	size, mtime, ok := env.db.GetSessionFileInfo(t.Context(), "hash-test")
 	require.True(t, ok, "file info not stored")
 	require.NotZero(t, mtime, "mtime not stored")
 	require.NotZero(t, size, "size not stored")
@@ -5056,7 +5058,7 @@ func TestSyncAllDedupesClaudeSourcesBySessionID(t *testing.T) {
 	})
 	liveInfo, err := os.Stat(livePath)
 	require.NoError(t, err)
-	storedSize, storedMtime, ok := env.db.GetSessionFileInfo("duplicate")
+	storedSize, storedMtime, ok := env.db.GetSessionFileInfo(t.Context(), "duplicate")
 	require.True(t, ok, "file info not stored")
 	assert.Equal(t, liveInfo.Size(), storedSize)
 	assert.Equal(t, liveInfo.ModTime().UnixNano(), storedMtime)
@@ -5099,7 +5101,7 @@ func TestSyncChangedPathFallbackDedupesClaudeSourcesBySessionID(t *testing.T) {
 	assert.Equal(t, 1, result.FilesDiscovered)
 	assert.Equal(t, 1, result.FilesProcessed)
 	assert.Equal(t, 1, result.Stats.Synced)
-	assert.Equal(t, livePath, env.db.GetSessionFilePath("fallback-duplicate"))
+	assert.Equal(t, livePath, env.db.GetSessionFilePath(t.Context(), "fallback-duplicate"))
 }
 
 func TestSyncAllClaudeDuplicateLiveGrowthBeatsUnchangedStoredArchive(t *testing.T) {
@@ -5126,7 +5128,7 @@ func TestSyncAllClaudeDuplicateLiveGrowthBeatsUnchangedStoredArchive(t *testing.
 		Synced:        1,
 		Skipped:       0,
 	})
-	assert.Equal(t, archivePath, env.db.GetSessionFilePath("duplicate-grow"))
+	assert.Equal(t, archivePath, env.db.GetSessionFilePath(t.Context(), "duplicate-grow"))
 
 	f, err := os.OpenFile(livePath, os.O_APPEND|os.O_WRONLY, 0o644)
 	require.NoError(t, err)
@@ -5141,7 +5143,7 @@ func TestSyncAllClaudeDuplicateLiveGrowthBeatsUnchangedStoredArchive(t *testing.
 		Synced:        1,
 		Skipped:       0,
 	})
-	assert.Equal(t, livePath, env.db.GetSessionFilePath("duplicate-grow"))
+	assert.Equal(t, livePath, env.db.GetSessionFilePath(t.Context(), "duplicate-grow"))
 	assertMessageContent(t, env.db, "duplicate-grow", "initial message", "live follow-up")
 }
 
@@ -5169,15 +5171,15 @@ func TestSyncAllSinceClaudeDuplicateTouchedStaleDoesNotBeatPreferred(t *testing.
 		Synced:        1,
 		Skipped:       0,
 	})
-	assert.Equal(t, livePath, env.db.GetSessionFilePath("duplicate-since"))
+	assert.Equal(t, livePath, env.db.GetSessionFilePath(t.Context(), "duplicate-since"))
 
 	cutoff := preferredTime.Add(time.Hour)
 	touchedArchive := cutoff.Add(time.Minute)
 	require.NoError(t, os.Chtimes(archivePath, touchedArchive, touchedArchive))
 
-	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	stats := env.engine.SyncAllSince(t.Context(), cutoff, nil)
 	assert.Zero(t, stats.Synced, "stale duplicate must not be re-synced")
-	assert.Equal(t, livePath, env.db.GetSessionFilePath("duplicate-since"))
+	assert.Equal(t, livePath, env.db.GetSessionFilePath(t.Context(), "duplicate-since"))
 	assertMessageContent(t, env.db, "duplicate-since", "same logical session")
 }
 
@@ -5205,7 +5207,7 @@ func TestSyncPathsClaudeDuplicateTouchedStaleDoesNotBeatPreferred(t *testing.T) 
 		Synced:        1,
 		Skipped:       0,
 	})
-	assert.Equal(t, livePath, env.db.GetSessionFilePath("duplicate-watch"))
+	assert.Equal(t, livePath, env.db.GetSessionFilePath(t.Context(), "duplicate-watch"))
 
 	touchedArchive := newer.Add(time.Second)
 	require.NoError(t, os.Chtimes(archivePath, touchedArchive, touchedArchive))
@@ -5213,7 +5215,7 @@ func TestSyncPathsClaudeDuplicateTouchedStaleDoesNotBeatPreferred(t *testing.T) 
 	env.engine.SyncPaths([]string{archivePath})
 	assert.Zero(t, env.engine.LastSyncStats().Synced,
 		"stale watcher duplicate must not be re-synced")
-	assert.Equal(t, livePath, env.db.GetSessionFilePath("duplicate-watch"))
+	assert.Equal(t, livePath, env.db.GetSessionFilePath(t.Context(), "duplicate-watch"))
 	assertMessageContent(t, env.db, "duplicate-watch", "same logical session")
 }
 
@@ -5224,7 +5226,7 @@ func TestSyncAllClaudeDuplicatePathRewriterKeepsStoredPreferred(t *testing.T) {
 	rewriter := func(path string) string {
 		return "host:" + path
 	}
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {liveDir, archiveDir},
 		},
@@ -5250,7 +5252,7 @@ func TestSyncAllClaudeDuplicatePathRewriterKeepsStoredPreferred(t *testing.T) {
 		Synced:        1,
 		Skipped:       0,
 	})
-	assert.Equal(t, rewriter(livePath), database.GetSessionFilePath("host~duplicate-remote"))
+	assert.Equal(t, rewriter(livePath), database.GetSessionFilePath(t.Context(), "host~duplicate-remote"))
 
 	touchedArchive := newer.Add(time.Second)
 	require.NoError(t, os.Chtimes(archivePath, touchedArchive, touchedArchive))
@@ -5260,7 +5262,7 @@ func TestSyncAllClaudeDuplicatePathRewriterKeepsStoredPreferred(t *testing.T) {
 		Synced:        0,
 		Skipped:       1,
 	})
-	assert.Equal(t, rewriter(livePath), database.GetSessionFilePath("host~duplicate-remote"))
+	assert.Equal(t, rewriter(livePath), database.GetSessionFilePath(t.Context(), "host~duplicate-remote"))
 	assertMessageContent(t, database, "host~duplicate-remote", "same logical session")
 }
 
@@ -5289,8 +5291,8 @@ func TestSyncEngineSkipCache(t *testing.T) {
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 0 + 1, Synced: 0, Skipped: 1})
 
 	// Touch file (change mtime) but keep same content
-	time.Sleep(10 * time.Millisecond)
-	os.Chtimes(path, time.Now(), time.Now())
+	touchTime := time.Now().Add(time.Minute)
+	require.NoError(t, os.Chtimes(path, touchTime, touchTime))
 
 	// Third sync — mtime changed → re-synced (harmless)
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
@@ -5344,7 +5346,7 @@ func TestSyncSingleSessionReplacesContent(
 		t, "test-proj", "replace-test.jsonl", original,
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertMessageContent(
 		t, env.db, "replace-test",
 		"original question", "original answer",
@@ -5382,7 +5384,7 @@ func TestSyncSingleSessionHash(t *testing.T) {
 		t, "test-proj", "single-hash.jsonl", content,
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	env.assertResyncRoundTrip(t, "single-hash")
 }
 
@@ -5403,7 +5405,7 @@ func TestSyncSingleSessionHashCodex(t *testing.T) {
 
 	sessionID := "codex:" + uuid
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	env.assertResyncRoundTrip(t, sessionID)
 }
 
@@ -5429,7 +5431,7 @@ func TestSyncAllImportsCodexExec(
 		"rollout-20240115-"+uuid+".jsonl", content,
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	assertSessionState(
 		t, env.db, "codex:"+uuid,
@@ -5461,7 +5463,7 @@ func TestSyncAllImportsCodexExecFromLegacySkipCache(
 	info, err := os.Stat(path)
 	require.NoError(t, err, "stat codex session")
 
-	require.NoError(t, env.db.ReplaceSkippedFiles(map[string]int64{
+	require.NoError(t, env.db.ReplaceSkippedFiles(t.Context(), map[string]int64{
 		path: info.ModTime().UnixNano(),
 	}), "seed skipped files")
 
@@ -5470,12 +5472,12 @@ func TestSyncAllImportsCodexExecFromLegacySkipCache(
 	// flipped the flag to "done". Reset the flag so the new
 	// engine below observes a legacy skip entry and scrubs
 	// it, matching the production upgrade path.
-	err = env.db.SetSyncState(
+	err = env.db.SetSyncState(t.Context(),
 		sync.CodexExecMigrationKey, "",
 	)
 	require.NoError(t, err, "reset migration flag")
 
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude:   {env.claudeDir},
 			parser.AgentCodex:    {env.codexDir},
@@ -5489,7 +5491,7 @@ func TestSyncAllImportsCodexExecFromLegacySkipCache(
 		Machine: "local",
 	})
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	assertSessionState(
 		t, env.db, "codex:"+uuid,
@@ -5535,14 +5537,14 @@ func TestCodexExecMigrationIdempotent(t *testing.T) {
 		sha256.Sum256([]byte(content)),
 	)
 
-	require.NoError(t, env.db.ReplaceSkippedFiles(map[string]int64{
+	require.NoError(t, env.db.ReplaceSkippedFiles(t.Context(), map[string]int64{
 		cacheKey: info.ModTime().UnixNano(),
 	}), "seed skipped files")
 
 	// Rebuild the engine without resetting the migration
 	// flag. The migration must be a no-op: the seeded entry
 	// stays in the DB and the engine respects it on sync.
-	env.engine = sync.NewEngine(env.db, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude:   {env.claudeDir},
 			parser.AgentCodex:    {env.codexDir},
@@ -5556,9 +5558,9 @@ func TestCodexExecMigrationIdempotent(t *testing.T) {
 		Machine: "local",
 	})
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
-	loaded, err := env.db.LoadSkippedFiles()
+	loaded, err := env.db.LoadSkippedFiles(t.Context())
 	require.NoError(t, err, "load skipped files")
 	_, ok := loaded[cacheKey]
 	require.True(t, ok,
@@ -5576,7 +5578,7 @@ func TestSyncEngineTombstoneClearOnMtimeChange(t *testing.T) {
 	)
 
 	// First sync
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	// Replace with valid content
 	valid := testjsonl.NewSessionBuilder().
@@ -5605,7 +5607,7 @@ func TestSyncSingleSessionProjectFallback(t *testing.T) {
 	)
 
 	// 2. Initial sync - should get "default-proj"
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	assertSessionProject(t, env.db, "fallback-test", "default_proj")
 
@@ -5747,7 +5749,7 @@ func TestSyncPathsIgnoresAgentFiles(t *testing.T) {
 
 	// No session should exist for agent-abc
 	sess, _ := env.db.GetSession(
-		context.Background(), "agent-abc",
+		t.Context(), "agent-abc",
 	)
 	assert.Nil(t, sess, "agent-* file should be ignored")
 }
@@ -6047,7 +6049,7 @@ func TestSyncAllGeminiProjectMetadataChangeReparsesProject(t *testing.T) {
 		),
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionState(t, env.db, "gemini:"+sessionID, func(sess *db.Session) {
 		assert.Equal(t, "one", sess.Project)
 	})
@@ -6058,7 +6060,7 @@ func TestSyncAllGeminiProjectMetadataChangeReparsesProject(t *testing.T) {
 	writeProject("two")
 	later := time.Now().Add(48 * time.Hour)
 	require.NoError(t, os.Chtimes(projectsPath, later, later), "bump projects mtime")
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	assertSessionState(t, env.db, "gemini:"+sessionID, func(sess *db.Session) {
 		assert.Equal(t, "two", sess.Project)
@@ -6085,11 +6087,11 @@ func TestSyncPathsCodexAcceptsFlatArchived(t *testing.T) {
 	env.engine.SyncPaths([]string{path})
 
 	sess, err := env.db.GetSession(
-		context.Background(), "codex:"+uuid,
+		t.Context(), "codex:"+uuid,
 	)
 	require.NoError(t, err, "GetSession")
 	require.NotNil(t, sess, "expected flat archived Codex session to sync")
-	assert.Equal(t, path, env.db.GetSessionFilePath("codex:"+uuid))
+	assert.Equal(t, path, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid))
 }
 
 func TestSyncPathsCodexPrefersLivePathOverArchived(t *testing.T) {
@@ -6116,14 +6118,14 @@ func TestSyncPathsCodexPrefersLivePathOverArchived(t *testing.T) {
 		content,
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	sess, err := env.db.GetSession(
-		context.Background(), "codex:"+uuid,
+		t.Context(), "codex:"+uuid,
 	)
 	require.NoError(t, err, "GetSession")
 	require.NotNil(t, sess, "expected Codex session to sync")
-	assert.Equal(t, livePath, env.db.GetSessionFilePath("codex:"+uuid))
+	assert.Equal(t, livePath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid))
 	assertSessionMessageCount(t, env.db, "codex:"+uuid, 1)
 	_ = archivedPath
 }
@@ -6158,15 +6160,15 @@ func TestSyncAllSinceCodexKeepsChangedArchivedDuplicate(t *testing.T) {
 	require.NoError(t, os.Chtimes(livePath, oldTime, oldTime), "chtimes live")
 	require.NoError(t, os.Chtimes(archivedPath, newTime, newTime), "chtimes archived")
 
-	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	stats := env.engine.SyncAllSince(t.Context(), cutoff, nil)
 	require.Equal(t, 1, stats.Synced, "SyncAllSince synced = %d, want 1", stats.Synced)
 
 	sess, err := env.db.GetSession(
-		context.Background(), "codex:"+uuid,
+		t.Context(), "codex:"+uuid,
 	)
 	require.NoError(t, err, "GetSession")
 	require.NotNil(t, sess, "expected archived Codex session to sync")
-	assert.Equal(t, archivedPath, env.db.GetSessionFilePath("codex:"+uuid))
+	assert.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid))
 }
 
 func TestSyncAllSinceCodexRefreshesSessionNameFromIndex(t *testing.T) {
@@ -6199,8 +6201,8 @@ func TestSyncAllSinceCodexRefreshesSessionNameFromIndex(t *testing.T) {
 	require.NoError(t, os.Chtimes(path, initialTime, initialTime), "chtimes initial session")
 	require.NoError(t, os.Chtimes(indexPath, initialTime, initialTime), "chtimes initial index")
 
-	env.engine.SyncAll(context.Background(), nil)
-	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	env.engine.SyncAll(t.Context(), nil)
+	sess, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, sess, "expected Codex session to sync")
 	if assert.NotNil(t, sess.SessionName, "expected session_name to be imported") {
@@ -6215,10 +6217,10 @@ func TestSyncAllSinceCodexRefreshesSessionNameFromIndex(t *testing.T) {
 	), 0o644))
 	require.NoError(t, os.Chtimes(indexPath, newIndexTime, newIndexTime), "chtimes index")
 
-	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	stats := env.engine.SyncAllSince(t.Context(), cutoff, nil)
 	require.Equal(t, 1, stats.Synced, "SyncAllSince synced = %d, want 1", stats.Synced)
 
-	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err = env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err, "GetSessionFull after rename")
 	require.NotNil(t, sess, "expected renamed Codex session to remain")
 	if assert.NotNil(t, sess.SessionName, "expected renamed session_name") {
@@ -6262,8 +6264,8 @@ func TestSyncAllSinceCodexIndexRenameBelowStoredMtimeRefreshesName(t *testing.T)
 	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime), "chtimes initial session")
 	require.NoError(t, os.Chtimes(indexPath, highIndexTime, highIndexTime), "chtimes initial index")
 
-	env.engine.SyncAll(context.Background(), nil)
-	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	env.engine.SyncAll(t.Context(), nil)
+	sess, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, sess, "expected Codex session to sync")
 	require.NotNil(t, sess.SessionName, "expected session_name to be imported")
@@ -6283,10 +6285,10 @@ func TestSyncAllSinceCodexIndexRenameBelowStoredMtimeRefreshesName(t *testing.T)
 	), 0o644))
 	require.NoError(t, os.Chtimes(indexPath, lowIndexTime, lowIndexTime), "chtimes renamed index")
 
-	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	stats := env.engine.SyncAllSince(t.Context(), cutoff, nil)
 	require.Equal(t, 1, stats.Synced, "SyncAllSince synced = %d, want 1", stats.Synced)
 
-	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err = env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err, "GetSessionFull after rename")
 	require.NotNil(t, sess, "expected renamed Codex session to remain")
 	if assert.NotNil(t, sess.SessionName, "expected renamed session_name") {
@@ -6332,8 +6334,8 @@ func TestSyncAllSkipsUnchangedTitledCodexSessionAfterIndexRemoval(t *testing.T) 
 	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
 	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
 
-	env.engine.SyncAll(context.Background(), nil)
-	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	env.engine.SyncAll(t.Context(), nil)
+	sess, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, sess, "expected Codex session to sync")
 	require.NotNil(t, sess.SessionName, "expected session_name to be imported")
@@ -6342,11 +6344,11 @@ func TestSyncAllSkipsUnchangedTitledCodexSessionAfterIndexRemoval(t *testing.T) 
 	// A Codex upgrade removes session_index.jsonl; the transcript is untouched.
 	require.NoError(t, os.Remove(indexPath))
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	assert.Equal(t, 0, stats.Synced,
 		"an unchanged titled session must skip once the index is gone")
 
-	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err = env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err, "GetSessionFull after index removal")
 	require.NotNil(t, sess, "expected Codex session to remain")
 	if assert.NotNil(t, sess.SessionName, "stored title must survive the skip") {
@@ -6369,7 +6371,7 @@ func TestCodexRequiredReparseWithoutIndexPreservesStoredTitle(t *testing.T) {
 			) {
 				t.Helper()
 				require.NoError(t, env.engine.SyncPathsContext(
-					context.Background(), []string{indexPath},
+					t.Context(), []string{indexPath},
 				))
 			},
 		},
@@ -6380,11 +6382,12 @@ func TestCodexRequiredReparseWithoutIndexPreservesStoredTitle(t *testing.T) {
 				t *testing.T, env *testEnv, sessionID, _ string,
 			) {
 				t.Helper()
+
 				require.Greater(t, db.CurrentDataVersion(), 1)
-				require.NoError(t, env.db.SetSessionDataVersion(
+				require.NoError(t, env.db.SetSessionDataVersion(t.Context(),
 					sessionID, db.CurrentDataVersion()-1,
 				))
-				stats := env.engine.SyncAll(context.Background(), nil)
+				stats := env.engine.SyncAll(t.Context(), nil)
 				require.Equal(t, 1, stats.Synced,
 					"stale data version must force a full reparse")
 			},
@@ -6396,7 +6399,7 @@ func TestCodexRequiredReparseWithoutIndexPreservesStoredTitle(t *testing.T) {
 				t *testing.T, env *testEnv, _, _ string,
 			) {
 				t.Helper()
-				stats := env.engine.ResyncAll(context.Background(), nil)
+				stats := env.engine.ResyncAll(t.Context(), nil)
 				require.False(t, stats.Aborted, "ResyncAll aborted: %v", stats.Warnings)
 				require.Equal(t, 1, stats.Synced)
 			},
@@ -6432,9 +6435,9 @@ func TestCodexRequiredReparseWithoutIndexPreservesStoredTitle(t *testing.T) {
 			require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
 			require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
 
-			first := env.engine.SyncAll(context.Background(), nil)
+			first := env.engine.SyncAll(t.Context(), nil)
 			require.Equal(t, 1, first.Synced)
-			sess, err := env.db.GetSessionFull(context.Background(), sessionID)
+			sess, err := env.db.GetSessionFull(t.Context(), sessionID)
 			require.NoError(t, err)
 			require.NotNil(t, sess)
 			require.NotNil(t, sess.SessionName)
@@ -6445,7 +6448,7 @@ func TestCodexRequiredReparseWithoutIndexPreservesStoredTitle(t *testing.T) {
 			require.NoError(t, os.Remove(indexPath))
 			tt.resync(t, env, sessionID, indexPath)
 
-			sess, err = env.db.GetSessionFull(context.Background(), sessionID)
+			sess, err = env.db.GetSessionFull(t.Context(), sessionID)
 			require.NoError(t, err)
 			require.NotNil(t, sess)
 			if assert.NotNil(t, sess.SessionName,
@@ -6497,9 +6500,9 @@ func TestCodexExplicitBlankIndexTitleClearsStoredTitle(t *testing.T) {
 	}
 
 	writeIndex("Stored title", transcriptTime.Add(time.Hour))
-	first := env.engine.SyncAll(context.Background(), nil)
+	first := env.engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, first.Synced)
-	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	if assert.NotNil(t, sess.SessionName) {
@@ -6507,10 +6510,10 @@ func TestCodexExplicitBlankIndexTitleClearsStoredTitle(t *testing.T) {
 	}
 
 	writeIndex("", transcriptTime.Add(2*time.Hour))
-	second := env.engine.SyncAll(context.Background(), nil)
+	second := env.engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, second.Synced,
 		"an explicit blank index title must trigger a refresh")
-	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err = env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Nil(t, sess.SessionName, "the stored title must be cleared")
@@ -6519,19 +6522,19 @@ func TestCodexExplicitBlankIndexTitleClearsStoredTitle(t *testing.T) {
 	// archive. Prove that an explicitly present blank still bypasses that carry
 	// forward instead of resurrecting the archived title.
 	writeIndex("Stored title", transcriptTime.Add(3*time.Hour))
-	restored := env.engine.SyncAll(context.Background(), nil)
+	restored := env.engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, restored.Synced)
-	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err = env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.NotNil(t, sess.SessionName)
 	require.Equal(t, "Stored title", *sess.SessionName)
 
 	writeIndex("", transcriptTime.Add(4*time.Hour))
-	rebuilt := env.engine.ResyncAll(context.Background(), nil)
+	rebuilt := env.engine.ResyncAll(t.Context(), nil)
 	require.False(t, rebuilt.Aborted, "ResyncAll aborted: %v", rebuilt.Warnings)
 	require.Equal(t, 1, rebuilt.Synced)
-	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err = env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Nil(t, sess.SessionName,
@@ -6542,6 +6545,7 @@ func TestSyncAllWarmGateCodexIndexSameStatRenameRefreshesName(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("NTFS Chtimes restores ChangeTime with mtime")
 	}
+
 	root := t.TempDir()
 	codexDir := filepath.Join(root, "sessions")
 	require.NoError(t, os.MkdirAll(codexDir, 0o755))
@@ -6577,12 +6581,12 @@ func TestSyncAllWarmGateCodexIndexSameStatRenameRefreshesName(t *testing.T) {
 	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
 	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
 
-	first := env.engine.SyncAll(context.Background(), nil)
+	first := env.engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, first.Synced)
-	second := env.engine.SyncAll(context.Background(), nil)
+	second := env.engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 0, second.Synced, "second pass must warm source trust")
 
-	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.NotNil(t, sess.SessionName)
@@ -6597,10 +6601,10 @@ func TestSyncAllWarmGateCodexIndexSameStatRenameRefreshesName(t *testing.T) {
 	require.NoError(t, os.WriteFile(indexPath, renamedIndex, 0o644))
 	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
 
-	third := env.engine.SyncAll(context.Background(), nil)
+	third := env.engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, third.Synced,
 		"same-stat title rewrite must bypass warm source trust")
-	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err = env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.NotNil(t, sess.SessionName)
@@ -6653,8 +6657,8 @@ func TestSyncAllSinceCodexIndexRefreshOnlySyncsRenamedSession(t *testing.T) {
 	require.NoError(t, os.Chtimes(unchangedPath, initialTime, initialTime), "chtimes initial unchanged")
 	require.NoError(t, os.Chtimes(indexPath, initialTime, initialTime), "chtimes initial index")
 
-	env.engine.SyncAll(context.Background(), nil)
-	unchangedBefore, err := env.db.GetSessionFull(context.Background(), "codex:"+unchangedUUID)
+	env.engine.SyncAll(t.Context(), nil)
+	unchangedBefore, err := env.db.GetSessionFull(t.Context(), "codex:"+unchangedUUID)
 	require.NoError(t, err, "GetSessionFull unchanged before rename")
 	require.NotNil(t, unchangedBefore, "expected unchanged Codex session to sync")
 	require.NotNil(t, unchangedBefore.SessionName, "expected unchanged session_name")
@@ -6670,17 +6674,17 @@ func TestSyncAllSinceCodexIndexRefreshOnlySyncsRenamedSession(t *testing.T) {
 	), 0o644))
 	require.NoError(t, os.Chtimes(indexPath, newIndexTime, newIndexTime), "chtimes index")
 
-	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	stats := env.engine.SyncAllSince(t.Context(), cutoff, nil)
 	require.Equal(t, 1, stats.Synced, "SyncAllSince synced = %d, want 1", stats.Synced)
 
-	renamed, err := env.db.GetSessionFull(context.Background(), "codex:"+renamedUUID)
+	renamed, err := env.db.GetSessionFull(t.Context(), "codex:"+renamedUUID)
 	require.NoError(t, err, "GetSessionFull renamed after index update")
 	require.NotNil(t, renamed, "expected renamed Codex session to remain")
 	if assert.NotNil(t, renamed.SessionName, "expected renamed session_name") {
 		assert.Equal(t, "Renamed title", *renamed.SessionName)
 	}
 
-	unchangedAfter, err := env.db.GetSessionFull(context.Background(), "codex:"+unchangedUUID)
+	unchangedAfter, err := env.db.GetSessionFull(t.Context(), "codex:"+unchangedUUID)
 	require.NoError(t, err, "GetSessionFull unchanged after index update")
 	require.NotNil(t, unchangedAfter, "expected unchanged Codex session to remain")
 	if assert.NotNil(t, unchangedAfter.SessionName, "expected unchanged session_name") {
@@ -6697,7 +6701,7 @@ func TestSyncAllSinceCodexIndexRefreshOnlySyncsRenamedSession(t *testing.T) {
 	), 0o644))
 	require.NoError(t, os.Chtimes(indexPath, unchangedIndexTime, unchangedIndexTime), "chtimes unchanged index")
 
-	stats = env.engine.SyncAll(context.Background(), nil)
+	stats = env.engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 0, stats.Synced,
 		"SyncAll synced = %d, want 0 when only the global index mtime changed", stats.Synced)
 }
@@ -6740,8 +6744,8 @@ func TestSyncPathsCodexIndexEventRefreshesRenamedSession(t *testing.T) {
 	require.NoError(t, os.Chtimes(unchangedPath, initialTime, initialTime), "chtimes unchanged")
 	require.NoError(t, os.Chtimes(indexPath, initialTime, initialTime), "chtimes index")
 
-	env.engine.SyncAll(context.Background(), nil)
-	unchangedBefore, err := env.db.GetSessionFull(context.Background(), "codex:"+unchangedUUID)
+	env.engine.SyncAll(t.Context(), nil)
+	unchangedBefore, err := env.db.GetSessionFull(t.Context(), "codex:"+unchangedUUID)
 	require.NoError(t, err, "GetSessionFull unchanged before rename")
 	require.NotNil(t, unchangedBefore, "expected unchanged Codex session to sync")
 	require.NotNil(t, unchangedBefore.FileMtime, "expected unchanged file_mtime")
@@ -6758,14 +6762,14 @@ func TestSyncPathsCodexIndexEventRefreshesRenamedSession(t *testing.T) {
 	// it into a refresh of the renamed session.
 	env.engine.SyncPaths([]string{indexPath})
 
-	renamed, err := env.db.GetSessionFull(context.Background(), "codex:"+renamedUUID)
+	renamed, err := env.db.GetSessionFull(t.Context(), "codex:"+renamedUUID)
 	require.NoError(t, err, "GetSessionFull renamed after index event")
 	require.NotNil(t, renamed, "expected renamed Codex session to remain")
 	if assert.NotNil(t, renamed.SessionName, "expected renamed session_name") {
 		assert.Equal(t, "Renamed title", *renamed.SessionName)
 	}
 
-	unchangedAfter, err := env.db.GetSessionFull(context.Background(), "codex:"+unchangedUUID)
+	unchangedAfter, err := env.db.GetSessionFull(t.Context(), "codex:"+unchangedUUID)
 	require.NoError(t, err, "GetSessionFull unchanged after index event")
 	require.NotNil(t, unchangedAfter, "expected unchanged Codex session to remain")
 	require.NotNil(t, unchangedAfter.FileMtime, "expected unchanged file_mtime after event")
@@ -6821,8 +6825,8 @@ func TestSyncAllSinceCodexIndexRefreshDoesNotShadowChangedArchivedDuplicate(t *t
 	require.NoError(t, os.Chtimes(archivedPath, initialTime, initialTime), "chtimes initial archived")
 	require.NoError(t, os.Chtimes(indexPath, initialTime, initialTime), "chtimes initial index")
 
-	env.engine.SyncAll(context.Background(), nil)
-	assert.Equal(t, livePath, env.db.GetSessionFilePath("codex:"+uuid))
+	env.engine.SyncAll(t.Context(), nil)
+	assert.Equal(t, livePath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid))
 
 	newTime := time.Now().Add(-30 * time.Minute)
 	cutoff := time.Now().Add(-1 * time.Hour)
@@ -6834,13 +6838,13 @@ func TestSyncAllSinceCodexIndexRefreshDoesNotShadowChangedArchivedDuplicate(t *t
 	), 0o644))
 	require.NoError(t, os.Chtimes(indexPath, newTime, newTime), "chtimes index")
 
-	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	stats := env.engine.SyncAllSince(t.Context(), cutoff, nil)
 	require.Equal(t, 1, stats.Synced, "SyncAllSince synced = %d, want 1", stats.Synced)
 
-	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, sess, "expected Codex session to sync")
-	assert.Equal(t, archivedPath, env.db.GetSessionFilePath("codex:"+uuid))
+	assert.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid))
 	if assert.NotNil(t, sess.SessionName, "expected renamed session_name") {
 		assert.Equal(t, "Renamed title", *sess.SessionName)
 	}
@@ -6868,7 +6872,7 @@ func TestReconcileWatchRootsCodexPreservesLiveDuplicateOfRemovedArchivedCopy(
 		t, archivedDir, "rollout-2026-05-04T14-31-58-"+uuid+".jsonl", content,
 	)
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
-	require.Equal(t, archivedPath, env.db.GetSessionFilePath("codex:"+uuid))
+	require.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid))
 
 	// The tracked archived copy vanishes while a live dated duplicate remains.
 	livePath := env.writeCodexSession(
@@ -6940,8 +6944,8 @@ func TestReconcileWatchRootsCodexReplacementIndexBuildsOncePerPass(
 					contentFor(uuidFor(i)),
 				)
 			}
-			require.Equal(
-				t, 3+tc.extraLive, env.engine.SyncAll(t.Context(), nil).Synced,
+			require.Equal(t,
+				3+tc.extraLive, env.engine.SyncAll(t.Context(), nil).Synced,
 			)
 
 			// Every archived copy vanishes; only the first has a
@@ -7009,8 +7013,8 @@ func TestSyncPathsCodexIndexEventRefreshesStoredDuplicate(t *testing.T) {
 	require.NoError(t, os.Chtimes(archivedPath, initialTime, initialTime), "chtimes archived")
 	require.NoError(t, os.Chtimes(indexPath, initialTime, initialTime), "chtimes index")
 
-	env.engine.SyncAll(context.Background(), nil)
-	require.Equal(t, archivedPath, env.db.GetSessionFilePath("codex:"+uuid),
+	env.engine.SyncAll(t.Context(), nil)
+	require.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid),
 		"DB must track the archived copy before the rename")
 
 	// A stale live duplicate now exists, and the index records a rename.
@@ -7030,10 +7034,10 @@ func TestSyncPathsCodexIndexEventRefreshesStoredDuplicate(t *testing.T) {
 
 	env.engine.SyncPaths([]string{indexPath})
 
-	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err, "GetSessionFull after index event")
 	require.NotNil(t, sess, "expected Codex session to remain")
-	assert.Equal(t, archivedPath, env.db.GetSessionFilePath("codex:"+uuid),
+	assert.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid),
 		"index rename must refresh the stored archived copy, not the stale live duplicate")
 	if assert.NotNil(t, sess.SessionName, "expected renamed session_name") {
 		assert.Equal(t, "Renamed title", *sess.SessionName)
@@ -7079,8 +7083,8 @@ func TestSyncPathsCodexArchivedDuplicateEventPinsChangedFile(t *testing.T) {
 	require.NoError(t, os.Chtimes(livePath, initialTime, initialTime), "chtimes live")
 	require.NoError(t, os.Chtimes(archivedPath, initialTime, initialTime), "chtimes archived")
 
-	env.engine.SyncAll(context.Background(), nil)
-	assert.Equal(t, livePath, env.db.GetSessionFilePath("codex:"+uuid))
+	env.engine.SyncAll(t.Context(), nil)
+	assert.Equal(t, livePath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid))
 
 	newTime := time.Now().Add(-30 * time.Minute)
 	require.NoError(t, os.WriteFile(archivedPath, []byte(updatedArchivedContent), 0o644))
@@ -7088,7 +7092,7 @@ func TestSyncPathsCodexArchivedDuplicateEventPinsChangedFile(t *testing.T) {
 
 	env.engine.SyncPaths([]string{archivedPath})
 
-	assert.Equal(t, archivedPath, env.db.GetSessionFilePath("codex:"+uuid),
+	assert.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid),
 		"archived transcript event must parse the changed file, not the stale live duplicate")
 	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
 }
@@ -7122,8 +7126,8 @@ func TestSyncSingleSessionCodexPreservesStoredArchivedDuplicate(t *testing.T) {
 	initialTime := time.Now().Add(-2 * time.Hour)
 	require.NoError(t, os.Chtimes(archivedPath, initialTime, initialTime), "chtimes archived")
 
-	env.engine.SyncAll(context.Background(), nil)
-	require.Equal(t, archivedPath, env.db.GetSessionFilePath("codex:"+uuid),
+	env.engine.SyncAll(t.Context(), nil)
+	require.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid),
 		"DB must track the archived copy before a stale live duplicate appears")
 
 	livePath := env.writeCodexSession(
@@ -7136,13 +7140,12 @@ func TestSyncSingleSessionCodexPreservesStoredArchivedDuplicate(t *testing.T) {
 
 	require.NoError(t, env.engine.SyncSingleSession("codex:"+uuid))
 
-	assert.Equal(t, archivedPath, env.db.GetSessionFilePath("codex:"+uuid),
+	assert.Equal(t, archivedPath, env.db.GetSessionFilePath(t.Context(), "codex:"+uuid),
 		"single-session resync must preserve the stored archived source")
 	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
 }
 
 func TestSyncPathsGeminiRejectsWrongStructure(t *testing.T) {
-
 	env := setupTestEnv(t)
 
 	sessionID := "gem-wrong-struct"
@@ -7169,7 +7172,7 @@ func TestSyncPathsGeminiRejectsWrongStructure(t *testing.T) {
 	env.engine.SyncPaths([]string{path1, path2})
 
 	sess, _ := env.db.GetSession(
-		context.Background(), "gemini:"+sessionID,
+		t.Context(), "gemini:"+sessionID,
 	)
 	assert.Nil(t, sess, "Gemini file outside tmp/<hash>/chats "+"should be ignored")
 }
@@ -7233,7 +7236,7 @@ func TestSyncPathsAmpRejectsWrongStructure(t *testing.T) {
 	env.engine.SyncPaths([]string{nested, wrongName, malformed})
 
 	sess, _ := env.db.GetSession(
-		context.Background(), "amp:T-019ca26f-aaaa-bbbb-cccc-dddddddddddd",
+		t.Context(), "amp:T-019ca26f-aaaa-bbbb-cccc-dddddddddddd",
 	)
 	assert.Nil(t, sess, "Amp files outside root-level valid T-<id>.json should be ignored")
 }
@@ -7360,7 +7363,7 @@ func TestSyncSubagentSetsParentSessionID(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "agent-worker1", 2)
 
 	// Verify FindSourceFile works for subagent
-	src := env.engine.FindSourceFile("agent-worker1")
+	src := env.engine.FindSourceFile(t.Context(), "agent-worker1")
 	assert.NotEmpty(t, src, "FindSourceFile returned empty for subagent")
 }
 
@@ -7396,7 +7399,7 @@ func TestSyncClaudeToolResultAgentIDLinksSubagentToolCall(t *testing.T) {
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 2, Synced: 2, Skipped: 0})
 
 	var got string
-	err := env.db.Reader().QueryRow(`
+	err := env.db.Reader().QueryRow(t.Context(), `
 		SELECT subagent_session_id
 		FROM tool_calls
 		WHERE session_id = ? AND tool_use_id = ?`,
@@ -7443,7 +7446,7 @@ func TestSyncClaudeSameMessageIDAgentChunksLinkAllSubagents(t *testing.T) {
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 4, Synced: 4, Skipped: 0})
 
-	rows, err := env.db.Reader().Query(`
+	rows, err := env.db.Reader().Query(t.Context(), `
 		SELECT tool_use_id, subagent_session_id
 		FROM tool_calls
 		WHERE session_id = ?
@@ -7466,7 +7469,7 @@ func TestSyncClaudeSameMessageIDAgentChunksLinkAllSubagents(t *testing.T) {
 		"toolu_second": "agent-childsecond",
 		"toolu_third":  "agent-childthird",
 	}
-	require.Equal(t, len(want), len(got), "linked tool calls = %v, want %v", got, want)
+	require.Len(t, got, len(want), "linked tool calls = %v, want %v", got, want)
 	for toolUseID, wantSessionID := range want {
 		assert.Equal(t, wantSessionID, got[toolUseID], "%s subagent_session_id = %q, want %q", toolUseID, got[toolUseID], wantSessionID)
 	}
@@ -7668,7 +7671,7 @@ func TestSyncPathsClaudeRejectsNonAgentInSubagents(t *testing.T) {
 	env.engine.SyncPaths([]string{path})
 
 	sess, _ := env.db.GetSession(
-		context.Background(), "not-agent",
+		t.Context(), "not-agent",
 	)
 	assert.Nil(t, sess, "non-agent file in subagents dir "+"should be rejected")
 }
@@ -7690,7 +7693,7 @@ func TestSyncPathsClaudeRejectsNested(t *testing.T) {
 	env.engine.SyncPaths([]string{path})
 
 	sess, _ := env.db.GetSession(
-		context.Background(), "nested",
+		t.Context(), "nested",
 	)
 	assert.Nil(t, sess, "nested Claude path should be rejected "+"(only <project>/<session>.jsonl allowed)")
 }
@@ -7730,7 +7733,7 @@ func TestSyncEngineOpenCodeBulkSync(t *testing.T) {
 	)
 
 	// First SyncAll should discover and store the session.
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	agentviewID := "opencode:" + sessionID
 	assertSessionState(t, env.db, agentviewID,
@@ -7755,7 +7758,7 @@ func TestSyncEngineOpenCodeBulkSync(t *testing.T) {
 	oc.updateSessionTime(t, sessionID, timeUpdated+1000)
 
 	// Second SyncAll should fully replace messages.
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	assertMessageContent(
 		t, env.db, agentviewID,
@@ -7764,7 +7767,7 @@ func TestSyncEngineOpenCodeBulkSync(t *testing.T) {
 
 	// Third SyncAll with no changes should be a no-op
 	// (time_updated unchanged, so session is skipped).
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	assertMessageContent(
 		t, env.db, agentviewID,
@@ -7796,19 +7799,19 @@ func TestSyncEngineOpenCodeDataVersionRefreshesUnchangedCwdProject(
 		t, "part-u1", sessionID, "msg-u1", "hello", 1704067200000,
 	)
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Synced)
 
 	agentviewID := "opencode:" + sessionID
 	stored := openCodeStoredSession(t, env.db, agentviewID)
 	stored.Cwd = "/"
 	stored.Project = "unknown"
-	require.NoError(t, env.db.UpsertSession(*stored))
-	require.NoError(t, env.db.SetSessionDataVersion(agentviewID, 70))
+	require.NoError(t, env.db.UpsertSession(t.Context(), *stored))
+	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), agentviewID, 70))
 
 	sourceState, ok := parser.StatSQLiteContainerState(oc.path)
 	require.True(t, ok)
-	stats = env.engine.SyncAll(context.Background(), nil)
+	stats = env.engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Synced)
 	afterState, ok := parser.StatSQLiteContainerState(oc.path)
 	require.True(t, ok)
@@ -7840,7 +7843,7 @@ func TestSyncEngineOpenCodeStorageMalformedProjectPreservesArchive(
 		"id": "legacy-project", "worktree": "/home/user/code/legacy-app",
 	})
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted)
 	require.Equal(t, 1, stats.Synced)
 	assertSessionState(t, env.db, "opencode:"+sessionID, func(sess *db.Session) {
@@ -7852,7 +7855,7 @@ func TestSyncEngineOpenCodeStorageMalformedProjectPreservesArchive(
 	future := time.Now().Add(2 * time.Second)
 	require.NoError(t, os.Chtimes(projectPath, future, future))
 	err := env.engine.SyncPathsContext(
-		context.Background(), []string{projectPath},
+		t.Context(), []string{projectPath},
 	)
 	require.Error(t, err, "malformed project metadata must be reported by scoped sync")
 	assertSessionState(t, env.db, "opencode:"+sessionID, func(sess *db.Session) {
@@ -7886,13 +7889,13 @@ func TestSyncEngineOpenCodeStorageDataVersionRefreshesArchivedCwdProject(
 	stored := openCodeStoredSession(t, env.db, "opencode:"+sessionID)
 	stored.Cwd = ""
 	stored.Project = "unknown"
-	require.NoError(t, env.db.UpsertSession(*stored))
-	require.NoError(t, env.db.SetSessionDataVersion(
+	require.NoError(t, env.db.UpsertSession(t.Context(), *stored))
+	require.NoError(t, env.db.SetSessionDataVersion(t.Context(),
 		"opencode:"+sessionID, db.CurrentDataVersion()-1,
 	))
 
 	require.NoError(t, env.engine.SyncPathsContext(
-		context.Background(), []string{projectPath},
+		t.Context(), []string{projectPath},
 	))
 	assertSessionState(t, env.db, "opencode:"+sessionID, func(sess *db.Session) {
 		assert.Equal(t, "/home/user/code/legacy-app", sess.Cwd)
@@ -7931,7 +7934,7 @@ func TestSyncEngineOpenCodeReviewWithGeneratedTitleIsAutomated(
 		"Review complete.", timeCreated+1,
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	agentviewID := "opencode:" + sessionID
 	assertSessionState(t, env.db, agentviewID,
@@ -7942,7 +7945,7 @@ func TestSyncEngineOpenCodeReviewWithGeneratedTitleIsAutomated(
 	)
 
 	page, err := env.db.ListSessions(
-		context.Background(),
+		t.Context(),
 		db.SessionFilter{ExcludeAutomated: true, Limit: 10},
 	)
 	require.NoError(t, err, "ListSessions exclude automated")
@@ -7989,7 +7992,7 @@ func TestSyncEngineOpenCodeStorageBulkSync(t *testing.T) {
 			assert.Equal(t, "opencode", sess.Agent, "agent = %q, want opencode", sess.Agent)
 		},
 	)
-	assert.Equal(t, sessionPath, env.engine.FindSourceFile("opencode:oc-storage-1"))
+	assert.Equal(t, sessionPath, env.engine.FindSourceFile(t.Context(), "opencode:oc-storage-1"))
 	assertMessageContent(
 		t, env.db, "opencode:oc-storage-1",
 		"hello from storage", "reply from storage",
@@ -8179,12 +8182,12 @@ func TestOpenCodeSQLiteRootSyncPathsAndStaleReparse(t *testing.T) {
 		"bad original question", "", 40,
 	)
 
-	initialMtime := env.engine.SourceMtime("opencode:" + sourceMtimeID)
-	require.Equal(t, int64((timeUpdated+20)*1_000_000), initialMtime, "initial source mtime")
+	initialMtime := env.engine.SourceMtime(t.Context(), "opencode:"+sourceMtimeID)
+	require.Equal(t, (timeUpdated+20)*1_000_000, initialMtime, "initial source mtime")
 
 	sourceUpdated := timeUpdated + 1020
 	oc.updateSessionTime(t, sourceMtimeID, sourceUpdated)
-	updatedMtime := env.engine.SourceMtime("opencode:" + sourceMtimeID)
+	updatedMtime := env.engine.SourceMtime(t.Context(), "opencode:"+sourceMtimeID)
 	require.Equal(t, sourceUpdated*1_000_000, updatedMtime, "updated source mtime")
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
@@ -8213,12 +8216,12 @@ func TestOpenCodeSQLiteRootSyncPathsAndStaleReparse(t *testing.T) {
 		"role":    "assistant",
 		"modelID": "claude-3-7-sonnet",
 	})
-	err := env.db.SetSessionDataVersion(
+	err := env.db.SetSessionDataVersion(t.Context(),
 		"opencode:"+staleVersionID, 0,
 	)
 	require.NoError(t, err, "SetSessionDataVersion")
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 0, stats.Failed, "SyncAll stats = %+v", stats)
 	require.NotZero(t, stats.Synced, "SyncAll stats = %+v", stats)
 
@@ -8307,7 +8310,7 @@ func TestSyncAllOpenCodeSQLiteFallbackPreservesStorageArchive(
 		"hello sqlite fallback", 1704067200000,
 	)
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 0, stats.Failed, "stats.Failed = %d, want 0", stats.Failed)
 	require.Equal(t, 0, stats.Synced, "stats.Synced = %d, want 0", stats.Synced)
 
@@ -8381,7 +8384,6 @@ func TestSyncPathsOpenCodeSQLiteDBEventIgnoresStaleSkipCache(
 func TestSyncPathsOpenCodeStorageChildRetryWithoutSessionMtimeChange(
 	t *testing.T,
 ) {
-
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
@@ -8402,7 +8404,7 @@ func TestSyncPathsOpenCodeStorageChildRetryWithoutSessionMtimeChange(
 
 	env.engine.SyncPaths([]string{messagePath})
 	sess, err := env.db.GetSession(
-		context.Background(), "opencode:oc-storage-retry",
+		t.Context(), "opencode:oc-storage-retry",
 	)
 	require.NoError(t, err, "GetSession")
 	require.Nil(t, sess, "unexpected session after invalid child parse: %+v", sess)
@@ -8437,7 +8439,6 @@ func TestSyncPathsOpenCodeStorageChildRetryWithoutSessionMtimeChange(
 func TestSyncPathsOpenCodeStorageChildUpdateAdvancesSessionMtime(
 	t *testing.T,
 ) {
-
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
@@ -8461,7 +8462,7 @@ func TestSyncPathsOpenCodeStorageChildUpdateAdvancesSessionMtime(
 		Skipped:       0,
 	})
 
-	_, initialMtime, ok := env.db.GetSessionFileInfo(
+	_, initialMtime, ok := env.db.GetSessionFileInfo(t.Context(),
 		"opencode:oc-storage-mtime",
 	)
 	require.True(t, ok, "expected initial session file_mtime")
@@ -8491,12 +8492,12 @@ func TestSyncPathsOpenCodeStorageChildUpdateAdvancesSessionMtime(
 	})
 	require.True(t, ok, "opencode provider available")
 	ocSource, found, parseErr := ocProvider.FindSource(
-		context.Background(),
+		t.Context(),
 		parser.FindSourceRequest{FullSessionID: "opencode:oc-storage-mtime"},
 	)
 	require.NoError(t, parseErr, "find opencode source after rewrite")
 	require.True(t, found, "opencode source found after rewrite")
-	ocOutcome, parseErr := ocProvider.Parse(context.Background(), parser.ParseRequest{
+	ocOutcome, parseErr := ocProvider.Parse(t.Context(), parser.ParseRequest{
 		Source:  ocSource,
 		Machine: "local",
 	})
@@ -8509,7 +8510,7 @@ func TestSyncPathsOpenCodeStorageChildUpdateAdvancesSessionMtime(
 
 	env.engine.SyncPaths([]string{partPath})
 
-	_, updatedMtime, ok := env.db.GetSessionFileInfo(
+	_, updatedMtime, ok := env.db.GetSessionFileInfo(t.Context(),
 		"opencode:oc-storage-mtime",
 	)
 	require.True(t, ok, "expected updated session file_mtime")
@@ -8538,7 +8539,7 @@ func TestSourceMtimeOpenCodeStorageIncludesChildFiles(t *testing.T) {
 		"initial reply", 1704067201000,
 	)
 
-	initialMtime := env.engine.SourceMtime("opencode:oc-source-mtime")
+	initialMtime := env.engine.SourceMtime(t.Context(), "opencode:oc-source-mtime")
 	require.NotZero(t, initialMtime, "expected initial composite source mtime")
 
 	info, err := os.Stat(sessionPath)
@@ -8553,7 +8554,7 @@ func TestSourceMtimeOpenCodeStorageIncludesChildFiles(t *testing.T) {
 	require.NoError(t, os.Chtimes(partPath, future, future), "chtimes part")
 	require.NoError(t, os.Chtimes(sessionPath, sessionMtime, sessionMtime), "restore session mtime")
 
-	updatedMtime := env.engine.SourceMtime("opencode:oc-source-mtime")
+	updatedMtime := env.engine.SourceMtime(t.Context(), "opencode:oc-source-mtime")
 	require.Greater(t, updatedMtime, initialMtime, "updated source mtime = %d, want > %d", updatedMtime, initialMtime)
 }
 
@@ -8575,7 +8576,7 @@ func TestSourceMtimeOpenCodeStorageTracksChildRemoval(t *testing.T) {
 		"initial reply", 1704067201000,
 	)
 
-	initialMtime := env.engine.SourceMtime("opencode:oc-source-remove")
+	initialMtime := env.engine.SourceMtime(t.Context(), "opencode:oc-source-remove")
 	require.NotZero(t, initialMtime, "expected initial composite source mtime")
 
 	partDir := filepath.Dir(partPath)
@@ -8583,7 +8584,7 @@ func TestSourceMtimeOpenCodeStorageTracksChildRemoval(t *testing.T) {
 	future := time.Now().Add(2 * time.Second)
 	require.NoError(t, os.Chtimes(partDir, future, future), "chtimes part dir")
 
-	updatedMtime := env.engine.SourceMtime("opencode:oc-source-remove")
+	updatedMtime := env.engine.SourceMtime(t.Context(), "opencode:oc-source-remove")
 	require.Greater(t, updatedMtime, initialMtime, "updated source mtime = %d, want > %d", updatedMtime, initialMtime)
 }
 
@@ -8605,7 +8606,7 @@ func TestSourceMtimeOpenCodeStorageTracksPartDirRemoval(t *testing.T) {
 		"initial reply", 1704067201000,
 	)
 
-	initialMtime := env.engine.SourceMtime("opencode:oc-source-remove-dir")
+	initialMtime := env.engine.SourceMtime(t.Context(), "opencode:oc-source-remove-dir")
 	require.NotZero(t, initialMtime, "expected initial composite source mtime")
 
 	future := time.Now().Add(2 * time.Second)
@@ -8615,7 +8616,7 @@ func TestSourceMtimeOpenCodeStorageTracksPartDirRemoval(t *testing.T) {
 	)
 	require.NoError(t, os.Chtimes(partRoot, future, future), "chtimes part root")
 
-	updatedMtime := env.engine.SourceMtime("opencode:oc-source-remove-dir")
+	updatedMtime := env.engine.SourceMtime(t.Context(), "opencode:oc-source-remove-dir")
 	require.Greater(t, updatedMtime, initialMtime, "updated source mtime = %d, want > %d", updatedMtime, initialMtime)
 }
 
@@ -8639,7 +8640,7 @@ func TestSourceMtimeOpenCodeStorageTracksMessageDirRemoval(
 		"initial reply", 1704067201000,
 	)
 
-	initialMtime := env.engine.SourceMtime(
+	initialMtime := env.engine.SourceMtime(t.Context(),
 		"opencode:oc-source-remove-message-dir",
 	)
 	require.NotZero(t, initialMtime, "expected initial composite source mtime")
@@ -8651,7 +8652,7 @@ func TestSourceMtimeOpenCodeStorageTracksMessageDirRemoval(
 	)
 	require.NoError(t, os.Chtimes(messageRoot, future, future), "chtimes message root")
 
-	updatedMtime := env.engine.SourceMtime(
+	updatedMtime := env.engine.SourceMtime(t.Context(),
 		"opencode:oc-source-remove-message-dir",
 	)
 	require.Greater(t, updatedMtime, initialMtime, "updated source mtime = %d, want > %d", updatedMtime, initialMtime)
@@ -8756,13 +8757,13 @@ func TestOpenCodeHybridRootSyncsSQLiteSessions(t *testing.T) {
 	)
 
 	virtualPath := parser.OpenCodeSQLiteVirtualPath(sqlite.path, sessionID)
-	assert.Equal(t, virtualPath, env.engine.FindSourceFile("opencode:"+sessionID))
-	assert.Equal(t, timeUpdated*1_000_000, env.engine.SourceMtime("opencode:"+sessionID))
+	assert.Equal(t, virtualPath, env.engine.FindSourceFile(t.Context(), "opencode:"+sessionID))
+	assert.Equal(t, timeUpdated*1_000_000, env.engine.SourceMtime(t.Context(), "opencode:"+sessionID))
 	duplicateStoragePath := filepath.Join(
 		env.opencodeDir, "storage", "session", "global",
 		duplicateID+".json",
 	)
-	assert.Equal(t, duplicateStoragePath, env.engine.FindSourceFile("opencode:"+duplicateID))
+	assert.Equal(t, duplicateStoragePath, env.engine.FindSourceFile(t.Context(), "opencode:"+duplicateID))
 
 	sqlite.replaceTextContent(
 		t, sessionID,
@@ -8896,7 +8897,7 @@ func TestOpenCodeHybridUnshadowedSQLiteSessionParsesAfterStorageRemoval(t *testi
 	)
 	virtualPath := parser.OpenCodeSQLiteVirtualPath(sqlite.path, sessionID)
 	assert.Equal(t, virtualPath,
-		env.engine.FindSourceFile("opencode:"+sessionID),
+		env.engine.FindSourceFile(t.Context(), "opencode:"+sessionID),
 		"the session must now resolve to the SQLite source")
 }
 
@@ -9113,7 +9114,7 @@ func TestFindSourceFileSkipsHybridRootMissingSession(t *testing.T) {
 		storageRoot, "storage", "session", "global",
 		wantedID+".json",
 	)
-	require.Equal(t, wantPath, env.engine.FindSourceFile("opencode:"+wantedID), "FindSourceFile() = ..., want %q (hybrid root must not shadow)", wantPath)
+	require.Equal(t, wantPath, env.engine.FindSourceFile(t.Context(), "opencode:"+wantedID), "FindSourceFile() = ..., want %q (hybrid root must not shadow)", wantPath)
 }
 
 func TestKiloStorageRewriteReplacesMessages(t *testing.T) {
@@ -9265,7 +9266,6 @@ func TestSyncPathsMiMoCodeStorageIgnoresStaleSessionSkipCache(t *testing.T) {
 }
 
 func TestKiloPreservesStorageArchiveAgainstSQLiteFallback(t *testing.T) {
-
 	env := setupSingleAgentTestEnv(t, parser.AgentKilo)
 	storage := createOpenCodeStorageFixture(t, env.kiloDir)
 	const sessionID = "kilo-hybrid-preserve"
@@ -9321,7 +9321,6 @@ func TestKiloPreservesStorageArchiveAgainstSQLiteFallback(t *testing.T) {
 }
 
 func TestSyncAllSinceOpenCodeStoragePicksUpUsagePartUpdate(t *testing.T) {
-
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
@@ -9377,10 +9376,10 @@ func TestSyncAllSinceOpenCodeStoragePicksUpUsagePartUpdate(t *testing.T) {
 
 	// Composite freshness includes the part file, so the part-only edit is
 	// fresh relative to the cutoff and re-syncs the updated reply.
-	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	stats := env.engine.SyncAllSince(t.Context(), cutoff, nil)
 	require.Equal(t, 1, stats.Synced, "SyncAllSince synced = %d, want 1", stats.Synced)
 
-	daily, err := env.db.GetDailyUsage(context.Background(), db.UsageFilter{
+	daily, err := env.db.GetDailyUsage(t.Context(), db.UsageFilter{
 		From:     "2024-01-01",
 		To:       "2024-01-01",
 		Timezone: "UTC",
@@ -9400,7 +9399,6 @@ func TestSyncAllSinceOpenCodeStoragePicksUpUsagePartUpdate(t *testing.T) {
 // the provider facade rather than taking the legacy DB-mtime skip; the
 // re-parse must be idempotent and keep the same content.
 func TestSyncAllOpenCodeStorageReparsesUnchangedSessionsIdempotently(t *testing.T) {
-
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
@@ -9424,7 +9422,7 @@ func TestSyncAllOpenCodeStorageReparsesUnchangedSessionsIdempotently(t *testing.
 		Skipped:       0,
 	})
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.TotalSessions, "SyncAll stats = %+v", stats)
 	require.Equal(t, 0, stats.Failed, "SyncAll stats = %+v", stats)
 	assertMessageContent(
@@ -9433,7 +9431,6 @@ func TestSyncAllOpenCodeStorageReparsesUnchangedSessionsIdempotently(t *testing.
 }
 
 func TestSyncAllOpenCodeStorageMissingMessagePreservesArchive(t *testing.T) {
-
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
@@ -9469,7 +9466,7 @@ func TestSyncAllOpenCodeStorageMissingMessagePreservesArchive(t *testing.T) {
 	future := time.Now().Add(2 * time.Second)
 	require.NoError(t, os.Chtimes(sessionPath, future, future), "touch session path")
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	assertMessageContent(
 		t, env.db, "opencode:oc-missing-message",
@@ -9482,7 +9479,7 @@ func TestSyncAllUsageOnlyOpenCodeMissingUsageMessagePreservesArchive(
 ) {
 	opencodeDir := t.TempDir()
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOpenCode: {opencodeDir},
 		},
@@ -9563,7 +9560,7 @@ func TestSyncAllUsageOnlyOpenCodeMissingUsageMessagePreservesArchive(
 func TestSyncAllUsageOnlyOpenCodeUpdatesLegacyMessageIdentity(t *testing.T) {
 	opencodeDir := t.TempDir()
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOpenCode: {opencodeDir},
 		},
@@ -9593,7 +9590,7 @@ func TestSyncAllUsageOnlyOpenCodeUpdatesLegacyMessageIdentity(t *testing.T) {
 	// Released parsers did not store OpenCode message IDs. Preserve the
 	// sparse ordinal and usage while reproducing that persisted shape.
 	messages[0].SourceUUID = ""
-	require.NoError(t, database.ReplaceSessionMessages("opencode:"+sessionID, messages))
+	require.NoError(t, database.ReplaceSessionMessages(t.Context(), "opencode:"+sessionID, messages))
 
 	writeAssistant(25)
 	future := time.Now().Add(2 * time.Second)
@@ -9613,7 +9610,6 @@ func TestSyncAllUsageOnlyOpenCodeUpdatesLegacyMessageIdentity(t *testing.T) {
 func TestSyncAllOpenCodeStoragePreservesLegacySQLiteArchive(
 	t *testing.T,
 ) {
-
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	sqlite := createOpenCodeDB(t, env.opencodeDir)
 	sqlite.addProject(t, "proj-1", "/home/user/code/myapp")
@@ -9662,7 +9658,7 @@ func TestSyncAllOpenCodeStoragePreservesLegacySQLiteArchive(
 		"legacy sqlite question", timeCreated,
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	assertMessageContent(
 		t, env.db, "opencode:"+sessionID,
@@ -9672,7 +9668,6 @@ func TestSyncAllOpenCodeStoragePreservesLegacySQLiteArchive(
 }
 
 func TestSyncAllOpenCodeStorageMissingPartDirPreservesArchive(t *testing.T) {
-
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
@@ -9708,7 +9703,7 @@ func TestSyncAllOpenCodeStorageMissingPartDirPreservesArchive(t *testing.T) {
 	future := time.Now().Add(2 * time.Second)
 	require.NoError(t, os.Chtimes(sessionPath, future, future), "touch session path")
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 0, stats.Failed, "stats.Failed = %d, want 0", stats.Failed)
 	require.Equal(t, 0, stats.Synced, "stats.Synced = %d, want 0", stats.Synced)
 
@@ -9721,7 +9716,6 @@ func TestSyncAllOpenCodeStorageMissingPartDirPreservesArchive(t *testing.T) {
 func TestSyncSingleSessionOpenCodeStorageMissingMessagePreservesArchive(
 	t *testing.T,
 ) {
-
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 	oc := createOpenCodeStorageFixture(t, env.opencodeDir)
 
@@ -10047,7 +10041,7 @@ func TestSyncAllOpenCodeStorageContentRewritePreservesArchive(
 	future := time.Now().Add(2 * time.Second)
 	require.NoError(t, os.Chtimes(sessionPath, future, future), "touch session path")
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	assertMessageContent(
 		t, env.db, "opencode:"+sessionID,
@@ -10103,10 +10097,10 @@ func TestSyncAllOpenCodeStorageMissingStepFinishPreservesTokens(
 	future := time.Now().Add(2 * time.Second)
 	require.NoError(t, os.Chtimes(sessionPath, future, future), "touch session path")
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	full, err := env.db.GetSessionFull(
-		context.Background(), "opencode:"+sessionID,
+		t.Context(), "opencode:"+sessionID,
 	)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, full, "session missing after preserve")
@@ -10158,7 +10152,7 @@ func TestSyncEngineOpenCodeToolCallReplace(t *testing.T) {
 		"bash", "call-1", timeCreated+1,
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	agentviewID := "opencode:" + sessionID
 	assertToolCallCount(t, env.db, agentviewID, 1)
@@ -10183,7 +10177,7 @@ func TestSyncEngineOpenCodeToolCallReplace(t *testing.T) {
 	)
 	oc.updateSessionTime(t, sessionID, timeUpdated+1000)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	assertMessageContent(
 		t, env.db, agentviewID,
@@ -10243,7 +10237,7 @@ func TestSyncEngineConcurrentSerialization(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		env.engine.SyncAll(context.Background(), syncProgress)
+		env.engine.SyncAll(t.Context(), syncProgress)
 	}()
 
 	// Wait until SyncAll is inside the locked section.
@@ -10251,14 +10245,14 @@ func TestSyncEngineConcurrentSerialization(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		env.engine.ResyncAll(context.Background(), resyncProgress)
+		env.engine.ResyncAll(t.Context(), resyncProgress)
 	}()
 
 	// ResyncAll should be blocked on the mutex. Give it
 	// a moment to prove it can't enter.
 	select {
 	case <-resyncEntered:
-		t.Fatal(
+		require.FailNow(t,
 			"ResyncAll entered while SyncAll held mutex",
 		)
 	case <-time.After(50 * time.Millisecond):
@@ -10273,7 +10267,7 @@ func TestSyncEngineConcurrentSerialization(t *testing.T) {
 	case <-resyncEntered:
 		// Expected: ResyncAll acquired mutex.
 	case <-time.After(5 * time.Second):
-		t.Fatal("ResyncAll never entered after barrier release")
+		require.FailNow(t, "ResyncAll never entered after barrier release")
 	}
 
 	wg.Wait()
@@ -10356,12 +10350,12 @@ func TestSyncSingleSessionPostFilterCounts(t *testing.T) {
 	)
 
 	// SyncAll to populate the session in the DB.
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	// Corrupt stored counts and clear mtime so
 	// SyncSingleSession re-parses via writeSessionFull.
-	err := env.db.Update(func(tx *sql.Tx) error {
-		res, err := tx.Exec(
+	err := env.db.Update(t.Context(), func(tx *sql.Tx) error {
+		res, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions"+
 				" SET message_count = 999,"+
 				" user_message_count = 999,"+
@@ -10428,7 +10422,7 @@ func TestSyncEngineMultiClaudeDir(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "sess1", 2)
 
 	// FindSourceFile should search across directories
-	src := env.engine.FindSourceFile("sess2")
+	src := env.engine.FindSourceFile(t.Context(), "sess2")
 	assert.NotEmpty(t, src, "FindSourceFile failed for sess2 in second directory")
 }
 
@@ -10491,7 +10485,7 @@ func TestSyncEngineMultiCursorDir(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "cursor:sess2", 4)
 
 	// FindSourceFile should work across directories.
-	src := env.engine.FindSourceFile("cursor:sess2")
+	src := env.engine.FindSourceFile(t.Context(), "cursor:sess2")
 	assert.NotEmpty(t, src, "FindSourceFile failed for cursor:sess2 "+"in second directory")
 }
 
@@ -10534,7 +10528,7 @@ func TestSyncCursorSubagentTranscriptLinksParentSession(t *testing.T) {
 		TotalSessions: 2, Synced: 2, Skipped: 0,
 	})
 
-	child, err := env.db.GetSession(context.Background(), "cursor:child-sync")
+	child, err := env.db.GetSession(t.Context(), "cursor:child-sync")
 	require.NoError(t, err)
 	require.NotNil(t, child.ParentSessionID)
 	assert.Equal(t, "cursor:parent-sync", *child.ParentSessionID)
@@ -10542,7 +10536,7 @@ func TestSyncCursorSubagentTranscriptLinksParentSession(t *testing.T) {
 	assertSessionProject(t, env.db, "cursor:child-sync", "nested_proj")
 	assertSessionMessageCount(t, env.db, "cursor:child-sync", 2)
 
-	parent, err := env.db.GetSession(context.Background(), "cursor:parent-sync")
+	parent, err := env.db.GetSession(t.Context(), "cursor:parent-sync")
 	require.NoError(t, err)
 	assert.Nil(t, parent.ParentSessionID)
 
@@ -10556,7 +10550,7 @@ func TestSyncCursorSubagentTranscriptLinksParentSession(t *testing.T) {
 	)
 	env.engine.SyncPaths([]string{later})
 
-	laterSess, err := env.db.GetSession(context.Background(), "cursor:later-sync")
+	laterSess, err := env.db.GetSession(t.Context(), "cursor:later-sync")
 	require.NoError(t, err)
 	require.NotNil(t, laterSess.ParentSessionID)
 	assert.Equal(t, "cursor:parent-sync", *laterSess.ParentSessionID)
@@ -10577,11 +10571,11 @@ func TestSyncPathsCursorDuplicateSubagentPreservesCanonicalSession(t *testing.T)
 			`{"role":"assistant","message":{"content":"Duplicate response"}}`+"\n",
 	)
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1, Synced: 1})
-	assert.Equal(t, canonical, env.db.GetSessionFilePath("cursor:child"))
+	assert.Equal(t, canonical, env.db.GetSessionFilePath(t.Context(), "cursor:child"))
 
 	env.engine.SyncPaths([]string{duplicate})
 
-	assert.Equal(t, canonical, env.db.GetSessionFilePath("cursor:child"))
+	assert.Equal(t, canonical, env.db.GetSessionFilePath(t.Context(), "cursor:child"))
 	assertMessageContent(t, env.db, "cursor:child", "Canonical child content")
 	child, err := env.db.GetSession(t.Context(), "cursor:child")
 	require.NoError(t, err)
@@ -10605,7 +10599,7 @@ func TestSyncCursorSubagentWithMissingParentTranscript(t *testing.T) {
 		TotalSessions: 1, Synced: 1, Skipped: 0,
 	})
 
-	child, err := env.db.GetSession(context.Background(), "cursor:orphan-child")
+	child, err := env.db.GetSession(t.Context(), "cursor:orphan-child")
 	require.NoError(t, err)
 	require.NotNil(t, child.ParentSessionID)
 	assert.Equal(t, "cursor:gone-parent", *child.ParentSessionID)
@@ -10613,7 +10607,7 @@ func TestSyncCursorSubagentWithMissingParentTranscript(t *testing.T) {
 
 	// The sidebar promotes a child whose parent row is absent to a root, so
 	// the session stays reachable instead of hanging off a missing parent.
-	index, err := env.db.GetSidebarSessionIndex(context.Background(), db.SessionFilter{})
+	index, err := env.db.GetSidebarSessionIndex(t.Context(), db.SessionFilter{})
 	require.NoError(t, err)
 	ids := make([]string, 0, len(index.Sessions))
 	for _, row := range index.Sessions {
@@ -10751,14 +10745,14 @@ func TestResyncAllReplacesMessageContent(t *testing.T) {
 
 	fullID := "gemini:" + sessionID
 	msgs := fetchMessages(t, env.db, fullID)
-	require.Equal(t, 2, len(msgs), "got %d messages, want 2", len(msgs))
+	require.Len(t, msgs, 2, "got %d messages, want 2", len(msgs))
 
 	// Simulate a parser change by directly modifying message
 	// content in the DB. This mirrors what happens when the Go
 	// parser is updated (e.g. thinking format change) but the
 	// source files on disk are unchanged.
-	err := env.db.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	err := env.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			"UPDATE messages SET content = ?"+
 				" WHERE session_id = ? AND ordinal = 1",
 			"stale content from old parser",
@@ -10771,15 +10765,15 @@ func TestResyncAllReplacesMessageContent(t *testing.T) {
 	// Capture FTS state before resync so a regression that
 	// breaks FTS isn't masked by HasFTS() returning false
 	// post-resync.
-	hadFTS := env.db.HasFTS()
+	hadFTS := env.db.HasFTS(t.Context())
 
 	// ResyncAll should re-parse and replace message content. Gemini is
 	// provider-authoritative, so it has no DB-backed mtime skip; a plain
 	// SyncAll would also re-parse the unchanged file. ResyncAll additionally
 	// drops and rebuilds the FTS index, which is what this test guards.
-	env.engine.ResyncAll(context.Background(), nil)
+	env.engine.ResyncAll(t.Context(), nil)
 	msgs = fetchMessages(t, env.db, fullID)
-	require.Equal(t, 2, len(msgs), "got %d messages after resync, want 2", len(msgs))
+	require.Len(t, msgs, 2, "got %d messages after resync, want 2", len(msgs))
 	assert.NotContains(t, msgs[1].Content, "stale content", "ResyncAll did not replace message content")
 	assert.Contains(t, msgs[1].Content, "Here is the explanation.",
 		"unexpected content after resync: %q", msgs[1].Content)
@@ -10787,13 +10781,13 @@ func TestResyncAllReplacesMessageContent(t *testing.T) {
 	// FTS search should work after resync (index was dropped
 	// and rebuilt).
 	if hadFTS {
-		require.True(t, env.db.HasFTS(), "FTS available before resync but not after")
+		require.True(t, env.db.HasFTS(t.Context()), "FTS available before resync but not after")
 		page, err := env.db.Search(
-			context.Background(),
+			t.Context(),
 			db.SearchFilter{Query: "explanation"},
 		)
 		require.NoError(t, err, "search after resync")
-		assert.NotZero(t, len(page.Results), "FTS search returned no results after resync")
+		assert.NotEmpty(t, page.Results, "FTS search returned no results after resync")
 	}
 }
 
@@ -10820,7 +10814,7 @@ func TestResyncAllPreservesTrashedSessionData(t *testing.T) {
 	)
 	env.engine.SyncPaths([]string{orphanPath})
 	assertSessionMessageCount(t, env.db, "active-orphan", 2)
-	require.NoError(t, env.db.UpdateSessionSignals(
+	require.NoError(t, env.db.UpdateSessionSignals(t.Context(),
 		"active-orphan",
 		db.SessionSignalUpdate{
 			Outcome:           "completed",
@@ -10837,7 +10831,7 @@ func TestResyncAllPreservesTrashedSessionData(t *testing.T) {
 	), "UpdateSessionSignals orphan")
 	require.NoError(t, os.Remove(orphanPath), "remove orphan source")
 
-	require.NoError(t, env.db.SoftDeleteSession("resync-trash"), "SoftDeleteSession")
+	require.NoError(t, env.db.SoftDeleteSession(t.Context(), "resync-trash"), "SoftDeleteSession")
 
 	replacement := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "replacement prompt").
@@ -10845,32 +10839,32 @@ func TestResyncAllPreservesTrashedSessionData(t *testing.T) {
 		String()
 	dbtest.WriteTestFile(t, path, []byte(replacement))
 
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "ResyncAll aborted: %+v", stats)
 	assertSessionMessageCount(t, env.db, "active-orphan", 2)
 	assertSessionState(t, env.db, "active-orphan", func(sess *db.Session) {
 		if sess.HealthScore == nil || *sess.HealthScore != 94 {
-			t.Fatalf("orphan health score = %v, want 94", sess.HealthScore)
+			require.FailNowf(t, "test failed", "orphan health score = %v, want 94", sess.HealthScore)
 		}
 		qs := sess.StoredQualitySignals()
 		if qs == nil {
-			t.Fatal("orphan quality signals were not preserved")
+			require.FailNow(t, "orphan quality signals were not preserved")
 		}
 		if qs.Version != db.CurrentQualitySignalVersion ||
 			qs.ShortPromptCount != 1 ||
 			qs.MissingSuccessCriteriaCount != 1 {
-			t.Fatalf("orphan quality signals = %+v, want preserved prompt signals", qs)
+			require.FailNowf(t, "test failed", "orphan quality signals = %+v, want preserved prompt signals", qs)
 		}
 	})
 
 	full, err := env.db.GetSessionFull(
-		context.Background(), "resync-trash",
+		t.Context(), "resync-trash",
 	)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, full, "trashed session was not preserved as trashed")
 	require.NotNil(t, full.DeletedAt, "trashed session was not preserved as trashed")
 	msgs := fetchMessages(t, env.db, "resync-trash")
-	require.Equal(t, 2, len(msgs), "messages = %d, want 2", len(msgs))
+	require.Len(t, msgs, 2, "messages = %d, want 2", len(msgs))
 	require.Equal(t, "original trashed prompt", msgs[0].Content, "trashed content = %q, want original content", msgs[0].Content)
 }
 
@@ -10908,13 +10902,13 @@ func TestResyncAllSurfacesQueuedCommands(t *testing.T) {
 
 	const sessionID = "queued-resync"
 	msgs := fetchMessages(t, env.db, sessionID)
-	require.Equal(t, 4, len(msgs), "initial sync: got %d messages, want 4", len(msgs))
+	require.Len(t, msgs, 4, "initial sync: got %d messages, want 4", len(msgs))
 
 	// Simulate an old-parser DB by removing the queued_command
 	// row directly. Older versions of the parser would never
 	// have stored it.
-	err := env.db.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	err := env.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			"DELETE FROM messages WHERE session_id = ?"+
 				" AND source_subtype = 'queued_command'",
 			sessionID,
@@ -10923,21 +10917,21 @@ func TestResyncAllSurfacesQueuedCommands(t *testing.T) {
 	})
 	require.NoError(t, err, "delete queued_command row")
 	msgs = fetchMessages(t, env.db, sessionID)
-	require.Equal(t, 3, len(msgs), "after stale simulation: got %d, want 3", len(msgs))
+	require.Len(t, msgs, 3, "after stale simulation: got %d, want 3", len(msgs))
 
 	// SyncAll must NOT recover the dropped row: the source
 	// file is unchanged on disk, so the engine skips it.
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Skipped, "SyncAll: expected Skipped=1, got %d", stats.Skipped)
 	msgs = fetchMessages(t, env.db, sessionID)
-	require.Equal(t, 3, len(msgs), "after SyncAll: got %d, want 3", len(msgs))
+	require.Len(t, msgs, 3, "after SyncAll: got %d, want 3", len(msgs))
 
 	// ResyncAll re-parses every session from scratch and the
 	// queued_command reappears.
-	env.engine.ResyncAll(context.Background(), nil)
+	env.engine.ResyncAll(t.Context(), nil)
 
 	msgs = fetchMessages(t, env.db, sessionID)
-	require.Equal(t, 4, len(msgs), "after ResyncAll: got %d, want 4", len(msgs))
+	require.Len(t, msgs, 4, "after ResyncAll: got %d, want 4", len(msgs))
 
 	var queued *db.Message
 	for i := range msgs {
@@ -10964,11 +10958,11 @@ func TestResyncAllPreservesInsights(t *testing.T) {
 		t, "test-proj", "insight-test.jsonl", content,
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, env.db, "insight-test", 2)
 
 	// Insert an insight into the DB.
-	_, err := env.db.InsertInsight(db.Insight{
+	_, err := env.db.InsertInsight(t.Context(), db.Insight{
 		Type:     "daily_activity",
 		DateFrom: "2025-01-15",
 		DateTo:   "2025-01-15",
@@ -10979,16 +10973,16 @@ func TestResyncAllPreservesInsights(t *testing.T) {
 
 	// ResyncAll should rebuild sessions and preserve
 	// insights.
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 	require.NotZero(t, stats.Synced, "expected at least 1 synced session")
 
 	assertSessionMessageCount(t, env.db, "insight-test", 2)
 
 	insights, err := env.db.ListInsights(
-		context.Background(), db.InsightFilter{},
+		t.Context(), db.InsightFilter{},
 	)
 	require.NoError(t, err, "ListInsights")
-	require.Equal(t, 1, len(insights), "got %d insights, want 1", len(insights))
+	require.Len(t, insights, 1, "got %d insights, want 1", len(insights))
 	assert.Equal(t, "test insight survives resync", insights[0].Content, "insight content = %q, want preserved", insights[0].Content)
 }
 
@@ -11002,14 +10996,14 @@ func TestResyncAllConsumesCopiedHierarchyRepairs(t *testing.T) {
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
 		TotalSessions: 1, Synced: 1,
 	})
-	require.NoError(t, env.db.QueueSubagentParentRepairs(
+	require.NoError(t, env.db.QueueSubagentParentRepairs(t.Context(),
 		[]string{"queued-relink"},
 	))
-	require.NoError(t, env.db.QueueSubagentParentCleanupRepairs(
+	require.NoError(t, env.db.QueueSubagentParentCleanupRepairs(t.Context(),
 		[]string{"queued-cleanup"},
 	))
 
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 
 	require.False(t, stats.Aborted, "resync aborted: %v", stats.Warnings)
 	for _, table := range []string{
@@ -11017,7 +11011,7 @@ func TestResyncAllConsumesCopiedHierarchyRepairs(t *testing.T) {
 		"subagent_parent_cleanup_queue",
 	} {
 		var pending int
-		require.NoError(t, env.db.Reader().QueryRow(
+		require.NoError(t, env.db.Reader().QueryRow(t.Context(),
 			"SELECT count(*) FROM "+table,
 		).Scan(&pending))
 		assert.Zero(t, pending, "%s must be consumed before swap", table)
@@ -11036,12 +11030,12 @@ func TestResyncAllAbortsWhenCopiedHierarchyRepairFails(t *testing.T) {
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
 		TotalSessions: 1, Synced: 1,
 	})
-	require.NoError(t, env.db.QueueSubagentParentRepairs(
+	require.NoError(t, env.db.QueueSubagentParentRepairs(t.Context(),
 		[]string{"queued-hierarchy-repair"},
 	))
 
 	stats, err := env.engine.ResyncAllWithOptions(
-		context.Background(), nil,
+		t.Context(), nil,
 		sync.RebuildOptions{Contributors: []sync.RebuildContributor{{
 			Name: "repair-failure-fixture",
 			Config: sync.EngineConfig{
@@ -11053,8 +11047,8 @@ func TestResyncAllAbortsWhenCopiedHierarchyRepairFails(t *testing.T) {
 				Ephemeral: true,
 			},
 			AfterSync: func(_ *sync.Engine, tempDB *db.DB) error {
-				return tempDB.Update(func(tx *sql.Tx) error {
-					_, triggerErr := tx.Exec(`
+				return tempDB.Update(t.Context(), func(tx *sql.Tx) error {
+					_, triggerErr := tx.ExecContext(t.Context(), `
 						CREATE TRIGGER fail_copied_hierarchy_repair
 						BEFORE DELETE ON subagent_parent_repair_queue
 						BEGIN
@@ -11086,7 +11080,7 @@ func TestResyncAllPreservesModelPricing(t *testing.T) {
 		t, "test-proj", "pricing-test.jsonl", content,
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, env.db, "pricing-test", 2)
 
 	require.NoError(t, env.db.UpsertModelPricing([]db.ModelPricing{
@@ -11097,7 +11091,7 @@ func TestResyncAllPreservesModelPricing(t *testing.T) {
 		},
 	}), "UpsertModelPricing")
 
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 	require.NotZero(t, stats.Synced, "expected at least 1 synced session")
 
 	pricing, err := env.db.GetModelPricing("claude-opus-4-8")
@@ -11115,20 +11109,20 @@ func TestResyncAllAbortsWhenSessionSnapshotMetadataCannotCopy(t *testing.T) {
 		AddClaudeAssistant(tsEarlyS5, "original reply").
 		String()
 	env.writeClaudeSession(t, "test-proj", "metadata-copy.jsonl", content)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, env.db, "metadata-copy", 2)
 
 	dbPath := env.db.Path()
 	require.NoError(t, env.db.Close())
 	raw, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = raw.Exec(`DROP TABLE starred_sessions;
+	_, err = raw.ExecContext(t.Context(), `DROP TABLE starred_sessions;
 		CREATE TABLE starred_sessions (broken_column TEXT)`)
 	require.NoError(t, err)
 	require.NoError(t, raw.Close())
 	require.NoError(t, env.db.Reopen())
 
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 
 	assert.True(t, stats.Aborted)
 	assert.Contains(t, strings.Join(stats.Warnings, "\n"),
@@ -11151,7 +11145,7 @@ func TestResyncAllAbortsOnFailures(t *testing.T) {
 		t, "test-proj", "abort-test.jsonl", content,
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, env.db, "abort-test", 2)
 
 	if runtime.GOOS == "windows" {
@@ -11172,7 +11166,7 @@ func TestResyncAllAbortsOnFailures(t *testing.T) {
 		os.Chmod(sessionPath, 0o644)
 	})
 
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 
 	require.NotEqual(t, 0, stats.Failed, "expected failures, got 0")
 	require.NotZero(t, stats.TotalSessions, "expected TotalSessions > 0")
@@ -11269,7 +11263,7 @@ func TestResyncAllAbortsWithForkAndFailures(t *testing.T) {
 	// Initial sync: all 3 files parse fine.
 	// Fork file produces 2 sessions: "forked" (10 msgs)
 	// and "forked-i" (2 msgs).
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, env.db, "forked", 10)
 	assertSessionMessageCount(t, env.db, "forked-i", 2)
 
@@ -11280,7 +11274,7 @@ func TestResyncAllAbortsWithForkAndFailures(t *testing.T) {
 		t.Cleanup(func() { os.Chmod(p, 0o644) })
 	}
 
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 
 	// Expect: filesOK=1, Failed=2, Synced=2.
 	// Abort should fire because Failed(2) > filesOK(1).
@@ -11321,7 +11315,7 @@ func TestResyncAllPostReopenAvailability(t *testing.T) {
 	})
 
 	// Resync triggers the full close-rename-reopen cycle.
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Synced, "resync: synced = %d, want 1", stats.Synced)
 	assert.False(t, stats.Aborted, "unexpected Aborted = true on successful resync")
 	for _, w := range stats.Warnings {
@@ -11330,16 +11324,16 @@ func TestResyncAllPostReopenAvailability(t *testing.T) {
 
 	// Verify reads work on the reopened DB.
 	s, err := env.db.GetSession(
-		context.Background(), "avail",
+		t.Context(), "avail",
 	)
 	require.NoError(t, err, "GetSession after resync")
 	require.NotNil(t, s, "session missing after resync")
 
 	msgs := fetchMessages(t, env.db, "avail")
-	require.Equal(t, 2, len(msgs), "got %d messages, want 2", len(msgs))
+	require.Len(t, msgs, 2, "got %d messages, want 2", len(msgs))
 
 	// Verify writes work on the reopened DB.
-	err = env.db.UpsertSession(db.Session{
+	err = env.db.UpsertSession(t.Context(), db.Session{
 		ID:           "post-resync-write",
 		Project:      "avail-proj",
 		Machine:      "local",
@@ -11348,14 +11342,14 @@ func TestResyncAllPostReopenAvailability(t *testing.T) {
 	})
 	require.NoError(t, err, "UpsertSession after resync")
 	s2, err := env.db.GetSession(
-		context.Background(), "post-resync-write",
+		t.Context(), "post-resync-write",
 	)
 	require.NoError(t, err, "GetSession post-write")
 	require.NotNil(t, s2, "session written after resync not found")
 
 	// Verify a subsequent SyncAll still works (engine state
 	// is consistent with the reopened DB).
-	stats2 := env.engine.SyncAll(context.Background(), nil)
+	stats2 := env.engine.SyncAll(t.Context(), nil)
 	assert.Equal(t, 0, stats2.Synced, "post-resync SyncAll: synced=%d skipped=%d", stats2.Synced, stats2.Skipped)
 	assert.Equal(t, 1, stats2.Skipped, "post-resync SyncAll: synced=%d skipped=%d", stats2.Synced, stats2.Skipped)
 }
@@ -11375,9 +11369,9 @@ func TestResyncAllConcurrentReads(t *testing.T) {
 		t, "conc-proj", "conc.jsonl", content,
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	var wg gosync.WaitGroup
@@ -11423,7 +11417,7 @@ func TestResyncAllConcurrentReads(t *testing.T) {
 	<-readersReady
 
 	// Run resync while readers are active.
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 	cancel()
 	wg.Wait()
 
@@ -11431,7 +11425,7 @@ func TestResyncAllConcurrentReads(t *testing.T) {
 
 	// Post-resync reads must succeed.
 	s, err := env.db.GetSession(
-		context.Background(), "conc",
+		t.Context(), "conc",
 	)
 	require.NoError(t, err, "GetSession after resync")
 	require.NotNil(t, s, "session missing after resync")
@@ -11450,7 +11444,7 @@ func TestResyncAllAbortsOnEmptyDiscovery(t *testing.T) {
 		AddClaudeAssistant(tsEarlyS5, "ok").
 		String()
 	env.writeClaudeSession(t, "proj", "keep.jsonl", content)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, env.db, "keep", 2)
 
 	// Remove all session files to simulate empty discovery.
@@ -11463,7 +11457,7 @@ func TestResyncAllAbortsOnEmptyDiscovery(t *testing.T) {
 		os.Remove(p)
 	}
 
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 
 	// Swap must be aborted.
 	hasAbortWarning := false
@@ -11482,7 +11476,6 @@ func TestResyncAllAbortsOnEmptyDiscovery(t *testing.T) {
 // sessions do not trip the empty-discovery guard simply because
 // they are DB-backed rather than JSONL-backed.
 func TestResyncAllKiroSQLiteOnly(t *testing.T) {
-
 	env := setupSingleAgentTestEnv(t, parser.AgentKiro)
 	ks := createKiroSQLiteDB(t, env.kiroDir)
 	ks.addSession(
@@ -11491,13 +11484,13 @@ func TestResyncAllKiroSQLiteOnly(t *testing.T) {
 		1779012000000, 1779012030000,
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	agentviewID := "kiro:kiro-resync-only"
 	assertSessionMessageCount(t, env.db, agentviewID, 4)
 
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 	for _, w := range stats.Warnings {
-		require.False(t, strings.Contains(w, "resync aborted"), "ResyncAll aborted for Kiro SQLite-only dataset: %s", w)
+		require.NotContains(t, w, "resync aborted", "ResyncAll aborted for Kiro SQLite-only dataset: %s", w)
 	}
 	require.NotZero(t, stats.Synced, "expected Kiro SQLite sessions to be synced")
 	assertSessionMessageCount(t, env.db, agentviewID, 4)
@@ -11543,14 +11536,14 @@ func TestResyncAllMixedOpenCodeRootsKeepsSQLiteFallback(t *testing.T) {
 		"hi sqlite fallback", timeCreated+1,
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	agentviewID := "opencode:" + sessionID
 	assertSessionMessageCount(t, env.db, agentviewID, 2)
 
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 
 	for _, w := range stats.Warnings {
-		require.False(t, strings.Contains(w, "resync aborted"), "ResyncAll aborted for mixed OpenCode roots: %s", w)
+		require.NotContains(t, w, "resync aborted", "ResyncAll aborted for mixed OpenCode roots: %s", w)
 	}
 	require.NotZero(t, stats.Synced, "expected SQLite fallback OpenCode session to be synced")
 
@@ -11637,9 +11630,9 @@ func TestResyncAllOpenCodeStorageArchiveHandlesSQLiteFallbackFreshness(
 		"hello newer sqlite fallback", 1704067200000,
 	)
 
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 	for _, w := range stats.Warnings {
-		require.False(t, strings.Contains(w, "resync aborted"), "ResyncAll aborted for storage->sqlite freshness: %s", w)
+		require.NotContains(t, w, "resync aborted", "ResyncAll aborted for storage->sqlite freshness: %s", w)
 	}
 	require.NotZero(t, stats.Synced, "expected newer sqlite fallback to be synced")
 
@@ -11656,7 +11649,6 @@ func TestResyncAllOpenCodeStorageArchiveHandlesSQLiteFallbackFreshness(
 func TestResyncAllKiloStorageArchivePreservesStaleSQLiteFallback(
 	t *testing.T,
 ) {
-
 	env := setupSingleAgentTestEnv(t, parser.AgentKilo)
 	storage := createOpenCodeStorageFixture(t, env.kiloDir)
 
@@ -11701,10 +11693,10 @@ func TestResyncAllKiloStorageArchivePreservesStaleSQLiteFallback(
 		"hello kilo sqlite fallback", 1704067200000,
 	)
 
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "ResyncAll aborted for Kilo storage archive")
 	for _, w := range stats.Warnings {
-		require.False(t, strings.Contains(w, "resync aborted"), "ResyncAll aborted for Kilo storage->sqlite fallback: %s", w)
+		require.NotContains(t, w, "resync aborted", "ResyncAll aborted for Kilo storage->sqlite fallback: %s", w)
 	}
 	require.Equal(t, 0, stats.Synced, "stats.Synced = %d, want 0", stats.Synced)
 
@@ -11727,10 +11719,10 @@ func TestResyncAllKiloStorageArchivePreservesStaleSQLiteFallback(
 		"sqlite-only kilo reply", 1704067211000,
 	)
 
-	stats = env.engine.ResyncAll(context.Background(), nil)
+	stats = env.engine.ResyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "ResyncAll aborted for Kilo SQLite-only session")
 	for _, w := range stats.Warnings {
-		require.False(t, strings.Contains(w, "resync aborted"), "ResyncAll aborted for Kilo SQLite-only session: %s", w)
+		require.NotContains(t, w, "resync aborted", "ResyncAll aborted for Kilo SQLite-only session: %s", w)
 	}
 	require.NotZero(t, stats.Synced, "expected Kilo SQLite-only session to be synced")
 	assertMessageContent(
@@ -11782,9 +11774,9 @@ func TestResyncAllOpenCodeStorageMissingMessagePreservesArchive(
 	future := time.Now().Add(2 * time.Second)
 	require.NoError(t, os.Chtimes(sessionPath, future, future), "touch session path")
 
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 	for _, w := range stats.Warnings {
-		require.False(t, strings.Contains(w, "resync aborted"), "ResyncAll aborted for missing OpenCode message: %s", w)
+		require.NotContains(t, w, "resync aborted", "ResyncAll aborted for missing OpenCode message: %s", w)
 	}
 
 	assertMessageContent(
@@ -11839,7 +11831,7 @@ func TestResyncAllAbortsMixedSourceEmptyFiles(t *testing.T) {
 	)
 
 	// Initial sync: both sources.
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, env.db, "mixed-file", 2)
 	assertSessionMessageCount(
 		t, env.db, "opencode:"+sessionID, 2,
@@ -11856,7 +11848,7 @@ func TestResyncAllAbortsMixedSourceEmptyFiles(t *testing.T) {
 		os.Remove(p)
 	}
 
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 
 	// Must abort: file-backed sessions would be lost.
 	hasAbortWarning := false
@@ -11888,7 +11880,7 @@ func TestNewEngineDefensiveCopy(t *testing.T) {
 	dirs := map[parser.AgentType][]string{
 		parser.AgentClaude: {claudeDir},
 	}
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: dirs,
 		Machine:   "local",
 	})
@@ -11908,7 +11900,7 @@ func TestNewEngineDefensiveCopy(t *testing.T) {
 	dirs[parser.AgentCodex] = []string{"/bogus"}
 
 	// Engine should still find the session via its own copy.
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Synced, "Synced = %d, want 1 (engine used mutated map)", stats.Synced)
 	assertSessionMessageCount(t, database, "copy-test", 1)
 
@@ -11921,7 +11913,7 @@ func TestNewEngineDefensiveCopy(t *testing.T) {
 		parser.AgentClaude: sliceDirs,
 	}
 	db2 := dbtest.OpenTestDB(t)
-	engine2 := sync.NewEngine(db2, sync.EngineConfig{
+	engine2 := sync.NewEngine(t.Context(), db2, sync.EngineConfig{
 		AgentDirs: dirs2,
 		Machine:   "local",
 	})
@@ -11937,7 +11929,7 @@ func TestNewEngineDefensiveCopy(t *testing.T) {
 	// Mutate the element inside the original slice.
 	sliceDirs[0] = "/nonexistent"
 
-	stats2 := engine2.SyncAll(context.Background(), nil)
+	stats2 := engine2.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats2.Synced, "Synced = %d, want 1 (engine used aliased slice)", stats2.Synced)
 	assertSessionMessageCount(t, db2, "slice-test", 1)
 }
@@ -11962,7 +11954,7 @@ func TestSyncPathsClaudeFallsThrough(t *testing.T) {
 	)
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeDir},
 			parser.AgentAmp:    {ampDir},
@@ -12014,7 +12006,7 @@ func TestSyncPathsClassifyFallsThrough(t *testing.T) {
 	ampDir := filepath.Join(cursorDir, "nested-amp")
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCursor: {cursorDir},
 			parser.AgentAmp:    {ampDir},
@@ -12054,7 +12046,7 @@ func TestSyncPathsVSCodeCopilotJSONLPriority(t *testing.T) {
 	)
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCodeCopilot: {vscDir},
 		},
@@ -12085,12 +12077,12 @@ func TestSyncPathsVSCodeCopilotJSONLPriority(t *testing.T) {
 	// because a .jsonl sibling exists.
 	engine.SyncPaths([]string{jsonPath})
 
-	ctx := context.Background()
+	ctx := t.Context()
 	page, err := database.ListSessions(
 		ctx, db.SessionFilter{Limit: 10},
 	)
 	require.NoError(t, err)
-	assert.Equal(t, 0, len(page.Sessions), "expected 0 sessions (.json skipped), got %d", len(page.Sessions))
+	assert.Empty(t, page.Sessions, "expected 0 sessions (.json skipped), got %d", len(page.Sessions))
 }
 
 func TestSyncPathsVSCodeCopilotWorkspaceMetadataRefreshesProject(t *testing.T) {
@@ -12105,7 +12097,7 @@ func TestSyncPathsVSCodeCopilotWorkspaceMetadataRefreshesProject(t *testing.T) {
 	workspacePath := filepath.Join(hashDir, "workspace.json")
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCodeCopilot: {vscDir},
 		},
@@ -12185,7 +12177,7 @@ func TestSyncPathsVSCodeCopilotPersistsUsageEvents(t *testing.T) {
 	)
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVSCodeCopilot: {vscDir},
 		},
@@ -12213,7 +12205,7 @@ func TestSyncPathsVSCodeCopilotPersistsUsageEvents(t *testing.T) {
 
 	engine.SyncPaths([]string{jsonPath})
 
-	ctx := context.Background()
+	ctx := t.Context()
 	sessionID := "vscode-copilot:" + uuid
 	events, err := database.GetUsageEvents(ctx, sessionID)
 	require.NoError(t, err)
@@ -12245,7 +12237,7 @@ func TestSyncPathsCopilotUsesAssistantOutputFallback(t *testing.T) {
 	}, "\n")+"\n"))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCopilot: {root},
 		},
@@ -12284,7 +12276,7 @@ func TestSyncPathsCopilotShutdownUsageSuppressesAssistantFallback(t *testing.T) 
 	}, "\n")+"\n"))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCopilot: {root},
 		},
@@ -12316,7 +12308,7 @@ func TestSyncPathsPositronJSONLPriority(t *testing.T) {
 	)
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentPositron: {positronDir},
 		},
@@ -12346,10 +12338,10 @@ func TestSyncPathsPositronJSONLPriority(t *testing.T) {
 	engine.SyncPaths([]string{jsonPath})
 
 	page, err := database.ListSessions(
-		context.Background(), db.SessionFilter{Limit: 10},
+		t.Context(), db.SessionFilter{Limit: 10},
 	)
 	require.NoError(t, err)
-	assert.Equal(t, 0, len(page.Sessions), "expected 0 sessions (.json skipped), got %d", len(page.Sessions))
+	assert.Empty(t, page.Sessions, "expected 0 sessions (.json skipped), got %d", len(page.Sessions))
 }
 
 func TestSyncAllPositronJSONLPriority(t *testing.T) {
@@ -12363,7 +12355,7 @@ func TestSyncAllPositronJSONLPriority(t *testing.T) {
 	chatDir := filepath.Join(hashDir, "chatSessions")
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentPositron: {positronDir},
 		},
@@ -12400,10 +12392,10 @@ func TestSyncAllPositronJSONLPriority(t *testing.T) {
 		[]byte(`{"kind":0,"v":`+jsonlSession+`}`),
 	)
 
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	assert.Equal(t, 1, stats.Synced, "synced = %d, want 1", stats.Synced)
 
-	sess, err := database.GetSession(context.Background(), "positron:"+uuid)
+	sess, err := database.GetSession(t.Context(), "positron:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assertSessionMessageCount(t, database, "positron:"+uuid, 2)
@@ -12424,7 +12416,7 @@ func TestSyncPathsPositronWorkspaceMetadataRefreshesProject(t *testing.T) {
 	workspacePath := filepath.Join(hashDir, "workspace.json")
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentPositron: {positronDir},
 		},
@@ -12503,7 +12495,7 @@ func TestSyncAllSincePositronWorkspaceMetadataRefreshesProject(t *testing.T) {
 	workspacePath := filepath.Join(hashDir, "workspace.json")
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentPositron: {positronDir},
 		},
@@ -12537,7 +12529,7 @@ func TestSyncAllSincePositronWorkspaceMetadataRefreshesProject(t *testing.T) {
 		[]byte(`{"kind":0,"v":`+session+`}`),
 	)
 
-	engine.SyncAll(context.Background(), nil)
+	engine.SyncAll(t.Context(), nil)
 	assertSessionState(
 		t, database, "positron:"+uuid,
 		func(sess *db.Session) {
@@ -12551,7 +12543,7 @@ func TestSyncAllSincePositronWorkspaceMetadataRefreshesProject(t *testing.T) {
 	cutoff := time.Now().Add(-1 * time.Hour)
 
 	writeWorkspace("two")
-	stats := engine.SyncAllSince(context.Background(), cutoff, nil)
+	stats := engine.SyncAllSince(t.Context(), cutoff, nil)
 	assert.Equal(t, 1, stats.Synced, "synced = %d, want 1", stats.Synced)
 
 	assertSessionState(
@@ -12588,14 +12580,14 @@ func TestPiSessionIntegration(t *testing.T) {
 	dbtest.WriteTestFile(t, sessionFile, fixtureContent)
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentPi: {piDir},
 		},
 		Machine: "local",
 	})
 
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Synced, "expected 1 synced session, got %d (failed=%d)", stats.Synced, stats.Failed)
 
 	assertSessionState(t, database, "pi:pi-test-session-uuid",
@@ -12609,7 +12601,7 @@ func TestPiSessionIntegration(t *testing.T) {
 	)
 
 	// FindSourceFile should locate pi sessions via the "pi:" prefix.
-	src := engine.FindSourceFile("pi:pi-test-session-uuid")
+	src := engine.FindSourceFile(t.Context(), "pi:pi-test-session-uuid")
 	assert.NotEmpty(t, src, "FindSourceFile returned empty for pi session")
 
 	// SyncSingleSession should work for pi sessions.
@@ -12637,7 +12629,7 @@ func TestOMPSyncAllAndChangedPathUseProvider(t *testing.T) {
 		assert.Equal(t, "omp", sess.Agent)
 		assert.Equal(t, "omp_app", sess.Project)
 	})
-	assert.Equal(t, path, env.engine.FindSourceFile("omp:omp-sync"))
+	assert.Equal(t, path, env.engine.FindSourceFile(t.Context(), "omp:omp-sync"))
 
 	updated := piLikeProviderFixture("omp-sync", "/Users/alice/code/omp-renamed")
 	dbtest.WriteTestFile(t, path, []byte(updated))
@@ -12667,7 +12659,7 @@ func TestIncrementalSync_ClaudeAppend(t *testing.T) {
 	path := env.writeClaudeSession(
 		t, "proj", "inc-test.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	assertSessionMessageCount(t, env.db, "inc-test", 1)
 	assertMessageRoles(t, env.db, "inc-test", "user")
@@ -12676,7 +12668,7 @@ func TestIncrementalSync_ClaudeAppend(t *testing.T) {
 
 	// Verify metadata is set from full parse.
 	full, err := env.db.GetSessionFull(
-		context.Background(), "inc-test",
+		t.Context(), "inc-test",
 	)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, full.FileHash, "file_hash not set after full parse")
@@ -12729,7 +12721,7 @@ func TestIncrementalSync_ClaudeAppend(t *testing.T) {
 	// cleared, not left on the pre-append snapshot) so the freshness gate can
 	// use it to detect a later same-size in-place rewrite.
 	updated, err := env.db.GetSessionFull(
-		context.Background(), "inc-test",
+		t.Context(), "inc-test",
 	)
 	require.NoError(t, err, "GetSessionFull after incremental")
 	require.NotNil(t, updated.FileHash, "file_hash = nil, want appended-content hash")
@@ -12759,12 +12751,12 @@ func TestIncrementalSync_ClaudeAgentSettingAppendUsesFullParse(t *testing.T) {
 	path := env.writeClaudeSession(
 		t, "proj", "identity-append.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	assertSessionState(t, env.db, "identity-append", func(sess *db.Session) {
 		assert.Equal(t, string(parser.AgentClaude), sess.Agent)
-		assert.Equal(t, "", sess.AgentLabel)
-		assert.Equal(t, "", sess.Entrypoint)
+		assert.Empty(t, sess.AgentLabel)
+		assert.Empty(t, sess.Entrypoint)
 	})
 
 	appended := `{"type":"user","timestamp":"2026-06-01T00:00:02Z","uuid":"u2","parentUuid":"u1","agentSetting":"triage","entrypoint":"sdk-cli","message":{"content":"late identity"}}` + "\n"
@@ -12794,7 +12786,7 @@ func TestIncrementalSync_ClaudeStoredEntrypointAppendStaysIncremental(t *testing
 	path := env.writeClaudeSession(
 		t, "proj", "identity-stored.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	assertSessionState(t, env.db, "identity-stored", func(sess *db.Session) {
 		assert.Equal(t, "cli", sess.Entrypoint)
@@ -12819,7 +12811,7 @@ func TestIncrementalSync_ClaudeStoredEntrypointAppendStaysIncremental(t *testing
 	assertSessionMessageCount(t, env.db, "identity-stored", 2)
 	assertSessionState(t, env.db, "identity-stored", func(sess *db.Session) {
 		assert.Equal(t, "cli", sess.Entrypoint)
-		assert.Equal(t, "", sess.AgentLabel)
+		assert.Empty(t, sess.AgentLabel)
 		assert.Equal(t, 0, sess.ParserMalformedLines,
 			"append with already-stored identity must stay incremental")
 	})
@@ -12993,7 +12985,7 @@ func TestIncrementalSync_ClaudeFilteredTailAdvancesNextOrdinal(t *testing.T) {
 	path := env.writeClaudeSession(
 		t, "proj", "filtered-tail.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	firstAppend := testjsonl.JoinJSONL(
 		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_pair","name":"Read","input":{"file_path":"README.md"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
@@ -13034,7 +13026,7 @@ func TestIncrementalSync_ClaudeQueueOperationPreservesSubagentMapping(t *testing
 	path := env.writeClaudeSession(
 		t, "proj", "queued-subagent.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	appended := testjsonl.JoinJSONL(
 		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_queue","name":"Agent","input":{"description":"inspect","subagent_type":"Explore","prompt":"inspect"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
@@ -13071,7 +13063,7 @@ func TestIncrementalSync_ClaudeQueueOperationOnlyRepairsStoredSubagentMapping(
 	path := env.writeClaudeSession(
 		t, "proj", "queued-subagent-split.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	appended := testjsonl.JoinJSONL(
 		`{"type":"queue-operation","operation":"enqueue","timestamp":"2024-01-01T10:00:02Z","sessionId":"queued-subagent-split","content":"{\"task_id\":\"childqueueonly\",\"tool_use_id\":\"toolu_queue_only\",\"description\":\"inspect\",\"task_type\":\"local_agent\"}"}`,
@@ -13107,7 +13099,7 @@ func TestIncrementalSync_ClaudeProgressOnlyRepairsStoredSubagentMapping(
 	path := env.writeClaudeSession(
 		t, "proj", "progress-subagent-split.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	appended := testjsonl.JoinJSONL(
 		`{"type":"progress","timestamp":"2024-01-01T10:00:02Z","parentToolUseID":"toolu_progress_only","data":{"type":"agent_progress","agentId":"childprogressonly"}}`,
@@ -13143,7 +13135,7 @@ func TestIncrementalSync_ClaudeProgressWithLateResultPersistsBoth(
 	path := env.writeClaudeSession(
 		t, "proj", "progress-late-result.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	appended := testjsonl.JoinJSONL(
 		`{"type":"progress","timestamp":"2024-01-01T10:00:02Z","parentToolUseID":"toolu_progress_late","data":{"type":"agent_progress","agentId":"childlate"}}`,
@@ -13160,12 +13152,12 @@ func TestIncrementalSync_ClaudeProgressWithLateResultPersistsBoth(
 	msgs := fetchMessages(t, env.db, "progress-late-result")
 	require.Len(t, msgs, 2)
 	require.Len(t, msgs[1].ToolCalls, 1)
-	assert.Equal(
-		t, "agent-childlate", msgs[1].ToolCalls[0].SubagentSessionID,
+	assert.Equal(t,
+		"agent-childlate", msgs[1].ToolCalls[0].SubagentSessionID,
 		"subagent_session_id",
 	)
-	assert.Equal(
-		t, "inspected", msgs[1].ToolCalls[0].ResultContent,
+	assert.Equal(t,
+		"inspected", msgs[1].ToolCalls[0].ResultContent,
 		"result_content",
 	)
 }
@@ -13183,12 +13175,12 @@ func TestIncrementalSync_ClaudeFileReplaced(t *testing.T) {
 	path := env.writeClaudeSession(
 		t, "proj", "replaced.jsonl", original,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	assertSessionMessageCount(t, env.db, "replaced", 1)
 
 	full, err := env.db.GetSessionFull(
-		context.Background(), "replaced",
+		t.Context(), "replaced",
 	)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, full.FileInode, "file_inode not populated after initial sync")
@@ -13214,7 +13206,7 @@ func TestIncrementalSync_ClaudeFileReplaced(t *testing.T) {
 	// and the appended bytes would be interpreted as continuation
 	// of the original file.
 	full, err = env.db.GetSessionFull(
-		context.Background(), "replaced",
+		t.Context(), "replaced",
 	)
 	require.NoError(t, err, "GetSessionFull after replace")
 	require.NotNil(t, full.FileInode, "file_inode cleared after replace")
@@ -13238,7 +13230,7 @@ func TestIncrementalSync_ClaudeTruncatedFileReplacesStoredMessages(t *testing.T)
 	path := env.writeClaudeSession(
 		t, "proj", "truncated-replace.jsonl", original,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, env.db, "truncated-replace", 2)
 
 	replacement := testjsonl.JoinJSONL(
@@ -13265,7 +13257,7 @@ func TestIncrementalSync_ClaudeSameSizeFileReplaceUsesFullParse(t *testing.T) {
 	path := env.writeClaudeSession(
 		t, "proj", "same-size-replace.jsonl", original,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	replacement := testjsonl.JoinJSONL(
 		testjsonl.ClaudeUserJSON("third", tsZero),
@@ -13296,10 +13288,10 @@ func TestIncrementalSync_ClaudeSameSizeSameMtimeFileReplaceUsesFullParse(
 	path := env.writeClaudeSession(
 		t, "proj", "same-size-same-mtime-replace.jsonl", original,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	full, err := env.db.GetSessionFull(
-		context.Background(), "same-size-same-mtime-replace",
+		t.Context(), "same-size-same-mtime-replace",
 	)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, full.FileInode, "file_inode not populated after initial sync")
@@ -13325,7 +13317,7 @@ func TestIncrementalSync_ClaudeSameSizeSameMtimeFileReplaceUsesFullParse(
 	assert.Equal(t, "third", msgs[0].Content)
 	assert.Equal(t, "bravo", msgs[1].Content)
 	full, err = env.db.GetSessionFull(
-		context.Background(), "same-size-same-mtime-replace",
+		t.Context(), "same-size-same-mtime-replace",
 	)
 	require.NoError(t, err, "GetSessionFull after replace")
 	require.NotNil(t, full.FileInode, "file_inode cleared after replace")
@@ -13354,12 +13346,12 @@ func TestIncrementalSync_ClaudeForkSameSizeSameMtimeFileReplaceUsesFullParse(
 	path := env.writeClaudeSession(
 		t, "proj", "same-size-same-mtime-fork-replace.jsonl", original,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	assertSessionMessageCount(t, env.db, "same-size-same-mtime-fork-replace", 10)
 	assertSessionMessageCount(t, env.db, "same-size-same-mtime-fork-replace-i", 2)
 	full, err := env.db.GetSessionFull(
-		context.Background(), "same-size-same-mtime-fork-replace",
+		t.Context(), "same-size-same-mtime-fork-replace",
 	)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, full.FileInode, "file_inode not populated after initial sync")
@@ -13399,7 +13391,7 @@ func TestIncrementalSync_ClaudeForkSameSizeSameMtimeFileReplaceUsesFullParse(
 	assert.Equal(t, "fork-other", forkMsgs[0].Content)
 	assert.Equal(t, "FORK-NO", forkMsgs[1].Content)
 	full, err = env.db.GetSessionFull(
-		context.Background(), "same-size-same-mtime-fork-replace",
+		t.Context(), "same-size-same-mtime-fork-replace",
 	)
 	require.NoError(t, err, "GetSessionFull after replace")
 	require.NotNil(t, full.FileInode, "file_inode cleared after replace")
@@ -13430,7 +13422,7 @@ func TestIncrementalSync_ClaudePathRewriterIgnoresTempInodeChange(t *testing.T) 
 	dbtest.WriteTestFile(t, firstPath, []byte(content))
 	firstInfo, err := os.Stat(firstPath)
 	require.NoError(t, err, "stat first temp copy")
-	firstEngine := sync.NewEngine(db, sync.EngineConfig{
+	firstEngine := sync.NewEngine(t.Context(), db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {firstRoot},
 		},
@@ -13449,7 +13441,7 @@ func TestIncrementalSync_ClaudePathRewriterIgnoresTempInodeChange(t *testing.T) 
 		os.Chtimes(secondPath, firstInfo.ModTime(), firstInfo.ModTime()),
 		"preserve remote mtime on second temp copy",
 	)
-	secondEngine := sync.NewEngine(db, sync.EngineConfig{
+	secondEngine := sync.NewEngine(t.Context(), db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {secondRoot},
 		},
@@ -13533,7 +13525,7 @@ func TestIncrementalSync_ClaudePathRewriterSameSizeSameMtimeRewrite(t *testing.T
 			dbtest.WriteTestFile(t, firstPath, []byte(original))
 			firstInfo, err := os.Stat(firstPath)
 			require.NoError(t, err, "stat first temp copy")
-			firstEngine := sync.NewEngine(database, sync.EngineConfig{
+			firstEngine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentClaude: {firstRoot},
 				},
@@ -13550,11 +13542,10 @@ func TestIncrementalSync_ClaudePathRewriterSameSizeSameMtimeRewrite(t *testing.T
 			// Only the content differs (or not, per the case).
 			secondPath := filepath.Join(secondRoot, "proj", "remote-rewrite.jsonl")
 			dbtest.WriteTestFile(t, secondPath, []byte(tt.second))
-			require.NoError(t,
-				os.Chtimes(secondPath, firstInfo.ModTime(), firstInfo.ModTime()),
+			require.NoError(t, os.Chtimes(secondPath, firstInfo.ModTime(), firstInfo.ModTime()),
 				"preserve remote mtime on second temp copy",
 			)
-			secondEngine := sync.NewEngine(database, sync.EngineConfig{
+			secondEngine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentClaude: {secondRoot},
 				},
@@ -13587,7 +13578,7 @@ func TestIncrementalSync_ClaudeSameSizeInPlaceRewriteClearsStaleRows(t *testing.
 	path := env.writeClaudeSession(
 		t, "proj", "same-size-in-place.jsonl", original,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, env.db, "same-size-in-place", 2)
 
 	replacement := ""
@@ -13637,11 +13628,11 @@ func TestIncrementalSync_ClaudeSameSizeSameMtimeInPlaceRewriteUsesFullParse(
 	path := env.writeClaudeSession(
 		t, "proj", "same-size-same-mtime-in-place.jsonl", original,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, env.db, "same-size-same-mtime-in-place", 2)
 
 	full, err := env.db.GetSessionFull(
-		context.Background(), "same-size-same-mtime-in-place",
+		t.Context(), "same-size-same-mtime-in-place",
 	)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, full.FileInode, "file_inode not populated after initial sync")
@@ -13670,7 +13661,7 @@ func TestIncrementalSync_ClaudeSameSizeSameMtimeInPlaceRewriteUsesFullParse(
 	assert.Equal(t, "bravo", msgs[1].Content)
 
 	full, err = env.db.GetSessionFull(
-		context.Background(), "same-size-same-mtime-in-place",
+		t.Context(), "same-size-same-mtime-in-place",
 	)
 	require.NoError(t, err, "GetSessionFull after replace")
 	require.NotNil(t, full.FileInode, "file_inode cleared after replace")
@@ -13715,7 +13706,7 @@ func TestIncrementalSync_ClaudeMidStreamSplitFallsBackToFullParse(t *testing.T) 
 	path := env.writeClaudeSession(
 		t, "proj", "split-stream.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	assertSessionMessageCount(t, env.db, "split-stream", 2)
 
@@ -13755,8 +13746,8 @@ func TestIncrementalSync_ClaudeMidStreamSplitFallsBackToFullParse(t *testing.T) 
 	assertSessionMessageCount(t, env.db, "split-stream", 2)
 
 	msgs := fetchMessages(t, env.db, "split-stream")
-	require.Equal(t, 2, len(msgs), "len(msgs) = %d, want 2", len(msgs))
-	require.Equal(t, "assistant", string(msgs[1].Role), "msgs[1].Role = %q, want assistant", msgs[1].Role)
+	require.Len(t, msgs, 2, "len(msgs) = %d, want 2", len(msgs))
+	require.Equal(t, "assistant", msgs[1].Role, "msgs[1].Role = %q, want assistant", msgs[1].Role)
 	// The partial snapshot ("Hello") must be REPLACED by the final
 	// snapshot ("Hello world"), not concatenated as additive content.
 	assert.Equal(t, "Hello world", msgs[1].Content, "msgs[1].Content = %q, want exactly %q", msgs[1].Content, "Hello world")
@@ -13794,11 +13785,11 @@ func TestIncrementalSync_ClaudeAgentIDLinksIncrementally(t *testing.T) {
 		subContent,
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	// Linkage starts empty (the toolUseResult hasn't appeared yet).
 	var assistantMessageID int64
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT id
 		FROM messages
 		WHERE session_id = ? AND ordinal = 1`,
@@ -13806,14 +13797,14 @@ func TestIncrementalSync_ClaudeAgentIDLinksIncrementally(t *testing.T) {
 	).Scan(&assistantMessageID), "query message id before append")
 
 	var got sql.NullString
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT subagent_session_id
 		FROM tool_calls
 		WHERE session_id = ? AND tool_use_id = ?`,
 		"parent-late-link", "toolu_late",
 	).Scan(&got), "query before append")
 	if got.Valid {
-		require.Equal(t, "", got.String, "subagent_session_id = %q before tool_result, want empty", got.String)
+		require.Empty(t, got.String, "subagent_session_id = %q before tool_result, want empty", got.String)
 	}
 
 	// Append a tool_result with toolUseResult.agentId pointing at
@@ -13830,14 +13821,14 @@ func TestIncrementalSync_ClaudeAgentIDLinksIncrementally(t *testing.T) {
 	env.engine.SyncPaths([]string{path})
 
 	var gotMessageID int64
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT id
 		FROM messages
 		WHERE session_id = ? AND ordinal = 1`,
 		"parent-late-link",
 	).Scan(&gotMessageID), "query message id after append")
 
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT subagent_session_id
 		FROM tool_calls
 		WHERE session_id = ? AND tool_use_id = ?`,
@@ -13925,10 +13916,10 @@ func TestIncrementalSync_ClaudePlainToolResultLinksIncrementally(
 	path := env.writeClaudeSession(
 		t, "proj-plain-result", "parent-plain-result.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	var assistantMessageID int64
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT id
 		FROM messages
 		WHERE session_id = ? AND ordinal = 1`,
@@ -13945,7 +13936,7 @@ func TestIncrementalSync_ClaudePlainToolResultLinksIncrementally(
 	env.engine.SyncPaths([]string{path})
 
 	var gotMessageID int64
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT id
 		FROM messages
 		WHERE session_id = ? AND ordinal = 1`,
@@ -13982,7 +13973,7 @@ func TestIncrementalSync_ClaudeRewindOntoFilteredCarrierFullParses(
 	path := env.writeClaudeSession(
 		t, "proj-rewind", "parent-rewind.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	// The carrier u2 is filtered from stored messages but resolvable
 	// in the full parser's DAG.
@@ -14026,10 +14017,10 @@ func TestIncrementalSync_ClaudeLinearBoundChainBreakStaysIncremental(
 	path := env.writeClaudeSession(
 		t, "proj-linear-bound", "parent-linear-bound.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	var assistantMessageID int64
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT id
 		FROM messages
 		WHERE session_id = ? AND ordinal = 1`,
@@ -14052,7 +14043,7 @@ func TestIncrementalSync_ClaudeLinearBoundChainBreakStaysIncremental(
 	env.engine.SyncPaths([]string{path})
 
 	var gotMessageID int64
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT id
 		FROM messages
 		WHERE session_id = ? AND ordinal = 1`,
@@ -14070,7 +14061,7 @@ func TestIncrementalSync_ClaudeAgentIDLinkUsesRemotePrefix(t *testing.T) {
 	claudeDir := t.TempDir()
 	database := dbtest.OpenTestDB(t)
 	env := &testEnv{claudeDir: claudeDir, db: database}
-	env.engine = sync.NewEngine(database, sync.EngineConfig{
+	env.engine = sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeDir},
 		},
@@ -14085,7 +14076,7 @@ func TestIncrementalSync_ClaudeAgentIDLinkUsesRemotePrefix(t *testing.T) {
 	path := env.writeClaudeSession(
 		t, "proj-prefix-link", "parent-prefix-link.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	toolResult := `{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_prefix","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"childprefix"}}`
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
@@ -14097,7 +14088,7 @@ func TestIncrementalSync_ClaudeAgentIDLinkUsesRemotePrefix(t *testing.T) {
 	env.engine.SyncPaths([]string{path})
 
 	var got string
-	require.NoError(t, database.Reader().QueryRow(`
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `
 		SELECT subagent_session_id
 		FROM tool_calls
 		WHERE session_id = ? AND tool_use_id = ?`,
@@ -14115,7 +14106,7 @@ func TestIncrementalSync_ClaudeAgentIDLinksToolUseFromSameAppend(t *testing.T) {
 	path := env.writeClaudeSession(
 		t, "proj-same-append-link", "parent-same-append-link.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	appended := testjsonl.JoinJSONL(
 		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"id":"msg_one","content":[{"type":"tool_use","id":"toolu_same_append","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}],"usage":{"input_tokens":1,"output_tokens":1},"stop_reason":"tool_use"}}`,
@@ -14131,7 +14122,7 @@ func TestIncrementalSync_ClaudeAgentIDLinksToolUseFromSameAppend(t *testing.T) {
 
 	assertSessionMessageCount(t, env.db, "parent-same-append-link", 2)
 	var got sql.NullString
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT subagent_session_id
 		FROM tool_calls
 		WHERE session_id = ? AND tool_use_id = ?`,
@@ -14149,7 +14140,7 @@ func TestIncrementalSync_ClaudeAgentIDUsesFirstLinkAndLatestResult(t *testing.T)
 	path := env.writeClaudeSession(
 		t, "proj-multiple-links", "parent-multiple-links.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	appended := testjsonl.JoinJSONL(
 		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_multiple_links","name":"Agent","input":{"description":"d","subagent_type":"Explore","prompt":"p"}}]}}`,
@@ -14183,7 +14174,7 @@ func TestIncrementalSync_ClaudeAgentIDPreservesExistingSubagentLink(t *testing.T
 	path := env.writeClaudeSession(
 		t, "proj-first-link", "parent-first-link.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	toolResult := `{"type":"user","timestamp":"2024-01-01T10:00:03Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_first_link","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"laterresult"}}`
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
@@ -14195,7 +14186,7 @@ func TestIncrementalSync_ClaudeAgentIDPreservesExistingSubagentLink(t *testing.T
 	env.engine.SyncPaths([]string{path})
 
 	var got string
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT subagent_session_id
 		FROM tool_calls
 		WHERE session_id = ? AND tool_use_id = ?`,
@@ -14213,7 +14204,7 @@ func TestIncrementalSync_ClaudeAgentIDDoesNotLinkNonSubagentTool(t *testing.T) {
 	path := env.writeClaudeSession(
 		t, "proj-read-link", "parent-read-link.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	appended := testjsonl.JoinJSONL(
 		`{"type":"assistant","timestamp":"2024-01-01T10:00:01Z","uuid":"a1","parentUuid":"u1","message":{"content":[{"type":"tool_use","id":"toolu_read_link","name":"Read","input":{"file_path":"README.md"}}]}}`,
@@ -14228,7 +14219,7 @@ func TestIncrementalSync_ClaudeAgentIDDoesNotLinkNonSubagentTool(t *testing.T) {
 	env.engine.SyncPaths([]string{path})
 
 	var got sql.NullString
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT subagent_session_id
 		FROM tool_calls
 		WHERE session_id = ? AND tool_use_id = ?`,
@@ -14246,7 +14237,7 @@ func TestIncrementalSync_ClaudeAgentIDMissingToolCallAdvancesCursor(t *testing.T
 	path := env.writeClaudeSession(
 		t, "proj-missing-link", "parent-missing-link.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	appended := `{"type":"user","isMeta":true,"timestamp":"2024-01-01T10:00:01Z","uuid":"r1","parentUuid":"u1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_missing","content":"done"}]},"toolUseResult":{"status":"completed","agentId":"missingchild"}}` + "\n"
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
@@ -14259,7 +14250,7 @@ func TestIncrementalSync_ClaudeAgentIDMissingToolCallAdvancesCursor(t *testing.T
 
 	info, err := os.Stat(path)
 	require.NoError(t, err, "stat appended transcript")
-	sess, err := env.db.GetSessionFull(context.Background(), "parent-missing-link")
+	sess, err := env.db.GetSessionFull(t.Context(), "parent-missing-link")
 	require.NoError(t, err, "get session after append")
 	require.NotNil(t, sess.FileSize)
 	assert.Equal(t, info.Size(), *sess.FileSize)
@@ -14277,7 +14268,7 @@ func TestIncrementalSync_ClaudeMetaAgentIDResultMatchesFullParse(t *testing.T) {
 	path := env.writeClaudeSession(
 		t, "proj-meta-link", "parent-meta-link.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	appended := `{"type":"user","isMeta":true,"timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_meta_link","content":"meta-only output"}]},"toolUseResult":{"status":"completed","agentId":"metachild"}}` + "\n"
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
@@ -14298,7 +14289,7 @@ func TestIncrementalSync_ClaudeMetaAgentIDResultMatchesFullParse(t *testing.T) {
 	}
 	assertToolCall("incremental parse")
 
-	env.engine.ResyncAll(context.Background(), nil)
+	env.engine.ResyncAll(t.Context(), nil)
 	assertToolCall("full parse")
 }
 
@@ -14312,7 +14303,7 @@ func TestIncrementalSync_ClaudeCrossSyncToolResultFallback(t *testing.T) {
 	path := env.writeClaudeSession(
 		t, "proj-cross-tool", "cross-tool.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	appended := `{"type":"user","timestamp":"2024-01-01T10:00:02Z","uuid":"r1","parentUuid":"a1","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_cross","content":"done"}]}}` + "\n"
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
@@ -14343,7 +14334,7 @@ func TestIncrementalSync_CodexAppend(t *testing.T) {
 		t, filepath.Join("2024", "01", "01"),
 		"rollout-20240101-inc-cx.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	before := fetchMessages(t, env.db, "codex:inc-cx")
 	require.Len(t, before, 1)
@@ -14379,7 +14370,7 @@ func TestIncrementalSync_CodexAppend(t *testing.T) {
 		assert.Equal(t, "codex:inc-cx", m.SessionID, "msgs[%d].SessionID = %q, want codex:inc-cx", i, m.SessionID)
 	}
 
-	sess, err := env.db.GetSessionFull(context.Background(), "codex:inc-cx")
+	sess, err := env.db.GetSessionFull(t.Context(), "codex:inc-cx")
 	require.NoError(t, err, "GetSessionFull after append")
 	require.NotNil(t, sess)
 	assert.True(t, sess.LastWriteIncremental)
@@ -14409,9 +14400,9 @@ func TestSyncPathsCodexSameStatInPlaceRewriteRejectedByCheckpoint(t *testing.T) 
 		t, filepath.Join("2024", "01", "01"),
 		"rollout-2024-01-01T10-00-00-"+uuid+".jsonl", original,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
-	before, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	before, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, before)
 	require.NotNil(t, before.FileHash)
@@ -14439,13 +14430,13 @@ func TestSyncPathsCodexSameStatInPlaceRewriteRejectedByCheckpoint(t *testing.T) 
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "bravo request", msgs[0].Content,
 		"a same-stat rewrite must be re-parsed, not trusted")
-	after, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	after, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, after)
 	require.NotNil(t, after.FileHash)
 	assert.NotEqual(t, beforeHash, *after.FileHash,
 		"the re-parse must refresh the stored hash")
-	cp, ok, err := env.db.GetParserCheckpoint("codex:" + uuid)
+	cp, ok, err := env.db.GetParserCheckpoint(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, int64(len(original)), cp.Offset,
@@ -14501,18 +14492,18 @@ func TestSyncAllCodexPathRewriterSameStatRewriteUsesContentHash(t *testing.T) {
 		}
 		return "host:" + filepath.ToSlash(path)
 	}
-	firstEngine := sync.NewEngine(database, sync.EngineConfig{
+	firstEngine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {firstRoot}},
 		Machine:   "host", IDPrefix: "host~", PathRewriter: rewriter, Ephemeral: true,
 	})
 	runSyncAndAssert(t, firstEngine, sync.SyncStats{TotalSessions: 1, Synced: 1})
-	before, err := database.GetSessionFull(context.Background(), "host~codex:"+uuid)
+	before, err := database.GetSessionFull(t.Context(), "host~codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, before)
 	require.NotNil(t, before.FileHash)
 	beforeHash := *before.FileHash
 
-	secondEngine := sync.NewEngine(database, sync.EngineConfig{
+	secondEngine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {secondRoot}},
 		Machine:   "host", IDPrefix: "host~", PathRewriter: rewriter, Ephemeral: true,
 	})
@@ -14521,7 +14512,7 @@ func TestSyncAllCodexPathRewriterSameStatRewriteUsesContentHash(t *testing.T) {
 	msgs := fetchMessages(t, database, "host~codex:"+uuid)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "bravo request", msgs[0].Content)
-	after, err := database.GetSessionFull(context.Background(), "host~codex:"+uuid)
+	after, err := database.GetSessionFull(t.Context(), "host~codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, after)
 	require.NotNil(t, after.FileHash)
@@ -14547,12 +14538,12 @@ func TestIncrementalSync_CodexLifecycleTailUpdatesTermination(t *testing.T) {
 		t, filepath.Join("2024", "01", "01"),
 		"rollout-2024-01-01T10-00-00-"+uuid+".jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	before := fetchMessages(t, env.db, "codex:"+uuid)
 	require.Len(t, before, 1)
 	firstMessageID := before[0].ID
-	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err, "GetSessionFull after initial parse")
 	require.NotNil(t, sess)
 	require.NotNil(t, sess.TerminationStatus)
@@ -14567,7 +14558,7 @@ func TestIncrementalSync_CodexLifecycleTailUpdatesTermination(t *testing.T) {
 	require.NoError(t, f.Close())
 	env.engine.SyncPaths([]string{path})
 
-	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err = env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err, "GetSessionFull after task_started")
 	require.NotNil(t, sess)
 	require.NotNil(t, sess.TerminationStatus)
@@ -14587,7 +14578,7 @@ func TestIncrementalSync_CodexLifecycleTailUpdatesTermination(t *testing.T) {
 	require.NoError(t, f.Close())
 	env.engine.SyncPaths([]string{path})
 
-	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err = env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err, "GetSessionFull after task_complete")
 	require.NotNil(t, sess)
 	require.NotNil(t, sess.TerminationStatus)
@@ -14609,7 +14600,7 @@ func TestIncrementalSync_CodexLifecycleTailUpdatesTermination(t *testing.T) {
 	require.NoError(t, f.Close())
 	env.engine.SyncPaths([]string{path})
 
-	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err = env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err, "GetSessionFull after message-bearing tail")
 	require.NotNil(t, sess)
 	require.NotNil(t, sess.TerminationStatus)
@@ -14635,14 +14626,14 @@ func TestIncrementalSync_CodexStaleProjectForcesFullReparse(t *testing.T) {
 		t, filepath.Join("2024", "01", "01"),
 		"rollout-2024-01-01T10-00-00-"+uuid+".jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
-	before, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	before, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, before)
 	require.Equal(t, "agentsview", before.Project)
-	require.NoError(t, env.db.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	require.NoError(t, env.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET project = ? WHERE id = ?",
 			"roborev_ci_28293_3831737461", "codex:"+uuid,
 		)
@@ -14658,7 +14649,7 @@ func TestIncrementalSync_CodexStaleProjectForcesFullReparse(t *testing.T) {
 	require.NoError(t, f.Close())
 	env.engine.SyncPaths([]string{path})
 
-	after, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	after, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, after)
 	assert.Equal(t, "agentsview", after.Project)
@@ -14688,7 +14679,7 @@ func TestSyncSingleSessionCodexAppendForcesFullReplacement(t *testing.T) {
 	require.NoError(t, os.WriteFile(indexPath, []byte(
 		`{"id":"`+uuid+`","thread_name":"Original title"}`+"\n",
 	), 0o644))
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	require.NoError(t, err, "open for append")
@@ -14700,7 +14691,7 @@ func TestSyncSingleSessionCodexAppendForcesFullReplacement(t *testing.T) {
 
 	require.NoError(t, env.engine.SyncSingleSession("codex:"+uuid))
 
-	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.NotNil(t, sess.SessionName)
@@ -14738,9 +14729,9 @@ func TestSyncPathsCodexEqualFingerprintTitleOnlyRefreshesName(t *testing.T) {
 	indexTime := time.Now().Add(-time.Hour)
 	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
 	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
-	before, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	before, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, before)
 	require.NotNil(t, before.SessionName)
@@ -14767,7 +14758,7 @@ func TestSyncPathsCodexEqualFingerprintTitleOnlyRefreshesName(t *testing.T) {
 
 	env.engine.SyncPaths([]string{path})
 
-	after, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	after, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, after)
 	require.NotNil(t, after.SessionName)
@@ -14803,9 +14794,9 @@ func TestSyncPathsCodexIndexEventReloadsSameStatTitle(t *testing.T) {
 	require.NoError(t, os.WriteFile(indexPath, []byte(original), 0o644))
 	stableTime := time.Unix(1_800_000_000, 456_000_000)
 	require.NoError(t, os.Chtimes(indexPath, stableTime, stableTime))
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
-	before, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	before, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, before)
 	require.NotNil(t, before.SessionName)
@@ -14822,7 +14813,7 @@ func TestSyncPathsCodexIndexEventReloadsSameStatTitle(t *testing.T) {
 
 	env.engine.SyncPaths([]string{indexPath})
 
-	after, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	after, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, after)
 	require.NotNil(t, after.SessionName)
@@ -14855,9 +14846,9 @@ func TestWatcherOverflowReloadsSameStatCodexIndexTitle(t *testing.T) {
 	require.NoError(t, os.WriteFile(indexPath, []byte(original), 0o644))
 	stableTime := time.Unix(1_800_000_001, 456_000_000)
 	require.NoError(t, os.Chtimes(indexPath, stableTime, stableTime))
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
-	before, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	before, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, before)
 	require.NotNil(t, before.SessionName)
@@ -14873,9 +14864,9 @@ func TestWatcherOverflowReloadsSameStatCodexIndexTitle(t *testing.T) {
 	require.Equal(t, indexInfo.ModTime(), rewrittenInfo.ModTime())
 
 	require.NoError(t, env.engine.ReconcileWatchRootsAfterLostEvents(
-		context.Background(), nil, true,
+		t.Context(), nil, true,
 	))
-	after, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	after, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, after)
 	require.NotNil(t, after.SessionName)
@@ -14921,7 +14912,7 @@ func TestIncrementalSync_CodexStoresEffectiveMtime(t *testing.T) {
 	base := time.Now().Add(-2 * time.Hour)
 	require.NoError(t, os.Chtimes(path, base, base), "chtimes initial session")
 	require.NoError(t, os.Chtimes(indexPath, base, base), "chtimes initial index")
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, env.db, "codex:"+uuid, 1)
 
 	// Append an assistant message so the next sync takes the incremental
@@ -14946,7 +14937,7 @@ func TestIncrementalSync_CodexStoresEffectiveMtime(t *testing.T) {
 	env.engine.SyncPaths([]string{path})
 
 	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
-	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, sess, "session present")
 	require.NotNil(t, sess.FileMtime, "file_mtime stored")
@@ -14982,7 +14973,7 @@ func TestIncrementalSync_CodexPartialTailCommitsOnlySafeRecords(t *testing.T) {
 		t, filepath.Join("2024", "01", "01"),
 		"rollout-2024-01-01T10-00-00-"+uuid+".jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, env.db, "codex:"+uuid, 1)
 
 	completeTail := testjsonl.JoinJSONL(
@@ -15003,7 +14994,7 @@ func TestIncrementalSync_CodexPartialTailCommitsOnlySafeRecords(t *testing.T) {
 	env.engine.SyncPaths([]string{path})
 	assertSessionMessageCount(t, env.db, "codex:"+uuid, 2)
 
-	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, sess, "session present")
 	require.NotNil(t, sess.FileSize, "file_size stored")
@@ -15016,7 +15007,7 @@ func TestIncrementalSync_CodexPartialTailCommitsOnlySafeRecords(t *testing.T) {
 	safePrefix, err := os.ReadFile(path)
 	require.NoError(t, err, "read live transcript")
 	sum := sha256.Sum256(safePrefix[:safeSize])
-	wantHash := fmt.Sprintf("%x", sum[:])
+	wantHash := hex.EncodeToString(sum[:])
 	assert.Equal(t, wantHash, *sess.FileHash,
 		"stored Codex hash covers only the committed safe prefix")
 
@@ -15037,7 +15028,7 @@ func TestIncrementalSync_CodexPartialTailCommitsOnlySafeRecords(t *testing.T) {
 	assert.Equal(t, []string{
 		"hello", "world", "completed later", "after partial",
 	}, []string{msgs[0].Content, msgs[1].Content, msgs[2].Content, msgs[3].Content})
-	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err = env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err, "GetSessionFull after partial completion")
 	require.NotNil(t, sess)
 	info, err := os.Stat(path)
@@ -15061,7 +15052,7 @@ func TestIncrementalSync_CodexZeroConsumedPartialTailRetriesAtSameMtime(t *testi
 		t, filepath.Join("2024", "01", "01"),
 		"rollout-2024-01-01T10-00-00-"+uuid+".jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	completeLine := testjsonl.CodexMsgJSON(
 		"assistant", "arrived after partial write", tsEarlyS5,
@@ -15078,7 +15069,7 @@ func TestIncrementalSync_CodexZeroConsumedPartialTailRetriesAtSameMtime(t *testi
 	env.engine.SyncPaths([]string{path})
 
 	intermediate, err := env.db.GetSessionFull(
-		context.Background(), "codex:"+uuid,
+		t.Context(), "codex:"+uuid,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, intermediate)
@@ -15103,7 +15094,7 @@ func TestIncrementalSync_CodexZeroConsumedPartialTailRetriesAtSameMtime(t *testi
 	require.Len(t, msgs, 2)
 	assert.Equal(t, []string{"hello", "arrived after partial write"},
 		[]string{msgs[0].Content, msgs[1].Content})
-	final, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	final, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, final)
 	require.NotNil(t, final.FileSize)
@@ -15133,9 +15124,9 @@ func TestIncrementalSync_CodexUnsafeStoredOffsetForcesFullReparse(t *testing.T) 
 		"rollout-2024-01-01T10-00-00-"+uuid+".jsonl",
 		unsafeSnapshot,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
-	initial, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	initial, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, initial)
 	require.NotNil(t, initial.FileSize)
@@ -15159,7 +15150,7 @@ func TestIncrementalSync_CodexUnsafeStoredOffsetForcesFullReparse(t *testing.T) 
 	require.Len(t, msgs, 3)
 	assert.Equal(t, []string{"hello", "completed record", "later record"},
 		[]string{msgs[0].Content, msgs[1].Content, msgs[2].Content})
-	after, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	after, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, after)
 	assert.False(t, after.LastWriteIncremental,
@@ -15188,7 +15179,7 @@ func TestIncrementalSync_CodexExecAppendRetainsEvents(t *testing.T) {
 		t, filepath.Join("2024", "01", "01"),
 		"rollout-20240101-inc-cx-exec.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	before := fetchMessages(t, env.db, "codex:inc-cx-exec")
 	require.Len(t, before, 2)
 	toolMessageID := before[1].ID
@@ -15220,13 +15211,13 @@ func TestIncrementalSync_CodexExecAppendRetainsEvents(t *testing.T) {
 	assert.Equal(t, "function_call_output", call.ResultEvents[0].Source)
 	assert.Equal(t, "done", call.ResultEvents[0].Content)
 	afterIncremental, err := env.db.GetSessionFull(
-		context.Background(), "codex:inc-cx-exec",
+		t.Context(), "codex:inc-cx-exec",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, afterIncremental)
 	assert.True(t, afterIncremental.LastWriteIncremental)
 
-	env.engine.ResyncAll(context.Background(), nil)
+	env.engine.ResyncAll(t.Context(), nil)
 	fullMsgs := fetchMessages(t, env.db, "codex:inc-cx-exec")
 	require.Len(t, fullMsgs, 2)
 	require.Len(t, fullMsgs[1].ToolCalls, 1)
@@ -15257,7 +15248,7 @@ func TestIncrementalSync_CodexLateTokenCountRewritesStoredMessage(t *testing.T) 
 		"rollout-20240101-inc-cx-late-usage.jsonl",
 		initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	msgs := fetchMessages(t, env.db, "codex:inc-cx-late-usage")
 	require.Len(t, msgs, 2)
@@ -15323,7 +15314,7 @@ func TestIncrementalSync_CodexLateTokenCountWithIndexRenameRewritesStoredMessage
 	require.NoError(t, os.Chtimes(path, initialTime, initialTime), "chtimes initial session")
 	require.NoError(t, os.Chtimes(indexPath, initialTime, initialTime), "chtimes initial index")
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	msgs := fetchMessages(t, env.db, "codex:"+uuid)
 	require.Len(t, msgs, 2)
@@ -15355,7 +15346,7 @@ func TestIncrementalSync_CodexLateTokenCountWithIndexRenameRewritesStoredMessage
 
 	env.engine.SyncPaths([]string{path})
 
-	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err, "GetSessionFull after rename")
 	require.NotNil(t, sess, "expected Codex session to remain")
 	if assert.NotNil(t, sess.SessionName, "expected renamed session_name") {
@@ -15411,8 +15402,8 @@ func TestIncrementalSync_CodexIndexRenameBelowStoredMtimeRefreshesName(t *testin
 	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime), "chtimes initial session")
 	require.NoError(t, os.Chtimes(indexPath, highIndexTime, highIndexTime), "chtimes initial index")
 
-	env.engine.SyncAll(context.Background(), nil)
-	sess, err := env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	env.engine.SyncAll(t.Context(), nil)
+	sess, err := env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, sess, "expected Codex session to sync")
 	require.NotNil(t, sess.SessionName, "expected session_name to be imported")
@@ -15445,7 +15436,7 @@ func TestIncrementalSync_CodexIndexRenameBelowStoredMtimeRefreshesName(t *testin
 
 	env.engine.SyncPaths([]string{path})
 
-	sess, err = env.db.GetSessionFull(context.Background(), "codex:"+uuid)
+	sess, err = env.db.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err, "GetSessionFull after rename")
 	require.NotNil(t, sess, "expected Codex session to remain")
 	if assert.NotNil(t, sess.SessionName, "expected renamed session_name") {
@@ -15478,7 +15469,7 @@ func TestIncrementalSync_CodexSubagentAppendFallsBackToFullParse(t *testing.T) {
 		t, filepath.Join("2024", "01", "01"),
 		"rollout-20240101-inc-cx-sub.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	assertSessionMessageCount(
 		t, env.db, "codex:inc-cx-sub", 2,
@@ -15510,11 +15501,11 @@ func TestIncrementalSync_CodexSubagentAppendFallsBackToFullParse(t *testing.T) {
 		t, env.db, "codex:inc-cx-sub", 3,
 	)
 	msgs := fetchMessages(t, env.db, "codex:inc-cx-sub")
-	require.Equal(t, 3, len(msgs), "messages len = %d, want 3", len(msgs))
-	require.Equal(t, 1, len(msgs[2].ToolCalls), "tool calls len = %d, want 1", len(msgs[2].ToolCalls))
+	require.Len(t, msgs, 3, "messages len = %d, want 3", len(msgs))
+	require.Len(t, msgs[2].ToolCalls, 1, "tool calls len = %d, want 1", len(msgs[2].ToolCalls))
 	waitCall := msgs[2].ToolCalls[0]
 	require.Equal(t, "wait", waitCall.ToolName, "tool name = %q, want %q", waitCall.ToolName, "wait")
-	require.Equal(t, 1, len(waitCall.ResultEvents), "result events len = %d, want 1", len(waitCall.ResultEvents))
+	require.Len(t, waitCall.ResultEvents, 1, "result events len = %d, want 1", len(waitCall.ResultEvents))
 	require.Equal(t, childID, waitCall.ResultEvents[0].AgentID, "event agent_id = %q, want %q", waitCall.ResultEvents[0].AgentID, childID)
 	require.Equal(t, "Finished successfully", waitCall.ResultEvents[0].Content, "event content = %q, want %q", waitCall.ResultEvents[0].Content, "Finished successfully")
 	require.Equal(t, "Finished successfully", waitCall.ResultContent, "result_content = %q, want %q", waitCall.ResultContent, "Finished successfully")
@@ -15531,11 +15522,11 @@ func TestResyncAllCancelledPreservesOriginalDB(t *testing.T) {
 	env.writeClaudeSession(
 		t, "cancel-project", "cancel-sess.jsonl", content,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	// Verify session exists with messages.
 	sess, err := env.db.GetSession(
-		context.Background(), "cancel-sess",
+		t.Context(), "cancel-sess",
 	)
 	require.NoError(t, err, "session not found")
 	require.NotNil(t, sess, "session not found")
@@ -15544,7 +15535,7 @@ func TestResyncAllCancelledPreservesOriginalDB(t *testing.T) {
 
 	// Cancel the context before starting ResyncAll so
 	// collectAndBatch aborts immediately.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	stats := env.engine.ResyncAll(ctx, nil)
@@ -15557,7 +15548,7 @@ func TestResyncAllCancelledPreservesOriginalDB(t *testing.T) {
 	// Original DB should be preserved — session still
 	// has the original data.
 	sess, err = env.db.GetSession(
-		context.Background(), "cancel-sess",
+		t.Context(), "cancel-sess",
 	)
 	require.NoError(t, err, "session lost after cancelled resync")
 	require.NotNil(t, sess, "session lost after cancelled resync")
@@ -15576,14 +15567,14 @@ func TestSyncAllCancelledDoesNotUpdateLastSync(t *testing.T) {
 	)
 
 	// Run a successful sync to set lastSync.
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	lastSync := env.engine.LastSync()
 	require.False(t, lastSync.IsZero(), "expected lastSync to be set")
 	lastStats := env.engine.LastSyncStats()
 	require.NotZero(t, lastStats.Synced, "expected synced > 0")
 
 	// Run a cancelled sync.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	stats := env.engine.SyncAll(ctx, nil)
 	require.True(t, stats.Aborted, "expected SyncAll to report Aborted")
@@ -15620,30 +15611,30 @@ func TestSyncAllSince_FiltersByMtime(t *testing.T) {
 	// process the new file.
 	cutoff := time.Now().Add(-1 * time.Hour)
 	stats := env.engine.SyncAllSince(
-		context.Background(), cutoff, nil,
+		t.Context(), cutoff, nil,
 	)
 	assert.Equal(t, 1, stats.Synced, "synced = %d, want 1", stats.Synced)
 
 	// Verify only the new session is in the DB.
 	page, err := env.db.ListSessions(
-		context.Background(), db.SessionFilter{Limit: 10},
+		t.Context(), db.SessionFilter{Limit: 10},
 	)
 	require.NoError(t, err, "list sessions")
-	require.Equal(t, 1, len(page.Sessions), "sessions = %d, want 1", len(page.Sessions))
+	require.Len(t, page.Sessions, 1, "sessions = %d, want 1", len(page.Sessions))
 
 	// Second call with zero cutoff syncs everything.
 	stats = env.engine.SyncAllSince(
-		context.Background(), time.Time{}, nil,
+		t.Context(), time.Time{}, nil,
 	)
 	// The new file is already in the DB (skip cache);
 	// the old file should now be synced too.
 	assert.NotZero(t, stats.Synced, "expected second sync to pick up backdated file")
 
 	page, err = env.db.ListSessions(
-		context.Background(), db.SessionFilter{Limit: 10},
+		t.Context(), db.SessionFilter{Limit: 10},
 	)
 	require.NoError(t, err, "list sessions")
-	assert.Equal(t, 2, len(page.Sessions), "sessions = %d, want 2", len(page.Sessions))
+	assert.Len(t, page.Sessions, 2, "sessions = %d, want 2", len(page.Sessions))
 
 	_ = newPath
 }
@@ -15675,13 +15666,13 @@ func TestSyncRootsSinceScopesDiscoveredFiles(t *testing.T) {
 	require.NoError(t, os.Chtimes(pathB, time.Now(), time.Now()), "touch root b")
 
 	stats := env.engine.SyncRootsSince(
-		context.Background(), []string{rootB}, cutoff, nil,
+		t.Context(), []string{rootB}, cutoff, nil,
 	)
 	assert.Equal(t, 1, stats.TotalSessions, "total sessions")
 	assert.Equal(t, 1, stats.Synced, "synced sessions")
 
 	page, err := env.db.ListSessions(
-		context.Background(), db.SessionFilter{Limit: 10},
+		t.Context(), db.SessionFilter{Limit: 10},
 	)
 	require.NoError(t, err, "list sessions")
 	require.Len(t, page.Sessions, 1, "sessions")
@@ -15713,13 +15704,13 @@ func TestSyncRootsSinceScopesOpenCodeSQLiteRoots(t *testing.T) {
 	)
 
 	stats := env.engine.SyncRootsSince(
-		context.Background(), []string{rootB}, time.Time{}, nil,
+		t.Context(), []string{rootB}, time.Time{}, nil,
 	)
 	assert.Equal(t, 1, stats.TotalSessions, "total sessions")
 	assert.Equal(t, 1, stats.Synced, "synced sessions")
 
 	page, err := env.db.ListSessions(
-		context.Background(), db.SessionFilter{Limit: 10},
+		t.Context(), db.SessionFilter{Limit: 10},
 	)
 	require.NoError(t, err, "list sessions")
 	require.Len(t, page.Sessions, 1, "sessions")
@@ -15733,7 +15724,7 @@ func TestSyncRootsSinceDoesNotAdvanceGlobalWatermark(t *testing.T) {
 	env := setupTestEnv(t, WithClaudeDirs([]string{rootA, rootB}))
 
 	watermark := time.Now().Add(-24 * time.Hour).UTC()
-	require.NoError(t, env.db.SetSyncState(
+	require.NoError(t, env.db.SetSyncState(t.Context(),
 		"last_sync_started_at",
 		watermark.Format(time.RFC3339Nano),
 	), "seed last_sync_started_at")
@@ -15748,17 +15739,17 @@ func TestSyncRootsSinceDoesNotAdvanceGlobalWatermark(t *testing.T) {
 	require.NoError(t, os.Chtimes(pathA, fileTime, fileTime), "chtimes root a")
 
 	env.engine.SyncRootsSince(
-		context.Background(), []string{rootB}, watermark, nil,
+		t.Context(), []string{rootB}, watermark, nil,
 	)
 
 	stats := env.engine.SyncAllSince(
-		context.Background(), env.engine.LastSyncStartedAt(), nil,
+		t.Context(), env.engine.LastSyncStartedAt(t.Context()), nil,
 	)
 	assert.Equal(t, 1, stats.TotalSessions, "total sessions")
 	assert.Equal(t, 1, stats.Synced, "synced sessions")
 
 	page, err := env.db.ListSessions(
-		context.Background(), db.SessionFilter{Limit: 10},
+		t.Context(), db.SessionFilter{Limit: 10},
 	)
 	require.NoError(t, err, "list sessions")
 	require.Len(t, page.Sessions, 1, "sessions")
@@ -15777,15 +15768,15 @@ func TestSyncAll_PersistsStartedAndFinishedAt(t *testing.T) {
 	)
 
 	before := time.Now().UTC().Add(-1 * time.Second)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	after := time.Now().UTC().Add(1 * time.Second)
 
-	startedAt := env.engine.LastSyncStartedAt()
+	startedAt := env.engine.LastSyncStartedAt(t.Context())
 	require.False(t, startedAt.IsZero(), "LastSyncStartedAt is zero after sync")
 	assert.False(t, startedAt.Before(before) || startedAt.After(after),
 		"LastSyncStartedAt %v outside [%v, %v]", startedAt, before, after)
 
-	finishedRaw, err := env.db.GetSyncState(
+	finishedRaw, err := env.db.GetSyncState(t.Context(),
 		"last_sync_finished_at",
 	)
 	require.NoError(t, err, "get finish state")
@@ -15800,21 +15791,20 @@ func TestResyncAllPreservesPGPushMarkerID(t *testing.T) {
 		AddClaudeAssistant(tsZeroS5, "hi").
 		String()
 	env.writeClaudeSession(t, "proj", "sess.jsonl", content)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
-	require.NoError(t, env.db.SetSyncState("pg_push_marker_id", "marker-123"),
+	require.NoError(t, env.db.SetSyncState(t.Context(), "pg_push_marker_id", "marker-123"),
 		"SetSyncState pg_push_marker_id")
 
-	stats := env.engine.ResyncAll(context.Background(), nil)
+	stats := env.engine.ResyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted, "ResyncAll aborted: %+v", stats)
 
-	got, err := env.db.GetSyncState("pg_push_marker_id")
+	got, err := env.db.GetSyncState(t.Context(), "pg_push_marker_id")
 	require.NoError(t, err, "GetSyncState pg_push_marker_id after resync")
 	assert.Equal(t, "marker-123", got)
 }
 
 func TestOpenCodeExcludedSessionsAreSkipped(t *testing.T) {
-
 	env := setupSingleAgentTestEnv(t, parser.AgentOpenCode)
 
 	oc := createOpenCodeDB(t, env.opencodeDir)
@@ -15833,7 +15823,7 @@ func TestOpenCodeExcludedSessionsAreSkipped(t *testing.T) {
 		"hello", 1000,
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	syncSessionID := "opencode:oc-excl-sync"
 	singleSessionID := "opencode:oc-excl-single"
@@ -15841,15 +15831,15 @@ func TestOpenCodeExcludedSessionsAreSkipped(t *testing.T) {
 	assertSessionMessageCount(t, env.db, singleSessionID, 1)
 
 	// Permanently delete the session (marks it excluded).
-	require.NoError(t, env.db.DeleteSession(syncSessionID), "delete sync session")
-	require.NoError(t, env.db.DeleteSession(singleSessionID), "delete single session")
+	require.NoError(t, env.db.DeleteSession(t.Context(), syncSessionID), "delete sync session")
+	require.NoError(t, env.db.DeleteSession(t.Context(), singleSessionID), "delete single session")
 
 	// Bump time_updated so the parser would normally pick them up.
 	oc.updateSessionTime(t, "oc-excl-sync", 2000)
 	oc.updateSessionTime(t, "oc-excl-single", 2000)
 
 	// Sync again: excluded sessions should not be counted as failures.
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	assert.Equal(t, 0, stats.Failed,
 		"excluded OpenCode session should not count as failure")
 
@@ -15861,7 +15851,6 @@ func TestOpenCodeExcludedSessionsAreSkipped(t *testing.T) {
 // SyncSingleSession on permanently deleted or soft-deleted Claude sessions
 // returns nil, not an error.
 func TestSyncSingleSessionDeletedClaudeIsNoOp(t *testing.T) {
-
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	content := testjsonl.NewSessionBuilder().
@@ -15876,16 +15865,16 @@ func TestSyncSingleSessionDeletedClaudeIsNoOp(t *testing.T) {
 		t, "test-proj", "trashed-single.jsonl", content,
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, env.db, "excl-single", 2)
 	assertSessionMessageCount(t, env.db, "trashed-single", 2)
 
 	// Permanently delete → marks it excluded.
-	err := env.db.DeleteSession(
+	err := env.db.DeleteSession(t.Context(),
 		"excl-single",
 	)
 	require.NoError(t, err, "DeleteSession")
-	require.NoError(t, env.db.SoftDeleteSession("trashed-single"), "SoftDeleteSession")
+	require.NoError(t, env.db.SoftDeleteSession(t.Context(), "trashed-single"), "SoftDeleteSession")
 
 	require.NoError(t, env.engine.SyncSingleSession("excl-single"),
 		"SyncSingleSession on excluded session returned error")
@@ -15894,7 +15883,6 @@ func TestSyncSingleSessionDeletedClaudeIsNoOp(t *testing.T) {
 }
 
 func TestSyncAllTrashedSessionIsSkippedAndCached(t *testing.T) {
-
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	content := testjsonl.NewSessionBuilder().
@@ -15905,11 +15893,11 @@ func TestSyncAllTrashedSessionIsSkippedAndCached(t *testing.T) {
 	path := env.writeClaudeSession(
 		t, "test-proj", "trashed-sync.jsonl", content,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, env.db, "trashed-sync", 2)
 
-	require.NoError(t, env.db.SoftDeleteSession("trashed-sync"), "SoftDeleteSession")
-	require.NoError(t, env.db.ResetAllMtimes(), "ResetAllMtimes")
+	require.NoError(t, env.db.SoftDeleteSession(t.Context(), "trashed-sync"), "SoftDeleteSession")
+	require.NoError(t, env.db.ResetAllMtimes(t.Context()), "ResetAllMtimes")
 
 	updated := testjsonl.NewSessionBuilder().
 		AddClaudeUser(tsZero, "hello again with a longer prompt").
@@ -15920,14 +15908,13 @@ func TestSyncAllTrashedSessionIsSkippedAndCached(t *testing.T) {
 	future := time.Now().Add(2 * time.Second)
 	require.NoError(t, os.Chtimes(path, future, future), "Chtimes")
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 0, stats.Failed, "Failed = %d, want 0 for trashed session", stats.Failed)
 	require.Equal(t, 0, stats.Synced, "Synced = %d, want 0 for trashed session", stats.Synced)
 	require.NotZero(t, env.engine.SnapshotSkipCache()[path], "skip cache missing trashed session path %s", path)
 }
 
 func TestSyncAllTrashedSessionAppendUsesSkipPath(t *testing.T) {
-
 	env := setupSingleAgentTestEnv(t, parser.AgentClaude)
 
 	content := testjsonl.NewSessionBuilder().
@@ -15938,10 +15925,10 @@ func TestSyncAllTrashedSessionAppendUsesSkipPath(t *testing.T) {
 	path := env.writeClaudeSession(
 		t, "test-proj", "trashed-append.jsonl", content,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 	assertSessionMessageCount(t, env.db, "trashed-append", 2)
 
-	require.NoError(t, env.db.SoftDeleteSession("trashed-append"), "SoftDeleteSession")
+	require.NoError(t, env.db.SoftDeleteSession(t.Context(), "trashed-append"), "SoftDeleteSession")
 
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	require.NoError(t, err, "open append")
@@ -15954,11 +15941,11 @@ func TestSyncAllTrashedSessionAppendUsesSkipPath(t *testing.T) {
 	require.NoError(t, f.Close(), "close append")
 	require.NoError(t, err, "append")
 
-	stats := env.engine.SyncAll(context.Background(), nil)
+	stats := env.engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 0, stats.Failed, "Failed = %d, want 0 for trashed append", stats.Failed)
 	require.Equal(t, 0, stats.Synced, "Synced = %d, want 0 for trashed append", stats.Synced)
 	full, err := env.db.GetSessionFull(
-		context.Background(), "trashed-append",
+		t.Context(), "trashed-append",
 	)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, full, "MessageCount = nil, want preserved count 2")
@@ -15980,14 +15967,14 @@ func TestIncrementalSync_ClaudeClearOnlyRepairedOnAppend(t *testing.T) {
 	path := env.writeClaudeSession(
 		t, "proj", "clear-only.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	full, err := env.db.GetSessionFull(
-		context.Background(), "clear-only",
+		t.Context(), "clear-only",
 	)
 	require.NoError(t, err, "GetSessionFull after initial sync")
 	if full.FirstMessage != nil {
-		require.Equal(t, "", *full.FirstMessage, "initial FirstMessage = %q, want empty", *full.FirstMessage)
+		require.Empty(t, *full.FirstMessage, "initial FirstMessage = %q, want empty", *full.FirstMessage)
 	}
 	require.Equal(t, 1, full.UserMessageCount, "initial UserMessageCount = %d, want 1", full.UserMessageCount)
 
@@ -16007,7 +15994,7 @@ func TestIncrementalSync_ClaudeClearOnlyRepairedOnAppend(t *testing.T) {
 	env.engine.SyncPaths([]string{path})
 
 	updated, err := env.db.GetSessionFull(
-		context.Background(), "clear-only",
+		t.Context(), "clear-only",
 	)
 	require.NoError(t, err, "GetSessionFull after append")
 	require.NotNil(t, updated.FirstMessage,
@@ -16031,14 +16018,14 @@ func TestIncrementalSync_ClaudeIDEContextOnlyRepairedOnAppend(t *testing.T) {
 	path := env.writeClaudeSession(
 		t, "proj", "ide-context-only.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	full, err := env.db.GetSessionFull(
-		context.Background(), "ide-context-only",
+		t.Context(), "ide-context-only",
 	)
 	require.NoError(t, err, "GetSessionFull after initial sync")
 	if full.FirstMessage != nil {
-		require.Equal(t, "", *full.FirstMessage,
+		require.Empty(t, *full.FirstMessage,
 			"initial FirstMessage = %q, want empty", *full.FirstMessage)
 	}
 	require.Zero(t, full.UserMessageCount,
@@ -16060,7 +16047,7 @@ func TestIncrementalSync_ClaudeIDEContextOnlyRepairedOnAppend(t *testing.T) {
 	env.engine.SyncPaths([]string{path})
 
 	updated, err := env.db.GetSessionFull(
-		context.Background(), "ide-context-only",
+		t.Context(), "ide-context-only",
 	)
 	require.NoError(t, err, "GetSessionFull after append")
 	require.NotNil(t, updated.FirstMessage,
@@ -16092,10 +16079,10 @@ func TestIncrementalSync_ClaudeEmptyPreviewAppendStaysIncremental(t *testing.T) 
 	path := env.writeClaudeSession(
 		t, "proj", "continuation-only.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	full, err := env.db.GetSessionFull(
-		context.Background(), "continuation-only",
+		t.Context(), "continuation-only",
 	)
 	require.NoError(t, err, "GetSessionFull after initial sync")
 	require.Equal(t, 1, full.MessageCount,
@@ -16127,7 +16114,7 @@ func TestIncrementalSync_ClaudeEmptyPreviewAppendStaysIncremental(t *testing.T) 
 	env.engine.SyncPaths([]string{path})
 
 	updated, err := env.db.GetSessionFull(
-		context.Background(), "continuation-only",
+		t.Context(), "continuation-only",
 	)
 	require.NoError(t, err, "GetSessionFull after append")
 	assert.True(t, updated.LastWriteIncremental,
@@ -16137,7 +16124,7 @@ func TestIncrementalSync_ClaudeEmptyPreviewAppendStaysIncremental(t *testing.T) 
 	assert.Equal(t, 1, updated.UserMessageCount,
 		"UserMessageCount after append = %d, want 1", updated.UserMessageCount)
 	if updated.FirstMessage != nil {
-		assert.Equal(t, "", *updated.FirstMessage,
+		assert.Empty(t, *updated.FirstMessage,
 			"FirstMessage after append = %q, want empty",
 			*updated.FirstMessage)
 	}
@@ -16159,7 +16146,7 @@ func TestIncrementalSync_ClaudeEmptyPreviewRepairedOnLaterPrompt(t *testing.T) {
 	path := env.writeClaudeSession(
 		t, "proj", "continuation-late-prompt.jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	appendLine := func(line string) {
 		f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
@@ -16176,7 +16163,7 @@ func TestIncrementalSync_ClaudeEmptyPreviewRepairedOnLaterPrompt(t *testing.T) {
 	env.engine.SyncPaths([]string{path})
 
 	mid, err := env.db.GetSessionFull(
-		context.Background(), "continuation-late-prompt",
+		t.Context(), "continuation-late-prompt",
 	)
 	require.NoError(t, err, "GetSessionFull after IDE append")
 	require.Equal(t, 2, mid.MessageCount,
@@ -16189,7 +16176,7 @@ func TestIncrementalSync_ClaudeEmptyPreviewRepairedOnLaterPrompt(t *testing.T) {
 	env.engine.SyncPaths([]string{path})
 
 	updated, err := env.db.GetSessionFull(
-		context.Background(), "continuation-late-prompt",
+		t.Context(), "continuation-late-prompt",
 	)
 	require.NoError(t, err, "GetSessionFull after prompt append")
 	require.NotNil(t, updated.FirstMessage,
@@ -16230,10 +16217,10 @@ func TestIncrementalSync_CodexReemittedPromptDedupedOnAppend(t *testing.T) {
 		t, filepath.Join("2024", "01", "15"),
 		"rollout-20240115-"+uuid+".jsonl", initial,
 	)
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	sessionID := "codex:" + uuid
-	full, err := env.db.GetSessionFull(context.Background(), sessionID)
+	full, err := env.db.GetSessionFull(t.Context(), sessionID)
 	require.NoError(t, err, "GetSessionFull after initial sync")
 	require.Equal(t, 1, full.UserMessageCount,
 		"initial UserMessageCount = %d, want 1", full.UserMessageCount)
@@ -16257,7 +16244,7 @@ func TestIncrementalSync_CodexReemittedPromptDedupedOnAppend(t *testing.T) {
 
 	env.engine.SyncPaths([]string{path})
 
-	updated, err := env.db.GetSessionFull(context.Background(), sessionID)
+	updated, err := env.db.GetSessionFull(t.Context(), sessionID)
 	require.NoError(t, err, "GetSessionFull after append")
 	assert.Equal(t, 1, updated.UserMessageCount,
 		"UserMessageCount after re-emitted prompt = %d, want 1 (duplicate must be dropped)",
@@ -16280,7 +16267,8 @@ func testStringPtrValue(v *string) string {
 // test when the session is missing or its parent is unset.
 func parentSessionIDOf(t *testing.T, env *testEnv, id string) string {
 	t.Helper()
-	sess, err := env.db.GetSession(context.Background(), id)
+
+	sess, err := env.db.GetSession(t.Context(), id)
 	require.NoError(t, err, "GetSession %s", id)
 	require.NotNil(t, sess, "session %s must exist", id)
 	require.NotNil(t, sess.ParentSessionID, "%s parent must be set", id)
@@ -16324,7 +16312,7 @@ func TestSyncSingleSessionIncrementalAppendLinksSpawnedChild(t *testing.T) {
 		),
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	// Path derivation pins every flat subagent to the main session.
 	require.Equal(t, "main-inc-link",
@@ -16334,7 +16322,7 @@ func TestSyncSingleSessionIncrementalAppendLinksSpawnedChild(t *testing.T) {
 	// The stored orchestrator row id proves the append stayed on the
 	// incremental path: a full replacement would delete and reinsert it.
 	var orchMsgID int64
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT id FROM messages
 		WHERE session_id = ? AND ordinal = 0`,
 		"agent-orch",
@@ -16356,7 +16344,7 @@ func TestSyncSingleSessionIncrementalAppendLinksSpawnedChild(t *testing.T) {
 		"SyncSingleSession orchestrator")
 
 	var gotMsgID int64
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT id FROM messages
 		WHERE session_id = ? AND ordinal = 0`,
 		"agent-orch",
@@ -16403,7 +16391,7 @@ func TestSyncChangedPathPlanIncrementalAppendLinksSpawnedChild(t *testing.T) {
 		parentSessionIDOf(t, env, "agent-child"))
 
 	var firstMessageID int64
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT id FROM messages
 		WHERE session_id = ? AND ordinal = 0`,
 		"agent-orchestrator",
@@ -16427,7 +16415,7 @@ func TestSyncChangedPathPlanIncrementalAppendLinksSpawnedChild(t *testing.T) {
 	assert.Equal(t, 1, result.Stats.Synced)
 
 	var gotFirstMessageID int64
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT id FROM messages
 		WHERE session_id = ? AND ordinal = 0`,
 		"agent-orchestrator",
@@ -16483,7 +16471,7 @@ func TestSyncChangedPathPlanLinkFailureQueuesDurableRepair(t *testing.T) {
 	raw, err := sql.Open("sqlite3", env.db.Path())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, raw.Close()) })
-	_, err = raw.Exec(`
+	_, err = raw.ExecContext(t.Context(), `
 		CREATE TRIGGER fail_changed_path_child_link
 		BEFORE UPDATE OF parent_session_id ON sessions
 		WHEN NEW.id = 'agent-child-retry'
@@ -16501,14 +16489,14 @@ func TestSyncChangedPathPlanLinkFailureQueuesDurableRepair(t *testing.T) {
 	require.ErrorContains(t, err, "injected changed-path link failure")
 
 	var queued int
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT count(*) FROM subagent_parent_repair_queue
 		WHERE session_id = 'agent-orchestrator-retry'`,
 	).Scan(&queued))
 	require.Equal(t, 1, queued,
 		"the changed spawner must remain queued after scoped linking fails")
 
-	_, err = raw.Exec("DROP TRIGGER fail_changed_path_child_link")
+	_, err = raw.ExecContext(t.Context(), "DROP TRIGGER fail_changed_path_child_link")
 	require.NoError(t, err)
 	require.NoError(t, env.db.RepairQueuedSubagentParents())
 	assert.Equal(t, "agent-orchestrator-retry",
@@ -16569,7 +16557,7 @@ func TestSyncSingleSessionNewEdgeLinkFailureRetriesFromDurableQueue(
 	raw, err := sql.Open("sqlite3", env.db.Path())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, raw.Close()) })
-	_, err = raw.Exec(`
+	_, err = raw.ExecContext(t.Context(), `
 		CREATE TRIGGER fail_new_child_parent_link
 		BEFORE UPDATE OF parent_session_id ON sessions
 		WHEN NEW.id = 'agent-kid'
@@ -16584,7 +16572,7 @@ func TestSyncSingleSessionNewEdgeLinkFailureRetriesFromDurableQueue(
 	assert.Equal(t, "main-new-edge-retry",
 		parentSessionIDOf(t, env, "agent-kid"))
 	var edgeCount int
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT count(*) FROM tool_calls
 		WHERE session_id = 'agent-orch'
 		  AND subagent_session_id = 'agent-kid'`,
@@ -16592,14 +16580,14 @@ func TestSyncSingleSessionNewEdgeLinkFailureRetriesFromDurableQueue(
 	require.Equal(t, 1, edgeCount,
 		"the first sync must persist the new edge before linking fails")
 	var queuedRepairs int
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT count(*) FROM subagent_parent_repair_queue
 		WHERE session_id = 'agent-kid'`,
 	).Scan(&queuedRepairs))
 	require.Equal(t, 1, queuedRepairs,
 		"the new child must remain durably queued after linking fails")
 
-	_, err = raw.Exec("DROP TRIGGER fail_new_child_parent_link")
+	_, err = raw.ExecContext(t.Context(), "DROP TRIGGER fail_new_child_parent_link")
 	require.NoError(t, err)
 	require.NoError(t, env.engine.SyncSingleSession("agent-orch"),
 		"freshness retry must consume the durable new-child repair")
@@ -16658,7 +16646,7 @@ func TestSyncSingleSessionRewriteRemovingEdgeRelinksFormerChild(t *testing.T) {
 		),
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	require.Equal(t, "agent-orcha",
 		parentSessionIDOf(t, env, "agent-kid"),
@@ -16683,6 +16671,7 @@ func setupSingleSessionParentRepairRetry(
 	t *testing.T,
 ) (*testEnv, string) {
 	t.Helper()
+
 	env := setupTestEnv(t)
 
 	env.writeClaudeSession(
@@ -16728,7 +16717,7 @@ func setupSingleSessionParentRepairRetry(
 
 	env.engine.SyncAll(t.Context(), nil)
 	var initialEdges int
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT count(*) FROM tool_calls WHERE subagent_session_id = 'agent-kid'`,
 	).Scan(&initialEdges))
 	require.Equal(t, 2, initialEdges, "test setup requires both spawn edges")
@@ -16744,7 +16733,7 @@ func TestSyncSingleSessionWriteFailureStillRepairsFormerChild(t *testing.T) {
 	raw, err := sql.Open("sqlite3", env.db.Path())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, raw.Close()) })
-	_, err = raw.Exec(fmt.Sprintf(`
+	_, err = raw.ExecContext(t.Context(), fmt.Sprintf(`
 		CREATE TRIGGER fail_parent_repair_write_completion
 		BEFORE UPDATE OF data_version ON sessions
 		WHEN NEW.id = 'agent-orcha' AND NEW.data_version = %d
@@ -16765,7 +16754,7 @@ func TestSyncSingleSessionRepairFailurePersistsFormerChildForRetry(t *testing.T)
 	raw, err := sql.Open("sqlite3", env.db.Path())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, raw.Close()) })
-	_, err = raw.Exec(`
+	_, err = raw.ExecContext(t.Context(), `
 		CREATE TRIGGER fail_parent_repair
 		BEFORE UPDATE OF parent_session_id ON sessions
 		WHEN NEW.id = 'agent-kid'
@@ -16779,14 +16768,14 @@ func TestSyncSingleSessionRepairFailurePersistsFormerChildForRetry(t *testing.T)
 	require.ErrorContains(t, firstErr, "injected parent repair failure")
 	assert.Equal(t, "agent-orcha", parentSessionIDOf(t, env, "agent-kid"))
 	var edgeCount int
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT count(*) FROM tool_calls
 		WHERE session_id = 'agent-orcha'
 		  AND subagent_session_id = 'agent-kid'`,
 	).Scan(&edgeCount), "count removed edge")
 	assert.Zero(t, edgeCount, "the first sync must remove the spawn edge")
 
-	_, err = raw.Exec("DROP TRIGGER fail_parent_repair")
+	_, err = raw.ExecContext(t.Context(), "DROP TRIGGER fail_parent_repair")
 	require.NoError(t, err)
 	require.NoError(t, env.engine.SyncSingleSession("agent-orcha"),
 		"retry must consume the durable repair queue")
@@ -16831,10 +16820,10 @@ func TestSyncSingleSessionPreWriteReadFailurePreservesEdges(t *testing.T) {
 		),
 	)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
 	var edgeCount int
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT count(*) FROM tool_calls
 		WHERE session_id = ? AND subagent_session_id = ?`,
 		"agent-spawner", "agent-kid",
@@ -16846,15 +16835,15 @@ func TestSyncSingleSessionPreWriteReadFailurePreservesEdges(t *testing.T) {
 		`{"type":"user","timestamp":"2024-01-01T10:00:00Z","uuid":"s1","message":{"content":"orchestrate"},"cwd":"/tmp","sessionId":"main-capture-fail"}`,
 	)+"\n"), 0o644), "rewrite spawner without edge")
 
-	require.NoError(t, env.db.CloseConnections(), "close database connections")
+	require.NoError(t, env.db.CloseConnections(t.Context()), "close database connections")
 	syncErr := env.engine.SyncSingleSession("agent-spawner")
 	require.NoError(t, env.db.Reopen(), "reopen database")
 	require.ErrorContains(t, syncErr, "database is closed")
 
-	spawner, err := env.db.GetSession(context.Background(), "agent-spawner")
+	spawner, err := env.db.GetSession(t.Context(), "agent-spawner")
 	require.NoError(t, err, "get spawner after failed sync")
 	assert.NotNil(t, spawner, "failed capture must not delete the spawner")
-	require.NoError(t, env.db.Reader().QueryRow(`
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(), `
 		SELECT count(*) FROM tool_calls
 		WHERE session_id = ? AND subagent_session_id = ?`,
 		"agent-spawner", "agent-kid",
@@ -16884,7 +16873,7 @@ func TestSyncAllPersistsClaudeStatDigestAcrossEngineRestart(t *testing.T) {
 		"successful write must stamp a provider_freshness digest")
 	require.NotZero(t, digest)
 
-	restarted := sync.NewEngine(env.db, sync.EngineConfig{
+	restarted := sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {env.claudeDir},
 		},
@@ -16934,7 +16923,7 @@ func TestPathRewriterEngineDoesNotStampCodexStatDigest(t *testing.T) {
 		}
 		return "host:" + filepath.ToSlash(p)
 	}
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
 		Machine:   "host", IDPrefix: "host~", PathRewriter: rewriter,
 		Ephemeral: true,
@@ -16973,7 +16962,7 @@ func TestRestartedEngineBackfillsClaudeStatDigestOnVerifiedSkip(t *testing.T) {
 		t.Context(), parser.AgentClaude, path,
 	), "simulate a row written before the digest side-table existed")
 
-	restarted := sync.NewEngine(env.db, sync.EngineConfig{
+	restarted := sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {env.claudeDir},
 		},
@@ -17021,7 +17010,7 @@ func TestRestartedEngineBackfillsCodexStatDigestOnConfirmedSkip(t *testing.T) {
 		t.Context(), parser.AgentCodex, path,
 	), "simulate a row written before the digest side-table existed")
 
-	restarted := sync.NewEngine(env.db, sync.EngineConfig{
+	restarted := sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {codexDir},
 		},
@@ -17088,7 +17077,7 @@ func TestRestartedEngineCodexIndexTouchRefreshesStoredDigest(t *testing.T) {
 	require.NoError(t, os.WriteFile(indexPath, indexContent, 0o644))
 	require.NoError(t, os.Chtimes(indexPath, touchedTime, touchedTime))
 
-	restarted := sync.NewEngine(env.db, sync.EngineConfig{
+	restarted := sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {codexDir},
 		},
@@ -17214,7 +17203,7 @@ func TestRestartedEngineCodexIndexReadFailureDoesNotRefreshStoredDigest(
 		t.Skip("test process can read mode-000 files")
 	}
 
-	restarted := sync.NewEngine(env.db, sync.EngineConfig{
+	restarted := sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {codexDir},
 		},
@@ -17276,7 +17265,7 @@ func TestRestartedEngineCodexIndexRenameNotMaskedByStatDigest(t *testing.T) {
 		"successful write must stamp a provider_freshness digest")
 	require.NotZero(t, digest)
 
-	restarted := sync.NewEngine(env.db, sync.EngineConfig{
+	restarted := sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {codexDir},
 		},
@@ -17332,7 +17321,7 @@ func TestSyncAllMarksStaleClaudeForkSourceMissing(t *testing.T) {
 	require.Equal(t, 1, result.WrittenSessions, "seed stale fork row")
 	// Zero data_version mirrors fork rows written before data-version
 	// stamping existed.
-	require.NoError(t, env.db.SetSessionDataVersion(staleID, 0))
+	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), staleID, 0))
 	// Real fork rows carry a source-ownership baseline from earlier
 	// discovery passes; the tombstone requires that deletion authority.
 	require.NoError(t, env.db.BaselineActiveSessionSourcePaths(
@@ -17357,7 +17346,7 @@ func TestSyncAllMarksStaleClaudeForkSourceMissing(t *testing.T) {
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
 
 	var deletedAt, sourceMissingAt sql.NullString
-	require.NoError(t, env.db.Reader().QueryRow(
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(),
 		`SELECT deleted_at, source_missing_at FROM sessions WHERE id = ?`,
 		staleID,
 	).Scan(&deletedAt, &sourceMissingAt), "query stale fork row")
@@ -17374,7 +17363,7 @@ func TestSyncAllMarksStaleClaudeForkSourceMissing(t *testing.T) {
 	require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
 
 	var lastWriteIncremental bool
-	require.NoError(t, env.db.Reader().QueryRow(
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(),
 		`SELECT last_write_incremental FROM sessions WHERE id = ?`,
 		"main-sess",
 	).Scan(&lastWriteIncremental), "query incremental marker")
@@ -17395,7 +17384,7 @@ func TestSyncAllRetriesStaleClaudeForkCleanupAfterEstablishingBaseline(
 
 	staleID := "upgrade-sess-11111111-2222-4333-8444-555555555555"
 	parentID := "upgrade-sess"
-	require.NoError(t, env.db.UpsertSession(db.Session{
+	require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{
 		ID:               staleID,
 		Project:          "api",
 		Machine:          "local",
@@ -17404,7 +17393,7 @@ func TestSyncAllRetriesStaleClaudeForkCleanupAfterEstablishingBaseline(
 		RelationshipType: "fork",
 		FilePath:         &path,
 	}))
-	require.NoError(t, env.db.SetSessionDataVersion(staleID, 0))
+	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), staleID, 0))
 
 	// An archive created before source baselines existed cannot authorize
 	// deletion on its first upgrade parse. That pass writes the current primary
@@ -17455,7 +17444,7 @@ func TestSyncAllTombstonesStaleClaudeForkAfterZeroResultParse(t *testing.T) {
 	}})
 	require.NoError(t, err, "seed legacy fork row")
 	require.Equal(t, 1, result.WrittenSessions, "seed legacy fork row")
-	require.NoError(t, env.db.SetSessionDataVersion(legacyForkID, 0))
+	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), legacyForkID, 0))
 	require.NoError(t, env.db.BaselineActiveSessionSourcePaths(
 		t.Context(), "local",
 		[]db.SessionSourcePath{{Agent: "claude", FilePath: forkPath}},
@@ -17466,7 +17455,7 @@ func TestSyncAllTombstonesStaleClaudeForkAfterZeroResultParse(t *testing.T) {
 		"the original session should sync while the replay is excluded")
 
 	var deletedAt, sourceMissingAt sql.NullString
-	require.NoError(t, env.db.Reader().QueryRow(
+	require.NoError(t, env.db.Reader().QueryRow(t.Context(),
 		`SELECT deleted_at, source_missing_at FROM sessions WHERE id = ?`,
 		legacyForkID,
 	).Scan(&deletedAt, &sourceMissingAt), "query legacy fork row")
@@ -17530,7 +17519,7 @@ func TestFullSyncEntryPointsEmitForZeroResultClaudeForkTombstone(t *testing.T) {
 
 			parentID := "notify-replay"
 			staleID := parentID + "-11111111-2222-4333-8444-555555555555"
-			require.NoError(t, env.db.UpsertSession(db.Session{
+			require.NoError(t, env.db.UpsertSession(t.Context(), db.Session{
 				ID:               staleID,
 				Project:          "project",
 				Machine:          "local",
@@ -17539,7 +17528,7 @@ func TestFullSyncEntryPointsEmitForZeroResultClaudeForkTombstone(t *testing.T) {
 				RelationshipType: "fork",
 				FilePath:         &forkPath,
 			}))
-			require.NoError(t, env.db.SetSessionDataVersion(staleID, 0))
+			require.NoError(t, env.db.SetSessionDataVersion(t.Context(), staleID, 0))
 			require.NoError(t, env.db.BaselineActiveSessionSourcePaths(
 				t.Context(), "local",
 				[]db.SessionSourcePath{{Agent: "claude", FilePath: forkPath}},
@@ -17600,8 +17589,7 @@ func TestSyncAllPreservesUnprovenClaudeMissingRows(t *testing.T) {
 			}})
 			require.NoError(t, err, "seed missing row")
 			require.Equal(t, 1, result.WrittenSessions, "seed missing row")
-			require.NoError(t,
-				env.db.SetSessionDataVersion(missingID, tt.dataVersion))
+			require.NoError(t, env.db.SetSessionDataVersion(t.Context(), missingID, tt.dataVersion))
 			require.NoError(t, env.db.BaselineActiveSessionSourcePaths(
 				t.Context(), "local",
 				[]db.SessionSourcePath{{Agent: "claude", FilePath: path}},
@@ -17618,7 +17606,7 @@ func TestSyncAllPreservesUnprovenClaudeMissingRows(t *testing.T) {
 			require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
 
 			var deletedAt, cause sql.NullString
-			require.NoError(t, env.db.Reader().QueryRow(
+			require.NoError(t, env.db.Reader().QueryRow(t.Context(),
 				`SELECT deleted_at, deletion_cause FROM sessions WHERE id = ?`,
 				missingID,
 			).Scan(&deletedAt, &cause), "query preserved row")

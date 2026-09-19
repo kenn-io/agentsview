@@ -47,8 +47,8 @@ func TestRooCodeFreshBeforeFingerprintUsesCompositeStat(t *testing.T) {
 		FileSize:  int64Ptr(compositeSize),
 		FileMtime: int64Ptr(compositeMtime),
 	}
-	require.NoError(t, database.UpsertSession(sess))
-	require.NoError(t, database.SetSessionDataVersion(
+	require.NoError(t, database.UpsertSession(t.Context(), sess))
+	require.NoError(t, database.SetSessionDataVersion(t.Context(),
 		sess.ID, db.CurrentDataVersion(),
 	))
 

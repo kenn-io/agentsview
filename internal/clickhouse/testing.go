@@ -119,21 +119,21 @@ func seedFixture(t *testing.T) (*db.DB, Target) {
 			ReplaceMessages: true,
 		},
 	}
-	_, err := local.WriteSessionBatchAtomic(writes)
+	_, err := local.WriteSessionBatchAtomic(t.Context(), writes)
 	require.NoError(t, err)
 	for _, id := range []string{fixtureAlphaID, fixtureBetaID, fixtureChildID} {
-		require.NoError(t, local.UpdateSessionSignals(id, db.SessionSignalUpdate{
+		require.NoError(t, local.UpdateSessionSignals(t.Context(), id, db.SessionSignalUpdate{
 			Outcome:           "success",
 			OutcomeConfidence: "high",
 		}))
 	}
-	ok, err := local.StarSession(fixtureAlphaID)
+	ok, err := local.StarSession(t.Context(), fixtureAlphaID)
 	require.NoError(t, err)
 	require.True(t, ok)
 	msgs, err := local.GetAllMessages(context.Background(), fixtureAlphaID)
 	require.NoError(t, err)
 	note := "pin alpha"
-	_, err = local.PinMessage(fixtureAlphaID, msgs[0].ID, &note)
+	_, err = local.PinMessage(t.Context(), fixtureAlphaID, msgs[0].ID, &note)
 	require.NoError(t, err)
 
 	dsn, database := chtest.FreshDatabase(t)
@@ -213,7 +213,7 @@ func appendMessage(t *testing.T, local *db.DB, sessionID, content, ts string) {
 	sess.MessageCount = len(msgs)
 	sess.EndedAt = &ts
 	sess.LocalModifiedAt = &ts
-	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err = local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
 		Session:         *sess,
 		Messages:        msgs,
 		DataVersion:     1,

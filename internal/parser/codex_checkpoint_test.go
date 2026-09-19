@@ -1,10 +1,9 @@
 package parser
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -88,9 +87,9 @@ func TestCodexProviderIncrementalResumesFromCheckpointSeed(t *testing.T) {
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, uuid)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: source, Fingerprint: fingerprint,
 	})
 	require.NoError(t, err)
@@ -104,10 +103,10 @@ func TestCodexProviderIncrementalResumesFromCheckpointSeed(t *testing.T) {
 	))
 	appendCodexProviderContent(t, path, tail)
 
-	fingerprint, err = provider.Fingerprint(context.Background(), source)
+	fingerprint, err = provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	incOutcome, status, err := provider.ParseIncremental(
-		context.Background(), IncrementalRequest{
+		t.Context(), IncrementalRequest{
 			Source:       source,
 			Fingerprint:  fingerprint,
 			SessionID:    "codex:" + uuid,
@@ -149,9 +148,9 @@ func TestCodexParseCarriesSinglePassHashState(t *testing.T) {
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, uuid)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: source, Fingerprint: fingerprint,
 	})
 	require.NoError(t, err)
@@ -167,7 +166,7 @@ func TestCodexParseCarriesSinglePassHashState(t *testing.T) {
 	assert.Equal(t, fingerprint.Hash, result.Session.File.Hash)
 	wantDigest := sha256.Sum256([]byte(prefix))
 	assert.Equal(t, fingerprint.Hash,
-		fmt.Sprintf("%x", wantDigest[:]),
+		hex.EncodeToString(wantDigest[:]),
 		"sanity: the provider fingerprint is the snapshot hash")
 	stateSum := stateHash.Sum(nil)
 	assert.Equal(t, wantDigest[:], stateSum,
@@ -176,7 +175,7 @@ func TestCodexParseCarriesSinglePassHashState(t *testing.T) {
 	// The anchor digest must equal the trailing window's hash.
 	window := prefix[max(0, len(prefix)-codexCheckpointAnchorSize):]
 	wantAnchor := sha256.Sum256([]byte(window))
-	assert.Equal(t, fmt.Sprintf("%x", wantAnchor[:]),
+	assert.Equal(t, hex.EncodeToString(wantAnchor[:]),
 		result.CheckpointAnchorDigest)
 
 	// Resuming the state over an appended tail must reproduce the real
@@ -221,9 +220,9 @@ func TestCodexProviderIncrementalTargetsLatestDuplicateCallIDOccurrence(t *testi
 	)
 	require.True(t, ok)
 	source := requireCodexProviderSource(t, provider, uuid)
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: source, Fingerprint: fingerprint,
 	})
 	require.NoError(t, err)
@@ -235,10 +234,10 @@ func TestCodexProviderIncrementalTargetsLatestDuplicateCallIDOccurrence(t *testi
 		callID, "second result", "2026-08-02T09:00:06Z",
 	))
 	appendCodexProviderContent(t, path, tail)
-	fingerprint, err = provider.Fingerprint(context.Background(), source)
+	fingerprint, err = provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	incOutcome, status, err := provider.ParseIncremental(
-		context.Background(), IncrementalRequest{
+		t.Context(), IncrementalRequest{
 			Source:       source,
 			Fingerprint:  fingerprint,
 			SessionID:    "codex:" + uuid,
@@ -261,17 +260,17 @@ func TestCodexProviderIncrementalTargetsLatestDuplicateCallIDOccurrence(t *testi
 
 func TestCodexCheckpointRecoversAfterPendingCallBurst(t *testing.T) {
 	for _, outputs := range []int{0, 1, 8, 9} {
-		t.Run(fmt.Sprint(outputs), func(t *testing.T) {
+		t.Run(strconv.Itoa(outputs), func(t *testing.T) {
 			const uuid = "019eb791-cf7d-75c1-8439-9ed74c122a09"
 			lines := []string{
 				testjsonl.CodexSessionMetaJSON(uuid, "/workspace/project-a", "codex_cli_rs", tsEarly),
 				testjsonl.CodexMsgJSON("user", "run the commands", tsEarlyS1),
 			}
 			for i := range 9 {
-				lines = append(lines, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", fmt.Sprint(i), nil, tsEarlyS5))
+				lines = append(lines, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", strconv.Itoa(i), nil, tsEarlyS5))
 			}
 			for i := range outputs {
-				lines = append(lines, testjsonl.CodexFunctionCallOutputJSON(fmt.Sprint(i), "done", tsLate))
+				lines = append(lines, testjsonl.CodexFunctionCallOutputJSON(strconv.Itoa(i), "done", tsLate))
 			}
 			content := testjsonl.JoinJSONL(lines...)
 			root := t.TempDir()
@@ -323,7 +322,7 @@ func TestCodexSeedlessAppendWithUnresolvedCallOverflow(t *testing.T) {
 		testjsonl.CodexMsgJSON("user", "run the commands", tsEarlyS1),
 	}
 	for i := range 10 {
-		lines = append(lines, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", fmt.Sprint(i), nil, tsEarlyS5))
+		lines = append(lines, testjsonl.CodexFunctionCallWithCallIDJSON("exec_command", strconv.Itoa(i), nil, tsEarlyS5))
 	}
 	lines = append(lines, `{"type":"event_msg","payload":{"type":"turn_aborted"}}`)
 	prefix := testjsonl.JoinJSONL(lines...)

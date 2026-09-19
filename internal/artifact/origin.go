@@ -1,6 +1,7 @@
 package artifact
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
@@ -11,8 +12,8 @@ import (
 )
 
 // EnsureOrigin returns the persisted origin ID, creating one when absent.
-func EnsureOrigin(database *db.DB) (string, error) {
-	origin, err := StoredOrigin(database)
+func EnsureOrigin(ctx context.Context, database *db.DB) (string, error) {
+	origin, err := StoredOrigin(ctx, database)
 	if err != nil {
 		return "", err
 	}
@@ -26,7 +27,7 @@ func EnsureOrigin(database *db.DB) (string, error) {
 	if err := validateOriginID(origin); err != nil {
 		return "", fmt.Errorf("generated artifact origin: %w", err)
 	}
-	origin, err = database.EnsureArtifactOrigin(origin)
+	origin, err = database.EnsureArtifactOrigin(ctx, origin)
 	if err != nil {
 		return "", fmt.Errorf("initializing artifact origin: %w", err)
 	}
@@ -41,19 +42,19 @@ func EnsureOrigin(database *db.DB) (string, error) {
 // authoritative config origin. It validates the input and is idempotent: it only
 // writes when the stored value differs. The config origin always wins, so a
 // previously stored value is overwritten to converge on a single origin.
-func AdoptOrigin(database *db.DB, origin string) error {
+func AdoptOrigin(ctx context.Context, database *db.DB, origin string) error {
 	if err := validateOriginID(origin); err != nil {
 		return fmt.Errorf("adopting artifact origin: %w", err)
 	}
-	if err := database.AdoptArtifactOrigin(origin); err != nil {
+	if err := database.AdoptArtifactOrigin(ctx, origin); err != nil {
 		return fmt.Errorf("adopting artifact origin: %w", err)
 	}
 	return nil
 }
 
 // StoredOrigin returns the persisted origin ID without creating one.
-func StoredOrigin(database *db.DB) (string, error) {
-	origin, err := database.GetSyncState(originStateKey)
+func StoredOrigin(ctx context.Context, database *db.DB) (string, error) {
+	origin, err := database.GetSyncState(ctx, originStateKey)
 	if err != nil {
 		return "", fmt.Errorf("reading artifact origin: %w", err)
 	}

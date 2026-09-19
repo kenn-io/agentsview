@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -374,13 +375,13 @@ func (s *Store) DecodeCursor(
 		)
 		if err != nil {
 			return db.SessionCursor{},
-				fmt.Errorf("%w: %v",
+				fmt.Errorf("%w: %w",
 					db.ErrInvalidCursor, err)
 		}
 		var c db.SessionCursor
 		if err := json.Unmarshal(data, &c); err != nil {
 			return db.SessionCursor{},
-				fmt.Errorf("%w: %v",
+				fmt.Errorf("%w: %w",
 					db.ErrInvalidCursor, err)
 		}
 		c.Total = 0
@@ -397,7 +398,7 @@ func (s *Store) DecodeCursor(
 	data, err := base64.RawURLEncoding.DecodeString(payload)
 	if err != nil {
 		return db.SessionCursor{},
-			fmt.Errorf("%w: invalid payload: %v",
+			fmt.Errorf("%w: invalid payload: %w",
 				db.ErrInvalidCursor, err)
 	}
 
@@ -405,7 +406,7 @@ func (s *Store) DecodeCursor(
 	if err != nil {
 		return db.SessionCursor{},
 			fmt.Errorf(
-				"%w: invalid signature encoding: %v",
+				"%w: invalid signature encoding: %w",
 				db.ErrInvalidCursor, err)
 	}
 
@@ -427,7 +428,7 @@ func (s *Store) DecodeCursor(
 	var c db.SessionCursor
 	if err := json.Unmarshal(data, &c); err != nil {
 		return db.SessionCursor{},
-			fmt.Errorf("%w: invalid json: %v",
+			fmt.Errorf("%w: invalid json: %w",
 				db.ErrInvalidCursor, err)
 	}
 	return c, nil
@@ -900,7 +901,7 @@ func (s *Store) GetSession(
 		id,
 	)
 	sess, err := scanPGSession(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -971,7 +972,7 @@ func (s *Store) GetSessionFull(
 		id,
 	)
 	sess, err := scanPGSession(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

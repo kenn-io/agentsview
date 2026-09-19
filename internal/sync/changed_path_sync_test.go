@@ -17,11 +17,11 @@ import (
 func TestSyncChangedPathPlanDoesNotTombstonePendingDeletion(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	deletedPath := filepath.Join(t.TempDir(), "deleted.jsonl")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "remote:retained", Agent: string(parser.AgentCowork),
 		Project: "fixture", Machine: "remote", FilePath: &deletedPath,
 	}))
-	engine := NewEngine(database, EngineConfig{Machine: "remote", Ephemeral: true})
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "remote", Ephemeral: true})
 	t.Cleanup(engine.Close)
 	plan := ChangedPathPlan{attribution: map[string]changedPathAttribution{
 		deletedPath: {provenIrrelevant: true},
@@ -47,7 +47,7 @@ func TestSyncChangedPathPlanReportsOnlyMtimeCacheSuppression(t *testing.T) {
 	}
 	provider := newProcessFixtureProvider(source, fingerprint, parser.ParseOutcome{})
 	provider.Caps.Sync.SkipCacheFreshWithoutStoredRow = true
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCowork: {root}},
 		Machine:   "remote", Ephemeral: true,
 		ProviderFactories: []parser.ProviderFactory{processFixtureFactory{provider: provider}},
@@ -154,7 +154,7 @@ func TestSyncChangedPathPlanFullParseScopeUsesDurableAttemptCache(t *testing.T) 
 			if tc.fallback {
 				provider.discovered = []parser.SourceRef{source}
 			}
-			engine := NewEngine(database, EngineConfig{
+			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentCowork: {root},
 				},
@@ -168,8 +168,7 @@ func TestSyncChangedPathPlanFullParseScopeUsesDurableAttemptCache(t *testing.T) 
 			})
 			t.Cleanup(engine.Close)
 			if tc.cached {
-				engine.skipCache[providerAgentSkipCacheKey(path, parser.AgentCowork)] =
-					fingerprint.MTimeNS
+				engine.skipCache[providerAgentSkipCacheKey(path, parser.AgentCowork)] = fingerprint.MTimeNS
 			}
 			file := parser.DiscoveredFile{
 				Path: path, Agent: parser.AgentCowork,
@@ -240,11 +239,11 @@ func TestSyncChangedPathPlanRemoteForceReplacePreservesMissingOwnedMember(t *tes
 		ForceReplace:      true,
 	})
 	storedPath := "remote:" + path
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "cowork:missing", Agent: string(parser.AgentCowork),
 		Project: "fixture-project", Machine: "remote", FilePath: &storedPath,
 	}))
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCowork: {root}},
 		Machine:   "remote", Ephemeral: true,
 		ProviderFactories: []parser.ProviderFactory{processFixtureFactory{provider: provider}},
@@ -296,7 +295,7 @@ func TestRemoteChangedPathWorkBoundedByPlannedSources(t *testing.T) {
 		for i := range unrelatedRoots {
 			roots = append(roots, filepath.Join(root, "unrelated", fmt.Sprintf("%04d", i)))
 		}
-		engine := NewEngine(database, EngineConfig{
+		engine := NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentCowork: {root}, unrelatedAgent: roots,
 			},
@@ -310,8 +309,7 @@ func TestRemoteChangedPathWorkBoundedByPlannedSources(t *testing.T) {
 			},
 		})
 		t.Cleanup(engine.Close)
-		engine.skipCache[providerAgentSkipCacheKey(path, parser.AgentCowork)] =
-			fingerprint.MTimeNS
+		engine.skipCache[providerAgentSkipCacheKey(path, parser.AgentCowork)] = fingerprint.MTimeNS
 		file := parser.DiscoveredFile{
 			Path: path, Agent: parser.AgentCowork,
 			ProviderSource: &source, ProviderProcess: true,

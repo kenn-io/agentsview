@@ -241,7 +241,7 @@ func TestSessionUsageJSONSchemaIncludesSubagentContract(t *testing.T) {
 	var raw map[string]any
 	require.NoError(t, json.Unmarshal(data, &raw))
 
-	assert.Equal(t, float64(1), raw["subagent_count"])
+	assert.InDelta(t, float64(1), raw["subagent_count"], 0)
 	rows, ok := raw["breakdown"].([]any)
 	require.True(t, ok, "breakdown must serialize as an array")
 	require.Len(t, rows, 2)
@@ -265,8 +265,10 @@ func TestRenderSessionUsageHuman_SubagentLine(t *testing.T) {
 		wantLine      bool
 	}{
 		{name: "own session omits the line", subagentCount: 0},
-		{name: "combined session names the count",
-			subagentCount: 2, wantLine: true},
+		{
+			name:          "combined session names the count",
+			subagentCount: 2, wantLine: true,
+		},
 	}
 
 	for _, tt := range tests {

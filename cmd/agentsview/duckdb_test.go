@@ -99,7 +99,7 @@ func TestArchiveWriteBackendDuckDBPushPostsToDaemon(t *testing.T) {
 		config.Config{AuthToken: "secret"}, ts.URL,
 	)
 	result, err := backend.DuckDBPush(
-		context.Background(),
+		t.Context(),
 		config.DuckDBConfig{
 			Path:        absPath,
 			MachineName: "workstation",
@@ -124,7 +124,7 @@ func TestArchiveWriteBackendDuckDBPushOmitsRelativeMirrorPath(t *testing.T) {
 
 	backend := newDaemonArchiveWriteBackendForTest(config.Config{}, ts.URL)
 	_, err := backend.DuckDBPush(
-		context.Background(),
+		t.Context(),
 		config.DuckDBConfig{Path: "relative.duckdb"},
 		DuckDBPushConfig{},
 		nil,
@@ -145,14 +145,14 @@ func TestArchiveWriteBackendDuckDBPushPostsRemoteURLToDaemon(t *testing.T) {
 	ts := pushRuntimeServer(t, "/api/v1/push/duckdb", func(
 		w http.ResponseWriter, r *http.Request,
 	) {
-		t.Fatal("daemon push route should not be called for a rejected remote target")
+		http.Error(w, "daemon push route should not be called for a rejected remote target", http.StatusInternalServerError)
 	})
 
 	backend := newDaemonArchiveWriteBackendForTest(
 		config.Config{AuthToken: "secret"}, ts.URL,
 	)
 	_, err := backend.DuckDBPush(
-		context.Background(),
+		t.Context(),
 		duckCfg,
 		DuckDBPushConfig{Full: true},
 		[]string{"a"},
@@ -166,7 +166,7 @@ func TestArchiveWriteBackendDuckDBPushPostsRemoteURLToDaemon(t *testing.T) {
 func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 	dataDir := t.TempDir()
 	mirrorPath := filepath.Join(t.TempDir(), "mirror.duckdb")
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	var startupPushes int
 	startup := pushRuntimeServer(t, "/api/v1/push/duckdb", func(
 		w http.ResponseWriter,
@@ -174,8 +174,12 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 	) {
 		startupPushes++
 		var req apiclient.DaemonPushRequest
-		require.NoError(t, json.UnmarshalRead(r.Body, &req))
-		require.NotNil(t, req.Duckdb)
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+			return
+		}
+		if !assert.NotNil(t, t, req.Duckdb) {
+			return
+		}
 		assert.Empty(t, req.Duckdb.Path,
 			"the CLI defers to the daemon's pinned mirror path")
 		assert.Equal(t, new(true), req.Automatic,
@@ -190,8 +194,12 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 		resolvedPushes++
 		cancel()
 		var req apiclient.DaemonPushRequest
-		require.NoError(t, json.UnmarshalRead(r.Body, &req))
-		require.NotNil(t, req.Duckdb)
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+			return
+		}
+		if !assert.NotNil(t, t, req.Duckdb) {
+			return
+		}
 		assert.Empty(t, req.Duckdb.Path,
 			"the CLI defers to the daemon's pinned mirror path")
 		assert.Equal(t, new(true), req.Automatic,
@@ -411,11 +419,15 @@ func duckDBPushDaemonServerAt(
 	) {
 		assert.Equal(t, want.auth, r.Header.Get("Authorization"))
 		var req apiclient.DaemonPushRequest
-		require.NoError(t, json.UnmarshalRead(r.Body, &req))
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+			return
+		}
 		assert.Equal(t, want.full, req.Full)
 		assert.Equal(t, want.projects, req.Projects)
 		assert.Equal(t, want.excludeProjects, req.ExcludeProjects)
-		require.NotNil(t, req.Duckdb)
+		if !assert.NotNil(t, req.Duckdb) {
+			return
+		}
 		assert.Equal(t, want.path, req.Duckdb.Path)
 		assert.Equal(t, want.url, req.Duckdb.URL)
 		assert.Equal(t, new(want.token), req.Duckdb.Token)

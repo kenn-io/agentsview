@@ -1,8 +1,10 @@
 package server
 
-import "github.com/danielgtaylor/huma/v2"
+import (
+	"context"
 
-import "context"
+	"github.com/danielgtaylor/huma/v2"
+)
 
 func (s *Server) registerOpenersRoutes() {
 	group := huma.NewGroup(s.api, "/api/v1/openers")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -117,7 +118,7 @@ func (p *windsurfProvider) Parse(
 	}
 	src, ok := p.sources.sourceFromRef(req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("windsurf source path unavailable")
+		return ParseOutcome{}, errors.New("windsurf source path unavailable")
 	}
 	if _, err := os.Stat(src.DBPath); err != nil {
 		if os.IsNotExist(err) {
@@ -132,7 +133,7 @@ func (p *windsurfProvider) Parse(
 	sess, msgs, err := parseWindsurfSessionContext(
 		ctx, src.DBPath, src.SessionID, src.Project, machine, src.VirtualPath,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return ParseOutcome{
 			ResultSetComplete: true,
 			ForceReplace:      true,
@@ -193,7 +194,7 @@ func (s windsurfSourceSet) Discover(ctx context.Context) ([]SourceRef, error) {
 		}
 		dbs := s.workspaceDBs(root)
 		for _, db := range dbs {
-			records, err := listWindsurfSessionRecords(db.DBPath)
+			records, err := listWindsurfSessionRecords(ctx, db.DBPath)
 			if err != nil {
 				return nil, err
 			}
@@ -276,7 +277,7 @@ func (s windsurfSourceSet) DiscoverEach(ctx context.Context, yield func(SourceRe
 				}
 				encoded, err := json.Marshal(SourceFingerprint{
 					Size: int64(len(record.Data) + len(manifest)), MTimeNS: mtime,
-					Hash: fmt.Sprintf("%x", h.Sum(nil)),
+					Hash: hex.EncodeToString(h.Sum(nil)),
 				})
 				if err != nil {
 					return err
@@ -347,7 +348,7 @@ func (s windsurfSourceSet) SourcesForChangedPath(
 			}
 			return nil, fmt.Errorf("stat %s: %w", dbPath, err)
 		}
-		sources, err := s.sourcesForDB(root, dbPath)
+		sources, err := s.sourcesForDB(ctx, root, dbPath)
 		if err != nil {
 			return nil, err
 		}
@@ -464,7 +465,7 @@ func (s windsurfSourceSet) Fingerprint(
 	}
 	src, ok := s.sourceFromRef(source)
 	if !ok {
-		return SourceFingerprint{}, fmt.Errorf("windsurf source path unavailable")
+		return SourceFingerprint{}, errors.New("windsurf source path unavailable")
 	}
 	info, err := os.Stat(src.DBPath)
 	if err != nil {
@@ -495,7 +496,7 @@ func (s windsurfSourceSet) Fingerprint(
 	}
 	workspacePath := windsurfWorkspaceManifestPath(src.DBPath)
 	record, err := loadWindsurfSessionRecord(src.DBPath, src.SessionID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return SourceFingerprint{Key: source.FingerprintKey}, nil
 	}
 	if err != nil {
@@ -529,7 +530,7 @@ func (s windsurfSourceSet) Fingerprint(
 		Key:     firstNonEmptyJSONLString(source.FingerprintKey, source.Key, src.VirtualPath),
 		Size:    size,
 		MTimeNS: mtime,
-		Hash:    fmt.Sprintf("%x", h.Sum(nil)),
+		Hash:    hex.EncodeToString(h.Sum(nil)),
 	}, nil
 }
 
@@ -588,8 +589,8 @@ func (s windsurfSourceSet) newSourceRef(
 	}
 }
 
-func (s windsurfSourceSet) sourcesForDB(root, dbPath string) ([]SourceRef, error) {
-	records, err := listWindsurfSessionRecords(dbPath)
+func (s windsurfSourceSet) sourcesForDB(ctx context.Context, root, dbPath string) ([]SourceRef, error) {
+	records, err := listWindsurfSessionRecords(ctx, dbPath)
 	if err != nil {
 		return nil, err
 	}
@@ -696,8 +697,8 @@ type windsurfChatValue struct {
 	Value string
 }
 
-func listWindsurfSessionRecords(dbPath string) ([]windsurfSessionRecord, error) {
-	values, err := readWindsurfChatValues(dbPath)
+func listWindsurfSessionRecords(ctx context.Context, dbPath string) ([]windsurfSessionRecord, error) {
+	values, err := readWindsurfChatValues(ctx, dbPath)
 	if err != nil {
 		return nil, err
 	}
@@ -725,7 +726,7 @@ func listWindsurfSessionRecords(dbPath string) ([]windsurfSessionRecord, error) 
 	return records, nil
 }
 
-func readWindsurfChatValues(dbPath string) ([]windsurfChatValue, error) {
+func readWindsurfChatValues(ctx context.Context, dbPath string) ([]windsurfChatValue, error) {
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 		return nil, nil
 	}
@@ -738,7 +739,7 @@ func readWindsurfChatValues(dbPath string) ([]windsurfChatValue, error) {
 	values := make([]windsurfChatValue, 0, len(windsurfChatDataKeys))
 	for _, key := range windsurfChatDataKeys {
 		var value string
-		err := db.QueryRow(
+		err := db.QueryRowContext(ctx,
 			`SELECT value FROM ItemTable WHERE key = ?`,
 			key,
 		).Scan(&value)
@@ -838,7 +839,7 @@ func forEachWindsurfRecordFromReader(
 		return fmt.Errorf("parse windsurf chatdata: %w", err)
 	}
 	if delim.Kind() != jsontext.KindBeginObject {
-		return fmt.Errorf("parse windsurf chatdata: expected object")
+		return errors.New("parse windsurf chatdata: expected object")
 	}
 	var session vscodeCopilotSession
 	hasRequests := false
@@ -898,7 +899,7 @@ func decodeWindsurfTabs(
 ) error {
 	open, err := dec.ReadToken()
 	if err != nil || open.Kind() != jsontext.KindBeginArray {
-		return fmt.Errorf("expected array")
+		return errors.New("expected array")
 	}
 	var decoderRetained int64
 	defer func() { observeStreamingRetainedBytes(ctx, -decoderRetained) }()
@@ -948,7 +949,7 @@ func skipJSONValue(dec *jsontext.Decoder) error {
 
 func windsurfDBHasSession(dbPath, sessionID string) (bool, error) {
 	_, err := loadWindsurfSessionRecord(dbPath, sessionID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	return err == nil, err
@@ -1217,7 +1218,7 @@ func splitWindsurfVirtualPath(path string) (string, string, bool) {
 
 func WriteWindsurfSessionJSON(w io.Writer, dbPath, sessionID string) error {
 	record, err := loadWindsurfSessionRecord(dbPath, sessionID)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf(
 			"windsurf session %s not found in %s: %w",
 			sessionID, dbPath, os.ErrNotExist,
@@ -1230,8 +1231,8 @@ func WriteWindsurfSessionJSON(w io.Writer, dbPath, sessionID string) error {
 	return err
 }
 
-func WriteSanitizedWindsurfStateDB(dstPath, dbPath string) error {
-	values, err := readWindsurfChatValues(dbPath)
+func WriteSanitizedWindsurfStateDB(ctx context.Context, dstPath, dbPath string) error {
+	values, err := readWindsurfChatValues(ctx, dbPath)
 	if err != nil {
 		return err
 	}
@@ -1257,23 +1258,24 @@ func WriteSanitizedWindsurfStateDB(dstPath, dbPath string) error {
 		}
 	}()
 
-	if _, err := dst.Exec(`PRAGMA journal_mode=DELETE`); err != nil {
+	if _, err := dst.ExecContext(ctx, `PRAGMA journal_mode=DELETE`); err != nil {
 		return fmt.Errorf("configure sanitized windsurf db: %w", err)
 	}
-	if _, err := dst.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`); err != nil {
+	if _, err := dst.ExecContext(ctx, `CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`); err != nil {
 		return fmt.Errorf("create sanitized windsurf ItemTable: %w", err)
 	}
-	tx, err := dst.Begin()
+	tx, err := dst.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin sanitized windsurf export: %w", err)
 	}
-	stmt, err := tx.Prepare(`INSERT INTO ItemTable (key, value) VALUES (?, ?)`)
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO ItemTable (key, value) VALUES (?, ?)`)
 	if err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("prepare sanitized windsurf export: %w", err)
 	}
+	defer stmt.Close()
 	for _, value := range values {
-		if _, err := stmt.Exec(value.Key, value.Value); err != nil {
+		if _, err := stmt.ExecContext(ctx, value.Key, value.Value); err != nil {
 			_ = stmt.Close()
 			_ = tx.Rollback()
 			return fmt.Errorf("write sanitized windsurf chat key: %w", err)

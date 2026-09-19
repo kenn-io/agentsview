@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,7 +9,7 @@ import (
 
 func TestStatsAllTotalsUseSameFilter(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	stats, err := d.GetStats(ctx, false, false)
 	require.NoError(t, err)
 	assert.Equal(t, Stats{}, stats)
@@ -42,18 +41,26 @@ func TestStatsAllTotalsUseSameFilter(t *testing.T) {
 		oneShot, automated bool
 		want               Stats
 	}{
-		{"all", false, false, Stats{SessionCount: 4, MessageCount: 23,
+		{"all", false, false, Stats{
+			SessionCount: 4, MessageCount: 23,
 			ProjectCount: 2, MachineCount: 3,
-			EarliestSession: new("2026-01-01T00:00:00Z")}},
-		{"exclude one-shot", true, false, Stats{SessionCount: 3, MessageCount: 20,
+			EarliestSession: new("2026-01-01T00:00:00Z"),
+		}},
+		{"exclude one-shot", true, false, Stats{
+			SessionCount: 3, MessageCount: 20,
 			ProjectCount: 2, MachineCount: 3,
-			EarliestSession: new("2026-01-01T00:00:00Z")}},
-		{"exclude automated", false, true, Stats{SessionCount: 2, MessageCount: 13,
+			EarliestSession: new("2026-01-01T00:00:00Z"),
+		}},
+		{"exclude automated", false, true, Stats{
+			SessionCount: 2, MessageCount: 13,
 			ProjectCount: 1, MachineCount: 2,
-			EarliestSession: new("2026-01-03T00:00:00Z")}},
-		{"exclude both", true, true, Stats{SessionCount: 1, MessageCount: 10,
+			EarliestSession: new("2026-01-03T00:00:00Z"),
+		}},
+		{"exclude both", true, true, Stats{
+			SessionCount: 1, MessageCount: 10,
 			ProjectCount: 1, MachineCount: 1,
-			EarliestSession: new("2026-01-04T00:00:00Z")}},
+			EarliestSession: new("2026-01-04T00:00:00Z"),
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := d.GetStats(ctx, tc.oneShot, tc.automated)

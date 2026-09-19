@@ -52,14 +52,14 @@ func TestParseReasonixSession_Basic(t *testing.T) {
 	assert.Equal(t, AgentReasonix, sess.Agent, "agent")
 	assert.Equal(t, "test-machine", sess.Machine, "machine")
 	assert.Equal(t, "Write a simple function", sess.FirstMessage, "first_message")
-	assert.True(t, strings.Contains(sess.ID, "reasonix:"), "session ID prefix")
+	assert.Contains(t, sess.ID, "reasonix:", "session ID prefix")
 
 	// Check message roles
 	assert.Equal(t, RoleUser, msgs[0].Role, "msgs[0].Role")
 	assert.Equal(t, RoleAssistant, msgs[1].Role, "msgs[1].Role")
 
 	// Check that reasoning content is included in display content
-	assert.True(t, strings.Contains(msgs[1].Content, "[Thinking]"), "thinking block in content")
+	assert.Contains(t, msgs[1].Content, "[Thinking]", "thinking block in content")
 	assert.True(t, msgs[1].HasThinking, "HasThinking flag")
 }
 
@@ -96,7 +96,7 @@ func TestParseReasonixSession_ToolResults(t *testing.T) {
 	resultMsg := msgs[2]
 	require.Len(t, resultMsg.ToolResults, 1)
 	assert.Equal(t, RoleUser, resultMsg.Role)
-	assert.Equal(t, "", resultMsg.Content)
+	assert.Empty(t, resultMsg.Content)
 	assert.Equal(t, "call_1", resultMsg.ToolResults[0].ToolUseID)
 	assert.Equal(t, len("file contents here"), resultMsg.ToolResults[0].ContentLength)
 	assert.Equal(t, "file contents here", DecodeContent(resultMsg.ToolResults[0].ContentRaw))

@@ -15,7 +15,7 @@ func TestCodexStagedArchiveProjection(t *testing.T) {
 		t.Run(string(policy), func(t *testing.T) {
 			root := writeCodexParityRoot(t, uuid)
 			database := openTestDB(t)
-			engine := NewEngine(database, EngineConfig{
+			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentCodex: {root}},
 				Machine:   "local", ArchiveContent: policy, StagedCodexParseMinBytes: 1,
 			})
@@ -57,7 +57,7 @@ func TestCodexStagedArchiveProjection(t *testing.T) {
 			require.NoError(t, err)
 			assert.Empty(t, findings)
 			// Resumable SHA state may include raw trailing transcript bytes.
-			_, found, err := database.GetParserCheckpointBlobs(id)
+			_, found, err := database.GetParserCheckpointBlobs(t.Context(), id)
 			require.NoError(t, err)
 			assert.False(t, found)
 		})

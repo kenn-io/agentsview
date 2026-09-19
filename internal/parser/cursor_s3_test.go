@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -121,7 +120,7 @@ func TestCursorS3DiscoverPrefersJSONLForSameStem(t *testing.T) {
 		}, nil
 	}
 
-	sources, err := newCursorSourceSet([]string{root}).Discover(context.Background())
+	sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
 	assert.ElementsMatch(t, []string{jsonlURI, otherURI}, []string{
@@ -131,7 +130,7 @@ func TestCursorS3DiscoverPrefersJSONLForSameStem(t *testing.T) {
 
 	var streamed []string
 	err = newCursorSourceSet([]string{root}).DiscoverEach(
-		context.Background(),
+		t.Context(),
 		func(src SourceRef) error {
 			streamed = append(streamed, src.DisplayPath)
 			return nil
@@ -156,7 +155,7 @@ func TestCursorS3DiscoverDeduplicatesSameStemAcrossProjectsDeterministically(t *
 		}, nil
 	}
 
-	sources, err := newCursorSourceSet([]string{root}).Discover(context.Background())
+	sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, firstURI, sources[0].DisplayPath)
@@ -195,7 +194,7 @@ func TestCursorS3DiscoverDeduplicatesSameStemAcrossRootsByMachine(t *testing.T) 
 		desktopRoot,
 		laptopJSONLRoot,
 	})
-	sources, err := sourceSet.Discover(context.Background())
+	sources, err := sourceSet.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
 	assert.ElementsMatch(t, []string{laptopJSONLURI, desktopURI}, []string{
@@ -204,7 +203,7 @@ func TestCursorS3DiscoverDeduplicatesSameStemAcrossRootsByMachine(t *testing.T) 
 	})
 
 	var streamed []string
-	err = sourceSet.DiscoverEach(context.Background(), func(source SourceRef) error {
+	err = sourceSet.DiscoverEach(t.Context(), func(source SourceRef) error {
 		streamed = append(streamed, source.DisplayPath)
 		return nil
 	})
@@ -231,7 +230,7 @@ func TestCursorS3DiscoverDecodesAgentTranscriptsProject(t *testing.T) {
 		}, nil
 	}
 
-	sources, err := newCursorSourceSet([]string{root}).Discover(context.Background())
+	sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 3)
 	byPath := make(map[string]SourceRef, len(sources))
@@ -263,7 +262,7 @@ func TestCursorS3DiscoverPrefersNestedOverFlat(t *testing.T) {
 		}, nil
 	}
 
-	sources, err := newCursorSourceSet([]string{root}).Discover(context.Background())
+	sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, nestedURI, sources[0].DisplayPath)
@@ -289,7 +288,7 @@ func TestCursorS3DiscoverPrefersFlatOverSubagentStem(t *testing.T) {
 		}, nil
 	}
 
-	sources, err := newCursorSourceSet([]string{root}).Discover(context.Background())
+	sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, flatURI, sources[0].DisplayPath)
@@ -332,7 +331,7 @@ func TestCursorS3DiscoverPrefersTopLevelTextOverSubagentJSONL(t *testing.T) {
 		}, nil
 	}
 
-	sources, err := newCursorSourceSet([]string{root}).Discover(context.Background())
+	sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, flatTxtURI, sources[0].DisplayPath,

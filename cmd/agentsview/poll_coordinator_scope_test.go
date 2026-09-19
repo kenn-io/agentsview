@@ -192,6 +192,8 @@ func TestUnwatchedPollDoesNotDragUnrelatedProvidersThroughOneProvidersGap(t *tes
 				agentACalls = append(agentACalls, c)
 			case parser.AgentOpenHands:
 				agentBCalls = append(agentBCalls, c)
+			default:
+				require.FailNowf(t, "unexpected agent", "got %v", c.Agent)
 			}
 		}
 		require.Len(t, agentACalls, 1, "provider A must have exactly one call")
@@ -342,7 +344,7 @@ func TestUnwatchedPollWaitsAfterAPassLongerThanTheInterval(t *testing.T) {
 	select {
 	case <-afterCh:
 	case <-time.After(2 * time.Second):
-		t.Fatal("expected after() to be called for cooldown wait")
+		require.FailNow(t, "expected after() to be called for cooldown wait")
 	}
 
 	afterMu.Lock()
@@ -465,7 +467,6 @@ func TestUnwatchedPollDefersOnlyTheProviderWhoseProbeIsMissing(t *testing.T) {
 		assert.Equal(t, parser.AgentOpenHands, calls[0].Agent,
 			"the call must be for the healthy provider")
 		assert.Equal(t, []string{sharedRoot}, calls[0].Roots)
-
 	})
 }
 
@@ -533,7 +534,7 @@ func TestUnwatchedPollStopDuringCooldown(t *testing.T) {
 	select {
 	case <-afterBlocking:
 	case <-time.After(2 * time.Second):
-		t.Fatal("cooldown after() was not called")
+		require.FailNow(t, "cooldown after() was not called")
 	}
 
 	// Stop must return without waiting out the cooldown.
@@ -545,6 +546,6 @@ func TestUnwatchedPollStopDuringCooldown(t *testing.T) {
 	select {
 	case <-stopDone:
 	case <-time.After(2 * time.Second):
-		t.Fatal("Stop() did not return while in cooldown wait")
+		require.FailNow(t, "Stop() did not return while in cooldown wait")
 	}
 }

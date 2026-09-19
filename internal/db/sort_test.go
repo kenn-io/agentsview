@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -12,7 +11,7 @@ import (
 // listSortedIDs returns the session IDs in the order ListSessions returns them.
 func listSortedIDs(t *testing.T, d *DB, f SessionFilter) []string {
 	t.Helper()
-	page, err := d.ListSessions(context.Background(), f)
+	page, err := d.ListSessions(t.Context(), f)
 	require.NoError(t, err, "ListSessions")
 	ids := make([]string, len(page.Sessions))
 	for i, s := range page.Sessions {
@@ -36,6 +35,7 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 			name:    "recent",
 			orderBy: "recent",
 			setup: func(t *testing.T, d *DB, project string) {
+				t.Helper()
 				insertSession(t, d, "r-old", project, func(s *Session) { s.EndedAt = Ptr("2024-01-01T00:00:00Z") })
 				insertSession(t, d, "r-mid", project, func(s *Session) { s.EndedAt = Ptr("2024-02-01T00:00:00Z") })
 				insertSession(t, d, "r-new", project, func(s *Session) { s.EndedAt = Ptr("2024-03-01T00:00:00Z") })
@@ -46,6 +46,7 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 			name:    "started",
 			orderBy: "started",
 			setup: func(t *testing.T, d *DB, project string) {
+				t.Helper()
 				insertSession(t, d, "s-old", project, func(s *Session) { s.StartedAt = Ptr("2024-01-01T00:00:00Z") })
 				insertSession(t, d, "s-mid", project, func(s *Session) { s.StartedAt = Ptr("2024-02-01T00:00:00Z") })
 				insertSession(t, d, "s-new", project, func(s *Session) { s.StartedAt = Ptr("2024-03-01T00:00:00Z") })
@@ -56,6 +57,7 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 			name:    "messages",
 			orderBy: "messages",
 			setup: func(t *testing.T, d *DB, project string) {
+				t.Helper()
 				insertSession(t, d, "m1", project, func(s *Session) { s.MessageCount = 1 })
 				insertSession(t, d, "m5", project, func(s *Session) { s.MessageCount = 5 })
 				insertSession(t, d, "m9", project, func(s *Session) { s.MessageCount = 9 })
@@ -66,6 +68,7 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 			name:    "user-messages",
 			orderBy: "user-messages",
 			setup: func(t *testing.T, d *DB, project string) {
+				t.Helper()
 				insertSession(t, d, "u1", project, func(s *Session) { s.UserMessageCount = 1 })
 				insertSession(t, d, "u4", project, func(s *Session) { s.UserMessageCount = 4 })
 				insertSession(t, d, "u8", project, func(s *Session) { s.UserMessageCount = 8 })
@@ -76,6 +79,7 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 			name:    "output-tokens",
 			orderBy: "output-tokens",
 			setup: func(t *testing.T, d *DB, project string) {
+				t.Helper()
 				insertSession(t, d, "o100", project, func(s *Session) { s.TotalOutputTokens = 100 })
 				insertSession(t, d, "o500", project, func(s *Session) { s.TotalOutputTokens = 500 })
 				insertSession(t, d, "o900", project, func(s *Session) { s.TotalOutputTokens = 900 })
@@ -86,6 +90,7 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 			name:    "peak-context",
 			orderBy: "peak-context",
 			setup: func(t *testing.T, d *DB, project string) {
+				t.Helper()
 				insertSession(t, d, "pc1", project, func(s *Session) { s.PeakContextTokens = 1000 })
 				insertSession(t, d, "pc2", project, func(s *Session) { s.PeakContextTokens = 2000 })
 				insertSession(t, d, "pc3", project, func(s *Session) { s.PeakContextTokens = 3000 })
@@ -96,6 +101,7 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 			name:    "failures",
 			orderBy: "failures",
 			setup: func(t *testing.T, d *DB, project string) {
+				t.Helper()
 				insertSession(t, d, "f0", project)
 				insertSession(t, d, "f3", project)
 				updateSignals(t, d, "f3", SessionSignalUpdate{ToolFailureSignalCount: 3})
@@ -108,6 +114,7 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 			name:    "retries",
 			orderBy: "retries",
 			setup: func(t *testing.T, d *DB, project string) {
+				t.Helper()
 				insertSession(t, d, "rt0", project)
 				insertSession(t, d, "rt2", project)
 				updateSignals(t, d, "rt2", SessionSignalUpdate{ToolRetryCount: 2})
@@ -120,6 +127,7 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 			name:    "edit-churn",
 			orderBy: "edit-churn",
 			setup: func(t *testing.T, d *DB, project string) {
+				t.Helper()
 				insertSession(t, d, "ec0", project)
 				insertSession(t, d, "ec4", project)
 				updateSignals(t, d, "ec4", SessionSignalUpdate{EditChurnCount: 4})
@@ -132,6 +140,7 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 			name:    "compactions",
 			orderBy: "compactions",
 			setup: func(t *testing.T, d *DB, project string) {
+				t.Helper()
 				insertSession(t, d, "c0", project)
 				insertSession(t, d, "c1", project)
 				updateSignals(t, d, "c1", SessionSignalUpdate{CompactionCount: 1})
@@ -144,6 +153,7 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 			name:    "context-pressure",
 			orderBy: "context-pressure",
 			setup: func(t *testing.T, d *DB, project string) {
+				t.Helper()
 				insertSession(t, d, "cp2", project)
 				updateSignals(t, d, "cp2", SessionSignalUpdate{ContextPressureMax: Ptr(0.2)})
 				insertSession(t, d, "cp5", project)
@@ -157,6 +167,7 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 			name:    "health",
 			orderBy: "health",
 			setup: func(t *testing.T, d *DB, project string) {
+				t.Helper()
 				insertSession(t, d, "h20", project)
 				updateSignals(t, d, "h20", SessionSignalUpdate{HealthScore: Ptr(20)})
 				insertSession(t, d, "h60", project)
@@ -170,11 +181,12 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 			name:    "secrets",
 			orderBy: "secrets",
 			setup: func(t *testing.T, d *DB, project string) {
+				t.Helper()
 				insertSession(t, d, "sec0", project)
 				insertSession(t, d, "sec2", project)
-				require.NoError(t, d.ReplaceSessionSecretFindings("sec2", nil, 2, "v1"))
+				require.NoError(t, d.ReplaceSessionSecretFindings(t.Context(), "sec2", nil, 2, "v1"))
 				insertSession(t, d, "sec5", project)
-				require.NoError(t, d.ReplaceSessionSecretFindings("sec5", nil, 5, "v1"))
+				require.NoError(t, d.ReplaceSessionSecretFindings(t.Context(), "sec5", nil, 5, "v1"))
 			},
 			wantAsc: []string{"sec0", "sec2", "sec5"},
 		},
@@ -182,6 +194,7 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 			name:    "id",
 			orderBy: "id",
 			setup: func(t *testing.T, d *DB, project string) {
+				t.Helper()
 				insertSession(t, d, "id-a", project)
 				insertSession(t, d, "id-b", project)
 				insertSession(t, d, "id-c", project)
@@ -201,7 +214,6 @@ func TestListSessions_SortAscDesc(t *testing.T) {
 	for i, tc := range cases {
 		project := caseProjects[i]
 		t.Run(tc.name, func(t *testing.T) {
-
 			gotAsc := listSortedIDs(t, d, filterWith(func(f *SessionFilter) {
 				f.Project = project
 				f.OrderBy = tc.orderBy
@@ -271,7 +283,7 @@ func TestListSessions_SortPaginationWalk(t *testing.T) {
 			cursor := ""
 			for pages := 0; ; pages++ {
 				require.LessOrEqual(t, pages, n+1, "pagination did not terminate")
-				page, err := d.ListSessions(context.Background(), SessionFilter{
+				page, err := d.ListSessions(t.Context(), SessionFilter{
 					Limit:      2,
 					OrderBy:    "messages",
 					Descending: Ptr(desc),
@@ -331,7 +343,7 @@ func TestListSessions_SortNullsLast(t *testing.T) {
 	var got []string
 	cursor := ""
 	for {
-		page, err := d.ListSessions(context.Background(), SessionFilter{
+		page, err := d.ListSessions(t.Context(), SessionFilter{
 			Limit: 1, OrderBy: "health", Descending: Ptr(false), Cursor: cursor,
 		})
 		require.NoError(t, err)
@@ -356,7 +368,7 @@ func TestListSessions_CursorSortMismatch(t *testing.T) {
 		})
 	}
 
-	page, err := d.ListSessions(context.Background(), SessionFilter{
+	page, err := d.ListSessions(t.Context(), SessionFilter{
 		Limit: 2, OrderBy: "messages", Descending: Ptr(false),
 	})
 	require.NoError(t, err)
@@ -364,19 +376,19 @@ func TestListSessions_CursorSortMismatch(t *testing.T) {
 	cursor := page.NextCursor
 
 	// Same sort + direction: accepted.
-	_, err = d.ListSessions(context.Background(), SessionFilter{
+	_, err = d.ListSessions(t.Context(), SessionFilter{
 		Limit: 2, OrderBy: "messages", Descending: Ptr(false), Cursor: cursor,
 	})
 	require.NoError(t, err, "same sort should accept cursor")
 
 	// Different sort key: rejected.
-	_, err = d.ListSessions(context.Background(), SessionFilter{
+	_, err = d.ListSessions(t.Context(), SessionFilter{
 		Limit: 2, OrderBy: "failures", Descending: Ptr(false), Cursor: cursor,
 	})
 	require.ErrorIs(t, err, ErrInvalidCursor, "cross-sort cursor")
 
 	// Same sort, flipped direction: rejected.
-	_, err = d.ListSessions(context.Background(), SessionFilter{
+	_, err = d.ListSessions(t.Context(), SessionFilter{
 		Limit: 2, OrderBy: "messages", Descending: Ptr(true), Cursor: cursor,
 	})
 	require.ErrorIs(t, err, ErrInvalidCursor, "flipped-direction cursor")
@@ -393,7 +405,7 @@ func TestListSessions_LegacyCursorRecent(t *testing.T) {
 			s.EndedAt = Ptr(fmt.Sprintf("2024-0%d-01T00:00:00Z", i))
 		})
 	}
-	page1, err := d.ListSessions(context.Background(), SessionFilter{Limit: 2})
+	page1, err := d.ListSessions(t.Context(), SessionFilter{Limit: 2})
 	require.NoError(t, err)
 	require.Equal(t, []string{"rc4", "rc3"}, idsOf(page1.Sessions))
 
@@ -408,7 +420,7 @@ func TestListSessions_LegacyCursorRecent(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, cur.Sort, "legacy cursor must carry no sort key")
 
-	page2, err := d.ListSessions(context.Background(), SessionFilter{
+	page2, err := d.ListSessions(t.Context(), SessionFilter{
 		Limit: 2, Cursor: legacy,
 	})
 	require.NoError(t, err)
@@ -429,9 +441,9 @@ func idsOf(sessions []Session) []string {
 func TestListSessions_SecretsSortVersionGated(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "sec-cur", "p")
-	require.NoError(t, d.ReplaceSessionSecretFindings("sec-cur", nil, 5, "v1"))
+	require.NoError(t, d.ReplaceSessionSecretFindings(t.Context(), "sec-cur", nil, 5, "v1"))
 	insertSession(t, d, "sec-stale", "p")
-	require.NoError(t, d.ReplaceSessionSecretFindings("sec-stale", nil, 9, "old"))
+	require.NoError(t, d.ReplaceSessionSecretFindings(t.Context(), "sec-stale", nil, 9, "old"))
 	insertSession(t, d, "sec-none", "p")
 
 	// With active version v1: the stale count (9) gates to 0, so the
@@ -457,7 +469,7 @@ func TestListSessions_SecretsSortVersionGated(t *testing.T) {
 	seen := map[string]bool{}
 	cursor := ""
 	for {
-		page, err := d.ListSessions(context.Background(), SessionFilter{
+		page, err := d.ListSessions(t.Context(), SessionFilter{
 			Limit:                1,
 			OrderBy:              "secrets",
 			Descending:           Ptr(true),

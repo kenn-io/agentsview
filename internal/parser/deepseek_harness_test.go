@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"fmt"
 	"maps"
 	"os"
 	"path/filepath"
@@ -270,13 +271,13 @@ func BenchmarkDeepSeekHarnessAbsentRootDiscovery(b *testing.B) {
 		ProviderConfig{Roots: []string{missingRoot}},
 	)
 	if !ok {
-		b.Fatal("DeepSeek Harness provider is not registered")
+		require.FailNow(b, "DeepSeek Harness provider is not registered")
 	}
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		if _, err := provider.Discover(context.Background()); err != nil {
-			b.Fatal(err)
+		if _, err := provider.Discover(b.Context()); err != nil {
+			require.FailNow(b, fmt.Sprint(err))
 		}
 	}
 }
@@ -680,7 +681,8 @@ func TestDeepSeekHarnessTornZstdFrameRetainsRecoveredEvents(t *testing.T) {
 	// treats complete JSONL rows recovered from this incomplete frame as work
 	// worth retaining until the writer repairs the tail.
 	tornFrame = tornFrame[:len(tornFrame)-4]
-	encoded := append(headerFrame, committedFrame...)
+	encoded := append([]byte(nil), headerFrame...)
+	encoded = append(encoded, committedFrame...)
 	encoded = append(encoded, tornFrame...)
 	require.NoError(t, os.WriteFile(path, encoded, 0o600))
 
@@ -1109,7 +1111,7 @@ func TestDeepSeekHarnessProviderDiscoversAndMapsOneChangedPath(t *testing.T) {
 	assert.Equal(t, CapabilitySupported, caps.Content.PerMessageTokenUsage)
 	assert.Equal(t, CapabilitySupported, caps.Content.AggregateUsageEvents)
 	assert.Equal(t, CapabilitySupported, caps.Content.TruncationStatus)
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 2)
 	fingerprint, err := provider.Fingerprint(t.Context(), discovered[0])
@@ -1188,8 +1190,8 @@ func TestDeepSeekHarnessProviderRejectsMixedEncodingAndSwitchesAfterDeletion(t *
 	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: changed[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
-	assert.Equal(
-		t, "deepseek-harness:mixed-encoding",
+	assert.Equal(t,
+		"deepseek-harness:mixed-encoding",
 		outcome.Results[0].Result.Session.ID,
 	)
 }
@@ -1430,6 +1432,7 @@ func writeDeepSeekHarnessFixture(
 	t *testing.T, root, id, cwd, compression string, records []any,
 ) string {
 	t.Helper()
+
 	require.Equal(t, deepSeekHarnessFixtureCwd, cwd)
 	encodedID := encodeDeepSeekHarnessSegment(id)
 	dir := filepath.Join(root, "--workspace-example--", encodedID)
@@ -1811,6 +1814,7 @@ func writeDeepSeekHarnessVersionedFixture(
 	t *testing.T, root, id, cwd, compression string, version int64, records []any,
 ) string {
 	t.Helper()
+
 	require.Equal(t, deepSeekHarnessFixtureCwd, cwd)
 	encodedID := encodeDeepSeekHarnessSegment(id)
 	dir := filepath.Join(root, "--workspace-example--", encodedID)

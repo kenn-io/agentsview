@@ -12,7 +12,7 @@ import (
 
 func TestLaunchResumeDarwinGhosttyDirectCli(t *testing.T) {
 	cwd := t.TempDir()
-	proc := launchResumeDarwin(
+	proc := launchResumeDarwin(t.Context(),
 		Opener{
 			ID:   "ghostty",
 			Name: "Ghostty",
@@ -32,7 +32,7 @@ func TestLaunchResumeDarwinGhosttyDirectCli(t *testing.T) {
 
 func TestLaunchResumeDarwinGhosttyAppBundle(t *testing.T) {
 	cwd := t.TempDir()
-	proc := launchResumeDarwin(
+	proc := launchResumeDarwin(t.Context(),
 		Opener{
 			ID:   "ghostty",
 			Name: "Ghostty",
@@ -54,7 +54,7 @@ func TestLaunchResumeDarwinGhosttyAppBundle(t *testing.T) {
 }
 
 func TestLaunchResumeDarwinGhosttyNoCwd(t *testing.T) {
-	proc := launchResumeDarwin(
+	proc := launchResumeDarwin(t.Context(),
 		Opener{
 			ID:   "ghostty",
 			Name: "Ghostty",
@@ -76,7 +76,7 @@ func TestLaunchTerminalInDirGhosttyDirectCliOnDarwin(t *testing.T) {
 		t.Skip("macOS-specific Ghostty launch path")
 	}
 	dir := t.TempDir()
-	proc := launchTerminalInDir(
+	proc := launchTerminalInDir(t.Context(),
 		Opener{
 			ID:   "ghostty",
 			Name: "Ghostty",

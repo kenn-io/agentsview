@@ -95,7 +95,7 @@ func TestStartQuackServerServesAgentsviewMirror(t *testing.T) {
 	bind := "quack:127.0.0.1:" + freeQuackServePort(t)
 	const token = "agentsview-quack-serve-test-token"
 
-	server, err := duckdbsync.Open(path)
+	server, err := duckdbsync.Open(ctx, path)
 	require.NoError(t, err)
 	server.SetMaxOpenConns(1)
 	server.SetMaxIdleConns(1)

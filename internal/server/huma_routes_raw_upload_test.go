@@ -6,13 +6,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -195,44 +195,45 @@ func TestRawUploadPatchAppendsOpaqueChunkAndReturnsCompletion(t *testing.T) {
 
 func TestRawUploadPatchIsNotWrappedByShortWriteTimeout(t *testing.T) {
 	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		identity := rawsync.AuthIdentity{TenantID: "tenant-auth", DeviceID: "device-auth"}
+		uploadID := "upl_AQEBAQEBAQEBAQEBAQEBAQ"
+		object := rawHTTPUploadObject(t, []byte("chunk"))
+		uploads := &rawSyncUploadsStub{
+			appendChunk: func(
+				ctx context.Context,
+				_ rawsync.AuthIdentity,
+				_ string,
+				_ int64,
+				_ []byte,
+			) (rawsync.UploadSession, error) {
+				time.Sleep(50 * time.Millisecond)
+				_, hasDeadline := ctx.Deadline()
+				assert.False(t, hasDeadline)
+				require.NoError(t, ctx.Err())
+				return rawsync.UploadSession{
+					ID: uploadID, Identity: identity, Provider: parser.AgentCodex,
+					Object: object, Offset: object.Length, Complete: true,
+					CreatedAt: time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC),
+					ExpiresAt: time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC),
+				}, nil
+			},
+		}
+		srv := New(config.Config{
+			Host: "127.0.0.1", Port: 8080, AuthToken: "legacy-shared-token",
+			RequireAuth: true, WriteTimeout: 10 * time.Millisecond,
+		}, nil, nil,
+			WithRawSyncServices(rawUploadAuthStub(t, identity), new(rawSyncCustodyStub)),
+			WithRawSyncUploads(uploads),
+		)
 
-	identity := rawsync.AuthIdentity{TenantID: "tenant-auth", DeviceID: "device-auth"}
-	uploadID := "upl_AQEBAQEBAQEBAQEBAQEBAQ"
-	object := rawHTTPUploadObject(t, []byte("chunk"))
-	uploads := &rawSyncUploadsStub{
-		appendChunk: func(
-			ctx context.Context,
-			_ rawsync.AuthIdentity,
-			_ string,
-			_ int64,
-			_ []byte,
-		) (rawsync.UploadSession, error) {
-			time.Sleep(50 * time.Millisecond)
-			_, hasDeadline := ctx.Deadline()
-			assert.False(t, hasDeadline)
-			assert.NoError(t, ctx.Err())
-			return rawsync.UploadSession{
-				ID: uploadID, Identity: identity, Provider: parser.AgentCodex,
-				Object: object, Offset: object.Length, Complete: true,
-				CreatedAt: time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC),
-				ExpiresAt: time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC),
-			}, nil
-		},
-	}
-	srv := New(config.Config{
-		Host: "127.0.0.1", Port: 8080, AuthToken: "legacy-shared-token",
-		RequireAuth: true, WriteTimeout: 10 * time.Millisecond,
-	}, nil, nil,
-		WithRawSyncServices(rawUploadAuthStub(t, identity), new(rawSyncCustodyStub)),
-		WithRawSyncUploads(uploads),
-	)
+		recorder := serveRawUploadChunk(
+			t, srv, http.MethodPatch, "/api/v1/raw-sync/uploads/"+uploadID,
+			"avdt_upload", 0, []byte("chunk"),
+		)
 
-	recorder := serveRawUploadChunk(
-		t, srv, http.MethodPatch, "/api/v1/raw-sync/uploads/"+uploadID,
-		"avdt_upload", 0, []byte("chunk"),
-	)
-
-	assert.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+		assert.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	})
 }
 
 func TestRawUploadPatchExtendsRealServerReadDeadline(t *testing.T) {
@@ -261,20 +262,21 @@ func TestRawUploadPatchExtendsRealServerReadDeadline(t *testing.T) {
 	}
 	srv := newRawUploadHTTPTestServer(t, rawUploadAuthStub(t, identity), uploads)
 	srv.httpReadTimeout = 50 * time.Millisecond
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- srv.Serve(listener) }()
+	deadlines := make(chan time.Time, 16)
+	go func() { serveErr <- srv.Serve(readDeadlineListener{Listener: listener, deadlines: deadlines}) }()
 	t.Cleanup(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(t.Context()), time.Second)
 		defer cancel()
 		require.NoError(t, srv.Shutdown(ctx))
 		err := <-serveErr
-		require.True(t, errors.Is(err, http.ErrServerClosed), "Serve returned %v", err)
+		require.ErrorIs(t, err, http.ErrServerClosed, "Serve returned %v", err)
 	})
 
 	reader, writer := io.Pipe()
-	request, err := http.NewRequest(
+	request, err := http.NewRequestWithContext(t.Context(),
 		http.MethodPatch,
 		"http://"+listener.Addr().String()+"/api/v1/raw-sync/uploads/"+uploadID,
 		reader,
@@ -292,30 +294,71 @@ func TestRawUploadPatchExtendsRealServerReadDeadline(t *testing.T) {
 			requestErr <- err
 			return
 		}
+		_, _ = io.Copy(io.Discard, result.Body)
+		_ = result.Body.Close()
 		response <- result
 	}()
-	require.NoError(t, writeSlowUploadBody(writer, chunk, 150*time.Millisecond))
+	defer writer.Close()
+	defer reader.Close()
+	_, err = writer.Write(chunk[:1])
+	require.NoError(t, err)
+	// Observe the upload middleware extending the real connection deadline
+	// before releasing the rest of the request body.
+	deadlineWait := time.NewTimer(3 * time.Second)
+	defer deadlineWait.Stop()
+waitForUploadDeadline:
+	for {
+		select {
+		case deadline := <-deadlines:
+			if time.Until(deadline) > time.Minute {
+				break waitForUploadDeadline
+			}
+		case <-deadlineWait.C:
+			require.FailNow(t, "upload did not extend the connection read deadline")
+		}
+	}
+	_, err = writer.Write(chunk[1:])
+	require.NoError(t, err)
+	require.NoError(t, writer.Close())
 
 	select {
 	case err := <-requestErr:
-		t.Fatalf("slow upload request failed: %v", err)
+		require.FailNowf(t, "test failed", "slow upload request failed: %v", err)
 	case result := <-response:
 		defer result.Body.Close()
 		assert.Equal(t, http.StatusOK, result.StatusCode)
 	case <-time.After(3 * time.Second):
-		t.Fatal("slow upload request did not finish")
+		require.FailNow(t, "slow upload request did not finish")
 	}
 }
 
-func writeSlowUploadBody(writer *io.PipeWriter, body []byte, delay time.Duration) error {
-	if _, err := writer.Write(body[:1]); err != nil {
+type readDeadlineListener struct {
+	net.Listener
+	deadlines chan<- time.Time
+}
+
+func (l readDeadlineListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return readDeadlineConn{Conn: conn, deadlines: l.deadlines}, nil
+}
+
+type readDeadlineConn struct {
+	net.Conn
+	deadlines chan<- time.Time
+}
+
+func (c readDeadlineConn) SetReadDeadline(deadline time.Time) error {
+	if err := c.Conn.SetReadDeadline(deadline); err != nil {
 		return err
 	}
-	time.Sleep(delay)
-	if _, err := writer.Write(body[1:]); err != nil {
-		return err
+	select {
+	case c.deadlines <- deadline:
+	default:
 	}
-	return writer.Close()
+	return nil
 }
 
 func TestRawUploadOffsetConflictReturnsResumeOffset(t *testing.T) {
@@ -344,7 +387,7 @@ func TestRawUploadOffsetConflictReturnsResumeOffset(t *testing.T) {
 	)
 
 	require.Equal(t, http.StatusConflict, recorder.Code, recorder.Body.String())
-	var response apiErrorResponse
+	var response apiResponseError
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
 	assert.Equal(t, "upload_offset_conflict", response.Code)
 	require.NotNil(t, response.CurrentUploadOffset)
@@ -377,7 +420,7 @@ func TestRawUploadChecksumMismatchReturnsResetOffset(t *testing.T) {
 	)
 
 	require.Equal(t, http.StatusConflict, recorder.Code, recorder.Body.String())
-	var response apiErrorResponse
+	var response apiResponseError
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
 	assert.Equal(t, "checksum_mismatch", response.Code)
 	require.NotNil(t, response.CurrentUploadOffset)
@@ -433,7 +476,7 @@ func TestRawUploadCORSAllowsAndExposesResumeHeaders(t *testing.T) {
 		},
 	}
 	srv := newRawUploadHTTPTestServer(t, rawUploadAuthStub(t, identity), uploads)
-	preflight := httptest.NewRequest(
+	preflight := httptest.NewRequestWithContext(t.Context(),
 		http.MethodOptions, "/api/v1/raw-sync/uploads/"+uploadID, nil,
 	)
 	preflight.Host = "127.0.0.1:8080"
@@ -448,12 +491,11 @@ func TestRawUploadCORSAllowsAndExposesResumeHeaders(t *testing.T) {
 	srv.Handler().ServeHTTP(preflightRecorder, preflight)
 
 	require.Equal(t, http.StatusNoContent, preflightRecorder.Code)
-	assert.Contains(t,
-		preflightRecorder.Header().Get("Access-Control-Allow-Headers"),
+	assert.Contains(t, preflightRecorder.Header().Get("Access-Control-Allow-Headers"),
 		rawSyncUploadOffsetHeader,
 	)
 
-	req := httptest.NewRequest(http.MethodHead, "/api/v1/raw-sync/uploads/"+uploadID, nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodHead, "/api/v1/raw-sync/uploads/"+uploadID, nil)
 	req.Host = "127.0.0.1:8080"
 	req.RemoteAddr = "192.0.2.10:54321"
 	req.Header.Set("Origin", "https://client.example")
@@ -462,8 +504,7 @@ func TestRawUploadCORSAllowsAndExposesResumeHeaders(t *testing.T) {
 	srv.Handler().ServeHTTP(recorder, req)
 
 	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
-	assert.Contains(t,
-		recorder.Header().Get("Access-Control-Expose-Headers"),
+	assert.Contains(t, recorder.Header().Get("Access-Control-Expose-Headers"),
 		rawSyncUploadOffsetHeader,
 	)
 }
@@ -514,7 +555,7 @@ func serveRawUploadChunk(
 	body []byte,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, path, bytes.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), method, path, bytes.NewReader(body))
 	req.Host = "127.0.0.1:8080"
 	req.RemoteAddr = "192.0.2.10:54321"
 	req.Header.Set("Authorization", "Bearer "+bearer)

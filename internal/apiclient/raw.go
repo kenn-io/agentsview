@@ -35,7 +35,7 @@ type rawTransport struct {
 }
 
 func (t *rawTransport) ExecuteRequest(ctx context.Context, req *http.Request, _ string) (*runtime.Response, error) {
-	response, err := t.client.Do(req.WithContext(ctx))
+	response, err := t.client.Do(req.WithContext(ctx)) //nolint:bodyclose // RawRequest transfers the open response to its caller.
 	if err != nil {
 		return nil, err
 	}

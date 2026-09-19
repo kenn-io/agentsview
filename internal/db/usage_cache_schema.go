@@ -84,7 +84,7 @@ CREATE TABLE usage_facts (
     timestamp_ms INTEGER,
     timestamp_ns INTEGER,
     raw_timestamp TEXT NOT NULL DEFAULT '',
-    uses_session_start INTEGER NOT NULL CHECK (uses_session_start IN (0, 1)),
+    uses_session_start INTEGER NOT NULL,
     model TEXT NOT NULL,
     provider_id TEXT NOT NULL DEFAULT '',
     input_tokens INTEGER NOT NULL,
@@ -96,13 +96,13 @@ CREATE TABLE usage_facts (
     web_search_requests INTEGER NOT NULL,
     reported_cost_microdollars INTEGER,
     cost_source TEXT NOT NULL DEFAULT '',
-    request_scoped INTEGER NOT NULL CHECK (request_scoped IN (0, 1)),
+    request_scoped INTEGER NOT NULL,
     claude_message_id TEXT NOT NULL DEFAULT '',
     claude_request_id TEXT NOT NULL DEFAULT '',
     source_uuid TEXT NOT NULL DEFAULT '',
     usage_dedup_key TEXT NOT NULL DEFAULT '',
-    token_eligible INTEGER NOT NULL CHECK (token_eligible IN (0, 1)),
-    activity_eligible INTEGER NOT NULL CHECK (activity_eligible IN (0, 1)),
+    token_eligible INTEGER NOT NULL,
+    activity_eligible INTEGER NOT NULL,
     PRIMARY KEY (cached_session_id, fact_index)
 ) WITHOUT ROWID;
 CREATE INDEX usage_facts_claude_identity
@@ -122,7 +122,7 @@ CREATE TABLE cursor_usage_facts (
     cache_creation_tokens INTEGER NOT NULL,
     cache_read_tokens INTEGER NOT NULL,
     charged_microdollars INTEGER NOT NULL,
-    is_headless INTEGER NOT NULL CHECK (is_headless IN (0, 1)),
+    is_headless INTEGER NOT NULL,
     dedup_key TEXT NOT NULL
 );
 CREATE INDEX cursor_usage_facts_dedup_key
@@ -166,7 +166,7 @@ CREATE TABLE usage_daily_rollups (
     provider_id TEXT NOT NULL DEFAULT '',
     priced_model TEXT NOT NULL,
     matched_pattern TEXT NOT NULL,
-    rate_ok INTEGER NOT NULL CHECK (rate_ok IN (0, 1)),
+    rate_ok INTEGER NOT NULL,
     rate_hash TEXT NOT NULL,
 	pricing_timestamp TEXT NOT NULL,
     band_threshold INTEGER NOT NULL DEFAULT -1,
@@ -202,7 +202,7 @@ CREATE TABLE usage_activity_rollups (
 CREATE TABLE usage_rollup_exceptions (
     rollup_install_id INTEGER NOT NULL REFERENCES usage_rollup_installs(id)
         ON DELETE CASCADE,
-    group_kind TEXT NOT NULL CHECK (group_kind IN ('snapshot', 'general')),
+    group_kind TEXT NOT NULL,
     group_key TEXT NOT NULL,
     cached_session_id INTEGER NOT NULL,
     fact_index INTEGER NOT NULL,
@@ -213,7 +213,7 @@ CREATE TABLE usage_rollup_exceptions (
     timestamp_ms INTEGER,
     timestamp_ns INTEGER,
     raw_timestamp TEXT NOT NULL,
-    uses_session_start INTEGER NOT NULL CHECK (uses_session_start IN (0, 1)),
+    uses_session_start INTEGER NOT NULL,
     model TEXT NOT NULL,
     provider_id TEXT NOT NULL DEFAULT '',
     input_tokens INTEGER NOT NULL,
@@ -225,8 +225,8 @@ CREATE TABLE usage_rollup_exceptions (
     web_search_requests INTEGER NOT NULL,
     reported_cost_microdollars INTEGER,
     cost_source TEXT NOT NULL,
-    request_scoped INTEGER NOT NULL CHECK (request_scoped IN (0, 1)),
-    is_headless INTEGER NOT NULL CHECK (is_headless IN (0, 1)),
+    request_scoped INTEGER NOT NULL,
+    is_headless INTEGER NOT NULL,
     claude_message_id TEXT NOT NULL,
     claude_request_id TEXT NOT NULL,
     source_uuid TEXT NOT NULL,
@@ -312,13 +312,13 @@ func (m *usageCacheManager) Generation(
 	}
 	databaseID = strings.TrimSpace(databaseID)
 	if databaseID == "" {
-		return nil, fmt.Errorf("usage cache source database id is required")
+		return nil, errors.New("usage cache source database id is required")
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
-		return nil, fmt.Errorf("usage cache manager is closed")
+		return nil, errors.New("usage cache manager is closed")
 	}
 	if m.currentID != "" && databaseID != m.currentID {
 		return nil, fmt.Errorf("%w before opening generation %s",
@@ -340,7 +340,7 @@ func (m *usageCacheManager) Generation(
 		}
 	}
 	if cache == nil {
-		return nil, fmt.Errorf("opening usage cache returned no database")
+		return nil, errors.New("opening usage cache returned no database")
 	}
 	cacheContext, cancel := context.WithCancel(m.ctx)
 	cache.cancel = cancel
@@ -559,7 +559,7 @@ func openTemporaryUsageCache(
 func initializeUsageCache(
 	ctx context.Context, path, databaseID string, temporary bool,
 ) (*usageCache, error) {
-	database, err := openUsageCacheDatabase(path)
+	database, err := openUsageCacheDatabase(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -595,8 +595,10 @@ func initializeUsageCache(
 		{usageCacheMetadataDeletionRevision, "0"},
 		{usageCacheMetadataCursorHighWaterMark, "0"},
 		{usageCacheMetadataBackfillCompletedAt, ""},
-		{usageCacheMetadataRetirementProtocol,
-			strconv.Itoa(usageCacheRetirementProtocolVersion)},
+		{
+			usageCacheMetadataRetirementProtocol,
+			strconv.Itoa(usageCacheRetirementProtocolVersion),
+		},
 	}
 	for _, item := range metadata {
 		if _, err := tx.ExecContext(ctx,
@@ -621,7 +623,7 @@ func initializeUsageCache(
 func openUsageCache(
 	ctx context.Context, path, databaseID string, temporary bool,
 ) (*usageCache, error) {
-	database, err := openUsageCacheDatabase(path)
+	database, err := openUsageCacheDatabase(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -634,14 +636,14 @@ func openUsageCache(
 	}, nil
 }
 
-func openUsageCacheDatabase(path string) (*sql.DB, error) {
+func openUsageCacheDatabase(ctx context.Context, path string) (*sql.DB, error) {
 	database, err := sql.Open(sqliteUsageDriverName, makeDSN(path, false))
 	if err != nil {
 		return nil, fmt.Errorf("opening usage cache %s: %w", path, err)
 	}
 	database.SetMaxOpenConns(readerMaxOpenConns)
 	database.SetMaxIdleConns(readerMaxOpenConns)
-	if err := database.Ping(); err != nil {
+	if err := database.PingContext(ctx); err != nil {
 		_ = database.Close()
 		return nil, fmt.Errorf("opening usage cache %s: %w", path, err)
 	}
@@ -688,12 +690,22 @@ func probeUsageCacheWithBusyTimeout(
 	if applicationID != usageCacheApplicationID {
 		return probe
 	}
+	var hasMetadata bool
+	if err := database.QueryRowContext(ctx,
+		`SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'usage_cache_metadata')`,
+	).Scan(&hasMetadata); err != nil {
+		probe.Err = fmt.Errorf("checking usage cache metadata table: %w", err)
+		return probe
+	}
+	if !hasMetadata {
+		return probe
+	}
 	var kind string
 	if err := database.QueryRowContext(ctx,
 		`SELECT value FROM usage_cache_metadata WHERE key = ?`,
 		usageCacheMetadataKind,
 	).Scan(&kind); err != nil {
-		if errors.Is(err, sql.ErrNoRows) || strings.Contains(err.Error(), "no such table") {
+		if errors.Is(err, sql.ErrNoRows) {
 			return probe
 		}
 		probe.Err = fmt.Errorf("reading usage cache kind: %w", err)
@@ -804,11 +816,7 @@ func usageCacheSchemaComplete(ctx context.Context, database *sql.DB) bool {
 		 FROM usage_rollup_exceptions LIMIT 0`,
 	}
 	for _, query := range queries {
-		rows, err := database.QueryContext(ctx, query)
-		if err != nil {
-			return false
-		}
-		if err := rows.Close(); err != nil {
+		if _, err := database.ExecContext(ctx, query); err != nil {
 			return false
 		}
 	}

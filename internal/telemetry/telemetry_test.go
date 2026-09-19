@@ -109,14 +109,14 @@ func TestReporterCaptureDaemonActiveNoopsDuringTests(t *testing.T) {
 	reporter := &Reporter{client: client}
 	assert.True(t, reporter.Enabled())
 
-	err = reporter.CaptureDaemonActive(context.Background())
+	err = reporter.CaptureDaemonActive(t.Context())
 	require.NoError(t, err)
 }
 
 func TestReporterCaptureDaemonActiveTestBlockerWinsOverCanceledContext(t *testing.T) {
 	client := kittelemetry.DisabledPostHogReporter()
 	reporter := &Reporter{client: client}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	err := reporter.CaptureDaemonActive(ctx)

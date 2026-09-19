@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"encoding/json/v2"
 	"path/filepath"
 	"testing"
@@ -17,14 +16,14 @@ import (
 // TestTranscriptFidelityRoundTripsViaDuckDBPush verifies that
 // transcript_fidelity is preserved across a DuckDB push + read cycle.
 func TestTranscriptFidelityRoundTripsViaDuckDBPush(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	sessionID := "fidelity-round-trip"
 	sess := syncSession(sessionID, "alpha", "fidelity first", "2026-01-20T00:00:00.000Z", 1)
 	sess.TranscriptFidelity = "high"
 
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session:         sess,
 		Messages:        []db.Message{syncMessage(sessionID, 0, "user", "fidelity first", "2026-01-20T00:00:00.000Z")},
 		DataVersion:     1,

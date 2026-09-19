@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -22,7 +21,7 @@ func TestDuckValueLiteralFormatsTimestampWithoutZone(t *testing.T) {
 }
 
 func TestDuckSQLWithArgsExecutesQuotedMultilineString(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	duck := openTestDuckDB(t)
 	want := "first line\nquoted ' value\ncontains $$ delimiter text"
 
@@ -35,7 +34,7 @@ func TestDuckSQLWithArgsExecutesQuotedMultilineString(t *testing.T) {
 }
 
 func TestDuckSQLWithArgsStripsNULFromStringLiteral(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	duck := openTestDuckDB(t)
 
 	stmt, err := duckSQLWithArgs(`SELECT ?`, "before\x00after")
@@ -47,7 +46,7 @@ func TestDuckSQLWithArgsStripsNULFromStringLiteral(t *testing.T) {
 }
 
 func TestDuckSQLWithArgsExecutesStringPointer(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	duck := openTestDuckDB(t)
 	want := "pinned note\nquoted ' value"
 
@@ -87,7 +86,7 @@ func TestDuckValueLiteralFormatsNullableNumericPointers(t *testing.T) {
 }
 
 func TestDuckSQLWithArgsExecutesNamedStringKinds(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	duck := openTestDuckDB(t)
 
 	stmt, err := duckSQLWithArgs(

@@ -1,7 +1,6 @@
 package capture
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -56,12 +55,14 @@ func TestClaudeWorkDirEncodingMatchesObservedProducerLayout(t *testing.T) {
 
 func TestResultMarksIncompleteTokenAndCostProvenance(t *testing.T) {
 	termination := string(parser.TerminationClean)
-	result, err := resultFromIngest(context.Background(), manifest{
+	result, err := resultFromIngest(t.Context(), manifest{
 		OccurrenceID: "partial-provenance", Provider: string(ProviderClaude),
 		ProviderSessionID: "11111111-1111-4111-8111-111111111111",
 	}, &ingestedCapture{
-		Root: &db.Session{ID: "11111111-1111-4111-8111-111111111111",
-			TerminationStatus: &termination},
+		Root: &db.Session{
+			ID:                "11111111-1111-4111-8111-111111111111",
+			TerminationStatus: &termination,
+		},
 		Usage: &db.SessionUsage{
 			HasTokenData: true, TotalOutputTokens: 70, BreakdownCount: 1,
 			Models: []string{"claude-test"},

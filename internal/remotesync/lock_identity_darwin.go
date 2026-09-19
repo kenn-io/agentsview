@@ -4,6 +4,7 @@ package remotesync
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,7 +26,7 @@ func platformCanonicalLockPath(lockFile *os.File, _ string) (string, error) {
 	}
 	before, _, ok := bytes.Cut(buffer, []byte{0})
 	if !ok {
-		return "", fmt.Errorf("resolve Darwin mirror lock identity: path is not terminated")
+		return "", errors.New("resolve Darwin mirror lock identity: path is not terminated")
 	}
 	return filepath.Clean(string(before)), nil
 }

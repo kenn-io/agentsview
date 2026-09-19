@@ -32,11 +32,13 @@ func TestWithTimeout(t *testing.T) {
 			operation: "GET /test",
 			timeout:   10 * time.Millisecond,
 			handler: func(w http.ResponseWriter, r *http.Request) {
-				time.Sleep(50 * time.Millisecond)
+				<-r.Context().Done()
 				w.WriteHeader(http.StatusOK)
 				w.Write([]byte("too slow"))
 			},
 			assertResponse: func(t *testing.T, resp *http.Response) {
+				t.Helper()
+
 				assertTimeoutResponse(
 					t, resp,
 					"GET /test",
@@ -75,7 +77,7 @@ func TestWithTimeout(t *testing.T) {
 				// A timeout returns before the handler finishes; join it while time can still advance.
 				defer func() { <-handlerDone }()
 
-				req := httptest.NewRequest(http.MethodGet, "/", nil)
+				req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 				w := httptest.NewRecorder()
 				wrapped.ServeHTTP(w, req)
 

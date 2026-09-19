@@ -16,7 +16,7 @@ func TestKitSqlitevecRoundTrip(t *testing.T) {
 	db, err := sql.Open(vectorDriverName, vectorDSN(filepath.Join(t.TempDir(), "v.db"), false))
 	require.NoError(t, err)
 	defer db.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err = db.ExecContext(ctx, `CREATE TABLE docs (
         doc_key TEXT PRIMARY KEY, content TEXT NOT NULL,
         content_hash TEXT NOT NULL, embed_gen TEXT)`)

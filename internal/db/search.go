@@ -391,9 +391,11 @@ func (db *DB) Search(
 	innerWhere = append(innerWhere, datePreds...)
 	ftsArgs = append(ftsArgs, dateBuilder.Args()...)
 	nameDateBuilder := NewQueryBuilder(SQLiteQueryDialect(), 0)
+	var nameProjectClauseSb394 strings.Builder
 	for _, pred := range nameDateBuilder.SessionDateRangePredicates(f.DateFrom, f.DateTo, "", func(col string) string { return "s." + col }) {
-		nameProjectClause += " AND " + pred
+		nameProjectClauseSb394.WriteString(" AND " + pred)
 	}
+	nameProjectClause += nameProjectClauseSb394.String()
 	nameProjectArgs = append(nameProjectArgs, nameDateBuilder.Args()...)
 
 	innerWhereSQL := strings.Join(innerWhere, " AND ")

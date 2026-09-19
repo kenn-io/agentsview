@@ -76,7 +76,7 @@ func TestUsageCommandsReconcileDaemonStartedByDaily(t *testing.T) {
 		t.Run(fmt.Sprintf("session=%t", sessionQuery), func(t *testing.T) {
 			cfg := testConfigWithClaudeFixture(t)
 			database := dbtest.OpenTestDBAt(t, cfg.DBPath)
-			engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 				AgentDirs: cfg.AgentDirs, Machine: cfg.InstallationID,
 				DeferStartupMaintenance: true,
 			})
@@ -115,11 +115,11 @@ func TestUsageCommandsReconcileDaemonStartedByDaily(t *testing.T) {
 				require.NoError(t, err)
 				require.NotNil(t, session, "statusline must query after startup ingestion")
 			}
-			lastSync := engine.LastSyncStartedAt()
+			lastSync := engine.LastSyncStartedAt(t.Context())
 			_, cleanup, err := resolveArchiveQueryBackendWithConfig(t.Context(), cfg, policy)
 			require.NoError(t, err)
 			cleanup()
-			assert.Equal(t, lastSync, engine.LastSyncStartedAt(), "warm prompt refresh must not repeat a full sync")
+			assert.Equal(t, lastSync, engine.LastSyncStartedAt(t.Context()), "warm prompt refresh must not repeat a full sync")
 		})
 	}
 }
@@ -149,7 +149,7 @@ func TestFetchHTTPDailyUsageStreamsProgressAndResult(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 	var phases []string
-	got, err := fetchHTTPDailyUsage(context.Background(), transport{URL: ts.URL}, "test-token", dailyUsageQuery{
+	got, err := fetchHTTPDailyUsage(t.Context(), transport{URL: ts.URL}, "test-token", dailyUsageQuery{
 		Progress: func(phase string) { phases = append(phases, phase) },
 	})
 	require.NoError(t, err)
@@ -182,11 +182,11 @@ func TestFetchHTTPDailyUsageReportsStreamFailures(t *testing.T) {
 func TestUsageProgressPrintsSlowWorkToStderr(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		var output syncBuffer
-		print, finish := newUsageProgressPrinter(&output)
+		writeProgress, finish := newUsageProgressPrinter(&output)
 		defer finish()
-		print("Reading archived sessions for this report")
+		writeProgress("Reading archived sessions for this report")
 		assert.Empty(t, output.String(), "a warm report should stay quiet")
-		print("Preparing usage data for 2 sessions in this report")
+		writeProgress("Preparing usage data for 2 sessions in this report")
 		time.Sleep(time.Second)
 		synctest.Wait()
 		assert.Contains(t, output.String(), "Preparing usage data for 2 sessions in this report (1s)")

@@ -3,11 +3,15 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/parser"
 )
+
+// ErrSessionProjectAssignmentInvalid identifies invalid assignment input.
+var ErrSessionProjectAssignmentInvalid = errors.New("invalid session project assignment")
 
 // SessionProjectAssignment is a user-selected project override for one
 // session. It takes precedence over parser discovery and folder mapping rules.
@@ -39,10 +43,10 @@ func (db *DB) AssignSessionProject(
 	sessionID = strings.TrimSpace(sessionID)
 	project = parser.NormalizeName(strings.TrimSpace(project))
 	if sessionID == "" {
-		return SessionProjectAssignment{}, fmt.Errorf("session_id is required")
+		return SessionProjectAssignment{}, fmt.Errorf("%w: session_id is required", ErrSessionProjectAssignmentInvalid)
 	}
 	if project == "" {
-		return SessionProjectAssignment{}, fmt.Errorf("project is required")
+		return SessionProjectAssignment{}, fmt.Errorf("%w: project is required", ErrSessionProjectAssignmentInvalid)
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -137,7 +141,7 @@ func (db *DB) ClearSessionProjectAssignment(
 	}
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
-		return ClearedSessionProjectAssignment{}, fmt.Errorf("session_id is required")
+		return ClearedSessionProjectAssignment{}, fmt.Errorf("%w: session_id is required", ErrSessionProjectAssignmentInvalid)
 	}
 	if ctx == nil {
 		ctx = context.Background()

@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -33,7 +32,7 @@ func projectRulesByPrefix(rules []db.ProjectRule) map[string]db.ProjectRule {
 // governed count, and a rule for a different machine is excluded from the
 // rules list but its machine still appears in the typeahead list.
 func TestDuckProjectRulesMatchesSQLite(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	seedInventorySession(t, local, "alpha-1", "alpha", func(s *db.Session) {
@@ -119,7 +118,7 @@ func TestDuckProjectRulesMatchesSQLite(t *testing.T) {
 // for every machine into an empty-machine request. The machine typeahead
 // list is unaffected either way, per ListProjectRules's contract.
 func TestDuckProjectRulesEmptyMachineMatchesSQLite(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	seedInventorySession(t, local, "alpha-1", "alpha", func(s *db.Session) {
@@ -173,7 +172,7 @@ func TestDuckProjectRulesEmptyMachineMatchesSQLite(t *testing.T) {
 // governed session leak into archive A's count too, producing 1/1 instead
 // of the expected 0/1.
 func TestDuckProjectRulesCrossArchiveIsolation(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	seedInventorySession(t, local, "a-session", "proja", func(s *db.Session) {

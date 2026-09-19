@@ -25,10 +25,10 @@ func TestIncrementalResultSanitizationRespectsCategory(t *testing.T) {
 			if tt.blocked {
 				cfg.BlockedResultCategories = []string{"Bash"}
 			}
-			engine := NewEngine(database, cfg)
+			engine := NewEngine(t.Context(), database, cfg)
 			t.Cleanup(engine.Close)
-			require.NoError(t, database.UpsertSession(db.Session{ID: "s1", Project: "project-a", Agent: "codex", MessageCount: 1}))
-			require.NoError(t, database.InsertMessages([]db.Message{{
+			require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "s1", Project: "project-a", Agent: "codex", MessageCount: 1}))
+			require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{
 				SessionID: "s1", Ordinal: 0, Role: "assistant", HasToolUse: true,
 				ToolCalls: []db.ToolCall{{SessionID: "s1", ToolUseID: "call", ToolName: "exec_command", Category: "Bash"}},
 			}}))
@@ -41,7 +41,7 @@ func TestIncrementalResultSanitizationRespectsCategory(t *testing.T) {
 					ResultEvents: []parser.ParsedToolResultEvent{{ToolUseID: "call", Source: "function_call_output", Content: "x\x00y\x01z"}},
 				}}
 			}
-			require.NoError(t, engine.writeIncremental(inc))
+			require.NoError(t, engine.writeIncremental(t.Context(), inc))
 			messages, err := database.GetAllMessages(t.Context(), "s1")
 			require.NoError(t, err)
 			require.Len(t, messages, 1)
@@ -54,10 +54,10 @@ func TestIncrementalResultSanitizationRespectsCategory(t *testing.T) {
 
 func TestCodexAppendedResultRetainsRawIdentity(t *testing.T) {
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{DisableSignalRecomputation: true})
+	engine := NewEngine(t.Context(), database, EngineConfig{DisableSignalRecomputation: true})
 	t.Cleanup(engine.Close)
-	require.NoError(t, database.UpsertSession(db.Session{ID: "s1", Project: "project-a", Agent: "codex"}))
-	require.NoError(t, engine.writeIncremental(&incrementalUpdate{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{ID: "s1", Project: "project-a", Agent: "codex"}))
+	require.NoError(t, engine.writeIncremental(t.Context(), &incrementalUpdate{
 		sessionID: "s1", agent: parser.AgentCodex, msgCount: 1, nextOrdinal: 1,
 		msgs: []parser.ParsedMessage{{
 			Ordinal: 0, Role: parser.RoleAssistant, HasToolUse: true,
@@ -70,7 +70,7 @@ func TestCodexAppendedResultRetainsRawIdentity(t *testing.T) {
 	missing, err := database.HasMissingToolResultMetadata(t.Context(), "s1", []db.ToolCallPosition{{}})
 	require.NoError(t, err)
 	assert.False(t, missing, "newly appended Codex events must remain eligible for incremental updates")
-	require.NoError(t, engine.writeIncremental(&incrementalUpdate{
+	require.NoError(t, engine.writeIncremental(t.Context(), &incrementalUpdate{
 		sessionID: "s1", agent: parser.AgentCodex, msgCount: 1, nextOrdinal: 1,
 		toolCallUpdates: []parser.ParsedToolCallUpdate{{
 			ToolUseID: "call", TargetKnown: true,

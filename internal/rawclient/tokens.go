@@ -2,10 +2,11 @@ package rawclient
 
 import (
 	"context"
-	"fmt"
-	"go.kenn.io/agentsview/internal/apiclient"
+	"errors"
 	"sync"
 	"time"
+
+	"go.kenn.io/agentsview/internal/apiclient"
 )
 
 // tokenScopes covers this client's upload operations. Hosted status callers
@@ -94,7 +95,7 @@ func (p *tokenProvider) exchange(ctx context.Context) (string, error) {
 	}
 	issued := response.JSON200
 	if issued.Token == "" || issued.DeviceID != p.deviceID {
-		return "", fmt.Errorf("rawclient: token response identity mismatch")
+		return "", errors.New("rawclient: token response identity mismatch")
 	}
 	p.mu.Lock()
 	p.current = issued.Token

@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -50,14 +49,14 @@ func TestCoworkProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{"local_*.json", "*.jsonl"}, plan.Roots[0].IncludeGlobs)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 2)
 	assert.ElementsMatch(t, []string{transcript, subagentPath}, []string{
@@ -70,21 +69,21 @@ func TestCoworkProviderSourceMethods(t *testing.T) {
 		assert.Equal(t, source.DisplayPath, source.FingerprintKey)
 	}
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "remote~cowork:" + cli,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, transcript, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "agent-worker",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, subagentPath, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: transcript,
 	})
 	require.NoError(t, err)
@@ -95,7 +94,7 @@ func TestCoworkProviderSourceMethods(t *testing.T) {
 	require.NoError(t, err)
 	newer := transcriptInfo.ModTime().Add(time.Hour)
 	require.NoError(t, os.Chtimes(metaPath, newer, newer))
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, transcript, fingerprint.Key)
 	assert.Equal(t, transcriptInfo.Size(), fingerprint.Size)
@@ -113,7 +112,7 @@ func TestCoworkProviderSourceMethods(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			changed, err := provider.SourcesForChangedPath(
-				context.Background(),
+				t.Context(),
 				ChangedPathRequest{
 					Path:      tc.path,
 					EventKind: "write",
@@ -128,7 +127,7 @@ func TestCoworkProviderSourceMethods(t *testing.T) {
 
 	require.NoError(t, os.Remove(metaPath))
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: metaPath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -137,7 +136,7 @@ func TestCoworkProviderSourceMethods(t *testing.T) {
 
 	require.NoError(t, os.Remove(transcript))
 	changed, err = provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: transcript, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -146,7 +145,7 @@ func TestCoworkProviderSourceMethods(t *testing.T) {
 
 	require.NoError(t, os.Remove(subagentPath))
 	changed, err = provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: subagentPath, EventKind: "rename", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -154,7 +153,7 @@ func TestCoworkProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, subagentPath, changed[0].DisplayPath)
 
 	ignored, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      filepath.Join(root, "org", "ws", "cowork-clientdata-cache.json"),
 			EventKind: "write",
@@ -165,7 +164,7 @@ func TestCoworkProviderSourceMethods(t *testing.T) {
 	assert.Empty(t, ignored)
 
 	wrongRoot, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      transcript,
 			EventKind: "write",
@@ -194,13 +193,13 @@ func TestCoworkProviderParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fingerprint,
 	})
@@ -251,7 +250,7 @@ func TestCoworkProviderMetadataRemovalRejectsAmbiguousMainTranscripts(t *testing
 
 	require.NoError(t, os.Remove(metaPath))
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: metaPath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -289,7 +288,7 @@ func TestCoworkProviderMetadataRemovalIgnoresSymlinkEscape(t *testing.T) {
 
 	require.NoError(t, os.Remove(metaPath))
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: metaPath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -326,7 +325,7 @@ func TestCoworkProviderMetadataRemovalIgnoresBrokenSymlinkAmbiguity(t *testing.T
 
 	require.NoError(t, os.Remove(metaPath))
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: metaPath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -353,7 +352,7 @@ func TestCoworkProviderFullSessionIDPrefixLookup(t *testing.T) {
 
 	for _, id := range []string{"cowork:" + cli, "remote~cowork:" + cli} {
 		t.Run(strings.ReplaceAll(id, ":", "_"), func(t *testing.T) {
-			found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+			found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 				FullSessionID: id,
 			})
 			require.NoError(t, err)

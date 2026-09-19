@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -85,9 +84,9 @@ func assertClawProviderStreamingDiscoveryPropagatesAgentSymlinkErrors(
 		_, err := discoverEach(t, root)
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, os.ErrNotExist)
+		require.ErrorIs(t, err, os.ErrNotExist)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(t, err, &incomplete)
+		require.ErrorAs(t, err, &incomplete)
 
 		require.NoError(t, os.Remove(link))
 		yielded, err := discoverEach(t, root)
@@ -116,9 +115,9 @@ func assertClawProviderStreamingDiscoveryPropagatesAgentSymlinkErrors(
 		_, err := discoverEach(t, root)
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, os.ErrPermission)
+		require.ErrorIs(t, err, os.ErrPermission)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(t, err, &incomplete)
+		require.ErrorAs(t, err, &incomplete)
 
 		require.NoError(t, os.Chmod(targetParent, 0o755))
 		yielded, err := discoverEach(t, root)
@@ -196,14 +195,14 @@ func assertClawProviderSourceMethods(t *testing.T, spec clawProviderTestSpec) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{"*.jsonl", "*.jsonl.*"}, plan.Roots[0].IncludeGlobs)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 2)
 	assert.Equal(t, activePath, discovered[0].DisplayPath)
@@ -211,28 +210,28 @@ func assertClawProviderSourceMethods(t *testing.T, spec clawProviderTestSpec) {
 	assert.Equal(t, newArchivePath, discovered[1].DisplayPath)
 	assert.Equal(t, "main", discovered[1].ProjectHint)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~" + spec.prefix + ":main:abc-123",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, activePath, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "main:def-456",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, newArchivePath, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: activeArchivePath,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, activePath, found.DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, activePath, fingerprint.Key)
 	assert.Positive(t, fingerprint.Size)
@@ -241,7 +240,7 @@ func assertClawProviderSourceMethods(t *testing.T, spec clawProviderTestSpec) {
 	// the provider fingerprint must too, or a resync clears stored file_hash.
 	assert.NotEmpty(t, fingerprint.Hash)
 
-	parsed, err := provider.Parse(context.Background(), ParseRequest{
+	parsed, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      found,
 		Fingerprint: fingerprint,
 	})
@@ -250,7 +249,7 @@ func assertClawProviderSourceMethods(t *testing.T, spec clawProviderTestSpec) {
 	assert.Equal(t, fingerprint.Hash, parsed.Results[0].Result.Session.File.Hash)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: newArchivePath, EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -258,7 +257,7 @@ func assertClawProviderSourceMethods(t *testing.T, spec clawProviderTestSpec) {
 	assert.Equal(t, newArchivePath, changed[0].DisplayPath)
 
 	changed, err = provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: activeArchivePath, EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -266,7 +265,7 @@ func assertClawProviderSourceMethods(t *testing.T, spec clawProviderTestSpec) {
 
 	require.NoError(t, os.Remove(activePath))
 	changed, err = provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: activePath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -275,7 +274,7 @@ func assertClawProviderSourceMethods(t *testing.T, spec clawProviderTestSpec) {
 
 	require.NoError(t, os.Remove(newArchivePath))
 	changed, err = provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: newArchivePath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -283,7 +282,7 @@ func assertClawProviderSourceMethods(t *testing.T, spec clawProviderTestSpec) {
 	assert.Equal(t, oldArchivePath, changed[0].DisplayPath)
 
 	changed, err = provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      oldArchivePath,
 			EventKind: "write",
@@ -322,12 +321,12 @@ func assertClawProviderDiscoversSymlinkedAgentDirectory(
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~" + spec.prefix + ":main:abc-123",
 	})
 	require.NoError(t, err)
@@ -347,11 +346,11 @@ func assertClawProviderParse(t *testing.T, spec clawProviderTestSpec) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: SourceFingerprint{Key: sourcePath, Hash: "abc123"},
 	})

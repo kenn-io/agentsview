@@ -1,7 +1,6 @@
 package service_test
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"fmt"
 	"testing"
@@ -111,7 +110,7 @@ func TestSessionUsageWithRequiredSubagentsRequiresPerSessionContextCoverage(
 	t *testing.T,
 ) {
 	d := dbtest.OpenTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	parent := subagentParentID
 	started := subagentUsageDay + "T09:00:00Z"
 	dbtest.SeedSession(t, d, subagentParentID, "proj", func(s *db.Session) {
@@ -156,7 +155,7 @@ func TestSessionUsageWithRequiredSubagentsRequiresPerSessionContextCoverage(
 
 func TestSessionUsageWithSubagentsOverSQLiteCombinesAndDedupes(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedSubagentUsageFixture(t, d)
 
 	own, err := d.GetSessionUsage(ctx, subagentParentID, true)
@@ -215,7 +214,7 @@ func TestSessionUsageWithSubagentsDoesNotRestoreDedupedOnlyChildTokens(
 	t *testing.T,
 ) {
 	d := dbtest.OpenTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",
@@ -249,7 +248,7 @@ func TestSessionUsageWithSubagentsPreservesOutputOnlyTokensAcrossSnapshots(
 	t *testing.T,
 ) {
 	d := dbtest.OpenTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",
 		InputPerMTok:  money.MustParseDollars("2.0"),
@@ -291,7 +290,7 @@ func TestSessionUsageRollupRecognizesChildSourcedAttributedSnapshot(
 	t *testing.T,
 ) {
 	d := dbtest.OpenTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",
 		InputPerMTok:  money.MustParseDollars("2.0"),
@@ -319,7 +318,7 @@ func TestSessionUsageRollupRecognizesChildSourcedAttributedSnapshot(
 
 func TestSessionUsageWithSubagentsPreservesOutputWithoutUsageRows(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",
@@ -350,7 +349,7 @@ func TestSessionUsageWithSubagentsPreservesOutputWithoutUsageRows(t *testing.T) 
 
 func TestSessionUsageWithSubagentsMarksRowlessContextIncomplete(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",
@@ -397,7 +396,7 @@ func TestSessionUsageWithSubagentsMarksRowlessContextIncomplete(t *testing.T) {
 
 func TestSessionUsageWithSubagentsAllowsExplicitZeroValuedSubagent(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",
@@ -446,7 +445,7 @@ func TestSessionUsageWithSubagentsIgnoresZeroRowForContextCoverage(t *testing.T)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			d := dbtest.OpenTestDB(t)
-			ctx := context.Background()
+			ctx := t.Context()
 			require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 				ModelPattern:  "test-opus",
 				InputPerMTok:  money.MustParseDollars("2.0"),
@@ -489,7 +488,7 @@ func TestSessionUsageWithSubagentsIgnoresZeroRowForContextCoverage(t *testing.T)
 
 func TestSessionUsageWithSubagentsDeductsStreamingSnapshotsOnce(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",
@@ -540,7 +539,7 @@ func TestSessionUsageWithSubagentsDeductsStreamingSnapshotsOnce(t *testing.T) {
 // view, not a relabeling of the archive.
 func TestSessionUsageWithSubagentsIsQueriedFromTheChildToo(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedSubagentUsageFixture(t, d)
 
 	got, err := service.SessionUsageWithSubagents(ctx, d, subagentChildBID, true)
@@ -557,7 +556,7 @@ func TestSessionUsageWithSubagentsIsQueriedFromTheChildToo(t *testing.T) {
 // computed.
 func TestSubagentRollupLeavesDayAggregatesUnchanged(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedSubagentUsageFixture(t, d)
 
 	filter := db.UsageFilter{
@@ -595,7 +594,7 @@ func TestSubagentRollupLeavesDayAggregatesUnchanged(t *testing.T) {
 // like it has data in the ordinary archive view.
 func TestSessionUsageWithSubagentsReportsTokenDataForEmptyParent(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -40,7 +41,7 @@ func newDBCompactCommand() *cobra.Command {
 			ctx := cmd.Context()
 			jsonOutput := outputFormat(cmd) == "json"
 			if jsonOutput && !yes && !dryRun {
-				return fmt.Errorf("--format json requires --yes for db compact")
+				return errors.New("--format json requires --yes for db compact")
 			}
 			cfg, err := config.LoadMinimal()
 			if err != nil {
@@ -85,7 +86,7 @@ func newDBCompactCommand() *cobra.Command {
 }
 
 func estimateDBCompact(ctx context.Context, cfg config.Config) (db.CompactEstimate, error) {
-	database, err := openReadOnlyDB(cfg)
+	database, err := openReadOnlyDB(ctx, cfg)
 	if err != nil {
 		return db.CompactEstimate{}, fmt.Errorf("opening archive for compaction estimate: %w", err)
 	}
@@ -152,9 +153,7 @@ func runDBCompact(
 func decideCompactRoute(tr transport, stagingDir string) (delegate bool, err error) {
 	if tr.Mode == transportHTTP && !tr.ReadOnly {
 		if stagingDir != "" {
-			return false, fmt.Errorf(
-				"--staging-dir requires direct archive access; stop the daemon before using it",
-			)
+			return false, errors.New("--staging-dir requires direct archive access; stop the daemon before using it")
 		}
 		return true, nil
 	}
@@ -190,7 +189,7 @@ func runDBCompactDirect(
 func requestDBCompact(
 	ctx context.Context, tr transport, authToken string, options db.CompactOptions,
 ) (db.CompactResult, error) {
-	api, err := apiclient.NewHTTPClient(tr.URL, authToken, http.DefaultClient)
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return db.CompactResult{}, err
 	}

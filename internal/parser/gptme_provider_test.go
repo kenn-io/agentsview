@@ -1,8 +1,6 @@
 package parser
 
 import (
-	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -50,7 +48,7 @@ func TestGptmeProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, AgentGptme, discovered[0].Provider)
@@ -59,21 +57,21 @@ func TestGptmeProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, "write-hello-world", discovered[0].ProjectHint)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, discovered[0].Key, changed[0].Key)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: sessionID,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, discovered[0].Key, found.Key)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, sourcePath, fingerprint.Key)
 	assert.NotZero(t, fingerprint.Size)
@@ -102,7 +100,7 @@ func TestGptmeProviderDiscoversSymlinkSessionDirectories(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, filepath.Join(linkDir, "conversation.jsonl"), discovered[0].DisplayPath)
@@ -122,7 +120,7 @@ func TestGptmeProviderClassifiesDeletedConversationPath(t *testing.T) {
 	require.NoError(t, os.Remove(sourcePath))
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      sourcePath,
 			EventKind: "remove",
@@ -153,7 +151,7 @@ func TestGptmeProviderFindSourceUsesPersistedFallbacks(t *testing.T) {
 		{FullSessionID: "gptme:" + sessionID},
 		{FullSessionID: "host~gptme:" + sessionID},
 	} {
-		found, ok, err := provider.FindSource(context.Background(), req)
+		found, ok, err := provider.FindSource(t.Context(), req)
 		require.NoError(t, err)
 		require.Truef(t, ok, "request %#v", req)
 		assert.Equal(t, sourcePath, found.DisplayPath)
@@ -172,15 +170,15 @@ func TestGptmeProviderParse(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: sourcePath,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      source,
 		Fingerprint: fingerprint,
 		Machine:     "devbox",
@@ -210,7 +208,7 @@ func TestGptmeProviderParseMissingSourceIsWholeSourceError(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: SourceRef{
 			Provider:       AgentGptme,
 			Key:            "/tmp/missing/conversation.jsonl",
@@ -221,7 +219,7 @@ func TestGptmeProviderParseMissingSourceIsWholeSourceError(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Empty(t, outcome)
-	assert.False(t, errors.Is(err, ErrUnsupportedProviderFeature))
+	assert.NotErrorIs(t, err, ErrUnsupportedProviderFeature)
 }
 
 func gptmeProviderFixture() string {

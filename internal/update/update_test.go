@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync/atomic"
 	"testing"
 
@@ -127,7 +128,7 @@ func TestResolveLatestTag(t *testing.T) {
 			))
 			defer srv.Close()
 
-			tag, err := resolveLatestTag(srv.URL)
+			tag, err := resolveLatestTag(t.Context(), srv.URL)
 			if tt.wantErrSub != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErrSub)
@@ -166,7 +167,7 @@ func TestFetchContentLength(t *testing.T) {
 					if tt.bodySize > 0 {
 						w.Header().Set(
 							"Content-Length",
-							fmt.Sprintf("%d", tt.bodySize),
+							strconv.Itoa(tt.bodySize),
 						)
 					}
 					w.WriteHeader(tt.status)
@@ -174,7 +175,7 @@ func TestFetchContentLength(t *testing.T) {
 			))
 			defer srv.Close()
 
-			size, err := fetchContentLength(srv.URL)
+			size, err := fetchContentLength(t.Context(), srv.URL)
 			if tt.wantErrSub != "" {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), tt.wantErrSub)
@@ -311,7 +312,7 @@ func TestInstallBinaryToNeverMissingDuringUpdate(t *testing.T) {
 		if err := installBinaryTo(srcPath, dstPath); err != nil {
 			close(stop)
 			<-done
-			t.Fatalf("install iteration %d: %v", i, err)
+			require.NoErrorf(t, err, "install iteration %d", i)
 		}
 	}
 
@@ -452,6 +453,7 @@ func createTestTarGz(
 	archivePath, fileName, content string,
 ) {
 	t.Helper()
+
 	f, err := os.Create(archivePath)
 	require.NoError(t, err)
 	defer f.Close()

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 func TestClaudeChangedPathCandidateWorkIgnoresUnrelatedSessions(t *testing.T) {
 	var allocations []float64
 	for _, size := range []int{8, 8000} {
-		t.Run(fmt.Sprint(size), func(t *testing.T) {
+		t.Run(strconv.Itoa(size), func(t *testing.T) {
 			root := t.TempDir()
 			for _, project := range []string{"project-a", "project-b"} {
 				require.NoError(t, os.Mkdir(filepath.Join(root, project), 0o700))
@@ -31,7 +32,7 @@ func TestClaudeChangedPathCandidateWorkIgnoresUnrelatedSessions(t *testing.T) {
 				require.NoError(t, os.WriteFile(filepath.Join(root, "project-a", fmt.Sprintf("unrelated-%d.jsonl", i)), nil, 0o600))
 			}
 			database := openTestDB(t)
-			engine := NewEngine(database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}})
+			engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}}})
 			t.Cleanup(engine.Close)
 			var files []parser.DiscoveredFile
 			var err error

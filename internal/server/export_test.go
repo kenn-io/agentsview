@@ -1295,7 +1295,7 @@ func TestCreateGist(t *testing.T) {
 			ts := stubServer(t, http.MethodPost, "tok", tt.respStatus, tt.respBody)
 			defer ts.Close()
 
-			ctx := context.Background()
+			ctx := t.Context()
 			if tt.cancelCtx {
 				var cancel context.CancelFunc
 				ctx, cancel = context.WithCancel(ctx)
@@ -1354,7 +1354,7 @@ func TestCreateGistVisibility(t *testing.T) {
 			defer ts.Close()
 
 			_, err := createGistWithURL(
-				context.Background(), ts.URL,
+				t.Context(), ts.URL,
 				"tok", "f.html", "desc", "content", tt.public,
 			)
 			require.NoError(t, err)
@@ -1367,9 +1367,9 @@ func TestResolveGitHubToken(t *testing.T) {
 	originalGhAuthTokenOutput := ghAuthTokenOutput
 	t.Cleanup(func() { ghAuthTokenOutput = originalGhAuthTokenOutput })
 
-	localCtx := context.WithValue(context.Background(), ctxKeyHumaRequestInfo,
+	localCtx := context.WithValue(t.Context(), ctxKeyHumaRequestInfo,
 		requestInfo{RemoteAddr: "127.0.0.1:1234"})
-	remoteCtx := context.WithValue(context.Background(), ctxKeyHumaRequestInfo,
+	remoteCtx := context.WithValue(t.Context(), ctxKeyHumaRequestInfo,
 		requestInfo{RemoteAddr: "127.0.0.1:1234", Forwarded: true})
 	tests := []struct {
 		name       string
@@ -1496,7 +1496,7 @@ func TestValidateGithubToken(t *testing.T) {
 			ts := stubServer(t, http.MethodGet, "tok", tt.respStatus, tt.respBody)
 			defer ts.Close()
 
-			ctx := context.Background()
+			ctx := t.Context()
 			if tt.cancelCtx {
 				var cancel context.CancelFunc
 				ctx, cancel = context.WithCancel(ctx)

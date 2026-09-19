@@ -5,7 +5,6 @@ package main
 import (
 	"archive/zip"
 	"bytes"
-	"context"
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -33,7 +32,7 @@ func TestGeminiAppsImportDispatchesDirectAndZipSources(t *testing.T) {
 	require.NoError(t, os.WriteFile(direct, []byte(geminiAppsCLIHTML), 0o644))
 
 	stats, err := runImportDispatch(
-		context.Background(), database, "gemini-apps", direct, t.TempDir(), "test-machine",
+		t.Context(), database, "gemini-apps", direct, t.TempDir(), "test-machine",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Imported)
@@ -54,16 +53,16 @@ func TestGeminiAppsImportDispatchesDirectAndZipSources(t *testing.T) {
 	require.NotNil(t, cleanup)
 	defer cleanup()
 	stats, err = runImportDispatch(
-		context.Background(), database, "gemini-apps", source, t.TempDir(), "test-machine",
+		t.Context(), database, "gemini-apps", source, t.TempDir(), "test-machine",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Skipped)
 
 	_, err = runImportDispatch(
-		context.Background(), database, "gemini-apps",
+		t.Context(), database, "gemini-apps",
 		filepath.Join(t.TempDir(), "missing.html"), t.TempDir(), "test-machine",
 	)
-	assert.ErrorContains(t, err, "stat import source")
+	require.ErrorContains(t, err, "stat import source")
 
 	nonPrompt := filepath.Join(t.TempDir(), "non-prompt.html")
 	require.NoError(t, os.WriteFile(
@@ -72,9 +71,9 @@ func TestGeminiAppsImportDispatchesDirectAndZipSources(t *testing.T) {
 		0o644,
 	))
 	stats, err = runImportDispatch(
-		context.Background(), database, "gemini-apps", nonPrompt, t.TempDir(), "test-machine",
+		t.Context(), database, "gemini-apps", nonPrompt, t.TempDir(), "test-machine",
 	)
-	assert.ErrorContains(t, err, "no admissible Prompted records")
+	require.ErrorContains(t, err, "no admissible Prompted records")
 	assert.Equal(t, 1, stats.Skipped)
 	assert.Equal(t, "\rDone: 1 processed (1 skipped)\n", formatImportFailureSummary(stats))
 	assert.Empty(t, formatImportFailureSummary(importer.ImportStats{}))
@@ -321,7 +320,7 @@ func TestDoParseDiff_FailOnChangeFalseOnEmptyArchive(t *testing.T) {
 	isolateParseDiffEnv(t)
 
 	var buf bytes.Buffer
-	failed := doParseDiff(ParseDiffConfig{
+	failed := doParseDiff(t.Context(), ParseDiffConfig{
 		FailOnChange: true,
 		Stdout:       &buf,
 		Stderr:       &buf,
@@ -951,16 +950,16 @@ func TestDoParseDiff_FailOnChangeDirections(t *testing.T) {
 	require.NoError(t, os.WriteFile(srcPath, []byte(content), 0o644))
 
 	d := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
-	engine := sync.NewEngine(d, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeDir},
 		},
 		Machine: "local",
 	})
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Synced, "one session synced")
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET first_message = ? WHERE id = ?",
 			"drifted first message", "real-session",
 		)
@@ -970,7 +969,7 @@ func TestDoParseDiff_FailOnChangeDirections(t *testing.T) {
 	require.NoError(t, d.Close())
 
 	var failBuf bytes.Buffer
-	failed := doParseDiff(ParseDiffConfig{
+	failed := doParseDiff(t.Context(), ParseDiffConfig{
 		FailOnChange: true, Stdout: &failBuf, Stderr: &failBuf,
 	})
 	assert.True(t, failed,
@@ -978,7 +977,7 @@ func TestDoParseDiff_FailOnChangeDirections(t *testing.T) {
 	assert.Contains(t, failBuf.String(), "sessions changed")
 
 	var cleanBuf bytes.Buffer
-	notFailed := doParseDiff(ParseDiffConfig{
+	notFailed := doParseDiff(t.Context(), ParseDiffConfig{
 		FailOnChange: false, Stdout: &cleanBuf, Stderr: &cleanBuf,
 	})
 	assert.False(t, notFailed,
@@ -1014,18 +1013,18 @@ func TestDoParseDiff_RacedSessionDoesNotFail(t *testing.T) {
 
 	dbPath := filepath.Join(dataDir, "sessions.db")
 	d := dbtest.OpenTestDBAt(t, dbPath)
-	engine := sync.NewEngine(d, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeDir},
 		},
 		Machine: "local",
 	})
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Synced, "one session synced")
 
 	// Find the synced session id so the drift targets the real row.
 	rows, err := d.ListSessionsModifiedBetween(
-		context.Background(), "", "", nil, nil,
+		t.Context(), "", "", nil, nil,
 	)
 	require.NoError(t, err)
 	require.Len(t, rows, 1, "exactly one stored session")
@@ -1033,8 +1032,8 @@ func TestDoParseDiff_RacedSessionDoesNotFail(t *testing.T) {
 
 	// Drift the stored row so a fresh parse reports a real change, then
 	// push the source mtime past the recorded snapshot file_mtime.
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		_, uerr := tx.Exec(
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, uerr := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET first_message = ? WHERE id = ?",
 			"drifted first message", sessionID,
 		)
@@ -1047,7 +1046,7 @@ func TestDoParseDiff_RacedSessionDoesNotFail(t *testing.T) {
 		"advance source mtime past the snapshot")
 
 	var racedBuf bytes.Buffer
-	racedFailed := doParseDiff(ParseDiffConfig{
+	racedFailed := doParseDiff(t.Context(), ParseDiffConfig{
 		FailOnChange: true, Stdout: &racedBuf, Stderr: &racedBuf,
 	})
 	assert.False(t, racedFailed,
@@ -1082,24 +1081,24 @@ func TestDoParseDiff_UntouchedDriftStillFails(t *testing.T) {
 
 	dbPath := filepath.Join(dataDir, "sessions.db")
 	d := dbtest.OpenTestDBAt(t, dbPath)
-	engine := sync.NewEngine(d, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {claudeDir},
 		},
 		Machine: "local",
 	})
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Synced, "one session synced")
 
 	rows, err := d.ListSessionsModifiedBetween(
-		context.Background(), "", "", nil, nil,
+		t.Context(), "", "", nil, nil,
 	)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	sessionID := rows[0].ID
 
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		_, uerr := tx.Exec(
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, uerr := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET first_message = ? WHERE id = ?",
 			"drifted first message", sessionID,
 		)
@@ -1109,7 +1108,7 @@ func TestDoParseDiff_UntouchedDriftStillFails(t *testing.T) {
 
 	// Source mtime is left untouched: the change is genuine drift.
 	var buf bytes.Buffer
-	failed := doParseDiff(ParseDiffConfig{
+	failed := doParseDiff(t.Context(), ParseDiffConfig{
 		FailOnChange: true, Stdout: &buf, Stderr: &buf,
 	})
 	assert.True(t, failed,

@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -51,7 +50,7 @@ func seedEmbeddableScopeCorpus(t *testing.T, d *DB) {
 			},
 		)
 		if sess.softKill {
-			require.NoError(t, d.SoftDeleteSession(sess.id))
+			require.NoError(t, d.SoftDeleteSession(t.Context(), sess.id))
 		}
 	}
 }
@@ -162,8 +161,9 @@ func TestScanEmbeddableUnitsSinceOrdering(t *testing.T) {
 // query.
 func explainQueryPlan(t *testing.T, d *DB, query string, args ...any) []string {
 	t.Helper()
+
 	rows, err := d.getReader().QueryContext(
-		context.Background(), "EXPLAIN QUERY PLAN "+query, args...)
+		t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
 	require.NoError(t, err)
 	defer rows.Close()
 

@@ -261,25 +261,28 @@ func (s *Sync) readMirrorFingerprints(ctx context.Context, ids []string) (map[st
 	out := make(map[string]string, len(ids))
 	for batch := range idBatches(ids) {
 		placeholders, args := inArgs(batch)
-		rows, err := s.conn.QueryContext(ctx,
-			"SELECT id, agentsview_push_fingerprint FROM sessions WHERE id IN ("+placeholders+")",
-			args...)
-		if err != nil {
-			return nil, fmt.Errorf("reading clickhouse fingerprints: %w", err)
-		}
-		for rows.Next() {
-			var id, fp string
-			if err := rows.Scan(&id, &fp); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("scanning clickhouse fingerprint: %w", err)
+		if err := func() error {
+			rows, err := s.conn.QueryContext(ctx,
+				"SELECT id, agentsview_push_fingerprint FROM sessions WHERE id IN ("+placeholders+")",
+				args...)
+			if err != nil {
+				return fmt.Errorf("reading clickhouse fingerprints: %w", err)
 			}
-			out[id] = fp
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
+			defer rows.Close()
+			for rows.Next() {
+				var id, fp string
+				if err := rows.Scan(&id, &fp); err != nil {
+					return fmt.Errorf("scanning clickhouse fingerprint: %w", err)
+				}
+				out[id] = fp
+			}
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			return nil
+		}(); err != nil {
 			return nil, err
 		}
-		rows.Close()
 	}
 	return out, nil
 }
@@ -289,24 +292,27 @@ func (s *Sync) residentSessionIDs(ctx context.Context, ids []string) (map[string
 	resident := make(map[string]bool, len(ids))
 	for batch := range idBatches(uniqueIDs(ids)) {
 		placeholders, args := inArgs(batch)
-		rows, err := s.conn.QueryContext(ctx,
-			"SELECT id FROM sessions WHERE id IN ("+placeholders+")", args...)
-		if err != nil {
-			return nil, fmt.Errorf("reading clickhouse resident sessions: %w", err)
-		}
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("scanning clickhouse resident session: %w", err)
+		if err := func() error {
+			rows, err := s.conn.QueryContext(ctx,
+				"SELECT id FROM sessions WHERE id IN ("+placeholders+")", args...)
+			if err != nil {
+				return fmt.Errorf("reading clickhouse resident sessions: %w", err)
 			}
-			resident[id] = true
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
+			defer rows.Close()
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					return fmt.Errorf("scanning clickhouse resident session: %w", err)
+				}
+				resident[id] = true
+			}
+			if err := rows.Err(); err != nil {
+				return err
+			}
+			return nil
+		}(); err != nil {
 			return nil, err
 		}
-		rows.Close()
 	}
 	return resident, nil
 }
@@ -424,6 +430,7 @@ func (s *Sync) deleteSessionsMissingLocally(ctx context.Context, keep []string, 
 	if err != nil {
 		return fmt.Errorf("listing clickhouse sessions for archive: %w", err)
 	}
+	defer rows.Close()
 	keepSet := make(map[string]bool, len(keep))
 	for _, id := range keep {
 		keepSet[id] = true
@@ -432,7 +439,6 @@ func (s *Sync) deleteSessionsMissingLocally(ctx context.Context, keep []string, 
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
-			rows.Close()
 			return fmt.Errorf("scanning clickhouse archive session: %w", err)
 		}
 		if !keepSet[id] {
@@ -440,7 +446,6 @@ func (s *Sync) deleteSessionsMissingLocally(ctx context.Context, keep []string, 
 		}
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
 		return err
 	}
 	rows.Close()
@@ -654,6 +659,7 @@ func insertRows(ctx context.Context, conn *sql.DB, table string, rows [][]any) e
 		_ = tx.Rollback()
 		return fmt.Errorf("preparing clickhouse %s insert: %w", table, err)
 	}
+	defer stmt.Close()
 	for _, row := range rows {
 		if len(row) != len(spec.columns)+1 {
 			_ = tx.Rollback()

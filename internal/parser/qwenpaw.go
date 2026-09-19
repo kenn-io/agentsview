@@ -316,7 +316,7 @@ func parseQwenPawTimestamp(s string) time.Time {
 		"2006-01-02 15:04:05.999",
 		"2006-01-02 15:04:05",
 	} {
-		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil {
+		if t, err := time.ParseInLocation(layout, s, time.Local); err == nil { //nolint:forbidigo // QwenPaw source timestamps omit the offset and represent local wall-clock time.
 			return t
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -111,7 +112,7 @@ func TestPrintUsageStatuslineJSON(t *testing.T) {
 				},
 			}
 			out := captureStdout(t, func() {
-				printUsageStatuslineJSON(result, tc.agent, "2026-08-04")
+				require.NoError(t, printUsageStatuslineJSON(result, tc.agent, "2026-08-04"))
 			})
 
 			var got usageStatuslineReport
@@ -132,7 +133,7 @@ func TestPrintUsageStatuslineJSONKeepsExactMicrodollars(t *testing.T) {
 	}
 
 	out := captureStdout(t, func() {
-		printUsageStatuslineJSON(result, "", "2026-08-04")
+		require.NoError(t, printUsageStatuslineJSON(result, "", "2026-08-04"))
 	})
 
 	assert.Contains(t, out, `"microdollars": 25000001`)
@@ -227,13 +228,14 @@ func writeGoldenCursorSecretConfig(t *testing.T, dataDir string) {
 
 func seedExportGoldenArchive(t *testing.T, database *db.DB) {
 	t.Helper()
-	ctx := context.Background()
+
+	ctx := t.Context()
 	database.SetCursorSecret(goldenCursorSecret)
 	require.NoError(t, database.SetDatabaseIDForTest(ctx, goldenDatabaseID))
 	require.NoError(t, database.SetArchiveIdentityForTest(
 		ctx, goldenArchiveID, goldenArchiveSalt,
 	))
-	require.NoError(t, database.SetSyncState(
+	require.NoError(t, database.SetSyncState(ctx,
 		db.MachineLabelKeyPrefix+"golden-host", "Golden Host",
 	))
 	require.NoError(t, database.UpsertModelPricing([]db.ModelPricing{
@@ -293,7 +295,8 @@ func seedExportGoldenArchive(t *testing.T, database *db.DB) {
 
 func seedGoldenProjectIdentities(t *testing.T, database *db.DB) {
 	t.Helper()
-	ctx := context.Background()
+
+	ctx := t.Context()
 	for _, sessionID := range []string{"remote-current", "remote-yesterday"} {
 		require.NoError(t, database.UpsertProjectIdentityObservation(ctx,
 			export.ProjectIdentityObservation{
@@ -351,6 +354,7 @@ func seedGoldenExportSession(
 	t *testing.T, database *db.DB, spec goldenExportSessionSpec,
 ) {
 	t.Helper()
+
 	session := db.Session{
 		ID:               spec.id,
 		Project:          spec.project,
@@ -370,7 +374,7 @@ func seedGoldenExportSession(
 		session.TotalOutputTokens = spec.outputTokens
 		session.HasTotalOutputTokens = true
 	}
-	require.NoError(t, database.UpsertSession(session),
+	require.NoError(t, database.UpsertSession(t.Context(), session),
 		"upsert golden session %s", spec.id)
 
 	msgs := []db.Message{
@@ -400,12 +404,12 @@ func seedGoldenExportSession(
 		msgs[1].OutputTokens = spec.outputTokens
 		msgs[1].HasOutputTokens = true
 	}
-	require.NoError(t, database.InsertMessages(msgs),
+	require.NoError(t, database.InsertMessages(t.Context(), msgs),
 		"insert golden messages %s", spec.id)
 
 	if spec.costUSD != nil {
 		ordinal := 1
-		require.NoError(t, database.ReplaceSessionUsageEvents(
+		require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(),
 			spec.id, []db.UsageEvent{{
 				SessionID:      spec.id,
 				MessageOrdinal: &ordinal,
@@ -428,7 +432,7 @@ func setGoldenExportTimestamps(t *testing.T, dbPath string) {
 	defer func() {
 		require.NoError(t, conn.Close(), "close pricing timestamp db")
 	}()
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		UPDATE model_pricing SET updated_at = ?;
 		UPDATE genai_pricing SET updated_at = ?;
 		UPDATE sessions SET local_modified_at = ?`,
@@ -438,6 +442,7 @@ func setGoldenExportTimestamps(t *testing.T, dbPath string) {
 
 func assertGoldenBytes(t *testing.T, name string, got []byte) {
 	t.Helper()
+
 	path := filepath.Join("..", "..", "testdata", "golden", name)
 	if *updateGolden {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755),
@@ -471,6 +476,7 @@ func assertGoldenBytes(t *testing.T, name string, got []byte) {
 
 func assertCatalogGolden(t *testing.T, name string, got []byte) {
 	t.Helper()
+
 	var metadata struct {
 		Pricing struct {
 			EffectiveRowCount int `json:"effective_row_count"`
@@ -569,7 +575,7 @@ func TestFetchHTTPDailyUsage(t *testing.T) {
 	defer ts.Close()
 
 	got, err := fetchHTTPDailyUsage(
-		context.Background(),
+		t.Context(),
 		transport{Mode: transportHTTP, URL: ts.URL},
 		"secret-token",
 		dailyUsageQuery{
@@ -603,18 +609,10 @@ func TestLocalTimezoneWindowsNameProducesServerAcceptedUsageQuery(t *testing.T) 
 	if runtime.GOOS != "windows" {
 		t.Skip("requires the Windows local timezone resolver")
 	}
-	previousTZ, hadTZ := os.LookupEnv("TZ")
-	require.NoError(t, os.Unsetenv("TZ"))
-	t.Cleanup(func() {
-		if hadTZ {
-			_ = os.Setenv("TZ", previousTZ)
-		} else {
-			_ = os.Unsetenv("TZ")
-		}
-	})
-	oldLocal := time.Local
-	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60)
-	t.Cleanup(func() { time.Local = oldLocal })
+	t.Setenv("TZ", "")
+	oldLocal := time.Local                                         //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
+	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60) //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
+	t.Cleanup(func() { time.Local = oldLocal })                    //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
 	expected, err := tzlocal.LocalTZ()
 	require.NoError(t, err)
 	require.NotEmpty(t, expected)
@@ -639,7 +637,7 @@ func TestLocalTimezoneWindowsNameProducesServerAcceptedUsageQuery(t *testing.T) 
 	}))
 	t.Cleanup(ts.Close)
 
-	base, err := fetchHTTPDailyUsage(context.Background(), transport{URL: ts.URL}, "",
+	base, err := fetchHTTPDailyUsage(t.Context(), transport{URL: ts.URL}, "",
 		dailyUsageQuery{Filter: db.UsageFilter{
 			Timezone: time.Now().Location().String(),
 		}, NoDefaultRange: true})
@@ -648,7 +646,7 @@ func TestLocalTimezoneWindowsNameProducesServerAcceptedUsageQuery(t *testing.T) 
 		`usage summary: HTTP 400: {"error":"invalid timezone: Eastern Standard Time"}`)
 	t.Logf("base: timezone=%q error=%v", gotTimezones[0], err)
 
-	head, err := fetchHTTPDailyUsage(context.Background(), transport{URL: ts.URL}, "",
+	head, err := fetchHTTPDailyUsage(t.Context(), transport{URL: ts.URL}, "",
 		dailyUsageQuery{Filter: db.UsageFilter{
 			Timezone: localTimezone(),
 		}, NoDefaultRange: true})
@@ -667,9 +665,9 @@ func TestUsageDateForTimezoneFallsBackToUTC(t *testing.T) {
 
 func TestRunUsageDailyDefaultsToMappedLocalTimezone(t *testing.T) {
 	t.Setenv("TZ", "America/New_York")
-	oldLocal := time.Local
-	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60)
-	t.Cleanup(func() { time.Local = oldLocal })
+	oldLocal := time.Local                                         //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
+	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60) //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
+	t.Cleanup(func() { time.Local = oldLocal })                    //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
 	dataDir := newAgentDataDir(t)
 	var gotTimezone string
 	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -686,9 +684,9 @@ func TestRunUsageDailyDefaultsToMappedLocalTimezone(t *testing.T) {
 
 func TestRunUsageStatuslineDefaultsToMappedLocalTimezone(t *testing.T) {
 	t.Setenv("TZ", "America/New_York")
-	oldLocal := time.Local
-	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60)
-	t.Cleanup(func() { time.Local = oldLocal })
+	oldLocal := time.Local                                         //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
+	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60) //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
+	t.Cleanup(func() { time.Local = oldLocal })                    //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
 	dataDir := newAgentDataDir(t)
 	var gotTimezone string
 	ts := sessionUsageRuntimeServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -705,9 +703,9 @@ func TestRunUsageStatuslineDefaultsToMappedLocalTimezone(t *testing.T) {
 
 func TestCursorUsageWindowUsesMappedLocalTimezone(t *testing.T) {
 	t.Setenv("TZ", "America/New_York")
-	oldLocal := time.Local
-	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60)
-	t.Cleanup(func() { time.Local = oldLocal })
+	oldLocal := time.Local                                         //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
+	time.Local = time.FixedZone("Eastern Standard Time", -5*60*60) //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
+	t.Cleanup(func() { time.Local = oldLocal })                    //nolint:forbidigo // Exercise report formatting and date buckets in the local calendar timezone.
 
 	loc := timeutil.LocalLocation()
 	assert.Equal(t, "America/New_York", loc.String())
@@ -716,8 +714,7 @@ func TestCursorUsageWindowUsesMappedLocalTimezone(t *testing.T) {
 	}, loc)
 	require.NoError(t, err)
 	assert.Equal(t, time.Date(2026, 3, 8, 5, 0, 0, 0, time.UTC), start)
-	assert.Equal(t,
-		time.Date(2026, 3, 9, 3, 59, 59, 999000000, time.UTC), end)
+	assert.Equal(t, time.Date(2026, 3, 9, 3, 59, 59, 999000000, time.UTC), end)
 }
 
 func TestFetchHTTPDailyUsageMissingProjectsDefaultsEmptyMap(t *testing.T) {
@@ -735,7 +732,7 @@ func TestFetchHTTPDailyUsageMissingProjectsDefaultsEmptyMap(t *testing.T) {
 	defer ts.Close()
 
 	got, err := fetchHTTPDailyUsage(
-		context.Background(),
+		t.Context(),
 		transport{Mode: transportHTTP, URL: ts.URL},
 		"",
 		dailyUsageQuery{NoDefaultRange: true},
@@ -757,7 +754,7 @@ func TestFetchHTTPDailyUsagePreservesExcludedSessionFilters(t *testing.T) {
 	defer ts.Close()
 
 	_, err := fetchHTTPDailyUsage(
-		context.Background(),
+		t.Context(),
 		transport{Mode: transportHTTP, URL: ts.URL},
 		"",
 		dailyUsageQuery{
@@ -786,7 +783,7 @@ func TestFetchHTTPDailyUsagePreservesOpenEndedRange(t *testing.T) {
 	defer ts.Close()
 
 	_, err := fetchHTTPDailyUsage(
-		context.Background(),
+		t.Context(),
 		transport{Mode: transportHTTP, URL: ts.URL},
 		"",
 		dailyUsageQuery{
@@ -812,7 +809,7 @@ func TestFetchHTTPDailyUsageAllowsDefaultRangeWhenRangeEmpty(t *testing.T) {
 	defer ts.Close()
 
 	_, err := fetchHTTPDailyUsage(
-		context.Background(),
+		t.Context(),
 		transport{Mode: transportHTTP, URL: ts.URL},
 		"",
 		dailyUsageQuery{
@@ -898,18 +895,28 @@ func TestResolveUsageWindow(t *testing.T) {
 		{name: "empty passes through"},
 		{name: "duration since anchors at now", since: "14d", wantFrom: "2026-04-04"},
 		{name: "Nh duration since", since: "48h", wantFrom: "2026-04-16"},
-		{name: "duration since anchors to explicit until", since: "14d",
-			until: "2026-04-10", wantFrom: "2026-03-27", wantTo: "2026-04-10"},
-		{name: "duration since anchors to duration until", since: "7d",
-			until: "30d", wantFrom: "2026-03-12", wantTo: "2026-03-19"},
-		{name: "dates pass through", since: "2026-04-01", until: "2026-04-10",
-			wantFrom: "2026-04-01", wantTo: "2026-04-10"},
-		{name: "equal bounds are a valid single day", since: "2026-04-10",
-			until: "2026-04-10", wantFrom: "2026-04-10", wantTo: "2026-04-10"},
+		{
+			name: "duration since anchors to explicit until", since: "14d",
+			until: "2026-04-10", wantFrom: "2026-03-27", wantTo: "2026-04-10",
+		},
+		{
+			name: "duration since anchors to duration until", since: "7d",
+			until: "30d", wantFrom: "2026-03-12", wantTo: "2026-03-19",
+		},
+		{
+			name: "dates pass through", since: "2026-04-01", until: "2026-04-10",
+			wantFrom: "2026-04-01", wantTo: "2026-04-10",
+		},
+		{
+			name: "equal bounds are a valid single day", since: "2026-04-10",
+			until: "2026-04-10", wantFrom: "2026-04-10", wantTo: "2026-04-10",
+		},
 		{name: "garbage since", since: "7x", wantErrSubstring: "invalid --since"},
 		{name: "garbage until", until: "nope", wantErrSubstring: "invalid --until"},
-		{name: "inverted explicit window", since: "2026-06-20", until: "2026-06-13",
-			wantErrSubstring: "must not be after"},
+		{
+			name: "inverted explicit window", since: "2026-06-20", until: "2026-06-13",
+			wantErrSubstring: "must not be after",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1085,7 +1092,7 @@ func TestRunUsageDailyOfflineUsesReadOnlyDBWhenWriteLockHeld(t *testing.T) {
 	dataDir := setupGoldenStatsDataDir(t)
 	writeCustomModelPricingConfig(t, dataDir)
 
-	lock, err := acquireWriteOwnerLock(context.Background(), dataDir)
+	lock, err := acquireWriteOwnerLock(t.Context(), dataDir)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, lock.Close()) }()
 
@@ -1111,12 +1118,12 @@ func TestApplyFallbackPricingPreservesReadOnlyLongContextBands(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "sessions.db")
 	writable := dbtest.OpenTestDBAt(t, dbPath)
 	startedAt := "2026-07-03T12:00:00Z"
-	require.NoError(t, writable.UpsertSession(db.Session{
+	require.NoError(t, writable.UpsertSession(t.Context(), db.Session{
 		ID: "long-context", Project: "pricing", Machine: "local", Agent: "codex",
 		StartedAt: &startedAt,
 	}))
 	ordinal := 1
-	require.NoError(t, writable.ReplaceSessionUsageEvents("long-context", []db.UsageEvent{{
+	require.NoError(t, writable.ReplaceSessionUsageEvents(t.Context(), "long-context", []db.UsageEvent{{
 		MessageOrdinal: &ordinal,
 		Source:         "codex",
 		Model:          "gpt-5.5",
@@ -1126,12 +1133,12 @@ func TestApplyFallbackPricingPreservesReadOnlyLongContextBands(t *testing.T) {
 	}}))
 	require.NoError(t, writable.Close())
 
-	readonly, err := db.OpenReadOnly(dbPath)
+	readonly, err := db.OpenReadOnly(t.Context(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, readonly.Close()) })
 	applyFallbackPricing(readonly, nil)
 
-	got, err := readonly.GetDailyUsage(context.Background(), db.UsageFilter{
+	got, err := readonly.GetDailyUsage(t.Context(), db.UsageFilter{
 		From: "2026-07-03", To: "2026-07-03", Timezone: "UTC",
 	})
 	require.NoError(t, err)
@@ -1171,7 +1178,7 @@ func TestArchiveQueryBackendRefusesReadOnlyDaemonForDailyUsage(t *testing.T) {
 	registerTestRuntime(t, dataDir, ts.URL, true)
 
 	_, cleanup, err := resolveArchiveQueryBackend(
-		context.Background(), defaultArchiveQueryPolicy(
+		t.Context(), defaultArchiveQueryPolicy(
 			func(p *archiveQueryPolicy) { p.AutoStart = true },
 		),
 	)
@@ -1218,7 +1225,7 @@ func TestLocalArchiveQueryDailyUsageAppliesDefaultRange(t *testing.T) {
 	upsertSession(t, d, "recent", "codex", recent)
 	upsertSession(t, d, "old", "codex", old)
 	upsertSession(t, d, "future", "codex", future)
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		{
 			SessionID:  "recent",
 			Ordinal:    0,
@@ -1251,20 +1258,20 @@ func TestLocalArchiveQueryDailyUsageAppliesDefaultRange(t *testing.T) {
 		offline:       true,
 		skipFreshData: true,
 	}
-	defaulted, err := backend.DailyUsage(context.Background(), dailyUsageQuery{
+	defaulted, err := backend.DailyUsage(t.Context(), dailyUsageQuery{
 		Filter: db.UsageFilter{Timezone: "UTC"},
 	})
 	require.NoError(t, err)
 	assert.Equal(t, 10, defaulted.Totals.InputTokens)
 
-	all, err := backend.DailyUsage(context.Background(), dailyUsageQuery{
+	all, err := backend.DailyUsage(t.Context(), dailyUsageQuery{
 		Filter:         db.UsageFilter{Timezone: "UTC"},
 		NoDefaultRange: true,
 	})
 	require.NoError(t, err)
 	assert.Equal(t, 70, all.Totals.InputTokens)
 
-	withBreakdowns, err := backend.DailyUsage(context.Background(), dailyUsageQuery{
+	withBreakdowns, err := backend.DailyUsage(t.Context(), dailyUsageQuery{
 		Filter:         db.UsageFilter{Timezone: "UTC"},
 		NoDefaultRange: true,
 		Breakdowns:     true,
@@ -1326,17 +1333,18 @@ func seedUsageDailyExportMetadataFixture(
 	t *testing.T, database *db.DB, fallbackModel string,
 ) {
 	t.Helper()
+
 	started := "2026-06-01T10:00:00Z"
 	ended := "2026-06-01T10:05:00Z"
 	for _, id := range []string{"reported-cost", "fallback-cost"} {
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 			ID: "usage-meta-" + id, Project: "shared-project",
 			Machine: "test", Agent: "codex", StartedAt: &started,
 			EndedAt: &ended, CreatedAt: started, MessageCount: 2,
 			UserMessageCount: 1, RelationshipType: "root", DataVersion: 1,
 		}))
 	}
-	require.NoError(t, database.InsertMessages([]db.Message{
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{
 		{
 			SessionID: "usage-meta-reported-cost", Ordinal: 0,
 			Role: "assistant", Timestamp: started, Model: "gpt-5.1",
@@ -1349,7 +1357,7 @@ func seedUsageDailyExportMetadataFixture(
 	}))
 	cost := money.MustParseDollars("0.25")
 	ordinal := 1
-	require.NoError(t, database.ReplaceSessionUsageEvents(
+	require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(),
 		"usage-meta-reported-cost", []db.UsageEvent{{
 			SessionID: "usage-meta-reported-cost", MessageOrdinal: &ordinal,
 			Source: "session", Model: "gpt-5.1", InputTokens: 100,
@@ -1450,15 +1458,23 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 
 	var requests []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(t, "/teams/filtered-usage-events", r.URL.Path)
-		require.Equal(t, http.MethodPost, r.Method)
+		if !assert.Equal(t, "/teams/filtered-usage-events", r.URL.Path) {
+			return
+		}
+		if !assert.Equal(t, http.MethodPost, r.Method) {
+			return
+		}
 		user, pass, ok := r.BasicAuth()
-		require.True(t, ok, "basic auth")
+		if !assert.True(t, ok, "basic auth") {
+			return
+		}
 		assert.Equal(t, "config-key", user)
 		assert.Empty(t, pass)
 
 		var req map[string]any
-		require.NoError(t, json.UnmarshalRead(r.Body, &req), "decode request")
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &req), "decode request") {
+			return
+		}
 		requests = append(requests, req)
 
 		page, _ := req["page"].(float64)
@@ -1504,7 +1520,7 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 				}]
 			}`))
 		default:
-			t.Fatalf("unexpected page request: %#v", req)
+			http.Error(w, fmt.Sprintf("unexpected page request: %#v", req), http.StatusInternalServerError)
 		}
 	}))
 	t.Cleanup(server.Close)
@@ -1531,23 +1547,23 @@ func TestNewUsageCursorCommandUsesConfigFallbacksAndSharedPagination(t *testing.
 	require.Len(t, requests, 2, "request count")
 	for _, req := range requests {
 		assert.Equal(t, "config@example.com", req["email"])
-		assert.Equal(t, float64(152683922), req["userId"])
-		assert.Equal(t, float64(1), req["pageSize"])
+		assert.InDelta(t, float64(152683922), req["userId"], 0)
+		assert.InDelta(t, float64(1), req["pageSize"], 0)
 		assert.IsType(t, float64(0), req["startDate"])
 		assert.IsType(t, float64(0), req["endDate"])
 	}
-	assert.Equal(t, float64(1), requests[0]["page"])
-	assert.Equal(t, float64(2), requests[1]["page"])
+	assert.InDelta(t, float64(1), requests[0]["page"], 0)
+	assert.InDelta(t, float64(2), requests[1]["page"], 0)
 
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 
 	var count int
-	require.NoError(t, database.Reader().QueryRow(
+	require.NoError(t, database.Reader().QueryRow(cmd.Context(),
 		"SELECT count(*) FROM cursor_usage_events",
 	).Scan(&count))
 	assert.Equal(t, 2, count)
 
-	rows, err := database.Reader().Query(
+	rows, err := database.Reader().Query(cmd.Context(),
 		`SELECT occurred_at, model, input_tokens, output_tokens,
 			cache_write_tokens, cache_read_tokens, user_email, is_headless
 		FROM cursor_usage_events
@@ -1667,8 +1683,10 @@ func TestNewUsageCursorCommandExplicitMemberFilterDoesNotReuseConfigSibling(t *t
 
 			var request map[string]any
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				require.NoError(t, json.UnmarshalRead(r.Body, &request),
-					"decode request")
+				if !assert.NoError(t, json.UnmarshalRead(r.Body, &request),
+					"decode request") {
+					return
+				}
 				_, _ = w.Write([]byte(`{
 					"totalUsageEventsCount": 0,
 					"usageEvents": []

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -63,8 +64,8 @@ func exitCodeFromError(err error) int {
 }
 
 func isSilentExitError(err error) bool {
-	var exitErr *cliExitError
-	if !errors.As(err, &exitErr) || exitErr == nil {
+	exitErr, hasExitErr := errors.AsType[*cliExitError](err)
+	if !hasExitErr || exitErr == nil {
 		return false
 	}
 	return exitErr.silent
@@ -177,7 +178,7 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return runServeDataVersionCheck(cfg)
+				return runServeDataVersionCheck(cmd.Context(), cfg)
 			}
 			if background {
 				// Acquire the launch lock before loading config; config
@@ -188,7 +189,7 @@ func newServeCommandWithDaemonDeps(deps daemonCommandDeps) *cobra.Command {
 				)
 				return nil
 			}
-			runServe(mustLoadConfig(cmd), serveOptions{
+			runServe(cmd.Context(), mustLoadConfig(cmd), serveOptions{
 				ReplaceDaemon:   replace,
 				NoSyncExplicit:  cmd.Flags().Changed("no-sync"),
 				SkipInitialSync: skipInitialSync,
@@ -253,8 +254,8 @@ func applyServeRestartPort(cfg config.Config, port int) (config.Config, int) {
 	return cfg, requestedPort
 }
 
-func runServeDataVersionCheck(cfg config.Config) error {
-	err := db.CheckDataVersion(cfg.DBPath)
+func runServeDataVersionCheck(ctx context.Context, cfg config.Config) error {
+	err := db.CheckDataVersion(ctx, cfg.DBPath)
 	if db.IsDataVersionTooNew(err) {
 		return withExitCode(err, dataVersionTooNewExitCode)
 	}
@@ -374,9 +375,7 @@ func newSyncCommandWithRunner(run func(SyncConfig)) *cobra.Command {
 			if cfg.Host == "" {
 				if cmd.Flags().Changed("user") ||
 					cmd.Flags().Changed("port") {
-					return fmt.Errorf(
-						"--user and --port require --host",
-					)
+					return errors.New("--user and --port require --host")
 				}
 			}
 			return nil
@@ -442,7 +441,7 @@ func newPruneCommand() *cobra.Command {
 			if maxMessages != -1 {
 				mm = &maxMessages
 			}
-			runPrune(PruneConfig{
+			runPrune(cmd.Context(), PruneConfig{
 				Filter: db.PruneFilter{
 					Project:      project,
 					MaxMessages:  mm,
@@ -472,7 +471,7 @@ func newUpdateCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runUpdate(cfg)
+			runUpdate(cmd.Context(), cfg)
 		},
 	}
 	cmd.Flags().BoolVar(&cfg.Check, "check", false, "Check for updates without installing")
@@ -701,9 +700,7 @@ func newPGPushCommand() *cobra.Command {
 			if cfg.AllTargets && cfg.Watch {
 				return fmt.Errorf(
 					"pg push --watch: %w",
-					fmt.Errorf(
-						"--all cannot be combined with --watch",
-					),
+					errors.New("--all cannot be combined with --watch"),
 				)
 			}
 			if cfg.Watch {
@@ -746,7 +743,7 @@ func newPGStatusCommand() *cobra.Command {
 			if len(args) == 1 {
 				targetName = args[0]
 			}
-			if err := runPGStatus(targetName, cfg); err != nil {
+			if err := runPGStatus(cmd.Context(), targetName, cfg); err != nil {
 				return fmt.Errorf("pg status: %w", err)
 			}
 			return nil
@@ -913,7 +910,6 @@ func newVersionCommand() *cobra.Command {
 					Commit:        commit,
 					BuildDate:     buildDate,
 				})
-
 			}
 			printVersion(cmd.OutOrStdout())
 			return nil

@@ -620,7 +620,7 @@ func validateDeepSeekHarnessPathIdentity(
 	}
 	encodedID := filepath.Base(filepath.Dir(path))
 	if encodeDeepSeekHarnessSegment(header.ID) != encodedID {
-		return fmt.Errorf("DeepSeek Harness header id does not match source path")
+		return errors.New("DeepSeek Harness header id does not match source path")
 	}
 	projectDir := filepath.Base(filepath.Dir(filepath.Dir(path)))
 	wantProject := "_no-cwd"
@@ -628,7 +628,7 @@ func validateDeepSeekHarnessPathIdentity(
 		wantProject = deepSeekHarnessProjectKey(header.Cwd)
 	}
 	if projectDir != wantProject {
-		return fmt.Errorf("DeepSeek Harness header cwd does not match source path")
+		return errors.New("DeepSeek Harness header cwd does not match source path")
 	}
 	return nil
 }

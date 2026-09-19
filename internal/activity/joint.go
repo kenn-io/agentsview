@@ -93,8 +93,10 @@ func (a *jointActivityAccumulator) add(iv interval) {
 		state := a.cells[key]
 		if state == nil {
 			state = &jointActivityState{
-				cell: JointActivityCell{BucketStart: window.Start, Project: session.Project, ProjectKey: session.ProjectKey,
-					Agent: session.Agent, Model: iv.model, Category: category},
+				cell: JointActivityCell{
+					BucketStart: window.Start, Project: session.Project, ProjectKey: session.ProjectKey,
+					Agent: session.Agent, Model: iv.model, Category: category,
+				},
 				deltas: make(map[time.Time]int),
 			}
 			a.cells[key] = state
@@ -125,8 +127,10 @@ func (a *jointActivityAccumulator) finish(ctx context.Context) ([]JointActivityC
 		cells = append(cells, state.cell)
 	}
 	slices.SortFunc(cells, func(a, b JointActivityCell) int {
-		for _, order := range []int{a.BucketStart.Compare(b.BucketStart),
-			cmp.Compare(a.Project, b.Project), cmp.Compare(a.Agent, b.Agent), cmp.Compare(a.Model, b.Model)} {
+		for _, order := range []int{
+			a.BucketStart.Compare(b.BucketStart),
+			cmp.Compare(a.Project, b.Project), cmp.Compare(a.Agent, b.Agent), cmp.Compare(a.Model, b.Model),
+		} {
 			if order != 0 {
 				return order
 			}

@@ -5,9 +5,10 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"net/http"
 	"strings"
+
+	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/server"
@@ -39,7 +40,7 @@ func postDaemonPush[T, P any](
 	body = daemonPushRequestForCapabilities(tr, body)
 	fallbackAttempted := false
 	for {
-		api, err := apiclient.NewHTTPClient(tr.URL, authToken, http.DefaultClient)
+		api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 		if err != nil {
 			return zero, err
 		}

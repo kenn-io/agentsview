@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -20,10 +19,10 @@ import (
 // CurrentQualitySignalVersion and remains a backfill candidate on the
 // next startup instead of silently keeping stale findings forever.
 func TestRecomputeSignalsFailedFindingsLeavesSessionStale(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "sessions.db")
 	d := dbtest.OpenTestDBAt(t, path)
-	engine := NewEngine(d, EngineConfig{
+	engine := NewEngine(ctx, d, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {t.TempDir()},
 		},
@@ -32,11 +31,11 @@ func TestRecomputeSignalsFailedFindingsLeavesSessionStale(t *testing.T) {
 	defer engine.Close()
 
 	const id = "s1"
-	require.NoError(t, d.UpsertSession(db.Session{
+	require.NoError(t, d.UpsertSession(ctx, db.Session{
 		ID: id, Project: "proj", Machine: "m", Agent: "claude",
 		MessageCount: 1, UserMessageCount: 1,
 	}))
-	require.NoError(t, d.ReplaceSessionMessages(id, []db.Message{
+	require.NoError(t, d.ReplaceSessionMessages(ctx, id, []db.Message{
 		{SessionID: id, Ordinal: 0, Role: "user", Content: "hello"},
 	}))
 
@@ -44,7 +43,7 @@ func TestRecomputeSignalsFailedFindingsLeavesSessionStale(t *testing.T) {
 	raw, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "open raw connection")
 	defer raw.Close()
-	_, err = raw.Exec("DROP TABLE secret_findings")
+	_, err = raw.ExecContext(ctx, "DROP TABLE secret_findings")
 	require.NoError(t, err, "drop findings table")
 
 	require.Error(t, engine.RecomputeSignals(ctx, id),

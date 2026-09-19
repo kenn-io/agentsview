@@ -242,7 +242,7 @@ func TestRefreshRawSyncRootsKeepsStillMissingRoot(t *testing.T) {
 	require.Len(t, pending, 1)
 	assert.Empty(t, registrar.roots)
 	_, statErr := os.Stat(rootPath)
-	assert.True(t, errors.Is(statErr, os.ErrNotExist))
+	assert.ErrorIs(t, statErr, os.ErrNotExist)
 }
 
 func TestRawSyncProvidersExcludeS3Roots(t *testing.T) {

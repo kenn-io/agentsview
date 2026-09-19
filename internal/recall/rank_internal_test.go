@@ -13,7 +13,7 @@ func TestPathBaseHandlesBackslashSeparators(t *testing.T) {
 	assert.Equal(t, "myproj", pathBase(`C:\work\myproj`))
 	assert.Equal(t, "leaf", pathBase(`C:\work\leaf\`))
 	assert.Equal(t, "single", pathBase("single"))
-	assert.Equal(t, "", pathBase("   "))
+	assert.Empty(t, pathBase("   "))
 }
 
 func TestQueryCalendarWindowsRequiresAdjacentMonthYear(t *testing.T) {

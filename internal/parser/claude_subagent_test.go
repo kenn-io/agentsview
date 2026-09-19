@@ -27,7 +27,6 @@ func parseAndGetToolCalls(t *testing.T, filename string, lines []string) []Parse
 }
 
 func TestSubagentSessionIDMapping(t *testing.T) {
-
 	tests := []struct {
 		name      string
 		lines     []string

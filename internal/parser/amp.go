@@ -97,8 +97,7 @@ func parseAmpSession(
 			role = RoleAssistant
 		}
 
-		content, thinkingText, hasThinking, hasToolUse, tcs, trs :=
-			ExtractTextContent(context.Background(), msg.Get("content"))
+		content, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), msg.Get("content"))
 		trs = append(trs, extractAmpToolResults(msg.Get("content"))...)
 		usage := msg.Get("usage")
 		if strings.TrimSpace(content) == "" && len(trs) == 0 &&

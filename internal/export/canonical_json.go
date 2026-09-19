@@ -2,6 +2,7 @@ package export
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -58,8 +59,7 @@ func canonicalPricingRows(rows []EffectivePricingRow) map[string]any {
 		// pre-existing digest (a canonicalization-stability requirement,
 		// see docs/session-export.md versioning).
 		if row.Rates.CacheWrite1hPerMTok.Microdollars != 0 {
-			entry["cache_write_1h_per_mtok"] =
-				row.Rates.CacheWrite1hPerMTok.Microdollars
+			entry["cache_write_1h_per_mtok"] = row.Rates.CacheWrite1hPerMTok.Microdollars
 		}
 		out = append(out, entry)
 	}
@@ -86,8 +86,7 @@ func canonicalPricingBands(bands []PricingBand) []any {
 			"updated_at":           updatedAt,
 		}
 		if band.CacheWrite1hPerMTok.Microdollars != 0 {
-			entry["cache_write_1h_per_mtok"] =
-				band.CacheWrite1hPerMTok.Microdollars
+			entry["cache_write_1h_per_mtok"] = band.CacheWrite1hPerMTok.Microdollars
 		}
 		out = append(out, entry)
 	}
@@ -125,7 +124,7 @@ func DigestCanonical(v any) (string, error) {
 
 func digestCanonicalBytes(canonical []byte) string {
 	sum := sha256.Sum256(canonical)
-	return "sha256:" + fmt.Sprintf("%x", sum)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func canonicalPricingRowLess(a, b EffectivePricingRow) bool {

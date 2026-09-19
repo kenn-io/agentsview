@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,13 +29,13 @@ func seedDiffSession(
 	t *testing.T, d *DB, sessionID string, msgs []Message,
 ) {
 	t.Helper()
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(t, d.UpsertSession(t.Context(), Session{
 		ID:      sessionID,
 		Project: "proj",
 		Machine: defaultMachine,
 		Agent:   defaultAgent,
 	}), "seed session %s", sessionID)
-	require.NoError(t, d.InsertMessages(msgs),
+	require.NoError(t, d.InsertMessages(t.Context(), msgs),
 		"seed messages for %s", sessionID)
 }
 
@@ -44,7 +43,8 @@ func messageIDsByOrdinal(
 	t *testing.T, d *DB, sessionID string,
 ) map[int]int64 {
 	t.Helper()
-	rows, err := d.getReader().Query(
+
+	rows, err := d.getReader().Query(t.Context(),
 		"SELECT ordinal, id FROM messages WHERE session_id = ?",
 		sessionID,
 	)
@@ -103,7 +103,7 @@ func TestReplaceSessionMessagesUpdatesChangedRowsInPlace(t *testing.T) {
 			}),
 		diffTestMsg("diff-a", 2, "assistant", "follow-up"),
 	}
-	require.NoError(t, d.ReplaceSessionMessages("diff-a", v2))
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "diff-a", v2))
 
 	after := messageIDsByOrdinal(t, d, "diff-a")
 	require.Len(t, after, 3)
@@ -112,15 +112,15 @@ func TestReplaceSessionMessagesUpdatesChangedRowsInPlace(t *testing.T) {
 	assert.Equal(t, before[1], after[1],
 		"merged tail row must be updated in place, not reinserted")
 
-	msgs, err := d.GetAllMessages(context.Background(), "diff-a")
+	msgs, err := d.GetAllMessages(t.Context(), "diff-a")
 	require.NoError(t, err)
 	require.Len(t, msgs, 3)
 	assert.Contains(t, msgs[1].Content, "zqmergetoken",
 		"merged content must be persisted")
 
-	if d.HasFTS() {
+	if d.HasFTS(t.Context()) {
 		var n int
-		require.NoError(t, d.getReader().QueryRow(
+		require.NoError(t, d.getReader().QueryRow(t.Context(),
 			`SELECT count(*) FROM messages_fts
 			 WHERE messages_fts MATCH 'zqmergetoken'`,
 		).Scan(&n))
@@ -214,18 +214,17 @@ func TestReplaceSessionMessagesDiffMatchesFullReplace(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := testDB(t)
 			seedDiffSession(t, got, "par", base("par"))
-			require.NoError(t,
-				got.ReplaceSessionMessages("par", tc.v2("par")))
+			require.NoError(t, got.ReplaceSessionMessages(t.Context(), "par", tc.v2("par")))
 
 			want := testDB(t)
 			seedDiffSession(t, want, "par", tc.v2("par"))
 
 			gotMsgs, err := got.GetAllMessages(
-				context.Background(), "par",
+				t.Context(), "par",
 			)
 			require.NoError(t, err)
 			wantMsgs, err := want.GetAllMessages(
-				context.Background(), "par",
+				t.Context(), "par",
 			)
 			require.NoError(t, err)
 			assert.Equal(t,
@@ -262,7 +261,7 @@ func TestReplaceSessionMessagesKeepsPinOnMergedRow(t *testing.T) {
 	seedDiffSession(t, d, "pin-s", v1)
 	ids := messageIDsByOrdinal(t, d, "pin-s")
 	note := "keep me"
-	pinID, err := d.PinMessage("pin-s", ids[1], &note)
+	pinID, err := d.PinMessage(t.Context(), "pin-s", ids[1], &note)
 	require.NoError(t, err)
 	require.NotZero(t, pinID)
 
@@ -272,10 +271,10 @@ func TestReplaceSessionMessagesKeepsPinOnMergedRow(t *testing.T) {
 			func(m *Message) { m.SourceUUID = "pin-tail" }),
 		diffTestMsg("pin-s", 2, "user", "more"),
 	}
-	require.NoError(t, d.ReplaceSessionMessages("pin-s", v2))
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "pin-s", v2))
 
 	var n int
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		`SELECT count(*) FROM pinned_messages
 		 WHERE session_id = 'pin-s' AND ordinal = 1 AND note = ?`,
 		note,
@@ -314,17 +313,16 @@ func TestReplaceSessionMessagesKeepsPinOnCompletedRow(t *testing.T) {
 			}
 			seedDiffSession(t, d, "pin-complete", v1)
 			ids := messageIDsByOrdinal(t, d, "pin-complete")
-			_, err := d.PinMessage("pin-complete", ids[1], nil)
+			_, err := d.PinMessage(t.Context(), "pin-complete", ids[1], nil)
 			require.NoError(t, err, "PinMessage")
 
 			v2 := append([]Message(nil), v1...)
 			v2[1].Content = "partial now complete"
 			v2[1].ContentLength = len(v2[1].Content)
-			require.NoError(t,
-				d.ReplaceSessionMessages("pin-complete", v2))
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "pin-complete", v2))
 
 			pins, err := d.ListPinnedMessages(
-				context.Background(), "pin-complete", "",
+				t.Context(), "pin-complete", "",
 			)
 			require.NoError(t, err, "ListPinnedMessages")
 			require.Len(t, pins, 1,
@@ -361,17 +359,16 @@ func TestReplaceSessionMessagesDropsPinOnAmbiguousChangedRow(t *testing.T) {
 			}
 			seedDiffSession(t, d, "pin-ambiguous", v1)
 			ids := messageIDsByOrdinal(t, d, "pin-ambiguous")
-			_, err := d.PinMessage("pin-ambiguous", ids[1], nil)
+			_, err := d.PinMessage(t.Context(), "pin-ambiguous", ids[1], nil)
 			require.NoError(t, err, "PinMessage")
 
 			v2 := append([]Message(nil), v1...)
 			v2[1].Content = "unrelated replacement"
 			v2[1].ContentLength = len(v2[1].Content)
-			require.NoError(t,
-				d.ReplaceSessionMessages("pin-ambiguous", v2))
+			require.NoError(t, d.ReplaceSessionMessages(t.Context(), "pin-ambiguous", v2))
 
 			pins, err := d.ListPinnedMessages(
-				context.Background(), "pin-ambiguous", "",
+				t.Context(), "pin-ambiguous", "",
 			)
 			require.NoError(t, err, "ListPinnedMessages")
 			assert.Empty(t, pins,

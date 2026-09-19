@@ -31,10 +31,10 @@ func TestFetchCatalogDegradesWhenOpenRouterFails(t *testing.T) {
 	}
 
 	catalog, err := fetchCatalog(
-		context.Background(), noGenAIPricing, fetchLiteLLM, fetchOpenRouter,
+		t.Context(), noGenAIPricing, fetchLiteLLM, fetchOpenRouter,
 	)
 
-	assert.ErrorIs(t, err, openrouterErr)
+	require.ErrorIs(t, err, openrouterErr)
 	assert.Equal(t, Catalog{LiteLLM: litellm}, catalog,
 		"LiteLLM rows survive an OpenRouter outage")
 }
@@ -45,15 +45,15 @@ func TestFetchCatalogFailsWhenLiteLLMFails(t *testing.T) {
 		return nil, litellmErr
 	}
 	fetchOpenRouter := func(context.Context) ([]ModelPricing, error) {
-		t.Fatal("openrouter must not be fetched after a litellm failure")
+		assert.Fail(t, "openrouter must not be fetched after a litellm failure")
 		return nil, nil
 	}
 
 	catalog, err := fetchCatalog(
-		context.Background(), noGenAIPricing, fetchLiteLLM, fetchOpenRouter,
+		t.Context(), noGenAIPricing, fetchLiteLLM, fetchOpenRouter,
 	)
 
-	assert.ErrorIs(t, err, litellmErr)
+	require.ErrorIs(t, err, litellmErr)
 	assert.Equal(t, Catalog{}, catalog)
 }
 

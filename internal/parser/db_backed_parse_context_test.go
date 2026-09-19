@@ -23,7 +23,7 @@ import (
 // helper-chain propagation past that first query is pinned separately for the
 // mtime path by TestZCodeMtimeQueryPropagatesCanceledContext below.
 func TestDBBackedParsePropagatesCanceledContext(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	t.Run("forge", func(t *testing.T) {
@@ -33,7 +33,7 @@ func TestDBBackedParsePropagatesCanceledContext(t *testing.T) {
 
 		sess, msgs, err := parseForgeSession(ctx, dbPath, "conv-001", "testmachine", false)
 		require.Error(t, err, "canceled context must abort forge parsing")
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 		assert.Nil(t, sess)
 		assert.Empty(t, msgs)
 	})
@@ -52,7 +52,7 @@ func TestDBBackedParsePropagatesCanceledContext(t *testing.T) {
 
 		results, err := parsePiebaldSessionResults(ctx, dbPath, "42", "testmachine", false)
 		require.Error(t, err, "canceled context must abort piebald parsing")
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 		assert.Empty(t, results)
 	})
 
@@ -63,7 +63,7 @@ func TestDBBackedParsePropagatesCanceledContext(t *testing.T) {
 
 		sess, msgs, err := parseWarpSession(ctx, dbPath, "conv-001", "testmachine", false)
 		require.Error(t, err, "canceled context must abort warp parsing")
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 		assert.Nil(t, sess)
 		assert.Empty(t, msgs)
 	})
@@ -80,7 +80,7 @@ func TestDBBackedParsePropagatesCanceledContext(t *testing.T) {
 
 		result, err := parseZCodeSession(ctx, fixture.DBPath, "session-ctx", "testmachine", false)
 		require.Error(t, err, "canceled context must abort zcode parsing")
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 		assert.Nil(t, result)
 	})
 
@@ -93,7 +93,7 @@ func TestDBBackedParsePropagatesCanceledContext(t *testing.T) {
 
 		result, err := parseGooseSession(ctx, fixture.dbPath, "child", "testmachine", false)
 		require.Error(t, err, "canceled context must abort goose parsing")
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 		assert.Nil(t, result)
 	})
 }
@@ -110,27 +110,27 @@ func TestZCodeMtimeQueryPropagatesCanceledContext(t *testing.T) {
 		"2026-07-06T13:00:00Z", "2026-07-06T13:01:00Z", "", "",
 	)
 	row, err := loadZCodeSessionRow(
-		context.Background(), fixture.database, "session-mtime-ctx",
+		t.Context(), fixture.database, "session-mtime-ctx",
 	)
 	require.NoError(t, err)
 
 	t.Run("canceled context aborts the usage-mtime query", func(t *testing.T) {
-		canceled, cancel := context.WithCancel(context.Background())
+		canceled, cancel := context.WithCancel(t.Context())
 		cancel()
 		mtime, err := zcodeSessionFileMtime(canceled, fixture.DBPath, fixture.database, row)
 		require.Error(t, err, "canceled context must abort the zcode usage-mtime query")
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 		assert.Zero(t, mtime)
 	})
 
 	t.Run("missing usage table stays tolerated", func(t *testing.T) {
-		_, err := fixture.database.Exec(`DROP TABLE model_usage`)
+		_, err := fixture.database.ExecContext(t.Context(), `DROP TABLE model_usage`)
 		require.NoError(t, err)
 		oldDBMtime := time.Date(2026, 7, 6, 13, 0, 0, 0, time.UTC)
 		require.NoError(t, os.Chtimes(fixture.DBPath, oldDBMtime, oldDBMtime))
 
 		mtime, err := zcodeSessionFileMtime(
-			context.Background(), fixture.DBPath, fixture.database, row,
+			t.Context(), fixture.DBPath, fixture.database, row,
 		)
 		require.NoError(t, err)
 		assert.Equal(

@@ -21,7 +21,7 @@ func newDBMigrateCommand() *cobra.Command {
 func previewDBMigrate(
 	ctx context.Context, cfg config.Config, filter db.StripImagesFilter,
 ) (db.StripImagesReport, error) {
-	database, err := openReadOnlyDB(cfg)
+	database, err := openReadOnlyDB(ctx, cfg)
 	if err != nil {
 		return db.StripImagesReport{}, fmt.Errorf("opening archive for image migration preview: %w", err)
 	}

@@ -1,7 +1,6 @@
 package vector
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -24,7 +23,7 @@ func forceIndexVarLimit(t *testing.T, ix *Index, limit int) {
 	t.Helper()
 	ix.db.SetMaxOpenConns(1)
 	ix.db.SetMaxIdleConns(1)
-	conn, err := ix.db.Conn(context.Background())
+	conn, err := ix.db.Conn(t.Context())
 	require.NoError(t, err)
 	defer func() { require.NoError(t, conn.Close()) }()
 	setConnVarLimit(t, conn, limit)
@@ -36,9 +35,9 @@ func forceIndexVarLimit(t *testing.T, ix *Index, limit int) {
 // setup bug cannot silently mask the regression the caller checks next.
 func requireIndexVarLimitConstrained(t *testing.T, ix *Index) {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	overLimitPh, overLimitArgs := inPlaceholders(make([]string, 1001))
-	_, probeErr := ix.db.QueryContext(ctx, "SELECT 1 WHERE '' IN "+overLimitPh, overLimitArgs...)
+	_, probeErr := ix.db.ExecContext(ctx, "SELECT 1 WHERE '' IN "+overLimitPh, overLimitArgs...)
 	require.Error(t, probeErr, "index variable limit was not constrained")
 }
 
@@ -90,7 +89,8 @@ func TestChunkKeysEmptyInputInvokesNothing(t *testing.T) {
 // stays fast.
 func seedVectorMessages(t *testing.T, ix *Index, n int) []string {
 	t.Helper()
-	ctx := context.Background()
+
+	ctx := t.Context()
 	tx, err := ix.db.BeginTx(ctx, nil)
 	require.NoError(t, err)
 
@@ -115,7 +115,7 @@ VALUES (?, ?, ?, ?, ?, ?)`,
 // a single Search call.
 func TestLookupMirrorDocsOverMaxSQLVars(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	forceIndexVarLimit(t, ix, 999)
 	requireIndexVarLimitConstrained(t, ix)
 
@@ -140,7 +140,7 @@ func TestLookupMirrorDocsOverMaxSQLVars(t *testing.T) {
 // mixed into a chunk of thousands of keys that do resolve.
 func TestLookupMirrorDocsMissingKeyOmittedNotZeroValued(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	keys := seedVectorMessages(t, ix, maxSQLVars+10)
 	keys = append(keys, "does-not-exist")
 
@@ -158,7 +158,7 @@ func TestLookupMirrorDocsMissingKeyOmittedNotZeroValued(t *testing.T) {
 // trigger.
 func TestCurrentOrdinalsOverMaxSQLVars(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	forceIndexVarLimit(t, ix, 999)
 	requireIndexVarLimitConstrained(t, ix)
 

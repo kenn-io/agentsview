@@ -27,7 +27,7 @@ func TestDefaultInsightGenerateStreamUsesServerConfig(t *testing.T) {
 	srv.cfg.Insights.Model = "snapshot-model"
 	srv.cfg.Insights.AllowHTTP = true
 	result, err := srv.defaultInsightGenerateStream(
-		context.Background(), "claude", "prompt", nil,
+		t.Context(), "claude", "prompt", nil,
 	)
 	require.NoError(t, err)
 	require.Equal(t, "openai", result.Agent)
@@ -61,7 +61,7 @@ func TestCannedGenerationPassesSnapshotToGenerator(t *testing.T) {
 	srv.cfg.Insights.Model = "snapshot-model"
 	srv.cfg.Insights.AllowHTTP = true
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost, "/api/v1/insights/generate", strings.NewReader(
 			`{"type":"llm_canned","kind":"prompt_maturity_review","date_from":"2025-01-15","date_to":"2025-01-15","agent":"claude","llm_opt_in":true}`,
 		),

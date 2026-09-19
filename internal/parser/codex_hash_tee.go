@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -63,7 +64,7 @@ func (t *codexHashAnchorTee) Read(p []byte) (int, error) {
 func (t *codexHashAnchorTee) HashState() ([]byte, error) {
 	m, ok := t.h.(encoding.BinaryMarshaler)
 	if !ok {
-		return nil, fmt.Errorf("sha256 does not support state capture")
+		return nil, errors.New("sha256 does not support state capture")
 	}
 	state, err := m.MarshalBinary()
 	if err != nil {

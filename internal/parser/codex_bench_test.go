@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -27,7 +26,7 @@ var codexBenchmarkOutcomeSink IncrementalOutcome
 // committed prefix cursor in the factory-owned cache.
 func BenchmarkCodexIncrementalCursor(b *testing.B) {
 	b.StopTimer()
-	ctx := context.Background()
+	ctx := b.Context()
 	root, path, prefix, tail, startOrdinal := writeCodexBenchmarkTranscript(b)
 	cfg := ProviderConfig{Roots: []string{root}, Machine: "benchmark-host"}
 
@@ -210,6 +209,7 @@ func writeCodexBenchmarkTranscript(
 
 func appendCodexBenchmarkTail(b *testing.B, path, tail string) {
 	b.Helper()
+
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	require.NoError(b, err)
 	_, err = f.WriteString(tail)
@@ -226,6 +226,7 @@ func requireCodexBenchmarkOutcome(
 	tailBytes int64,
 ) {
 	b.Helper()
+
 	require.NoError(b, err)
 	require.Equal(b, IncrementalApplied, status)
 	require.Len(b, outcome.Messages, 2)

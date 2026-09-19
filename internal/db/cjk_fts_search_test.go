@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -41,12 +40,12 @@ func TestCJKFTSJapaneseAndKoreanSearch(t *testing.T) {
 			seedSearchSession(t, d, "match", "proj", [][2]string{{"user", tc.match}})
 			seedSearchSession(t, d, "miss", "proj", [][2]string{{"user", tc.miss}})
 
-			results, err := d.Search(context.Background(), SearchFilter{Query: tc.query, Limit: 20})
+			results, err := d.Search(t.Context(), SearchFilter{Query: tc.query, Limit: 20})
 			require.NoError(t, err)
 			require.Len(t, results.Results, 1, "session search must preserve term adjacency and order")
 			assert.Equal(t, "match", results.Results[0].SessionID)
 
-			content, err := d.SearchContent(context.Background(), ContentSearchFilter{
+			content, err := d.SearchContent(t.Context(), ContentSearchFilter{
 				Pattern: tc.query,
 				Mode:    "fts",
 				Sources: []string{"messages"},

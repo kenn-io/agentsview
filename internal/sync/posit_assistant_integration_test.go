@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -48,7 +47,7 @@ func TestSyncPositAssistantSidecarAppendResyncsWithoutWatchEvents(t *testing.T) 
 			`{"id":1,"message":{"role":"assistant","content":[{"type":"text","text":"Looking."}],"providerOptions":{"providerMetadata":{"positai":{"timestamp":1735689601000,"modelId":"claude-sonnet-4-6","providerId":"anthropic","usage":{"inputTokens":10,"outputTokens":5,"cacheReadTokens":0,"cacheWriteTokens":100}}}}}}`+"\n")
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentPositAssistant: {root},
 		},
@@ -58,7 +57,7 @@ func TestSyncPositAssistantSidecarAppendResyncsWithoutWatchEvents(t *testing.T) 
 
 	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
 	sessionID := "posit-assistant:" + convID
-	usage, err := database.GetUsageEvents(context.Background(), sessionID)
+	usage, err := database.GetUsageEvents(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.Empty(t, usage, "no sidecar yet, no usage events")
 
@@ -69,7 +68,7 @@ func TestSyncPositAssistantSidecarAppendResyncsWithoutWatchEvents(t *testing.T) 
 		`{"type":"usage","kind":"keepalive","timestamp":1735693200000,"anchorMessageId":"n1","providerId":"anthropic","modelId":"claude-sonnet-4-6","inputTokens":2,"outputTokens":1,"totalTokens":24642,"cacheReadTokens":24639,"cacheWriteTokens":0}`+"\n")
 
 	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
-	usage, err = database.GetUsageEvents(context.Background(), sessionID)
+	usage, err = database.GetUsageEvents(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.Len(t, usage, 1,
 		"a sidecar-only append must resync the session without a watch event")

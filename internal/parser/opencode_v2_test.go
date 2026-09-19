@@ -25,7 +25,7 @@ func TestOpenCodeV2BetaWorkflow(t *testing.T) {
 	writer, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	t.Cleanup(func() { writer.Close() })
-	_, err = writer.Exec(string(raw))
+	_, err = writer.ExecContext(t.Context(), string(raw))
 	require.NoError(t, err)
 
 	const id = "ses_f78f34fafffeIugr4PB2oXkVD0"
@@ -36,7 +36,7 @@ func TestOpenCodeV2BetaWorkflow(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, watermarks, 3)
 	assert.True(t, watermarks[0].WatermarkOnly)
-	assert.True(t, OpenCodeSQLiteSessionExists(path, id))
+	assert.True(t, OpenCodeSQLiteSessionExists(t.Context(), path, id))
 	_, composite, found, err := openCodeSQLiteSessionWatermarkOnly(t.Context(), path, id)
 	require.NoError(t, err)
 	assert.True(t, composite)
@@ -73,16 +73,16 @@ func TestOpenCodeV2BetaWorkflow(t *testing.T) {
 	assert.Contains(t, shell.ResultEvents[0].Content, "Command exited with code 7.")
 
 	// Streaming finalization updates only the projection, not session metadata.
-	before, digest, composite, err := openCodeSessionCompositeMtime(writer, path, id)
+	before, digest, composite, err := openCodeSessionCompositeMtime(t.Context(), writer, path, id)
 	require.NoError(t, err)
 	assert.True(t, composite)
-	_, err = writer.Exec(`UPDATE session_message SET time_updated = 1788972160000,
+	_, err = writer.ExecContext(t.Context(), `UPDATE session_message SET time_updated = 1788972160000,
 	 data = json_set(data, '$.content[1].text', 'updated beta') WHERE session_id = ? AND seq = 25`, id)
 	require.NoError(t, err)
-	after, err := OpenCodeSourceMtime(path + "#" + id)
+	after, err := OpenCodeSourceMtime(t.Context(), path+"#"+id)
 	require.NoError(t, err)
 	assert.Greater(t, after, before*1_000_000)
-	_, updatedDigest, _, err := openCodeSessionCompositeMtime(writer, path, id)
+	_, updatedDigest, _, err := openCodeSessionCompositeMtime(t.Context(), writer, path, id)
 	require.NoError(t, err)
 	assert.NotEqual(t, digest, updatedDigest)
 	_, msgs, err = parseOpenCodeDBSession(path, id, "host-a")
@@ -91,7 +91,7 @@ func TestOpenCodeV2BetaWorkflow(t *testing.T) {
 	assert.Contains(t, msgs[4].Content, "[/Thinking]\nupdated beta")
 
 	// An empty v2 session must not try to load nonexistent v1 message tables.
-	_, err = writer.Exec("DELETE FROM session_message WHERE session_id = ?", id)
+	_, err = writer.ExecContext(t.Context(), "DELETE FROM session_message WHERE session_id = ?", id)
 	require.NoError(t, err)
 	sess, msgs, err = parseOpenCodeDBSession(path, id, "host-a")
 	require.NoError(t, err)
@@ -116,10 +116,10 @@ func TestOpenCodeV2CapturedWorkflow(t *testing.T) {
 	path, seed, writer := newTestDB(t)
 	seed.AddProject("project-a", "/workspace/project-a")
 	seed.AddSession("ses_captured", "project-a", "", "Count lines", 1788899250985, 1788899253026)
-	_, err = writer.Exec(openCodeV2TestSchema)
+	_, err = writer.ExecContext(t.Context(), openCodeV2TestSchema)
 	require.NoError(t, err)
 	for _, row := range rows {
-		_, err = writer.Exec(`INSERT INTO session_message VALUES (?, 'ses_captured', ?, ?, ?, ?, ?)`, row.ID, row.Type, row.Seq, row.Created, row.Updated, string(row.Data))
+		_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES (?, 'ses_captured', ?, ?, ?, ?, ?)`, row.ID, row.Type, row.Seq, row.Created, row.Updated, string(row.Data))
 		require.NoError(t, err)
 	}
 	sess, msgs, err := parseOpenCodeDBSession(path, "ses_captured", "host-a")
@@ -159,10 +159,10 @@ func TestOpenCodeV2Projection(t *testing.T) {
 	t.Cleanup(func() { writer.Close() })
 	seed.AddProject("project-a", "/workspace/project-a")
 	seed.AddSession("ses_v2", "project-a", "ses_parent", "", 1700000000000, 1700000060000)
-	_, err := writer.Exec(openCodeV2TestSchema)
+	_, err := writer.ExecContext(t.Context(), openCodeV2TestSchema)
 	require.NoError(t, err)
 	// IDs and timestamps deliberately disagree with event sequence order.
-	_, err = writer.Exec(`INSERT INTO session_message VALUES
+	_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES
  ('msg_a', 'ses_v2', 'assistant', 20, 1700000000000, 1700000000000,
  '{"agent":"build","model":{"id":"gpt-5.4","providerID":"openai"},"time":{"created":1700000000000},"content":[{"type":"text","id":"txt_a","text":"Draft"}]}'),
  ('msg_z', 'ses_v2', 'user', 10, 1700000000100, 1700000000100,
@@ -182,7 +182,7 @@ func TestOpenCodeV2Projection(t *testing.T) {
 
 	// Text.Ended, Tool.Success and Step.Ended update a projection in place.
 	// A high session timestamp must not hide this child-only update.
-	_, err = writer.Exec(`UPDATE session_message SET time_updated = 1700000001000, data =
+	_, err = writer.ExecContext(t.Context(), `UPDATE session_message SET time_updated = 1700000001000, data =
  '{"agent":"build","model":{"id":"gpt-5.4","providerID":"openai"},
  "time":{"created":1700000000000,"completed":1700000001000},
  "tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":30,"write":0}},
@@ -196,7 +196,7 @@ func TestOpenCodeV2Projection(t *testing.T) {
 	require.Len(t, after, 1)
 	assert.Equal(t, before[0].FileMtime, after[0].FileMtime)
 	assert.NotEqual(t, before[0].ChildDigest, after[0].ChildDigest)
-	mtime, digest, composite, err := openCodeSessionCompositeMtime(writer, path, "ses_v2")
+	mtime, digest, composite, err := openCodeSessionCompositeMtime(t.Context(), writer, path, "ses_v2")
 	require.NoError(t, err)
 	assert.True(t, composite)
 	assert.Equal(t, after[0].ChildDigest, digest)
@@ -219,7 +219,7 @@ func TestOpenCodeV2Projection(t *testing.T) {
 	assert.Equal(t, "Index scan", call.ResultEvents[0].Content)
 
 	// Revert.Committed removes later projection rows without lowering session time.
-	_, err = writer.Exec(`DELETE FROM session_message WHERE session_id = 'ses_v2' AND seq > 10`)
+	_, err = writer.ExecContext(t.Context(), `DELETE FROM session_message WHERE session_id = 'ses_v2' AND seq > 10`)
 	require.NoError(t, err)
 	reverted, err := ListOpenCodeSessionMeta(path)
 	require.NoError(t, err)
@@ -232,7 +232,7 @@ func TestOpenCodeV2Projection(t *testing.T) {
 
 func TestOpenCodeV2MixedDatabase(t *testing.T) {
 	path, seed, writer := newTestDB(t)
-	_, err := writer.Exec(openCodeV2TestSchema)
+	_, err := writer.ExecContext(t.Context(), openCodeV2TestSchema)
 	require.NoError(t, err)
 	seed.AddProject("project-a", "/workspace/project-a")
 	for _, id := range []string{"ses_v1", "ses_v2"} {
@@ -240,11 +240,11 @@ func TestOpenCodeV2MixedDatabase(t *testing.T) {
 		seed.AddMessage("msg_"+id, id, 1700000000000, 1700000000000, `{"role":"user"}`)
 		seed.AddPart("prt_"+id, "msg_"+id, id, 1700000000000, 1700000000000, `{"type":"text","text":"Legacy conversation"}`)
 	}
-	_, err = writer.Exec(`INSERT INTO session_message VALUES ('msg_ses_v2', 'ses_v2', 'user', 1, 1700000000000, 1700000000000, '{"text":"Projected conversation"}')`)
+	_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES ('msg_ses_v2', 'ses_v2', 'user', 1, 1700000000000, 1700000000000, '{"text":"Projected conversation"}')`)
 	require.NoError(t, err)
 	for _, tc := range []struct{ id, text string }{{"ses_v1", "Legacy conversation"}, {"ses_v2", "Projected conversation"}} {
 		t.Run(tc.id, func(t *testing.T) {
-			assert.True(t, OpenCodeSQLiteSessionExists(path, tc.id))
+			assert.True(t, OpenCodeSQLiteSessionExists(t.Context(), path, tc.id))
 			_, msgs, err := parseOpenCodeDBSession(path, tc.id, "host-a")
 			require.NoError(t, err)
 			require.Len(t, msgs, 1)
@@ -266,9 +266,9 @@ func TestOpenCodeV2ToolStates(t *testing.T) {
 			path, seed, writer := newTestDB(t)
 			seed.AddProject("project-a", "/workspace/project-a")
 			seed.AddSession("ses_a", "project-a", "", "", 1700000000000, 1700000001000)
-			_, err := writer.Exec(openCodeV2TestSchema)
+			_, err := writer.ExecContext(t.Context(), openCodeV2TestSchema)
 			require.NoError(t, err)
-			_, err = writer.Exec(`INSERT INTO session_message VALUES ('msg_a', 'ses_a', 'assistant', 1, 1700000000000, 1700000001000, ?)`,
+			_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES ('msg_a', 'ses_a', 'assistant', 1, 1700000000000, 1700000001000, ?)`,
 				fmt.Sprintf(`{"content":[{"type":"tool","id":"call_a","name":%q,"state":%s,"time":{"created":1700000000000,"completed":1700000001000}}]}`, tc.tool, tc.state))
 			require.NoError(t, err)
 			_, msgs, err := parseOpenCodeDBSession(path, "ses_a", "host-a")
@@ -309,9 +309,9 @@ func TestOpenCodeV2MessageKinds(t *testing.T) {
 			path, seed, writer := newTestDB(t)
 			seed.AddProject("project-a", "/workspace/project-a")
 			seed.AddSession("ses_a", "project-a", "", "", 1700000000000, 1700000001000)
-			_, err := writer.Exec(openCodeV2TestSchema)
+			_, err := writer.ExecContext(t.Context(), openCodeV2TestSchema)
 			require.NoError(t, err)
-			_, err = writer.Exec(`INSERT INTO session_message VALUES ('msg_a', 'ses_a', ?, 1, 1700000000000, 1700000001000, ?)`, tc.kind, tc.data)
+			_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES ('msg_a', 'ses_a', ?, 1, 1700000000000, 1700000001000, ?)`, tc.kind, tc.data)
 			require.NoError(t, err)
 			sess, msgs, err := parseOpenCodeDBSession(path, "ses_a", "host-a")
 			if tc.invalid {
@@ -356,9 +356,9 @@ func TestOpenCodeV2CrossPathHistory(t *testing.T) {
 		seed.AddMessage(id, "ses_a", int64(i+1)*1000, int64(i+1)*1000, `{"role":"user"}`)
 		seed.AddPart("prt_"+id, id, "ses_a", int64(i+1)*1000, int64(i+1)*1000, fmt.Sprintf(`{"type":"text","text":%q}`, text))
 	}
-	_, err := writer.Exec(openCodeV2TestSchema)
+	_, err := writer.ExecContext(t.Context(), openCodeV2TestSchema)
 	require.NoError(t, err)
-	_, err = writer.Exec(`INSERT INTO session_message VALUES
+	_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES
  ('msg_1','ses_a','user',10,2000,2000,'{"text":"Projected copy"}'),
  ('msg_a','ses_a','assistant',20,2500,2500,'{"content":[{"type":"text","text":"First projected reply"}]}'),
  ('msg_b','ses_a','assistant',30,2400,2500,'{"content":[{"type":"text","text":"Second projected reply"}]}')`)
@@ -384,16 +384,16 @@ func TestOpenCodeV2UpgradeCoexistence(t *testing.T) {
 	}
 	// The beta migration leaves session/message/part in place and commits
 	// session_v2 metadata plus all its projections together, one session at a time.
-	_, err := writer.Exec(`CREATE TABLE session_v2 (
+	_, err := writer.ExecContext(t.Context(), `CREATE TABLE session_v2 (
  id TEXT PRIMARY KEY, project_id TEXT NOT NULL, parent_id TEXT, title TEXT,
  directory TEXT NOT NULL, time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL,
  time_idle INTEGER);
  INSERT INTO session_v2 VALUES ('ses_b','project-a',NULL,NULL,'/workspace/project-a',1000,2000,4000),
  ('ses_c','project-a',NULL,NULL,'/workspace/project-a',1000,2000,5000);`)
 	require.NoError(t, err)
-	_, err = writer.Exec(strings.ReplaceAll(openCodeV2TestSchema, "REFERENCES session(id)", "REFERENCES session_v2(id)"))
+	_, err = writer.ExecContext(t.Context(), strings.ReplaceAll(openCodeV2TestSchema, "REFERENCES session(id)", "REFERENCES session_v2(id)"))
 	require.NoError(t, err)
-	_, err = writer.Exec(`INSERT INTO session_message VALUES
+	_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES
  ('msg_ses_b','ses_b','user',1,1000,1000,'{"text":"Migrated prompt"}'),
  ('msg_ses_c','ses_c','user',1,1000,1000,'{"text":"Beta prompt"}')`)
 	require.NoError(t, err)
@@ -411,8 +411,8 @@ func TestOpenCodeV2UpgradeCoexistence(t *testing.T) {
 	} {
 		assert.Equal(t, tc.id, full[i].SessionID)
 		assert.Equal(t, tc.id, watermarks[i].SessionID)
-		assert.True(t, OpenCodeSQLiteSessionExists(path, tc.id))
-		mtime, digest, composite, err := openCodeSessionCompositeMtime(writer, path, tc.id)
+		assert.True(t, OpenCodeSQLiteSessionExists(t.Context(), path, tc.id))
+		mtime, digest, composite, err := openCodeSessionCompositeMtime(t.Context(), writer, path, tc.id)
 		require.NoError(t, err)
 		assert.True(t, composite)
 		assert.Equal(t, full[i].FileMtime, mtime*1_000_000)
@@ -425,18 +425,18 @@ func TestOpenCodeV2UpgradeCoexistence(t *testing.T) {
 		assert.True(t, time.UnixMilli(tc.ended).Equal(sess.EndedAt))
 	}
 	// Execution completion alone must advance both passive and active freshness.
-	_, err = writer.Exec("UPDATE session_v2 SET time_idle = 6000 WHERE id = 'ses_c'")
+	_, err = writer.ExecContext(t.Context(), "UPDATE session_v2 SET time_idle = 6000 WHERE id = 'ses_c'")
 	require.NoError(t, err)
 	next, err := ListOpenCodeSessionWatermarkMeta(path)
 	require.NoError(t, err)
 	require.Len(t, next, 3)
 	assert.Equal(t, int64(6000_000_000), next[2].FileMtime)
-	mtime, err := OpenCodeSourceMtime(path + "#ses_c")
+	mtime, err := OpenCodeSourceMtime(t.Context(), path+"#ses_c")
 	require.NoError(t, err)
 	assert.Equal(t, int64(6000_000_000), mtime)
 	// The producer keeps v1 rows after migration, including after v2 deletion.
 	// Its descending cursor excludes copied IDs while older IDs remain visible.
-	_, err = writer.Exec(`CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+	_, err = writer.ExecContext(t.Context(), `CREATE TABLE kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
  INSERT INTO kv VALUES ('migration.v1-v2', '{"phase":"sessions","cursor":"ses_b"}');
  DELETE FROM session_v2 WHERE id = 'ses_b'`)
 	require.NoError(t, err)
@@ -445,17 +445,17 @@ func TestOpenCodeV2UpgradeCoexistence(t *testing.T) {
 	require.Len(t, full, 2)
 	assert.Equal(t, "ses_a", full[0].SessionID)
 	assert.Equal(t, "ses_c", full[1].SessionID)
-	assert.False(t, OpenCodeSQLiteSessionExists(path, "ses_b"))
+	assert.False(t, OpenCodeSQLiteSessionExists(t.Context(), path, "ses_b"))
 	_, _, found, err := openCodeSQLiteSessionWatermarkOnly(t.Context(), path, "ses_b")
 	require.NoError(t, err)
 	assert.False(t, found)
-	_, err = writer.Exec(`UPDATE kv SET value = '{"phase":"completed"}' WHERE key = 'migration.v1-v2'`)
+	_, err = writer.ExecContext(t.Context(), `UPDATE kv SET value = '{"phase":"completed"}' WHERE key = 'migration.v1-v2'`)
 	require.NoError(t, err)
 	watermarks, err = ListOpenCodeSessionWatermarkMeta(path)
 	require.NoError(t, err)
 	require.Len(t, watermarks, 1)
 	assert.Equal(t, "ses_c", watermarks[0].SessionID)
-	assert.False(t, OpenCodeSQLiteSessionExists(path, "ses_a"))
+	assert.False(t, OpenCodeSQLiteSessionExists(t.Context(), path, "ses_a"))
 }
 
 func TestOpenCodeV2CapturedAttachmentCompaction(t *testing.T) {
@@ -475,10 +475,10 @@ func TestOpenCodeV2CapturedAttachmentCompaction(t *testing.T) {
 	path, seed, writer := newTestDB(t)
 	seed.AddProject("project-a", "/workspace/project-a")
 	seed.AddSession("ses_a", "project-a", "", "", 1788977900000, 1788977920000)
-	_, err = writer.Exec(openCodeV2TestSchema)
+	_, err = writer.ExecContext(t.Context(), openCodeV2TestSchema)
 	require.NoError(t, err)
 	for _, row := range rows {
-		_, err = writer.Exec(`INSERT INTO session_message VALUES (?, 'ses_a', ?, ?, ?, ?, ?)`, row.ID, row.Type, row.Seq, row.Created, row.Updated, string(row.Data))
+		_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES (?, 'ses_a', ?, ?, ?, ?, ?)`, row.ID, row.Type, row.Seq, row.Created, row.Updated, string(row.Data))
 		require.NoError(t, err)
 	}
 	sess, msgs, err := parseOpenCodeDBSession(path, "ses_a", "host-a")
@@ -509,13 +509,13 @@ func TestOpenCodeV2ToolFiles(t *testing.T) {
 			path, seed, writer := newTestDB(t)
 			seed.AddProject("project-a", "/workspace/project-a")
 			seed.AddSession("ses_files", "project-a", "", "Files", 1700000000000, 1700000002000)
-			_, err := writer.Exec(openCodeV2TestSchema)
+			_, err := writer.ExecContext(t.Context(), openCodeV2TestSchema)
 			require.NoError(t, err)
 			data := string(raw)
 			if status == "error" {
 				data = strings.ReplaceAll(data, `"status": "completed"`, `"status": "error", "error": {"message": "Read failed"}`)
 			}
-			_, err = writer.Exec(`INSERT INTO session_message VALUES ('msg_files', 'ses_files', 'assistant', 1, 1700000000000, 1700000002000, ?)`, data)
+			_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES ('msg_files', 'ses_files', 'assistant', 1, 1700000000000, 1700000002000, ?)`, data)
 			require.NoError(t, err)
 			_, messages, err := parseOpenCodeDBSession(path, "ses_files", "host-a")
 			require.NoError(t, err)

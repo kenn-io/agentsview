@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -20,7 +21,7 @@ const (
 
 // ZedSQLiteSessionExists reports whether a top-level Zed thread row
 // with the given ID exists in threads.db.
-func ZedSQLiteSessionExists(dbPath, sessionID string) bool {
+func ZedSQLiteSessionExists(ctx context.Context, dbPath, sessionID string) bool {
 	if dbPath == "" || sessionID == "" {
 		return false
 	}
@@ -32,12 +33,12 @@ func ZedSQLiteSessionExists(dbPath, sessionID string) bool {
 		return false
 	}
 	defer db.Close()
-	shape, err := inspectZedSchema(context.Background(), db)
+	shape, err := inspectZedSchema(ctx, db)
 	if err != nil {
 		return false
 	}
 	var found int
-	err = db.QueryRow(fmt.Sprintf(`SELECT 1 FROM threads WHERE id = ? %s LIMIT 1`, shape.parentFilter()), sessionID).Scan(&found)
+	err = db.QueryRowContext(ctx, fmt.Sprintf(`SELECT 1 FROM threads WHERE id = ? %s LIMIT 1`, shape.parentFilter()), sessionID).Scan(&found)
 	return err == nil
 }
 
@@ -123,7 +124,7 @@ func inspectZedSchema(ctx context.Context, conn *sql.DB) (zedSchema, error) {
 	var table int
 	if err := conn.QueryRowContext(ctx, `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'threads'`).Scan(&table); err != nil {
 		if err == sql.ErrNoRows {
-			return shape, fmt.Errorf("missing Zed threads table")
+			return shape, errors.New("missing Zed threads table")
 		}
 		return shape, fmt.Errorf("inspecting Zed threads table: %w", err)
 	}
@@ -170,18 +171,21 @@ func (s zedSchema) parentFilter() string {
 	}
 	return ""
 }
+
 func (s zedSchema) parentExpr() string {
 	if s.hasParent {
 		return `COALESCE(parent_id, '')`
 	}
 	return `''`
 }
+
 func (s zedSchema) folderExpr() string {
 	if s.hasFolderPaths {
 		return `COALESCE(folder_paths, '')`
 	}
 	return `''`
 }
+
 func (s zedSchema) createdExpr() string {
 	if s.hasCreatedAt {
 		return `COALESCE(created_at, '')`

@@ -38,7 +38,7 @@ func TestPushSessionGuardsAgainstCrossMachineCollision(t *testing.T) {
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
 	// Local SQLite DB.
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -53,7 +53,7 @@ func TestPushSessionGuardsAgainstCrossMachineCollision(t *testing.T) {
 	const clashID = "clash-001"
 
 	// Step 1: Insert a session owned by machine-a directly into PG.
-	markerID, err := sync.pushMarkerID()
+	markerID, err := sync.pushMarkerID(t.Context())
 	require.NoError(t, err, "pushMarkerID")
 
 	_, err = pg.ExecContext(ctx, `
@@ -72,8 +72,8 @@ func TestPushSessionGuardsAgainstCrossMachineCollision(t *testing.T) {
 		MessageCount: 1,
 		CreatedAt:    "2026-01-01T00:00:00Z",
 	}
-	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     clashID,
 		Ordinal:       0,
 		Role:          "user",
@@ -122,7 +122,7 @@ func TestPushSessionAllowsMachineRenameForSameOwnerMarker(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -133,7 +133,7 @@ func TestPushSessionAllowsMachineRenameForSameOwnerMarker(t *testing.T) {
 		schema:     schema,
 		schemaDone: true,
 	}
-	markerID, err := sync.pushMarkerID()
+	markerID, err := sync.pushMarkerID(t.Context())
 	require.NoError(t, err, "pushMarkerID")
 
 	const sessID = "rename-001"
@@ -152,7 +152,7 @@ func TestPushSessionAllowsMachineRenameForSameOwnerMarker(t *testing.T) {
 		MessageCount: 1,
 		CreatedAt:    "2026-01-01T00:00:00Z",
 	}
-	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
 
 	tx, err := pg.BeginTx(ctx, nil)
 	require.NoError(t, err, "BeginTx")
@@ -181,7 +181,7 @@ func TestPushSessionAdoptsLegacyLocalSentinelRow(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -209,11 +209,11 @@ func TestPushSessionAdoptsLegacyLocalSentinelRow(t *testing.T) {
 		MessageCount: 1,
 		CreatedAt:    "2026-01-01T00:00:00Z",
 	}
-	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
 
 	tx, err := pg.BeginTx(ctx, nil)
 	require.NoError(t, err, "BeginTx")
-	markerID, err := sync.pushMarkerID()
+	markerID, err := sync.pushMarkerID(t.Context())
 	require.NoError(t, err, "pushMarkerID")
 	require.NoError(t, sync.pushSession(ctx, tx, sess, markerID, nil), "pushSession")
 	require.NoError(t, tx.Commit(), "Commit")

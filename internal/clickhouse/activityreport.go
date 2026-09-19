@@ -399,17 +399,16 @@ func (s *Store) activityReportCandidateSource(
 		if err != nil {
 			return fmt.Errorf("querying clickhouse activity report terminal candidates: %w", err)
 		}
+		defer terminalRows.Close()
 		var terminal []activity.IntervalCandidate
 		for terminalRows.Next() {
 			candidate, scanErr := scanCandidate(terminalRows)
 			if scanErr != nil {
-				terminalRows.Close()
 				return scanErr
 			}
 			terminal = append(terminal, candidate)
 		}
 		if err := terminalRows.Err(); err != nil {
-			terminalRows.Close()
 			return err
 		}
 		if err := terminalRows.Close(); err != nil {
@@ -583,21 +582,18 @@ func (s *Store) GetSessionUsageRows(
 			o.scan.webSearchRequests)
 		rawOutputTokensBySession[o.scan.sessionID] += o.scan.outputTok
 	}
-	canonicalTokenCoverageBySession, err :=
-		activity.CanonicalSessionTokenCoverageContext(ctx, snapshotRows)
+	canonicalTokenCoverageBySession, err := activity.CanonicalSessionTokenCoverageContext(ctx, snapshotRows)
 	if err != nil {
 		return nil, err
 	}
-	snapshotMask, snapshotAttribution, snapshotWebSearchRequests :=
-		activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
+	snapshotMask, snapshotAttribution, snapshotWebSearchRequests := activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
 	seen := make(map[string]struct{})
 	deduplicatedOutputTokens := make(map[string]int)
 	discardedContributingSessions := make(map[string]struct{})
 	out := make([]activity.UsageRow, 0, len(rowsAcc))
 	for i, o := range rowsAcc {
 		if !snapshotMask[i] {
-			deduplicatedOutputTokens[o.scan.sessionID] +=
-				snapshotRows[i].OutputTokens
+			deduplicatedOutputTokens[o.scan.sessionID] += snapshotRows[i].OutputTokens
 			if rowContributes[i] {
 				discardedContributingSessions[o.scan.sessionID] = struct{}{}
 			}
@@ -622,8 +618,7 @@ func (s *Store) GetSessionUsageRows(
 			}
 			seen[key] = struct{}{}
 		}
-		cost, costSource, priced, contributes, sessionCost, priceErr :=
-			clickActivityUsageCost(r, rateResolver)
+		cost, costSource, priced, contributes, sessionCost, priceErr := clickActivityUsageCost(r, rateResolver)
 		if priceErr != nil {
 			return nil, priceErr
 		}
@@ -773,10 +768,9 @@ func (s *Store) activityReportUsage(
 			UsageDedupKey:     o.scan.usageDedupKey,
 		}
 	}
-	mask, attribution, webSearchRequests :=
-		activity.UsageSurvivorSelectionForSessions(
-			q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
-		)
+	mask, attribution, webSearchRequests := activity.UsageSurvivorSelectionForSessions(
+		q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
+	)
 	out = make([]activity.UsageRow, 0, len(rowsAcc))
 	for i, o := range rowsAcc {
 		if !mask[i] {
@@ -784,8 +778,7 @@ func (s *Store) activityReportUsage(
 		}
 		costRow := o.scan
 		costRow.webSearchRequests = webSearchRequests[i]
-		cost, costSource, priced, contributes, sessionCost, priceErr :=
-			clickActivityUsageCost(costRow, rateResolver)
+		cost, costSource, priced, contributes, sessionCost, priceErr := clickActivityUsageCost(costRow, rateResolver)
 		if priceErr != nil {
 			return nil, nil, priceErr
 		}
@@ -1019,7 +1012,8 @@ func clickSessionUsageRowLess(
 func clickActivityUsageCost(
 	r clickActivityReportUsageRow, pricing *export.PricingResolver,
 ) (cost money.Money, costSource export.CostSource, priced, contributes bool,
-	sessionCost *money.Money, err error) {
+	sessionCost *money.Money, err error,
+) {
 	costRow := r
 	if r.costSource == db.CopilotReportedCostSource && r.cost.Valid {
 		v := money.Money{Microdollars: r.cost.Int64}

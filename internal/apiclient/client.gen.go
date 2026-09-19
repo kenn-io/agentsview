@@ -19972,6 +19972,7 @@ func (r RemoteSyncRequest) Validate() error {
 
 type RemoteSyncResponse struct {
 	ErrorData  *string             `json:"error,omitempty"`
+	ErrorCode  *string             `json:"error_code,omitempty"`
 	Failures   []RemoteSyncFailure `json:"failures,omitempty"`
 	LocalStats *SyncSyncStats      `json:"local_stats,omitempty"`
 }

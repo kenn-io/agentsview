@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +15,7 @@ import (
 func TestEngineClassifyQoderPaths(t *testing.T) {
 	db := openTestDB(t)
 	root := t.TempDir()
-	engine := NewEngine(db, EngineConfig{
+	engine := NewEngine(t.Context(), db, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentQoder: {root},
 		},
@@ -64,7 +63,7 @@ func TestEngineClassifyQoderPaths(t *testing.T) {
 func TestEngineClassifyQoderProjectNamedSubagentsAsMainSession(t *testing.T) {
 	db := openTestDB(t)
 	root := t.TempDir()
-	engine := NewEngine(db, EngineConfig{
+	engine := NewEngine(t.Context(), db, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentQoder: {root},
 		},
@@ -86,7 +85,7 @@ func TestEngineClassifyQoderProjectNamedSubagentsAsMainSession(t *testing.T) {
 func TestEngineSyncQoderSameMessageIDAppendForceReplaces(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentQoder: {root},
 		},
@@ -102,8 +101,8 @@ func TestEngineSyncQoderSameMessageIDAppendForceReplaces(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
 
-	engine.SyncAll(context.Background(), nil)
-	msgs, err := database.GetAllMessages(context.Background(), sessionID)
+	engine.SyncAll(t.Context(), nil)
+	msgs, err := database.GetAllMessages(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "Hello", msgs[1].Content)
@@ -117,7 +116,7 @@ func TestEngineSyncQoderSameMessageIDAppendForceReplaces(t *testing.T) {
 	require.NoError(t, f.Close())
 
 	engine.SyncPaths([]string{path})
-	msgs, err = database.GetAllMessages(context.Background(), sessionID)
+	msgs, err = database.GetAllMessages(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "Hello world", msgs[1].Content)
@@ -137,7 +136,7 @@ func TestProcessFileQoderSameSizeSameMtimeSidecarRewriteReparses(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			database := openTestDB(t)
 			root := t.TempDir()
-			engine := NewEngine(database, EngineConfig{
+			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentQoder: {root},
 				},
@@ -164,7 +163,7 @@ func TestProcessFileQoderSameSizeSameMtimeSidecarRewriteReparses(t *testing.T) {
 				Agent:           parser.AgentQoder,
 				ProviderProcess: true,
 			}
-			first := engine.processFile(context.Background(), file)
+			first := engine.processFile(t.Context(), file)
 			require.NoError(t, first.err)
 			require.Len(t, first.results, 1)
 			initialMtime := first.results[0].Session.File.Mtime
@@ -181,7 +180,7 @@ func TestProcessFileQoderSameSizeSameMtimeSidecarRewriteReparses(t *testing.T) {
 				engine.cacheSkip(first.cacheKey, initialMtime)
 			}
 			if tt.freshSync {
-				engine = NewEngine(database, EngineConfig{
+				engine = NewEngine(t.Context(), database, EngineConfig{
 					AgentDirs: map[parser.AgentType][]string{
 						parser.AgentQoder: {root},
 					},
@@ -189,7 +188,7 @@ func TestProcessFileQoderSameSizeSameMtimeSidecarRewriteReparses(t *testing.T) {
 				})
 			}
 
-			second := engine.processFile(context.Background(), file)
+			second := engine.processFile(t.Context(), file)
 			require.NoError(t, second.err)
 			assert.False(t, second.skip)
 			require.Len(t, second.results, 1)
@@ -206,7 +205,7 @@ func TestProcessFileQoderSameSizeSameMtimeSidecarRewriteReparses(t *testing.T) {
 func TestSourceMtimeQoderIncludesSidecarMtime(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentQoder: {root},
 		},
@@ -230,7 +229,7 @@ func TestSourceMtimeQoderIncludesSidecarMtime(t *testing.T) {
 	require.NoError(t, os.Chtimes(path, transcriptTime, transcriptTime))
 	require.NoError(t, os.Chtimes(sidecarPath, sidecarTime, sidecarTime))
 
-	assert.Equal(t, sidecarTime.UnixNano(), engine.SourceMtime("qoder:"+rawID))
+	assert.Equal(t, sidecarTime.UnixNano(), engine.SourceMtime(t.Context(), "qoder:"+rawID))
 }
 
 func writeProcessQoderResult(

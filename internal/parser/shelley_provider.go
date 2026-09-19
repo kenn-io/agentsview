@@ -26,8 +26,8 @@ func newShelleyProviderFactory(def AgentDef) ProviderFactory {
 				WithChangedPathClassifier(shelleyClassifyPath),
 				WithMemberLookup(shelleyFindMember),
 				WithFingerprint(shelleyFingerprintSource),
-				WithContainerParse(shelleyParseContainer),
-				WithMemberParse(shelleyParseMember),
+				WithContextContainerParse(shelleyParseContainer),
+				WithContextMemberParse(shelleyParseMember),
 				// Special case: confirm a stored conversation still exists for
 				// RequireFreshSource lookups.
 				WithMemberPresence(shelleyMemberPresent),
@@ -93,12 +93,12 @@ func shelleyClassifyPath(
 // shelleyFindMember resolves a raw conversation ID to its virtual source path
 // inside the shared database. The ID is validated only to reject path-like
 // input; all conversations live in one DB.
-func shelleyFindMember(root, rawID string) (multiSessionMatch, bool) {
+func shelleyFindMember(ctx context.Context, root, rawID string) (multiSessionMatch, bool) {
 	if root == "" || !IsValidSessionID(rawID) {
 		return multiSessionMatch{}, false
 	}
 	dbPath := shelleyDBPath(root)
-	if dbPath == "" || !ShelleyConversationExists(dbPath, rawID) {
+	if dbPath == "" || !ShelleyConversationExists(ctx, dbPath, rawID) {
 		return multiSessionMatch{}, false
 	}
 	return multiSessionMatch{
@@ -158,14 +158,14 @@ func shelleyFingerprintSource(src multiSessionSource) (SourceFingerprint, error)
 	return SourceFingerprint{}, nil
 }
 
-func shelleyMemberPresent(src multiSessionSource) bool {
+func shelleyMemberPresent(ctx context.Context, src multiSessionSource) bool {
 	if src.MemberID == "" {
 		return IsRegularFile(src.Container)
 	}
-	return ShelleyConversationExists(src.Container, src.MemberID)
+	return ShelleyConversationExists(ctx, src.Container, src.MemberID)
 }
 
-func shelleyParseMember(
+func shelleyParseMember(ctx context.Context,
 	src multiSessionSource, req ParseRequest,
 ) (*ParseResult, error) {
 	dbInfo, err := os.Stat(src.Container)
@@ -183,12 +183,12 @@ func shelleyParseMember(
 		return nil, err
 	}
 	defer conn.Close()
-	return parseShelleyConversationFromDB(
+	return parseShelleyConversationFromDB(ctx,
 		conn, src.Container, src.MemberID, req.Machine, dbInfo,
 	)
 }
 
-func shelleyParseContainer(
+func shelleyParseContainer(ctx context.Context,
 	src multiSessionSource, req ParseRequest,
 ) ([]ParseResult, error) {
 	dbInfo, err := os.Stat(src.Container)
@@ -209,7 +209,7 @@ func shelleyParseContainer(
 	}
 	results := make([]ParseResult, 0, len(metas))
 	for _, meta := range metas {
-		result, err := parseShelleyConversationFromDB(
+		result, err := parseShelleyConversationFromDB(ctx,
 			conn, src.Container, meta.RawID, req.Machine, dbInfo,
 		)
 		if err != nil {

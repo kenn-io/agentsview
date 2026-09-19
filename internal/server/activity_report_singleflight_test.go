@@ -56,7 +56,7 @@ func TestActivityReportBuildGroupSharesBuildAfterOneWaiterCancels(t *testing.T) 
 				return activity.CandidateArtifacts{}, ctx.Err()
 			}
 		}
-		firstCtx, cancelFirst := context.WithCancel(context.Background())
+		firstCtx, cancelFirst := context.WithCancel(t.Context())
 		firstDone := make(chan error, 1)
 		go func() {
 			_, err := group.do(firstCtx, "same", build)
@@ -69,7 +69,7 @@ func TestActivityReportBuildGroupSharesBuildAfterOneWaiterCancels(t *testing.T) 
 		}
 		secondDone := make(chan result, 1)
 		go func() {
-			artifacts, err := group.do(context.Background(), "same", build)
+			artifacts, err := group.do(t.Context(), "same", build)
 			secondDone <- result{artifacts: artifacts, err: err}
 		}()
 		synctest.Wait()
@@ -96,7 +96,7 @@ func TestActivityReportBuildGroupCancelsAbandonedBuild(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		group := newActivityReportBuildGroup()
 		buildCanceled := make(chan struct{})
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		done := make(chan error, 1)
 		go func() {
 			_, err := group.do(ctx, "abandoned", func(ctx context.Context) (
@@ -154,7 +154,7 @@ func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T)
 			}
 		}
 
-		firstCtx, cancelFirst := context.WithCancel(context.Background())
+		firstCtx, cancelFirst := context.WithCancel(t.Context())
 		firstDone := make(chan error, 1)
 		go func() {
 			_, err := group.do(firstCtx, "same", build)
@@ -186,7 +186,7 @@ func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T)
 		}
 		secondDone := make(chan result, 1)
 		go func() {
-			artifacts, err := group.do(context.Background(), "same", build)
+			artifacts, err := group.do(t.Context(), "same", build)
 			secondDone <- result{artifacts: artifacts, err: err}
 		}()
 		synctest.Wait()
@@ -216,7 +216,7 @@ func TestActivityReportBuildGroupStartsFreshAfterLastWaiterCancels(t *testing.T)
 
 		thirdDone := make(chan result, 1)
 		go func() {
-			artifacts, err := group.do(context.Background(), "same", build)
+			artifacts, err := group.do(t.Context(), "same", build)
 			thirdDone <- result{artifacts: artifacts, err: err}
 		}()
 		synctest.Wait()
@@ -253,7 +253,7 @@ func TestActivityReportProgressBuildsKeepCallbacksRequestLocal(t *testing.T) {
 			done := make(chan error, 1)
 			go func() {
 				_, err := srv.buildActivityArtifacts(
-					context.Background(), store, resolvedActivitySelection{},
+					t.Context(), store, resolvedActivitySelection{},
 					activity.SourceProbe{}, func(progress activity.Progress) {
 						mu.Lock()
 						seen[name] = append(seen[name], progress.RowsProcessed)

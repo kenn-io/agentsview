@@ -42,8 +42,10 @@ var errLocalDaemonUnreachable = errors.New(
 	"local daemon owns the SQLite archive but is not responding",
 )
 
-var startBackgroundServeForTransport = autoStartBackgroundServe
-var waitForDaemonStartupForTransport = WaitForDaemonStartupContext
+var (
+	startBackgroundServeForTransport = autoStartBackgroundServe
+	waitForDaemonStartupForTransport = WaitForDaemonStartupContext
+)
 
 // autoStartBackgroundServe guards transport auto-start against test
 // binaries: os.Executable inside `go test` is the test executable, so a
@@ -75,6 +77,7 @@ type transport struct {
 	DirectIncompatible bool // live daemon owns DB but cannot serve this client
 	DirectDaemonAhead  bool // that daemon runs a newer API or data version than this client
 	DirectReason       string
+	DirectError        error
 	Runtime            *DaemonRuntime
 }
 
@@ -160,11 +163,13 @@ func detectTransportContext(
 		}
 	}
 	if IsLocalDaemonActive(dataDir, authToken) {
-		reason := errLocalDaemonUnreachable.Error()
+		directErr := errLocalDaemonUnreachable
+		reason := directErr.Error()
 		incompatible := false
 		ahead := false
 		if rt, err := FindIncompatibleDaemonRuntime(dataDir, authToken); err != nil {
 			reason = err.Error()
+			directErr = err
 			incompatible = true
 			ahead = daemonRuntimeAhead(rt)
 		}
@@ -174,6 +179,7 @@ func detectTransportContext(
 			DirectIncompatible: incompatible,
 			DirectDaemonAhead:  ahead,
 			DirectReason:       reason,
+			DirectError:        directErr,
 		}, nil
 	}
 	return transport{Mode: transportDirect}, nil
@@ -290,7 +296,7 @@ func ensureTransportContext(
 		}
 		if tr.DirectReadOnly {
 			if tr.DirectReason != "" {
-				if tr.DirectReason == errLocalDaemonUnreachable.Error() {
+				if errors.Is(tr.DirectError, errLocalDaemonUnreachable) {
 					return transport{}, errLocalDaemonUnreachable
 				}
 				return transport{}, appendDaemonCompatibilityHint(
@@ -324,7 +330,7 @@ func ensureTransportContext(
 	}
 	if tr.DirectReadOnly {
 		if tr.DirectReason != "" {
-			if tr.DirectReason == errLocalDaemonUnreachable.Error() {
+			if errors.Is(tr.DirectError, errLocalDaemonUnreachable) {
 				return transport{}, errLocalDaemonUnreachable
 			}
 			return transport{}, appendDaemonCompatibilityHint(
@@ -372,6 +378,9 @@ func waitForBackgroundLaunchBeforeArchiveWrite(
 	progress := daemonLaunchProgressWriter{w: os.Stderr}
 	var lastUpdate time.Time
 	for isBackgroundLaunchActive(dataDir) {
+		if backgroundServeProbeHook != nil {
+			backgroundServeProbeHook()
+		}
 		if err := ctx.Err(); err != nil {
 			return true, err
 		}
@@ -503,7 +512,7 @@ func daemonOriginURL(rawURL string) string {
 // newService builds the SessionService matching the detected
 // transport. The returned cleanup function must be called when
 // the caller is done with the service.
-func newService(
+func newService(ctx context.Context,
 	cfg config.Config, tr transport,
 ) (service.SessionService, func(), error) {
 	switch tr.Mode {
@@ -514,7 +523,7 @@ func newService(
 		if err := directIncompatibleDaemonError(tr); err != nil {
 			return nil, nil, err
 		}
-		d, err := openReadOnlyDB(cfg)
+		d, err := openReadOnlyDB(ctx, cfg)
 		if err != nil {
 			return nil, nil, fmt.Errorf(
 				"opening db: %w", err,

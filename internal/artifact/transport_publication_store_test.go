@@ -445,11 +445,10 @@ func TestFolderTransportResumesBoundedPublishedRepairAfterReopen(t *testing.T) {
 	assert.False(t, recoveryResult.More)
 	require.NoError(t, recovery.Close())
 	assert.Equal(t, journalSequence+2, readTestFolderJournalSequence(t, target))
-	assert.NoFileExists(t,
-		filepath.Join(
-			filepath.Dir(checkpointPath),
-			folderJournalRejectionName(checkpointWire.Name),
-		),
+	assert.NoFileExists(t, filepath.Join(
+		filepath.Dir(checkpointPath),
+		folderJournalRejectionName(checkpointWire.Name),
+	),
 		"a durable repair event supersedes the rejection marker",
 	)
 }

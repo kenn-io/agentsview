@@ -3,7 +3,6 @@ package parser
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -30,7 +29,6 @@ func TestZedProviderCapabilities(t *testing.T) {
 }
 
 func TestZedProviderSourceMethods(t *testing.T) {
-
 	fixture := zedProviderReadFixture(t)
 	root := fixture.Root
 	dbPath := fixture.DBPath
@@ -43,21 +41,21 @@ func TestZedProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, filepath.Join(root, "threads"), plan.Roots[0].Path)
 	assert.False(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{"threads.db", "threads.db-*"}, plan.Roots[0].IncludeGlobs)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, AgentZed, discovered[0].Provider)
 	assert.Equal(t, dbPath, discovered[0].DisplayPath)
 	assert.Equal(t, dbPath, discovered[0].FingerprintKey)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~zed:" + threadID,
 	})
 	require.NoError(t, err)
@@ -65,7 +63,7 @@ func TestZedProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, virtualPath, found.DisplayPath)
 	assert.Equal(t, virtualPath, found.FingerprintKey)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, virtualPath, fingerprint.Key)
 	assert.Positive(t, fingerprint.Size)
@@ -73,7 +71,7 @@ func TestZedProviderSourceMethods(t *testing.T) {
 	assert.NotEmpty(t, fingerprint.Hash)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: dbPath + "-wal", EventKind: "write", WatchRoot: filepath.Dir(dbPath)},
 	)
 	require.NoError(t, err)
@@ -82,7 +80,6 @@ func TestZedProviderSourceMethods(t *testing.T) {
 }
 
 func TestZedProviderParsePhysicalAndVirtualSources(t *testing.T) {
-
 	fixture := zedProviderReadFixture(t)
 	root := fixture.Root
 	threadOne := fixture.FirstThreadID
@@ -93,11 +90,11 @@ func TestZedProviderParsePhysicalAndVirtualSources(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	allOutcome, err := provider.Parse(context.Background(), ParseRequest{
+	allOutcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0],
 	})
 	require.NoError(t, err)
@@ -107,12 +104,12 @@ func TestZedProviderParsePhysicalAndVirtualSources(t *testing.T) {
 	assert.Equal(t, "zed:"+threadOne, allOutcome.Results[0].Result.Session.ID)
 	assert.Equal(t, "zed:"+threadTwo, allOutcome.Results[1].Result.Session.ID)
 
-	virtualSource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	virtualSource, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: threadTwo,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
-	oneOutcome, err := provider.Parse(context.Background(), ParseRequest{
+	oneOutcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: virtualSource,
 	})
 	require.NoError(t, err)
@@ -132,29 +129,29 @@ func TestZedProviderLegacySchemaPhysicalAndVirtual(t *testing.T) {
 	require.NoError(t, err)
 	artifact, err := os.ReadFile("testdata/zed-legacy-threads.sql")
 	require.NoError(t, err)
-	_, err = db.Exec(string(artifact))
+	_, err = db.ExecContext(t.Context(), string(artifact))
 	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO threads (id, summary, updated_at, data_type, data) VALUES (?, ?, ?, ?, ?)`,
+	_, err = db.ExecContext(t.Context(), `INSERT INTO threads (id, summary, updated_at, data_type, data) VALUES (?, ?, ?, ?, ?)`,
 		"legacy", "Legacy", "2026-06-08T09:14:10Z", "json", []byte(`{"messages":[{"User":{"content":[{"Text":"hello"}]}}]}`))
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
 	provider, ok := NewProvider(AgentZed, ProviderConfig{Roots: []string{root}, Machine: "devbox"})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	physical, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	physical, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	require.Len(t, physical.Results, 1)
 	assert.Equal(t, "zed:legacy", physical.Results[0].Result.Session.ID)
 
-	virtual, ok, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: "legacy"})
+	virtual, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: "legacy"})
 	require.NoError(t, err)
 	require.True(t, ok)
-	fingerprint, err := provider.Fingerprint(context.Background(), virtual)
+	fingerprint, err := provider.Fingerprint(t.Context(), virtual)
 	require.NoError(t, err)
-	parsed, err := provider.Parse(context.Background(), ParseRequest{Source: virtual, Fingerprint: fingerprint})
+	parsed, err := provider.Parse(t.Context(), ParseRequest{Source: virtual, Fingerprint: fingerprint})
 	require.NoError(t, err)
 	require.Len(t, parsed.Results, 1)
 	assert.Equal(t, "zed:legacy", parsed.Results[0].Result.Session.ID)
@@ -166,7 +163,7 @@ func TestZedProviderMalformedSchemaReturnsError(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = db.Exec(`CREATE TABLE threads (
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE threads (
 		id TEXT PRIMARY KEY,
 		summary TEXT NOT NULL,
 		updated_at TEXT NOT NULL,
@@ -177,16 +174,16 @@ func TestZedProviderMalformedSchemaReturnsError(t *testing.T) {
 
 	provider, ok := NewProvider(AgentZed, ProviderConfig{Roots: []string{root}, Machine: "devbox"})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	_, err = zedFingerprintSource(context.Background(), multiSessionSource{
+	_, err = zedFingerprintSource(t.Context(), multiSessionSource{
 		Root: root, Path: ZedSQLiteVirtualPath(dbPath, "malformed"),
 		Container: dbPath, MemberID: "malformed",
 	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing required Zed threads column data")
-	_, err = provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	_, err = provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "missing required Zed threads column data")
 }
@@ -204,26 +201,25 @@ func TestZedProviderPropagatesParseAndFingerprintContext(t *testing.T) {
 		Root: root, Path: ZedSQLiteVirtualPath(dbPath, threadID),
 		Container: dbPath, MemberID: threadID,
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	_, err := zedParseContainer(ctx, multiSessionSource{
 		Root: root, Path: dbPath, Container: dbPath,
 	}, ParseRequest{})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 
 	_, err = zedParseMember(ctx, src, ParseRequest{})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 
 	_, err = zedFingerprintSource(ctx, src)
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, context.Canceled), "fingerprint error = %v", err)
+	assert.ErrorIs(t, err, context.Canceled, "fingerprint error = %v", err)
 }
 
 func TestZedProviderFingerprintIncludesWALSiblings(t *testing.T) {
-
 	root := t.TempDir()
 	dbPath := filepath.Join(root, zedThreadsDBRelPath)
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
@@ -237,17 +233,17 @@ func TestZedProviderFingerprintIncludesWALSiblings(t *testing.T) {
 
 	provider, ok := NewProvider(AgentZed, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	before, err := provider.Fingerprint(context.Background(), sources[0])
+	before, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 
 	walPath := dbPath + "-wal"
 	writeSourceFile(t, walPath, "wal")
 	walTime := time.Unix(0, before.MTimeNS+int64(time.Second))
 	require.NoError(t, os.Chtimes(walPath, walTime, walTime))
-	after, err := provider.Fingerprint(context.Background(), sources[0])
+	after, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 
 	assert.Equal(t, before.Size, after.Size)
@@ -270,14 +266,14 @@ func TestZedProviderClassifiesDeletedPhysicalDB(t *testing.T) {
 	provider, ok := NewProvider(AgentZed, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: dbPath, EventKind: "remove", WatchRoot: filepath.Dir(dbPath)},
 	)
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, dbPath, changed[0].DisplayPath)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: changed[0]})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: changed[0]})
 	require.NoError(t, err)
 	assert.True(t, outcome.ResultSetComplete)
 	// The backing DB file is gone, so the outcome must not force-replace: the
@@ -303,7 +299,7 @@ func TestZedProviderStoredVirtualPathFreshness(t *testing.T) {
 
 	provider, ok := NewProvider(AgentZed, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath:     virtualPath,
 		RequireFreshSource: true,
 	})
@@ -313,23 +309,23 @@ func TestZedProviderStoredVirtualPathFreshness(t *testing.T) {
 
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = db.Exec(`DELETE FROM threads WHERE id = ?`, threadID)
+	_, err = db.ExecContext(t.Context(), `DELETE FROM threads WHERE id = ?`, threadID)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath:     virtualPath,
 		RequireFreshSource: true,
 	})
 	require.NoError(t, err)
 	assert.False(t, ok, "fresh lookup must reject a deleted virtual row")
 
-	staleSource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	staleSource, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: virtualPath,
 	})
 	require.NoError(t, err)
 	require.True(t, ok, "non-fresh lookup keeps tombstone source identity")
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: staleSource,
 	})
 	require.NoError(t, err)
@@ -376,12 +372,12 @@ func TestZedProviderChangedPathTombstonesDeletedThread(t *testing.T) {
 
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = db.Exec(`DELETE FROM threads WHERE id = ?`, deletedID)
+	_, err = db.ExecContext(t.Context(), `DELETE FROM threads WHERE id = ?`, deletedID)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:              dbPath,
 			EventKind:         "write",
@@ -411,7 +407,7 @@ func TestZedProviderChangedPathTombstonesDeletedThread(t *testing.T) {
 	// engine's pre-parse freshness check skip Parse whenever stored metadata
 	// happens to match, stranding the deleted thread. This mirrors Shelley and
 	// Kiro tombstone fingerprinting.
-	fingerprint, err := provider.Fingerprint(context.Background(), tombstone)
+	fingerprint, err := provider.Fingerprint(t.Context(), tombstone)
 	require.NoError(t, err, "missing-thread fingerprint must not error")
 	assert.Equal(t, tombstone.FingerprintKey, fingerprint.Key)
 	assert.Zero(t, fingerprint.Size,
@@ -421,7 +417,7 @@ func TestZedProviderChangedPathTombstonesDeletedThread(t *testing.T) {
 	assert.Empty(t, fingerprint.Hash,
 		"deleted-thread fingerprint must not carry the DB hash")
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      tombstone,
 		Fingerprint: fingerprint,
 	})
@@ -434,7 +430,7 @@ func TestZedProviderChangedPathTombstonesDeletedThread(t *testing.T) {
 
 	require.NoError(t, os.Remove(dbPath))
 	gone, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:              dbPath,
 			EventKind:         "remove",
@@ -471,7 +467,7 @@ func TestZedProviderRejectsInvalidStoredVirtualPaths(t *testing.T) {
 		filepath.Join(root, "threads", "threads-copy.db") + "#" + threadID,
 		filepath.Join(root, "debug", "threads.db") + "#" + threadID,
 	} {
-		_, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		_, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 			StoredFilePath:     path,
 			RequireFreshSource: true,
 		})
@@ -486,7 +482,7 @@ func TestZedProviderIgnoresUnrelatedSidecarBasename(t *testing.T) {
 	require.True(t, ok)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      filepath.Join(root, "other", "threads.db-wal"),
 			EventKind: "remove",
@@ -514,7 +510,6 @@ func TestShelleyProviderCapabilities(t *testing.T) {
 }
 
 func TestShelleyProviderSourceMethods(t *testing.T) {
-
 	fixture := shelleyProviderReadFixture(t)
 	root := fixture.Root
 	dbPath := fixture.DBPath
@@ -526,21 +521,21 @@ func TestShelleyProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.False(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{shelleyDBName, shelleyDBName + "-*"}, plan.Roots[0].IncludeGlobs)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, AgentShelley, discovered[0].Provider)
 	assert.Equal(t, dbPath, discovered[0].DisplayPath)
 	assert.Equal(t, dbPath, discovered[0].FingerprintKey)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~shelley:cMAIN1",
 	})
 	require.NoError(t, err)
@@ -548,7 +543,7 @@ func TestShelleyProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, virtualPath, found.DisplayPath)
 	assert.Equal(t, virtualPath, found.FingerprintKey)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, virtualPath, fingerprint.Key)
 	assert.Positive(t, fingerprint.Size)
@@ -556,7 +551,7 @@ func TestShelleyProviderSourceMethods(t *testing.T) {
 	assert.NotEmpty(t, fingerprint.Hash)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: dbPath + "-wal", EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -565,7 +560,6 @@ func TestShelleyProviderSourceMethods(t *testing.T) {
 }
 
 func TestShelleyProviderParsePhysicalAndVirtualSources(t *testing.T) {
-
 	fixture := shelleyProviderReadFixture(t)
 	root := fixture.Root
 	dbPath := fixture.DBPath
@@ -575,11 +569,11 @@ func TestShelleyProviderParsePhysicalAndVirtualSources(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	allOutcome, err := provider.Parse(context.Background(), ParseRequest{
+	allOutcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0],
 	})
 	require.NoError(t, err)
@@ -589,12 +583,12 @@ func TestShelleyProviderParsePhysicalAndVirtualSources(t *testing.T) {
 	assert.Equal(t, "shelley:cAUX1", allOutcome.Results[0].Result.Session.ID)
 	assert.Equal(t, "shelley:cMAIN1", allOutcome.Results[1].Result.Session.ID)
 
-	virtualSource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	virtualSource, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: ShelleyVirtualPath(dbPath, "cMAIN1"),
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
-	oneOutcome, err := provider.Parse(context.Background(), ParseRequest{
+	oneOutcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: virtualSource,
 	})
 	require.NoError(t, err)
@@ -607,22 +601,21 @@ func TestShelleyProviderParsePhysicalAndVirtualSources(t *testing.T) {
 }
 
 func TestShelleyProviderFingerprintChangesForSameSecondRewrite(t *testing.T) {
-
 	root, _, db := newShelleyTestDB(t)
 	seedShelleyMainConversation(t, db)
 
 	provider, ok := NewProvider(AgentShelley, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "cMAIN1",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	before, err := provider.Fingerprint(context.Background(), source)
+	before, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 
-	_, err = db.Exec(
+	_, err = db.ExecContext(t.Context(),
 		`UPDATE messages
 		    SET llm_data = ?
 		  WHERE conversation_id = ? AND sequence_id = ?`,
@@ -631,7 +624,7 @@ func TestShelleyProviderFingerprintChangesForSameSecondRewrite(t *testing.T) {
 		4,
 	)
 	require.NoError(t, err)
-	after, err := provider.Fingerprint(context.Background(), source)
+	after, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 
 	assert.Equal(t, before.MTimeNS, after.MTimeNS)
@@ -639,23 +632,22 @@ func TestShelleyProviderFingerprintChangesForSameSecondRewrite(t *testing.T) {
 }
 
 func TestShelleyProviderFingerprintIncludesWALSiblings(t *testing.T) {
-
 	root, dbPath, db := newShelleyTestDB(t)
 	seedShelleyMainConversation(t, db)
 
 	provider, ok := NewProvider(AgentShelley, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	before, err := provider.Fingerprint(context.Background(), sources[0])
+	before, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 
 	walPath := dbPath + "-wal"
 	writeSourceFile(t, walPath, "wal")
 	walTime := time.Unix(0, before.MTimeNS+int64(time.Second))
 	require.NoError(t, os.Chtimes(walPath, walTime, walTime))
-	after, err := provider.Fingerprint(context.Background(), sources[0])
+	after, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 
 	assert.Equal(t, before.Size, after.Size)
@@ -674,7 +666,7 @@ func TestShelleyProviderClassifiesDeletedVirtualPath(t *testing.T) {
 	provider, ok := NewProvider(AgentShelley, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: virtualPath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -693,14 +685,14 @@ func TestShelleyProviderClassifiesDeletedPhysicalDB(t *testing.T) {
 	provider, ok := NewProvider(AgentShelley, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: dbPath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, dbPath, changed[0].DisplayPath)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: changed[0]})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: changed[0]})
 	require.NoError(t, err)
 	assert.True(t, outcome.ResultSetComplete)
 	// The backing DB file is gone, so the outcome must not force-replace: the
@@ -737,13 +729,13 @@ func TestShelleyProviderChangedPathTombstonesDeletedConversation(t *testing.T) {
 	survivingPath := ShelleyVirtualPath(dbPath, "cMAIN1")
 	deletedPath := ShelleyVirtualPath(dbPath, "cDEL1")
 
-	_, err := db.Exec(`DELETE FROM messages WHERE conversation_id = ?`, "cDEL1")
+	_, err := db.ExecContext(t.Context(), `DELETE FROM messages WHERE conversation_id = ?`, "cDEL1")
 	require.NoError(t, err)
-	_, err = db.Exec(`DELETE FROM conversations WHERE conversation_id = ?`, "cDEL1")
+	_, err = db.ExecContext(t.Context(), `DELETE FROM conversations WHERE conversation_id = ?`, "cDEL1")
 	require.NoError(t, err)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:              dbPath,
 			EventKind:         "write",
@@ -769,11 +761,11 @@ func TestShelleyProviderChangedPathTombstonesDeletedConversation(t *testing.T) {
 
 	// The fingerprint of a deleted-but-present-DB member must not error, or the
 	// engine aborts before Parse and the stale session is never dropped.
-	fingerprint, err := provider.Fingerprint(context.Background(), tombstone)
+	fingerprint, err := provider.Fingerprint(t.Context(), tombstone)
 	require.NoError(t, err, "missing-member fingerprint must not error")
 	assert.Equal(t, tombstone.FingerprintKey, fingerprint.Key)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      tombstone,
 		Fingerprint: fingerprint,
 	})
@@ -788,7 +780,7 @@ func TestShelleyProviderChangedPathTombstonesDeletedConversation(t *testing.T) {
 	require.NoError(t, db.Close())
 	require.NoError(t, os.Remove(dbPath))
 	gone, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:              dbPath,
 			EventKind:         "remove",
@@ -811,7 +803,7 @@ func TestShelleyProviderStoredVirtualPathFreshness(t *testing.T) {
 
 	provider, ok := NewProvider(AgentShelley, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath:     virtualPath,
 		RequireFreshSource: true,
 	})
@@ -819,24 +811,24 @@ func TestShelleyProviderStoredVirtualPathFreshness(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, virtualPath, found.DisplayPath)
 
-	_, err = db.Exec(`DELETE FROM messages WHERE conversation_id = ?`, "cMAIN1")
+	_, err = db.ExecContext(t.Context(), `DELETE FROM messages WHERE conversation_id = ?`, "cMAIN1")
 	require.NoError(t, err)
-	_, err = db.Exec(`DELETE FROM conversations WHERE conversation_id = ?`, "cMAIN1")
+	_, err = db.ExecContext(t.Context(), `DELETE FROM conversations WHERE conversation_id = ?`, "cMAIN1")
 	require.NoError(t, err)
 
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath:     virtualPath,
 		RequireFreshSource: true,
 	})
 	require.NoError(t, err)
 	assert.False(t, ok, "fresh lookup must reject a deleted virtual row")
 
-	staleSource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	staleSource, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: virtualPath,
 	})
 	require.NoError(t, err)
 	require.True(t, ok, "non-fresh lookup keeps tombstone source identity")
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: staleSource,
 	})
 	require.NoError(t, err)
@@ -858,7 +850,7 @@ func TestShelleyProviderRejectsInvalidStoredVirtualPaths(t *testing.T) {
 		filepath.Join(root, "shelley-debug.db") + "#cMAIN1",
 		filepath.Join(root, "nested", shelleyDBName) + "#cMAIN1",
 	} {
-		_, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		_, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 			StoredFilePath:     path,
 			RequireFreshSource: true,
 		})
@@ -873,7 +865,7 @@ func TestShelleyProviderIgnoresUnrelatedSidecarBasename(t *testing.T) {
 	require.True(t, ok)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      filepath.Join(root, "nested", shelleyDBName+"-wal"),
 			EventKind: "remove",
@@ -903,14 +895,14 @@ func TestZedProviderIgnoresBareShmSiblingEvents(t *testing.T) {
 	require.True(t, ok)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: dbPath + "-shm", EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
 	assert.Empty(t, changed)
 
 	changed, err = provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: dbPath + "-wal", EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -931,17 +923,17 @@ func TestZedProviderFingerprintIgnoresShmSibling(t *testing.T) {
 
 	provider, ok := NewProvider(AgentZed, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	before, err := provider.Fingerprint(context.Background(), sources[0])
+	before, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 
 	shmPath := dbPath + "-shm"
 	writeSourceFile(t, shmPath, "shm")
 	shmTime := time.Unix(0, before.MTimeNS+int64(time.Hour))
 	require.NoError(t, os.Chtimes(shmPath, shmTime, shmTime))
-	after, err := provider.Fingerprint(context.Background(), sources[0])
+	after, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 
 	assert.Equal(t, before.MTimeNS, after.MTimeNS)
@@ -955,14 +947,14 @@ func TestShelleyProviderIgnoresBareShmSiblingEvents(t *testing.T) {
 	require.True(t, ok)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: dbPath + "-shm", EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
 	assert.Empty(t, changed)
 
 	changed, err = provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: dbPath + "-wal", EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -975,17 +967,17 @@ func TestShelleyProviderFingerprintIgnoresShmSibling(t *testing.T) {
 
 	provider, ok := NewProvider(AgentShelley, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	before, err := provider.Fingerprint(context.Background(), sources[0])
+	before, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 
 	shmPath := dbPath + "-shm"
 	writeSourceFile(t, shmPath, "shm")
 	shmTime := time.Unix(0, before.MTimeNS+int64(time.Hour))
 	require.NoError(t, os.Chtimes(shmPath, shmTime, shmTime))
-	after, err := provider.Fingerprint(context.Background(), sources[0])
+	after, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 
 	assert.Equal(t, before.MTimeNS, after.MTimeNS)

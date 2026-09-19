@@ -13,7 +13,7 @@ import (
 )
 
 func TestDiscoveryDiskMapGetDistinguishesAbsenceAndFailure(t *testing.T) {
-	index, err := newDiscoveryDiskMap()
+	index, err := newDiscoveryDiskMap(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		_ = os.Remove(index.path)
@@ -29,7 +29,7 @@ func TestDiscoveryDiskMapGetDistinguishesAbsenceAndFailure(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, _, err = index.get(ctx, "missing")
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 
 	require.NoError(t, index.db.Close())
 	_, _, err = index.get(t.Context(), "missing")
@@ -38,7 +38,7 @@ func TestDiscoveryDiskMapGetDistinguishesAbsenceAndFailure(t *testing.T) {
 }
 
 func TestDiscoveryDiskMapCloseReportsCleanupFailure(t *testing.T) {
-	index, err := newDiscoveryDiskMap()
+	index, err := newDiscoveryDiskMap(t.Context())
 	require.NoError(t, err)
 	injected := errors.New("remove discovery index failed")
 	index.remove = func(path string) error {
@@ -55,10 +55,10 @@ func TestDiscoveryDiskMapCloseReportsCleanupFailure(t *testing.T) {
 }
 
 func TestDiscoveryDiskMapAppendDoesNotRewriteAccumulatedValue(t *testing.T) {
-	index, err := newDiscoveryDiskMap()
+	index, err := newDiscoveryDiskMap(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, index.close()) })
-	_, err = index.db.Exec(`
+	_, err = index.db.ExecContext(t.Context(), `
 		CREATE TABLE IF NOT EXISTS appended_entries (
 			ordinal INTEGER PRIMARY KEY,
 			key TEXT NOT NULL,
@@ -99,7 +99,7 @@ func TestDiscoveryDiskMapAppendDoesNotRewriteAccumulatedValue(t *testing.T) {
 	assert.Equal(t, values, strings.Split(got, "\n"),
 		"append retrieval must preserve insertion order")
 	var writtenValueBytes int64
-	require.NoError(t, index.db.QueryRow(
+	require.NoError(t, index.db.QueryRowContext(t.Context(),
 		"SELECT COALESCE(SUM(bytes), 0) FROM append_write_cost",
 	).Scan(&writtenValueBytes))
 	assert.LessOrEqual(t, writtenValueBytes, inputBytes+spanCount-1,
@@ -111,7 +111,7 @@ func TestDiscoveryDiskMapAppendDoesNotRewriteAccumulatedValue(t *testing.T) {
 func TestDiscoveryDiskMapPutAndAppendPreserveMapSemantics(t *testing.T) {
 	newIndex := func(t *testing.T) *discoveryDiskMap {
 		t.Helper()
-		index, err := newDiscoveryDiskMap()
+		index, err := newDiscoveryDiskMap(t.Context())
 		require.NoError(t, err)
 		t.Cleanup(func() { require.NoError(t, index.close()) })
 		return index
@@ -168,7 +168,7 @@ func TestDiscoveryDiskMapPutAndAppendPreserveMapSemantics(t *testing.T) {
 }
 
 func TestDiscoveryDiskMapForEachIncludesAppendedValuesInKeyOrder(t *testing.T) {
-	index, err := newDiscoveryDiskMap()
+	index, err := newDiscoveryDiskMap(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, index.close()) })
 	require.NoError(t, index.append(t.Context(), "beta", "first"))
@@ -185,7 +185,7 @@ func TestDiscoveryDiskMapForEachIncludesAppendedValuesInKeyOrder(t *testing.T) {
 }
 
 func TestDiscoveryDiskMapForEachUsesStoredIndexOrder(t *testing.T) {
-	index, err := newDiscoveryDiskMap()
+	index, err := newDiscoveryDiskMap(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, index.close()) })
 	for i := range 256 {
@@ -193,11 +193,11 @@ func TestDiscoveryDiskMapForEachUsesStoredIndexOrder(t *testing.T) {
 		require.NoError(t, index.put(t.Context(), key, "base", true))
 		require.NoError(t, index.append(t.Context(), key, "appended"))
 	}
-	_, err = index.db.Exec("ANALYZE")
+	_, err = index.db.ExecContext(t.Context(), "ANALYZE")
 	require.NoError(t, err)
 
-	rows, err := index.db.Query(
-		"EXPLAIN QUERY PLAN " + discoveryDiskMapForEachQuery,
+	rows, err := index.db.QueryContext(t.Context(),
+		"EXPLAIN QUERY PLAN "+discoveryDiskMapForEachQuery,
 	)
 	require.NoError(t, err)
 	defer rows.Close()

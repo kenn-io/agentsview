@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -72,7 +71,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	t.Run("blank model returns nil", func(t *testing.T) {
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
-			context.Background(),
+			t.Context(),
 			[]string{sessionA},
 			AnalyticsFilter{},
 			false,
@@ -84,7 +83,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	t.Run("matching session has rows", func(t *testing.T) {
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
-			context.Background(),
+			t.Context(),
 			[]string{sessionA, sessionB},
 			AnalyticsFilter{Model: model},
 			true,
@@ -108,7 +107,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	t.Run("StatsBySession counts user and assistant", func(t *testing.T) {
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
-			context.Background(),
+			t.Context(),
 			[]string{sessionA},
 			AnalyticsFilter{Model: model},
 			false,
@@ -127,7 +126,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	t.Run("TimingBySession returns one entry per row", func(t *testing.T) {
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
-			context.Background(),
+			t.Context(),
 			[]string{sessionA},
 			AnalyticsFilter{Model: model},
 			false,
@@ -143,7 +142,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	t.Run("includeContent=false omits content", func(t *testing.T) {
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
-			context.Background(),
+			t.Context(),
 			[]string{sessionA},
 			AnalyticsFilter{Model: model},
 			false,
@@ -161,7 +160,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 	t.Run("includeContent=true populates content", func(t *testing.T) {
 		d := setup(t)
 		scope, err := d.resolveAnalyticsMessageScope(
-			context.Background(),
+			t.Context(),
 			[]string{sessionA},
 			AnalyticsFilter{Model: model},
 			true,
@@ -181,7 +180,7 @@ func TestResolveAnalyticsMessageScope(t *testing.T) {
 		d := setup(t)
 		// Pass sessionA twice; resolver must not error or double-count.
 		scope, err := d.resolveAnalyticsMessageScope(
-			context.Background(),
+			t.Context(),
 			[]string{sessionA, sessionA},
 			AnalyticsFilter{Model: model},
 			false,

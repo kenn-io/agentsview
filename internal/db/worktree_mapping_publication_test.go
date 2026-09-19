@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,7 +11,7 @@ func mappingChangeRow(
 	t *testing.T, db *DB, machine, prefix string,
 ) (revision int64, deleted int, found bool) {
 	t.Helper()
-	err := db.getReader().QueryRowContext(context.Background(),
+	err := db.getReader().QueryRowContext(t.Context(),
 		`SELECT revision, deleted FROM worktree_project_mapping_changes
 		 WHERE machine = ? AND path_prefix = ?`, machine, prefix,
 	).Scan(&revision, &deleted)
@@ -24,7 +23,7 @@ func mappingChangeRow(
 
 func TestWorktreeMappingPublicationRevisionLifecycle(t *testing.T) {
 	db := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	rev0, err := db.WorktreeMappingPublicationRevision(ctx)
 	require.NoError(t, err)
@@ -56,8 +55,7 @@ func TestWorktreeMappingPublicationRevisionLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	assert.Greater(t, rev2, rev1)
 
-	require.NoError(t,
-		db.DeleteWorktreeProjectMapping(ctx, "workstation", created.ID))
+	require.NoError(t, db.DeleteWorktreeProjectMapping(ctx, "workstation", created.ID))
 	rev3, err := db.WorktreeMappingPublicationRevision(ctx)
 	require.NoError(t, err)
 	assert.Greater(t, rev3, rev2)
@@ -69,7 +67,7 @@ func TestWorktreeMappingPublicationRevisionLifecycle(t *testing.T) {
 
 func TestWorktreeMappingChangeJournalPrefixRename(t *testing.T) {
 	db := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	created, err := db.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "workstation", PathPrefix: "/work/old",
@@ -95,15 +93,14 @@ func TestWorktreeMappingChangeJournalPrefixRename(t *testing.T) {
 
 func TestWorktreeMappingChangeJournalSelfCompacts(t *testing.T) {
 	db := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	created, err := db.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "workstation", PathPrefix: "/work/repos/sample",
 		Layout: WorktreeMappingLayoutExplicit, Project: "sample",
 	})
 	require.NoError(t, err)
-	require.NoError(t,
-		db.DeleteWorktreeProjectMapping(ctx, "workstation", created.ID))
+	require.NoError(t, db.DeleteWorktreeProjectMapping(ctx, "workstation", created.ID))
 	_, err = db.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "workstation", PathPrefix: "/work/repos/sample",
 		Layout: WorktreeMappingLayoutExplicit, Project: "sample",
@@ -125,7 +122,7 @@ func TestWorktreeMappingChangeJournalSelfCompacts(t *testing.T) {
 
 func TestLoadWorktreeMappingPublicationDelta(t *testing.T) {
 	db := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	first, err := db.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "workstation", PathPrefix: "/work/a",
@@ -140,8 +137,7 @@ func TestLoadWorktreeMappingPublicationDelta(t *testing.T) {
 		Layout: WorktreeMappingLayoutExplicit, Project: "beta",
 	})
 	require.NoError(t, err)
-	require.NoError(t,
-		db.DeleteWorktreeProjectMapping(ctx, "workstation", first.ID))
+	require.NoError(t, db.DeleteWorktreeProjectMapping(ctx, "workstation", first.ID))
 	through, err := db.WorktreeMappingPublicationRevision(ctx)
 	require.NoError(t, err)
 
@@ -151,8 +147,7 @@ func TestLoadWorktreeMappingPublicationDelta(t *testing.T) {
 	require.Len(t, delta.Mappings, 1)
 	assert.Equal(t, "/work/b", delta.Mappings[0].PathPrefix)
 	require.Len(t, delta.Deletes, 1)
-	assert.Equal(t,
-		WorktreeMappingKey{Machine: "workstation", PathPrefix: "/work/a"},
+	assert.Equal(t, WorktreeMappingKey{Machine: "workstation", PathPrefix: "/work/a"},
 		delta.Deletes[0])
 
 	empty, err := db.LoadWorktreeMappingPublicationDelta(ctx, through, through)
@@ -166,12 +161,16 @@ func TestLoadWorktreeMappingPublicationDelta(t *testing.T) {
 
 func TestListAllWorktreeProjectMappings(t *testing.T) {
 	db := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, m := range []WorktreeProjectMapping{
-		{Machine: "workstation", PathPrefix: "/work/a",
-			Layout: WorktreeMappingLayoutExplicit, Project: "alpha"},
-		{Machine: "laptop", PathPrefix: "/work/b",
-			Layout: WorktreeMappingLayoutExplicit, Project: "beta"},
+		{
+			Machine: "workstation", PathPrefix: "/work/a",
+			Layout: WorktreeMappingLayoutExplicit, Project: "alpha",
+		},
+		{
+			Machine: "laptop", PathPrefix: "/work/b",
+			Layout: WorktreeMappingLayoutExplicit, Project: "beta",
+		},
 	} {
 		_, err := db.CreateWorktreeProjectMapping(ctx, m)
 		require.NoError(t, err)

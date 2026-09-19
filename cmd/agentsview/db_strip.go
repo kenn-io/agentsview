@@ -106,7 +106,7 @@ func newDBImageCommand(
 func previewDBStrip(
 	ctx context.Context, cfg config.Config, filter db.StripImagesFilter,
 ) (db.StripImagesReport, error) {
-	database, err := openReadOnlyDB(cfg)
+	database, err := openReadOnlyDB(ctx, cfg)
 	if err != nil {
 		return db.StripImagesReport{}, fmt.Errorf("opening archive for image strip preview: %w", err)
 	}

@@ -115,6 +115,7 @@ func (db *DB) LoadArtifactExportData(
 	if err != nil {
 		return ArtifactExportData{}, fmt.Errorf("loading artifact export messages: %w", err)
 	}
+	defer rows.Close()
 	messages, scanErr := scanMessages(rows)
 	closeErr := rows.Close()
 	if scanErr != nil || closeErr != nil {
@@ -180,6 +181,7 @@ func attachArtifactNestedCollectionsTx(
 	if err != nil {
 		return fmt.Errorf("loading bounded artifact tool calls: %w", err)
 	}
+	defer rows.Close()
 	toolCalls := make([]toolCallRow, 0)
 	for rows.Next() {
 		var row toolCallRow
@@ -271,6 +273,7 @@ func attachArtifactNestedCollectionsTx(
 	if err != nil {
 		return fmt.Errorf("loading bounded artifact result events: %w", err)
 	}
+	defer rows.Close()
 	resultEvents := make([]resultEventRow, 0)
 	for rows.Next() {
 		var row resultEventRow
@@ -397,6 +400,7 @@ func preflightArtifactMessagesTx(
 	if err != nil {
 		return 0, fmt.Errorf("preflighting artifact messages: %w", err)
 	}
+	defer rows.Close()
 	var count int
 	var totalBytes int64
 	for rows.Next() {
@@ -445,6 +449,7 @@ func preflightArtifactToolCallsTx(
 	if err != nil {
 		return 0, fmt.Errorf("preflighting artifact tool calls: %w", err)
 	}
+	defer rows.Close()
 	perMessage := make(map[int64]int)
 	var count int
 	var totalBytes int64
@@ -502,6 +507,7 @@ func preflightArtifactResultEventsTx(
 	if err != nil {
 		return 0, fmt.Errorf("preflighting artifact result events: %w", err)
 	}
+	defer rows.Close()
 	type callKey struct {
 		messageOrdinal int
 		callIndex      int
@@ -562,6 +568,7 @@ func preflightArtifactUsageTx(
 	if err != nil {
 		return fmt.Errorf("preflighting artifact usage events: %w", err)
 	}
+	defer rows.Close()
 	var count int
 	var totalBytes int64
 	for rows.Next() {

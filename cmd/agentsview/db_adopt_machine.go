@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"text/tabwriter"
 
@@ -19,13 +21,13 @@ func newDBAdoptMachineCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, machines []string) error {
 			if list {
 				if len(machines) != 0 {
-					return fmt.Errorf("use --list alone to inspect machine keys")
+					return errors.New("use --list alone to inspect machine keys")
 				}
 				cfg, err := config.LoadReadOnly()
 				if err != nil {
 					return err
 				}
-				database, err := openReadOnlyDB(cfg)
+				database, err := openReadOnlyDB(cmd.Context(), cfg)
 				if err != nil {
 					return err
 				}
@@ -42,15 +44,15 @@ func newDBAdoptMachineCommand() *cobra.Command {
 				return out.Flush()
 			}
 			if len(machines) == 0 {
-				return fmt.Errorf("select one or more old machine keys")
+				return errors.New("select one or more old machine keys")
 			}
 			cfg, err := config.LoadMinimal()
 			if err != nil {
 				return err
 			}
-			database, lock, err := openWriteDBWith(cmd.Context(), cfg, func(cfg config.Config) (*db.DB, error) {
+			database, lock, err := openWriteDBWith(cmd.Context(), cfg, func(ctx context.Context, cfg config.Config) (*db.DB, error) {
 				applyClassifierConfig(cfg)
-				database, err := db.Open(cfg.DBPath)
+				database, err := db.Open(ctx, cfg.DBPath)
 				if err != nil {
 					return nil, err
 				}

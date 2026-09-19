@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -48,7 +47,8 @@ func assertOpenWriteDBRefused(
 	wantSubstrings ...string,
 ) error {
 	t.Helper()
-	database, lock, err := openWriteDB(context.Background(), cfg)
+
+	database, lock, err := openWriteDB(t.Context(), cfg)
 	require.Error(t, err)
 	require.Nil(t, database)
 	require.Nil(t, lock)
@@ -61,7 +61,8 @@ func requireOpenWriteDBForTest(
 	cfg config.Config,
 ) (*db.DB, *writeOwnerLock) {
 	t.Helper()
-	database, lock, err := openWriteDB(context.Background(), cfg)
+
+	database, lock, err := openWriteDB(t.Context(), cfg)
 	require.NoError(t, err)
 	require.NotNil(t, database)
 	require.NotNil(t, lock)
@@ -79,6 +80,7 @@ func holdBackgroundLaunchLockForTest(t *testing.T, dataDir string) *flock.Flock 
 
 func holdExternalStartupLockForTest(t *testing.T, dataDir string) *flock.Flock {
 	t.Helper()
+
 	lockPath, err := runtimeStore(dataDir).LockPath()
 	require.NoError(t, err)
 	startLock := flock.New(lockPath)
@@ -114,7 +116,7 @@ func TestWriteOwnerLockPathUsesDataDir(t *testing.T) {
 func TestAcquireWriteOwnerLockExcludesSecondOwner(t *testing.T) {
 	dataDir := t.TempDir()
 
-	first, err := acquireWriteOwnerLock(context.Background(), dataDir)
+	first, err := acquireWriteOwnerLock(t.Context(), dataDir)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, first.Close()) })
 

@@ -1,7 +1,6 @@
 package capture
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -14,7 +13,7 @@ import (
 func TestClaudeSessionReservationCrossesProcesses(t *testing.T) {
 	if os.Getenv("AGENTSVIEW_CAPTURE_RESERVATION_PROBE") == "1" {
 		reservation, err := reserveClaudeSession(
-			context.Background(),
+			t.Context(),
 			os.Getenv("AGENTSVIEW_CAPTURE_RESERVATION_ROOT"),
 			os.Getenv("AGENTSVIEW_CAPTURE_RESERVATION_SESSION"),
 		)
@@ -36,7 +35,7 @@ func TestClaudeSessionReservationCrossesProcesses(t *testing.T) {
 	t.Cleanup(reservation.close)
 
 	command := func() *exec.Cmd {
-		cmd := exec.Command(os.Args[0],
+		cmd := exec.CommandContext(t.Context(), os.Args[0],
 			"-test.run=^TestClaudeSessionReservationCrossesProcesses$")
 		cmd.Env = append(os.Environ(),
 			"AGENTSVIEW_CAPTURE_RESERVATION_PROBE=1",

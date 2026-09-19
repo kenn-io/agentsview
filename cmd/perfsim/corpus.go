@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -21,16 +22,16 @@ type source struct {
 	Store    *sql.DB `json:"-"`
 }
 
-func corpus(dir string, o options) ([]source, map[parser.AgentType][]string, error) {
+func corpus(ctx context.Context, dir string, o options) ([]source, map[parser.AgentType][]string, error) {
 	if o.SourceFormat == "opencode" || o.SourceFormat == "opencode-v2" {
-		return openCodeCorpus(dir, o)
+		return openCodeCorpus(ctx, dir, o)
 	}
 	claudeRoot, codexRoot := filepath.Join(dir, "claude"), filepath.Join(dir, "codex")
 	roots := map[parser.AgentType][]string{
 		parser.AgentClaude: {claudeRoot}, parser.AgentCodex: {codexRoot},
 	}
 	sources := make([]source, 0, o.Sessions+o.Empty)
-	for i := 0; i < o.Sessions+o.Empty; i++ {
+	for i := range o.Sessions + o.Empty {
 		agent := parser.AgentCodex
 		if i >= o.Sessions || i%2 == 0 {
 			agent = parser.AgentClaude
@@ -57,7 +58,7 @@ func corpus(dir string, o options) ([]source, map[parser.AgentType][]string, err
 			if i < o.Active && o.ActiveTurns > 0 {
 				turns = o.ActiveTurns
 			}
-			if err := s.appendTurns(turns, o.ContentBytes); err != nil {
+			if err := s.appendTurns(ctx, turns, o.ContentBytes); err != nil {
 				return nil, nil, err
 			}
 			sources = append(sources, s)
@@ -66,14 +67,14 @@ func corpus(dir string, o options) ([]source, map[parser.AgentType][]string, err
 	return sources, roots, nil
 }
 
-func (s *source) appendTurns(n, contentBytes int) error {
+func (s *source) appendTurns(ctx context.Context, n, contentBytes int) error {
 	if s.Store != nil {
-		tx, err := s.Store.Begin()
+		tx, err := s.Store.BeginTx(ctx, nil)
 		if err != nil {
 			return err
 		}
 		defer func() { _ = tx.Rollback() }()
-		if err := s.writeSQLiteTurns(tx, n, contentBytes); err != nil {
+		if err := s.writeSQLiteTurns(ctx, tx, n, contentBytes); err != nil {
 			return err
 		}
 		if err := tx.Commit(); err != nil {

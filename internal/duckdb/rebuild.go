@@ -99,7 +99,7 @@ func rebuildMirror(
 		}
 	}()
 
-	s, err := New(tmpPath, local, machine, opts)
+	s, err := New(ctx, tmpPath, local, machine, opts)
 	if err != nil {
 		return PushResult{}, err
 	}
@@ -238,7 +238,7 @@ func isGeneratedSweepName(name, prefix string) bool {
 	if suffix == "" {
 		return false
 	}
-	for i := 0; i < len(suffix); i++ {
+	for i := range len(suffix) {
 		if suffix[i] < '0' || suffix[i] > '9' {
 			return false
 		}
@@ -487,7 +487,7 @@ func validateBuiltMirror(ctx context.Context, tmpPath string, wantSessions int) 
 			probe.SchemaVersion, SchemaVersion,
 		)
 	}
-	conn, err := OpenReadOnly(tmpPath)
+	conn, err := OpenReadOnly(ctx, tmpPath)
 	if err != nil {
 		return fmt.Errorf("validating rebuilt duckdb mirror: %w", err)
 	}

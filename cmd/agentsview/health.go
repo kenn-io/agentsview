@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -340,7 +341,7 @@ func formatCompactions(total, midTask int) string {
 		return "0"
 	}
 	if midTask == 0 {
-		return fmt.Sprintf("%d", total)
+		return strconv.Itoa(total)
 	}
 	return fmt.Sprintf("%d (%d mid-task)", total, midTask)
 }

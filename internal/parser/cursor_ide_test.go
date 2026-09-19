@@ -3,7 +3,6 @@
 package parser
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"encoding/json/jsontext"
@@ -47,12 +46,13 @@ type cursorIDETestComposer struct {
 
 func createCursorIDEDB(t *testing.T, composers []cursorIDETestComposer) string {
 	t.Helper()
+
 	dbPath := filepath.Join(t.TempDir(), CursorIDEDBRelPath)
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	defer db.Close()
 
-	_, err = db.Exec(
+	_, err = db.ExecContext(t.Context(),
 		`CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)`,
 	)
 	require.NoError(t, err)
@@ -81,7 +81,7 @@ func createCursorIDEDB(t *testing.T, composers []cursorIDETestComposer) string {
 		}
 		raw, err := json.Marshal(doc)
 		require.NoError(t, err)
-		_, err = db.Exec(
+		_, err = db.ExecContext(t.Context(),
 			`INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`,
 			cursorIDEComposerKeyPrefix+c.id, raw,
 		)
@@ -100,7 +100,7 @@ func createCursorIDEDB(t *testing.T, composers []cursorIDETestComposer) string {
 			if b.raw != nil {
 				raw = b.raw
 			}
-			_, err = db.Exec(
+			_, err = db.ExecContext(t.Context(),
 				`INSERT INTO cursorDiskKV (key, value) VALUES (?, ?)`,
 				cursorIDEBubbleKeyPrefix+c.id+":"+b.id, raw,
 			)
@@ -119,12 +119,13 @@ func createCursorIDEDB(t *testing.T, composers []cursorIDETestComposer) string {
 // siblings and still pass.
 func assertCursorDiskKVStoredShape(t *testing.T, dbPath, key string, wantNull bool) {
 	t.Helper()
+
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	defer conn.Close()
 	var typ string
 	var length sql.NullInt64
-	require.NoError(t, conn.QueryRow(
+	require.NoError(t, conn.QueryRowContext(t.Context(),
 		`SELECT typeof(value), length(value) FROM cursorDiskKV WHERE key = ?`,
 		key,
 	).Scan(&typ, &length))
@@ -207,24 +208,24 @@ func TestCursorIDEProviderDiscoverAndParse(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.False(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{"state.vscdb", "state.vscdb-*"}, plan.Roots[0].IncludeGlobs)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, AgentCursorIDE, discovered[0].Provider)
 	assert.Equal(t, dbPath, discovered[0].DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), discovered[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), discovered[0])
 	require.NoError(t, err)
 	require.NotZero(t, fingerprint.MTimeNS)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: discovered[0], Machine: "devbox", Fingerprint: fingerprint,
 	})
 	require.NoError(t, err)
@@ -246,8 +247,7 @@ func TestCursorIDEProviderDiscoverAndParse(t *testing.T) {
 	// This fixture's lastUpdatedAt (07:26:31.522Z) lags the final bubble, so
 	// EndedAt comes from the latest message timestamp instead.
 	assert.Equal(t, time.UnixMilli(1782026756842).UTC(), sess.StartedAt)
-	assert.Equal(t,
-		time.Date(2026, 6, 21, 7, 27, 32, 0, time.UTC), sess.EndedAt)
+	assert.Equal(t, time.Date(2026, 6, 21, 7, 27, 32, 0, time.UTC), sess.EndedAt)
 	// Both encodings describe the same real conversation, so they must land
 	// within the same window rather than merely both parsing without error.
 	assert.WithinDuration(t, sess.StartedAt, sess.EndedAt, 2*time.Minute)
@@ -282,12 +282,12 @@ func TestCursorIDEProviderObjectToolResult(t *testing.T) {
 	})
 	provider, ok := NewProvider(AgentCursorIDE, ProviderConfig{Roots: []string{filepath.Dir(dbPath)}, Machine: "test"})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0], Machine: "test", Fingerprint: fingerprint})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0], Machine: "test", Fingerprint: fingerprint})
 	t.Logf("container results=%d error=%v", len(outcome.Results), err)
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 3)
@@ -352,7 +352,7 @@ func TestParseCursorIDEComposer_ResultValues(t *testing.T) {
 			defer conn.Close()
 			info, err := os.Stat(dbPath)
 			require.NoError(t, err)
-			result, err := parseCursorIDEComposer(context.Background(), conn, dbPath, "result-values", "test", info)
+			result, err := parseCursorIDEComposer(t.Context(), conn, dbPath, "result-values", "test", info)
 			require.NoError(t, err)
 			require.NotNil(t, result)
 			assert.False(t, result.Session.IsTruncated)
@@ -395,7 +395,7 @@ func TestParseCursorIDEComposer_MalformedResult(t *testing.T) {
 	defer conn.Close()
 	info, err := os.Stat(dbPath)
 	require.NoError(t, err)
-	result, err := parseCursorIDEComposer(context.Background(), conn, dbPath, "malformed-result", "test", info)
+	result, err := parseCursorIDEComposer(t.Context(), conn, dbPath, "malformed-result", "test", info)
 	require.Error(t, err)
 	assert.Nil(t, result)
 	t.Logf("input=%s error=%v", raw, err)
@@ -421,14 +421,14 @@ func TestCursorIDEFindSourceAndFingerprint(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "devbox~cursor-ide:" + composerID,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, virtualPath, found.DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, virtualPath, fingerprint.Key)
 	assert.Positive(t, fingerprint.Size)
@@ -444,7 +444,7 @@ func TestCursorIDEFindSourceAndFingerprint(t *testing.T) {
 		src.Path = VirtualSourcePath(dbPath, "does-not-exist")
 		ghost.Opaque = src
 	}
-	ghostFingerprint, err := provider.Fingerprint(context.Background(), ghost)
+	ghostFingerprint, err := provider.Fingerprint(t.Context(), ghost)
 	require.NoError(t, err)
 	assert.Empty(t, ghostFingerprint.Hash)
 }
@@ -469,7 +469,7 @@ func TestParseCursorIDEComposer_ToleratesMissingBubbleRow(t *testing.T) {
 	require.NoError(t, err)
 
 	result, err := parseCursorIDEComposer(
-		context.Background(), conn, dbPath,
+		t.Context(), conn, dbPath,
 		"gap-0000-0000-0000-000000000000", "devbox", info,
 	)
 	require.NoError(t, err)
@@ -491,7 +491,7 @@ func TestParseCursorIDEComposer_EmptyComposerSkipped(t *testing.T) {
 	require.NoError(t, err)
 
 	result, err := parseCursorIDEComposer(
-		context.Background(), conn, dbPath,
+		t.Context(), conn, dbPath,
 		"empty-0000-0000-0000-000000000000", "devbox", info,
 	)
 	require.NoError(t, err)
@@ -511,7 +511,7 @@ func TestParseCursorIDEComposer_MalformedBubbleFailsInsteadOfTruncating(t *testi
 	}})
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 		[]byte(`{"type": "not-an-int"`),
 		"bubbleId:corrupt-bubble-0000-0000-000000000000:b2",
@@ -526,7 +526,7 @@ func TestParseCursorIDEComposer_MalformedBubbleFailsInsteadOfTruncating(t *testi
 	require.NoError(t, err)
 
 	result, err := parseCursorIDEComposer(
-		context.Background(), conn, dbPath,
+		t.Context(), conn, dbPath,
 		"corrupt-bubble-0000-0000-000000000000", "devbox", info,
 	)
 	require.Error(t, err,
@@ -547,7 +547,7 @@ func TestParseCursorIDEComposer_MalformedComposerFailsInsteadOfRetiring(t *testi
 	}})
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 		[]byte(`{"fullConversationHeadersOnly": [truncated`),
 		"composerData:corrupt-doc-0000-0000-000000000000",
@@ -562,7 +562,7 @@ func TestParseCursorIDEComposer_MalformedComposerFailsInsteadOfRetiring(t *testi
 	require.NoError(t, err)
 
 	result, err := parseCursorIDEComposer(
-		context.Background(), conn, dbPath,
+		t.Context(), conn, dbPath,
 		"corrupt-doc-0000-0000-000000000000", "devbox", info,
 	)
 	require.Error(t, err,
@@ -570,7 +570,7 @@ func TestParseCursorIDEComposer_MalformedComposerFailsInsteadOfRetiring(t *testi
 	assert.Nil(t, result)
 
 	_, _, err = loadCursorIDEComposerMeta(
-		context.Background(), conn, "corrupt-doc-0000-0000-000000000000",
+		t.Context(), conn, "corrupt-doc-0000-0000-000000000000",
 	)
 	require.Error(t, err,
 		"the freshness meta load must not fingerprint a malformed composer as vanished")
@@ -594,13 +594,12 @@ func TestParseCursorIDEComposer_EndedAtNotBeforeLastMessage(t *testing.T) {
 	require.NoError(t, err)
 
 	result, err := parseCursorIDEComposer(
-		context.Background(), conn, dbPath,
+		t.Context(), conn, dbPath,
 		"stale-stamp-0000-0000-000000000000", "devbox", info,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.Equal(t,
-		time.Date(2026, 6, 21, 7, 28, 5, 0, time.UTC), result.Session.EndedAt,
+	assert.Equal(t, time.Date(2026, 6, 21, 7, 28, 5, 0, time.UTC), result.Session.EndedAt,
 		"a stale lastUpdatedAt must not place EndedAt before the final message")
 	assert.False(t, result.Session.EndedAt.Before(result.Session.StartedAt))
 }
@@ -656,7 +655,7 @@ func TestCursorIDEParseContainerKeepsSiblingsPastNullComposer(t *testing.T) {
 			})
 			writer, err := sql.Open("sqlite3", dbPath)
 			require.NoError(t, err)
-			_, err = writer.Exec(
+			_, err = writer.ExecContext(t.Context(),
 				`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 				tc.value, "composerData:husk-0000-0000-0000-000000000000",
 			)
@@ -671,14 +670,14 @@ func TestCursorIDEParseContainerKeepsSiblingsPastNullComposer(t *testing.T) {
 			})
 			require.True(t, ok)
 
-			discovered, err := provider.Discover(context.Background())
+			discovered, err := provider.Discover(t.Context())
 			require.NoError(t, err)
 			require.Len(t, discovered, 1)
 
-			fingerprint, err := provider.Fingerprint(context.Background(), discovered[0])
+			fingerprint, err := provider.Fingerprint(t.Context(), discovered[0])
 			require.NoError(t, err)
 
-			outcome, err := provider.Parse(context.Background(), ParseRequest{
+			outcome, err := provider.Parse(t.Context(), ParseRequest{
 				Source: discovered[0], Machine: "devbox", Fingerprint: fingerprint,
 			})
 			require.NoError(t, err,
@@ -758,7 +757,7 @@ func TestParseCursorIDEComposer_NullBubbleValueBecomesGap(t *testing.T) {
 			intactInfo, err := os.Stat(intactPath)
 			require.NoError(t, err)
 			intactResult, err := parseCursorIDEComposer(
-				context.Background(), intactConn, intactPath,
+				t.Context(), intactConn, intactPath,
 				"null-bubble-0000-0000-000000000000", "devbox", intactInfo,
 			)
 			require.NoError(t, err)
@@ -769,7 +768,7 @@ func TestParseCursorIDEComposer_NullBubbleValueBecomesGap(t *testing.T) {
 			dbPath := createCursorIDEDB(t, composer)
 			writer, err := sql.Open("sqlite3", dbPath)
 			require.NoError(t, err)
-			_, err = writer.Exec(
+			_, err = writer.ExecContext(t.Context(),
 				`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 				tc.value, "bubbleId:null-bubble-0000-0000-000000000000:b2",
 			)
@@ -785,7 +784,7 @@ func TestParseCursorIDEComposer_NullBubbleValueBecomesGap(t *testing.T) {
 			require.NoError(t, err)
 
 			result, err := parseCursorIDEComposer(
-				context.Background(), conn, dbPath,
+				t.Context(), conn, dbPath,
 				"null-bubble-0000-0000-000000000000", "devbox", info,
 			)
 			require.NoError(t, err,
@@ -814,7 +813,7 @@ func TestCursorIDEEmptyJSONObjectValuesTakeExistingPaths(t *testing.T) {
 		}})
 		writer, err := sql.Open("sqlite3", dbPath)
 		require.NoError(t, err)
-		_, err = writer.Exec(
+		_, err = writer.ExecContext(t.Context(),
 			`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 			[]byte(`{}`), "composerData:empty-object-composer-0000-00000000",
 		)
@@ -828,7 +827,7 @@ func TestCursorIDEEmptyJSONObjectValuesTakeExistingPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		result, err := parseCursorIDEComposer(
-			context.Background(), conn, dbPath,
+			t.Context(), conn, dbPath,
 			"empty-object-composer-0000-00000000", "devbox", info,
 		)
 		require.NoError(t, err,
@@ -845,7 +844,7 @@ func TestCursorIDEEmptyJSONObjectValuesTakeExistingPaths(t *testing.T) {
 		// A guard broadened to catch len(raw) <= 2 would flip this ok to false,
 		// which is exactly the false-positive this row exists to catch.
 		meta, ok, err := loadCursorIDEComposerMeta(
-			context.Background(), conn, "empty-object-composer-0000-00000000",
+			t.Context(), conn, "empty-object-composer-0000-00000000",
 		)
 		require.NoError(t, err)
 		assert.True(t, ok,
@@ -867,7 +866,7 @@ func TestCursorIDEEmptyJSONObjectValuesTakeExistingPaths(t *testing.T) {
 		}})
 		writer, err := sql.Open("sqlite3", dbPath)
 		require.NoError(t, err)
-		_, err = writer.Exec(
+		_, err = writer.ExecContext(t.Context(),
 			`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 			[]byte(`{}`), "bubbleId:empty-object-bubble-0000-0000000000:b2",
 		)
@@ -881,7 +880,7 @@ func TestCursorIDEEmptyJSONObjectValuesTakeExistingPaths(t *testing.T) {
 		require.NoError(t, err)
 
 		result, err := parseCursorIDEComposer(
-			context.Background(), conn, dbPath,
+			t.Context(), conn, dbPath,
 			"empty-object-bubble-0000-0000000000", "devbox", info,
 		)
 		require.NoError(t, err,
@@ -903,7 +902,7 @@ func TestCursorIDEEmptyJSONObjectValuesTakeExistingPaths(t *testing.T) {
 		// broadened to catch len(raw) <= 2 would flip this to nil, which is
 		// exactly the false-positive this row exists to catch.
 		bubble, err := loadCursorIDEBubble(
-			context.Background(), conn,
+			t.Context(), conn,
 			"empty-object-bubble-0000-0000000000", "b2",
 		)
 		require.NoError(t, err)
@@ -940,7 +939,7 @@ func TestLoadCursorIDEComposerMetaNullValueReportsNotFound(t *testing.T) {
 			}})
 			writer, err := sql.Open("sqlite3", dbPath)
 			require.NoError(t, err)
-			_, err = writer.Exec(
+			_, err = writer.ExecContext(t.Context(),
 				`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 				tc.value, "composerData:null-meta-0000-0000-000000000000",
 			)
@@ -954,15 +953,14 @@ func TestLoadCursorIDEComposerMetaNullValueReportsNotFound(t *testing.T) {
 			defer conn.Close()
 
 			meta, ok, err := loadCursorIDEComposerMeta(
-				context.Background(), conn, "null-meta-0000-0000-000000000000",
+				t.Context(), conn, "null-meta-0000-0000-000000000000",
 			)
 			require.NoError(t, err,
 				"a NULL or empty composer value must fingerprint as absent, not error")
 			assert.False(t, ok)
 			assert.Equal(t, cursorIDEComposerMeta{}, meta)
 
-			assert.True(t,
-				CursorIDEComposerExists(dbPath, "null-meta-0000-0000-000000000000"),
+			assert.True(t, CursorIDEComposerExists(t.Context(), dbPath, "null-meta-0000-0000-000000000000"),
 				"the key remains present in cursorDiskKV even though its value is NULL or empty")
 		})
 	}
@@ -983,7 +981,7 @@ func TestParseCursorIDEComposer_TypelessBubbleFallsBackToHeaderType(t *testing.T
 	// partially-written row would: the header still records the turn's role.
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = writer.Exec(
+	_, err = writer.ExecContext(t.Context(),
 		`UPDATE cursorDiskKV SET value = ? WHERE key = ?`,
 		[]byte(`{"text": "answer", "createdAt": "2026-06-21T07:27:31.522Z"}`),
 		"bubbleId:typeless-0000-0000-0000-000000000000:b2",
@@ -998,7 +996,7 @@ func TestParseCursorIDEComposer_TypelessBubbleFallsBackToHeaderType(t *testing.T
 	require.NoError(t, err)
 
 	result, err := parseCursorIDEComposer(
-		context.Background(), conn, dbPath,
+		t.Context(), conn, dbPath,
 		"typeless-0000-0000-0000-000000000000", "devbox", info,
 	)
 	require.NoError(t, err)

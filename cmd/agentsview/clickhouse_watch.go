@@ -101,7 +101,7 @@ func resolveClickHouseWatchTargets(
 		return clickHouseTargetSelection{}, nil, nil, err
 	}
 	if target.Config.URL == "" {
-		return clickHouseTargetSelection{}, nil, nil, fmt.Errorf("url not configured")
+		return clickHouseTargetSelection{}, nil, nil, errors.New("url not configured")
 	}
 	if err := clickhouse.CheckTransportSecurity(
 		target.Config.URL, target.Config.AllowInsecure,

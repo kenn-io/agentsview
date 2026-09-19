@@ -95,7 +95,7 @@ func newClickHousePushCommand() *cobra.Command {
 			if cfg.AllTargets && cfg.Watch {
 				return fmt.Errorf(
 					"clickhouse push --watch: %w",
-					fmt.Errorf("--all cannot be combined with --watch"),
+					errors.New("--all cannot be combined with --watch"),
 				)
 			}
 			if cfg.Watch {
@@ -137,7 +137,7 @@ func newClickHouseStatusCommand() *cobra.Command {
 			if len(args) == 1 {
 				targetName = args[0]
 			}
-			if err := runClickHouseStatus(targetName, cfg); err != nil {
+			if err := runClickHouseStatus(cmd.Context(), targetName, cfg); err != nil {
 				return fmt.Errorf("clickhouse status: %w", err)
 			}
 			return nil
@@ -234,7 +234,7 @@ func runClickHousePushTarget(
 		return err
 	}
 	if target.Config.URL == "" {
-		return fmt.Errorf("url not configured")
+		return errors.New("url not configured")
 	}
 	if err := clickhouse.CheckTransportSecurity(
 		target.Config.URL, target.Config.AllowInsecure,
@@ -305,7 +305,7 @@ func writeClickHousePushSummary(w io.Writer, result clickhouse.PushResult) {
 	}
 }
 
-func runClickHouseStatus(targetName string, cfg ClickHouseStatusConfig) error {
+func runClickHouseStatus(ctx context.Context, targetName string, cfg ClickHouseStatusConfig) error {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -321,7 +321,7 @@ func runClickHouseStatus(targetName string, cfg ClickHouseStatusConfig) error {
 	}
 
 	applyClassifierConfig(appCfg)
-	database, err := openReadOnlyDB(appCfg)
+	database, err := openReadOnlyDB(ctx, appCfg)
 	if err != nil {
 		log.Printf("warning: reading local clickhouse status watermark: %v", err)
 		database = nil
@@ -338,7 +338,7 @@ func runClickHouseStatus(targetName string, cfg ClickHouseStatusConfig) error {
 			}
 			fmt.Printf("Target: %s\n", target.label())
 		}
-		if err := runClickHouseStatusTarget(database, appCfg, target, cfg); err != nil {
+		if err := runClickHouseStatusTarget(ctx, database, appCfg, target, cfg); err != nil {
 			if len(targets) == 1 {
 				return err
 			}
@@ -355,6 +355,7 @@ func runClickHouseStatus(targetName string, cfg ClickHouseStatusConfig) error {
 }
 
 func runClickHouseStatusTarget(
+	ctx context.Context,
 	database *db.DB,
 	appCfg config.Config,
 	target clickHouseTargetSelection,
@@ -365,7 +366,7 @@ func runClickHouseStatusTarget(
 		return err
 	}
 	if target.Config.URL == "" {
-		return fmt.Errorf("url not configured")
+		return errors.New("url not configured")
 	}
 	if err := clickhouse.CheckTransportSecurity(
 		target.Config.URL, target.Config.AllowInsecure,
@@ -381,7 +382,7 @@ func runClickHouseStatusTarget(
 		return err
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := signal.NotifyContext(ctx, os.Interrupt)
 	defer stop()
 
 	archiveID := ""
@@ -489,7 +490,7 @@ func prepareClickHouseServeImpl(appCfg config.Config, basePath string) (clickHou
 		BasePath:      basePath,
 		RequestedPort: appCfg.Port,
 	}
-	appCfg, err = prepareServeRuntimeConfig(appCfg, rtOpts)
+	appCfg, err = prepareServeRuntimeConfig(ctx, appCfg, rtOpts)
 	if err != nil {
 		cleanup()
 		return clickHouseServeStartup{}, fmt.Errorf("clickhouse serve: %w", err)
@@ -573,14 +574,10 @@ func resolveClickHousePushProjects(
 	chCfg config.ClickHouseConfig, cfg ClickHousePushConfig,
 ) (projects, exclude []string, err error) {
 	if cfg.ProjectsFlag != "" && cfg.ExcludeProjects != "" {
-		return nil, nil, fmt.Errorf(
-			"--projects and --exclude-projects are mutually exclusive",
-		)
+		return nil, nil, errors.New("--projects and --exclude-projects are mutually exclusive")
 	}
 	if cfg.AllProjects && (cfg.ProjectsFlag != "" || cfg.ExcludeProjects != "") {
-		return nil, nil, fmt.Errorf(
-			"--all-projects cannot be combined with --projects or --exclude-projects",
-		)
+		return nil, nil, errors.New("--all-projects cannot be combined with --projects or --exclude-projects")
 	}
 	projects = chCfg.Projects
 	exclude = chCfg.ExcludeProjects
@@ -597,9 +594,7 @@ func resolveClickHousePushProjects(
 		projects = nil
 	}
 	if len(projects) > 0 && len(exclude) > 0 {
-		return nil, nil, fmt.Errorf(
-			"projects and exclude_projects are mutually exclusive",
-		)
+		return nil, nil, errors.New("projects and exclude_projects are mutually exclusive")
 	}
 	return projects, exclude, nil
 }
@@ -608,7 +603,7 @@ func resolveClickHouseTargetSelections(
 	appCfg config.Config, targetName string, allTargets bool,
 ) ([]clickHouseTargetSelection, error) {
 	if allTargets && strings.TrimSpace(targetName) != "" {
-		return nil, fmt.Errorf("target name cannot be combined with --all")
+		return nil, errors.New("target name cannot be combined with --all")
 	}
 	if len(appCfg.ClickHouseTargets) == 0 {
 		if strings.TrimSpace(targetName) != "" {

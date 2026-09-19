@@ -92,7 +92,7 @@ func resolveService(
 	if err != nil {
 		return nil, nil, err
 	}
-	return newService(cfg, tr)
+	return newService(cmd.Context(), cfg, tr)
 }
 
 // resolveSinceFlag validates the --since/--active-since pair shared by
@@ -185,7 +185,7 @@ func resolveWritableServiceWithIntent(
 				"is reachable and compatible, or stop it to write locally",
 		)
 	}
-	return syncService(cfg, tr)
+	return syncService(cmd.Context(), cfg, tr)
 }
 
 func resolvePGReadConfig(

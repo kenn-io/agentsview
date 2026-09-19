@@ -183,7 +183,7 @@ func TestRecoverStopsBeforeSpoolSweepOnObjectIterationError(t *testing.T) {
 
 	_, err := store.Recover(t.Context())
 
-	assert.ErrorIs(t, err, errInjectedRowIteration)
+	require.ErrorIs(t, err, errInjectedRowIteration)
 	assert.FileExists(t, store.ObjectPath(omitted))
 }
 
@@ -195,7 +195,7 @@ func TestRecoverPreservesReservationsOnIterationError(t *testing.T) {
 
 	_, err := store.Recover(t.Context())
 
-	assert.ErrorIs(t, err, errInjectedRowIteration)
+	require.ErrorIs(t, err, errInjectedRowIteration)
 	assert.Zero(t, scenario.reservationDeletes.Load())
 }
 
@@ -220,7 +220,7 @@ func TestReleaseGenerationObjectsStopsBeforeUpdatesOnIterationError(t *testing.T
 
 	err = releaseGenerationObjectsConn(t.Context(), conn, "capture-a")
 
-	assert.ErrorIs(t, err, errInjectedRowIteration)
+	require.ErrorIs(t, err, errInjectedRowIteration)
 	assert.Zero(t, scenario.objectUpdates.Load())
 }
 
@@ -234,6 +234,6 @@ func TestCollectGarbageStopsBeforeFileRemovalOnIterationError(t *testing.T) {
 
 	_, err := store.CollectGarbage(t.Context())
 
-	assert.ErrorIs(t, err, errInjectedRowIteration)
+	require.ErrorIs(t, err, errInjectedRowIteration)
 	assert.FileExists(t, path)
 }

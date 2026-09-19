@@ -34,7 +34,7 @@ func TestExportProfileInvalidPath(t *testing.T) {
 		root func() *cobra.Command
 		args []string
 	}{
-		{"sessions", func(t *testing.T) { seedExportSessionsArchive(t) }, newRootCommand, []string{"export", "sessions"}},
+		{"sessions", func(t *testing.T) { t.Helper(); seedExportSessionsArchive(t) }, newRootCommand, []string{"export", "sessions"}},
 		{"hour", seedExportReportingArchive, func() *cobra.Command {
 			return newExportReportingTestRoot(time.Date(2026, 7, 29, 14, 37, 0, 0, time.UTC))
 		}, []string{"export", "hour", "2026-07-28-10"}},
@@ -68,23 +68,31 @@ func TestExportProfileSuccess(t *testing.T) {
 		root func() *cobra.Command
 		args []string
 	}{
-		{"sessions", func(t *testing.T) { seedExportSessionsArchive(t) }, newRootCommand,
-			[]string{"export", "sessions"}},
-		{"hour", seedExportReportingArchive,
+		{
+			"sessions", func(t *testing.T) { t.Helper(); seedExportSessionsArchive(t) }, newRootCommand,
+			[]string{"export", "sessions"},
+		},
+		{
+			"hour", seedExportReportingArchive,
 			func() *cobra.Command {
 				return newExportReportingTestRoot(time.Date(2026, 7, 29, 14, 37, 0, 0, time.UTC))
 			},
-			[]string{"export", "hour", "2026-07-28-10"}},
-		{"day", seedExportReportingArchive,
+			[]string{"export", "hour", "2026-07-28-10"},
+		},
+		{
+			"day", seedExportReportingArchive,
 			func() *cobra.Command {
 				return newExportReportingTestRoot(time.Date(2026, 7, 29, 14, 37, 0, 0, time.UTC))
 			},
-			[]string{"export", "day", "2026-07-28"}},
-		{"digest", seedExportReportingArchive,
+			[]string{"export", "day", "2026-07-28"},
+		},
+		{
+			"digest", seedExportReportingArchive,
 			func() *cobra.Command {
 				return newExportReportingTestRoot(time.Date(2026, 7, 29, 14, 37, 0, 0, time.UTC))
 			},
-			[]string{"export", "digest", "--from", "2026-07-28", "--to", "2026-07-28"}},
+			[]string{"export", "digest", "--from", "2026-07-28", "--to", "2026-07-28"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -12,7 +12,6 @@ import (
 )
 
 func TestListStoredSourcePathHintsScopesByAgentAndRoot(t *testing.T) {
-
 	d := testDB(t)
 	root := t.TempDir()
 	watchRoot := filepath.Join(root, "db")
@@ -31,7 +30,7 @@ func TestListStoredSourcePathHintsScopesByAgentAndRoot(t *testing.T) {
 	insertSessionWithSourcePath(t, d, "claude:sibling", "claude", siblingPath)
 	insertSessionWithSourcePath(t, d, "codex:other-agent", "codex", otherAgentPath)
 	insertSessionWithSourcePath(t, d, "claude:deleted", "claude", deletedPath)
-	require.NoError(t, d.SoftDeleteSession("claude:deleted"))
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "claude:deleted"))
 
 	got, err := d.ListStoredSourcePathHints("claude", storedSourcePathHintScopes(
 		filepath.Join(watchRoot, "."),
@@ -47,7 +46,6 @@ func TestListStoredSourcePathHintsScopesByAgentAndRoot(t *testing.T) {
 }
 
 func TestListStoredSourcePathHintsHandlesHashPathsAndVirtualSuffixes(t *testing.T) {
-
 	d := testDB(t)
 	base := t.TempDir()
 
@@ -136,7 +134,6 @@ func TestListStoredSourcePathHintsLimitVirtualMembersToSingleSegments(t *testing
 }
 
 func TestListStoredSourcePathHintsEscapesLikeWildcards(t *testing.T) {
-
 	d := testDB(t)
 	base := t.TempDir()
 	root := filepath.Join(base, "db%!_root")
@@ -153,7 +150,6 @@ func TestListStoredSourcePathHintsEscapesLikeWildcards(t *testing.T) {
 }
 
 func TestListStoredSourcePathHintsBatchesRootsWithoutTruncating(t *testing.T) {
-
 	d := testDB(t)
 	base := t.TempDir()
 	var roots []string
@@ -189,11 +185,10 @@ func TestListStoredSourcePathHintsBatchesRootsWithoutTruncating(t *testing.T) {
 }
 
 func TestStoredSourcePathHintsLookupUsesAgentFilePathRangeSeek(t *testing.T) {
-
 	d := testDB(t)
 	root := t.TempDir()
 	explainSQL, args := storedSourcePathHintQuery("claude", storedSourcePathHintScopes(root))
-	rows, err := d.getReader().Query("EXPLAIN QUERY PLAN "+explainSQL, args...)
+	rows, err := d.getReader().Query(t.Context(), "EXPLAIN QUERY PLAN "+explainSQL, args...)
 	require.NoError(t, err)
 	defer rows.Close()
 
@@ -226,7 +221,7 @@ func TestStoredSourcePathHintVirtualMemberLookupUsesBoundedRangeSeek(t *testing.
 	explainSQL, args := storedSourcePathHintQuery("visualstudio-copilot", []StoredSourcePathHintScope{{
 		Path: root, IncludeVirtualMembers: true,
 	}})
-	rows, err := d.getReader().Query("EXPLAIN QUERY PLAN "+explainSQL, args...)
+	rows, err := d.getReader().Query(t.Context(), "EXPLAIN QUERY PLAN "+explainSQL, args...)
 	require.NoError(t, err)
 	defer rows.Close()
 
@@ -273,7 +268,9 @@ func TestListActiveSessionSourceOwnershipScopesPageUsesStableBoundedKeyset(t *te
 	require.NoError(t, err)
 	require.Len(t, second, 3)
 
-	got := append(first, second...)
+	got := make([]SessionSourceOwnership, 0, len(first)+len(second))
+	got = append(got, first...)
+	got = append(got, second...)
 	require.Len(t, got, len(seeds))
 	for i, ownership := range got {
 		assert.Equal(t, seeds[i].id, ownership.ID)
@@ -519,7 +516,7 @@ func TestSourceBaselineTreatsVirtualAndLiteralHashPathsAsExact(t *testing.T) {
 		"virtual": virtual,
 	} {
 		var got string
-		require.NoError(t, d.getReader().QueryRow(
+		require.NoError(t, d.getReader().QueryRow(t.Context(),
 			"SELECT file_path FROM local_session_source_baselines WHERE session_id = ?", id,
 		).Scan(&got))
 		assert.Equal(t, want, got)
@@ -530,7 +527,7 @@ func TestSourceBaselineDoesNotRewriteAlreadyObservedOwnership(t *testing.T) {
 	d := testDB(t)
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	insertSessionWithSourcePath(t, d, "session", "claude", path)
-	_, err := d.getWriter().Exec(`
+	_, err := d.getWriter().Exec(t.Context(), `
 		CREATE TABLE source_baseline_update_observer (updates INTEGER NOT NULL);
 		INSERT INTO source_baseline_update_observer VALUES (0);
 		CREATE TRIGGER observe_source_baseline_insert
@@ -553,7 +550,7 @@ func TestSourceBaselineDoesNotRewriteAlreadyObservedOwnership(t *testing.T) {
 	))
 
 	var updates int
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT updates FROM source_baseline_update_observer",
 	).Scan(&updates))
 	assert.Equal(t, 1, updates,
@@ -568,8 +565,8 @@ func TestRestoreSessionClearsSourceBaseline(t *testing.T) {
 		t.Context(), defaultMachine,
 		[]SessionSourcePath{{Agent: "claude", FilePath: path}},
 	))
-	require.NoError(t, d.SoftDeleteSession("session"))
-	restored, err := d.RestoreSession("session")
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "session"))
+	restored, err := d.RestoreSession(t.Context(), "session")
 	require.NoError(t, err)
 	require.EqualValues(t, 1, restored)
 
@@ -614,7 +611,7 @@ func TestSourceMissingOwnershipDoesNotSatisfyFreshnessLookups(t *testing.T) {
 	userDeletedPath := filepath.Join(t.TempDir(), "user-deleted.jsonl")
 	insertSessionWithSourcePath(t, d, "session", "claude", path)
 	insertSessionWithSourcePath(t, d, "user-deleted", "claude", userDeletedPath)
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(t.Context(),
 		`UPDATE sessions
 		 SET file_size = 4096, file_mtime = 1234,
 		     file_hash = 'unchanged', data_version = ?
@@ -622,7 +619,7 @@ func TestSourceMissingOwnershipDoesNotSatisfyFreshnessLookups(t *testing.T) {
 		CurrentDataVersion(),
 	)
 	require.NoError(t, err)
-	require.NoError(t, d.SoftDeleteSession("user-deleted"))
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "user-deleted"))
 	baselineSessionSource(t, d, defaultMachine, "claude", path)
 
 	changed, err := d.MarkSessionSourceMissing(
@@ -631,27 +628,27 @@ func TestSourceMissingOwnershipDoesNotSatisfyFreshnessLookups(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, changed)
 
-	_, _, ok := d.GetFileInfoByPath(path)
+	_, _, ok := d.GetFileInfoByPath(t.Context(), path)
 	assert.False(t, ok)
-	_, ok = d.GetFileHashByPath(path)
+	_, ok = d.GetFileHashByPath(t.Context(), path)
 	assert.False(t, ok)
-	assert.Zero(t, d.GetDataVersionByPath(path))
-	_, _, _, _, ok = d.GetSourceRepairStateByPath(path)
+	assert.Zero(t, d.GetDataVersionByPath(t.Context(), path))
+	_, _, _, _, ok = d.GetSourceRepairStateByPath(t.Context(), path)
 	assert.False(t, ok)
-	_, _, ok = d.GetSessionFileInfo("session")
+	_, _, ok = d.GetSessionFileInfo(t.Context(), "session")
 	assert.False(t, ok)
-	_, ok = d.GetSessionFileHash("session")
+	_, ok = d.GetSessionFileHash(t.Context(), "session")
 	assert.False(t, ok)
 
-	storedSize, storedMtime, ok := d.GetFileInfoByPath(userDeletedPath)
+	storedSize, storedMtime, ok := d.GetFileInfoByPath(t.Context(), userDeletedPath)
 	assert.True(t, ok, "ordinary user trash still suppresses redundant source parsing")
 	assert.EqualValues(t, 4096, storedSize)
 	assert.EqualValues(t, 1234, storedMtime)
-	storedSize, storedMtime, ok = d.GetSessionFileInfo("user-deleted")
+	storedSize, storedMtime, ok = d.GetSessionFileInfo(t.Context(), "user-deleted")
 	assert.True(t, ok, "ordinary user trash retains legacy ID freshness semantics")
 	assert.EqualValues(t, 4096, storedSize)
 	assert.EqualValues(t, 1234, storedMtime)
-	storedHash, ok := d.GetSessionFileHash("user-deleted")
+	storedHash, ok := d.GetSessionFileHash(t.Context(), "user-deleted")
 	assert.True(t, ok)
 	assert.Equal(t, "unchanged", storedHash)
 }
@@ -662,7 +659,7 @@ func TestGetSourceRepairStateByAgentPathDoesNotBorrowAnotherAgent(
 	d := testDB(t)
 	path := filepath.Join(t.TempDir(), "shared.jsonl")
 	insertSessionWithSourcePath(t, d, "codex:shared", "codex", path)
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(t.Context(),
 		`UPDATE sessions
 		 SET project = 'project', file_size = 64,
 		     file_mtime = 128, data_version = ?
@@ -671,15 +668,14 @@ func TestGetSourceRepairStateByAgentPathDoesNotBorrowAnotherAgent(
 	)
 	require.NoError(t, err)
 
-	project, version, size, mtime, ok :=
-		d.GetSourceRepairStateByAgentPath(path, "codex")
+	project, version, size, mtime, ok := d.GetSourceRepairStateByAgentPath(t.Context(), path, "codex")
 	require.True(t, ok)
 	assert.Equal(t, "project", project)
 	assert.Equal(t, CurrentDataVersion(), version)
 	assert.EqualValues(t, 64, size)
 	assert.EqualValues(t, 128, mtime)
 
-	_, _, _, _, ok = d.GetSourceRepairStateByAgentPath(path, "traex")
+	_, _, _, _, ok = d.GetSourceRepairStateByAgentPath(t.Context(), path, "traex")
 	assert.False(t, ok)
 }
 
@@ -726,7 +722,7 @@ func TestActiveSessionSourceOwnershipPageUsesOrderedCoveringIndex(t *testing.T) 
 	d := testDB(t)
 	root := t.TempDir()
 	likeRoot := sqliteLikeEscape(root)
-	rows, err := d.getReader().Query(`
+	rows, err := d.getReader().Query(t.Context(), `
 		EXPLAIN QUERY PLAN
 		SELECT s.machine, s.agent, s.id, s.file_path
 		FROM local_session_source_baselines AS b
@@ -793,14 +789,14 @@ func TestSourceMissingStateClearsThroughEverySessionUpsert(t *testing.T) {
 			name: "single upsert",
 			upsert: func(t *testing.T, d *DB, session Session) error {
 				t.Helper()
-				return d.UpsertSession(session)
+				return d.UpsertSession(t.Context(), session)
 			},
 		},
 		{
 			name: "atomic batch upsert",
 			upsert: func(t *testing.T, d *DB, session Session) error {
 				t.Helper()
-				result, err := d.WriteSessionBatchAtomic([]SessionBatchWrite{{
+				result, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{{
 					Session: session, DataVersion: CurrentDataVersion(),
 				}})
 				require.Equal(t, 1, result.WrittenSessions)
@@ -823,7 +819,7 @@ func TestSourceMissingStateClearsThroughEverySessionUpsert(t *testing.T) {
 			require.True(t, changed)
 
 			var deletedAt, sourceMissingAt *string
-			require.NoError(t, d.getReader().QueryRow(
+			require.NoError(t, d.getReader().QueryRow(t.Context(),
 				"SELECT deleted_at, source_missing_at FROM sessions WHERE id = ?",
 				"session",
 			).Scan(&deletedAt, &sourceMissingAt))
@@ -835,7 +831,7 @@ func TestSourceMissingStateClearsThroughEverySessionUpsert(t *testing.T) {
 				Agent: "claude", FilePath: &path,
 			})
 			require.NoError(t, err)
-			require.NoError(t, d.getReader().QueryRow(
+			require.NoError(t, d.getReader().QueryRow(t.Context(),
 				"SELECT deleted_at, source_missing_at FROM sessions WHERE id = ?",
 				"session",
 			).Scan(&deletedAt, &sourceMissingAt))
@@ -890,11 +886,11 @@ func TestWriteSessionBatchSourceMissingRevivalReplacesRetainedMessages(
 func TestUserTrashRemainsRejectedByEverySessionUpsert(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "session", "project")
-	require.NoError(t, d.SoftDeleteSession("session"))
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "session"))
 
-	err := d.UpsertSession(Session{ID: "session", Project: "changed"})
+	err := d.UpsertSession(t.Context(), Session{ID: "session", Project: "changed"})
 	require.ErrorIs(t, err, ErrSessionTrashed)
-	result, err := d.WriteSessionBatchAtomic([]SessionBatchWrite{{
+	result, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{{
 		Session:     Session{ID: "session", Project: "changed"},
 		DataVersion: CurrentDataVersion(),
 	}})
@@ -902,7 +898,7 @@ func TestUserTrashRemainsRejectedByEverySessionUpsert(t *testing.T) {
 	assert.Equal(t, 1, result.ExcludedSessions)
 
 	var cause *string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT deletion_cause FROM sessions WHERE id = ?", "session",
 	).Scan(&cause))
 	assert.Nil(t, cause, "legacy and user trash keep the established NULL cause")
@@ -921,21 +917,21 @@ func TestSourceMissingTombstoneIsNotUserTrash(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.True(t, changed)
-	require.NoError(t, d.SoftDeleteSession("user"))
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "user"))
 
-	assert.False(t, d.IsSessionTrashed("missing"))
-	assert.True(t, d.IsSessionTrashed("user"))
-	assert.False(t, d.HasTrashedSessionByFilePath(missingPath, "claude"))
-	assert.True(t, d.HasTrashedSessionByFilePath(userPath, "claude"))
+	assert.False(t, d.IsSessionTrashed(t.Context(), "missing"))
+	assert.True(t, d.IsSessionTrashed(t.Context(), "user"))
+	assert.False(t, d.HasTrashedSessionByFilePath(t.Context(), missingPath, "claude"))
+	assert.True(t, d.HasTrashedSessionByFilePath(t.Context(), userPath, "claude"))
 	trashed, err := d.ListTrashedSessions(t.Context())
 	require.NoError(t, err)
 	require.Len(t, trashed, 1)
 	assert.Equal(t, "user", trashed[0].ID)
 
-	emptied, err := d.EmptyTrash()
+	emptied, err := d.EmptyTrash(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 1, emptied)
-	assert.False(t, d.IsSessionExcluded("missing"))
+	assert.False(t, d.IsSessionExcluded(t.Context(), "missing"))
 	assertSessionState(t, d, "missing", false, true)
 }
 
@@ -989,7 +985,7 @@ func totalWriterChanges(t *testing.T, d *DB) int64 {
 	t.Helper()
 	var n int64
 	require.NoError(t,
-		d.getWriter().QueryRow("SELECT total_changes()").Scan(&n))
+		d.getWriter().QueryRow(t.Context(), "SELECT total_changes()").Scan(&n))
 	return n
 }
 
@@ -999,7 +995,8 @@ func listBaselineOwnership(
 	t *testing.T, d *DB, machine string,
 ) map[string]SessionSourcePath {
 	t.Helper()
-	rows, err := d.Reader().Query(`
+
+	rows, err := d.Reader().Query(t.Context(), `
 		SELECT session_id, agent, file_path
 		FROM local_session_source_baselines WHERE machine = ?`, machine)
 	require.NoError(t, err)
@@ -1050,7 +1047,7 @@ func TestReplaceActiveSessionSourceBaselinesWarmPassWritesBounded(t *testing.T) 
 
 			// One rejected source and one tombstoned session: the pass must
 			// withdraw exactly those two proofs, independent of archive size.
-			require.NoError(t, d.SoftDeleteSession(seeds[1].id))
+			require.NoError(t, d.SoftDeleteSession(t.Context(), seeds[1].id))
 			before = totalWriterChanges(t, d)
 			require.NoError(t, d.ReplaceActiveSessionSourceBaselines(
 				t.Context(), defaultMachine, sources, sources[1:],
@@ -1074,7 +1071,7 @@ func TestReplaceActiveSessionSourceBaselinesRollsBackBroadProofWhenExceptionFail
 	path := filepath.Join(t.TempDir(), "mixed.jsonl")
 	insertSessionWithSourcePath(t, d, "allowed", "claude", path)
 	insertSessionWithSourcePath(t, d, "rejected", "claude", path)
-	_, err := d.getWriter().Exec(`
+	_, err := d.getWriter().Exec(t.Context(), `
 		CREATE TRIGGER fail_rejected_baseline_removal
 		BEFORE DELETE ON local_session_source_baselines
 		WHEN OLD.session_id = 'rejected'
@@ -1114,7 +1111,7 @@ func TestListActiveSessionSourceAttributionsReturnsEveryMachine(t *testing.T) {
 		{id: "unrelated", machine: "machine-c", path: unrelatedPath},
 	} {
 		path := seed.path
-		require.NoError(t, d.UpsertSession(Session{
+		require.NoError(t, d.UpsertSession(t.Context(), Session{
 			ID: seed.id, Project: "project", Machine: seed.machine,
 			Agent: "shared-provider", FilePath: &path,
 		}))
@@ -1199,7 +1196,7 @@ func insertSessionsWithSourcePaths(
 			DataVersion: CurrentDataVersion(),
 		})
 	}
-	result, err := d.WriteSessionBatchAtomic(writes)
+	result, err := d.WriteSessionBatchAtomic(t.Context(), writes)
 	require.NoError(t, err, "insert source path sessions")
 	require.Equal(t, len(seeds), result.WrittenSessions, "WrittenSessions")
 }
@@ -1226,19 +1223,19 @@ func TestListStaleForkSessionOwnerships(t *testing.T) {
 	fork("stale-codex", "local", path, func(s *Session) { s.Agent = "codex" })
 	fork("current", "local", path)
 	for _, id := range []string{"stale-a", "stale-b", "stale-deleted", "stale-codex"} {
-		require.NoError(t, d.SetSessionDataVersion(id, 0))
+		require.NoError(t, d.SetSessionDataVersion(t.Context(), id, 0))
 	}
-	require.NoError(t, d.SoftDeleteSession("stale-deleted"))
-	require.NoError(t, d.SetSessionDataVersion("current", CurrentDataVersion()))
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "stale-deleted"))
+	require.NoError(t, d.SetSessionDataVersion(t.Context(), "current", CurrentDataVersion()))
 
-	got, err := d.ListStaleForkSessionOwnerships("claude")
+	got, err := d.ListStaleForkSessionOwnerships(t.Context(), "claude")
 	require.NoError(t, err)
 	assert.ElementsMatch(t, []SessionSourceOwnership{
 		{ID: "stale-a", Machine: "local", Agent: "claude", FilePath: path},
 		{ID: "stale-b", Machine: "remote", Agent: "claude", FilePath: otherPath},
 	}, got, "only active stale fork rows for the agent are listed")
 
-	none, err := d.ListStaleForkSessionOwnerships("gemini")
+	none, err := d.ListStaleForkSessionOwnerships(t.Context(), "gemini")
 	require.NoError(t, err)
 	assert.Empty(t, none)
 }

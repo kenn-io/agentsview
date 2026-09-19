@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,19 +27,19 @@ func TestPositronProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, filepath.Join(root, "workspaceStorage"), plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 	assert.Equal(t, "positron-app", discovered[0].ProjectHint)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~positron:" + sessionID,
 	})
 	require.NoError(t, err)
@@ -48,21 +47,21 @@ func TestPositronProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, sourcePath, found.DisplayPath)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "write"},
 	)
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, sourcePath, changed[0].DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, sourcePath, fingerprint.Key)
 	assert.Positive(t, fingerprint.Size)
 	assert.Positive(t, fingerprint.MTimeNS)
 	assert.NotEmpty(t, fingerprint.Hash)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      found,
 		Fingerprint: fingerprint,
 	})
@@ -95,24 +94,24 @@ func TestPositronProviderClassifiesDeletedAndMetadataPaths(t *testing.T) {
 	require.True(t, ok)
 
 	metadataChanged, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: workspacePath, EventKind: "write"},
 	)
 	require.NoError(t, err)
 	require.Len(t, metadataChanged, 1)
 	assert.Equal(t, sourcePath, metadataChanged[0].DisplayPath)
 
-	beforeMetadata, err := provider.Fingerprint(context.Background(), metadataChanged[0])
+	beforeMetadata, err := provider.Fingerprint(t.Context(), metadataChanged[0])
 	require.NoError(t, err)
 	writeSourceFile(t, workspacePath,
 		`{"folder":"file:///Users/alice/code/positron-renamed-app"}`)
-	afterMetadata, err := provider.Fingerprint(context.Background(), metadataChanged[0])
+	afterMetadata, err := provider.Fingerprint(t.Context(), metadataChanged[0])
 	require.NoError(t, err)
 	assert.NotEqual(t, beforeMetadata.Hash, afterMetadata.Hash)
 
 	require.NoError(t, os.Remove(sourcePath))
 	deleted, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove"},
 	)
 	require.NoError(t, err)

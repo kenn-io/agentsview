@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -63,7 +64,7 @@ func TestRunClaudeProducesExactResultAndPreservesChildOutcome(t *testing.T) {
 			producer := copyCaptureHelper(t, "claude")
 			var stdout, stderr bytes.Buffer
 			limits := testLimits()
-			outcome, err := Run(context.Background(), RunOptions{
+			outcome, err := Run(t.Context(), RunOptions{
 				Provider:          ProviderClaude,
 				OccurrenceID:      "job-42-attempt-1",
 				CaptureDir:        captureDir,
@@ -119,7 +120,7 @@ func TestRunClaudeProducesExactResultAndPreservesChildOutcome(t *testing.T) {
 
 			var replay bytes.Buffer
 			pricingLoaded := false
-			reporting, err := Report(context.Background(), ReportOptions{
+			reporting, err := Report(t.Context(), ReportOptions{
 				CaptureDir: captureDir, ResultPath: "-", Stdout: &replay,
 				LoadCustomPricing: func() (map[string]config.CustomModelRate, error) {
 					pricingLoaded = true
@@ -144,7 +145,7 @@ func TestRunInvalidatesExistingResultBeforeStartingProducer(t *testing.T) {
 		"AGENTSVIEW_CAPTURE_TEST_RESULT_MUST_BE_ABSENT="+resultPath,
 	)
 
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "current-occurrence",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -224,22 +225,24 @@ func TestReportPricingFailureWritesOrReplaysFailureResult(t *testing.T) {
 }
 
 func TestRunFinalizesUsageAfterPostStartStreamError(t *testing.T) {
+	errStream := assert.AnError
+
 	root := t.TempDir()
 	resultPath := filepath.Join(t.TempDir(), "usage.json")
 	producer := copyCaptureHelper(t, "claude")
-	outcome, err := Run(context.Background(), RunOptions{
+	outcome, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "post-start-stream-error",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
 		Command:     []string{producer, "-p"},
 		Environment: helperEnvironment(root, "claude-stdin", 0),
 		Streams: Streams{
-			Stdin: iotest.ErrReader(assert.AnError), Stdout: io.Discard, Stderr: io.Discard,
+			Stdin: iotest.ErrReader(errStream), Stdout: io.Discard, Stderr: io.Discard,
 		},
 		Limits: testLimits(), CustomPricing: testPricing(),
 	})
 
-	require.ErrorContains(t, err, assert.AnError.Error())
+	require.ErrorContains(t, err, errStream.Error())
 	assert.Equal(t, ReportFailureExitCode, outcome.ExitCode)
 	assert.Equal(t, ReportingComplete, outcome.Reporting.Outcome)
 	require.NotNil(t, outcome.Execution.ExitCode)
@@ -354,7 +357,7 @@ func TestClaudeCapturePersistsARecoverableProviderShapedBundle(t *testing.T) {
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	resultPath := filepath.Join(t.TempDir(), "usage.json")
 	producer := copyCaptureHelper(t, "claude")
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "persisted-bundle",
 		CaptureDir: captureDir, ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: workDir,
@@ -408,7 +411,7 @@ func TestClaudeCapturePersistsARecoverableProviderShapedBundle(t *testing.T) {
 		require.NoError(t, readErr)
 		assertPrivateMode(t, path, 0o600)
 		digest := sha256.Sum256(data)
-		assert.Equal(t, fmt.Sprintf("%x", digest), source.RawSource.Hash)
+		assert.Equal(t, hex.EncodeToString(digest[:]), source.RawSource.Hash)
 		assert.Equal(t, int64(len(data)), source.RawSource.Size)
 		assert.Equal(t, SourceProvenance{
 			SessionID: source.SessionID,
@@ -434,7 +437,7 @@ func TestReportRebuildsFromPersistedSourcesAfterLiveArchiveIsGone(t *testing.T) 
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	resultPath := filepath.Join(t.TempDir(), "usage.json")
 	producer := copyCaptureHelper(t, "claude")
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "ephemeral-runner-recovery",
 		CaptureDir: captureDir, ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -461,7 +464,7 @@ func TestReportRebuildsFromPersistedSourcesAfterLiveArchiveIsGone(t *testing.T) 
 	))
 
 	var recoveredJSON bytes.Buffer
-	reporting, err := Report(context.Background(), ReportOptions{
+	reporting, err := Report(t.Context(), ReportOptions{
 		CaptureDir: captureDir, ResultPath: "-", Stdout: &recoveredJSON,
 		CustomPricing: testPricing(),
 	})
@@ -480,7 +483,7 @@ func TestRunClaudePassesStandardInputThrough(t *testing.T) {
 	root := t.TempDir()
 	producer := copyCaptureHelper(t, "claude")
 	var stdout bytes.Buffer
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "stdin",
 		CaptureDir:   filepath.Join(t.TempDir(), "capture"),
 		ResultPath:   filepath.Join(t.TempDir(), "result.json"),
@@ -510,12 +513,12 @@ func TestRunRejectsReuseOfCompletedCapture(t *testing.T) {
 		Streams:     Streams{Stdout: io.Discard, Stderr: io.Discard},
 		Limits:      testLimits(), CustomPricing: testPricing(),
 	}
-	_, err := Run(context.Background(), options)
+	_, err := Run(t.Context(), options)
 	require.NoError(t, err)
 	before, err := os.ReadFile(resultPath)
 	require.NoError(t, err)
 
-	_, err = Run(context.Background(), options)
+	_, err = Run(t.Context(), options)
 	require.ErrorContains(t, err, "capture directory already exists")
 	after, err := os.ReadFile(resultPath)
 	require.NoError(t, err)
@@ -528,7 +531,7 @@ func TestRunRejectsPreexistingCaptureDirectoryWithoutChangingIt(t *testing.T) {
 	require.NoError(t, os.WriteFile(sentinelPath, []byte("keep me"), 0o600))
 	producer := copyCaptureHelper(t, "claude")
 
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "existing-directory",
 		CaptureDir: captureDir, ResultPath: filepath.Join(t.TempDir(), "result.json"),
 		ProviderRoot: t.TempDir(), WorkDir: t.TempDir(),
@@ -552,7 +555,7 @@ func TestReportRejectsInvalidStateBeforeCreatingRecoveryFiles(t *testing.T) {
 		filepath.Join(captureDir, manifestFileName), []byte("not json"), 0o600))
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 
-	_, err := Report(context.Background(), ReportOptions{
+	_, err := Report(t.Context(), ReportOptions{
 		CaptureDir: captureDir, ResultPath: resultPath,
 	})
 
@@ -565,7 +568,7 @@ func TestReportRejectsUnexpectedCaptureContentsWithoutRemovingThem(t *testing.T)
 	root := t.TempDir()
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	producer := copyCaptureHelper(t, "claude")
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "unexpected-recovery-state",
 		CaptureDir: captureDir, ResultPath: filepath.Join(t.TempDir(), "result.json"),
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -578,7 +581,7 @@ func TestReportRejectsUnexpectedCaptureContentsWithoutRemovingThem(t *testing.T)
 	unrelated := filepath.Join(captureDir, "unrelated.txt")
 	require.NoError(t, os.WriteFile(unrelated, []byte("keep me"), 0o600))
 
-	_, err = Report(context.Background(), ReportOptions{
+	_, err = Report(t.Context(), ReportOptions{
 		CaptureDir: captureDir, ResultPath: "-", Stdout: io.Discard,
 	})
 
@@ -612,7 +615,7 @@ func TestRunRejectsHistoricalClaudeSessionSources(t *testing.T) {
 			captureDir := filepath.Join(t.TempDir(), "capture")
 			producer := copyCaptureHelper(t, "run-claude-ci")
 
-			_, err = Run(context.Background(), RunOptions{
+			_, err = Run(t.Context(), RunOptions{
 				Provider: ProviderClaude, OccurrenceID: "historical-session",
 				ProviderSessionID: sessionID,
 				CaptureDir:        captureDir, ResultPath: filepath.Join(t.TempDir(), "result.json"),
@@ -660,7 +663,7 @@ func TestCaptureRejectsResultPathsInsideCaptureState(t *testing.T) {
 	root := t.TempDir()
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	producer := copyCaptureHelper(t, "claude")
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "result-collision",
 		CaptureDir:   captureDir,
 		ResultPath:   filepath.Join(captureDir, sourcesDirName, bundleFileName),
@@ -674,7 +677,7 @@ func TestCaptureRejectsResultPathsInsideCaptureState(t *testing.T) {
 	assert.NoDirExists(t, captureDir)
 
 	externalResult := filepath.Join(t.TempDir(), "result.json")
-	_, err = Run(context.Background(), RunOptions{
+	_, err = Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "report-result-collision",
 		CaptureDir: captureDir, ResultPath: externalResult,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -688,7 +691,7 @@ func TestCaptureRejectsResultPathsInsideCaptureState(t *testing.T) {
 	before, err := os.ReadFile(manifestPath)
 	require.NoError(t, err)
 
-	_, err = Report(context.Background(), ReportOptions{
+	_, err = Report(t.Context(), ReportOptions{
 		CaptureDir: captureDir, ResultPath: manifestPath,
 	})
 	require.ErrorContains(t, err, "result path must be outside")
@@ -698,7 +701,7 @@ func TestCaptureRejectsResultPathsInsideCaptureState(t *testing.T) {
 
 	alias := filepath.Join(t.TempDir(), "capture-alias")
 	if err := os.Symlink(captureDir, alias); err == nil {
-		_, err = Report(context.Background(), ReportOptions{
+		_, err = Report(t.Context(), ReportOptions{
 			CaptureDir: captureDir,
 			ResultPath: filepath.Join(alias, manifestFileName),
 		})
@@ -718,7 +721,7 @@ func TestRunRejectsResultPathInsideProviderRootBeforeStarting(t *testing.T) {
 	producer := copyCaptureHelper(t, "claude")
 	var stdout bytes.Buffer
 
-	_, err = Run(context.Background(), RunOptions{
+	_, err = Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "provider-result-collision",
 		ProviderSessionID: sessionID,
 		CaptureDir:        captureDir, ResultPath: resultPath,
@@ -752,7 +755,7 @@ func TestRunRejectsResultDirectoryBeforeCreatingState(t *testing.T) {
 		Limits:      testLimits(), CustomPricing: testPricing(),
 	}
 
-	_, err := Run(context.Background(), opts)
+	_, err := Run(t.Context(), opts)
 
 	require.ErrorContains(t, err, "not a regular file")
 	assert.DirExists(t, resultPath)
@@ -760,7 +763,7 @@ func TestRunRejectsResultDirectoryBeforeCreatingState(t *testing.T) {
 	assert.Empty(t, stdout.String(), "the producer must not start")
 
 	opts.ResultPath = filepath.Join(t.TempDir(), "usage.json")
-	_, err = Run(context.Background(), opts)
+	_, err = Run(t.Context(), opts)
 	require.NoError(t, err)
 	assert.FileExists(t, opts.ResultPath)
 }
@@ -789,7 +792,7 @@ func TestRunRejectsOverlappingCaptureAndProviderRoots(t *testing.T) {
 			captureDir := filepath.Join(base, tt.capturePath)
 			var stdout bytes.Buffer
 
-			_, err := Run(context.Background(), RunOptions{
+			_, err := Run(t.Context(), RunOptions{
 				Provider: ProviderClaude, OccurrenceID: "overlapping-roots",
 				CaptureDir:   captureDir,
 				ResultPath:   filepath.Join(t.TempDir(), "result.json"),
@@ -812,7 +815,7 @@ func TestRunClaudeWrapperRequiresAndUsesCallerSessionID(t *testing.T) {
 	root := t.TempDir()
 	producer := copyCaptureHelper(t, "run-claude-ci")
 	claudeWorkDir := t.TempDir()
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "wrapper-missing-id",
 		CaptureDir:   filepath.Join(t.TempDir(), "capture"),
 		ResultPath:   filepath.Join(t.TempDir(), "result.json"),
@@ -827,10 +830,10 @@ func TestRunClaudeWrapperRequiresAndUsesCallerSessionID(t *testing.T) {
 	env := append(
 		helperEnvironment(root, "claude-final", 0),
 		"AGENTSVIEW_CAPTURE_TEST_SESSION_ID="+sessionID,
-		"AGENTSVIEW_CAPTURE_TEST_CHDIR="+claudeWorkDir,
+		"AGENTSVIEW_CAPTURE_TEST_CLAUDE_WORK_DIR="+claudeWorkDir,
 	)
 	missingWorkDirCapture := filepath.Join(t.TempDir(), "capture")
-	_, err = Run(context.Background(), RunOptions{
+	_, err = Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "wrapper-missing-work-dir",
 		ProviderSessionID: sessionID,
 		CaptureDir:        missingWorkDirCapture,
@@ -843,7 +846,7 @@ func TestRunClaudeWrapperRequiresAndUsesCallerSessionID(t *testing.T) {
 	assert.NoDirExists(t, missingWorkDirCapture)
 
 	resultPath := filepath.Join(t.TempDir(), "result.json")
-	_, err = Run(context.Background(), RunOptions{
+	_, err = Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "wrapper",
 		ProviderSessionID: sessionID,
 		CaptureDir:        filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
@@ -885,7 +888,7 @@ func TestRunRejectsUppercaseClaudeSessionIDsBeforeStarting(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			producer := copyCaptureHelper(t, test.executable)
 			captureDir := filepath.Join(t.TempDir(), "capture")
-			_, err := Run(context.Background(), RunOptions{
+			_, err := Run(t.Context(), RunOptions{
 				Provider: ProviderClaude, OccurrenceID: "uppercase-session",
 				ProviderSessionID: test.supplied,
 				CaptureDir:        captureDir, ResultPath: filepath.Join(t.TempDir(), "result.json"),
@@ -951,7 +954,7 @@ func TestRunRejectsUnsupportedSessionModesBeforeStarting(t *testing.T) {
 			captureDir := filepath.Join(t.TempDir(), "capture")
 			root := t.TempDir()
 			var stdout bytes.Buffer
-			_, err := Run(context.Background(), RunOptions{
+			_, err := Run(t.Context(), RunOptions{
 				Provider: test.provider, OccurrenceID: "unsupported-session-mode",
 				CaptureDir: captureDir, ResultPath: filepath.Join(t.TempDir(), "result.json"),
 				ProviderRoot: root, WorkDir: t.TempDir(),
@@ -981,7 +984,7 @@ func TestRunRejectsImpossibleTimingBeforeStarting(t *testing.T) {
 	limits.FinalizationWait = time.Second
 	limits.Quiescence = time.Second
 
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "invalid-timing",
 		CaptureDir:   filepath.Join(t.TempDir(), "capture"),
 		ResultPath:   filepath.Join(t.TempDir(), "result.json"),
@@ -1076,7 +1079,7 @@ func TestRunClaudeReportingFailuresAreDistinctAndWriteResults(t *testing.T) {
 			root := t.TempDir()
 			resultPath := filepath.Join(t.TempDir(), "result.json")
 			producer := copyCaptureHelper(t, "claude")
-			outcome, err := Run(context.Background(), RunOptions{
+			outcome, err := Run(t.Context(), RunOptions{
 				Provider: ProviderClaude, OccurrenceID: "failure-case",
 				CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 				ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1109,7 +1112,7 @@ func TestFailedReportRetryPreservesFirstFailureUntilSuccess(t *testing.T) {
 	limits.MaxSourceBytes = 8 << 10
 	producer := copyCaptureHelper(t, "claude")
 
-	_, err = Run(context.Background(), RunOptions{
+	_, err = Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "stable-failure",
 		CaptureDir: captureDir, ResultPath: firstResultPath,
 		ProviderRoot: root, WorkDir: workDir,
@@ -1136,7 +1139,7 @@ func TestFailedReportRetryPreservesFirstFailureUntilSuccess(t *testing.T) {
 		sourcePath, bytes.Repeat([]byte("x"), int(limits.MaxSourceBytes)+1), 0o600))
 
 	retryPath := filepath.Join(t.TempDir(), "retry.json")
-	reporting, err := Report(context.Background(), ReportOptions{
+	reporting, err := Report(t.Context(), ReportOptions{
 		CaptureDir: captureDir, ResultPath: retryPath,
 		CustomPricing: testPricing(),
 	})
@@ -1154,7 +1157,7 @@ func TestFailedReportRetryPreservesFirstFailureUntilSuccess(t *testing.T) {
 	require.Less(t, int64(len(validData)), limits.MaxSourceBytes)
 	require.NoError(t, os.WriteFile(sourcePath, validData, 0o600))
 	successPath := filepath.Join(t.TempDir(), "success.json")
-	reporting, err = Report(context.Background(), ReportOptions{
+	reporting, err = Report(t.Context(), ReportOptions{
 		CaptureDir: captureDir, ResultPath: successPath,
 		CustomPricing: testPricing(),
 	})
@@ -1198,9 +1201,10 @@ func TestReportRefusesQuiescentSourceWithoutDurableExecutionCompletion(
 	initial := []byte(strings.Join(
 		claudeHelperLines(sessionID, physicalWorkDir, false), "\n") + "\n")
 	require.NoError(t, os.WriteFile(sourcePath, initial, 0o600))
-	time.Sleep(testLimits().Quiescence + time.Millisecond)
+	settledAt := time.Now().Add(-2 * testLimits().Quiescence)
+	require.NoError(t, os.Chtimes(sourcePath, settledAt, settledAt))
 
-	reporting, reportErr := Report(context.Background(), ReportOptions{
+	reporting, reportErr := Report(t.Context(), ReportOptions{
 		CaptureDir: captureDir, ResultPath: resultPath,
 		CustomPricing: testPricing(),
 	})
@@ -1216,7 +1220,7 @@ func TestReportRefusesQuiescentSourceWithoutDurableExecutionCompletion(
 	assert.False(t, captured.SourcesComplete)
 	require.NoError(t, os.WriteFile(
 		sourcePath, append(initial, []byte(`{"type":"assistant"}`+"\n")...), 0o600))
-	retry, retryErr := Report(context.Background(), ReportOptions{
+	retry, retryErr := Report(t.Context(), ReportOptions{
 		CaptureDir:    captureDir,
 		ResultPath:    filepath.Join(t.TempDir(), "retry.json"),
 		CustomPricing: testPricing(),
@@ -1236,7 +1240,7 @@ func TestRunClaudeQuiescentUnfinishedSessionSealsPartialUsage(t *testing.T) {
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "claude")
-	outcome, err := Run(context.Background(), RunOptions{
+	outcome, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "interrupted-usage",
 		CaptureDir: captureDir, ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1262,7 +1266,7 @@ func TestRunClaudeQuiescentUnfinishedSessionSealsPartialUsage(t *testing.T) {
 	assertIntPointer(t, result.Usage.OutputTokens, 50)
 
 	var replay bytes.Buffer
-	_, err = Report(context.Background(), ReportOptions{
+	_, err = Report(t.Context(), ReportOptions{
 		CaptureDir: captureDir, ResultPath: "-", Stdout: &replay,
 		CustomPricing: testPricing(),
 	})
@@ -1282,7 +1286,7 @@ func TestRunClaudeMalformedMiddleRecordSealsPartialUsage(t *testing.T) {
 			root := t.TempDir()
 			resultPath := filepath.Join(t.TempDir(), "result.json")
 			producer := copyCaptureHelper(t, "claude")
-			_, err := Run(context.Background(), RunOptions{
+			_, err := Run(t.Context(), RunOptions{
 				Provider: ProviderClaude, OccurrenceID: "malformed-" + tc.name,
 				CaptureDir: filepath.Join(t.TempDir(), "capture"),
 				ResultPath: resultPath, ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1323,7 +1327,7 @@ func TestRunCodexMalformedRecordSealsPartialUsage(t *testing.T) {
 			root := t.TempDir()
 			resultPath := filepath.Join(t.TempDir(), "result.json")
 			producer := copyCaptureHelper(t, "codex")
-			_, err := Run(context.Background(), RunOptions{
+			_, err := Run(t.Context(), RunOptions{
 				Provider: ProviderCodex, OccurrenceID: "codex-malformed-" + tc.name,
 				CaptureDir: filepath.Join(t.TempDir(), "capture"),
 				ResultPath: resultPath, ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1357,7 +1361,7 @@ func TestRunCodexRequiresJSONAndUsesExactThreadMarker(t *testing.T) {
 	root := t.TempDir()
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	var stdout bytes.Buffer
-	outcome, err := Run(context.Background(), RunOptions{
+	outcome, err := Run(t.Context(), RunOptions{
 		Provider: ProviderCodex, OccurrenceID: "codex-run",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1390,7 +1394,7 @@ func TestRunCodexQuiescentUnfinishedSessionSealsPartialUsage(t *testing.T) {
 	root := t.TempDir()
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "codex")
-	outcome, err := Run(context.Background(), RunOptions{
+	outcome, err := Run(t.Context(), RunOptions{
 		Provider: ProviderCodex, OccurrenceID: "codex-interrupted",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1420,7 +1424,7 @@ func TestRunCodexPersistsDiscoveredSubagentSources(t *testing.T) {
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "codex")
 	limits := testLimits()
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderCodex, OccurrenceID: "codex-delegated",
 		CaptureDir: captureDir, ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1466,7 +1470,7 @@ func TestRunCodexFindsChildInSpawnDayShard(t *testing.T) {
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "codex")
 	limits := testLimits()
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderCodex, OccurrenceID: "codex-late-child",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1503,7 +1507,7 @@ func TestRunCodexRetriesWhenChildChangesDuringFinalization(t *testing.T) {
 		"rollout-child-"+childID+".jsonl",
 	)
 	changedDuringFinalization := false
-	outcome, err := runWithHooks(context.Background(), RunOptions{
+	outcome, err := runWithHooks(t.Context(), RunOptions{
 		Provider: ProviderCodex, OccurrenceID: "codex-changing-child",
 		CaptureDir: captureDir, ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1543,7 +1547,7 @@ func TestRunCodexConflictingMarkersReportCorrelationConflict(t *testing.T) {
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	producer := copyCaptureHelper(t, "codex")
 	resultPath := filepath.Join(t.TempDir(), "result.json")
-	outcome, err := Run(context.Background(), RunOptions{
+	outcome, err := Run(t.Context(), RunOptions{
 		Provider: ProviderCodex, OccurrenceID: "codex-marker-conflict",
 		CaptureDir: captureDir, ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1575,7 +1579,7 @@ func TestRunCodexConflictingMarkersReportCorrelationConflict(t *testing.T) {
 		filepath.Join(dayDir, "rollout-test-"+firstID+".jsonl"),
 		[]byte(strings.Join(lines, "\n")+"\n"), 0o600,
 	))
-	recovered, reportErr := Report(context.Background(), ReportOptions{
+	recovered, reportErr := Report(t.Context(), ReportOptions{
 		CaptureDir:    captureDir,
 		ResultPath:    filepath.Join(t.TempDir(), "recovered.json"),
 		CustomPricing: testPricing(),
@@ -1647,7 +1651,7 @@ func TestCodexCorrelationFailureIsDurableBeforeChildWaitReturns(t *testing.T) {
 				[]byte(strings.Join(lines, "\n")+"\n"), 0o600,
 			))
 
-			reporting, reportErr := Report(context.Background(), ReportOptions{
+			reporting, reportErr := Report(t.Context(), ReportOptions{
 				CaptureDir: captureDir, ResultPath: filepath.Join(t.TempDir(), "result.json"),
 				CustomPricing: testPricing(),
 			})
@@ -1662,7 +1666,7 @@ func TestRunCodexRejectsSeveralExactCandidates(t *testing.T) {
 	root := t.TempDir()
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "codex")
-	outcome, err := Run(context.Background(), RunOptions{
+	outcome, err := Run(t.Context(), RunOptions{
 		Provider: ProviderCodex, OccurrenceID: "codex-conflict",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1732,7 +1736,7 @@ func TestConcurrentClaudeCapturesCannotSelectEachOthersSessions(t *testing.T) {
 	for i := range 2 {
 		go func() {
 			resultPath := filepath.Join(t.TempDir(), fmt.Sprintf("result-%d.json", i))
-			_, runErr := Run(context.Background(), RunOptions{
+			_, runErr := Run(t.Context(), RunOptions{
 				Provider: ProviderClaude, OccurrenceID: fmt.Sprintf("parallel-%d", i),
 				CaptureDir: filepath.Join(t.TempDir(), fmt.Sprintf("capture-%d", i)),
 				ResultPath: resultPath, ProviderRoot: root, WorkDir: workDir,
@@ -1768,7 +1772,8 @@ func TestConcurrentClaudeCapturesCannotReserveSameSession(t *testing.T) {
 	producer := copyCaptureHelper(t, "claude")
 	sessionID := "44444444-4444-4444-8444-444444444444"
 	marker := filepath.Join(t.TempDir(), "producer-started")
-	release := filepath.Join(t.TempDir(), "release-producer")
+	input, release := io.Pipe()
+	defer input.Close()
 	firstCaptureDir := filepath.Join(t.TempDir(), "capture-first")
 	firstResultPath := filepath.Join(t.TempDir(), "result-first.json")
 
@@ -1792,19 +1797,18 @@ func TestConcurrentClaudeCapturesCannotReserveSameSession(t *testing.T) {
 			Environment: append(
 				helperEnvironment(root, "claude-block-before-source", 0),
 				"AGENTSVIEW_CAPTURE_TEST_SIGNAL_MARKER="+marker,
-				"AGENTSVIEW_CAPTURE_TEST_RELEASE_MARKER="+release,
 			),
-			Streams: Streams{Stdout: io.Discard, Stderr: io.Discard},
+			Streams: Streams{Stdin: input, Stdout: io.Discard, Stderr: io.Discard},
 			Limits:  testLimits(), CustomPricing: testPricing(),
 		})
 		firstDone <- response{outcome: outcome, err: err}
 	}()
 	t.Cleanup(func() {
-		_ = os.WriteFile(release, []byte("release"), 0o600)
+		_ = release.Close()
 		select {
 		case <-firstStopped:
 		case <-time.After(20 * time.Second):
-			t.Error("reserved capture did not stop during cleanup")
+			assert.Fail(t, "reserved capture did not stop during cleanup")
 		}
 	})
 	require.Eventually(t, func() bool {
@@ -1833,7 +1837,7 @@ func TestConcurrentClaudeCapturesCannotReserveSameSession(t *testing.T) {
 	assert.Empty(t, secondOutput.String())
 	assert.NoDirExists(t, secondCaptureDir)
 
-	require.NoError(t, os.WriteFile(release, []byte("release"), 0o600))
+	require.NoError(t, release.Close())
 	resolvedWorkDir, err := resolveWorkDir(workDir)
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
@@ -1855,7 +1859,7 @@ func TestClaudeCaptureUsesCanonicalDelegatedUsageWithoutDoubleCounting(t *testin
 	root := t.TempDir()
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "claude")
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "delegated",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1880,7 +1884,7 @@ func TestClaudeCaptureIncludesChildWithoutFlushedLinkMetadata(t *testing.T) {
 	root := t.TempDir()
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "claude")
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "unlinked-child",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1904,7 +1908,7 @@ func TestClaudeCaptureRejectsMissingReferencedChild(t *testing.T) {
 	root := t.TempDir()
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "claude")
-	outcome, err := Run(context.Background(), RunOptions{
+	outcome, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "missing-child",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -1939,7 +1943,7 @@ func TestClaudeCaptureRetryDropsRemovedSubagentUsage(t *testing.T) {
 	persisted := make(chan struct{})
 	release := make(chan struct{}, 1)
 	go func() {
-		outcome, runErr := runWithHooks(context.Background(), RunOptions{
+		outcome, runErr := runWithHooks(t.Context(), RunOptions{
 			Provider: ProviderClaude, OccurrenceID: "subagent-removed",
 			CaptureDir: captureDir, ResultPath: resultPath,
 			ProviderRoot: root, WorkDir: workDir,
@@ -2006,7 +2010,7 @@ func TestCaptureSourceByteLimitIsActionable(t *testing.T) {
 	producer := copyCaptureHelper(t, "claude")
 	limits := testLimits()
 	limits.MaxSourceBytes = 32
-	outcome, err := Run(context.Background(), RunOptions{
+	outcome, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "bounded",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -2040,7 +2044,7 @@ func TestCaptureAggregateSourceByteLimitIsActionable(t *testing.T) {
 	resultPath := filepath.Join(t.TempDir(), "result.json")
 	producer := copyCaptureHelper(t, "claude")
 
-	_, err = Run(context.Background(), RunOptions{
+	_, err = Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "bounded-total",
 		CaptureDir: captureDir, ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: workDir,
@@ -2077,7 +2081,7 @@ func TestCaptureSourceCountLimitIsActionable(t *testing.T) {
 	producer := copyCaptureHelper(t, "claude")
 	limits := testLimits()
 	limits.MaxSources = 2
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "bounded-count",
 		CaptureDir: filepath.Join(t.TempDir(), "capture"), ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),
@@ -2109,7 +2113,7 @@ func TestCaptureDistinguishesAnObservedSourceThatDisappears(t *testing.T) {
 	persisted := make(chan struct{})
 	release := make(chan struct{}, 1)
 	go func() {
-		outcome, runErr := runWithHooks(context.Background(), RunOptions{
+		outcome, runErr := runWithHooks(t.Context(), RunOptions{
 			Provider: ProviderClaude, OccurrenceID: "source-disappeared",
 			CaptureDir: captureDir, ResultPath: resultPath,
 			ProviderRoot: root, WorkDir: workDir,
@@ -2158,7 +2162,7 @@ func TestCaptureLeavesNormalRuntimeStateUntouched(t *testing.T) {
 	t.Setenv("AGENTSVIEW_DATA_DIR", normalDataDir)
 	root := t.TempDir()
 	producer := copyCaptureHelper(t, "claude")
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "isolated",
 		CaptureDir:   filepath.Join(t.TempDir(), "capture"),
 		ResultPath:   filepath.Join(t.TempDir(), "result.json"),
@@ -2177,6 +2181,7 @@ func TestCaptureLeavesNormalRuntimeStateUntouched(t *testing.T) {
 
 func copyCaptureHelper(t *testing.T, name string) string {
 	t.Helper()
+
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
@@ -2221,10 +2226,18 @@ func helperEnvironment(root, mode string, exitCode int) []string {
 	)
 }
 
+func mustMarshalJSON(value any) []byte {
+	data, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
+
 func captureTestHelper() {
 	root := os.Getenv("AGENTSVIEW_CAPTURE_TEST_ROOT")
 	if len(os.Args) == 2 && os.Args[1] == "write-delayed-codex-child" {
-		time.Sleep(200 * time.Millisecond)
+		_, _ = io.Copy(io.Discard, os.Stdin)
 		writeCodexChildHelper(root)
 		os.Exit(0)
 	}
@@ -2242,12 +2255,7 @@ func captureTestHelper() {
 		fmt.Fprintln(os.Stderr, "child stderr")
 		os.Exit(exitCode)
 	}
-	if dir := os.Getenv("AGENTSVIEW_CAPTURE_TEST_CHDIR"); dir != "" {
-		if err := os.Chdir(dir); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(98)
-		}
-	}
+
 	if strings.HasPrefix(mode, "claude-") {
 		sessionID, _ := optionValue(os.Args[1:], "--session-id")
 		if sessionID == "" {
@@ -2255,16 +2263,13 @@ func captureTestHelper() {
 		}
 		if mode == "claude-block-before-source" {
 			marker := os.Getenv("AGENTSVIEW_CAPTURE_TEST_SIGNAL_MARKER")
-			release := os.Getenv("AGENTSVIEW_CAPTURE_TEST_RELEASE_MARKER")
 			_ = os.WriteFile(marker, []byte("started"), 0o600)
-			for {
-				if _, err := os.Stat(release); err == nil {
-					break
-				}
-				time.Sleep(10 * time.Millisecond)
-			}
+			_, _ = io.Copy(io.Discard, os.Stdin)
 		}
-		cwd, _ := os.Getwd()
+		cwd := os.Getenv("AGENTSVIEW_CAPTURE_TEST_CLAUDE_WORK_DIR")
+		if cwd == "" {
+			cwd, _ = os.Getwd()
+		}
 		cwd, _ = resolveWorkDir(cwd)
 		path := filepath.Join(root, encodeClaudeWorkDir(cwd), sessionID+".jsonl")
 		_ = os.MkdirAll(filepath.Dir(path), 0o700)
@@ -2320,10 +2325,10 @@ func captureTestHelper() {
 		os.Exit(exitCode)
 	}
 	if mode == "codex-conflicting-markers" {
-		first, _ := json.Marshal(map[string]string{
+		first := mustMarshalJSON(map[string]string{
 			"type": "thread.started", "thread_id": "11111111-1111-4111-8111-111111111111",
 		})
-		second, _ := json.Marshal(map[string]string{
+		second := mustMarshalJSON(map[string]string{
 			"type": "thread.started", "thread_id": "22222222-2222-4222-8222-222222222222",
 		})
 		fmt.Fprintln(os.Stdout, string(first))
@@ -2335,10 +2340,11 @@ func captureTestHelper() {
 		mode == "codex-late-subagent" || mode == "codex-changing-subagent" ||
 		mode == "codex-malformed" || mode == "codex-malformed-tail" ||
 		mode == "codex-subagent-malformed" {
+		var childRelease *os.File
 		id := "11111111-1111-4111-8111-111111111111"
 		childID := "22222222-2222-4222-8222-222222222222"
-		marker, _ := json.Marshal(map[string]string{"type": "thread.started", "thread_id": id})
-		completed, _ := json.Marshal(map[string]any{
+		marker := mustMarshalJSON(map[string]string{"type": "thread.started", "thread_id": id})
+		completed := mustMarshalJSON(map[string]any{
 			"type": "turn.completed", "usage": map[string]int{"input_tokens": 100, "output_tokens": 10},
 		})
 		fmt.Fprintln(os.Stdout, string(marker))
@@ -2371,11 +2377,19 @@ func captureTestHelper() {
 				),
 			)
 			if mode == "codex-subagent" {
-				writer := exec.Command(os.Args[0], "write-delayed-codex-child")
+				// EOF releases the child after this producer process exits.
+				input, release, err := os.Pipe()
+				if err != nil {
+					os.Exit(3)
+				}
+				childRelease = release
+				writer := exec.CommandContext(context.Background(), os.Args[0], "write-delayed-codex-child")
+				writer.Stdin = input
 				writer.Env = os.Environ()
 				if writer.Start() != nil {
 					os.Exit(3)
 				}
+				_ = input.Close()
 				_ = writer.Process.Release()
 			}
 		}
@@ -2408,6 +2422,7 @@ func captureTestHelper() {
 			)
 		}
 		fmt.Fprintln(os.Stdout, string(completed))
+		runtime.KeepAlive(childRelease)
 		os.Exit(exitCode)
 	}
 	os.Exit(2)
@@ -2452,12 +2467,12 @@ func claudeHelperLines(sessionID, cwd string, unfinished bool) []string {
 			"input": map[string]string{"file_path": "private.txt"},
 		}}
 	}
-	user, _ := json.Marshal(map[string]any{
+	user := mustMarshalJSON(map[string]any{
 		"type": "user", "uuid": "user-1", "sessionId": sessionID,
 		"timestamp": "2026-08-16T10:00:00Z", "cwd": cwd,
 		"message": map[string]any{"role": "user", "content": "PROMPT_SENTINEL"},
 	})
-	assistant, _ := json.Marshal(map[string]any{
+	assistant := mustMarshalJSON(map[string]any{
 		"type": "assistant", "uuid": "assistant-1", "parentUuid": "user-1",
 		"sessionId": sessionID, "timestamp": "2026-08-16T10:00:01Z", "cwd": cwd,
 		"message": map[string]any{
@@ -2474,8 +2489,7 @@ func claudeHelperLines(sessionID, cwd string, unfinished bool) []string {
 
 func claudeSubagentHelperLines(sessionID, cwd string) ([]string, []string) {
 	marshal := func(value any) string {
-		data, _ := json.Marshal(value)
-		return string(data)
+		return string(mustMarshalJSON(value))
 	}
 	rootUser := map[string]any{
 		"type": "user", "uuid": "u1", "sessionId": sessionID,
@@ -2521,12 +2535,14 @@ func claudeSubagentHelperLines(sessionID, cwd string) ([]string, []string) {
 		"timestamp": "2026-08-16T10:00:02Z", "cwd": cwd,
 		"message": map[string]any{"role": "user", "content": "inspect"},
 	}
-	return []string{
+	rootLines := []string{
 		marshal(rootUser), marshal(rootTool), marshal(rootResult),
 		marshal(shared(sessionID, "a2", "u2")),
-	}, []string{
+	}
+	childLines := []string{
 		marshal(childUser), marshal(shared(sessionID, "ca1", "cu1")),
 	}
+	return rootLines, childLines
 }
 
 func testLimits() Limits {
@@ -2557,7 +2573,8 @@ func assertBundleImportsUsage(
 	sealed Result,
 ) {
 	t.Helper()
-	database, err := db.OpenIsolated(filepath.Join(t.TempDir(), "import.db"))
+
+	database, err := db.OpenIsolated(t.Context(), filepath.Join(t.TempDir(), "import.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	database.SetCustomPricing(testPricing())
@@ -2567,7 +2584,7 @@ func assertBundleImportsUsage(
 			disabled = append(disabled, definition.Type)
 		}
 	}
-	engine := syncer.NewEngine(database, syncer.EngineConfig{
+	engine := syncer.NewEngine(t.Context(), database, syncer.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			agent: {providerRoot},
 		},

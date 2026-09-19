@@ -140,16 +140,17 @@ func TestStagedPublishWithoutSignalsInvalidatesChangedTranscript(t *testing.T) {
 	}}
 	require.NoError(t, d.ReplaceSessionContentStaged(t.Context(), "s1", msgs, staged, nil,
 		func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) {
-			return SessionSignalUpdate{
+			signals := SessionSignalUpdate{
 				QualitySignals:  QualitySignals{Version: CurrentQualitySignalVersion},
 				SecretLeakCount: 1, SecretsRulesVersion: "test-rules",
-			}, []SecretFinding{{
+			}
+			return signals, []SecretFinding{{
 				SessionID: "s1", RuleName: "test-secret", Confidence: "definite",
 				LocationKind: "message", MessageOrdinal: 0, MatchEnd: 4,
 				RedactedMatch: "****", RulesVersion: "test-rules",
 			}}, nil
 		}))
-	originalRevision, err := d.TranscriptRevision("s1")
+	originalRevision, err := d.TranscriptRevision(t.Context(), "s1")
 	require.NoError(t, err)
 
 	// A no-op publish can retain findings for the same transcript even when
@@ -166,7 +167,7 @@ func TestStagedPublishWithoutSignalsInvalidatesChangedTranscript(t *testing.T) {
 		require.NotNil(t, session)
 		findings, err := d.SessionSecretFindings(t.Context(), "s1")
 		require.NoError(t, err)
-		revision, err := d.TranscriptRevision("s1")
+		revision, err := d.TranscriptRevision(t.Context(), "s1")
 		require.NoError(t, err)
 		if content == "original" {
 			require.Equal(t, originalRevision, revision)

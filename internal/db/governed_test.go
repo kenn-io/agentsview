@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -33,14 +32,19 @@ func TestEvaluateGovernedSessions(t *testing.T) {
 				explicitMapping("ws", "/work/foo", "alpha"),
 			}}},
 			[]MappingEvaluationRow{
-				{SessionID: "in", Machine: "ws", Project: "x",
-					Cwd: "/work/foo/sub"},
-				{SessionID: "out", Machine: "ws", Project: "x",
-					Cwd: "/work/foobar/sub"},
+				{
+					SessionID: "in", Machine: "ws", Project: "x",
+					Cwd: "/work/foo/sub",
+				},
+				{
+					SessionID: "out", Machine: "ws", Project: "x",
+					Cwd: "/work/foobar/sub",
+				},
 			})
 		assert.Equal(t, 1, got.GovernedSessions)
 		assert.Equal(t, 1, got.SessionsByRule[GovernedRuleKey{
-			Machine: "ws", PathPrefix: "/work/foo"}])
+			Machine: "ws", PathPrefix: "/work/foo",
+		}])
 	})
 
 	t.Run("windows separators canonicalize", func(t *testing.T) {
@@ -49,12 +53,15 @@ func TestEvaluateGovernedSessions(t *testing.T) {
 				explicitMapping("ws", "C:/work/repo", "alpha"),
 			}}},
 			[]MappingEvaluationRow{
-				{SessionID: "win", Machine: "ws", Project: "x",
-					Cwd: `C:\work\repo\sub`},
+				{
+					SessionID: "win", Machine: "ws", Project: "x",
+					Cwd: `C:\work\repo\sub`,
+				},
 			})
 		assert.Equal(t, 1, got.GovernedSessions)
 		assert.Equal(t, 1, got.SessionsByRule[GovernedRuleKey{
-			Machine: "ws", PathPrefix: "C:/work/repo"}])
+			Machine: "ws", PathPrefix: "C:/work/repo",
+		}])
 	})
 
 	t.Run("unresolved repo_dot_worktrees is not governed", func(t *testing.T) {
@@ -66,8 +73,10 @@ func TestEvaluateGovernedSessions(t *testing.T) {
 				repoDotWorktreesMapping("ws", "/work/service"),
 			}}},
 			[]MappingEvaluationRow{
-				{SessionID: "branchless", Machine: "ws", Project: "x",
-					Cwd: "/work/service/service.worktrees"},
+				{
+					SessionID: "branchless", Machine: "ws", Project: "x",
+					Cwd: "/work/service/service.worktrees",
+				},
 			})
 		assert.Equal(t, 0, got.GovernedSessions)
 		assert.Empty(t, got.SessionsByRule)
@@ -79,14 +88,19 @@ func TestEvaluateGovernedSessions(t *testing.T) {
 				explicitMapping("ws", "/work/a", "alpha"),
 			}}},
 			[]MappingEvaluationRow{
-				{SessionID: "reference", Machine: "ws", Project: "x",
-					Cwd: "/work/a/sub", FilePath: "shared.jsonl"},
-				{SessionID: "empty-cwd", Machine: "ws", Project: "x",
-					Cwd: "", FilePath: "shared.jsonl"},
+				{
+					SessionID: "reference", Machine: "ws", Project: "x",
+					Cwd: "/work/a/sub", FilePath: "shared.jsonl",
+				},
+				{
+					SessionID: "empty-cwd", Machine: "ws", Project: "x",
+					Cwd: "", FilePath: "shared.jsonl",
+				},
 			})
 		assert.Equal(t, 2, got.GovernedSessions)
 		assert.Equal(t, 2, got.SessionsByRule[GovernedRuleKey{
-			Machine: "ws", PathPrefix: "/work/a"}])
+			Machine: "ws", PathPrefix: "/work/a",
+		}])
 	})
 
 	t.Run("assigned sibling is evidence but is not governed", func(t *testing.T) {
@@ -95,14 +109,19 @@ func TestEvaluateGovernedSessions(t *testing.T) {
 				explicitMapping("ws", "/work/a", "alpha"),
 			}}},
 			[]MappingEvaluationRow{
-				{SessionID: "assigned-reference", Machine: "ws", Project: "pinned",
-					Cwd: "/work/a/sub", FilePath: "shared.jsonl", ProjectAssigned: true},
-				{SessionID: "empty-cwd", Machine: "ws", Project: "x",
-					Cwd: "", FilePath: "shared.jsonl"},
+				{
+					SessionID: "assigned-reference", Machine: "ws", Project: "pinned",
+					Cwd: "/work/a/sub", FilePath: "shared.jsonl", ProjectAssigned: true,
+				},
+				{
+					SessionID: "empty-cwd", Machine: "ws", Project: "x",
+					Cwd: "", FilePath: "shared.jsonl",
+				},
 			})
 		assert.Equal(t, 1, got.GovernedSessions)
 		assert.Equal(t, 1, got.SessionsByRule[GovernedRuleKey{
-			Machine: "ws", PathPrefix: "/work/a"}])
+			Machine: "ws", PathPrefix: "/work/a",
+		}])
 	})
 
 	t.Run("conflicting siblings block empty cwd fallback", func(t *testing.T) {
@@ -112,18 +131,26 @@ func TestEvaluateGovernedSessions(t *testing.T) {
 				explicitMapping("ws", "/work/b", "beta"),
 			}}},
 			[]MappingEvaluationRow{
-				{SessionID: "ref-a", Machine: "ws", Project: "x",
-					Cwd: "/work/a/sub", FilePath: "shared.jsonl"},
-				{SessionID: "ref-b", Machine: "ws", Project: "x",
-					Cwd: "/work/b/sub", FilePath: "shared.jsonl"},
-				{SessionID: "empty-cwd", Machine: "ws", Project: "x",
-					Cwd: "", FilePath: "shared.jsonl"},
+				{
+					SessionID: "ref-a", Machine: "ws", Project: "x",
+					Cwd: "/work/a/sub", FilePath: "shared.jsonl",
+				},
+				{
+					SessionID: "ref-b", Machine: "ws", Project: "x",
+					Cwd: "/work/b/sub", FilePath: "shared.jsonl",
+				},
+				{
+					SessionID: "empty-cwd", Machine: "ws", Project: "x",
+					Cwd: "", FilePath: "shared.jsonl",
+				},
 			})
 		assert.Equal(t, 2, got.GovernedSessions)
 		assert.Equal(t, 1, got.SessionsByRule[GovernedRuleKey{
-			Machine: "ws", PathPrefix: "/work/a"}])
+			Machine: "ws", PathPrefix: "/work/a",
+		}])
 		assert.Equal(t, 1, got.SessionsByRule[GovernedRuleKey{
-			Machine: "ws", PathPrefix: "/work/b"}])
+			Machine: "ws", PathPrefix: "/work/b",
+		}])
 	})
 
 	t.Run("cross-archive isolation", func(t *testing.T) {
@@ -132,17 +159,24 @@ func TestEvaluateGovernedSessions(t *testing.T) {
 				explicitMapping("ws", "/work/foo", "alpha"),
 			}}},
 			[]MappingEvaluationRow{
-				{SessionID: "wrong-archive", Machine: "ws", Project: "x",
-					Cwd: "/work/foo/sub", SourceArchiveID: "B"},
-				{SessionID: "empty-archive", Machine: "ws", Project: "x",
-					Cwd: "/work/foo/sub", SourceArchiveID: ""},
-				{SessionID: "matching-archive", Machine: "ws", Project: "x",
-					Cwd: "/work/foo/sub", SourceArchiveID: "A"},
+				{
+					SessionID: "wrong-archive", Machine: "ws", Project: "x",
+					Cwd: "/work/foo/sub", SourceArchiveID: "B",
+				},
+				{
+					SessionID: "empty-archive", Machine: "ws", Project: "x",
+					Cwd: "/work/foo/sub", SourceArchiveID: "",
+				},
+				{
+					SessionID: "matching-archive", Machine: "ws", Project: "x",
+					Cwd: "/work/foo/sub", SourceArchiveID: "A",
+				},
 			})
 		assert.Equal(t, 1, got.GovernedSessions,
 			"only the row whose SourceArchiveID matches the rule set's archive is governed")
 		assert.Equal(t, 1, got.SessionsByRule[GovernedRuleKey{
-			SourceArchiveID: "A", Machine: "ws", PathPrefix: "/work/foo"}])
+			SourceArchiveID: "A", Machine: "ws", PathPrefix: "/work/foo",
+		}])
 	})
 
 	t.Run("longest prefix wins", func(t *testing.T) {
@@ -152,14 +186,18 @@ func TestEvaluateGovernedSessions(t *testing.T) {
 				explicitMapping("ws", "/work/repo", "inner"),
 			}}},
 			[]MappingEvaluationRow{
-				{SessionID: "nested", Machine: "ws", Project: "x",
-					Cwd: "/work/repo/sub"},
+				{
+					SessionID: "nested", Machine: "ws", Project: "x",
+					Cwd: "/work/repo/sub",
+				},
 			})
 		assert.Equal(t, 1, got.GovernedSessions)
 		assert.Equal(t, 1, got.SessionsByRule[GovernedRuleKey{
-			Machine: "ws", PathPrefix: "/work/repo"}])
+			Machine: "ws", PathPrefix: "/work/repo",
+		}])
 		assert.Equal(t, 0, got.SessionsByRule[GovernedRuleKey{
-			Machine: "ws", PathPrefix: "/work"}])
+			Machine: "ws", PathPrefix: "/work",
+		}])
 	})
 
 	t.Run("dynamic label rule attribution", func(t *testing.T) {
@@ -168,8 +206,10 @@ func TestEvaluateGovernedSessions(t *testing.T) {
 				repoDotWorktreesMapping("ws", "/work/service"),
 			}}},
 			[]MappingEvaluationRow{
-				{SessionID: "branch", Machine: "ws", Project: "x",
-					Cwd: "/work/service/alpha.worktrees/feature"},
+				{
+					SessionID: "branch", Machine: "ws", Project: "x",
+					Cwd: "/work/service/alpha.worktrees/feature",
+				},
 			})
 		assert.Equal(t, 1, got.GovernedSessions)
 		ruleKey := GovernedRuleKey{Machine: "ws", PathPrefix: "/work/service"}
@@ -187,7 +227,7 @@ func TestEvaluateGovernedSessions(t *testing.T) {
 // resolution succeeds, whether or not it changes the stored project.
 func TestEvaluateGovernedSessionsMatchesApplyEvaluator(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	machine := "differential.example"
 	root := t.TempDir()
 	prefix := filepath.Join(root, "foo")
@@ -211,8 +251,10 @@ func TestEvaluateGovernedSessionsMatchesApplyEvaluator(t *testing.T) {
 		{id: "out-boundary", cwd: filepath.Join(root, "foobar", "x"), project: "misc"},
 		{id: "out-unrelated", cwd: filepath.Join(root, "elsewhere"), project: "misc"},
 		{id: "win-style", cwd: windowsCwd, project: "misc"},
-		{id: "sibling-ref", cwd: filepath.Join(prefix, "c"), project: "misc",
-			filePath: sharedFilePath},
+		{
+			id: "sibling-ref", cwd: filepath.Join(prefix, "c"), project: "misc",
+			filePath: sharedFilePath,
+		},
 		{id: "empty-sibling", cwd: "", project: "misc", filePath: sharedFilePath},
 		{id: "empty-nosibling", cwd: "", project: "misc"},
 	}
@@ -225,7 +267,7 @@ func TestEvaluateGovernedSessionsMatchesApplyEvaluator(t *testing.T) {
 			filePath := s.filePath
 			session.FilePath = &filePath
 		}
-		require.NoError(t, d.UpsertSession(session), "seed session %s", s.id)
+		require.NoError(t, d.UpsertSession(ctx, session), "seed session %s", s.id)
 		rows = append(rows, MappingEvaluationRow{
 			SessionID: s.id, Machine: machine, Project: s.project,
 			Cwd: s.cwd, FilePath: s.filePath,
@@ -259,7 +301,7 @@ func TestEvaluateGovernedSessionsMatchesApplyEvaluator(t *testing.T) {
 // it returns exactly the 3 "ws" rows.
 func TestGovernedEvaluationTouchesOnlyRuleMachines(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	_, err := d.CreateWorktreeProjectMapping(ctx, WorktreeProjectMapping{
 		Machine: "ws", PathPrefix: "/work/repo", Project: "alpha", Enabled: true,
@@ -320,8 +362,10 @@ func TestGovernedEvaluationTouchesOnlyRuleMachines(t *testing.T) {
 func TestGovernedCandidateMachinesExcludesDisabledMappings(t *testing.T) {
 	mappings := []WorktreeProjectMapping{
 		{Machine: "ws", PathPrefix: "/work/repo", Project: "alpha", Enabled: true},
-		{Machine: "disabled-host", PathPrefix: "/work/other", Project: "beta",
-			Enabled: false},
+		{
+			Machine: "disabled-host", PathPrefix: "/work/other", Project: "beta",
+			Enabled: false,
+		},
 	}
 
 	machines := governedCandidateMachines(mappings)

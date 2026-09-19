@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -37,7 +36,7 @@ func parseCopilotTestSession(
 	t *testing.T, path, machine string,
 ) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
 	t.Helper()
-	return newCopilotTestProvider(t).parseSession(path, machine)
+	return newCopilotTestProvider(t).parseSession(t.Context(), path, machine)
 }
 
 // discoverCopilotTestSessions discovers Copilot sessions under root through the
@@ -46,7 +45,7 @@ func parseCopilotTestSession(
 func discoverCopilotTestSessions(t *testing.T, root string) []DiscoveredFile {
 	t.Helper()
 	provider := newCopilotTestProvider(t, root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	if len(sources) == 0 {
 		return nil
@@ -86,6 +85,7 @@ func writeCopilotJSONL(
 // parseAndValidateHelper parses the session and fails the test on basic errors.
 func parseAndValidateHelper(t *testing.T, path string, machine string, wantMsgs int) (*ParsedSession, []ParsedMessage) {
 	t.Helper()
+
 	sess, msgs, _, err := parseCopilotTestSession(t, path, machine)
 	require.NoError(t, err)
 	require.NotNil(t, sess, "expected non-nil session")
@@ -266,6 +266,7 @@ func writeDirSession(
 	workspaceYAML string,
 ) string {
 	t.Helper()
+
 	dir := t.TempDir()
 	sessDir := filepath.Join(dir, sessID)
 	require.NoError(t, os.MkdirAll(sessDir, 0o755))

@@ -250,10 +250,14 @@ func TestAggregate_PartialDayClipsUsage(t *testing.T) {
 		GapCapSeconds: 300, Bucket: BucketSpec{BucketMinute, 300},
 	}
 	usage := []UsageRow{
-		{SessionID: "s1", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-			OutputTokens: 100, Cost: money.MustParseDollars("1.0"), ClaudeMessageID: "a", ClaudeRequestID: "x"},
-		{SessionID: "s1", Model: "m1", Timestamp: "2026-06-16T14:00:00Z",
-			OutputTokens: 200, Cost: money.MustParseDollars("2.0"), ClaudeMessageID: "b", ClaudeRequestID: "y"},
+		{
+			SessionID: "s1", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
+			OutputTokens: 100, Cost: money.MustParseDollars("1.0"), ClaudeMessageID: "a", ClaudeRequestID: "x",
+		},
+		{
+			SessionID: "s1", Model: "m1", Timestamp: "2026-06-16T14:00:00Z",
+			OutputTokens: 200, Cost: money.MustParseDollars("2.0"), ClaudeMessageID: "b", ClaudeRequestID: "y",
+		},
 	}
 	sessions := []SessionMeta{{SessionID: "s1", Project: "p", Agent: "claude"}}
 	r := mustAggregate(t, p, sessions, nil, usage)
@@ -509,8 +513,10 @@ func TestAggregate_UsageOnlySessionZeroCostKeepsPrimaryModel(t *testing.T) {
 	// One untimed session (no activity events) whose single usage row has a
 	// known model but ZERO cost.
 	usage := []UsageRow{
-		{SessionID: "u", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-			OutputTokens: 0, Cost: money.MustParseDollars("0"), ClaudeMessageID: "u", ClaudeRequestID: "r"},
+		{
+			SessionID: "u", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
+			OutputTokens: 0, Cost: money.MustParseDollars("0"), ClaudeMessageID: "u", ClaudeRequestID: "r",
+		},
 	}
 	sessions := []SessionMeta{
 		{SessionID: "u", Project: "P", Agent: "claude"},
@@ -548,12 +554,18 @@ func TestAggregate_BreakdownCostDeterministicAcrossSessionOrder(t *testing.T) {
 	// so reversing the session order shifts the rolled-up cost by one ULP unless
 	// the order is normalized.
 	usage := []UsageRow{
-		{SessionID: "s1", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
-			OutputTokens: 10, Cost: money.MustParseDollars("0.1"), ClaudeMessageID: "s1", ClaudeRequestID: "r"},
-		{SessionID: "s2", Model: "m1", Timestamp: "2026-06-16T11:00:00Z",
-			OutputTokens: 20, Cost: money.MustParseDollars("0.2"), ClaudeMessageID: "s2", ClaudeRequestID: "r"},
-		{SessionID: "s3", Model: "m1", Timestamp: "2026-06-16T12:00:00Z",
-			OutputTokens: 30, Cost: money.MustParseDollars("0.3"), ClaudeMessageID: "s3", ClaudeRequestID: "r"},
+		{
+			SessionID: "s1", Model: "m1", Timestamp: "2026-06-16T10:00:00Z",
+			OutputTokens: 10, Cost: money.MustParseDollars("0.1"), ClaudeMessageID: "s1", ClaudeRequestID: "r",
+		},
+		{
+			SessionID: "s2", Model: "m1", Timestamp: "2026-06-16T11:00:00Z",
+			OutputTokens: 20, Cost: money.MustParseDollars("0.2"), ClaudeMessageID: "s2", ClaudeRequestID: "r",
+		},
+		{
+			SessionID: "s3", Model: "m1", Timestamp: "2026-06-16T12:00:00Z",
+			OutputTokens: 30, Cost: money.MustParseDollars("0.3"), ClaudeMessageID: "s3", ClaudeRequestID: "r",
+		},
 	}
 	meta := func(id string) SessionMeta {
 		return SessionMeta{SessionID: id, Project: "P", Agent: "claude"}
@@ -627,16 +639,16 @@ func TestAggregate_IndependentSessionKindPeaks(t *testing.T) {
 	assert.Equal(t, 1, bucket.InteractiveAtPeak)
 	assert.Equal(t, 2, bucket.SubagentAtPeak)
 	assert.Equal(t, 1, bucket.AutomatedAtPeak)
-	assert.Equal(t, 4.0, r.Totals.ActiveMinutes)
-	assert.Equal(t, 11.0, r.Totals.AgentMinutes)
-	assert.Equal(t, 5.0, r.Totals.InteractiveAgentMinutes)
-	assert.Equal(t, 4.0, r.Totals.SubagentAgentMinutes)
-	assert.Equal(t, 2.0, r.Totals.AutomatedAgentMinutes)
+	assert.InDelta(t, 4.0, r.Totals.ActiveMinutes, 0)
+	assert.InDelta(t, 11.0, r.Totals.AgentMinutes, 0)
+	assert.InDelta(t, 5.0, r.Totals.InteractiveAgentMinutes, 0)
+	assert.InDelta(t, 4.0, r.Totals.SubagentAgentMinutes, 0)
+	assert.InDelta(t, 2.0, r.Totals.AutomatedAgentMinutes, 0)
 	for _, rows := range [][]KeyMinutes{r.ByProject, r.ByAgent, r.ByModel} {
 		require.Len(t, rows, 1)
-		assert.Equal(t, 4.0, rows[0].SubagentAgentMinutes)
-		assert.Equal(t, 5.0, rows[0].InteractiveAgentMinutes)
-		assert.Equal(t, 2.0, rows[0].AutomatedAgentMinutes)
+		assert.InDelta(t, 4.0, rows[0].SubagentAgentMinutes, 0)
+		assert.InDelta(t, 5.0, rows[0].InteractiveAgentMinutes, 0)
+		assert.InDelta(t, 2.0, rows[0].AutomatedAgentMinutes, 0)
 	}
 	for _, row := range r.BySession {
 		if row.SessionID == "child-2" {

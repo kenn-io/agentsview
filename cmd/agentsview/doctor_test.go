@@ -24,9 +24,9 @@ func TestDoctorSyncTraeEncryptedLayout(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(state), 0o755))
 	conn, err := sql.Open("sqlite3", state)
 	require.NoError(t, err)
-	_, err = conn.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
+	_, err = conn.ExecContext(t.Context(), `CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
 	require.NoError(t, err)
-	_, err = conn.Exec(`INSERT INTO ItemTable(key, value) VALUES (?, ?)`,
+	_, err = conn.ExecContext(t.Context(), `INSERT INTO ItemTable(key, value) VALUES (?, ?)`,
 		"memento/icube-ai-agent-storage",
 		`{"list":[{"sessionId":"stub","messages":[]}]}`)
 	require.NoError(t, err)
@@ -38,7 +38,7 @@ func TestDoctorSyncTraeEncryptedLayout(t *testing.T) {
 	var out bytes.Buffer
 	writeDoctorTraeEncryptedLayouts(&out, doctorSyncReport{
 		AgentRoots:         []doctorAgentRoot{{Agent: parser.AgentTrae, Path: root, Exists: true}},
-		TraeEncryptedRoots: collectDoctorTraeEncryptedRoots([]doctorAgentRoot{{Agent: parser.AgentTrae, Path: root, Exists: true}}),
+		TraeEncryptedRoots: collectDoctorTraeEncryptedRoots(t.Context(), []doctorAgentRoot{{Agent: parser.AgentTrae, Path: root, Exists: true}}),
 	})
 	assert.Contains(t, out.String(), "unsupported encrypted transcript layout")
 }
@@ -46,7 +46,7 @@ func TestDoctorSyncTraeEncryptedLayout(t *testing.T) {
 func TestDoctorSyncCurrentDatabaseReportsNormalStartupSync(t *testing.T) {
 	dataDir := testDataDir(t)
 
-	database, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	database, err := db.Open(t.Context(), filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err, "open db")
 	require.NoError(t, database.Close(), "close db")
 
@@ -73,9 +73,9 @@ func TestDoctorSyncStaleDatabaseReportsLikelyAbortedResync(t *testing.T) {
 	dataDir := testDataDir(t)
 	dbPath := filepath.Join(dataDir, "sessions.db")
 
-	database, err := db.Open(dbPath)
+	database, err := db.Open(t.Context(), dbPath)
 	require.NoError(t, err, "open db")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:           "stale-session",
 		Project:      "proj",
 		Machine:      "local",
@@ -87,7 +87,7 @@ func TestDoctorSyncStaleDatabaseReportsLikelyAbortedResync(t *testing.T) {
 
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "raw sqlite open")
-	_, err = conn.Exec("PRAGMA user_version = 0")
+	_, err = conn.ExecContext(t.Context(), "PRAGMA user_version = 0")
 	require.NoError(t, err, "downgrade user_version")
 	require.NoError(t, conn.Close(), "close raw sqlite")
 
@@ -117,10 +117,10 @@ func TestDoctorSyncReportsSessionsMissingSecretScan(t *testing.T) {
 	dataDir := testDataDir(t)
 	dbPath := filepath.Join(dataDir, "sessions.db")
 
-	database, err := db.Open(dbPath)
+	database, err := db.Open(t.Context(), dbPath)
 	require.NoError(t, err, "open db")
 	for _, id := range []string{"suspect", "scanned"} {
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 			ID: id, Project: "proj", Machine: "local", Agent: "claude",
 			MessageCount: 1,
 		}), "insert session %s", id)
@@ -131,12 +131,12 @@ func TestDoctorSyncReportsSessionsMissingSecretScan(t *testing.T) {
 	// findings persisted (any non-empty rules version).
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "raw sqlite open")
-	_, err = conn.Exec(
+	_, err = conn.ExecContext(t.Context(),
 		`UPDATE sessions SET quality_signal_version = ?`,
 		db.CurrentQualitySignalVersion,
 	)
 	require.NoError(t, err, "set current signal versions")
-	_, err = conn.Exec(
+	_, err = conn.ExecContext(t.Context(),
 		`UPDATE sessions SET secrets_rules_version = 'v-old'
 		 WHERE id = 'scanned'`,
 	)
@@ -154,7 +154,7 @@ func TestDoctorSyncReportsSessionsMissingSecretScan(t *testing.T) {
 func TestDoctorSyncSilentWithoutMissingSecretScans(t *testing.T) {
 	dataDir := testDataDir(t)
 
-	database, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+	database, err := db.Open(t.Context(), filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err, "open db")
 	require.NoError(t, database.Close(), "close db")
 
@@ -169,14 +169,14 @@ func TestDoctorSyncNewerDatabaseReportsRefusedStartup(t *testing.T) {
 	dataDir := testDataDir(t)
 	dbPath := filepath.Join(dataDir, "sessions.db")
 
-	database, err := db.Open(dbPath)
+	database, err := db.Open(t.Context(), dbPath)
 	require.NoError(t, err, "open db")
 	require.NoError(t, database.Close(), "close db")
 
 	futureVersion := db.CurrentDataVersion() + 10
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "raw sqlite open")
-	_, err = conn.Exec(fmt.Sprintf("PRAGMA user_version = %d", futureVersion))
+	_, err = conn.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", futureVersion))
 	require.NoError(t, err, "set future user_version")
 	require.NoError(t, conn.Close(), "close raw sqlite")
 
@@ -263,21 +263,21 @@ func TestInspectDoctorDBCountsAntigravityCLISummaryMode(t *testing.T) {
 	dbPath := filepath.Join(dir, "sessions.db")
 
 	database := dbtest.OpenTestDBAt(t, dbPath)
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:                 "agy-summary",
 		Agent:              "antigravity-cli",
 		Machine:            "local",
 		Project:            "proj",
 		TranscriptFidelity: "summary",
 	}), "upsert summary session")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:                 "agy-full",
 		Agent:              "antigravity-cli",
 		Machine:            "local",
 		Project:            "proj",
 		TranscriptFidelity: "full",
 	}), "upsert full session")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:      "other-agent",
 		Agent:   "claude-code",
 		Machine: "local",
@@ -285,7 +285,7 @@ func TestInspectDoctorDBCountsAntigravityCLISummaryMode(t *testing.T) {
 	}), "upsert other-agent session")
 	require.NoError(t, database.Close(), "close db")
 
-	insp := inspectDoctorDB(dbPath)
+	insp := inspectDoctorDB(t.Context(), dbPath)
 	require.NoError(t, insp.AntigravityCountsErr, "antigravity counts query")
 	assert.Equal(t, 2, insp.AntigravityCLITotal, "AntigravityCLITotal")
 	assert.Equal(t, 1, insp.AntigravityCLISummary, "AntigravityCLISummary")
@@ -299,28 +299,28 @@ func TestInspectDoctorDBCountsUnknownSchema(t *testing.T) {
 	dbPath := filepath.Join(dir, "sessions.db")
 
 	database := dbtest.OpenTestDBAt(t, dbPath)
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:            "agy-ide-unknown",
 		Agent:         "antigravity",
 		Machine:       "local",
 		Project:       "proj",
 		SourceVersion: "agy-schema:abc123def456",
 	}), "upsert IDE unknown-schema session")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:            "agy-cli-unknown",
 		Agent:         "antigravity-cli",
 		Machine:       "local",
 		Project:       "proj",
 		SourceVersion: "agy-schema:abc123def456",
 	}), "upsert CLI unknown-schema session")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:            "agy-known",
 		Agent:         "antigravity-cli",
 		Machine:       "local",
 		Project:       "proj",
 		SourceVersion: "1.0.7-1.0.10",
 	}), "upsert known-range session")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:            "piebald-generic",
 		Agent:         "piebald",
 		Machine:       "local",
@@ -329,7 +329,7 @@ func TestInspectDoctorDBCountsUnknownSchema(t *testing.T) {
 	}), "upsert non-antigravity session")
 	require.NoError(t, database.Close(), "close db")
 
-	insp := inspectDoctorDB(dbPath)
+	insp := inspectDoctorDB(t.Context(), dbPath)
 	require.NoError(t, insp.AntigravityCountsErr, "antigravity counts query")
 	assert.Equal(t, 2, insp.AntigravityUnknownSchema, "AntigravityUnknownSchema")
 }

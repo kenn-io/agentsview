@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,7 +32,7 @@ func parseZencoderTestSession(
 	})
 	require.True(t, ok)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: SourceRef{
 			Provider:       AgentZencoder,
 			Key:            path,
@@ -84,7 +83,7 @@ func TestZencoderProviderParsesBasic(t *testing.T) {
 	wantEnd := mustParseTime(t, "2024-01-01T00:01:00Z")
 	assertTimestamp(t, sess.EndedAt, wantEnd)
 
-	require.Equal(t, 4, len(msgs))
+	require.Len(t, msgs, 4)
 	// msg[0]: system message (IsSystem=true)
 	assert.True(t, msgs[0].IsSystem)
 	assert.Equal(t, RoleUser, msgs[0].Role)
@@ -133,7 +132,7 @@ func TestZencoderProviderParsesToolCallAndReasoning(t *testing.T) {
 	assert.Contains(t, msgs[1].Content, "Let me think about this.")
 	assert.Contains(t, msgs[1].Content, "[Read: main.go]")
 
-	require.Equal(t, 1, len(msgs[1].ToolCalls))
+	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Equal(t, "Read", msgs[1].ToolCalls[0].ToolName)
 	assert.Equal(t, "Read", msgs[1].ToolCalls[0].Category)
 	assert.Equal(t, "tc1", msgs[1].ToolCalls[0].ToolUseID)
@@ -161,7 +160,7 @@ func TestZencoderProviderParsesToolResults(t *testing.T) {
 
 	// Tool result is emitted as RoleUser message.
 	assert.Equal(t, RoleUser, msgs[2].Role)
-	require.Equal(t, 1, len(msgs[2].ToolResults))
+	require.Len(t, msgs[2].ToolResults, 1)
 	assert.Equal(t, "tc1", msgs[2].ToolResults[0].ToolUseID)
 	assert.Equal(t, len("package main"),
 		msgs[2].ToolResults[0].ContentLength)
@@ -294,7 +293,7 @@ func TestZencoderProviderParsesPermissionSkippedFinishStored(t *testing.T) {
 	// permission is skipped; finish is stored as system.
 	// user + assistant + finish = 3
 	assertMessageCount(t, sess.MessageCount, 3)
-	require.Equal(t, 3, len(msgs))
+	require.Len(t, msgs, 3)
 	assert.False(t, msgs[0].IsSystem) // user
 	assert.False(t, msgs[1].IsSystem) // assistant
 	assert.True(t, msgs[2].IsSystem)  // finish
@@ -313,7 +312,7 @@ func TestZencoderProviderParsesFirstMessageTruncation(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	// truncate clips at 300 chars + 3 ellipsis chars = 303.
-	assert.Equal(t, 303, len(sess.FirstMessage))
+	assert.Len(t, sess.FirstMessage, 303)
 }
 
 func TestZencoderProviderParsesMissingFile(t *testing.T) {
@@ -361,9 +360,9 @@ func TestZencoderProviderDiscoversSessions(t *testing.T) {
 		Machine: "local",
 	})
 	require.True(t, ok)
-	files, err := provider.Discover(context.Background())
+	files, err := provider.Discover(t.Context())
 	require.NoError(t, err)
-	assert.Equal(t, 2, len(files))
+	assert.Len(t, files, 2)
 	for _, f := range files {
 		assert.Equal(t, AgentZencoder, f.Provider)
 		assert.True(t, strings.HasSuffix(f.DisplayPath, ".jsonl"))
@@ -376,7 +375,7 @@ func TestZencoderProviderDiscoversEmptyDir(t *testing.T) {
 		Machine: "local",
 	})
 	require.True(t, ok)
-	files, err := provider.Discover(context.Background())
+	files, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, files)
 }
@@ -394,7 +393,7 @@ func TestZencoderProviderFindsSourceFile(t *testing.T) {
 	})
 	require.True(t, ok)
 	found, ok, err := provider.FindSource(
-		context.Background(),
+		t.Context(),
 		FindSourceRequest{RawSessionID: "abc-def-123"},
 	)
 	require.NoError(t, err)
@@ -403,7 +402,7 @@ func TestZencoderProviderFindsSourceFile(t *testing.T) {
 
 	// Non-existent ID.
 	_, ok, err = provider.FindSource(
-		context.Background(),
+		t.Context(),
 		FindSourceRequest{RawSessionID: "nonexistent"},
 	)
 	require.NoError(t, err)
@@ -416,7 +415,7 @@ func TestZencoderProviderFindsSourceFile(t *testing.T) {
 	})
 	require.True(t, ok)
 	_, ok, err = emptyProvider.FindSource(
-		context.Background(),
+		t.Context(),
 		FindSourceRequest{RawSessionID: "abc-def-123"},
 	)
 	require.NoError(t, err)
@@ -474,8 +473,8 @@ func TestZencoderProviderParsesSubagentSessionID(t *testing.T) {
 
 	// The assistant message should have the tool call with
 	// SubagentSessionID set from the tool-result's <session-id>.
-	require.Equal(t, 3, len(msgs))
-	require.Equal(t, 1, len(msgs[1].ToolCalls))
+	require.Len(t, msgs, 3)
+	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Equal(t,
 		"zencoder:child-abc-123",
 		msgs[1].ToolCalls[0].SubagentSessionID,
@@ -503,13 +502,11 @@ func TestZencoderProviderParsesSubagentMultiple(t *testing.T) {
 	_, msgs, err := runZencoderParserTest(t, content)
 	require.NoError(t, err)
 
-	require.Equal(t, 2, len(msgs[1].ToolCalls))
-	assert.Equal(t,
-		"zencoder:child-aaa",
+	require.Len(t, msgs[1].ToolCalls, 2)
+	assert.Equal(t, "zencoder:child-aaa",
 		msgs[1].ToolCalls[0].SubagentSessionID,
 	)
-	assert.Equal(t,
-		"zencoder:child-bbb",
+	assert.Equal(t, "zencoder:child-bbb",
 		msgs[1].ToolCalls[1].SubagentSessionID,
 	)
 }
@@ -532,7 +529,7 @@ func TestZencoderProviderParsesNoSessionIDTag(t *testing.T) {
 	require.NoError(t, err)
 
 	// Non-subagent tool call should have empty SubagentSessionID.
-	require.Equal(t, 1, len(msgs[1].ToolCalls))
+	require.Len(t, msgs[1].ToolCalls, 1)
 	assert.Empty(t, msgs[1].ToolCalls[0].SubagentSessionID)
 }
 
@@ -596,12 +593,12 @@ func TestZencoderProviderParsesToolResultSystemTags(t *testing.T) {
 
 	// msg[0]: user, msg[1]: assistant, msg[2]: tool result,
 	// msg[3]: system message from tool-result tags
-	require.Equal(t, 4, len(msgs))
+	require.Len(t, msgs, 4)
 
 	// Tool result message is unaffected.
 	assert.Equal(t, RoleUser, msgs[2].Role)
 	assert.False(t, msgs[2].IsSystem)
-	require.Equal(t, 1, len(msgs[2].ToolResults))
+	require.Len(t, msgs[2].ToolResults, 1)
 	assert.Equal(t, "tc1", msgs[2].ToolResults[0].ToolUseID)
 
 	// System message from tool-result tags.
@@ -686,11 +683,11 @@ func TestZencoderProviderParsesToolResultTaggedBlocksFilteredFromContentRaw(t *t
 			sess, msgs, err := runZencoderParserTest(t, content)
 			require.NoError(t, err)
 			require.NotNil(t, sess)
-			require.Equal(t, tt.wantMsgCount, len(msgs))
+			require.Len(t, msgs, tt.wantMsgCount)
 
 			// Tool result message is always at index 2.
 			toolMsg := msgs[2]
-			require.Equal(t, 1, len(toolMsg.ToolResults))
+			require.Len(t, toolMsg.ToolResults, 1)
 			tr := toolMsg.ToolResults[0]
 
 			// Verify ContentLength matches filtered content.
@@ -823,7 +820,7 @@ func TestZencoderProviderParsesMessageTimestamps(t *testing.T) {
 
 	_, msgs, err := runZencoderParserTest(t, content)
 	require.NoError(t, err)
-	require.Equal(t, 5, len(msgs))
+	require.Len(t, msgs, 5)
 
 	// System message.
 	wantSys := mustParseTime(t, "2024-01-01T00:00:01Z")
@@ -858,7 +855,7 @@ func TestZencoderProviderParsesMessageTimestamps_Missing(t *testing.T) {
 
 	_, msgs, err := runZencoderParserTest(t, content)
 	require.NoError(t, err)
-	require.Equal(t, 2, len(msgs))
+	require.Len(t, msgs, 2)
 
 	// Both messages should have zero time when createdAt is missing.
 	assert.True(t, msgs[0].Timestamp.IsZero())
@@ -869,7 +866,7 @@ func mustParseTime(t *testing.T, s string) time.Time {
 	t.Helper()
 	ts := parseTimestamp(s)
 	if ts.IsZero() {
-		t.Fatalf("failed to parse timestamp %q", s)
+		require.FailNowf(t, "test failed", "failed to parse timestamp %q", s)
 	}
 	return ts
 }

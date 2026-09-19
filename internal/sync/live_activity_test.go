@@ -483,11 +483,11 @@ func TestLiveActivityOlderHintDoesNotRegressHotRefreshRetry(t *testing.T) {
 
 	require.Error(t, err)
 	require.NotNil(t, poller.hot["codex:active"].refreshRetry)
-	assert.Equal(
-		t, newerHint, poller.hot["codex:active"].refreshRetry.firstSeen,
+	assert.Equal(t,
+		newerHint, poller.hot["codex:active"].refreshRetry.firstSeen,
 	)
-	assert.Equal(
-		t, newerHint, poller.hot["codex:active"].refreshRetry.lastHint,
+	assert.Equal(t,
+		newerHint, poller.hot["codex:active"].refreshRetry.lastHint,
 	)
 }
 
@@ -828,11 +828,11 @@ func TestLiveActivityRunStopsOnCancellation(t *testing.T) {
 	cancel()
 	poller := NewLiveActivityPoller(nil,
 		func(context.Context, string) (LiveActivitySource, bool, error) {
-			t.Fatal("lookup after cancellation")
+			require.FailNow(t, "lookup after cancellation")
 			return LiveActivitySource{}, false, nil
 		},
 		func(context.Context, []string) error {
-			t.Fatal("sync after cancellation")
+			require.FailNow(t, "sync after cancellation")
 			return nil
 		}, nil)
 	poller.Run(ctx)
@@ -1063,10 +1063,10 @@ func TestLiveActivityStopsAfterHintReadCancellation(t *testing.T) {
 		Hints:    decoder,
 		Sources:  sources,
 	}}, func(context.Context, string) (LiveActivitySource, bool, error) {
-		t.Fatal("lookup after hint cancellation")
+		require.FailNow(t, "lookup after hint cancellation")
 		return LiveActivitySource{}, false, nil
 	}, func(context.Context, []string) error {
-		t.Fatal("sync after hint cancellation")
+		require.FailNow(t, "sync after hint cancellation")
 		return nil
 	}, nil)
 
@@ -1152,6 +1152,7 @@ func runLiveActivityCardinalityCase(
 	unrelated int,
 ) LiveActivityPollStats {
 	t.Helper()
+
 	now := time.Unix(1_800_000_000, 0).UTC()
 	dir := t.TempDir()
 	for i := range unrelated {
@@ -1189,6 +1190,7 @@ func withoutHintBytes(stats LiveActivityPollStats) LiveActivityPollStats {
 
 func appendFile(t *testing.T, path string, content string) {
 	t.Helper()
+
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	require.NoError(t, err)
 	_, err = file.WriteString(content)

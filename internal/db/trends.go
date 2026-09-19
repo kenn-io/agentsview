@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -205,7 +206,7 @@ func ParseTrendTerms(values []string) ([]TrendTermInput, error) {
 		})
 	}
 	if len(terms) == 0 {
-		return nil, fmt.Errorf("at least one trend term is required")
+		return nil, errors.New("at least one trend term is required")
 	}
 	if len(terms) > MaxTrendTerms {
 		return nil, fmt.Errorf("trend query supports at most %d terms", MaxTrendTerms)
@@ -323,7 +324,7 @@ func isSingleWordMatcher(matcher string) bool {
 	if matcher == "" {
 		return false
 	}
-	for i := 0; i < len(matcher); i++ {
+	for i := range len(matcher) {
 		if !isWordByte(matcher[i]) {
 			return false
 		}

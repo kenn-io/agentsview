@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,6 +20,7 @@ import (
 // root plus the canonical chat-messages.json path.
 func seedCodebuffSingleSession(t *testing.T) (root, chatPath string) {
 	t.Helper()
+
 	root = t.TempDir()
 	dir := filepath.Join(root, "project-0", "chats", "2026-07-15T10-00-00.000Z")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
@@ -70,7 +70,7 @@ func TestSyncCodebuffWriteFailureDoesNotPersistStatHash(t *testing.T) {
 
 	database := dbtest.OpenTestDB(t)
 	root, chatPath := seedCodebuffSingleSession(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodebuff: {root},
 		},
@@ -88,14 +88,14 @@ func TestSyncCodebuffWriteFailureDoesNotPersistStatHash(t *testing.T) {
 		return 0, 0, len(batch), 0
 	}
 
-	failed := engine.SyncAll(context.Background(), nil)
+	failed := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, failed.Failed,
 		"the injected archive write must fail and be counted as failed")
 	assert.Zero(t, failed.Synced,
 		"no session may be reported synced when the write failed")
 
 	_, has, err := database.GetProviderStatHash(
-		context.Background(), parser.AgentCodebuff, chatPath,
+		t.Context(), parser.AgentCodebuff, chatPath,
 	)
 	require.NoError(t, err)
 	require.False(t, has,
@@ -107,14 +107,14 @@ func TestSyncCodebuffWriteFailureDoesNotPersistStatHash(t *testing.T) {
 	// suppressed — the session must now parse and commit, and the
 	// successful-write flush gate must stamp the digest.
 	engine.writeBatchOverride = nil
-	retry := engine.SyncAll(context.Background(), nil)
+	retry := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, retry.Synced,
 		"the retry after a transient write failure must parse and store "+
 			"the session; a skip here means a digest was stamped before "+
 			"the write outcome was confirmed")
 
 	_, hasAfter, err := database.GetProviderStatHash(
-		context.Background(), parser.AgentCodebuff, chatPath,
+		t.Context(), parser.AgentCodebuff, chatPath,
 	)
 	require.NoError(t, err)
 	require.True(t, hasAfter,

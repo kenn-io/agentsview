@@ -121,7 +121,7 @@ func TestCommitManifestRejectsInvalidResult(t *testing.T) {
 
 			result, err := client.CommitManifest(t.Context(), rawHTTPTestManifest())
 			require.Error(t, err)
-			assert.ErrorContains(t, err, tt.want)
+			require.ErrorContains(t, err, tt.want)
 			assert.Equal(t, rawsync.CommitResult{}, result)
 		})
 	}
@@ -184,6 +184,6 @@ func TestCommitManifestRejectsMissingReceipt(t *testing.T) {
 
 	result, err := client.CommitManifest(t.Context(), rawHTTPTestManifest())
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "missing receipt")
+	require.ErrorContains(t, err, "missing receipt")
 	assert.Equal(t, rawsync.CommitResult{}, result)
 }

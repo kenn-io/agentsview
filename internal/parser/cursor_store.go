@@ -318,7 +318,7 @@ func loadCursorStoreMeta(
 ) (cursorStoreMetaJSON, error) {
 	var raw string
 	err := q.QueryRowContext(ctx, `SELECT value FROM meta WHERE key = ?`, "0").Scan(&raw)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return cursorStoreMetaJSON{}, fmt.Errorf(
 			"%w: missing metadata key 0 for %s", errCursorStoreFormat, agentID,
 		)
@@ -570,7 +570,7 @@ func cursorStoreTimeMS(v uint64) (time.Time, bool) {
 	if v < 1_000_000_000_000 || v > 99_999_999_999_999 {
 		return time.Time{}, false
 	}
-	if v > uint64(^uint64(0)>>1) {
+	if v > (^uint64(0) >> 1) {
 		return time.Time{}, false
 	}
 	return time.UnixMilli(int64(v)).UTC(), true
@@ -592,6 +592,8 @@ func applyCursorStoreTurns(
 			expectedUsers++
 		case RoleAssistant:
 			expectedAssistants++
+		case RoleSystem, RoleTool:
+			// System and tool messages do not form user/assistant pairs.
 		}
 	}
 	expectedPairs := max(expectedUsers, expectedAssistants)

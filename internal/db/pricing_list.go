@@ -10,10 +10,6 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 )
 
-type pricingQuerier interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}
-
 // ListModelPricing returns every pricing row, including sentinel
 // metadata rows (for example `_fallback_version`).
 func (db *DB) ListModelPricing(
@@ -29,7 +25,7 @@ func (db *DB) listModelPricing(
 }
 
 func listModelPricingFrom(
-	ctx context.Context, q pricingQuerier,
+	ctx context.Context, q messageRowsQuerier,
 ) ([]ModelPricing, error) {
 	rows, err := q.QueryContext(
 		ctx,

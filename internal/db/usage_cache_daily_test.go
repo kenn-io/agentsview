@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"math"
 	"testing"
@@ -29,7 +28,7 @@ func TestRecordUsageFactsPricingSeparatesReportedAndBilledProvenance(t *testing.
 		asserted[resolution.OutputCostPerMTok.Microdollars] = true
 	}
 	if !asserted[1_000_000] || !asserted[1_100_000] {
-		t.Fatalf("reported and billed provenance merged: %#v", resolutions)
+		require.Failf(t, "reported and billed provenance merged", "%#v", resolutions)
 	}
 }
 
@@ -57,7 +56,7 @@ func TestAssembleDailyUsageFactsPropagatesBillingError(t *testing.T) {
 		Rates:        export.ModelRates{OutputPerMTok: money.Money{Microdollars: math.MaxInt64}},
 	}})
 	_, err := (&DB{}).assembleDailyUsageFacts(
-		context.Background(), UsageFilter{}, usageFactsResult{
+		t.Context(), UsageFilter{}, usageFactsResult{
 			Groups: []usageFactsGroup{{
 				Agent: "posit-assistant", ProviderID: "positai", Model: "model", PricedModel: "model",
 				ComputedAggregateCount: 1,
@@ -77,22 +76,26 @@ func TestPositBillingPublicAPIReproduction(t *testing.T) {
 		s.Agent = "posit-assistant"
 		s.StartedAt = new("2024-06-15T10:00:00Z")
 	})
-	insertMessages(t, d, Message{SessionID: "posit-repro", Ordinal: 0,
+	insertMessages(t, d, Message{
+		SessionID: "posit-repro", Ordinal: 0,
 		Role: "assistant", Timestamp: "2024-06-15T10:30:00Z",
 		Model: "repro-model", ProviderID: "positai",
-		TokenUsage: jsontext.Value(`{"input_tokens":1000000}`)})
+		TokenUsage: jsontext.Value(`{"input_tokens":1000000}`),
+	})
 	insertSession(t, d, "plain-repro", "repro", func(s *Session) {
 		s.Agent = "claude"
 		s.StartedAt = new("2024-06-15T10:00:00Z")
 	})
-	insertMessages(t, d, Message{SessionID: "plain-repro", Ordinal: 0,
+	insertMessages(t, d, Message{
+		SessionID: "plain-repro", Ordinal: 0,
 		Role: "assistant", Timestamp: "2024-06-15T10:30:00Z",
-		Model: "repro-model", TokenUsage: jsontext.Value(`{"input_tokens":1000000}`)})
+		Model: "repro-model", TokenUsage: jsontext.Value(`{"input_tokens":1000000}`),
+	})
 	filter := UsageFilter{
 		From: "2024-06-01", To: "2024-06-30", Breakdowns: true,
 	}
 	for range 2 {
-		result, err := d.GetDailyUsage(context.Background(), filter)
+		result, err := d.GetDailyUsage(t.Context(), filter)
 		require.NoError(t, err)
 		require.Len(t, result.Daily, 1)
 		costs := make(map[string]money.Money, len(result.Daily[0].AgentBreakdowns))
@@ -117,22 +120,26 @@ func TestPositBillingUsesProviderPerUsageRow(t *testing.T) {
 		s.StartedAt = new("2024-06-15T10:00:00Z")
 	})
 	insertMessages(t, d,
-		Message{SessionID: "mixed-provider", Ordinal: 0, Role: "assistant",
+		Message{
+			SessionID: "mixed-provider", Ordinal: 0, Role: "assistant",
 			Timestamp: "2024-06-15T10:30:00Z", Model: "mixed-provider-model",
 			ProviderID: "positai",
-			TokenUsage: jsontext.Value(`{"input_tokens":1000000}`)},
-		Message{SessionID: "mixed-provider", Ordinal: 1, Role: "assistant",
+			TokenUsage: jsontext.Value(`{"input_tokens":1000000}`),
+		},
+		Message{
+			SessionID: "mixed-provider", Ordinal: 1, Role: "assistant",
 			Timestamp: "2024-06-15T10:31:00Z", Model: "mixed-provider-model",
 			ProviderID: "anthropic",
-			TokenUsage: jsontext.Value(`{"input_tokens":1000000}`)},
+			TokenUsage: jsontext.Value(`{"input_tokens":1000000}`),
+		},
 	)
 
-	usage, err := d.GetSessionUsage(context.Background(), "mixed-provider", true)
+	usage, err := d.GetSessionUsage(t.Context(), "mixed-provider", true)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 	require.Equal(t, money.MustParseDollars("2.1"), usage.Cost)
 
-	daily, err := d.GetDailyUsage(context.Background(), UsageFilter{
+	daily, err := d.GetDailyUsage(t.Context(), UsageFilter{
 		From: "2024-06-01", To: "2024-06-30", Timezone: "UTC",
 	})
 	require.NoError(t, err)

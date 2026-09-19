@@ -41,11 +41,10 @@ func (s *Server) humaListStarred(
 	return &jsonOutput[starredResponse]{Body: starredResponse{SessionIDs: ids}}, nil
 }
 
-func (s *Server) humaStarSession(
-	_ context.Context,
+func (s *Server) humaStarSession(ctx context.Context,
 	in *idPathInput,
 ) (*noContentOutput, error) {
-	ok, err := s.db.StarSession(in.ID)
+	ok, err := s.db.StarSession(ctx, in.ID)
 	if err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
@@ -58,11 +57,10 @@ func (s *Server) humaStarSession(
 	return &noContentOutput{Status: http.StatusNoContent}, nil
 }
 
-func (s *Server) humaUnstarSession(
-	_ context.Context,
+func (s *Server) humaUnstarSession(ctx context.Context,
 	in *idPathInput,
 ) (*noContentOutput, error) {
-	if err := s.db.UnstarSession(in.ID); err != nil {
+	if err := s.db.UnstarSession(ctx, in.ID); err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
 		}
@@ -71,14 +69,13 @@ func (s *Server) humaUnstarSession(
 	return &noContentOutput{Status: http.StatusNoContent}, nil
 }
 
-func (s *Server) humaBulkStar(
-	_ context.Context,
+func (s *Server) humaBulkStar(ctx context.Context,
 	in *bulkStarInput,
 ) (*noContentOutput, error) {
 	if len(in.Body.SessionIDs) == 0 {
 		return &noContentOutput{Status: http.StatusNoContent}, nil
 	}
-	if err := s.db.BulkStarSessions(in.Body.SessionIDs); err != nil {
+	if err := s.db.BulkStarSessions(ctx, in.Body.SessionIDs); err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
 		}

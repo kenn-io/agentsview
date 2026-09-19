@@ -30,7 +30,7 @@ func TestEvenerRemoteFilesAndImport(t *testing.T) {
 	require.NoError(t, os.WriteFile(log, []byte("synthetic-operation-log"), 0o600))
 	targets, err := ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentType("evener"): {root}}})
 	require.NoError(t, err)
-	manifest, err := BuildManifest(targets)
+	manifest, err := BuildManifest(t.Context(), targets)
 	require.NoError(t, err)
 	var files []string
 	for _, f := range manifest.Files {
@@ -97,7 +97,7 @@ func TestEvenerRemoteSyncToleratesDeletedCompanions(t *testing.T) {
 				require.NoError(t, err)
 				selected, ok := SelectAllowedTargets(fresh, requested)
 				require.True(t, ok, "deleting a companion must not reject the sync request")
-				manifest, err := BuildManifest(selected)
+				manifest, err := BuildManifest(t.Context(), selected)
 				require.NoError(t, err)
 				var paths []string
 				for _, file := range manifest.Files {
@@ -124,7 +124,7 @@ func TestEvenerEmptyRemoteRootDoesNotExportUnrelatedState(t *testing.T) {
 	require.NoError(t, os.WriteFile(secret, []byte("synthetic-secret"), 0o600))
 	targets, err := ResolveTargets(config.Config{AgentDirs: map[parser.AgentType][]string{parser.AgentType("evener"): {root}}})
 	require.NoError(t, err)
-	manifest, err := BuildManifest(targets)
+	manifest, err := BuildManifest(t.Context(), targets)
 	require.NoError(t, err)
 	assert.Empty(t, manifest.Files)
 	_, allowed := SelectAllowedFiles(targets, []string{secret})
@@ -136,13 +136,13 @@ func TestEvenerRemoteDeltaRefreshesForkWhenParentArrives(t *testing.T) {
 	root := t.TempDir()
 	remoteDir := "/remote/evener"
 	local := filepath.Join(remappedRemotePath(root, remoteDir), "sessions")
-	require.NoError(t, os.MkdirAll(local, 0700))
+	require.NoError(t, os.MkdirAll(local, 0o700))
 	parent, err := os.ReadFile(filepath.Join("..", "sync", "testdata", "evener", "demo.transcript.jsonl"))
 	require.NoError(t, err)
 	child := strings.Replace(string(parent), `"session_id":"demo"`, `"session_id":"fork","parent_session_id":"demo"`, 1)
 	child += "{\"kind\":\"entry\",\"seq\":4,\"turn\":{\"kind\":\"USER_INPUT\",\"message\":{\"content\":[{\"kind\":\"text\",\"text\":\"child-only\"}]}}}\n"
-	require.NoError(t, os.WriteFile(filepath.Join(local, "fork.transcript.jsonl"), []byte(child), 0600))
-	require.NoError(t, os.WriteFile(filepath.Join(local, "fork.meta.json"), []byte(`{"id":"fork","parent_session_id":"demo","divergence_turn":4}`), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(local, "fork.transcript.jsonl"), []byte(child), 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(local, "fork.meta.json"), []byte(`{"id":"fork","parent_session_id":"demo","divergence_turn":4}`), 0o600))
 	targets := TargetSet{Dirs: map[parser.AgentType][]string{parser.AgentEvener: {remoteDir}}}
 	importer := Importer{Host: "remote", DB: database, Root: root, Targets: targets}
 	stats, err := importer.ImportExtracted(t.Context(), targets, root)
@@ -167,7 +167,7 @@ func TestEvenerRemoteDeltaRefreshesForkWhenParentArrives(t *testing.T) {
 			if tc.metadata != "" {
 				changedPath, content = filepath.Join(local, "demo.meta.json"), tc.metadata
 			}
-			require.NoError(t, os.WriteFile(changedPath, []byte(content), 0600))
+			require.NoError(t, os.WriteFile(changedPath, []byte(content), 0o600))
 			relative, err := mirrorRelativeLocalChangePath(root, changedPath)
 			require.NoError(t, err)
 			pending, err := importer.PreparePending(t.Context(), DeltaImportRequest{Journal: MirrorChangeJournal{Version: mirrorJournalVersion, Entries: []MirrorChangeEntry{{Path: relative}}}})

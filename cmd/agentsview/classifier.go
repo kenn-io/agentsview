@@ -126,7 +126,7 @@ func runClassifierRebuild(
 	}
 	defer func() { _ = writeLock.Close() }()
 
-	if err := clearSQLiteClassifierHash(cfg.DBPath); err != nil {
+	if err := clearSQLiteClassifierHash(ctx, cfg.DBPath); err != nil {
 		return fmt.Errorf("clearing SQLite hash: %w", err)
 	}
 
@@ -161,7 +161,7 @@ func runClassifierRebuild(
 	return nil
 }
 
-func clearSQLiteClassifierHash(dbPath string) error {
+func clearSQLiteClassifierHash(ctx context.Context, dbPath string) error {
 	if _, err := os.Stat(dbPath); errors.Is(err, os.ErrNotExist) {
 		// Nothing to clear; first open will write the hash.
 		return nil
@@ -171,7 +171,7 @@ func clearSQLiteClassifierHash(dbPath string) error {
 		return err
 	}
 	defer conn.Close()
-	_, err = conn.Exec(
+	_, err = conn.ExecContext(ctx,
 		`DELETE FROM stats WHERE key = ?`,
 		db.ClassifierHashKey,
 	)

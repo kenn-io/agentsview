@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -42,7 +43,7 @@ func TestKiroProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
@@ -51,13 +52,13 @@ func TestKiroProviderSourceMethods(t *testing.T) {
 	assert.Contains(t, plan.Roots[0].IncludeGlobs, kiroSQLiteDBName)
 	assert.Contains(t, plan.Roots[0].IncludeGlobs, kiroSQLiteDBName+"-*")
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 2)
 	assert.Equal(t, dbPath, discovered[0].DisplayPath)
 	assert.Equal(t, legacyPath, discovered[1].DisplayPath)
 
-	foundSQLite, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	foundSQLite, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~kiro:sqlite-session",
 	})
 	require.NoError(t, err)
@@ -65,7 +66,7 @@ func TestKiroProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, KiroSQLiteVirtualPath(dbPath, "sqlite-session"), foundSQLite.DisplayPath)
 	assert.Equal(t, foundSQLite.DisplayPath, foundSQLite.FingerprintKey)
 
-	foundLegacy, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	foundLegacy, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "legacy-session",
 	})
 	require.NoError(t, err)
@@ -73,7 +74,7 @@ func TestKiroProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, legacyPath, foundLegacy.DisplayPath)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: dbPath + "-wal", EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -97,35 +98,35 @@ func TestKiroProviderParsePhysicalVirtualAndLegacySources(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
 
-	allOutcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	allOutcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	require.True(t, allOutcome.ResultSetComplete)
 	require.True(t, allOutcome.ForceReplace)
 	require.Len(t, allOutcome.Results, 1)
 	assert.Equal(t, "kiro:sqlite-session", allOutcome.Results[0].Result.Session.ID)
 
-	virtualSource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	virtualSource, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "sqlite-session",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
-	oneOutcome, err := provider.Parse(context.Background(), ParseRequest{Source: virtualSource})
+	oneOutcome, err := provider.Parse(t.Context(), ParseRequest{Source: virtualSource})
 	require.NoError(t, err)
 	require.True(t, oneOutcome.ResultSetComplete)
 	require.True(t, oneOutcome.ForceReplace)
 	require.Len(t, oneOutcome.Results, 1)
 	assert.Equal(t, "devbox", oneOutcome.Results[0].Result.Session.Machine)
 
-	legacySource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	legacySource, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: legacyPath,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
-	legacyOutcome, err := provider.Parse(context.Background(), ParseRequest{
+	legacyOutcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      legacySource,
 		Fingerprint: SourceFingerprint{Hash: "legacy-hash"},
 	})
@@ -140,7 +141,7 @@ func TestKiroProviderParsePhysicalVirtualAndLegacySources(t *testing.T) {
 	// this process still holds open.
 	require.NoError(t, db.Close())
 	require.NoError(t, os.Remove(dbPath))
-	missingOutcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	missingOutcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	assert.True(t, missingOutcome.ResultSetComplete)
 	// The backing DB file was deleted; preserve the stored sessions by not
@@ -223,20 +224,20 @@ func TestKiroProviderSkipsShadowedLegacySource(t *testing.T) {
 
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID:   "shadowed-session",
 		StoredFilePath: shadowedPath,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: source})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
 	require.NoError(t, err)
 	assert.True(t, outcome.ResultSetComplete)
 	assert.Len(t, outcome.Results, 1)
 	assert.Equal(t, "kiro:shadowed-session", outcome.Results[0].Result.Session.ID)
 
-	source, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID:  "host~kiro:shadowed-session",
 		StoredFilePath: shadowedPath,
 	})
@@ -264,18 +265,18 @@ func TestKiroProviderShadowsLegacyAcrossAllRoots(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, dbPath, discovered[0].DisplayPath)
 
-	legacySource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	legacySource, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID:   "shared-session",
 		StoredFilePath: legacyPath,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: legacySource,
 	})
 	require.NoError(t, err)
@@ -304,7 +305,7 @@ func TestKiroProviderZeroWinnerSQLitePreservesArchive(t *testing.T) {
 		Roots: []string{currentRoot, sqliteRoot},
 	})
 	require.True(t, ok)
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	var database SourceRef
 	var foundWinner bool
@@ -319,7 +320,7 @@ func TestKiroProviderZeroWinnerSQLitePreservesArchive(t *testing.T) {
 	require.True(t, foundWinner)
 	require.Equal(t, dbPath, database.DisplayPath)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: database})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: database})
 	require.NoError(t, err)
 	assert.Empty(t, outcome.Results)
 	assert.False(t, outcome.ForceReplace)
@@ -344,38 +345,38 @@ func TestKiroProviderFingerprintsSQLiteAndLegacySources(t *testing.T) {
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 
-	virtualSource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	virtualSource, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "sqlite-session",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
-	virtualFingerprint, err := provider.Fingerprint(context.Background(), virtualSource)
+	virtualFingerprint, err := provider.Fingerprint(t.Context(), virtualSource)
 	require.NoError(t, err)
 	assert.Equal(t, KiroSQLiteVirtualPath(dbPath, "sqlite-session"), virtualFingerprint.Key)
 	assert.Equal(t, int64(len(payload)), virtualFingerprint.Size)
 	assert.Equal(t, int64(1779012030000)*1_000_000, virtualFingerprint.MTimeNS)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.NotEmpty(t, sources)
 	sqliteSource := sources[0]
 	require.Equal(t, dbPath, sqliteSource.DisplayPath)
-	beforePhysical, err := provider.Fingerprint(context.Background(), sqliteSource)
+	beforePhysical, err := provider.Fingerprint(t.Context(), sqliteSource)
 	require.NoError(t, err)
 	walPath := dbPath + "-wal"
 	writeSourceFile(t, walPath, "wal")
 	walTime := time.Unix(0, beforePhysical.MTimeNS+int64(time.Second))
 	require.NoError(t, os.Chtimes(walPath, walTime, walTime))
-	afterPhysical, err := provider.Fingerprint(context.Background(), sqliteSource)
+	afterPhysical, err := provider.Fingerprint(t.Context(), sqliteSource)
 	require.NoError(t, err)
 	assert.Greater(t, afterPhysical.MTimeNS, beforePhysical.MTimeNS)
 
-	legacySource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	legacySource, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: legacyPath,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
-	legacyFingerprint, err := provider.Fingerprint(context.Background(), legacySource)
+	legacyFingerprint, err := provider.Fingerprint(t.Context(), legacySource)
 	require.NoError(t, err)
 	assert.Equal(t, legacyPath, legacyFingerprint.Key)
 	assert.NotEmpty(t, legacyFingerprint.Hash)
@@ -392,34 +393,34 @@ func TestKiroProviderMissingSQLiteSourcesCanReachParse(t *testing.T) {
 
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	physicalSource := sources[0]
-	virtualSource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	virtualSource, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "sqlite-session",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	_, err = db.Exec(`DELETE FROM conversations_v2 WHERE conversation_id = ?`, "sqlite-session")
+	_, err = db.ExecContext(t.Context(), `DELETE FROM conversations_v2 WHERE conversation_id = ?`, "sqlite-session")
 	require.NoError(t, err)
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath:     virtualSource.DisplayPath,
 		RequireFreshSource: true,
 	})
 	require.NoError(t, err)
 	assert.False(t, ok, "fresh lookup must reject a deleted SQLite row")
-	staleVirtualSource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	staleVirtualSource, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: virtualSource.DisplayPath,
 	})
 	require.NoError(t, err)
 	require.True(t, ok, "non-fresh lookup keeps virtual tombstone identity")
 	assert.Equal(t, virtualSource.DisplayPath, staleVirtualSource.DisplayPath)
-	virtualFingerprint, err := provider.Fingerprint(context.Background(), virtualSource)
+	virtualFingerprint, err := provider.Fingerprint(t.Context(), virtualSource)
 	require.NoError(t, err)
 	assert.Equal(t, virtualSource.FingerprintKey, virtualFingerprint.Key)
-	virtualOutcome, err := provider.Parse(context.Background(), ParseRequest{
+	virtualOutcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      virtualSource,
 		Fingerprint: virtualFingerprint,
 	})
@@ -430,16 +431,16 @@ func TestKiroProviderMissingSQLiteSourcesCanReachParse(t *testing.T) {
 
 	require.NoError(t, db.Close())
 	require.NoError(t, os.Remove(dbPath))
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath:     physicalSource.DisplayPath,
 		RequireFreshSource: true,
 	})
 	require.NoError(t, err)
 	assert.False(t, ok, "fresh lookup must reject a deleted SQLite DB")
-	physicalFingerprint, err := provider.Fingerprint(context.Background(), physicalSource)
+	physicalFingerprint, err := provider.Fingerprint(t.Context(), physicalSource)
 	require.NoError(t, err)
 	assert.Equal(t, physicalSource.FingerprintKey, physicalFingerprint.Key)
-	physicalOutcome, err := provider.Parse(context.Background(), ParseRequest{
+	physicalOutcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      physicalSource,
 		Fingerprint: physicalFingerprint,
 	})
@@ -482,11 +483,11 @@ func TestKiroProviderChangedPathTombstonesDeletedRow(t *testing.T) {
 	deletedPath := KiroSQLiteVirtualPath(dbPath, "deleted")
 
 	// Delete one row while the database file stays present.
-	_, err := db.Exec(`DELETE FROM conversations_v2 WHERE conversation_id = ?`, "deleted")
+	_, err := db.ExecContext(t.Context(), `DELETE FROM conversations_v2 WHERE conversation_id = ?`, "deleted")
 	require.NoError(t, err)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:              dbPath,
 			EventKind:         "write",
@@ -509,9 +510,9 @@ func TestKiroProviderChangedPathTombstonesDeletedRow(t *testing.T) {
 		}
 	}
 	require.NotEmpty(t, tombstone.DisplayPath, "deleted-row tombstone source")
-	fingerprint, err := provider.Fingerprint(context.Background(), tombstone)
+	fingerprint, err := provider.Fingerprint(t.Context(), tombstone)
 	require.NoError(t, err)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      tombstone,
 		Fingerprint: fingerprint,
 	})
@@ -527,7 +528,7 @@ func TestKiroProviderChangedPathTombstonesDeletedRow(t *testing.T) {
 	require.NoError(t, db.Close())
 	require.NoError(t, os.Remove(dbPath))
 	gone, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:              dbPath,
 			EventKind:         "remove",
@@ -559,7 +560,7 @@ func TestKiroProviderRejectsInvalidStoredSQLitePaths(t *testing.T) {
 		filepath.Join(root, "data-copy.sqlite3") + "#sqlite-session",
 		filepath.Join(root, "nested", kiroSQLiteDBName) + "#sqlite-session",
 	} {
-		_, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		_, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 			StoredFilePath:     path,
 			RequireFreshSource: true,
 		})
@@ -581,10 +582,10 @@ func TestKiroProviderCurrentLayoutParsesMessages(t *testing.T) {
 	}, "\n")+"\n")
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, "kiro:sess_0123456789abcdef", outcome.Results[0].Result.Session.ID)
@@ -610,29 +611,29 @@ func TestKiroProviderCurrentLayoutRejectsLookalikesAndEscapes(t *testing.T) {
 	}
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, valid, sources[0].DisplayPath)
 	for _, tc := range []struct{ id, path string }{
 		{"sess_0123456789abcdef", valid},
 	} {
-		found, foundOK, findErr := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: tc.id})
+		found, foundOK, findErr := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: tc.id})
 		require.NoError(t, findErr)
 		require.True(t, foundOK)
 		assert.Equal(t, tc.path, found.DisplayPath)
 	}
 	sidecar := filepath.Join(filepath.Dir(valid), "session.json")
 	writeSourceFile(t, sidecar, `{"title":"Synthetic"}`)
-	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{Path: sidecar, WatchRoot: root, EventKind: "write"})
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: sidecar, WatchRoot: root, EventKind: "write"})
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, valid, changed[0].DisplayPath)
-	changed, err = provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{Path: valid, WatchRoot: root, EventKind: "write"})
+	changed, err = provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: valid, WatchRoot: root, EventKind: "write"})
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, valid, changed[0].DisplayPath)
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: "sess_../escape"})
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: "sess_../escape"})
 	require.NoError(t, err)
 	assert.False(t, ok)
 }
@@ -645,15 +646,15 @@ func TestKiroProviderCurrentLayoutLifecycleAndExactLookup(t *testing.T) {
 	writeSourceFile(t, sidecar, `{"title":"Synthetic","workspacePaths":["/home/user/project"]}`)
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{Path: sidecar, WatchRoot: root, EventKind: "write"})
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: sidecar, WatchRoot: root, EventKind: "write"})
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, path, changed[0].DisplayPath)
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: "sess_0123456789abcdef"})
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: "sess_0123456789abcdef"})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, path, found.DisplayPath)
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Greater(t, fingerprint.Size, int64(len(`{"payload":{"type":"user","content":"hello"}}`)+1))
 }
@@ -668,17 +669,17 @@ func TestKiroProviderCurrentFingerprintIncludesSidecarContent(t *testing.T) {
 
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: rawID})
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: rawID})
 	require.NoError(t, err)
 	require.True(t, found)
-	before, err := provider.Fingerprint(context.Background(), source)
+	before, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(sidecar, []byte(`{"title":"B"}`), 0o644))
 	transcriptInfo, err := os.Stat(path)
 	require.NoError(t, err)
 	earlier := transcriptInfo.ModTime().Add(-time.Minute)
 	require.NoError(t, os.Chtimes(sidecar, earlier, earlier))
-	after, err := provider.Fingerprint(context.Background(), source)
+	after, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	assert.NotEqual(t, before.Hash, after.Hash)
 }
@@ -693,10 +694,10 @@ func TestKiroProviderCurrentMetadataDecodeFailureIsRetryable(t *testing.T) {
 
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: rawID})
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: rawID})
 	require.NoError(t, err)
 	require.True(t, found)
-	_, err = provider.Parse(context.Background(), ParseRequest{Source: source})
+	_, err = provider.Parse(t.Context(), ParseRequest{Source: source})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decode Kiro current metadata")
 }
@@ -713,10 +714,10 @@ func TestKiroProviderCurrentBoundsUseAcceptedMessageTimestamps(t *testing.T) {
 
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: rawID})
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: rawID})
 	require.NoError(t, err)
 	require.True(t, found)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: source})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	session := outcome.Results[0].Result.Session
@@ -738,7 +739,7 @@ func TestKiroProviderStablePathTieBreak(t *testing.T) {
 
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	found, foundOK, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: rawID})
+	found, foundOK, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: rawID})
 	require.NoError(t, err)
 	require.True(t, foundOK)
 	assert.Equal(t, direct, found.DisplayPath)
@@ -750,7 +751,7 @@ func TestKiroProviderDiscoveryFailsOnSQLiteMetadataError(t *testing.T) {
 	writeSourceFile(t, dbPath, "not a sqlite database")
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	_, err := provider.Discover(context.Background())
+	_, err := provider.Discover(t.Context())
 	assert.Error(t, err)
 }
 
@@ -764,7 +765,7 @@ func TestKiroProviderLogicalIdentityAndRankUnifyLegacyAndCurrent(t *testing.T) {
 
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, current, discovered[0].DisplayPath)
@@ -773,7 +774,7 @@ func TestKiroProviderLogicalIdentityAndRankUnifyLegacyAndCurrent(t *testing.T) {
 	var streamed []SourceRef
 	err = provider.(interface {
 		DiscoverEach(context.Context, func(SourceRef) error) error
-	}).DiscoverEach(context.Background(), func(source SourceRef) error {
+	}).DiscoverEach(t.Context(), func(source SourceRef) error {
 		streamed = append(streamed, source)
 		return nil
 	})
@@ -783,18 +784,18 @@ func TestKiroProviderLogicalIdentityAndRankUnifyLegacyAndCurrent(t *testing.T) {
 	ranker := provider.(ReconciliationSourceRanker)
 	assert.Equal(t, int64(1), ranker.ReconciliationSourceRank(streamed[0]).Class)
 	assert.Equal(t, int64(2), ranker.ReconciliationSourceRank(streamed[1]).Class)
-	legacySource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{StoredFilePath: legacy})
+	legacySource, ok, err := provider.FindSource(t.Context(), FindSourceRequest{StoredFilePath: legacy})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, rawID, legacySource.Key)
 	assert.Equal(t, int64(1), ranker.ReconciliationSourceRank(legacySource).Class)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: rawID})
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: rawID})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, current, found.DisplayPath)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: found})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: found})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	require.Len(t, outcome.Results[0].Result.Messages, 1)
@@ -810,17 +811,17 @@ func TestKiroProviderRejectsCurrentSymlinkEscapeOnLookupAndChange(t *testing.T) 
 	writeSourceFile(t, outsidePath, `{"payload":{"type":"user","content":"outside"}}`+"\n")
 	path := filepath.Join(root, "workspace", rawID, "messages.jsonl")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
+		require.FailNow(t, fmt.Sprint(err))
 	}
 	if err := os.Symlink(outsidePath, path); err != nil {
 		t.Skipf("symlink creation unavailable: %v", err)
 	}
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	_, ok, err := provider.FindSource(context.Background(), FindSourceRequest{StoredFilePath: path})
+	_, ok, err := provider.FindSource(t.Context(), FindSourceRequest{StoredFilePath: path})
 	require.NoError(t, err)
 	assert.False(t, ok)
-	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{Path: path, WatchRoot: root, EventKind: "write"})
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{Path: path, WatchRoot: root, EventKind: "write"})
 	require.NoError(t, err)
 	assert.Empty(t, changed)
 }
@@ -834,14 +835,14 @@ func TestKiroProviderFindSourceRanksAllRepresentationsAndRoots(t *testing.T) {
 	writeSourceFile(t, current, `{"payload":{"type":"user","content":"current"}}`+"\n")
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: rawID, StoredFilePath: legacy,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, current, found.DisplayPath,
 		"a non-pinned stored hint must use the same representation ranking as discovery")
-	pinned, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	pinned, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: rawID, StoredFilePath: legacy, PreferStoredSource: true,
 	})
 	require.NoError(t, err)
@@ -859,7 +860,7 @@ func TestKiroProviderChangedCurrentEventIncludesSQLiteDuplicate(t *testing.T) {
 		readKiroFixture(t, "standard_payload.json"), 1779012000000, 1779012030000)
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: current, WatchRoot: root, EventKind: "write",
 	})
 	require.NoError(t, err)
@@ -891,7 +892,7 @@ func TestKiroProviderChangedCurrentEventScansOnlyAffectedSession(t *testing.T) {
 		return os.ReadDir(path)
 	}
 
-	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: target, WatchRoot: root, EventKind: "write",
 	})
 	require.NoError(t, err)
@@ -911,7 +912,7 @@ func TestKiroProviderChangedCurrentEventIgnoresUnrelatedLegacyDamage(t *testing.
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 
-	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: current, WatchRoot: root, EventKind: "write",
 	})
 	require.NoError(t, err,
@@ -929,7 +930,7 @@ func TestKiroProviderChangedLegacyEventPreservesMetadataIdentity(t *testing.T) {
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 
-	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: path, WatchRoot: root, EventKind: "write",
 	})
 	require.NoError(t, err)
@@ -946,13 +947,13 @@ func TestKiroProviderLegacySidecarEventAndFingerprint(t *testing.T) {
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 
-	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: sidecar, WatchRoot: root, EventKind: "write",
 	})
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, path, changed[0].DisplayPath)
-	before, err := provider.Fingerprint(context.Background(), changed[0])
+	before, err := provider.Fingerprint(t.Context(), changed[0])
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(sidecar, []byte(
 		strings.Replace(
@@ -964,7 +965,7 @@ func TestKiroProviderLegacySidecarEventAndFingerprint(t *testing.T) {
 	require.NoError(t, err)
 	earlier := transcriptInfo.ModTime().Add(-time.Minute)
 	require.NoError(t, os.Chtimes(sidecar, earlier, earlier))
-	after, err := provider.Fingerprint(context.Background(), changed[0])
+	after, err := provider.Fingerprint(t.Context(), changed[0])
 	require.NoError(t, err)
 	assert.NotEqual(t, before.Hash, after.Hash)
 }
@@ -976,7 +977,7 @@ func TestKiroProviderLegacyMetadataDecodeFailureIsRetryable(t *testing.T) {
 	writeSourceFile(t, filepath.Join(root, "storage-name.json"), "{")
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	_, err := provider.Discover(context.Background())
+	_, err := provider.Discover(t.Context())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "decode Kiro legacy metadata")
 }
@@ -996,7 +997,7 @@ func TestKiroProviderChangedCurrentEventRanksMetadataMappedLegacy(t *testing.T) 
 	})
 	require.True(t, ok)
 
-	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: current, WatchRoot: currentRoot, EventKind: "write",
 	})
 	require.NoError(t, err)
@@ -1009,9 +1010,9 @@ func TestKiroProviderDiscoveryFailsOnCurrentRootReadError(t *testing.T) {
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 	provider.(*kiroProvider).sources.readDir = func(string) ([]os.DirEntry, error) {
-		return nil, fmt.Errorf("current root is unreadable")
+		return nil, errors.New("current root is unreadable")
 	}
-	_, err := provider.Discover(context.Background())
+	_, err := provider.Discover(t.Context())
 	assert.Error(t, err)
 }
 
@@ -1025,9 +1026,9 @@ func TestKiroProviderDiscoveryFailsOnCurrentWorkspaceReadError(t *testing.T) {
 		if samePath(path, root) {
 			return os.ReadDir(path)
 		}
-		return nil, fmt.Errorf("current workspace is unreadable")
+		return nil, errors.New("current workspace is unreadable")
 	}
-	_, err := provider.Discover(context.Background())
+	_, err := provider.Discover(t.Context())
 	assert.Error(t, err)
 }
 
@@ -1040,15 +1041,15 @@ func TestKiroProviderCurrentSidecarRequiresRegularContainedFile(t *testing.T) {
 	require.NoError(t, os.Mkdir(sidecar, 0o755))
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: sidecar, WatchRoot: root, EventKind: "write",
 	})
 	require.NoError(t, err)
 	assert.Empty(t, changed, "a directory named session.json is not metadata")
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Empty(t, outcome.Results[0].Result.Session.SessionName)
@@ -1067,12 +1068,12 @@ func TestKiroProviderRejectsSQLiteSymlinkEscape(t *testing.T) {
 
 	provider, ok := NewProvider(AgentKiro, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, sources)
 
 	virtual := KiroSQLiteVirtualPath(dbPath, "sqlite-session")
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: virtual,
 		RawSessionID:   "sqlite-session",
 	})
@@ -1099,7 +1100,7 @@ func TestKiroIDEProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
@@ -1107,20 +1108,20 @@ func TestKiroIDEProviderSourceMethods(t *testing.T) {
 	assert.Contains(t, plan.Roots[0].IncludeGlobs, "*.chat")
 	assert.Contains(t, plan.Roots[0].IncludeGlobs, "*.json")
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 2)
 	assert.Equal(t, oldPath, discovered[0].DisplayPath)
 	assert.Equal(t, newPath, discovered[1].DisplayPath)
 
-	foundOld, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	foundOld, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: oldWSHash + ":" + oldFileHash,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, oldPath, foundOld.DisplayPath)
 
-	foundNew, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	foundNew, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~kiro-ide:new-session",
 	})
 	require.NoError(t, err)
@@ -1142,18 +1143,18 @@ func TestKiroIDEProviderParsesOldAndNewSources(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
 
-	oldOutcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	oldOutcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	require.True(t, oldOutcome.ResultSetComplete)
 	require.Len(t, oldOutcome.Results, 1)
 	assert.Equal(t, "kiro-ide:"+oldWSHash+":"+oldFileHash, oldOutcome.Results[0].Result.Session.ID)
 	assert.Equal(t, "devbox", oldOutcome.Results[0].Result.Session.Machine)
 
-	newOutcome, err := provider.Parse(context.Background(), ParseRequest{
+	newOutcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[1],
 		Fingerprint: SourceFingerprint{Hash: "new-hash"},
 	})
@@ -1171,16 +1172,16 @@ func TestKiroIDEProviderFingerprintsSessionContent(t *testing.T) {
 
 	provider, ok := NewProvider(AgentKiroIDE, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "new-session",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
-	before, err := provider.Fingerprint(context.Background(), source)
+	before, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 
 	writeSourceFile(t, path, kiroIDEProviderNewFixture("Changed IDE question"))
-	after, err := provider.Fingerprint(context.Background(), source)
+	after, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	assert.NotEqual(t, before.Hash, after.Hash)
 }
@@ -1191,7 +1192,7 @@ func newKiroProviderSQLiteDBAt(t *testing.T, root string) (string, *sql.DB) {
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open kiro provider sqlite db")
 	t.Cleanup(func() { _ = db.Close() })
-	_, err = db.Exec(kiroSQLiteSchema)
+	_, err = db.ExecContext(t.Context(), kiroSQLiteSchema)
 	require.NoError(t, err, "create kiro sqlite schema")
 	return dbPath, db
 }
@@ -1229,24 +1230,24 @@ func TestKiroProviderIgnoresBareShmSibling(t *testing.T) {
 	require.True(t, ok)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: dbPath + "-shm", EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
 	assert.Empty(t, changed)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.NotEmpty(t, sources)
 	require.Equal(t, dbPath, sources[0].DisplayPath)
-	before, err := provider.Fingerprint(context.Background(), sources[0])
+	before, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 
 	shmPath := dbPath + "-shm"
 	writeSourceFile(t, shmPath, "shm")
 	shmTime := time.Unix(0, before.MTimeNS+int64(time.Hour))
 	require.NoError(t, os.Chtimes(shmPath, shmTime, shmTime))
-	after, err := provider.Fingerprint(context.Background(), sources[0])
+	after, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 	assert.Equal(t, before.MTimeNS, after.MTimeNS)
 }

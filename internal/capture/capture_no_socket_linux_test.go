@@ -4,7 +4,6 @@ package capture
 
 import (
 	"bufio"
-	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -28,7 +27,7 @@ func TestCaptureStartsNoListeningSocket(t *testing.T) {
 	workDir := t.TempDir()
 	done := make(chan error, 1)
 	go func() {
-		_, runErr := Run(context.Background(), RunOptions{
+		_, runErr := Run(t.Context(), RunOptions{
 			Provider: ProviderClaude, OccurrenceID: "no-listener",
 			CaptureDir: captureDir, ResultPath: resultPath,
 			ProviderRoot: root, WorkDir: workDir,

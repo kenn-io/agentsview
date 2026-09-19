@@ -19,7 +19,7 @@ func TestSessionSummaryExportRevisionFields(t *testing.T) {
 	})
 	// Preserve the decimal counter exactly, including beyond JSON's common
 	// floating-point integer range. Missing local timestamps stay unknown.
-	_, err := d.getWriter().Exec(`UPDATE sessions
+	_, err := d.getWriter().Exec(t.Context(), `UPDATE sessions
 		SET transcript_revision = '9007199254740993', local_modified_at = NULL
 		WHERE id = 'session-a'`)
 	require.NoError(t, err)
@@ -33,7 +33,7 @@ func TestSessionSummaryExportRevisionFields(t *testing.T) {
 	assert.Equal(t, "9007199254740993", row["transcript_revision"])
 	require.Contains(t, row, "local_modified_at")
 	assert.Nil(t, row["local_modified_at"])
-	_, err = d.getWriter().Exec(`UPDATE sessions
+	_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions
 		SET local_modified_at = '2026-05-02T11:00:00.123Z'
 		WHERE id = 'session-a'`)
 	require.NoError(t, err)
@@ -65,12 +65,12 @@ func TestSessionSummaryExportIndependentChangeSignals(t *testing.T) {
 			}, {
 				ModelPattern: "model-b", InputPerMTok: money.MustParseDollars("1"),
 			}}))
-			_, err := d.getWriter().Exec(`UPDATE model_pricing
+			_, err := d.getWriter().Exec(t.Context(), `UPDATE model_pricing
 				SET updated_at = '2100-01-01T00:00:00Z' WHERE model_pattern = 'model-b'`)
 			require.NoError(t, err)
 			// An old local timestamp makes a wall-clock mutation observable
 			// without sleeping or relying on sub-millisecond test timing.
-			_, err = d.getWriter().Exec(`UPDATE sessions
+			_, err = d.getWriter().Exec(t.Context(), `UPDATE sessions
 				SET local_modified_at = '2026-05-01T10:01:00Z'`)
 			require.NoError(t, err)
 			before, err := d.ExportSessionSummaries(t.Context(), SessionExportOptions{})
@@ -79,9 +79,9 @@ func TestSessionSummaryExportIndependentChangeSignals(t *testing.T) {
 			switch kind {
 			case "transcript":
 				message.TokenUsage = []byte(`{"input_tokens":50,"output_tokens":20}`)
-				require.NoError(t, d.ReplaceSessionMessages("session-a", []Message{message}))
+				require.NoError(t, d.ReplaceSessionMessages(t.Context(), "session-a", []Message{message}))
 			case "usage-event":
-				require.NoError(t, d.ReplaceSessionUsageEvents("session-a", []UsageEvent{{
+				require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), "session-a", []UsageEvent{{
 					Source: "provider", Model: "model-a", InputTokens: 200,
 					OccurredAt: "2026-05-01T09:59:00Z",
 				}}))
@@ -142,9 +142,9 @@ func TestSessionSummaryExportTranscriptRevisionSurvivesResync(t *testing.T) {
 				TokenUsage: []byte(`{"input_tokens":100,"output_tokens":20}`),
 			}
 			insertMessages(t, source, message)
-			_, err := source.getWriter().Exec(`UPDATE sessions SET transcript_revision = '7'`)
+			_, err := source.getWriter().Exec(t.Context(), `UPDATE sessions SET transcript_revision = '7'`)
 			require.NoError(t, err)
-			require.NoError(t, source.CloseConnections())
+			require.NoError(t, source.CloseConnections(t.Context()))
 			rebuilt := testDB(t)
 			require.NoError(t, rebuilt.CopyArchiveIdentityFrom(source.Path()))
 			insertExportSession(t, rebuilt, session)

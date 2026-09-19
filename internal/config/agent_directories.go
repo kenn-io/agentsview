@@ -2,6 +2,7 @@ package config
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"log"
 	"maps"
@@ -27,7 +28,7 @@ func (c *Config) applyAgentDirectories(value any) error {
 	}
 	agents, ok := value.(map[string]any)
 	if !ok {
-		return fmt.Errorf("agents: expected a TOML table")
+		return errors.New("agents: expected a TOML table")
 	}
 	for _, name := range slices.Sorted(maps.Keys(agents)) {
 		def, ok := parser.AgentByType(parser.AgentType(name))
@@ -154,6 +155,8 @@ func convertAgentTableMap(raw map[string]any) (bool, error) {
 			keys["claude_homes"] = "homes"
 		case parser.AgentCodex:
 			keys["codex_homes"] = "homes"
+		default:
+			// Other providers only have the canonical dirs field.
 		}
 		for _, key := range slices.Sorted(maps.Keys(keys)) {
 			value, exists := raw[key]
@@ -208,7 +211,7 @@ func (c *Config) migrateAgentTables() error {
 			_ = temp.Close()
 			return fmt.Errorf("setting temporary agent configuration permissions: %w", err)
 		}
-		if _, err := temp.Write([]byte(converted)); err != nil {
+		if _, err := temp.WriteString(converted); err != nil {
 			_ = temp.Close()
 			return fmt.Errorf("writing temporary agent configuration: %w", err)
 		}

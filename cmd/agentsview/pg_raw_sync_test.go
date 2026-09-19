@@ -57,7 +57,7 @@ func TestPreparePGRawSyncServicesWiresRuntimeStatusRoute(t *testing.T) {
 		WriteTimeout: 30 * time.Second,
 	}, nil, nil, option)
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/raw-sync/status", nil)
+	request := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/raw-sync/status", nil)
 	request.Host = "127.0.0.1:8080"
 	request.Header.Set("Authorization", "Bearer legacy-shared-token")
 	srv.Handler().ServeHTTP(recorder, request)

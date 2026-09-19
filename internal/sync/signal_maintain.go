@@ -92,7 +92,7 @@ func (m *incrementalSignalMaintainer) MaintainTx(
 	}
 	var state signals.IncrementalState
 	if err := state.UnmarshalBinary(stored.State); err != nil {
-		return nil, nil
+		return nil, nil //nolint:nilerr // Malformed cached reducer state forces full signal recomputation.
 	}
 	// The persisted state and the pre-write session row must both be at
 	// the current quality and secrets rules versions. Requiring the
@@ -258,7 +258,7 @@ func (m *incrementalSignalMaintainer) MaintainTx(
 		if msg.IsSystem || msg.SourceSubtype == string(parser.SourceSubtypeToolResult) {
 			continue
 		}
-		lastRole, lastContent = string(msg.Role), msg.Content
+		lastRole, lastContent = msg.Role, msg.Content
 		if msg.Role == "assistant" && msg.Model != "" {
 			if _, seen := modelCounts[msg.Model]; !seen {
 				modelFirstSeen[msg.Model] = msgIndex

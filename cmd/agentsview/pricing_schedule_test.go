@@ -122,7 +122,7 @@ func TestPricingWritesWaitForResyncSwap(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			database := dbtest.OpenTestDB(t)
-			engine := agentsync.NewEngine(database, agentsync.EngineConfig{})
+			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{})
 			t.Cleanup(engine.Close)
 			dbtest.EnsureTestDBAt(t, engine.ResyncTempPath())
 
@@ -138,7 +138,7 @@ func TestPricingWritesWaitForResyncSwap(t *testing.T) {
 					if _, err := engine.SwapResyncDatabase(engine.ResyncTempPath()); err != nil {
 						return err
 					}
-					return engine.ResetCachesAfterSwap()
+					return engine.ResetCachesAfterSwap(t.Context())
 				})
 			}()
 			awaitPricingResult(t, swapEntered)
@@ -175,6 +175,6 @@ func awaitPricingResult(t *testing.T, result <-chan error) {
 	case err := <-result:
 		require.NoError(t, err)
 	case <-time.After(pricingResyncTestTimeout):
-		t.Fatal("pricing operation did not finish")
+		require.FailNow(t, "pricing operation did not finish")
 	}
 }

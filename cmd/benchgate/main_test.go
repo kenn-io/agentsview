@@ -96,8 +96,8 @@ func TestParseBench(t *testing.T) {
 				gotUnits, ok := got[name]
 				require.True(t, ok, "missing benchmark %s", name)
 				for unit, wantVals := range wantUnits {
-					assert.InDeltaSlice(
-						t, wantVals, gotUnits[unit], 1e-15,
+					assert.InDeltaSlice(t,
+						wantVals, gotUnits[unit], 1e-15,
 						"%s %s", name, unit,
 					)
 				}

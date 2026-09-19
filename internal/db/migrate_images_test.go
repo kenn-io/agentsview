@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -36,7 +37,7 @@ func errorPut(_ string, _ []byte) (string, bool, error) {
 // hexSHA256 computes the lowercase hex SHA-256 of b.
 func hexSHA256(b []byte) string {
 	sum := sha256.Sum256(b)
-	return fmt.Sprintf("%x", sum[:])
+	return hex.EncodeToString(sum[:])
 }
 
 // realPut returns a put closure backed by the production asset writer.
@@ -98,7 +99,7 @@ func TestMigrateLeavesBlockInlineWhenPutFails(t *testing.T) {
 	insertMessages(t, d, testImageMessage("fail-put"))
 
 	var beforeContent string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "fail-put",
 	).Scan(&beforeContent))
 	assert.Contains(t, beforeContent, "input_image")
@@ -107,13 +108,12 @@ func TestMigrateLeavesBlockInlineWhenPutFails(t *testing.T) {
 	require.Error(t, err)
 
 	var afterContent string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "fail-put",
 	).Scan(&afterContent))
 	// Boundary: 0 rows carrying image_ref after failure.
 	assert.Equal(t, beforeContent, afterContent)
 	assert.NotContains(t, afterContent, "image_ref")
-
 }
 
 // TestMigratePartialFailurePreservesReport verifies the partial-failure contract:
@@ -131,7 +131,7 @@ func TestMigratePartialFailurePreservesReport(t *testing.T) {
 
 	// Snapshot second session content before migration.
 	var secondBefore string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "pf-second",
 	).Scan(&secondBefore))
 
@@ -159,7 +159,7 @@ func TestMigratePartialFailurePreservesReport(t *testing.T) {
 
 	// First session's row is migrated.
 	var firstAfter string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "pf-first",
 	).Scan(&firstAfter))
 	assert.Contains(t, firstAfter, "image_ref")
@@ -167,7 +167,7 @@ func TestMigratePartialFailurePreservesReport(t *testing.T) {
 
 	// Second session's row is unchanged.
 	var secondAfter string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "pf-second",
 	).Scan(&secondAfter))
 	assert.Equal(t, secondBefore, secondAfter)
@@ -206,13 +206,13 @@ func TestMigrateCancellationPreservesReport(t *testing.T) {
 	t.Logf("cancellation report: sessions=%d changed=%d payloads=%d", report.Sessions, report.Changed, report.Payloads)
 
 	var firstContent string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(context.WithoutCancel(ctx),
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "cancel-first",
 	).Scan(&firstContent))
 	assert.Contains(t, firstContent, "image_ref")
 
 	var secondContent string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(context.WithoutCancel(ctx),
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "cancel-second",
 	).Scan(&secondContent))
 	assert.Contains(t, secondContent, "input_image")
@@ -238,7 +238,7 @@ func TestMigrateStatsFailurePreservesReport(t *testing.T) {
 		}
 		applies++
 		if applies == 1 {
-			_, err = d.getWriter().Exec("DROP TABLE tool_result_events")
+			_, err = d.getWriter().Exec(ctx, "DROP TABLE tool_result_events")
 			require.NoError(t, err)
 		}
 		return changed, nil
@@ -246,7 +246,7 @@ func TestMigrateStatsFailurePreservesReport(t *testing.T) {
 
 	report, err := d.scanToolImages(t.Context(), StripImagesFilter{}, countMigratable, apply)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "tool result bytes")
+	require.ErrorContains(t, err, "tool result bytes")
 	assert.Equal(t, 1, report.Sessions)
 	assert.Equal(t, 1, report.Changed)
 	assert.Equal(t, int64(1), report.Payloads)
@@ -288,7 +288,7 @@ func TestMigratedReferenceMatchesStoredFile(t *testing.T) {
 			assert.Equal(t, 1, report.Changed)
 
 			var storedContent string
-			require.NoError(t, d.getReader().QueryRow(
+			require.NoError(t, d.getReader().QueryRow(t.Context(),
 				"SELECT content FROM tool_result_events WHERE session_id = ?", "ref-match",
 			).Scan(&storedContent))
 			assert.NotContains(t, storedContent, "input_image")
@@ -327,7 +327,7 @@ func TestMigratedReferenceMatchesStoredFile(t *testing.T) {
 			assert.NotContains(t, call.ResultContent, "input_image")
 
 			var summaryLength, eventLength int
-			require.NoError(t, d.getReader().QueryRow(`
+			require.NoError(t, d.getReader().QueryRow(t.Context(), `
 				SELECT tc.result_content_length, ev.content_length
 				FROM tool_calls tc
 				JOIN messages m ON m.id = tc.message_id
@@ -356,7 +356,7 @@ func TestMigrateWritesBeforeCommit(t *testing.T) {
 
 	insertSession(t, d, "write-before-commit", "project")
 	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
-	_, err := d.getWriter().Exec(`
+	_, err := d.getWriter().Exec(t.Context(), `
 		INSERT INTO tool_result_events
 			(session_id, tool_call_message_ordinal, call_index,
 			 tool_use_id, agent_id, subagent_session_id,
@@ -372,8 +372,8 @@ func TestMigrateWritesBeforeCommit(t *testing.T) {
 	// Trigger that fires after bumpTranscriptRevisionTx updates transcript_revision,
 	// aborting the transaction. At that point content UPDATEs have run but the
 	// file has already been written to disk (projection runs before UPDATEs).
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
 			CREATE TRIGGER fail_after_revision_bump
 			AFTER UPDATE OF transcript_revision ON sessions
 			BEGIN
@@ -395,7 +395,7 @@ func TestMigrateWritesBeforeCommit(t *testing.T) {
 
 	// Archive row still carries inline content.
 	var storedAfterFail string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT content FROM tool_result_events WHERE session_id = ?",
 		"write-before-commit",
 	).Scan(&storedAfterFail))
@@ -403,7 +403,7 @@ func TestMigrateWritesBeforeCommit(t *testing.T) {
 	assert.NotContains(t, storedAfterFail, "image_ref")
 
 	// Drop the trigger so the retry can succeed.
-	_, err = d.getWriter().Exec(`DROP TRIGGER fail_after_revision_bump`)
+	_, err = d.getWriter().Exec(t.Context(), `DROP TRIGGER fail_after_revision_bump`)
 	require.NoError(t, err)
 
 	// Retry converges: same file (created=false), row now has image_ref.
@@ -432,7 +432,7 @@ func TestMigrateSkipsStrippedAndUnservable(t *testing.T) {
 	// Inline SVG: accepted by decodeInlineImage but not in the four passive media types.
 	svgContent := `[{"type":"input_image","image_url":"data:image/svg+xml;base64,PHN2Zy8+"}]`
 
-	_, err := d.getWriter().Exec(`
+	_, err := d.getWriter().Exec(t.Context(), `
 		INSERT INTO tool_result_events
 			(session_id, tool_call_message_ordinal, call_index,
 			 tool_use_id, agent_id, subagent_session_id,
@@ -446,7 +446,7 @@ func TestMigrateSkipsStrippedAndUnservable(t *testing.T) {
 	require.NoError(t, err)
 
 	var beforeRevision string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT transcript_revision FROM sessions WHERE id = ?", "skip-ineligible",
 	).Scan(&beforeRevision))
 
@@ -464,7 +464,7 @@ func TestMigrateSkipsStrippedAndUnservable(t *testing.T) {
 
 	// SVG payload stays inline.
 	var svgAfter string
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `
 		SELECT content FROM tool_result_events
 		WHERE session_id = ? AND event_index = 1`, "skip-ineligible",
 	).Scan(&svgAfter))
@@ -472,7 +472,7 @@ func TestMigrateSkipsStrippedAndUnservable(t *testing.T) {
 
 	// Revision unchanged.
 	var afterRevision string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT transcript_revision FROM sessions WHERE id = ?", "skip-ineligible",
 	).Scan(&afterRevision))
 	assert.Equal(t, beforeRevision, afterRevision)
@@ -491,7 +491,7 @@ func TestMigrateRejectsUnsupportedImageMediaTypes(t *testing.T) {
 
 			content := `[{"type":"input_image","image_url":"data:` +
 				mediaType + `;base64,AAEC"}]`
-			_, err := d.getWriter().Exec(`
+			_, err := d.getWriter().Exec(t.Context(), `
 				INSERT INTO tool_result_events
 					(session_id, tool_call_message_ordinal, call_index,
 					 tool_use_id, agent_id, subagent_session_id,
@@ -508,7 +508,7 @@ func TestMigrateRejectsUnsupportedImageMediaTypes(t *testing.T) {
 			assert.Zero(t, report.Payloads)
 
 			var after string
-			require.NoError(t, d.getReader().QueryRow(
+			require.NoError(t, d.getReader().QueryRow(t.Context(),
 				"SELECT content FROM tool_result_events WHERE session_id = ?", "reject-media",
 			).Scan(&after))
 			assert.Equal(t, content, after)
@@ -539,7 +539,7 @@ func TestMigratePreviewAndApplyAgreeOnUnsupportedType(t *testing.T) {
 
 	content := `[{"TYPE":"input_image","IMAGE_URL":"data:image/png;base64,AAEC"},` +
 		`{"type":"input_image","image_url":"data:image/bmp;base64,AAEC"}]`
-	_, err := d.getWriter().Exec(`
+	_, err := d.getWriter().Exec(t.Context(), `
 		INSERT INTO tool_result_events
 			(session_id, tool_call_message_ordinal, call_index,
 			 tool_use_id, agent_id, subagent_session_id,
@@ -568,7 +568,7 @@ func TestMigratePreviewAndApplyAgreeOnUnsupportedType(t *testing.T) {
 	assert.Equal(t, []string{"image/png"}, putTypes)
 
 	var after string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "mixed-media",
 	).Scan(&after))
 	assert.Contains(t, after, "image_ref")
@@ -619,7 +619,7 @@ func TestMigrateNoOpPreservesRevisionAndQueue(t *testing.T) {
 	})
 
 	var beforeRevision string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT transcript_revision FROM sessions WHERE id = ?", "noop-session",
 	).Scan(&beforeRevision))
 
@@ -627,7 +627,7 @@ func TestMigrateNoOpPreservesRevisionAndQueue(t *testing.T) {
 	// detectable. rewriteStoredToolResultRows touches quality_signal_version
 	// (invalidateSessionSignalsTx) and last_write_incremental
 	// (resetIncrementalMarkerTx) on every change; we verify both are unchanged.
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(t.Context(),
 		"UPDATE sessions SET quality_signal_version = 7, last_write_incremental = 1 WHERE id = ?",
 		"noop-session",
 	)
@@ -644,7 +644,7 @@ func TestMigrateNoOpPreservesRevisionAndQueue(t *testing.T) {
 	assert.Zero(t, report.Changed)
 
 	var afterRevision string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT transcript_revision FROM sessions WHERE id = ?", "noop-session",
 	).Scan(&afterRevision))
 	assert.Equal(t, beforeRevision, afterRevision)
@@ -652,14 +652,14 @@ func TestMigrateNoOpPreservesRevisionAndQueue(t *testing.T) {
 	// No new publication queued: pending stays 0 (clearArtifactExportQueue zeros
 	// rows but does not delete them).
 	var pending int
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT pending FROM artifact_export_queue WHERE session_id = ?", "noop-session",
 	).Scan(&pending))
 	assert.Zero(t, pending)
 
 	// Signal invalidation and incremental-marker reset must not fire.
 	var qualitySignalVersion, lastWriteIncremental int
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT quality_signal_version, last_write_incremental FROM sessions WHERE id = ?",
 		"noop-session",
 	).Scan(&qualitySignalVersion, &lastWriteIncremental))
@@ -698,7 +698,7 @@ func TestMigrateDeduplicatesAcrossSessions(t *testing.T) {
 	refs := make([]string, 0, 2)
 	for _, id := range []string{"dedup-a", "dedup-b"} {
 		var content string
-		require.NoError(t, d.getReader().QueryRow(
+		require.NoError(t, d.getReader().QueryRow(t.Context(),
 			"SELECT content FROM tool_result_events WHERE session_id = ?", id,
 		).Scan(&content))
 		var blocks []json.RawMessage
@@ -750,7 +750,7 @@ func TestMigrateStateMatrix(t *testing.T) {
 		assetsDir := t.TempDir()
 		insertSession(t, d, "tombstoned", "project")
 		insertMessages(t, d, testImageMessage("tombstoned"))
-		_, err := d.getWriter().Exec("DELETE FROM sessions WHERE id = ?", "tombstoned")
+		_, err := d.getWriter().Exec(t.Context(), "DELETE FROM sessions WHERE id = ?", "tombstoned")
 		require.NoError(t, err)
 		report, err := d.MigrateToolImages(t.Context(), StripImagesFilter{}, realPut(assetsDir))
 		require.NoError(t, err)
@@ -768,12 +768,12 @@ func TestMigrateStateMatrix(t *testing.T) {
 		insertSession(t, d, "srcmissing-mig", "project")
 		insertMessages(t, d, testImageMessage("trashed-mig"))
 		insertMessages(t, d, testImageMessage("srcmissing-mig"))
-		require.NoError(t, d.SoftDeleteSession("trashed-mig"))
+		require.NoError(t, d.SoftDeleteSession(t.Context(), "trashed-mig"))
 		sourcePath := filepath.Join(t.TempDir(), "missing.jsonl")
 		insertSession(t, d, "srcmissing-mig", "project", func(s *Session) {
 			s.FilePath = &sourcePath
 		})
-		_, err := d.getWriter().Exec(
+		_, err := d.getWriter().Exec(t.Context(),
 			"UPDATE sessions SET source_missing_at = ? WHERE id = ?",
 			"2026-01-01T00:00:00Z", "srcmissing-mig",
 		)
@@ -793,7 +793,7 @@ func TestMigrateStateMatrix(t *testing.T) {
 
 		// Multiline labeled-summary: agent-a has an inline image, agent-b is plain.
 		labeledContent := "agent-a:\n" + testInlineImageContent() + "\n\nagent-b:\n[{\"type\":\"text\",\"text\":\"plain\"}]"
-		_, err := d.getWriter().Exec(`
+		_, err := d.getWriter().Exec(t.Context(), `
 			INSERT INTO tool_result_events
 				(session_id, tool_call_message_ordinal, call_index,
 				 tool_use_id, agent_id, subagent_session_id,
@@ -810,7 +810,7 @@ func TestMigrateStateMatrix(t *testing.T) {
 		assert.Equal(t, 1, report.Changed)
 
 		var stored string
-		require.NoError(t, d.getReader().QueryRow(
+		require.NoError(t, d.getReader().QueryRow(t.Context(),
 			"SELECT content FROM tool_result_events WHERE session_id = ?", "labeled-sum",
 		).Scan(&stored))
 		assert.Contains(t, stored, "image_ref")
@@ -832,7 +832,7 @@ func TestMigrateStateMatrix(t *testing.T) {
 		// Slice-1 placeholder already stored (simulates a later result stripped at ingest).
 		strippedContent := `[{"byte_size":3,"media_type":"image/png","sha256":"","text":"[Image: image/png, 3 bytes]","type":"agentsview_image","version":1}]`
 
-		_, err := d.getWriter().Exec(`
+		_, err := d.getWriter().Exec(t.Context(), `
 			INSERT INTO tool_result_events
 				(session_id, tool_call_message_ordinal, call_index,
 				 tool_use_id, agent_id, subagent_session_id,
@@ -852,7 +852,7 @@ func TestMigrateStateMatrix(t *testing.T) {
 
 		// Inline event is migrated.
 		var inlineAfter string
-		require.NoError(t, d.getReader().QueryRow(`
+		require.NoError(t, d.getReader().QueryRow(t.Context(), `
 			SELECT content FROM tool_result_events
 			WHERE session_id = ? AND event_index = 0`, "ktd-session",
 		).Scan(&inlineAfter))
@@ -860,7 +860,7 @@ func TestMigrateStateMatrix(t *testing.T) {
 
 		// Already-stripped event is unchanged.
 		var strippedAfter string
-		require.NoError(t, d.getReader().QueryRow(`
+		require.NoError(t, d.getReader().QueryRow(t.Context(), `
 			SELECT content FROM tool_result_events
 			WHERE session_id = ? AND event_index = 1`, "ktd-session",
 		).Scan(&strippedAfter))
@@ -876,7 +876,7 @@ func TestMigrateStateMatrix(t *testing.T) {
 
 		// Insert a late-arriving event directly (simulates WriteSessionIncremental).
 		lateContent := `[{"type":"input_image","image_url":"data:image/gif;base64,AAEC"}]`
-		_, err := d.getWriter().Exec(`
+		_, err := d.getWriter().Exec(t.Context(), `
 			INSERT INTO tool_result_events
 				(session_id, tool_call_message_ordinal, call_index,
 				 tool_use_id, agent_id, subagent_session_id,
@@ -893,7 +893,7 @@ func TestMigrateStateMatrix(t *testing.T) {
 		assert.Equal(t, 1, report.Changed)
 
 		var stored string
-		require.NoError(t, d.getReader().QueryRow(
+		require.NoError(t, d.getReader().QueryRow(t.Context(),
 			"SELECT content FROM tool_result_events WHERE session_id = ?", "late-mig",
 		).Scan(&stored))
 		assert.Contains(t, stored, "image_ref")
@@ -950,7 +950,7 @@ func TestMigrateStateMatrix(t *testing.T) {
 		assert.Equal(t, 1, report.Changed)
 
 		var storedLen int
-		require.NoError(t, d.getReader().QueryRow(`
+		require.NoError(t, d.getReader().QueryRow(t.Context(), `
 			SELECT COALESCE(result_content_length, 0)
 			FROM tool_calls WHERE session_id = ? AND tool_use_id = ?`,
 			"blocked-nbr", "call-blocked",
@@ -979,7 +979,7 @@ func TestMigrateDeduplicatedSummaryKeepsCollapse(t *testing.T) {
 	// is positive (set to the event length at insert time).
 	var beforeCallContent string
 	var beforeLength int
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `
 		SELECT COALESCE(result_content, ''), result_content_length
 		FROM tool_calls WHERE session_id = ?`, "dedup-collapse",
 	).Scan(&beforeCallContent, &beforeLength))
@@ -992,14 +992,14 @@ func TestMigrateDeduplicatedSummaryKeepsCollapse(t *testing.T) {
 
 	var callContent string
 	var callLength int
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `
 		SELECT COALESCE(result_content, ''), result_content_length
 		FROM tool_calls WHERE session_id = ?`, "dedup-collapse",
 	).Scan(&callContent, &callLength))
 
 	var eventContent string
 	var eventLength int
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `
 		SELECT content, content_length
 		FROM tool_result_events WHERE session_id = ?`, "dedup-collapse",
 	).Scan(&eventContent, &eventLength))
@@ -1023,7 +1023,7 @@ func TestMigrateReachesOrphanEventRows(t *testing.T) {
 	insertSession(t, d, "orphan-event", "project")
 
 	content := `[{"type":"input_image","image_url":"data:image/png;base64,AAEC"}]`
-	_, err := d.getWriter().Exec(`
+	_, err := d.getWriter().Exec(t.Context(), `
 		INSERT INTO tool_result_events
 			(session_id, tool_call_message_ordinal, call_index,
 			 tool_use_id, agent_id, subagent_session_id,
@@ -1042,7 +1042,7 @@ func TestMigrateReachesOrphanEventRows(t *testing.T) {
 	assert.Equal(t, 1, report.Changed)
 
 	var stored string
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "orphan-event",
 	).Scan(&stored))
 	assert.Contains(t, stored, "image_ref")

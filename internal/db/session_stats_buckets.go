@@ -13,11 +13,15 @@ var durationMinutesEdges = []float64{0, 1, 5, 20, 60, 120, math.Inf(1)}
 // Values below 2 are filtered before accumulating scope_human, preserving
 // the v1 bucket shape while keeping human mean and bucket counts consistent.
 // Represented as two separate edge lists for clarity.
-var userMessagesEdgesAll = []float64{0, 2, 6, 16, 31, 51, math.Inf(1)}
-var userMessagesEdgesHuman = []float64{2, 6, 16, 31, 51, math.Inf(1)}
+var (
+	userMessagesEdgesAll   = []float64{0, 2, 6, 16, 31, 51, math.Inf(1)}
+	userMessagesEdgesHuman = []float64{2, 6, 16, 31, 51, math.Inf(1)}
+)
 
-var peakContextEdges = []float64{0, 10_000, 50_000, 100_000, 150_000, 200_000, math.Inf(1)}
-var toolsPerTurnEdges = []float64{0, 1, 2, 4, 7, 11, math.Inf(1)}
+var (
+	peakContextEdges  = []float64{0, 10_000, 50_000, 100_000, 150_000, 200_000, math.Inf(1)}
+	toolsPerTurnEdges = []float64{0, 1, 2, 4, 7, 11, math.Inf(1)}
+)
 
 // cacheHitRatioEdges uses 1.000001 as an internal sentinel so values of
 // exactly 1.0 fall into the last bucket under assignBucket's half-open
@@ -29,7 +33,7 @@ var cacheHitRatioEdges = []float64{0, 0.25, 0.5, 0.75, 0.95, 1.000001}
 // assignBucket returns the index i such that edges[i] <= v < edges[i+1],
 // or -1 if v < edges[0] or v >= edges[len-1] (shouldn't happen given Inf upper).
 func assignBucket(edges []float64, v float64) int {
-	for i := 0; i < len(edges)-1; i++ {
+	for i := range len(edges) - 1 {
 		if v >= edges[i] && v < edges[i+1] {
 			return i
 		}
@@ -41,7 +45,7 @@ func assignBucket(edges []float64, v float64) int {
 // Top bucket's hi is represented as JSON null by leaving Edge[1] as nil pointer.
 func buildEmptyBuckets(edges []float64) []DistributionBucketV1 {
 	out := make([]DistributionBucketV1, 0, len(edges)-1)
-	for i := 0; i < len(edges)-1; i++ {
+	for i := range len(edges) - 1 {
 		lo := edges[i]
 		var hiPtr *float64
 		if !math.IsInf(edges[i+1], 1) {

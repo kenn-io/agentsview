@@ -34,6 +34,7 @@ func exportSessionToTestStoreWithLimits(
 // PR2 scope; see plan hazard 6).
 func latestTestStoreManifest(t *testing.T, store ArtifactStore, origin string) manifest {
 	t.Helper()
+
 	cp := latestStoreCheckpointForTest(t, store, origin)
 	hash := cp.Sessions[origin+"~sess-1"]
 	require.NotEmpty(t, hash)
@@ -76,6 +77,7 @@ func assertFinalizedExportRejection(
 	wantError string,
 ) {
 	t.Helper()
+
 	assert.Zero(t, result.ExportedSessions)
 	assert.Equal(t, 1, result.RejectedSessions)
 	checkpoint := latestStoreCheckpointForTest(t, store, origin)
@@ -98,7 +100,7 @@ func TestExportClassifiesBoundedLoadLimit(t *testing.T) {
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
 	seedSession(t, database, "sess-1", "alpha")
-	require.NoError(t, database.ReplaceSessionMessages("sess-1", []db.Message{
+	require.NoError(t, database.ReplaceSessionMessages(ctx, "sess-1", []db.Message{
 		{SessionID: "sess-1", Ordinal: 0, Role: "user", Content: "one"},
 		{SessionID: "sess-1", Ordinal: 1, Role: "assistant", Content: "two"},
 		{SessionID: "sess-1", Ordinal: 2, Role: "user", Content: "three"},
@@ -126,6 +128,7 @@ func TestExportRejectsNativeSessionIDsImporterCannotRepresent(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			store := newTestArtifactStore(t)
 			session := &db.Session{
 				ID:               tt.sessionID,
@@ -183,7 +186,8 @@ func TestExportRejectsNestedAmplificationBeforePublication(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
+			t.Parallel()
+			ctx := t.Context()
 			database := testExportDB(t)
 			store := newTestArtifactStore(t)
 			origin := contractOrigin
@@ -192,7 +196,7 @@ func TestExportRejectsNestedAmplificationBeforePublication(t *testing.T) {
 			message.SessionID = "sess-1"
 			message.Ordinal = 0
 			message.Role = "assistant"
-			require.NoError(t, database.ReplaceSessionMessages("sess-1", []db.Message{message}))
+			require.NoError(t, database.ReplaceSessionMessages(ctx, "sess-1", []db.Message{message}))
 
 			result, err := ExportToStore(
 				ctx, database, store, ExportOptions{Origin: origin, Full: true},
@@ -229,7 +233,9 @@ func TestExportChunksOnAggregateNestedLimitsWithSmallLimits(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
+			t.Parallel()
+
+			ctx := t.Context()
 			database := testExportDB(t)
 			store := newTestArtifactStore(t)
 			origin := contractOrigin
@@ -245,7 +251,7 @@ func TestExportChunksOnAggregateNestedLimitsWithSmallLimits(t *testing.T) {
 					}},
 				}
 			}
-			require.NoError(t, database.ReplaceSessionMessages("sess-1", msgs))
+			require.NoError(t, database.ReplaceSessionMessages(ctx, "sess-1", msgs))
 			limits := productionArtifactLimits()
 			tt.configure(&limits)
 
@@ -306,7 +312,9 @@ func TestExportRejectsMessageThatCannotFitNestedSegmentLimits(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
+			t.Parallel()
+
+			ctx := t.Context()
 			database := testExportDB(t)
 			store := newTestArtifactStore(t)
 			origin := contractOrigin
@@ -315,7 +323,7 @@ func TestExportRejectsMessageThatCannotFitNestedSegmentLimits(t *testing.T) {
 			message.SessionID = "sess-1"
 			message.Ordinal = 0
 			message.Role = "assistant"
-			require.NoError(t, database.ReplaceSessionMessages("sess-1", []db.Message{message}))
+			require.NoError(t, database.ReplaceSessionMessages(ctx, "sess-1", []db.Message{message}))
 			limits := productionArtifactLimits()
 			tt.configure(&limits)
 
@@ -356,7 +364,9 @@ func TestExportRejectsSessionNestedLimitsBeforeWritingWithSmallLimits(t *testing
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
+			t.Parallel()
+
+			ctx := t.Context()
 			database := testExportDB(t)
 			store := newTestArtifactStore(t)
 			origin := contractOrigin
@@ -372,7 +382,7 @@ func TestExportRejectsSessionNestedLimitsBeforeWritingWithSmallLimits(t *testing
 					}},
 				}
 			}
-			require.NoError(t, database.ReplaceSessionMessages("sess-1", msgs))
+			require.NoError(t, database.ReplaceSessionMessages(ctx, "sess-1", msgs))
 			limits := productionArtifactLimits()
 			tt.configure(&limits)
 
@@ -390,7 +400,7 @@ func TestExportRejectsSessionNestedLimitsBeforeWritingWithSmallLimits(t *testing
 func TestExportChunksOnMessageRecordLimit(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
 	origin := contractOrigin
@@ -399,7 +409,7 @@ func TestExportChunksOnMessageRecordLimit(t *testing.T) {
 	for i := range msgs {
 		msgs[i] = db.Message{SessionID: "sess-1", Ordinal: i, Role: "user"}
 	}
-	require.NoError(t, database.ReplaceSessionMessages("sess-1", msgs))
+	require.NoError(t, database.ReplaceSessionMessages(ctx, "sess-1", msgs))
 
 	_, err := ExportToStore(ctx, database, store, ExportOptions{Origin: origin, Full: true})
 	require.NoError(t, err)
@@ -412,7 +422,7 @@ func TestExportChunksOnMessageRecordLimit(t *testing.T) {
 func TestExportRejectsOversizedGeneratedManifestBeforePublication(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
 	origin := contractOrigin
@@ -433,7 +443,7 @@ func TestExportRejectsOversizedGeneratedManifestBeforePublication(t *testing.T) 
 func TestExportRejectsSessionMessageAmplificationBeforePublication(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
 	origin := contractOrigin
@@ -442,7 +452,7 @@ func TestExportRejectsSessionMessageAmplificationBeforePublication(t *testing.T)
 	for i := range msgs {
 		msgs[i] = db.Message{SessionID: "sess-1", Ordinal: i, Role: "user"}
 	}
-	require.NoError(t, database.ReplaceSessionMessages("sess-1", msgs))
+	require.NoError(t, database.ReplaceSessionMessages(ctx, "sess-1", msgs))
 
 	result, err := ExportToStore(
 		ctx, database, store, ExportOptions{Origin: origin, Full: true},
@@ -456,7 +466,7 @@ func TestExportRejectsSessionMessageAmplificationBeforePublication(t *testing.T)
 func TestExportRejectsUsageEventAmplificationBeforePublication(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
 	origin := contractOrigin
@@ -469,7 +479,7 @@ func TestExportRejectsUsageEventAmplificationBeforePublication(t *testing.T) {
 			DedupKey:  fmt.Sprintf("usage-%d", i),
 		}
 	}
-	require.NoError(t, database.ReplaceSessionUsageEvents("sess-1", events))
+	require.NoError(t, database.ReplaceSessionUsageEvents(ctx, "sess-1", events))
 
 	result, err := ExportToStore(
 		ctx, database, store, ExportOptions{Origin: origin, Full: true},
@@ -506,7 +516,9 @@ func TestExportSessionRejectsAggregateLimitsBeforeWritingWithSmallLimits(t *test
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ctx := context.Background()
+			t.Parallel()
+
+			ctx := t.Context()
 			database := testExportDB(t)
 			store := newTestArtifactStore(t)
 			origin := contractOrigin
@@ -533,7 +545,7 @@ func TestExportSessionRejectsAggregateLimitsBeforeWritingWithSmallLimits(t *test
 func TestExportChunksLargeMultiMessageSessionInOrder(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
 	origin := contractOrigin
@@ -549,7 +561,7 @@ func TestExportChunksLargeMultiMessageSessionInOrder(t *testing.T) {
 			ContentLength: len(content),
 		}
 	}
-	require.NoError(t, database.ReplaceSessionMessages("sess-1", msgs))
+	require.NoError(t, database.ReplaceSessionMessages(ctx, "sess-1", msgs))
 
 	exportResult, err := ExportToStore(ctx, database, store, ExportOptions{Origin: origin, Full: true})
 	require.NoError(t, err)
@@ -568,13 +580,13 @@ func TestExportChunksLargeMultiMessageSessionInOrder(t *testing.T) {
 func TestExportRejectsSingleEncodedRecordAboveReadableLimit(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
 	origin := contractOrigin
 	seedSession(t, database, "sess-1", "alpha")
 	content := strings.Repeat("x", 64<<20)
-	require.NoError(t, database.ReplaceSessionMessages("sess-1", []db.Message{{
+	require.NoError(t, database.ReplaceSessionMessages(ctx, "sess-1", []db.Message{{
 		SessionID:     "sess-1",
 		Ordinal:       0,
 		Role:          "user",
@@ -595,7 +607,7 @@ func TestExportRejectsSingleEncodedRecordAboveReadableLimit(t *testing.T) {
 func TestExportPreservesSmallSingleSegmentHash(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	database := testExportDB(t)
 	store := newTestArtifactStore(t)
 	origin := contractOrigin

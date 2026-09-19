@@ -18,11 +18,11 @@ func assertSQLiteMemoryPragmas(
 	t.Helper()
 
 	var got int
-	require.NoError(t, conn.QueryRow("PRAGMA cache_size").Scan(&got))
+	require.NoError(t, conn.QueryRowContext(t.Context(), "PRAGMA cache_size").Scan(&got))
 	assert.Equal(t, expectedSQLiteCacheSizeKiB, got)
 
 	var mmapSize int64
-	require.NoError(t, conn.QueryRow("PRAGMA mmap_size").Scan(&mmapSize))
+	require.NoError(t, conn.QueryRowContext(t.Context(), "PRAGMA mmap_size").Scan(&mmapSize))
 }
 
 func TestSQLiteConnectionMemoryPragmas(t *testing.T) {
@@ -33,7 +33,8 @@ func TestSQLiteConnectionMemoryPragmas(t *testing.T) {
 		{
 			name: "Open writer",
 			open: func(t *testing.T, path string) *sql.DB {
-				database, err := Open(path)
+				t.Helper()
+				database, err := Open(t.Context(), path)
 				require.NoError(t, err)
 				t.Cleanup(func() {
 					require.NoError(t, database.Close())
@@ -44,7 +45,8 @@ func TestSQLiteConnectionMemoryPragmas(t *testing.T) {
 		{
 			name: "Open reader",
 			open: func(t *testing.T, path string) *sql.DB {
-				database, err := Open(path)
+				t.Helper()
+				database, err := Open(t.Context(), path)
 				require.NoError(t, err)
 				t.Cleanup(func() {
 					require.NoError(t, database.Close())
@@ -55,11 +57,13 @@ func TestSQLiteConnectionMemoryPragmas(t *testing.T) {
 		{
 			name: "OpenReadOnly reader",
 			open: func(t *testing.T, path string) *sql.DB {
-				writable, err := Open(path)
+				t.Helper()
+
+				writable, err := Open(t.Context(), path)
 				require.NoError(t, err)
 				require.NoError(t, writable.Close())
 
-				readonly, err := OpenReadOnly(path)
+				readonly, err := OpenReadOnly(t.Context(), path)
 				require.NoError(t, err)
 				t.Cleanup(func() {
 					require.NoError(t, readonly.Close())
@@ -79,7 +83,7 @@ func TestSQLiteConnectionMemoryPragmas(t *testing.T) {
 
 func TestReaderPoolRetainsConfiguredBurstConnections(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sessions.db")
-	database, err := Open(path)
+	database, err := Open(t.Context(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, database.Close())

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -36,21 +35,21 @@ func TestDirectSearchContentRedacts(t *testing.T) {
 	be := service.NewDirectBackend(d, nil)
 
 	// default: secret should be redacted
-	res, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
+	res, err := be.SearchContent(t.Context(), service.ContentSearchRequest{
 		Pattern: "AKIA", Mode: "substring", Limit: 50,
 	})
 	require.NoError(t, err)
 	require.Len(t, res.Matches, 1)
-	assert.False(t, strings.Contains(res.Matches[0].Snippet, "AKIA7QHWN2DKR4FYPLJM"),
+	assert.NotContains(t, res.Matches[0].Snippet, "AKIA7QHWN2DKR4FYPLJM",
 		"default search leaked secret: %q", res.Matches[0].Snippet)
 
 	// reveal: full secret should be present
-	rev, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
+	rev, err := be.SearchContent(t.Context(), service.ContentSearchRequest{
 		Pattern: "AKIA", Mode: "substring", Limit: 50, Reveal: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, rev.Matches, 1)
-	assert.True(t, strings.Contains(rev.Matches[0].Snippet, "AKIA7QHWN2DKR4FYPLJM"),
+	assert.Contains(t, rev.Matches[0].Snippet, "AKIA7QHWN2DKR4FYPLJM",
 		"reveal should show full secret: %q", rev.Matches[0].Snippet)
 }
 
@@ -59,7 +58,7 @@ func TestDirectSearchContentFTSSourceGuard(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	be := service.NewDirectBackend(d, nil)
 
-	_, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
+	_, err := be.SearchContent(t.Context(), service.ContentSearchRequest{
 		Pattern: "test", Mode: "fts",
 		Sources: []string{"tool_result"},
 		Limit:   50,
@@ -122,7 +121,7 @@ func TestDirectSearchContentContextEnrichment(t *testing.T) {
 	}
 	be := service.NewReadOnlyBackend(store)
 
-	res, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
+	res, err := be.SearchContent(t.Context(), service.ContentSearchRequest{
 		Pattern: "match", Context: 2,
 	})
 	require.NoError(t, err)
@@ -150,7 +149,7 @@ func TestDirectSearchContentContextZeroLeavesNil(t *testing.T) {
 	}
 	be := service.NewReadOnlyBackend(store)
 
-	res, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
+	res, err := be.SearchContent(t.Context(), service.ContentSearchRequest{
 		Pattern: "match",
 	})
 	require.NoError(t, err)
@@ -163,7 +162,7 @@ func TestDirectSearchContentContextRejectsOverMax(t *testing.T) {
 	t.Parallel()
 	be := service.NewReadOnlyBackend(&fakeContentStore{})
 
-	_, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
+	_, err := be.SearchContent(t.Context(), service.ContentSearchRequest{
 		Pattern: "match", Context: 11,
 	})
 	require.Error(t, err)
@@ -201,26 +200,24 @@ func TestDirectSearchContentContextRedactsSecretsByDefault(t *testing.T) {
 	}
 
 	redacted := service.NewReadOnlyBackend(newStore())
-	res, err := redacted.SearchContent(context.Background(), service.ContentSearchRequest{
+	res, err := redacted.SearchContent(t.Context(), service.ContentSearchRequest{
 		Pattern: "match", Context: 2,
 	})
 	require.NoError(t, err)
 	require.Len(t, res.Matches, 1)
 	require.Len(t, res.Matches[0].ContextBefore, 2)
-	assert.False(t,
-		strings.Contains(res.Matches[0].ContextBefore[1].Content, "AKIA7QHWN2DKR4FYPLJM"),
+	assert.NotContains(t, res.Matches[0].ContextBefore[1].Content, "AKIA7QHWN2DKR4FYPLJM",
 		"default (Reveal=false) must redact a secret in a context message: %q",
 		res.Matches[0].ContextBefore[1].Content)
 
 	revealed := service.NewReadOnlyBackend(newStore())
-	rev, err := revealed.SearchContent(context.Background(), service.ContentSearchRequest{
+	rev, err := revealed.SearchContent(t.Context(), service.ContentSearchRequest{
 		Pattern: "match", Context: 2, Reveal: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, rev.Matches, 1)
 	require.Len(t, rev.Matches[0].ContextBefore, 2)
-	assert.True(t,
-		strings.Contains(rev.Matches[0].ContextBefore[1].Content, "AKIA7QHWN2DKR4FYPLJM"),
+	assert.Contains(t, rev.Matches[0].ContextBefore[1].Content, "AKIA7QHWN2DKR4FYPLJM",
 		"Reveal=true must leave a context message's secret intact: %q",
 		rev.Matches[0].ContextBefore[1].Content)
 }
@@ -258,7 +255,7 @@ func TestDirectSearchContentContextRedactsToolPayloads(t *testing.T) {
 	}
 	be := service.NewReadOnlyBackend(store)
 
-	res, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
+	res, err := be.SearchContent(t.Context(), service.ContentSearchRequest{
 		Pattern: "match", Context: 2,
 	})
 	require.NoError(t, err)
@@ -282,7 +279,7 @@ func TestDirectSearchContentContextSkipsNegativeOrdinal(t *testing.T) {
 	}
 	be := service.NewReadOnlyBackend(store)
 
-	res, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
+	res, err := be.SearchContent(t.Context(), service.ContentSearchRequest{
 		Pattern: "match", Context: 2,
 	})
 	require.NoError(t, err)

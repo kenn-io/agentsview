@@ -37,7 +37,7 @@ import (
 var (
 	agKeyOnce sync.Once
 	agKeyVal  []byte
-	agKeyErr  error
+	errAGKey  error
 )
 
 // loadAntigravityKey returns the AES key (16, 24, or 32 bytes)
@@ -48,7 +48,7 @@ func loadAntigravityKey() ([]byte, error) {
 	agKeyOnce.Do(func() {
 		raw := os.Getenv("ANTIGRAVITY_KEY")
 		if raw == "" {
-			agKeyErr = errors.New(
+			errAGKey = errors.New(
 				"ANTIGRAVITY_KEY env var not set; set it " +
 					"to the base64-encoded key to decrypt " +
 					"Antigravity CLI conversations",
@@ -57,7 +57,7 @@ func loadAntigravityKey() ([]byte, error) {
 		}
 		key, err := base64.StdEncoding.DecodeString(raw)
 		if err != nil {
-			agKeyErr = errors.New(
+			errAGKey = errors.New(
 				"ANTIGRAVITY_KEY is not valid base64",
 			)
 			return
@@ -66,14 +66,14 @@ func loadAntigravityKey() ([]byte, error) {
 		case 16, 24, 32:
 			agKeyVal = key
 		default:
-			agKeyErr = errors.New(
+			errAGKey = errors.New(
 				"ANTIGRAVITY_KEY decodes to an unsupported " +
 					"AES key length (need 16/24/32 bytes)",
 			)
 		}
 	})
-	if agKeyErr != nil {
-		return nil, agKeyErr
+	if errAGKey != nil {
+		return nil, errAGKey
 	}
 	return agKeyVal, nil
 }

@@ -86,7 +86,7 @@ func openCacheDB(t *testing.T, withSchema bool) *sql.DB {
 	require.NoError(t, err, "sql.Open")
 	t.Cleanup(func() { _ = db.Close() })
 	if withSchema {
-		_, err = db.Exec(cacheSchema)
+		_, err = db.ExecContext(t.Context(), cacheSchema)
 		require.NoError(t, err, "init git_cache schema")
 	}
 	return db
@@ -99,7 +99,7 @@ func callTestCache(
 ) ([]byte, error) {
 	t.Helper()
 	return cache.GetOrCompute(
-		context.Background(),
+		t.Context(),
 		testCacheKey,
 		testCacheKind,
 		testCacheTTL,
@@ -138,7 +138,7 @@ func seedCacheRow(t *testing.T, db *sql.DB, row cacheRow) {
 	if row.ComputedAt.IsZero() {
 		row.ComputedAt = time.Now().UTC()
 	}
-	_, err := db.Exec(
+	_, err := db.ExecContext(t.Context(),
 		`INSERT OR REPLACE INTO git_cache(cache_key, kind, payload, computed_at)
 		 VALUES (?, ?, ?, ?)`,
 		row.Key, row.Kind, row.Payload,
@@ -151,7 +151,7 @@ func requireCacheRow(t *testing.T, db *sql.DB, key string) cacheRow {
 	t.Helper()
 	var row cacheRow
 	var computedAt string
-	err := db.QueryRow(
+	err := db.QueryRowContext(t.Context(),
 		`SELECT cache_key, kind, payload, computed_at
 		 FROM git_cache WHERE cache_key = ?`,
 		key,
@@ -165,7 +165,7 @@ func requireCacheRow(t *testing.T, db *sql.DB, key string) cacheRow {
 func requireCacheRowCount(t *testing.T, db *sql.DB, key string) int {
 	t.Helper()
 	var n int
-	err := db.QueryRow(
+	err := db.QueryRowContext(t.Context(),
 		`SELECT count(*) FROM git_cache WHERE cache_key = ?`, key,
 	).Scan(&n)
 	require.NoError(t, err, "count")
@@ -174,7 +174,7 @@ func requireCacheRowCount(t *testing.T, db *sql.DB, key string) int {
 
 func backdateCacheRow(t *testing.T, db *sql.DB, key string, age time.Duration) {
 	t.Helper()
-	_, err := db.Exec(
+	_, err := db.ExecContext(t.Context(),
 		`UPDATE git_cache SET computed_at = ? WHERE cache_key = ?`,
 		time.Now().Add(-age).UTC().Format(time.RFC3339Nano), key,
 	)

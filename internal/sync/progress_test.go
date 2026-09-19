@@ -20,7 +20,7 @@ func TestSyncStats_RecordSkip(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var s SyncStats
-			for i := 0; i < tt.skips; i++ {
+			for range tt.skips {
 				s.RecordSkip()
 			}
 			assert.Equal(t, tt.want, s.Skipped)

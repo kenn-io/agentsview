@@ -1,7 +1,6 @@
 package vector
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,8 +15,9 @@ import (
 // for query.
 func explainVectorPlan(t *testing.T, ix *Index, query string, args ...any) []string {
 	t.Helper()
+
 	rows, err := ix.db.QueryContext(
-		context.Background(), "EXPLAIN QUERY PLAN "+query, args...)
+		t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
 	require.NoError(t, err)
 	defer rows.Close()
 
@@ -48,13 +48,13 @@ func TestMirrorRevisionIndexExists(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ix, err := OpenSpec(context.Background(),
+			ix, err := OpenSpec(t.Context(),
 				filepath.Join(t.TempDir(), "vectors.db"), tt.spec, false, 4000)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, ix.Close()) })
 
 			var sql string
-			require.NoError(t, ix.db.QueryRow(
+			require.NoError(t, ix.db.QueryRowContext(t.Context(),
 				`SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?`,
 				tt.index).Scan(&sql))
 			assert.Contains(t, sql, tt.spec.DocsTable)
@@ -69,7 +69,7 @@ func TestMirrorRevisionIndexExists(t *testing.T) {
 // covering index, and content must only be read per pending doc_key.
 func TestPendingContentQueryPlanSkipsStampedDocumentContent(t *testing.T) {
 	ix, gen := builtPendingIndex(t)
-	ordinal, err := ix.ordinalForFingerprint(context.Background(), gen.Fingerprint())
+	ordinal, err := ix.ordinalForFingerprint(t.Context(), gen.Fingerprint())
 	require.NoError(t, err)
 
 	plan := explainVectorPlan(t, ix, ix.pendingContentQuery(), ordinal)
@@ -113,7 +113,7 @@ func TestGenerationCoverageQueryPlanUsesRevisionIndex(t *testing.T) {
 // denominator against the same stamp anti-join `embeddings status` reports
 // as Missing, across the states a refresh can leave a mirror in.
 func TestCountPendingMatchesCoverageMissing(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	longContent := strings.Repeat("word ", 2000)
 
 	tests := []struct {
@@ -135,6 +135,8 @@ func TestCountPendingMatchesCoverageMissing(t *testing.T) {
 		{
 			name: "StaleRevisionCountsAsPending",
 			mutate: func(t *testing.T, ix *Index) {
+				t.Helper()
+
 				_, err := ix.db.ExecContext(ctx,
 					`UPDATE vector_messages SET content_hash = 'changed'
 					 WHERE doc_key = 'u:s1:u1'`)
@@ -146,6 +148,8 @@ func TestCountPendingMatchesCoverageMissing(t *testing.T) {
 		{
 			name: "UnstampedMultiChunkDocumentCountsEveryChunk",
 			mutate: func(t *testing.T, ix *Index) {
+				t.Helper()
+
 				_, err := ix.db.ExecContext(ctx, `
 INSERT INTO vector_messages
     (doc_key, session_id, source_uuid, ordinal, ordinal_end, content, content_hash)
@@ -153,6 +157,8 @@ VALUES ('u:s1:u3', 's1', 'u3', 9, 9, ?, 'hash-u3')`, longContent)
 				require.NoError(t, err)
 			},
 			wantChunks: func(t *testing.T, ix *Index) int64 {
+				t.Helper()
+
 				chunks := int64(len(kitvec.Split(longContent, ix.split)))
 				require.Greater(t, chunks, int64(1),
 					"content must split into several chunks for this case to be meaningful")
@@ -187,7 +193,7 @@ func builtPendingIndex(t *testing.T) (*Index, kitvec.Generation) {
 	ix := openTestIndex(t)
 	gen := fakeGeneration("fake-model")
 	_, err := ix.Build(
-		context.Background(), twoDocSource(), fakeBuildEncoder(), gen, BuildOptions{})
+		t.Context(), twoDocSource(), fakeBuildEncoder(), gen, BuildOptions{})
 	require.NoError(t, err)
 	return ix, gen
 }

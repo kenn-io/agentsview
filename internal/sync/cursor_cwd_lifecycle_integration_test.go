@@ -3,7 +3,7 @@ package sync_test
 import (
 	"context"
 	"database/sql"
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -82,7 +82,7 @@ func (p *unavailableCursorProvider) DiscoverEach(
 ) error {
 	discoverer, ok := p.Provider.(parser.StreamingDiscoverer)
 	if !ok {
-		return fmt.Errorf("cursor test provider lacks streaming discovery")
+		return errors.New("cursor test provider lacks streaming discovery")
 	}
 	return discoverer.DiscoverEach(ctx, func(source parser.SourceRef) error {
 		return yield(p.sourceWithCwd(source))
@@ -112,7 +112,7 @@ func cursorProviderFactoryForTest(
 			return unavailableCursorFactory{base: factory, state: state}
 		}
 	}
-	t.Fatal("Cursor provider factory is not registered")
+	require.FailNow(t, "Cursor provider factory is not registered")
 	return nil
 }
 
@@ -128,7 +128,7 @@ func TestSyncEngineCursorUnavailableChangedTranscriptPreservesCwd(t *testing.T) 
 		`{"role":"user","message":{"content":"before"}}`+"\n",
 	), 0o644))
 	d := dbtest.OpenTestDB(t)
-	e := sync.NewEngine(d, sync.EngineConfig{
+	e := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:   "local",
 		ProviderFactories: []parser.ProviderFactory{
@@ -137,14 +137,14 @@ func TestSyncEngineCursorUnavailableChangedTranscriptPreservesCwd(t *testing.T) 
 	})
 	t.Cleanup(func() { e.Close() })
 
-	e.SyncAll(context.Background(), nil)
+	e.SyncAll(t.Context(), nil)
 	fullID := "cursor:" + sessionID
-	stored, err := d.GetSession(context.Background(), fullID)
+	stored, err := d.GetSession(t.Context(), fullID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Empty(t, stored.Cwd)
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec("UPDATE sessions SET cwd = ? WHERE id = ?", workspace, fullID)
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET cwd = ? WHERE id = ?", workspace, fullID)
 		return err
 	}))
 
@@ -153,7 +153,7 @@ func TestSyncEngineCursorUnavailableChangedTranscriptPreservesCwd(t *testing.T) 
 	), 0o644))
 	changedAt := time.Now().Add(2 * time.Second)
 	require.NoError(t, os.Chtimes(path, changedAt, changedAt))
-	filtered := sync.NewEngine(d, sync.EngineConfig{
+	filtered := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs:          map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:            "local",
 		IncludeCwdPrefixes: []string{workspace},
@@ -163,13 +163,13 @@ func TestSyncEngineCursorUnavailableChangedTranscriptPreservesCwd(t *testing.T) 
 	})
 	t.Cleanup(func() { filtered.Close() })
 	require.NoError(t, filtered.SyncSingleSessionContext(
-		context.Background(), fullID,
+		t.Context(), fullID,
 	))
 	stats := filtered.LastSyncStats()
 	assert.Zero(t, stats.Failed)
 	assert.False(t, stats.Aborted)
 
-	stored, err = d.GetSession(context.Background(), fullID)
+	stored, err = d.GetSession(t.Context(), fullID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, workspace, stored.Cwd)
@@ -189,14 +189,14 @@ func TestResyncCursorUnavailablePreservesArchiveCwd(t *testing.T) {
 	), 0o644))
 
 	d := dbtest.OpenTestDB(t)
-	initial := sync.NewEngine(d, sync.EngineConfig{
+	initial := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:   "local",
 	})
-	initial.SyncAll(context.Background(), nil)
+	initial.SyncAll(t.Context(), nil)
 	initial.Close()
 
-	rebuild := sync.NewEngine(d, sync.EngineConfig{
+	rebuild := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:   "local",
 		ProviderFactories: []parser.ProviderFactory{
@@ -204,11 +204,11 @@ func TestResyncCursorUnavailablePreservesArchiveCwd(t *testing.T) {
 		},
 	})
 	t.Cleanup(func() { rebuild.Close() })
-	stats := rebuild.ResyncAll(context.Background(), nil)
+	stats := rebuild.ResyncAll(t.Context(), nil)
 	assert.Zero(t, stats.Failed)
 	assert.False(t, stats.Aborted)
 
-	stored, err := d.GetSession(context.Background(), "cursor:"+sessionID)
+	stored, err := d.GetSession(t.Context(), "cursor:"+sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, workspace, stored.Cwd)
@@ -229,14 +229,14 @@ func TestResyncCursorFilteredCwdSurvivesOrphanCopy(t *testing.T) {
 	), 0o644))
 
 	d := dbtest.OpenTestDB(t)
-	initial := sync.NewEngine(d, sync.EngineConfig{
+	initial := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:   "local",
 	})
-	initial.SyncAll(context.Background(), nil)
+	initial.SyncAll(t.Context(), nil)
 	initial.Close()
 
-	rebuild := sync.NewEngine(d, sync.EngineConfig{
+	rebuild := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs:          map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:            "local",
 		IncludeCwdPrefixes: []string{oldWorkspace},
@@ -250,12 +250,12 @@ func TestResyncCursorFilteredCwdSurvivesOrphanCopy(t *testing.T) {
 		},
 	})
 	t.Cleanup(func() { rebuild.Close() })
-	stats := rebuild.ResyncAll(context.Background(), nil)
+	stats := rebuild.ResyncAll(t.Context(), nil)
 	assert.Zero(t, stats.Failed)
 	assert.False(t, stats.Aborted)
 	assert.NotZero(t, stats.CwdUpdated)
 
-	stored, err := d.GetSession(context.Background(), "cursor:"+sessionID)
+	stored, err := d.GetSession(t.Context(), "cursor:"+sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, newWorkspace, stored.Cwd)
@@ -275,26 +275,26 @@ func TestParseDiffCursorCwdDoesNotWriteOnParseError(t *testing.T) {
 	), 0o644))
 
 	d := dbtest.OpenTestDB(t)
-	initial := sync.NewEngine(d, sync.EngineConfig{
+	initial := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:   "local",
 	})
-	initial.SyncAll(context.Background(), nil)
+	initial.SyncAll(t.Context(), nil)
 	initial.Close()
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET local_modified_at = 'before' WHERE id = ?",
 			"cursor:"+sessionID,
 		)
 		return err
 	}))
-	before, err := d.GetSessionFull(context.Background(), "cursor:"+sessionID)
+	before, err := d.GetSessionFull(t.Context(), "cursor:"+sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, before)
 	require.NotNil(t, before.LocalModifiedAt)
 
 	require.NoError(t, os.Truncate(path, 10<<20+1))
-	diff := sync.NewDiffEngine(d, sync.EngineConfig{
+	diff := sync.NewDiffEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:   "local",
 		ProviderFactories: []parser.ProviderFactory{
@@ -307,12 +307,12 @@ func TestParseDiffCursorCwdDoesNotWriteOnParseError(t *testing.T) {
 		},
 	})
 	t.Cleanup(func() { diff.Close() })
-	_, err = diff.ParseDiff(context.Background(), sync.ParseDiffOptions{
+	_, err = diff.ParseDiff(t.Context(), sync.ParseDiffOptions{
 		Agents: []parser.AgentType{parser.AgentCursor},
 	})
 	require.NoError(t, err)
 
-	after, err := d.GetSessionFull(context.Background(), "cursor:"+sessionID)
+	after, err := d.GetSessionFull(t.Context(), "cursor:"+sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, after)
 	assert.Equal(t, workspace, after.Cwd)
@@ -333,31 +333,31 @@ func TestSyncEngineCursorResolvedFilteredCwdIsReconciled(t *testing.T) {
 	), 0o644))
 
 	d := dbtest.OpenTestDB(t)
-	initial := sync.NewEngine(d, sync.EngineConfig{
+	initial := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:   "local",
 	})
-	initial.SyncAll(context.Background(), nil)
+	initial.SyncAll(t.Context(), nil)
 	initial.Close()
 	fullID := "cursor:" + sessionID
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec("UPDATE sessions SET cwd = ? WHERE id = ?", oldWorkspace, fullID)
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET cwd = ? WHERE id = ?", oldWorkspace, fullID)
 		return err
 	}))
 	require.NoError(t, os.MkdirAll(workspace, 0o755))
 
-	filtered := sync.NewEngine(d, sync.EngineConfig{
+	filtered := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs:          map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:            "local",
 		IncludeCwdPrefixes: []string{oldWorkspace},
 	})
 	t.Cleanup(func() { filtered.Close() })
-	stats := filtered.SyncAll(context.Background(), nil)
+	stats := filtered.SyncAll(t.Context(), nil)
 	assert.Zero(t, stats.Failed)
 	assert.False(t, stats.Aborted)
 	assert.NotZero(t, stats.CwdUpdated)
 
-	stored, err := d.GetSession(context.Background(), fullID)
+	stored, err := d.GetSession(t.Context(), fullID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, workspace, stored.Cwd)
@@ -376,43 +376,43 @@ func TestSyncEngineCursorOversizedTranscriptReconcilesWorkspace(t *testing.T) {
 	), 0o644))
 
 	d := dbtest.OpenTestDB(t)
-	e := sync.NewEngine(d, sync.EngineConfig{
+	e := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:   "local",
 	})
 	t.Cleanup(func() { e.Close() })
 
-	e.SyncAll(context.Background(), nil)
+	e.SyncAll(t.Context(), nil)
 	fullID := "cursor:" + sessionID
-	first, err := d.GetSession(context.Background(), fullID)
+	first, err := d.GetSession(t.Context(), fullID)
 	require.NoError(t, err)
 	require.NotNil(t, first)
 	assert.Empty(t, first.Cwd)
 
 	// Seed the hash-empty state before the final workspace-only transition.
 	require.NoError(t, os.Truncate(path, 10<<20+1))
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET file_hash = '' WHERE id = ?", fullID,
 		)
 		return err
 	}))
-	e.SyncAll(context.Background(), nil)
-	hash, ok := d.GetSessionFileHash(fullID)
+	e.SyncAll(t.Context(), nil)
+	hash, ok := d.GetSessionFileHash(t.Context(), fullID)
 	assert.True(t, ok)
 	assert.Empty(t, hash)
 
 	require.NoError(t, os.MkdirAll(workspace, 0o755))
-	e.SyncAll(context.Background(), nil)
+	e.SyncAll(t.Context(), nil)
 
-	second, err := d.GetSession(context.Background(), fullID)
+	second, err := d.GetSession(t.Context(), fullID)
 	require.NoError(t, err)
 	require.NotNil(t, second)
-	hash, ok = d.GetSessionFileHash(fullID)
+	hash, ok = d.GetSessionFileHash(t.Context(), fullID)
 	assert.True(t, ok)
 	assert.Empty(t, hash)
 	assert.Equal(t, workspace, second.Cwd)
-	assert.Less(t, d.GetSessionDataVersion(fullID), db.CurrentDataVersion())
+	assert.Less(t, d.GetSessionDataVersion(t.Context(), fullID), db.CurrentDataVersion())
 }
 
 func TestSyncEngineCursorNoneSingleSessionClearsFilteredCwd(t *testing.T) {
@@ -428,32 +428,32 @@ func TestSyncEngineCursorNoneSingleSessionClearsFilteredCwd(t *testing.T) {
 	), 0o644))
 
 	d := dbtest.OpenTestDB(t)
-	e := sync.NewEngine(d, sync.EngineConfig{
+	e := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:   "local",
 	})
-	e.SyncAll(context.Background(), nil)
+	e.SyncAll(t.Context(), nil)
 	e.Close()
 	fullID := "cursor:" + sessionID
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec("UPDATE sessions SET cwd = ? WHERE id = ?", workspace, fullID)
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET cwd = ? WHERE id = ?", workspace, fullID)
 		return err
 	}))
 
-	filtered := sync.NewEngine(d, sync.EngineConfig{
+	filtered := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs:          map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:            "local",
 		IncludeCwdPrefixes: []string{workspaceRoot},
 	})
 	t.Cleanup(func() { filtered.Close() })
 	require.NoError(t, filtered.SyncSingleSessionContext(
-		context.Background(), fullID,
+		t.Context(), fullID,
 	))
 	stats := filtered.LastSyncStats()
 	assert.Zero(t, stats.Failed)
 	assert.False(t, stats.Aborted)
 
-	stored, err := d.GetSession(context.Background(), fullID)
+	stored, err := d.GetSession(t.Context(), fullID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Empty(t, stored.Cwd)
@@ -473,19 +473,19 @@ func TestSyncEngineCursorRemoteClearsStoredCwd(t *testing.T) {
 	), 0o644))
 
 	d := dbtest.OpenTestDB(t)
-	local := sync.NewEngine(d, sync.EngineConfig{
+	local := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:   "local",
 	})
-	local.SyncAll(context.Background(), nil)
+	local.SyncAll(t.Context(), nil)
 	local.Close()
 	fullID := "cursor:" + sessionID
-	stored, err := d.GetSession(context.Background(), fullID)
+	stored, err := d.GetSession(t.Context(), fullID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, workspace, stored.Cwd)
 
-	remote := sync.NewEngine(d, sync.EngineConfig{
+	remote := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:   "local",
 		ProviderFactories: []parser.ProviderFactory{
@@ -493,11 +493,11 @@ func TestSyncEngineCursorRemoteClearsStoredCwd(t *testing.T) {
 		},
 	})
 	t.Cleanup(func() { remote.Close() })
-	stats := remote.SyncAll(context.Background(), nil)
+	stats := remote.SyncAll(t.Context(), nil)
 	assert.Zero(t, stats.Failed)
 	assert.False(t, stats.Aborted)
 
-	stored, err = d.GetSession(context.Background(), fullID)
+	stored, err = d.GetSession(t.Context(), fullID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Empty(t, stored.Cwd)
@@ -517,19 +517,19 @@ func TestSyncEngineCursorSourceMissingRevivalPreservesCwd(t *testing.T) {
 	), 0o644))
 
 	d := dbtest.OpenTestDB(t)
-	e := sync.NewEngine(d, sync.EngineConfig{
+	e := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:   "local",
 	})
 	t.Cleanup(func() { e.Close() })
-	e.SyncAll(context.Background(), nil)
+	e.SyncAll(t.Context(), nil)
 	fullID := "cursor:" + sessionID
-	stored, err := d.GetSession(context.Background(), fullID)
+	stored, err := d.GetSession(t.Context(), fullID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, workspace, stored.Cwd)
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET source_missing_at = 'now' WHERE id = ?",
 			fullID,
 		)
@@ -541,11 +541,11 @@ func TestSyncEngineCursorSourceMissingRevivalPreservesCwd(t *testing.T) {
 	), 0o644))
 	changedAt := time.Now().Add(2 * time.Second)
 	require.NoError(t, os.Chtimes(path, changedAt, changedAt))
-	stats := e.SyncAll(context.Background(), nil)
+	stats := e.SyncAll(t.Context(), nil)
 	assert.Zero(t, stats.Failed)
 	assert.False(t, stats.Aborted)
 
-	stored, err = d.GetSession(context.Background(), fullID)
+	stored, err = d.GetSession(t.Context(), fullID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Nil(t, stored.DeletedAt)
@@ -566,12 +566,12 @@ func TestSyncEngineCursorUnchangedTranscriptFollowsWorkspaceLifecycle(t *testing
 	require.NoError(t, err)
 
 	d := dbtest.OpenTestDB(t)
-	e := sync.NewEngine(d, sync.EngineConfig{
+	e := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:   "local",
 	})
-	e.SyncAll(context.Background(), nil)
-	first, err := d.GetSession(context.Background(), "cursor:"+sessionID)
+	e.SyncAll(t.Context(), nil)
+	first, err := d.GetSession(t.Context(), "cursor:"+sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, first)
 	assert.Empty(t, first.Cwd)
@@ -582,20 +582,20 @@ func TestSyncEngineCursorUnchangedTranscriptFollowsWorkspaceLifecycle(t *testing
 	assert.Equal(t, before.Size(), after.Size())
 	assert.Equal(t, before.ModTime(), after.ModTime())
 
-	e.SyncAllSince(context.Background(), before.ModTime().Add(time.Second), nil)
-	second, err := d.GetSession(context.Background(), "cursor:"+sessionID)
+	e.SyncAllSince(t.Context(), before.ModTime().Add(time.Second), nil)
+	second, err := d.GetSession(t.Context(), "cursor:"+sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, second)
 	assert.Equal(t, workspace, second.Cwd)
 
 	e.Close()
-	cold := sync.NewEngine(d, sync.EngineConfig{
+	cold := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:   "local",
 	})
 	t.Cleanup(func() { cold.Close() })
-	cold.SyncAll(context.Background(), nil)
-	third, err := d.GetSession(context.Background(), "cursor:"+sessionID)
+	cold.SyncAll(t.Context(), nil)
+	third, err := d.GetSession(t.Context(), "cursor:"+sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, third)
 	assert.Equal(t, workspace, third.Cwd)
@@ -603,10 +603,10 @@ func TestSyncEngineCursorUnchangedTranscriptFollowsWorkspaceLifecycle(t *testing
 	require.NoError(t, os.RemoveAll(workspace))
 	otherWorkspace := filepath.Join(workspaceRoot, "Code-app")
 	require.NoError(t, os.MkdirAll(otherWorkspace, 0o755))
-	fourthStats := cold.SyncAll(context.Background(), nil)
+	fourthStats := cold.SyncAll(t.Context(), nil)
 	assert.Zero(t, fourthStats.Failed)
 	assert.False(t, fourthStats.Aborted)
-	fourth, err := d.GetSession(context.Background(), "cursor:"+sessionID)
+	fourth, err := d.GetSession(t.Context(), "cursor:"+sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, fourth)
 	assert.Equal(t, otherWorkspace, fourth.Cwd)
@@ -624,7 +624,7 @@ func TestSyncEngineCursorCompleteNoneAndAmbiguousClearStoredCwd(t *testing.T) {
 		`{"role":"user","message":{"content":"clear cwd"}}`+"\n",
 	), 0o644))
 	d := dbtest.OpenTestDB(t)
-	e := sync.NewEngine(d, sync.EngineConfig{
+	e := sync.NewEngine(t.Context(), d, sync.EngineConfig{
 		AgentDirs:          map[parser.AgentType][]string{parser.AgentCursor: {root}},
 		Machine:            "local",
 		IncludeCwdPrefixes: []string{workspaceRoot},
@@ -632,38 +632,38 @@ func TestSyncEngineCursorCompleteNoneAndAmbiguousClearStoredCwd(t *testing.T) {
 	t.Cleanup(func() { e.Close() })
 
 	require.NoError(t, os.MkdirAll(workspace, 0o755))
-	stats := e.SyncAll(context.Background(), nil)
+	stats := e.SyncAll(t.Context(), nil)
 	assert.Zero(t, stats.Failed)
 	assert.False(t, stats.Aborted)
 	fullID := "cursor:" + sessionID
-	session, err := d.GetSession(context.Background(), fullID)
+	session, err := d.GetSession(t.Context(), fullID)
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, workspace, session.Cwd)
 
 	require.NoError(t, os.RemoveAll(workspace))
-	stats = e.SyncAll(context.Background(), nil)
+	stats = e.SyncAll(t.Context(), nil)
 	assert.Zero(t, stats.Failed)
 	assert.False(t, stats.Aborted)
-	session, err = d.GetSession(context.Background(), fullID)
+	session, err = d.GetSession(t.Context(), fullID)
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Empty(t, session.Cwd)
 
 	require.NoError(t, os.MkdirAll(workspace, 0o755))
-	stats = e.SyncAll(context.Background(), nil)
+	stats = e.SyncAll(t.Context(), nil)
 	assert.Zero(t, stats.Failed)
 	assert.False(t, stats.Aborted)
-	session, err = d.GetSession(context.Background(), fullID)
+	session, err = d.GetSession(t.Context(), fullID)
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, workspace, session.Cwd)
 
 	require.NoError(t, os.MkdirAll(filepath.Join(workspaceRoot, "Code-app"), 0o755))
-	stats = e.SyncAll(context.Background(), nil)
+	stats = e.SyncAll(t.Context(), nil)
 	assert.Zero(t, stats.Failed)
 	assert.False(t, stats.Aborted)
-	session, err = d.GetSession(context.Background(), fullID)
+	session, err = d.GetSession(t.Context(), fullID)
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Empty(t, session.Cwd)

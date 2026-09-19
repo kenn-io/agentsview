@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -32,7 +31,7 @@ func TestProviderAuthoritativeUnchangedSessionSkipsOnResync(t *testing.T) {
 
 	vibeDir := t.TempDir()
 	testDB := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), testDB, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentVibe: {vibeDir},
 		},
@@ -44,7 +43,7 @@ func TestProviderAuthoritativeUnchangedSessionSkipsOnResync(t *testing.T) {
 		t, vibeDir, "session_20260616_083518_abc123", sessionID, "Title",
 	)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	first := engine.SyncAll(ctx, nil)
 	require.Equal(t, 1, first.Synced, "first sync parses and stores the session")
 
@@ -80,7 +79,7 @@ func TestCursorSameMtimeHashChangeReparses(t *testing.T) {
 	require.NoError(t, os.Chtimes(path, mtime, mtime))
 
 	testDB := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), testDB, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCursor: {root},
 		},
@@ -88,7 +87,7 @@ func TestCursorSameMtimeHashChangeReparses(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	first := engine.SyncAll(ctx, nil)
 	require.Equal(t, 1, first.Synced)
 	before, err := testDB.GetSession(ctx, "cursor:"+sessionID)
@@ -119,7 +118,7 @@ func TestCursorUnreadableStoreDoesNotCountAsFresh(t *testing.T) {
 	store, err := sql.Open("sqlite3", storePath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = store.Close() })
-	_, err = store.Exec(`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+	_, err = store.ExecContext(t.Context(), `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 		CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB);`)
 	require.NoError(t, err)
 	require.NoError(t, store.Close())
@@ -133,7 +132,7 @@ func TestCursorUnreadableStoreDoesNotCountAsFresh(t *testing.T) {
 	), 0o644))
 
 	archive := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(archive, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {projects}},
 		ProviderMetadata: map[parser.AgentType]map[string][]string{
 			parser.AgentCursor: {projects: {filepath.Join(cursorRoot, "chats")}},
@@ -184,7 +183,7 @@ func TestCursorStoreEnrichmentFailureStillArchivesTranscriptUpdates(t *testing.T
 				store, err := sql.Open("sqlite3", storePath)
 				require.NoError(t, err)
 				t.Cleanup(func() { _ = store.Close() })
-				_, err = store.Exec(`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+				_, err = store.ExecContext(t.Context(), `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
 					CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB);
 					INSERT INTO meta VALUES ('0', 'not-hex');`)
 				require.NoError(t, err)
@@ -192,7 +191,7 @@ func TestCursorStoreEnrichmentFailureStillArchivesTranscriptUpdates(t *testing.T
 			}
 
 			archive := dbtest.OpenTestDB(t)
-			engine := sync.NewEngine(archive, sync.EngineConfig{
+			engine := sync.NewEngine(t.Context(), archive, sync.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentCursor: {root}},
 				ProviderMetadata: map[parser.AgentType]map[string][]string{
 					parser.AgentCursor: {root: {chats}},

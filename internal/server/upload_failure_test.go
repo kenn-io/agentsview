@@ -15,7 +15,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/server"
@@ -29,7 +28,7 @@ type uploadCommitFailStore struct {
 
 func (s uploadCommitFailStore) ReadOnly() bool { return false }
 
-func (s uploadCommitFailStore) WriteSessionBatchAtomic(
+func (s uploadCommitFailStore) WriteSessionBatchAtomic(ctx context.Context,
 	_ []db.SessionBatchWrite,
 	beforeCommit ...func() error,
 ) (db.SessionBatchResult, error) {
@@ -87,7 +86,7 @@ func TestUploadSession_CommitFailureDoesNotWriteDB(t *testing.T) {
 	assertErrorResponse(t, w, "failed to save upload")
 
 	sess, err := te.db.GetSessionFull(
-		context.Background(), "rename-fail",
+		t.Context(), "rename-fail",
 	)
 	require.NoError(t, err)
 	assert.Nil(t, sess, "session persisted despite upload commit failure")
@@ -123,7 +122,7 @@ func TestUploadSession_DBCommitFailureAfterFileCommitRollsBackUpload(
 	require.NoError(t, err)
 	require.NoError(t, mw.Close())
 
-	req := httptest.NewRequest(http.MethodPost,
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
 		"/api/v1/sessions/upload?project="+project+"&machine=remote", &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.Header.Set("Origin", "http://127.0.0.1:0")
@@ -171,7 +170,7 @@ func TestUploadSession_DBCommitFailureAfterReplacingFileRestoresPrevious(
 	require.NoError(t, err)
 	require.NoError(t, mw.Close())
 
-	req := httptest.NewRequest(http.MethodPost,
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost,
 		"/api/v1/sessions/upload?project="+project+"&machine=remote", &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.Header.Set("Origin", "http://127.0.0.1:0")
@@ -211,7 +210,7 @@ func TestUploadSession_RetargetedCommitFailureRestoresPrevious(t *testing.T) {
 	_, err = fw.Write([]byte(content))
 	require.NoError(t, err)
 	require.NoError(t, mw.Close())
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/upload?project="+project, &buf)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/sessions/upload?project="+project, &buf)
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.Header.Set("Origin", "http://127.0.0.1:0")
 	req.Host = "127.0.0.1:0"
@@ -236,7 +235,7 @@ func TestUploadSession_ExplicitIdentityRetargetsCollision(t *testing.T) {
 	oldContent := transcript("archived-old", "old")
 	w := te.upload(t, "collision.jsonl", oldContent, "project=myproj&machine=remote")
 	assertStatus(t, w, http.StatusOK)
-	oldBefore, err := te.db.GetSessionFull(context.Background(), "archived-old")
+	oldBefore, err := te.db.GetSessionFull(t.Context(), "archived-old")
 	require.NoError(t, err)
 	require.NotNil(t, oldBefore)
 	newContent := transcript("archived-new", "new")
@@ -254,11 +253,11 @@ func TestUploadSession_ExplicitIdentityRetargetsCollision(t *testing.T) {
 	gotNew, err := os.ReadFile(newPath)
 	require.NoError(t, err)
 	assert.Equal(t, []byte(newContent), gotNew)
-	old, err := te.db.GetSessionFull(context.Background(), "archived-old")
+	old, err := te.db.GetSessionFull(t.Context(), "archived-old")
 	require.NoError(t, err)
 	require.NotNil(t, old)
 	assert.Equal(t, oldBefore, old)
-	newSession, err := te.db.GetSessionFull(context.Background(), "archived-new")
+	newSession, err := te.db.GetSessionFull(t.Context(), "archived-new")
 	require.NoError(t, err)
 	require.NotNil(t, newSession)
 	require.NotNil(t, newSession.FilePath)

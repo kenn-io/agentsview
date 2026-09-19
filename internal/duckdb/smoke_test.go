@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -23,12 +22,11 @@ func TestLocalFileSmoke(t *testing.T) {
 		require.NoError(t, db.Close(), "close DuckDB file")
 	})
 
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, db.PingContext(ctx), "ping DuckDB")
 
 	var version string
-	require.NoError(t,
-		db.QueryRowContext(ctx, "SELECT version()").Scan(&version),
+	require.NoError(t, db.QueryRowContext(ctx, "SELECT version()").Scan(&version),
 		"query DuckDB version",
 	)
 	t.Logf("duckdb version: %s; duckdb-go version: %s",
@@ -55,11 +53,10 @@ func TestLocalFileSmoke(t *testing.T) {
 	})
 
 	var count int
-	require.NoError(t,
-		reopened.QueryRowContext(ctx,
-			`SELECT message_count FROM sessions WHERE id = ?`,
-			"duckdb-local",
-		).Scan(&count),
+	require.NoError(t, reopened.QueryRowContext(ctx,
+		`SELECT message_count FROM sessions WHERE id = ?`,
+		"duckdb-local",
+	).Scan(&count),
 		"query persisted row",
 	)
 	assert.Equal(t, 3, count)

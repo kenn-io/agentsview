@@ -77,7 +77,7 @@ func newOmnigentSourceSet(
 			watchRoots:         omnigentWatchRoots,
 			classifyPath:       omnigentClassifyPath,
 			findMember:         omnigentFindMember,
-			fingerprint:        omnigentFingerprintSource,
+			fingerprintContext: omnigentFingerprintSource,
 			memberPresent:      omnigentMemberPresent,
 		},
 		tracker: tracker,
@@ -314,12 +314,12 @@ func omnigentClassifyPath(
 	)
 }
 
-func omnigentFindMember(root, rawID string) (multiSessionMatch, bool) {
+func omnigentFindMember(ctx context.Context, root, rawID string) (multiSessionMatch, bool) {
 	if root == "" {
 		return multiSessionMatch{}, false
 	}
 	dbPath := omnigentDBPath(root)
-	if dbPath == "" || !omnigentConversationExists(dbPath, rawID) {
+	if dbPath == "" || !omnigentConversationExists(ctx, dbPath, rawID) {
 		return multiSessionMatch{}, false
 	}
 	return multiSessionMatch{
@@ -329,7 +329,7 @@ func omnigentFindMember(root, rawID string) (multiSessionMatch, bool) {
 	}, true
 }
 
-func omnigentFingerprintSource(src multiSessionSource) (SourceFingerprint, error) {
+func omnigentFingerprintSource(ctx context.Context, src multiSessionSource) (SourceFingerprint, error) {
 	info, err := os.Stat(src.Container)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -359,7 +359,7 @@ func omnigentFingerprintSource(src multiSessionSource) (SourceFingerprint, error
 		return SourceFingerprint{}, err
 	}
 	defer conn.Close()
-	schema, err := detectOmnigentSchema(conn)
+	schema, err := detectOmnigentSchema(ctx, conn)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -369,7 +369,7 @@ func omnigentFingerprintSource(src multiSessionSource) (SourceFingerprint, error
 	if err != nil {
 		return SourceFingerprint{}, nil
 	}
-	meta, ok, err := loadOmnigentConversationMeta(conn, schema, member)
+	meta, ok, err := loadOmnigentConversationMeta(ctx, conn, schema, member)
 	if err != nil {
 		return SourceFingerprint{}, err
 	}
@@ -384,7 +384,7 @@ func omnigentFingerprintSource(src multiSessionSource) (SourceFingerprint, error
 	return SourceFingerprint{}, nil
 }
 
-func loadOmnigentConversationMeta(
+func loadOmnigentConversationMeta(ctx context.Context,
 	conn *sql.DB, schema omnigentSchema, member omnigentMemberID,
 ) (omnigentMeta, bool, error) {
 	query := omnigentConversationAggregateQuery(
@@ -392,7 +392,7 @@ func loadOmnigentConversationMeta(
 	)
 	args := []any{member.workspaceID, omnigentIDArg(schema, member.rawID)}
 	var meta omnigentMeta
-	err := conn.QueryRow(query, args...).Scan(
+	err := conn.QueryRowContext(ctx, query, args...).Scan(
 		&meta.rowID, &meta.workspaceID, &meta.rawID, &meta.updatedAt,
 		&meta.itemCount, &meta.maxPosition,
 	)
@@ -420,7 +420,7 @@ func (t *omnigentChangeTracker) changedMembers(
 		return nil, err
 	}
 	defer conn.Close()
-	schema, err := detectOmnigentSchema(conn)
+	schema, err := detectOmnigentSchema(ctx, conn)
 	if err != nil {
 		if omnigentSchemaUnsupported(err) {
 			return []multiSessionMatch{match}, nil
@@ -455,30 +455,28 @@ func (t *omnigentChangeTracker) splitSchemaMatchesSince(
 	match multiSessionMatch, tracked omnigentTrackedContainer,
 ) ([]multiSessionMatch, error) {
 	conversationIDExprs := omnigentConversationIDExprs(schema)
-	conversationCursor, conversationTail, reconcile, err :=
-		normalizeOmnigentRowIDCursor(
-			ctx, conn, tracked.conversationRowID, tracked.conversationTail,
-			func(rowID int64) (string, bool, error) {
-				return omnigentRowIdentityAt(
-					ctx, conn, omnigentConversationsTable, conversationIDExprs, rowID,
-				)
-			},
-			func() (int64, string, error) {
-				return omnigentLatestRowIdentity(
-					ctx, conn, omnigentConversationsTable, conversationIDExprs,
-				)
-			},
-		)
+	conversationCursor, conversationTail, reconcile, err := normalizeOmnigentRowIDCursor(
+		ctx, conn, tracked.conversationRowID, tracked.conversationTail,
+		func(rowID int64) (string, bool, error) {
+			return omnigentRowIdentityAt(
+				ctx, conn, omnigentConversationsTable, conversationIDExprs, rowID,
+			)
+		},
+		func() (int64, string, error) {
+			return omnigentLatestRowIdentity(
+				ctx, conn, omnigentConversationsTable, conversationIDExprs,
+			)
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
 	if reconcile {
 		return []multiSessionMatch{match}, nil
 	}
-	newConversations, conversationRowID, conversationTail, err :=
-		listOmnigentNewConversationMetas(
-			ctx, conn, schema, conversationCursor, conversationTail,
-		)
+	newConversations, conversationRowID, conversationTail, err := listOmnigentNewConversationMetas(
+		ctx, conn, schema, conversationCursor, conversationTail,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -517,7 +515,7 @@ func (t *omnigentChangeTracker) splitSchemaMatchesSince(
 			continue
 		}
 		seen[key] = struct{}{}
-		meta, present, loadErr := loadOmnigentConversationMeta(
+		meta, present, loadErr := loadOmnigentConversationMeta(ctx,
 			conn, schema, member,
 		)
 		if loadErr != nil {
@@ -736,35 +734,42 @@ func listOmnigentNewItemMembers(
 	tailIdentity := afterIdentity
 	var members []omnigentMemberID
 	for {
-		rows, err := conn.QueryContext(
-			ctx, query, cursor, omnigentChangePageSize,
-		)
-		if err != nil {
-			return nil, afterRowID, afterIdentity,
-				fmt.Errorf("listing new omnigent items: %w", err)
-		}
-		pageSize := 0
-		for rows.Next() {
-			var rowID int64
-			var member omnigentMemberID
-			var itemID string
-			if err := rows.Scan(
-				&rowID, &member.workspaceID, &member.rawID, &itemID,
-			); err != nil {
-				_ = rows.Close()
-				return nil, afterRowID, afterIdentity,
-					fmt.Errorf("scanning new omnigent item: %w", err)
+		pageSize, err := func() (int, error) {
+			rows, err := conn.QueryContext(
+				ctx, query, cursor, omnigentChangePageSize,
+			)
+			if err != nil {
+				return 0,
+					fmt.Errorf("listing new omnigent items: %w", err)
 			}
-			cursor = rowID
-			tailIdentity = member.key() + ":" + itemID
-			members = append(members, member)
-			pageSize++
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return nil, afterRowID, afterIdentity, err
-		}
-		if err := rows.Close(); err != nil {
+			defer rows.Close()
+			pageSize := 0
+			for rows.Next() {
+				var rowID int64
+				var member omnigentMemberID
+				var itemID string
+				if err := rows.Scan(
+					&rowID, &member.workspaceID, &member.rawID, &itemID,
+				); err != nil {
+					_ = rows.Close()
+					return 0,
+						fmt.Errorf("scanning new omnigent item: %w", err)
+				}
+				cursor = rowID
+				tailIdentity = member.key() + ":" + itemID
+				members = append(members, member)
+				pageSize++
+			}
+			if err := rows.Err(); err != nil {
+				_ = rows.Close()
+				return 0, err
+			}
+			if err := rows.Close(); err != nil {
+				return 0, err
+			}
+			return pageSize, nil
+		}()
+		if err != nil {
 			return nil, afterRowID, afterIdentity, err
 		}
 		if pageSize < omnigentChangePageSize {
@@ -839,7 +844,7 @@ func (t *omnigentChangeTracker) restoreCachedContainer(
 		return false, err
 	}
 	defer conn.Close()
-	schema, err := detectOmnigentSchema(conn)
+	schema, err := detectOmnigentSchema(ctx, conn)
 	if err != nil {
 		if omnigentSchemaUnsupported(err) {
 			// Unsupported parse outcomes are intentionally skip-cached. A
@@ -905,11 +910,11 @@ func (t *omnigentChangeTracker) parseContainer(
 	return results, nil
 }
 
-func omnigentMemberPresent(src multiSessionSource) bool {
+func omnigentMemberPresent(ctx context.Context, src multiSessionSource) bool {
 	if src.MemberID == "" {
 		return IsRegularFile(src.Container)
 	}
-	return omnigentConversationExists(src.Container, src.MemberID)
+	return omnigentConversationExists(ctx, src.Container, src.MemberID)
 }
 
 func omnigentParseMember(
@@ -931,7 +936,7 @@ func omnigentParseMember(
 	}
 	defer conn.Close()
 
-	schema, err := detectOmnigentSchema(conn)
+	schema, err := detectOmnigentSchema(ctx, conn)
 	if err != nil {
 		return nil, err
 	}
@@ -966,7 +971,7 @@ func omnigentParseContainerData(
 	}
 	defer conn.Close()
 
-	schema, err := detectOmnigentSchema(conn)
+	schema, err := detectOmnigentSchema(ctx, conn)
 	if err != nil {
 		return nil, omnigentSchema{}, nil, 0, "", err
 	}
@@ -1001,8 +1006,8 @@ func omnigentParseContainerData(
 }
 
 func omnigentSchemaUnsupported(err error) bool {
-	var unsupported ErrOmnigentUnsupportedSchema
-	return errors.As(err, &unsupported)
+	_, hasUnsupported := errors.AsType[OmnigentUnsupportedSchemaError](err)
+	return hasUnsupported
 }
 
 func parseOmnigentVirtualPath(path string) (string, string, bool) {

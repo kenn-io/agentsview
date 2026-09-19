@@ -44,7 +44,7 @@ func DecodeTranscriptBundle(r io.Reader) (TranscriptBundle, error) {
 		return TranscriptBundle{}, fmt.Errorf("decoding transcript bundle: %w", err)
 	}
 	var trailing any
-	if err := json.UnmarshalDecode(dec, &trailing); err != io.EOF {
+	if err := json.UnmarshalDecode(dec, &trailing); !errors.Is(err, io.EOF) {
 		if err == nil {
 			return TranscriptBundle{}, errors.New("transcript bundle contains trailing JSON")
 		}

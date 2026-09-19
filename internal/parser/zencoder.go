@@ -182,10 +182,9 @@ func (b *zencoderSessionBuilder) handleUserMessage(
 func (b *zencoderSessionBuilder) handleAssistantMessage(
 	line string, ts time.Time,
 ) {
-	content, hasThinking, hasToolUse, tcs :=
-		extractZencoderAssistantContent(
-			gjson.Get(line, "content"),
-		)
+	content, hasThinking, hasToolUse, tcs := extractZencoderAssistantContent(
+		gjson.Get(line, "content"),
+	)
 
 	if strings.TrimSpace(content) == "" && !hasToolUse {
 		return

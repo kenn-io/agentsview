@@ -130,21 +130,21 @@ func TestOpenReadOnlyStatusSupportsVersionOneCheckpoint(t *testing.T) {
 	db, err := sql.Open(checkpointDriverName, checkpointDSN(path, false))
 	require.NoError(t, err)
 	for _, statement := range versionOneSchemaStatements {
-		_, err = db.Exec(statement)
+		_, err = db.ExecContext(t.Context(), statement)
 		require.NoError(t, err)
 	}
 	updatedAt := time.Date(2026, 8, 1, 12, 30, 0, 0, time.UTC)
-	_, err = db.Exec(`INSERT INTO device_config (id, device_id, created_at)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO device_config (id, device_id, created_at)
 		VALUES (1, ?, ?)`, "legacy-device", checkpointTimestamp(updatedAt))
 	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO raw_sources (
+	_, err = db.ExecContext(t.Context(), `INSERT INTO raw_sources (
 		provider, configured_root_id, source_key, head_manifest_id,
 		head_receipt, head_generation, updated_at
 	) VALUES (?, ?, ?, ?, ?, ?, ?)`, "claude", "legacy-root", "private-source-key",
 		validCheckpointDigest(1), validCheckpointDigest(2), 7,
 		checkpointTimestamp(updatedAt))
 	require.NoError(t, err)
-	_, err = db.Exec(`PRAGMA user_version = 1`)
+	_, err = db.ExecContext(t.Context(), `PRAGMA user_version = 1`)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
@@ -180,7 +180,7 @@ func TestOpenReadOnlyStatusSupportsVersionOneCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, inspection.Close()) })
 	var version int
-	require.NoError(t, inspection.QueryRow(`PRAGMA user_version`).Scan(&version))
+	require.NoError(t, inspection.QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
 	assert.Equal(t, 1, version, "read-only status must not migrate the checkpoint")
 }
 
@@ -193,13 +193,13 @@ func TestOpenReadOnlyStatusSupportsVersionTwoCheckpoint(t *testing.T) {
 		versionTwoMigrationStatements,
 	} {
 		for _, statement := range statements {
-			_, err = db.Exec(statement)
+			_, err = db.ExecContext(t.Context(), statement)
 			require.NoError(t, err)
 		}
 	}
-	_, err = db.Exec(`INSERT INTO outbox_config (id, spool_path) VALUES (1, 'spool')`)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO outbox_config (id, spool_path) VALUES (1, 'spool')`)
 	require.NoError(t, err)
-	_, err = db.Exec(`PRAGMA user_version = 2`)
+	_, err = db.ExecContext(t.Context(), `PRAGMA user_version = 2`)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
@@ -217,7 +217,7 @@ func TestOpenReadOnlyStatusSupportsVersionTwoCheckpoint(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, inspection.Close()) })
 	var version int
-	require.NoError(t, inspection.QueryRow(`PRAGMA user_version`).Scan(&version))
+	require.NoError(t, inspection.QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version))
 	assert.Equal(t, 2, version, "read-only status must not migrate the checkpoint")
 }
 
@@ -233,13 +233,13 @@ func TestOpenReadOnlyStatusSupportsVersionFiveCheckpoint(t *testing.T) {
 		versionFiveMigrationStatements,
 	} {
 		for _, statement := range statements {
-			_, err = db.Exec(statement)
+			_, err = db.ExecContext(t.Context(), statement)
 			require.NoError(t, err)
 		}
 	}
-	_, err = db.Exec(`INSERT INTO outbox_config (id, spool_path) VALUES (1, 'spool')`)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO outbox_config (id, spool_path) VALUES (1, 'spool')`)
 	require.NoError(t, err)
-	_, err = db.Exec(`PRAGMA user_version = 5`)
+	_, err = db.ExecContext(t.Context(), `PRAGMA user_version = 5`)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 

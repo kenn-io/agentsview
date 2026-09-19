@@ -24,8 +24,7 @@ func openChunkedAnalyticsFixtureDB(t *testing.T) *DB {
 	t.Helper()
 
 	chunkedAnalyticsOnce.Do(func() {
-		chunkedAnalyticsDir, chunkedAnalyticsPath =
-			buildChunkedAnalyticsFixtureTemplate(t)
+		chunkedAnalyticsDir, chunkedAnalyticsPath = buildChunkedAnalyticsFixtureTemplate(t)
 	})
 
 	dst := filepath.Join(t.TempDir(), "test.db")
@@ -45,8 +44,8 @@ func openChunkedAnalyticsFixtureDB(t *testing.T) *DB {
 func buildChunkedAnalyticsFixtureTemplate(t *testing.T) (string, string) {
 	t.Helper()
 
-	dir, err := os.MkdirTemp("", "agentsview-chunked-analytics-*")
-	require.NoError(t, err, "create chunked analytics fixture dir")
+	dir := filepath.Join(testDBFixtureTempDir, "chunked-analytics")
+	require.NoError(t, os.MkdirAll(dir, 0o700), "create chunked analytics fixture dir")
 	path := filepath.Join(dir, "test.db")
 	require.NoError(t, copyTestDBTemplate(t, path),
 		"copy base db template for chunked analytics fixture")
@@ -54,7 +53,7 @@ func buildChunkedAnalyticsFixtureTemplate(t *testing.T) (string, string) {
 	d, err := OpenPreparedTestDB(path)
 	require.NoError(t, err, "open chunked analytics template")
 	seedChunkedAnalyticsFixture(t, d)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	require.NoError(t, d.CheckpointWALTruncate(ctx),
 		"checkpoint chunked analytics template")
@@ -102,7 +101,7 @@ func seedChunkedAnalyticsFixture(t *testing.T, d *DB) {
 			},
 		})
 	}
-	result, err := d.WriteSessionBatchAtomic(writes)
+	result, err := d.WriteSessionBatchAtomic(t.Context(), writes)
 	require.NoError(t, err, "WriteSessionBatchAtomic chunked fixture")
 	require.Equal(t, chunkedAnalyticsFixtureSessionCount,
 		result.WrittenSessions, "WrittenSessions")

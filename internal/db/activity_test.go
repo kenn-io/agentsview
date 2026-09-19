@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,7 +11,7 @@ func TestGetSessionActivity(t *testing.T) {
 	d := testDB(t)
 	sid := "test-activity"
 
-	err := d.UpsertSession(Session{
+	err := d.UpsertSession(t.Context(), Session{
 		ID:        sid,
 		Agent:     "claude",
 		StartedAt: new("2026-03-26T10:00:00Z"),
@@ -33,9 +32,9 @@ func TestGetSessionActivity(t *testing.T) {
 		// System message — should be excluded from counts.
 		{SessionID: sid, Ordinal: 6, Role: "user", Content: "This session is being continued from a previous conversation.", Timestamp: "2026-03-26T10:29:30Z", ContentLength: 60, IsSystem: true},
 	}
-	require.NoError(t, d.InsertMessages(msgs))
+	require.NoError(t, d.InsertMessages(t.Context(), msgs))
 
-	resp, err := d.GetSessionActivity(context.Background(), sid)
+	resp, err := d.GetSessionActivity(t.Context(), sid)
 	require.NoError(t, err)
 
 	// 29 min span => 1min buckets (snapInterval(1740) = 60).
@@ -65,9 +64,9 @@ func TestGetSessionActivity_NoMessages(t *testing.T) {
 	d := testDB(t)
 	sid := "test-empty"
 
-	require.NoError(t, d.UpsertSession(Session{ID: sid, Agent: "claude"}))
+	require.NoError(t, d.UpsertSession(t.Context(), Session{ID: sid, Agent: "claude"}))
 
-	resp, err := d.GetSessionActivity(context.Background(), sid)
+	resp, err := d.GetSessionActivity(t.Context(), sid)
 	require.NoError(t, err)
 	assert.Empty(t, resp.Buckets, "buckets")
 }
@@ -76,15 +75,15 @@ func TestGetSessionActivity_NullTimestamps(t *testing.T) {
 	d := testDB(t)
 	sid := "test-null-ts"
 
-	require.NoError(t, d.UpsertSession(Session{ID: sid, Agent: "claude"}))
+	require.NoError(t, d.UpsertSession(t.Context(), Session{ID: sid, Agent: "claude"}))
 
 	msgs := []Message{
 		{SessionID: sid, Ordinal: 0, Role: "user", Content: "hi", ContentLength: 2},
 		{SessionID: sid, Ordinal: 1, Role: "assistant", Content: "hello", ContentLength: 5},
 	}
-	require.NoError(t, d.InsertMessages(msgs))
+	require.NoError(t, d.InsertMessages(t.Context(), msgs))
 
-	resp, err := d.GetSessionActivity(context.Background(), sid)
+	resp, err := d.GetSessionActivity(t.Context(), sid)
 	require.NoError(t, err)
 	assert.Empty(t, resp.Buckets, "buckets")
 	assert.Equal(t, 2, resp.TotalMessages, "total")
@@ -94,14 +93,14 @@ func TestGetSessionActivity_SingleMessage(t *testing.T) {
 	d := testDB(t)
 	sid := "test-single"
 
-	require.NoError(t, d.UpsertSession(Session{ID: sid, Agent: "claude"}))
+	require.NoError(t, d.UpsertSession(t.Context(), Session{ID: sid, Agent: "claude"}))
 
 	msgs := []Message{
 		{SessionID: sid, Ordinal: 0, Role: "user", Content: "hi", Timestamp: "2026-03-26T10:00:00Z", ContentLength: 2},
 	}
-	require.NoError(t, d.InsertMessages(msgs))
+	require.NoError(t, d.InsertMessages(t.Context(), msgs))
 
-	resp, err := d.GetSessionActivity(context.Background(), sid)
+	resp, err := d.GetSessionActivity(t.Context(), sid)
 	require.NoError(t, err)
 	require.Len(t, resp.Buckets, 1, "buckets")
 	assert.Equal(t, 1, resp.Buckets[0].UserCount, "user count")
@@ -111,16 +110,16 @@ func TestGetSessionActivity_MalformedTimestamps(t *testing.T) {
 	d := testDB(t)
 	sid := "test-malformed-ts"
 
-	require.NoError(t, d.UpsertSession(Session{ID: sid, Agent: "claude"}))
+	require.NoError(t, d.UpsertSession(t.Context(), Session{ID: sid, Agent: "claude"}))
 
 	msgs := []Message{
 		{SessionID: sid, Ordinal: 0, Role: "user", Content: "hi", Timestamp: "2026-03-26T10:00:00Z", ContentLength: 2},
 		{SessionID: sid, Ordinal: 1, Role: "assistant", Content: "hello", Timestamp: "not-a-timestamp", ContentLength: 5},
 		{SessionID: sid, Ordinal: 2, Role: "user", Content: "bye", Timestamp: "2026-03-26T10:00:30Z", ContentLength: 3},
 	}
-	require.NoError(t, d.InsertMessages(msgs))
+	require.NoError(t, d.InsertMessages(t.Context(), msgs))
 
-	resp, err := d.GetSessionActivity(context.Background(), sid)
+	resp, err := d.GetSessionActivity(t.Context(), sid)
 	require.NoError(t, err)
 
 	// Malformed timestamp excluded from buckets; valid ones bucketed.
@@ -136,7 +135,7 @@ func TestGetSessionActivity_FractionalTimestamps(t *testing.T) {
 	d := testDB(t)
 	sid := "test-frac-ts"
 
-	require.NoError(t, d.UpsertSession(Session{ID: sid, Agent: "claude"}))
+	require.NoError(t, d.UpsertSession(t.Context(), Session{ID: sid, Agent: "claude"}))
 
 	// Two messages within the same 60s bucket but with fractional
 	// timestamps that would be mis-bucketed by whole-second truncation.
@@ -147,9 +146,9 @@ func TestGetSessionActivity_FractionalTimestamps(t *testing.T) {
 		// This message is in the next bucket (60.1s after the anchor).
 		{SessionID: sid, Ordinal: 2, Role: "user", Content: "c", Timestamp: "2026-03-26T10:01:01.000Z", ContentLength: 1},
 	}
-	require.NoError(t, d.InsertMessages(msgs))
+	require.NoError(t, d.InsertMessages(t.Context(), msgs))
 
-	resp, err := d.GetSessionActivity(context.Background(), sid)
+	resp, err := d.GetSessionActivity(t.Context(), sid)
 	require.NoError(t, err)
 
 	require.Equal(t, int64(60), resp.IntervalSeconds, "interval")

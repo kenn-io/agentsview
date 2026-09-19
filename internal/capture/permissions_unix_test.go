@@ -3,7 +3,6 @@
 package capture
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -52,7 +51,7 @@ func TestOpenCaptureEngineCreatesOwnerOnlyArchive(t *testing.T) {
 	state := &captureState{dir: t.TempDir(), manifest: manifest{
 		Provider: string(ProviderClaude), Limits: DefaultLimits(),
 	}}
-	database, engine, err := openCaptureEngine(context.Background(), state, nil)
+	database, engine, err := openCaptureEngine(t.Context(), state, nil)
 	require.NoError(t, err)
 	engine.Close()
 	require.NoError(t, database.Close())

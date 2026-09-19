@@ -49,7 +49,7 @@ func (s *Server) withTimeout(
 	// (Huma) API path. Passing 0 to http.TimeoutHandler would instead fire
 	// immediately and 503 every request.
 	if s.cfg.WriteTimeout <= 0 {
-		return http.HandlerFunc(inner)
+		return inner
 	}
 
 	handler := http.TimeoutHandler(

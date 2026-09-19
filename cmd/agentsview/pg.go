@@ -173,7 +173,7 @@ func runPGPushTarget(
 		return err
 	}
 	if target.PG.URL == "" {
-		return fmt.Errorf("url not configured")
+		return errors.New("url not configured")
 	}
 
 	projects, excludeProjects, err := resolvePushProjects(
@@ -335,7 +335,7 @@ func writePGVectorPushSummary(w io.Writer, v postgres.VectorPushResult) {
 	}
 }
 
-func runPGStatus(targetName string, cfg PGStatusConfig) error {
+func runPGStatus(ctx context.Context, targetName string, cfg PGStatusConfig) error {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -353,7 +353,7 @@ func runPGStatus(targetName string, cfg PGStatusConfig) error {
 	}
 
 	applyClassifierConfig(appCfg)
-	database, err := openReadOnlyDB(appCfg)
+	database, err := openReadOnlyDB(ctx, appCfg)
 	if err != nil {
 		log.Printf(
 			"warning: reading local pg status watermark: %v",
@@ -409,7 +409,7 @@ func runPGStatusTarget(
 		return err
 	}
 	if target.PG.URL == "" {
-		return fmt.Errorf("url not configured")
+		return errors.New("url not configured")
 	}
 	projects, excludeProjects, err := resolvePushProjects(
 		target.PG,
@@ -430,7 +430,7 @@ func runPGStatusTarget(
 
 	lastPush := ""
 	if database != nil {
-		lastPush, err = postgres.ReadLastPushAt(
+		lastPush, err = postgres.ReadLastPushAt(ctx,
 			database,
 			target.SyncStateTarget,
 			projects,
@@ -584,7 +584,7 @@ func preparePGServeImpl(appCfg config.Config, basePath string) (pgServeStartup, 
 		BasePath:      basePath,
 		RequestedPort: appCfg.Port,
 	}
-	appCfg, err = prepareServeRuntimeConfig(appCfg, rtOpts)
+	appCfg, err = prepareServeRuntimeConfig(ctx, appCfg, rtOpts)
 	if err != nil {
 		cleanup()
 		return pgServeStartup{}, fmt.Errorf("pg serve: %w", err)
@@ -701,15 +701,12 @@ func resolvePushProjects(
 	pgCfg config.PGConfig, cfg PGPushConfig,
 ) (projects, exclude []string, err error) {
 	if cfg.ProjectsFlag != "" && cfg.ExcludeProjects != "" {
-		return nil, nil, fmt.Errorf(
-			"--projects and --exclude-projects are mutually exclusive",
-		)
+		return nil, nil, errors.New("--projects and --exclude-projects are mutually exclusive")
 	}
 	if cfg.AllProjects &&
 		(cfg.ProjectsFlag != "" || cfg.ExcludeProjects != "") {
-		return nil, nil, fmt.Errorf(
-			"--all-projects cannot be combined with " +
-				"--projects or --exclude-projects",
+		return nil, nil, errors.New("--all-projects cannot be combined with " +
+			"--projects or --exclude-projects",
 		)
 	}
 	projects = pgCfg.Projects
@@ -727,9 +724,7 @@ func resolvePushProjects(
 		projects = nil
 	}
 	if len(projects) > 0 && len(exclude) > 0 {
-		return nil, nil, fmt.Errorf(
-			"projects and exclude_projects are mutually exclusive",
-		)
+		return nil, nil, errors.New("projects and exclude_projects are mutually exclusive")
 	}
 	return projects, exclude, nil
 }
@@ -740,9 +735,7 @@ func resolvePGTargetSelections(
 	allTargets bool,
 ) ([]pgTargetSelection, error) {
 	if allTargets && strings.TrimSpace(targetName) != "" {
-		return nil, fmt.Errorf(
-			"target name cannot be combined with --all",
-		)
+		return nil, errors.New("target name cannot be combined with --all")
 	}
 	if len(appCfg.PGTargets) == 0 {
 		if strings.TrimSpace(targetName) != "" {

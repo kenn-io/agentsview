@@ -55,6 +55,8 @@ func TestTraeLayoutStateMatrix(t *testing.T) {
 			name: "supported",
 			root: traeProfileRoot,
 			setup: func(t *testing.T, root string) {
+				t.Helper()
+
 				writeTraeModularData(t, root, "encrypted header")
 				writeTraeDB(t, filepath.Join(root, "globalStorage", traeStateDBName), traeStoreValue(t, []any{
 					map[string]any{
@@ -64,6 +66,8 @@ func TestTraeLayoutStateMatrix(t *testing.T) {
 				}), "memento/unrelated-chat-storage")
 			},
 			check: func(t *testing.T, outcome ParseOutcome) {
+				t.Helper()
+
 				require.Len(t, outcome.Results, 1)
 				assert.Equal(t, SkipNone, outcome.SkipReason)
 			},
@@ -72,10 +76,14 @@ func TestTraeLayoutStateMatrix(t *testing.T) {
 			name: "valid empty",
 			root: traeProfileRoot,
 			setup: func(t *testing.T, root string) {
+				t.Helper()
+
 				writeTraeModularData(t, root, "encrypted header")
 				writeTraeDB(t, filepath.Join(root, "globalStorage", traeStateDBName), traeStoreValue(t, []any{}), "memento/unrelated-chat-storage")
 			},
 			check: func(t *testing.T, outcome ParseOutcome) {
+				t.Helper()
+
 				assert.Equal(t, SkipNoSession, outcome.SkipReason)
 				assert.True(t, outcome.ResultSetComplete)
 				assert.True(t, outcome.ForceReplace)
@@ -85,10 +93,14 @@ func TestTraeLayoutStateMatrix(t *testing.T) {
 			name: "unsupported",
 			root: traeProfileRoot,
 			setup: func(t *testing.T, root string) {
+				t.Helper()
+
 				writeTraeModularData(t, root, "encrypted header")
 				writeTraeDBWithoutStorageKey(t, filepath.Join(root, "globalStorage", traeStateDBName), "memento/unrelated-chat-storage")
 			},
 			check: func(t *testing.T, outcome ParseOutcome) {
+				t.Helper()
+
 				assert.Equal(t, SkipUnsupportedSource, outcome.SkipReason)
 				assert.True(t, outcome.ResultSetComplete)
 				assert.False(t, outcome.ForceReplace)
@@ -98,6 +110,8 @@ func TestTraeLayoutStateMatrix(t *testing.T) {
 			name: "malformed",
 			root: traeProfileRoot,
 			setup: func(t *testing.T, root string) {
+				t.Helper()
+
 				writeTraeModularData(t, root, "encrypted header")
 				writeTraeDB(t, filepath.Join(root, "globalStorage", traeStateDBName), traeStoreValue(t, []any{
 					map[string]any{
@@ -107,6 +121,8 @@ func TestTraeLayoutStateMatrix(t *testing.T) {
 				}), "memento/unrelated-chat-storage")
 			},
 			check: func(t *testing.T, outcome ParseOutcome) {
+				t.Helper()
+
 				assert.Equal(t, SkipNoSession, outcome.SkipReason)
 				assert.False(t, outcome.ResultSetComplete)
 				assert.False(t, outcome.ForceReplace)
@@ -114,11 +130,18 @@ func TestTraeLayoutStateMatrix(t *testing.T) {
 		},
 		{
 			name: "incomplete without evidence",
-			root: func(t *testing.T) string { return filepath.Join(t.TempDir(), "custom", "User") },
+			root: func(t *testing.T) string {
+				t.Helper()
+				return filepath.Join(t.TempDir(), "custom", "User")
+			},
 			setup: func(t *testing.T, root string) {
+				t.Helper()
+
 				writeTraeDBWithoutStorageKey(t, filepath.Join(root, "globalStorage", traeStateDBName), "memento/unrelated-chat-storage")
 			},
 			check: func(t *testing.T, outcome ParseOutcome) {
+				t.Helper()
+
 				assert.Equal(t, SkipNoSession, outcome.SkipReason)
 				assert.False(t, outcome.ResultSetComplete)
 				assert.False(t, outcome.ForceReplace)
@@ -132,10 +155,10 @@ func TestTraeLayoutStateMatrix(t *testing.T) {
 			factory, ok := ProviderFactoryByType(AgentTrae)
 			require.True(t, ok)
 			provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
-			sources, err := provider.Discover(context.Background())
+			sources, err := provider.Discover(t.Context())
 			require.NoError(t, err)
 			require.Len(t, sources, 1)
-			outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 			require.NoError(t, err)
 			test.check(t, outcome)
 		})
@@ -157,7 +180,7 @@ func TestTraeLayoutNegativeSpace(t *testing.T) {
 	writeTraeModularData(t, unsupportedRoot, "encrypted header")
 	unsupportedPath := filepath.Join(unsupportedRoot, "globalStorage", traeStateDBName)
 	writeTraeDBWithoutStorageKey(t, unsupportedPath, "memento/unrelated-chat-storage")
-	assert.True(t, TraeEncryptedLayoutDetected(unsupportedRoot))
+	assert.True(t, TraeEncryptedLayoutDetected(t.Context(), unsupportedRoot))
 
 	validEmptyRoot := traeProfileRoot(t)
 	writeTraeModularData(t, validEmptyRoot, "encrypted header")
@@ -165,7 +188,7 @@ func TestTraeLayoutNegativeSpace(t *testing.T) {
 	writeTraeDBWithoutStorageKey(t, workspacePath, "memento/unrelated-chat-storage")
 	globalPath := filepath.Join(validEmptyRoot, "globalStorage", traeStateDBName)
 	writeTraeDB(t, globalPath, traeStoreValue(t, []any{}), "memento/unrelated-chat-storage")
-	assert.True(t, TraeEncryptedLayoutDetected(validEmptyRoot))
+	assert.True(t, TraeEncryptedLayoutDetected(t.Context(), validEmptyRoot))
 
 	errorRoot := traeProfileRoot(t)
 	writeTraeModularData(t, errorRoot, "encrypted header")
@@ -175,11 +198,11 @@ func TestTraeLayoutNegativeSpace(t *testing.T) {
 	writeTraeDBWithoutStorageKey(t, errorWorkspace, "memento/unrelated-chat-storage")
 	orig := traeLoadSessionSnapshot
 	defer func() { traeLoadSessionSnapshot = orig }()
-	traeLoadSessionSnapshot = func(path string) (traeSessionSnapshot, error) {
+	traeLoadSessionSnapshot = func(ctx context.Context, path string) (traeSessionSnapshot, error) {
 		if path == errorWorkspace {
 			return traeSessionSnapshot{}, os.ErrPermission
 		}
-		return orig(path)
+		return orig(ctx, path)
 	}
-	assert.True(t, TraeEncryptedLayoutDetected(errorRoot))
+	assert.True(t, TraeEncryptedLayoutDetected(t.Context(), errorRoot))
 }

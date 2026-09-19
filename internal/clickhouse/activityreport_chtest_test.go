@@ -55,14 +55,18 @@ func TestActivityReportIncludesSessionWithOnlyToolEventInWindow(t *testing.T) {
 		Category:  "Other",
 		ToolUseID: "sample-call",
 		ResultEvents: []db.ToolResultEvent{
-			{ToolUseID: "sample-call", Source: "tool_execution",
-				Status: "started", Timestamp: called, EventIndex: 0},
-			{ToolUseID: "sample-call", Source: "tool_execution",
-				Status: "completed", Timestamp: completed, EventIndex: 1},
+			{
+				ToolUseID: "sample-call", Source: "tool_execution",
+				Status: "started", Timestamp: called, EventIndex: 0,
+			},
+			{
+				ToolUseID: "sample-call", Source: "tool_execution",
+				Status: "completed", Timestamp: completed, EventIndex: 1,
+			},
 		},
 	})
 	call.HasToolUse = true
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
 		Session: sess,
 		Messages: []db.Message{
 			fixtureMessage(sessionID, 0, "user", "run the sample", started),

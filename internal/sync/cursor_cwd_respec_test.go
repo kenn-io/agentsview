@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -16,10 +15,10 @@ import (
 
 func TestCursorSourceCwdDecisionUsesGenericStates(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	e := NewEngine(d, EngineConfig{})
+	e := NewEngine(t.Context(), d, EngineConfig{})
 	t.Cleanup(func() { e.Close() })
 	path := "cursor-project/agent-transcripts/session.jsonl"
-	require.NoError(t, d.UpsertSession(db.Session{
+	require.NoError(t, d.UpsertSession(t.Context(), db.Session{
 		ID: "cursor:session", Agent: string(parser.AgentCursor),
 		FilePath: &path, Cwd: "/work/a",
 	}))
@@ -67,7 +66,7 @@ func TestCursorSourceCwdDecisionUsesGenericStates(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			decision := e.sourceCwdDecision(parser.SourceRef{
+			decision := e.sourceCwdDecision(t.Context(), parser.SourceRef{
 				Provider:       tt.provider,
 				FingerprintKey: path,
 				CwdResolution:  tt.resolution,
@@ -78,7 +77,7 @@ func TestCursorSourceCwdDecisionUsesGenericStates(t *testing.T) {
 		})
 	}
 
-	decision := e.sourceCwdDecision(parser.SourceRef{
+	decision := e.sourceCwdDecision(t.Context(), parser.SourceRef{
 		Provider:       parser.AgentCursor,
 		FingerprintKey: path,
 		CwdResolution: parser.SourceCwdResolution{
@@ -96,7 +95,7 @@ func TestCursorSourceCwdDecisionUsesGenericStates(t *testing.T) {
 	}}, syncWriteDefault, false)
 	assert.Equal(t, 1, written)
 	assert.Zero(t, failed)
-	stored, err := d.GetSession(context.Background(), "cursor:session")
+	stored, err := d.GetSession(t.Context(), "cursor:session")
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, "/work/a", stored.Cwd)
@@ -113,7 +112,7 @@ func TestCursorSourceCwdDecisionUsesGenericStates(t *testing.T) {
 	}}, syncWriteDefault, false)
 	assert.Equal(t, 1, written)
 	assert.Zero(t, failed)
-	parsed, err := d.GetSession(context.Background(), "cursor:parsed")
+	parsed, err := d.GetSession(t.Context(), "cursor:parsed")
 	require.NoError(t, err)
 	require.NotNil(t, parsed)
 	assert.Equal(t, "/parsed", parsed.Cwd)
@@ -121,14 +120,14 @@ func TestCursorSourceCwdDecisionUsesGenericStates(t *testing.T) {
 
 func TestUnavailableCursorCwdPreservesArchivedProjectAttribution(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	e := NewEngine(d, EngineConfig{Machine: "local"})
+	e := NewEngine(t.Context(), d, EngineConfig{Machine: "local"})
 	t.Cleanup(func() { e.Close() })
-	ctx := context.Background()
+	ctx := t.Context()
 	workspaceRoot := t.TempDir()
 	workspace := filepath.Join(workspaceRoot, "work", "a")
 	path := "cursor-project/agent-transcripts/session.jsonl"
 	const sessionID = "cursor:archived-project"
-	require.NoError(t, d.UpsertSession(db.Session{
+	require.NoError(t, d.UpsertSession(ctx, db.Session{
 		ID: sessionID, Agent: string(parser.AgentCursor), Machine: "local",
 		Project: "mapped_project", Cwd: workspace, FilePath: &path,
 	}))
@@ -174,17 +173,17 @@ func TestFilteredCursorCwdReconciliationScopesSourceIdentity(t *testing.T) {
 	path := "cursor-project/agent-transcripts/scoped.jsonl"
 	otherPath := "other-project/agent-transcripts/scoped.jsonl"
 	const sessionID = "cursor:scoped"
-	require.NoError(t, d.UpsertSession(db.Session{
+	require.NoError(t, d.UpsertSession(t.Context(), db.Session{
 		ID: sessionID, Agent: string(parser.AgentCursor), Machine: "local",
 		Cwd: filepath.Join(workspaceRoot, "old"), FilePath: &path,
 	}))
-	e := NewEngine(d, EngineConfig{
+	e := NewEngine(t.Context(), d, EngineConfig{
 		Machine:            "local",
 		IncludeCwdPrefixes: []string{allowed},
 	})
 	t.Cleanup(func() { e.Close() })
 
-	changed, err := e.reconcileFilteredSourceCwd(
+	changed, err := e.reconcileFilteredSourceCwd(t.Context(),
 		[]parser.ParseResult{{Session: parser.ParsedSession{
 			ID: sessionID, Agent: parser.AgentCursor, Cwd: actual,
 			File: parser.FileInfo{Path: otherPath},
@@ -195,12 +194,12 @@ func TestFilteredCursorCwdReconciliationScopesSourceIdentity(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.False(t, changed)
-	stored, err := d.GetSession(context.Background(), sessionID)
+	stored, err := d.GetSession(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, filepath.Join(workspaceRoot, "old"), stored.Cwd)
 
-	changed, err = e.reconcileFilteredSourceCwd(
+	changed, err = e.reconcileFilteredSourceCwd(t.Context(),
 		[]parser.ParseResult{{Session: parser.ParsedSession{
 			ID: sessionID, Agent: parser.AgentCursor, Cwd: actual,
 			File: parser.FileInfo{Path: path},
@@ -211,11 +210,11 @@ func TestFilteredCursorCwdReconciliationScopesSourceIdentity(t *testing.T) {
 	)
 	require.NoError(t, err)
 	assert.True(t, changed)
-	stored, err = d.GetSession(context.Background(), sessionID)
+	stored, err = d.GetSession(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, actual, stored.Cwd)
-	assert.Less(t, d.GetSessionDataVersion(sessionID), db.CurrentDataVersion())
+	assert.Less(t, d.GetSessionDataVersion(t.Context(), sessionID), db.CurrentDataVersion())
 }
 
 func TestFilteredCursorCwdReconciliationKeepsSteadyStateRowsStale(t *testing.T) {
@@ -225,11 +224,11 @@ func TestFilteredCursorCwdReconciliationKeepsSteadyStateRowsStale(t *testing.T) 
 	actual := filepath.Join(workspaceRoot, "actual")
 	path := "cursor-project/agent-transcripts/steady.jsonl"
 	const sessionID = "cursor:steady-stale"
-	require.NoError(t, d.UpsertSession(db.Session{
+	require.NoError(t, d.UpsertSession(t.Context(), db.Session{
 		ID: sessionID, Agent: string(parser.AgentCursor), Machine: "local",
 		Cwd: filepath.Join(workspaceRoot, "old"), FilePath: &path,
 	}))
-	e := NewEngine(d, EngineConfig{
+	e := NewEngine(t.Context(), d, EngineConfig{
 		Machine:            "local",
 		IncludeCwdPrefixes: []string{allowed},
 	})
@@ -242,17 +241,17 @@ func TestFilteredCursorCwdReconciliationKeepsSteadyStateRowsStale(t *testing.T) 
 		State: parser.SourceCwdResolved, Path: actual,
 	}}
 
-	changed, err := e.reconcileFilteredSourceCwd(vetoed, decision)
+	changed, err := e.reconcileFilteredSourceCwd(t.Context(), vetoed, decision)
 	require.NoError(t, err)
 	assert.True(t, changed)
-	assert.Less(t, d.GetSessionDataVersion(sessionID), db.CurrentDataVersion())
+	assert.Less(t, d.GetSessionDataVersion(t.Context(), sessionID), db.CurrentDataVersion())
 
-	changed, err = e.reconcileFilteredSourceCwd(vetoed, decision)
+	changed, err = e.reconcileFilteredSourceCwd(t.Context(), vetoed, decision)
 	require.NoError(t, err)
 	assert.False(t, changed)
-	assert.Less(t, d.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
+	assert.Less(t, d.GetSessionDataVersion(t.Context(), sessionID), db.CurrentDataVersion(),
 		"staleness must survive the veto so a later admitted parse refreshes the row")
-	stored, err := d.GetSession(context.Background(), sessionID)
+	stored, err := d.GetSession(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
 	assert.Equal(t, actual, stored.Cwd)
@@ -263,12 +262,12 @@ func TestStaleSourceReparseAdmittedPredictsCwdFilterVeto(t *testing.T) {
 	workspaceRoot := t.TempDir()
 	allowed := filepath.Join(workspaceRoot, "allowed")
 	vetoedPath := filepath.Join(workspaceRoot, "vetoed")
-	e := NewEngine(d, EngineConfig{
+	e := NewEngine(t.Context(), d, EngineConfig{
 		Machine:            "local",
 		IncludeCwdPrefixes: []string{allowed},
 	})
 	t.Cleanup(func() { e.Close() })
-	open := NewEngine(d, EngineConfig{Machine: "local"})
+	open := NewEngine(t.Context(), d, EngineConfig{Machine: "local"})
 	t.Cleanup(func() { open.Close() })
 
 	tests := []struct {

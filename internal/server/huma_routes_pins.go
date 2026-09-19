@@ -65,11 +65,10 @@ func (s *Server) humaListSessionPins(
 	return &jsonOutput[pinsResponse]{Body: pinsResponse{Pins: pins}}, nil
 }
 
-func (s *Server) humaPinMessage(
-	_ context.Context,
+func (s *Server) humaPinMessage(ctx context.Context,
 	in *pinMessageInput,
 ) (*createdOutput[pinMessageResponse], error) {
-	id, err := s.db.PinMessage(in.ID, in.MessageID, in.Body.Note)
+	id, err := s.db.PinMessage(ctx, in.ID, in.MessageID, in.Body.Note)
 	if err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
@@ -86,11 +85,10 @@ func (s *Server) humaPinMessage(
 	}, nil
 }
 
-func (s *Server) humaUnpinMessage(
-	_ context.Context,
+func (s *Server) humaUnpinMessage(ctx context.Context,
 	in *messagePathInput,
 ) (*noContentOutput, error) {
-	if err := s.db.UnpinMessage(in.ID, in.MessageID); err != nil {
+	if err := s.db.UnpinMessage(ctx, in.ID, in.MessageID); err != nil {
 		if handled := handleHumaReadOnly(err); handled != nil {
 			return nil, handled
 		}

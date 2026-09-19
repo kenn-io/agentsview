@@ -151,7 +151,7 @@ func coworkSubagentTranscripts(encDir, cliSessionID string) []string {
 		subagentsDir,
 		func(path string, d os.DirEntry, err error) error {
 			if err != nil || d.IsDir() {
-				return nil
+				return nil //nolint:nilerr // Discovery skips unavailable optional session paths.
 			}
 			name := d.Name()
 			if !strings.HasPrefix(name, "agent-") ||
@@ -218,7 +218,7 @@ func walkCoworkSessions(root string, fn func(transcriptPath string)) {
 		root,
 		func(path string, d os.DirEntry, err error) error {
 			if err != nil {
-				return nil
+				return nil //nolint:nilerr // Discovery skips unavailable optional session paths.
 			}
 			if d.IsDir() {
 				if path == root {

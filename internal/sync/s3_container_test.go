@@ -146,7 +146,7 @@ func TestS3DiscoverySyncAgainstContainer(t *testing.T) {
 	putS3Object(ctx, t, uploadClient, codexKey, codexBody)
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(ctx, database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {"s3://" + s3TestBucket + "/" + s3TestMachine + "/raw/claude"},
 			parser.AgentCodex:  {"s3://" + s3TestBucket + "/" + s3TestMachine + "/raw/codex"},

@@ -52,9 +52,9 @@ func TestStoreGetAnalyticsSignals(t *testing.T) {
 			StartedAt:    &started,
 			MessageCount: 4,
 		}
-		require.NoError(t, local.UpsertSession(sess),
+		require.NoError(t, local.UpsertSession(t.Context(), sess),
 			"upsert %s", id)
-		require.NoError(t, local.UpdateSessionSignals(
+		require.NoError(t, local.UpdateSessionSignals(t.Context(),
 			id,
 			db.SessionSignalUpdate{
 				Outcome:                "completed",
@@ -123,7 +123,7 @@ func TestStoreGetAnalyticsSignalSessionsModelFilterUsesMatchingMessages(
 
 	started := "2024-06-01T09:00:00Z"
 	first := "tool evidence"
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 		ID:           "signal-mixed",
 		Project:      "proj",
 		Machine:      "local",
@@ -132,7 +132,7 @@ func TestStoreGetAnalyticsSignalSessionsModelFilterUsesMatchingMessages(
 		StartedAt:    &started,
 		MessageCount: 2,
 	}), "upsert session")
-	require.NoError(t, local.InsertMessages([]db.Message{
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
 		{
 			SessionID: "signal-mixed", Ordinal: 0, Role: "assistant",
 			Content: "claude tool evidence", ContentLength: 20,
@@ -148,7 +148,7 @@ func TestStoreGetAnalyticsSignalSessionsModelFilterUsesMatchingMessages(
 			HasToolUse: true,
 		},
 	}), "insert messages")
-	require.NoError(t, local.UpdateSessionSignals(
+	require.NoError(t, local.UpdateSessionSignals(t.Context(),
 		"signal-mixed",
 		db.SessionSignalUpdate{ToolFailureSignalCount: 1},
 	), "update session signals")

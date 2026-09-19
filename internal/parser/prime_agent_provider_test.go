@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,20 +29,20 @@ func TestPrimeAgentProviderParsesFlatSessionAndAttributedUsage(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, AgentPrimeAgent, sources[0].Provider)
 	assert.Equal(t, sourcePath, sources[0].DisplayPath)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~prime-agent:019c1234-session",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, sourcePath, found.DisplayPath)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0],
 	})
 	require.NoError(t, err)
@@ -155,7 +154,7 @@ func TestPrimeAgentFindSourceVerifiesDirectFilenameHeader(t *testing.T) {
 				Roots: []string{root},
 			})
 			require.True(t, ok)
-			found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+			found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 				FullSessionID: "prime-agent:target-session",
 			})
 			require.NoError(t, err)
@@ -197,7 +196,7 @@ func TestPrimeAgentFindSourceRejectsMismatchedStoredHints(t *testing.T) {
 				request.StoredFilePath = stalePath
 			}
 
-			found, ok, err := provider.FindSource(context.Background(), request)
+			found, ok, err := provider.FindSource(t.Context(), request)
 			require.NoError(t, err)
 			require.True(t, ok)
 			assert.Equal(t, matchingPath, found.DisplayPath)
@@ -224,13 +223,13 @@ func TestPrimeAgentParentSessionUsesSiblingHeaderID(t *testing.T) {
 		Roots: []string{root},
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
 
 	var parentID, childParentID string
 	for _, source := range sources {
-		outcome, err := provider.Parse(context.Background(), ParseRequest{
+		outcome, err := provider.Parse(t.Context(), ParseRequest{
 			Source: source,
 		})
 		require.NoError(t, err)

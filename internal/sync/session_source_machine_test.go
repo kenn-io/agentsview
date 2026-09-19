@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -22,7 +21,7 @@ func TestSyncAllAttributesFilesystemSessionsPerRoot(t *testing.T) {
 	writeSessionSourceClaudeFile(t, localRoot, "local-session.jsonl")
 	writeSessionSourceClaudeFile(t, archiveRoot, "archive-session.jsonl")
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {localRoot, archiveRoot},
 		},
@@ -35,10 +34,10 @@ func TestSyncAllAttributesFilesystemSessionsPerRoot(t *testing.T) {
 		Machine: "localbox",
 	})
 
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 
 	assert.False(t, stats.Aborted)
-	page, err := database.ListSessions(context.Background(), db.SessionFilter{
+	page, err := database.ListSessions(t.Context(), db.SessionFilter{
 		Limit: 10,
 	})
 	require.NoError(t, err)
@@ -55,7 +54,7 @@ func TestSyncPathsAttributesFilesystemSessionFromChangedRoot(t *testing.T) {
 	root := t.TempDir()
 	path := writeSessionSourceClaudeFile(t, root, "watched-session.jsonl")
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
@@ -65,9 +64,9 @@ func TestSyncPathsAttributesFilesystemSessionFromChangedRoot(t *testing.T) {
 		Machine: "localbox",
 	})
 
-	engine.SyncPathsContext(context.Background(), []string{path})
+	engine.SyncPathsContext(t.Context(), []string{path})
 
-	sess, err := database.GetSessionFull(context.Background(), "watched-session")
+	sess, err := database.GetSessionFull(t.Context(), "watched-session")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "archivebox", sess.Machine)
@@ -123,7 +122,7 @@ func TestReconcileWatchRootsTombstonesMissingLabeledFilesystemSession(
 	root := t.TempDir()
 	path := writeSessionSourceClaudeFile(t, root, "missing-session.jsonl")
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
@@ -153,7 +152,7 @@ func TestSyncAllSincePreservesIngestedFilesystemMachine(t *testing.T) {
 	writeSessionSourceClaudeFile(t, root, "ingested-machine.jsonl")
 	database := openTestDB(t)
 	newEngine := func(machine string) *Engine {
-		return NewEngine(database, EngineConfig{
+		return NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentClaude: {root},
 			},
@@ -164,15 +163,15 @@ func TestSyncAllSincePreservesIngestedFilesystemMachine(t *testing.T) {
 		})
 	}
 
-	first := newEngine("oldbox").SyncAll(context.Background(), nil)
+	first := newEngine("oldbox").SyncAll(t.Context(), nil)
 	require.Equal(t, 1, first.Synced)
 	second := newEngine("newbox").SyncAllSince(
-		context.Background(), time.Now().Add(time.Hour), nil,
+		t.Context(), time.Now().Add(time.Hour), nil,
 	)
 	require.Zero(t, second.Synced)
 
 	sess, err := database.GetSessionFull(
-		context.Background(), "ingested-machine",
+		t.Context(), "ingested-machine",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
@@ -198,7 +197,7 @@ func TestSyncAllSincePreservesTrashedSessionMachine(t *testing.T) {
 	writeSessionSourceClaudeFile(t, root, "trashed-machine.jsonl")
 	database := openTestDB(t)
 	newEngine := func(machine string) *Engine {
-		return NewEngine(database, EngineConfig{
+		return NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentClaude: {root},
 			},
@@ -210,7 +209,7 @@ func TestSyncAllSincePreservesTrashedSessionMachine(t *testing.T) {
 	}
 
 	require.Equal(t, 1, newEngine("oldbox").SyncAll(t.Context(), nil).Synced)
-	require.NoError(t, database.SoftDeleteSession("trashed-machine"))
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "trashed-machine"))
 
 	stats := newEngine("newbox").SyncAllSince(
 		t.Context(), time.Now().Add(time.Hour), nil,
@@ -234,7 +233,7 @@ func TestResyncAllPreservesSourceMachineIdentityAttribution(t *testing.T) {
 	writeSessionSourceClaudeFile(t, root, "resynced-identity.jsonl")
 	database := openTestDB(t)
 	newEngine := func(machine string) *Engine {
-		return NewEngine(database, EngineConfig{
+		return NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentClaude: {root},
 			},
@@ -270,7 +269,7 @@ func TestResyncAllPreservesTrashedSessionMachine(t *testing.T) {
 	writeSessionSourceClaudeFile(t, root, "resynced-trash.jsonl")
 	database := openTestDB(t)
 	newEngine := func(machine string) *Engine {
-		return NewEngine(database, EngineConfig{
+		return NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentClaude: {root},
 			},
@@ -282,7 +281,7 @@ func TestResyncAllPreservesTrashedSessionMachine(t *testing.T) {
 	}
 
 	require.Equal(t, 1, newEngine("oldbox").SyncAll(t.Context(), nil).Synced)
-	require.NoError(t, database.SoftDeleteSession("resynced-trash"))
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "resynced-trash"))
 	stats := newEngine("newbox").ResyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted)
 
@@ -301,7 +300,7 @@ func TestIncrementalAppendPreservesIngestedSourceMachine(t *testing.T) {
 	path := writeSessionSourceClaudeFile(t, root, "incremental-machine.jsonl")
 	database := openTestDB(t)
 	newEngine := func(machine string) *Engine {
-		return NewEngine(database, EngineConfig{
+		return NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentClaude: {root},
 			},
@@ -312,7 +311,7 @@ func TestIncrementalAppendPreservesIngestedSourceMachine(t *testing.T) {
 		})
 	}
 
-	first := newEngine("oldbox").SyncAll(context.Background(), nil)
+	first := newEngine("oldbox").SyncAll(t.Context(), nil)
 	require.Equal(t, 1, first.Synced)
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 	require.NoError(t, err)
@@ -324,11 +323,11 @@ func TestIncrementalAppendPreservesIngestedSourceMachine(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	second := newEngine("newbox").SyncAll(context.Background(), nil)
+	second := newEngine("newbox").SyncAll(t.Context(), nil)
 	require.Equal(t, 1, second.Synced)
 
 	sess, err := database.GetSessionFull(
-		context.Background(), "incremental-machine",
+		t.Context(), "incremental-machine",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
@@ -342,7 +341,7 @@ func TestFullReparsePreservesIngestedSourceMachine(t *testing.T) {
 	path := writeSessionSourceClaudeFile(t, root, "reparsed-machine.jsonl")
 	database := openTestDB(t)
 	newEngine := func(machine string) *Engine {
-		return NewEngine(database, EngineConfig{
+		return NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentClaude: {root},
 			},
@@ -375,7 +374,7 @@ func TestIncompleteIncrementalAppendPreservesIngestedSourceMachine(t *testing.T)
 	path := writeSessionSourceClaudeFile(t, root, "partial-machine.jsonl")
 	database := openTestDB(t)
 	newEngine := func(machine string) *Engine {
-		return NewEngine(database, EngineConfig{
+		return NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentClaude: {root},
 			},
@@ -442,7 +441,7 @@ func TestCopiedFilesystemSessionKeepsNativeIDDeduplication(t *testing.T) {
 		filepath.Join(secondProject, "copied-session.jsonl"), data, 0o600,
 	))
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {firstRoot, secondRoot},
 		},
@@ -455,9 +454,9 @@ func TestCopiedFilesystemSessionKeepsNativeIDDeduplication(t *testing.T) {
 		Machine: "localbox",
 	})
 
-	engine.SyncAll(context.Background(), nil)
+	engine.SyncAll(t.Context(), nil)
 
-	page, err := database.ListSessions(context.Background(), db.SessionFilter{
+	page, err := database.ListSessions(t.Context(), db.SessionFilter{
 		Limit: 10,
 	})
 	require.NoError(t, err)
@@ -487,7 +486,7 @@ func TestReconcileTombstonesAfterSourceLabelChange(t *testing.T) {
 	database := openTestDB(t)
 
 	newEngine := func(machine string) *Engine {
-		return NewEngine(database, EngineConfig{
+		return NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentClaude: {archiveRoot},
 			},
@@ -500,14 +499,14 @@ func TestReconcileTombstonesAfterSourceLabelChange(t *testing.T) {
 
 	first := newEngine("archivebox")
 	t.Cleanup(first.Close)
-	require.False(t, first.SyncAll(context.Background(), nil).Aborted)
+	require.False(t, first.SyncAll(t.Context(), nil).Aborted)
 
 	require.Equal(t, "archivebox", activeSessionMachines(t, database)["archive-session"])
 	// Model an archive admitted before deletion-proof baselines existed. The
 	// relabeled reconciliation must recreate proof under the stored machine,
 	// not only visit the configured candidate machine.
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			"DELETE FROM local_session_source_baselines WHERE session_id = ?",
 			"archive-session",
 		)
@@ -519,12 +518,12 @@ func TestReconcileTombstonesAfterSourceLabelChange(t *testing.T) {
 	relabeled := newEngine("renamedbox")
 	t.Cleanup(relabeled.Close)
 	require.NoError(t, relabeled.ReconcileWatchRootsAfterLostEvents(
-		context.Background(), []string{archiveRoot}, false,
+		t.Context(), []string{archiveRoot}, false,
 	))
 	assert.Equal(t, "archivebox", activeSessionMachines(t, database)["archive-session"],
 		"an edited label must not rewrite an already-ingested session")
 	ownership, err := database.ListActiveSessionSourceOwnershipScopesPage(
-		context.Background(), "archivebox", string(parser.AgentClaude),
+		t.Context(), "archivebox", string(parser.AgentClaude),
 		[]db.StoredSourcePathHintScope{{Path: archiveRoot}},
 		db.SessionSourceCursor{},
 	)
@@ -535,7 +534,7 @@ func TestReconcileTombstonesAfterSourceLabelChange(t *testing.T) {
 	// Now delete the source and reconcile under the new label.
 	require.NoError(t, os.Remove(archivePath))
 	require.NoError(t, relabeled.ReconcileWatchRootsAfterLostEvents(
-		context.Background(), []string{archiveRoot}, false,
+		t.Context(), []string{archiveRoot}, false,
 	))
 
 	archived, err := database.GetSessionFull(t.Context(), "archive-session")
@@ -548,7 +547,7 @@ func TestReconcileTombstonesLegacyEmptyMachineSession(t *testing.T) {
 	root := t.TempDir()
 	path := writeSessionSourceClaudeFile(t, root, "legacy-empty-machine.jsonl")
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
@@ -563,14 +562,14 @@ func TestReconcileTombstonesLegacyEmptyMachineSession(t *testing.T) {
 	// Model a session admitted before machine attribution and deletion-proof
 	// baselines existed. Refreshing it must retain the empty attribution while
 	// recreating deletion proof for that exact stored ownership key.
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
-		if _, err := tx.Exec(
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET machine = '' WHERE id = ?",
 			"legacy-empty-machine",
 		); err != nil {
 			return err
 		}
-		_, err := tx.Exec(
+		_, err := tx.ExecContext(t.Context(),
 			"DELETE FROM local_session_source_baselines WHERE session_id = ?",
 			"legacy-empty-machine",
 		)
@@ -610,7 +609,7 @@ func TestReconcileTombstonesLegacyEmptyMachineSession(t *testing.T) {
 // keyed by session ID.
 func activeSessionMachines(t *testing.T, database *db.DB) map[string]string {
 	t.Helper()
-	page, err := database.ListSessions(context.Background(), db.SessionFilter{
+	page, err := database.ListSessions(t.Context(), db.SessionFilter{
 		Limit: 100,
 	})
 	require.NoError(t, err)
@@ -632,7 +631,7 @@ func TestBaselineFollowsPersistedMachineAfterRelabel(t *testing.T) {
 	database := openTestDB(t)
 
 	newEngine := func(machine string) *Engine {
-		return NewEngine(database, EngineConfig{
+		return NewEngine(t.Context(), database, EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{
 				parser.AgentClaude: {archiveRoot},
 			},
@@ -645,7 +644,7 @@ func TestBaselineFollowsPersistedMachineAfterRelabel(t *testing.T) {
 
 	first := newEngine("archivebox")
 	t.Cleanup(first.Close)
-	require.False(t, first.SyncAll(context.Background(), nil).Aborted)
+	require.False(t, first.SyncAll(t.Context(), nil).Aborted)
 
 	// Append to the source so the relabeled pass actually reparses and rewrites
 	// it. An unchanged file is skipped, which never exercises the write path.
@@ -655,14 +654,14 @@ func TestBaselineFollowsPersistedMachineAfterRelabel(t *testing.T) {
 	// must land there too, not under the newly configured "renamedbox".
 	relabeled := newEngine("renamedbox")
 	t.Cleanup(relabeled.Close)
-	require.False(t, relabeled.SyncAll(context.Background(), nil).Aborted)
+	require.False(t, relabeled.SyncAll(t.Context(), nil).Aborted)
 
 	require.Equal(t, "archivebox",
 		activeSessionMachines(t, database)["archive-session"])
 
 	ownershipFor := func(machine string) []db.SessionSourceOwnership {
 		rows, err := database.ListActiveSessionSourceOwnershipScopesPage(
-			context.Background(), machine, string(parser.AgentClaude),
+			t.Context(), machine, string(parser.AgentClaude),
 			[]db.StoredSourcePathHintScope{{Path: archiveRoot}},
 			db.SessionSourceCursor{},
 		)

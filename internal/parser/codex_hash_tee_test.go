@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding"
 	"encoding/hex"
+	"errors"
 	"io"
 	"testing"
 
@@ -25,7 +26,7 @@ func TestCodexHashAnchorTeeWrapAndDigest(t *testing.T) {
 	buf := make([]byte, 64<<10)
 	for {
 		_, err := tee.Read(buf)
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		require.NoError(t, err)
@@ -35,7 +36,7 @@ func TestCodexHashAnchorTeeWrapAndDigest(t *testing.T) {
 	require.NoError(t, err)
 	h := sha256.New()
 	require.NoError(t, h.(encoding.BinaryUnmarshaler).UnmarshalBinary(state))
-	require.Equal(t, sha256.Sum256(payload), *(*[32]byte)(h.Sum(nil)))
+	require.Equal(t, *(*[32]byte)(h.Sum(nil)), sha256.Sum256(payload))
 
 	wantAnchor := sha256.Sum256(payload[len(payload)-codexCheckpointAnchorSize:])
 	require.Equal(t, hex.EncodeToString(wantAnchor[:]), tee.AnchorDigest())

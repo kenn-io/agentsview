@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -41,14 +40,14 @@ func TestQwenPawProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{"*.json"}, plan.Roots[0].IncludeGlobs)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 2)
 	assert.ElementsMatch(t, []string{rootPath, consolePath}, []string{
@@ -61,28 +60,28 @@ func TestQwenPawProviderSourceMethods(t *testing.T) {
 		assert.Equal(t, source.DisplayPath, source.FingerprintKey)
 	}
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~qwenpaw:default:root_1",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, rootPath, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "default:console:console_1",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, consolePath, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: rootPath,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, rootPath, found.DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, rootPath, fingerprint.Key)
 	assert.Positive(t, fingerprint.Size)
@@ -90,7 +89,7 @@ func TestQwenPawProviderSourceMethods(t *testing.T) {
 	assert.NotEmpty(t, fingerprint.Hash)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: rootPath, EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -99,7 +98,7 @@ func TestQwenPawProviderSourceMethods(t *testing.T) {
 
 	require.NoError(t, os.Remove(consolePath))
 	changed, err = provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: consolePath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -107,7 +106,7 @@ func TestQwenPawProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, consolePath, changed[0].DisplayPath)
 
 	changed, err = provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      rootPath,
 			EventKind: "write",
@@ -128,11 +127,11 @@ func TestQwenPawProviderParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: SourceFingerprint{Key: sourcePath, Hash: "abc123"},
 	})
@@ -168,7 +167,7 @@ func TestQwenPawProviderFindSourceResolvesStoredPathOutsideRoots(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: storedPath,
 	})
 	require.NoError(t, err)
@@ -176,7 +175,7 @@ func TestQwenPawProviderFindSourceResolvesStoredPathOutsideRoots(t *testing.T) {
 	assert.Equal(t, storedPath, found.DisplayPath)
 	assert.Equal(t, "my_ws", found.ProjectHint)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  found,
 		Machine: "devbox",
 	})
@@ -186,7 +185,7 @@ func TestQwenPawProviderFindSourceResolvesStoredPathOutsideRoots(t *testing.T) {
 	assert.Equal(t, "my_ws", outcome.Results[0].Result.Session.Project)
 
 	// A stored path that is not a valid qwenpaw source shape stays unresolved.
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: filepath.Join(storedRoot, "loose.json"),
 	})
 	require.NoError(t, err)
@@ -212,7 +211,7 @@ func TestQwenPawProviderDiscoversSymlinkedWorkspace(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
@@ -243,13 +242,13 @@ func TestQwenPawProviderPrunesSymlinkedSessionNamespaces(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      linkedPath,
 			EventKind: "write",

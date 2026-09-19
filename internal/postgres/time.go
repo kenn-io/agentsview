@@ -1,6 +1,7 @@
 package postgres
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -81,18 +82,18 @@ func NormalizeLocalSyncTimestamp(
 // SyncStateStore is the interface needed for normalizing local
 // sync timestamps stored in SQLite.
 type SyncStateStore interface {
-	GetSyncState(key string) (string, error)
-	SetSyncState(key, value string) error
-	GetOrCreateSyncState(key, defaultValue string) (string, error)
+	GetSyncState(ctx context.Context, key string) (string, error)
+	SetSyncState(ctx context.Context, key, value string) error
+	GetOrCreateSyncState(ctx context.Context, key, defaultValue string) (string, error)
 }
 
 // NormalizeLocalSyncStateTimestamps normalizes the last_push_at
 // watermark in the local SQLite sync state to millisecond
 // precision.
-func NormalizeLocalSyncStateTimestamps(
+func NormalizeLocalSyncStateTimestamps(ctx context.Context,
 	local SyncStateStore,
 ) error {
-	value, err := local.GetSyncState("last_push_at")
+	value, err := local.GetSyncState(ctx, "last_push_at")
 	if err != nil {
 		return fmt.Errorf("reading last_push_at: %w", err)
 	}
@@ -108,7 +109,7 @@ func NormalizeLocalSyncStateTimestamps(
 	if normalized == value {
 		return nil
 	}
-	if err := local.SetSyncState(
+	if err := local.SetSyncState(ctx,
 		"last_push_at", normalized,
 	); err != nil {
 		return fmt.Errorf("writing last_push_at: %w", err)

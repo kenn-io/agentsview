@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -302,7 +303,7 @@ func (ix *Index) upsertMirrorRow(
 	err = ix.db.QueryRowContext(ctx,
 		`SELECT content_hash FROM `+ix.spec.DocsTable+` WHERE doc_key = ?`, key,
 	).Scan(&existingHash)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return false, evicted, fmt.Errorf("reading existing content hash: %w", err)
 	}
 
@@ -401,6 +402,7 @@ func (ix *Index) evictSlotOccupant(
 	if err != nil {
 		return nil, fmt.Errorf("finding slot occupant: %w", err)
 	}
+	defer rows.Close()
 	var evictKeys []string
 	for rows.Next() {
 		var k string
@@ -498,6 +500,7 @@ func (ix *Index) currentOrdinals(ctx context.Context, keys []string) (map[string
 		if err != nil {
 			return fmt.Errorf("checking evicted doc_key ordinals: %w", err)
 		}
+		defer rows.Close()
 		for rows.Next() {
 			var k string
 			var ordinal int
@@ -528,6 +531,7 @@ func (ix *Index) reconcileDeletions(
 	if err != nil {
 		return 0, fmt.Errorf("listing mirror doc_keys: %w", err)
 	}
+	defer rows.Close()
 	var vanished []string
 	for rows.Next() {
 		var key string

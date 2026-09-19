@@ -24,8 +24,7 @@ func TestOpenTestDBWithTemplateFallsBackWhenTemplateUnavailable(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, d.Close()) })
 
 	var sessions int
-	require.NoError(t,
-		d.getReader().QueryRow("SELECT COUNT(*) FROM sessions").Scan(&sessions),
+	require.NoError(t, d.getReader().QueryRow(t.Context(), "SELECT COUNT(*) FROM sessions").Scan(&sessions),
 		"querying sessions on fallback db")
 	require.Zero(t, sessions, "fresh fallback db should be empty")
 }

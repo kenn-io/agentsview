@@ -69,7 +69,7 @@ func TestWatcherStartFailureSuppressesFallbackWhenPollingOwnershipSet(t *testing
 		"obligation must carry one scope per named agent")
 	assert.Equal(t, "gemini", ob.Scopes[0].Agent,
 		"scope must carry the provider agent identity from rootAgents")
-	assert.False(t, ob.Scopes[0].Agent == "",
+	assert.NotEmpty(t, ob.Scopes[0].Agent,
 		"named-agent root must not produce an empty-agent scope")
 }
 
@@ -177,7 +177,7 @@ func TestWatcherStartFailureEmitsEmptyAgentScopeForNoAgentRoot(t *testing.T) {
 	ob := emitted[0]
 	require.Len(t, ob.Scopes, 1,
 		"absent-agent root must still emit one empty-agent scope for coverage")
-	assert.Equal(t, "", ob.Scopes[0].Agent,
+	assert.Empty(t, ob.Scopes[0].Agent,
 		"scope must use empty agent when rootScopes has no named agents for the root")
 }
 

@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -53,6 +52,7 @@ type crushTestFixture struct {
 
 func newCrushTestFixture(t *testing.T) *crushTestFixture {
 	t.Helper()
+
 	projectDir := t.TempDir()
 	dataDir := filepath.Join(projectDir, ".crush")
 	require.NoError(t, os.MkdirAll(dataDir, 0o755))
@@ -60,7 +60,7 @@ func newCrushTestFixture(t *testing.T) *crushTestFixture {
 	database, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	_, err = database.Exec(crushTestSchema)
+	_, err = database.ExecContext(t.Context(), crushTestSchema)
 	require.NoError(t, err)
 	return &crushTestFixture{
 		projectDir: projectDir,
@@ -75,7 +75,7 @@ func (f *crushTestFixture) insertSession(
 	created, updated int64, prompt, completion int64, cost float64,
 ) {
 	t.Helper()
-	_, err := f.database.Exec(`
+	_, err := f.database.ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, parent_session_id, title, created_at, updated_at,
 			prompt_tokens, completion_tokens, cost
@@ -90,7 +90,7 @@ func (f *crushTestFixture) insertMessage(
 	model, provider string,
 ) {
 	t.Helper()
-	_, err := f.database.Exec(`
+	_, err := f.database.ExecContext(t.Context(), `
 		INSERT INTO messages (
 			id, session_id, role, parts, model, created_at, updated_at,
 			provider
@@ -137,7 +137,7 @@ func TestCrushProviderParsesTranscriptToolsAndUsage(t *testing.T) {
 		{"type":"finish","data":{"reason":"stop","time":1789093740}}
 	]`, created+30, "glm-5.3-flash", "hyper")
 
-	session, messages, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-1", "workstation", false, nil)
+	session, messages, err := parseCrushSession(t.Context(), fixture.dbPath, "sess-1", "workstation", false, nil)
 	require.NoError(t, err)
 
 	require.NotNil(t, session)
@@ -258,7 +258,7 @@ func TestCrushProviderDiscoveryAndRoots(t *testing.T) {
 
 	metas := make([]dbBackedSessionMeta, 0)
 	require.NoError(t, forEachCrushSessionMeta(
-		context.Background(), crushDBPath(roots[0]), false,
+		t.Context(), crushDBPath(roots[0]), false,
 		func(meta dbBackedSessionMeta) error {
 			metas = append(metas, meta)
 			return nil
@@ -269,7 +269,7 @@ func TestCrushProviderDiscoveryAndRoots(t *testing.T) {
 	assert.Equal(t, VirtualSourcePath(fixture.dbPath, "sess-1"), metas[0].VirtualPath)
 	assert.Positive(t, metas[0].FileMtime)
 
-	meta, found, err := crushSessionMeta(context.Background(), fixture.dbPath, "missing", false)
+	meta, found, err := crushSessionMeta(t.Context(), fixture.dbPath, "missing", false)
 	require.NoError(t, err)
 	assert.False(t, found)
 	assert.Empty(t, meta.SessionID)
@@ -337,13 +337,11 @@ func TestCrushResolveReconciliationScopesMapsDatabaseFileRoot(t *testing.T) {
 			scope := plan.Scopes[0]
 			assert.Equal(t, []string{filepath.Clean(fixture.dbPath)}, scope.TraversalRoots,
 				"traversal must keep the original configured database-file root")
-			assert.Equal(t,
-				[]string{cleanReconciliationScopeRoot(fixture.dataDir)},
+			assert.Equal(t, []string{cleanReconciliationScopeRoot(fixture.dataDir)},
 				scope.CoverageIdentities,
 				"the database-file request must cover the configured data directory")
 			assert.Equal(t, []string{requested}, scope.RetryRoots)
-			assert.Equal(t,
-				[]string{cleanReconciliationScopeRoot(fixture.dataDir)},
+			assert.Equal(t, []string{cleanReconciliationScopeRoot(fixture.dataDir)},
 				plan.RequiredCoverageIdentities)
 		})
 	}
@@ -359,8 +357,7 @@ func TestCrushResolveReconciliationScopesMapsDatabaseFileRoot(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, plan.Scopes, 1)
 	assert.Equal(t, []string{filepath.Clean(fixture.dataDir)}, plan.Scopes[0].TraversalRoots)
-	assert.Equal(t,
-		[]string{cleanReconciliationScopeRoot(fixture.dataDir)},
+	assert.Equal(t, []string{cleanReconciliationScopeRoot(fixture.dataDir)},
 		plan.Scopes[0].CoverageIdentities,
 	)
 	assert.Equal(t, []string{fixture.dbPath}, plan.Scopes[0].RetryRoots)
@@ -370,19 +367,19 @@ func TestCrushSchemaValidationRejectsGooseStores(t *testing.T) {
 	fixture := newCrushTestFixture(t)
 	// Drop the parts column marker: a messages table without it is not
 	// a Crush store (e.g. goose's vendored migrations).
-	_, err := fixture.database.Exec(`
+	_, err := fixture.database.ExecContext(t.Context(), `
 		CREATE TABLE messages_like_goose (
 			id TEXT PRIMARY KEY, session_id TEXT, role TEXT,
 			content_json TEXT, created_at INTEGER
 		)
 	`)
 	require.NoError(t, err)
-	_, err = fixture.database.Exec(`DROP TABLE messages`)
+	_, err = fixture.database.ExecContext(t.Context(), `DROP TABLE messages`)
 	require.NoError(t, err)
-	_, err = fixture.database.Exec(`ALTER TABLE messages_like_goose RENAME TO messages`)
+	_, err = fixture.database.ExecContext(t.Context(), `ALTER TABLE messages_like_goose RENAME TO messages`)
 	require.NoError(t, err)
 	require.Error(t, validateCrushSchema(
-		context.Background(), fixture.database,
+		t.Context(), fixture.database,
 	), "a messages table without parts must not be treated as Crush")
 }
 
@@ -395,12 +392,12 @@ func TestCrushSummaryMessageIsCompactBoundary(t *testing.T) {
 		{"type":"text","data":{"text":"Summary of the conversation so far."}}
 	]`, created, "glm-5.3-flash", "")
 	// Mark the row as a condensed summary.
-	_, err := fixture.database.Exec(
+	_, err := fixture.database.ExecContext(t.Context(),
 		`UPDATE messages SET is_summary_message = 1 WHERE id = 'msg-sum'`,
 	)
 	require.NoError(t, err)
 
-	session, messages, err := parseCrushSession(context.Background(), fixture.dbPath, "sess-summary", "m", false, nil)
+	session, messages, err := parseCrushSession(t.Context(), fixture.dbPath, "sess-summary", "m", false, nil)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	message := messages[0]
@@ -424,20 +421,20 @@ func TestCrushFingerprintReflectsMessageContent(t *testing.T) {
 
 	var childCache crushChildRelationshipsCache
 	first, found, err := crushSessionFingerprint(
-		context.Background(), fixture.dbPath, "sess-fp", false, &childCache,
+		t.Context(), fixture.dbPath, "sess-fp", false, &childCache,
 	)
 	require.NoError(t, err)
 	require.True(t, found)
 
 	// An edit within the same second leaves every timestamp unchanged;
 	// the content hash must still move.
-	_, err = fixture.database.Exec(`
+	_, err = fixture.database.ExecContext(t.Context(), `
 		UPDATE messages SET parts = '[{"type":"text","data":{"text":"after"}}]'
 		WHERE id = 'msg-fp'
 	`)
 	require.NoError(t, err)
 	second, found, err := crushSessionFingerprint(
-		context.Background(), fixture.dbPath, "sess-fp", false, &childCache,
+		t.Context(), fixture.dbPath, "sess-fp", false, &childCache,
 	)
 	require.NoError(t, err)
 	require.True(t, found)
@@ -446,7 +443,7 @@ func TestCrushFingerprintReflectsMessageContent(t *testing.T) {
 
 	// A vanished session reports not-found rather than a stale hash.
 	_, found, err = crushSessionFingerprint(
-		context.Background(), fixture.dbPath, "sess-missing", false, &childCache,
+		t.Context(), fixture.dbPath, "sess-missing", false, &childCache,
 	)
 	require.NoError(t, err)
 	assert.False(t, found)
@@ -461,7 +458,7 @@ func TestCrushParseSessionWithoutOptionalColumns(t *testing.T) {
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	defer db.Close()
-	_, err = db.Exec(`
+	_, err = db.ExecContext(t.Context(), `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY, parent_session_id TEXT, title TEXT NOT NULL,
 			message_count INTEGER NOT NULL DEFAULT 0,
@@ -484,7 +481,7 @@ func TestCrushParseSessionWithoutOptionalColumns(t *testing.T) {
 	require.NoError(t, db.Close())
 
 	session, messages, err := parseCrushSession(
-		context.Background(), dbPath, "sess-min", "m", false, nil,
+		t.Context(), dbPath, "sess-min", "m", false, nil,
 	)
 
 	require.NoError(t, err)
@@ -498,7 +495,7 @@ func TestCrushParseSessionWithoutOptionalColumns(t *testing.T) {
 	// schema without messages.updated_at must still produce a hash.
 	var childCache crushChildRelationshipsCache
 	hash, found, err := crushSessionFingerprint(
-		context.Background(), dbPath, "sess-min", false, &childCache,
+		t.Context(), dbPath, "sess-min", false, &childCache,
 	)
 	require.NoError(t, err)
 	require.True(t, found,

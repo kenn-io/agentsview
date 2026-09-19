@@ -141,13 +141,13 @@ func TestParseCanonicalManifestAcceptsOnlyExactAuthenticatedEnvelope(t *testing.
 	_, err = ParseCanonicalManifest(
 		otherIdentity, canonical.ManifestID, canonical.CanonicalJSON, DefaultManifestLimits(),
 	)
-	assert.ErrorIs(t, err, ErrInvalid)
+	require.ErrorIs(t, err, ErrInvalid)
 
 	noncanonical := append([]byte(" "), canonical.CanonicalJSON...)
 	_, err = ParseCanonicalManifest(
 		identity, canonical.ManifestID, noncanonical, DefaultManifestLimits(),
 	)
-	assert.ErrorIs(t, err, ErrInvalid)
+	require.ErrorIs(t, err, ErrInvalid)
 
 	_, err = ParseCanonicalManifest(
 		identity, strings.Repeat("0", 64), canonical.CanonicalJSON, DefaultManifestLimits(),

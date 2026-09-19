@@ -69,7 +69,7 @@ func TestMaterializerReconstructsVerifiedReadOnlyTreeAndCleansUp(t *testing.T) {
 
 	require.NoError(t, materialized.Cleanup())
 	_, err = os.Stat(materialized.Root())
-	assert.ErrorIs(t, err, os.ErrNotExist)
+	require.ErrorIs(t, err, os.ErrNotExist)
 	require.NoError(t, materialized.Cleanup(), "cleanup must be idempotent")
 }
 
@@ -169,7 +169,7 @@ func TestMaterializerEnforcesAggregateLimitBeforeOpeningObjects(t *testing.T) {
 	_, err := (Materializer{
 		Store: store, BaseDir: t.TempDir(), MaxTotalBytes: int64(len(data) - 1),
 	}).Materialize(t.Context(), manifest)
-	assert.ErrorIs(t, err, rawsync.ErrInvalid)
+	require.ErrorIs(t, err, rawsync.ErrInvalid)
 	assert.Empty(t, store.opened)
 }
 
@@ -183,25 +183,24 @@ func TestMaterializeObjectCopyObservesCancellationInBoundedChunks(t *testing.T) 
 		Path: "session.jsonl", Type: "file", Length: total,
 		Objects: []rawsync.ObjectRef{object},
 	}})
-	// The reader ignores the context on purpose: only the copy loop's own
-	// bounded-chunk observation may stop it.
+	// Cancel after the first chunk. Only the copy loop can stop further reads.
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	reader := &cancelingChunkReader{cancel: cancel, data: data, chunkSize: len(chunk)}
 	store := &materializerStore{
 		objects: map[rawsync.ObjectRef][]byte{object: data},
-		readerFactory: func(ctx context.Context, data []byte) io.Reader {
-			return &pacedReader{ctx: ctx, data: data, chunkSize: len(chunk), delay: 15 * time.Millisecond}
+		readerFactory: func(context.Context, []byte) io.Reader {
+			return reader
 		},
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Millisecond)
-	defer cancel()
-	started := time.Now()
 
 	_, err := (Materializer{
 		Store: store, BaseDir: t.TempDir(), MaxTotalBytes: 1 << 20,
 	}).Materialize(ctx, manifest)
 
-	require.ErrorIs(t, err, context.DeadlineExceeded,
+	require.ErrorIs(t, err, context.Canceled,
 		"a stalled object stream must stop materialization at a chunk boundary")
-	assert.Less(t, time.Since(started), 2*time.Second,
+	assert.Equal(t, len(chunk), reader.offset,
 		"cancellation must be observed between bounded copy chunks")
 }
 
@@ -235,27 +234,22 @@ func TestMaterializeTrailingProbeObservesCancellation(t *testing.T) {
 	assert.Less(t, time.Since(started), 2*time.Second)
 }
 
-// pacedReader yields fixed-size chunks after a delay and deliberately ignores
-// its context, so only explicit bounded-chunk context observation stops it.
-type pacedReader struct {
-	ctx       context.Context
+// cancelingChunkReader cancels after a chunk but leaves further reads possible.
+type cancelingChunkReader struct {
+	cancel    context.CancelFunc
 	data      []byte
 	chunkSize int
-	delay     time.Duration
 	offset    int
 }
 
-func (r *pacedReader) Read(p []byte) (int, error) {
-	if r.offset >= len(r.data) {
-		return 0, io.EOF
-	}
-	time.Sleep(r.delay)
+func (r *cancelingChunkReader) Read(p []byte) (int, error) {
 	if r.offset >= len(r.data) {
 		return 0, io.EOF
 	}
 	size := min(len(p), r.chunkSize, len(r.data)-r.offset)
 	n := copy(p, r.data[r.offset:r.offset+size])
 	r.offset += n
+	r.cancel()
 	return n, nil
 }
 
@@ -297,10 +291,14 @@ func TestMaterializerRejectsConflictingEntryPathsBeforeCreatingFiles(t *testing.
 		CapturedAt:       time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC),
 		Kind:             rawsync.ManifestSnapshot,
 		Entries: []rawsync.Entry{
-			{Path: "a", Type: "file", Length: int64(len(data)),
-				Objects: []rawsync.ObjectRef{object}},
-			{Path: "a/b", Type: "file", Length: int64(len(data)),
-				Objects: []rawsync.ObjectRef{object}},
+			{
+				Path: "a", Type: "file", Length: int64(len(data)),
+				Objects: []rawsync.ObjectRef{object},
+			},
+			{
+				Path: "a/b", Type: "file", Length: int64(len(data)),
+				Objects: []rawsync.ObjectRef{object},
+			},
 		},
 	}
 	canonicalJSON := []byte(fmt.Sprintf(
@@ -322,7 +320,7 @@ func TestMaterializerRejectsConflictingEntryPathsBeforeCreatingFiles(t *testing.
 	}).Materialize(t.Context(), conflicted)
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, rawsync.ErrInvalid,
+	require.ErrorIs(t, err, rawsync.ErrInvalid,
 		"conflicting paths must fail validation, not filesystem materialization")
 	assert.Nil(t, materialized)
 	assert.Empty(t, store.opened,
@@ -365,7 +363,7 @@ func TestMaterializeDelegatesInFlightCancellationToObjectStore(t *testing.T) {
 	select {
 	case <-copyStarted:
 	case <-time.After(5 * time.Second):
-		t.Fatal("the materializer never started copying the object")
+		require.FailNow(t, "the materializer never started copying the object")
 	}
 	cancel()
 
@@ -374,7 +372,7 @@ func TestMaterializeDelegatesInFlightCancellationToObjectStore(t *testing.T) {
 		require.ErrorIs(t, err, context.Canceled,
 			"the materializer must pass attempt cancellation into the store-owned copy")
 	case <-time.After(5 * time.Second):
-		t.Fatal("the materialized copy never observed cancellation")
+		require.FailNow(t, "the materialized copy never observed cancellation")
 	}
 }
 
@@ -407,7 +405,7 @@ func TestMaterializationCleanupIsRetryableAfterTransientFailure(t *testing.T) {
 	require.NoError(t, materialized.Cleanup(),
 		"a transient cleanup failure must be retryable, not latched")
 	_, statErr = os.Stat(root)
-	assert.ErrorIs(t, statErr, os.ErrNotExist)
+	require.ErrorIs(t, statErr, os.ErrNotExist)
 	require.NoError(t, materialized.Cleanup(), "successful cleanup stays idempotent")
 }
 
@@ -431,7 +429,7 @@ func TestMaterializeJoinsPartialCleanupFailureIntoOperationError(t *testing.T) {
 	}).Materialize(t.Context(), manifest)
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, cleanupFailure,
+	require.ErrorIs(t, err, cleanupFailure,
 		"partial-materialization cleanup failures must join the operation error")
 	assert.NotContains(t, err.Error(), "agentsview-raw",
 		"the joined error must not expose the raw tree path")

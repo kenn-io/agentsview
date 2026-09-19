@@ -29,7 +29,7 @@ func TestVnodeObserverWakesOnEntryCreation(t *testing.T) {
 	select {
 	case <-woke:
 	case <-time.After(30 * time.Second):
-		t.Fatal("no wake after directory entry creation")
+		require.FailNow(t, "no wake after directory entry creation")
 	}
 }
 
@@ -62,12 +62,12 @@ func TestVnodeObserverCloseInterruptsBlockedRun(t *testing.T) {
 	case err := <-closeDone:
 		require.NoError(t, err)
 	case <-time.After(10 * time.Second):
-		t.Fatal("Close did not return; the blocked run loop was not interrupted")
+		require.FailNow(t, "Close did not return; the blocked run loop was not interrupted")
 	}
 	select {
 	case <-o.done:
 	case <-time.After(time.Second):
-		t.Fatal("run loop still active after Close returned")
+		require.FailNow(t, "run loop still active after Close returned")
 	}
 }
 
@@ -92,15 +92,15 @@ func TestVnodeObserverConcurrentCloseWaitsForTeardown(t *testing.T) {
 			select {
 			case <-o.done:
 			default:
-				t.Fatal("Close returned while the run loop was still active")
+				require.FailNow(t, "Close returned while the run loop was still active")
 			}
 			select {
 			case <-o.closeDone:
 			default:
-				t.Fatal("Close returned before teardown completed")
+				require.FailNow(t, "Close returned before teardown completed")
 			}
 		case <-time.After(10 * time.Second):
-			t.Fatal("concurrent Close did not return")
+			require.FailNow(t, "concurrent Close did not return")
 		}
 	}
 	assert.Equal(t, 0, o.watchedCount())

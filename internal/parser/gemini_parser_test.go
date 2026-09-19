@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -44,7 +43,7 @@ func parseGeminiTestSession(
 func discoverGeminiTestSessions(t *testing.T, root string) []DiscoveredFile {
 	t.Helper()
 	provider := newGeminiTestProvider(t, root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	if len(sources) == 0 {
 		return nil
@@ -105,7 +104,7 @@ func TestParseGeminiSession_JSONLStream(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NotNil(t, sess)
-	require.Equal(t, 2, len(msgs))
+	require.Len(t, msgs, 2)
 	assertSessionMeta(t, sess, "gemini:sess-jsonl-1", "my_project", AgentGemini)
 	assert.Equal(t, "Fix the import path", sess.FirstMessage)
 	assertMessage(t, msgs[0], RoleUser, "Fix the import path")
@@ -116,8 +115,7 @@ func TestParseGeminiSession_JSONLStream(t *testing.T) {
 	assert.Equal(t, "read_file_1", msgs[1].ToolCalls[0].ToolUseID)
 	require.Len(t, msgs[1].ToolResults, 1)
 	assert.Equal(t, "package main", DecodeContent(msgs[1].ToolResults[0].ContentRaw))
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		parseTimestamp("2026-04-23T16:12:50.158Z"),
 		sess.EndedAt,
 	)
@@ -174,7 +172,7 @@ func TestParseGeminiSession_JSONLStreamLargeRecord(t *testing.T) {
 	require.NotNil(t, sess)
 	require.Len(t, msgs, 1)
 	assertSessionMeta(t, sess, "gemini:sess-jsonl-large", "my_project", AgentGemini)
-	assert.Equal(t, len(largeContent), len(msgs[0].Content))
+	assert.Len(t, msgs[0].Content, len(largeContent))
 }
 
 func TestParseGeminiSession_JSONLStreamTolerantOfPartialLines(t *testing.T) {
@@ -189,7 +187,7 @@ func TestParseGeminiSession_JSONLStreamTolerantOfPartialLines(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NotNil(t, sess)
-		require.Equal(t, 1, len(msgs))
+		require.Len(t, msgs, 1)
 		assertMessage(t, msgs[0], RoleUser, "first")
 	})
 
@@ -206,7 +204,7 @@ func TestParseGeminiSession_JSONLStreamTolerantOfPartialLines(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NotNil(t, sess)
-		require.Equal(t, 2, len(msgs))
+		require.Len(t, msgs, 2)
 		assertMessage(t, msgs[0], RoleUser, "first")
 		assertMessage(t, msgs[1], RoleAssistant, "reply")
 	})
@@ -217,12 +215,12 @@ func TestParseGeminiSession_ToolCalls(t *testing.T) {
 		content := loadFixture(t, "gemini/tool_calls.json")
 		_, msgs := runGeminiParserTest(t, content)
 
-		assert.Equal(t, 2, len(msgs))
+		assert.Len(t, msgs, 2)
 		assert.True(t, msgs[1].HasToolUse)
 		assert.True(t, msgs[1].HasThinking)
-		assert.True(t, strings.Contains(msgs[1].Content, "[Thinking]\nPlanning\n"))
-		assert.True(t, strings.Contains(msgs[1].Content, "[/Thinking]"))
-		assert.True(t, strings.Contains(msgs[1].Content, "[Read: main.go]"))
+		assert.Contains(t, msgs[1].Content, "[Thinking]\nPlanning\n")
+		assert.Contains(t, msgs[1].Content, "[/Thinking]")
+		assert.Contains(t, msgs[1].Content, "[Read: main.go]")
 		// Chronological: thinking before content before tool calls
 		thinkIdx := strings.Index(msgs[1].Content, "[Thinking]")
 		contentIdx := strings.Index(msgs[1].Content, "Let me read it.")
@@ -236,12 +234,12 @@ func TestParseGeminiSession_ToolCalls(t *testing.T) {
 		content := loadFixture(t, "gemini/tool_calls_with_results.json")
 		_, msgs := runGeminiParserTest(t, content)
 
-		require.Equal(t, 2, len(msgs))
+		require.Len(t, msgs, 2)
 		assistantMsg := msgs[1]
 		assert.True(t, assistantMsg.HasToolUse)
 
 		// Verify ToolUseID and InputJSON are extracted
-		require.Equal(t, 2, len(assistantMsg.ToolCalls))
+		require.Len(t, assistantMsg.ToolCalls, 2)
 		assertToolCalls(t, assistantMsg.ToolCalls, []ParsedToolCall{
 			{
 				ToolName:  "read_file",
@@ -258,7 +256,7 @@ func TestParseGeminiSession_ToolCalls(t *testing.T) {
 		})
 
 		// Verify tool results are extracted
-		require.Equal(t, 2, len(assistantMsg.ToolResults))
+		require.Len(t, assistantMsg.ToolResults, 2)
 		assert.Equal(t, "read_file_1772747340739_0", assistantMsg.ToolResults[0].ToolUseID)
 		assert.Equal(t, len("# Agentstrove -- One-Pager\n\nDraft: 2026-03-04"), assistantMsg.ToolResults[0].ContentLength)
 		// Verify DecodeContent works on the raw content
@@ -284,11 +282,11 @@ func TestParseGeminiSession_ToolCalls(t *testing.T) {
 			}),
 		})
 		_, msgs := runGeminiParserTest(t, content)
-		require.Equal(t, 2, len(msgs))
-		require.Equal(t, 1, len(msgs[1].ToolCalls))
+		require.Len(t, msgs, 2)
+		require.Len(t, msgs[1].ToolCalls, 1)
 		assert.Equal(t, "run_cmd_1", msgs[1].ToolCalls[0].ToolUseID)
 
-		require.Equal(t, 1, len(msgs[1].ToolResults))
+		require.Len(t, msgs[1].ToolResults, 1)
 		assert.Equal(t, "run_cmd_1", msgs[1].ToolResults[0].ToolUseID)
 		assert.Equal(t, len("file1.go\nfile2.go"), msgs[1].ToolResults[0].ContentLength)
 		assert.Equal(t, "file1.go\nfile2.go", DecodeContent(msgs[1].ToolResults[0].ContentRaw))
@@ -309,10 +307,10 @@ func TestParseGeminiSession_ToolCalls(t *testing.T) {
 			}),
 		})
 		_, msgs := runGeminiParserTest(t, content)
-		require.Equal(t, 2, len(msgs))
-		require.Equal(t, 1, len(msgs[1].ToolCalls))
+		require.Len(t, msgs, 2)
+		require.Len(t, msgs[1].ToolCalls, 1)
 		assert.Equal(t, "read_1", msgs[1].ToolCalls[0].ToolUseID)
-		assert.Equal(t, 0, len(msgs[1].ToolResults))
+		assert.Empty(t, msgs[1].ToolResults)
 	})
 
 	t.Run("empty tool name skipped", func(t *testing.T) {
@@ -323,7 +321,7 @@ func TestParseGeminiSession_ToolCalls(t *testing.T) {
 			}),
 		})
 		_, msgs := runGeminiParserTest(t, content)
-		assert.Equal(t, 2, len(msgs))
+		assert.Len(t, msgs, 2)
 		assert.True(t, msgs[1].HasToolUse)
 		assertToolCalls(t, msgs[1].ToolCalls, nil)
 	})
@@ -333,7 +331,7 @@ func TestParseGeminiSession_ThinkingWithText(t *testing.T) {
 	content := loadFixture(t, "gemini/thinking_only.json")
 	_, msgs := runGeminiParserTest(t, content)
 
-	require.Equal(t, 2, len(msgs))
+	require.Len(t, msgs, 2)
 
 	msg := msgs[1]
 	assert.True(t, msg.HasThinking)
@@ -365,7 +363,7 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		content := loadFixture(t, "gemini/standard_session.json")
 		sess, msgs := runGeminiParserTest(t, content)
 
-		require.Equal(t, 4, len(msgs))
+		require.Len(t, msgs, 4)
 
 		// User messages have no tokens
 		assert.Equal(t, 0, msgs[0].ContextTokens)
@@ -426,7 +424,7 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		)
 		sess, msgs := runGeminiParserTest(t, content)
 
-		require.Equal(t, 2, len(msgs))
+		require.Len(t, msgs, 2)
 		assert.Equal(t, 0, msgs[0].ContextTokens)
 		assert.Equal(t, 0, msgs[1].ContextTokens)
 		assert.Equal(t, 0, msgs[1].OutputTokens)
@@ -463,7 +461,7 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		)
 		sess, msgs := runGeminiParserTest(t, content)
 
-		require.Equal(t, 2, len(msgs))
+		require.Len(t, msgs, 2)
 		assert.Equal(t, 5200, msgs[1].ContextTokens)
 		assert.Equal(t, 900, msgs[1].OutputTokens)
 		assert.True(t, msgs[1].HasContextTokens)
@@ -502,7 +500,7 @@ func TestParseGeminiSession_TokenUsage(t *testing.T) {
 		)
 		sess, msgs := runGeminiParserTest(t, content)
 
-		require.Equal(t, 2, len(msgs))
+		require.Len(t, msgs, 2)
 		assert.Equal(t, 0, msgs[1].ContextTokens)
 		assert.Equal(t, 0, msgs[1].OutputTokens)
 		assert.True(t, msgs[1].HasContextTokens)
@@ -529,7 +527,7 @@ func TestParseGeminiSession_EdgeCases(t *testing.T) {
 		content := loadFixture(t, "gemini/system_messages.json")
 		sess, msgs := runGeminiParserTest(t, content)
 		require.NotNil(t, sess)
-		assert.Equal(t, 0, len(msgs))
+		assert.Empty(t, msgs)
 	})
 
 	t.Run("first message truncation", func(t *testing.T) {
@@ -541,7 +539,7 @@ func TestParseGeminiSession_EdgeCases(t *testing.T) {
 		)
 		sess, _ := runGeminiParserTest(t, content)
 		require.NotNil(t, sess)
-		assert.Equal(t, 303, len(sess.FirstMessage))
+		assert.Len(t, sess.FirstMessage, 303)
 	})
 
 	t.Run("malformed JSON", func(t *testing.T) {
@@ -559,7 +557,7 @@ func TestParseGeminiSession_EdgeCases(t *testing.T) {
 		content := testjsonl.GeminiSessionJSON("sess-uuid-4", "hash", tsEarly, tsEarlyS5, []map[string]any{})
 		sess, msgs := runGeminiParserTest(t, content)
 		assert.Equal(t, 0, sess.MessageCount)
-		assert.Equal(t, 0, len(msgs))
+		assert.Empty(t, msgs)
 	})
 
 	t.Run("content as Part array", func(t *testing.T) {
@@ -575,9 +573,9 @@ func TestParseGeminiSession_EdgeCases(t *testing.T) {
 			},
 		})
 		_, msgs := runGeminiParserTest(t, content)
-		assert.Equal(t, 1, len(msgs))
-		assert.True(t, strings.Contains(msgs[0].Content, "part one"))
-		assert.True(t, strings.Contains(msgs[0].Content, "part two"))
+		assert.Len(t, msgs, 1)
+		assert.Contains(t, msgs[0].Content, "part one")
+		assert.Contains(t, msgs[0].Content, "part two")
 	})
 
 	t.Run("timestamps from startTime and lastUpdated", func(t *testing.T) {

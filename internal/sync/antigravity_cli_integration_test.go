@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
@@ -168,8 +167,8 @@ func TestSyncEngineAntigravityCLI_StaleDataVersionRenormalizesProject(t *testing
 	// path stored as the project, stamped with data version 91 -- the last
 	// version whose parser stored workspace paths unnormalized. The current
 	// version must stay above 91 for these rows to reparse.
-	require.NoError(t, env.db.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	require.NoError(t, env.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET project = ?, data_version = 91 WHERE id = ?",
 			"/home/user/my-cli-project", sessionID,
 		)
@@ -178,7 +177,7 @@ func TestSyncEngineAntigravityCLI_StaleDataVersionRenormalizesProject(t *testing
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{TotalSessions: 1, Synced: 1})
 	assertSessionProject(t, env.db, sessionID, "my_cli_project")
-	assert.Equal(t, db.CurrentDataVersion(), env.db.GetSessionDataVersion(sessionID),
+	assert.Equal(t, db.CurrentDataVersion(), env.db.GetSessionDataVersion(t.Context(), sessionID),
 		"reparse must restamp the session at the current data version")
 }
 
@@ -195,7 +194,7 @@ func TestSyncEngineAntigravityCLI_DisabledProjectDiscoveryHonoredBySyncAll(t *te
 	}
 	gitRun := func(dir string, args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		cmd := exec.CommandContext(t.Context(), "git", args...)
 		cmd.Dir = dir
 		out, err := cmd.CombinedOutput()
 		require.NoError(t, err, "git %v: %s", args, out)
@@ -235,7 +234,7 @@ func TestSyncEngineAntigravityCLI_DisabledProjectDiscoveryHonoredBySyncAll(t *te
 	))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentAntigravityCLI: {cliDir},
 		},
@@ -244,7 +243,7 @@ func TestSyncEngineAntigravityCLI_DisabledProjectDiscoveryHonoredBySyncAll(t *te
 	})
 	defer engine.Close()
 
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 	assertSessionProject(t, database, "antigravity-cli:"+uuid, "feature_checkout")
 }
 
@@ -357,12 +356,13 @@ func TestSyncEngineAntigravityCLI_SidecarUpdates(t *testing.T) {
 		Skipped:       2,
 	})
 
-	time.Sleep(10 * time.Millisecond)
 	trajPath := filepath.Join(convDir, syncUUID+".trajectory.json")
 	trajectoryJSON := antigravityCLISingleUserTrajectory(
 		syncUUID, "New Prompt from Trajectory",
 	)
 	require.NoError(t, os.WriteFile(trajPath, []byte(trajectoryJSON), 0o644))
+	trajectoryTime := time.Now().Add(time.Minute)
+	require.NoError(t, os.Chtimes(trajPath, trajectoryTime, trajectoryTime))
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
 		TotalSessions: 2,
@@ -375,9 +375,7 @@ func TestSyncEngineAntigravityCLI_SidecarUpdates(t *testing.T) {
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "New Prompt from Trajectory", msgs[0].Content)
 
-	time.Sleep(10 * time.Millisecond)
 	cutoff := time.Now()
-	time.Sleep(10 * time.Millisecond)
 
 	sinceTrajPath := filepath.Join(convDir, sinceUUID+".trajectory.json")
 	sinceTrajectoryJSON := antigravityCLISingleUserTrajectory(
@@ -386,8 +384,12 @@ func TestSyncEngineAntigravityCLI_SidecarUpdates(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		sinceTrajPath, []byte(sinceTrajectoryJSON), 0o644,
 	))
+	sinceTrajectoryTime := cutoff.Add(time.Minute)
+	require.NoError(t, os.Chtimes(
+		sinceTrajPath, sinceTrajectoryTime, sinceTrajectoryTime,
+	))
 
-	stats := env.engine.SyncAllSince(context.Background(), cutoff, nil)
+	stats := env.engine.SyncAllSince(t.Context(), cutoff, nil)
 	require.Equal(t, 1, stats.Synced, "synced = %d, want 1", stats.Synced)
 
 	msgs = fetchMessages(t, env.db, "antigravity-cli:"+sinceUUID)
@@ -420,11 +422,11 @@ func TestSyncEngineAntigravityCLI_SyncAllSinceReSyncsDBWalUpdate(t *testing.T) {
 	require.NoError(t, err)
 	baseMtime := baseInfo.ModTime()
 
-	time.Sleep(10 * time.Millisecond)
-
 	writer := openAntigravityCLITestWALDB(t, dbPath)
 	defer writer.Close()
 	insertAntigravityCLIStep(t, writer, 1, 17, "Assistant response from WAL text")
+	walTime := baseMtime.Add(time.Minute)
+	require.NoError(t, os.Chtimes(dbPath+"-wal", walTime, walTime))
 
 	walInfo, err := os.Stat(dbPath + "-wal")
 	require.NoError(t, err, "expected WAL sidecar after uncheckpointed write")
@@ -437,7 +439,7 @@ func TestSyncEngineAntigravityCLI_SyncAllSinceReSyncsDBWalUpdate(t *testing.T) {
 	require.Equal(t, baseMtime.UnixNano(), baseAfter.ModTime().UnixNano(),
 		"base DB mtime should not reveal WAL-only update")
 
-	stats := env.engine.SyncAllSince(context.Background(), baseMtime.Add(time.Nanosecond), nil)
+	stats := env.engine.SyncAllSince(t.Context(), baseMtime.Add(time.Nanosecond), nil)
 	assert.Equal(t, 1, stats.TotalSessions)
 	assert.Equal(t, 1, stats.Synced)
 	assert.Equal(t, 0, stats.Skipped)
@@ -513,18 +515,18 @@ func TestSyncEngineAntigravityCLI_DBFallbackRetries(t *testing.T) {
 	msgs := fetchMessages(t, env.db, malformedSessionID)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "History Prompt", msgs[0].Content)
-	assert.Less(t, env.db.GetSessionDataVersion(malformedSessionID), db.CurrentDataVersion(),
+	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), malformedSessionID), db.CurrentDataVersion(),
 		"degraded DB fallback should stay stale so unchanged syncs retry")
 	assertSessionMessageCount(t, env.db, filteredSessionID, 1)
 	msgs = fetchMessages(t, env.db, filteredSessionID)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "Filtered History Prompt", msgs[0].Content)
-	assert.Less(t, env.db.GetSessionDataVersion(filteredSessionID), db.CurrentDataVersion(),
+	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), filteredSessionID), db.CurrentDataVersion(),
 		"DB fallback after dropping all raw steps should stay stale so unchanged syncs retry")
 
-	require.NoError(t, env.db.SetSessionDataVersion(malformedSessionID, db.CurrentDataVersion()))
-	require.NoError(t, env.db.SetSessionDataVersion(filteredSessionID, db.CurrentDataVersion()))
-	require.NoError(t, env.db.ResetAllMtimes(), "force fallback rewrite")
+	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), malformedSessionID, db.CurrentDataVersion()))
+	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), filteredSessionID, db.CurrentDataVersion()))
+	require.NoError(t, env.db.ResetAllMtimes(t.Context()), "force fallback rewrite")
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
 		TotalSessions: 2,
 		Synced:        2,
@@ -532,9 +534,9 @@ func TestSyncEngineAntigravityCLI_DBFallbackRetries(t *testing.T) {
 		Failed:        2,
 		Anomalies:     agyCLIUnknownSchemaAnomaly(1),
 	})
-	assert.Less(t, env.db.GetSessionDataVersion(malformedSessionID), db.CurrentDataVersion(),
+	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), malformedSessionID), db.CurrentDataVersion(),
 		"DB decode fallback should demote previously current rows")
-	assert.Less(t, env.db.GetSessionDataVersion(filteredSessionID), db.CurrentDataVersion(),
+	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), filteredSessionID), db.CurrentDataVersion(),
 		"DB fallback after dropping all raw steps should demote previously current rows")
 
 	runSyncAndAssert(t, env.engine, sync.SyncStats{
@@ -544,9 +546,9 @@ func TestSyncEngineAntigravityCLI_DBFallbackRetries(t *testing.T) {
 		Failed:        2,
 		Anomalies:     agyCLIUnknownSchemaAnomaly(1),
 	})
-	assert.Less(t, env.db.GetSessionDataVersion(malformedSessionID), db.CurrentDataVersion(),
+	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), malformedSessionID), db.CurrentDataVersion(),
 		"unchanged DB decode fallback should keep retrying")
-	assert.Less(t, env.db.GetSessionDataVersion(filteredSessionID), db.CurrentDataVersion(),
+	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), filteredSessionID), db.CurrentDataVersion(),
 		"unchanged DB fallback after dropping all raw steps should keep retrying")
 }
 
@@ -574,7 +576,7 @@ func TestSyncEngineAntigravityCLI_NeedsRetryReplacesCurrentMessages(t *testing.T
 		Anomalies:     agyCLIUnknownSchemaAnomaly(1),
 	})
 	assertSessionMessageCount(t, env.db, sessionID, 2)
-	assert.Equal(t, db.CurrentDataVersion(), env.db.GetSessionDataVersion(sessionID))
+	assert.Equal(t, db.CurrentDataVersion(), env.db.GetSessionDataVersion(t.Context(), sessionID))
 
 	require.NoError(t, os.WriteFile(dbPath, []byte("not a sqlite database"), 0o644))
 
@@ -589,7 +591,7 @@ func TestSyncEngineAntigravityCLI_NeedsRetryReplacesCurrentMessages(t *testing.T
 	msgs := fetchMessages(t, env.db, sessionID)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "History Prompt", msgs[0].Content)
-	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
+	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), sessionID), db.CurrentDataVersion(),
 		"retry fallback should be written before the row is demoted")
 }
 
@@ -616,16 +618,16 @@ func TestSyncSingleSessionAntigravityCLI_DBDecodeFallbackRetries(t *testing.T) {
 	msgs := fetchMessages(t, env.db, sessionID)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, "History Prompt", msgs[0].Content)
-	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
+	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), sessionID), db.CurrentDataVersion(),
 		"single-session DB fallback should stay stale so later syncs retry")
 
 	// A previously current row must be demoted when an explicit re-sync
 	// hits the same decode failure, otherwise the high-resolution DB is
 	// never retried once it has been stamped current.
-	require.NoError(t, env.db.SetSessionDataVersion(sessionID, db.CurrentDataVersion()))
-	require.NoError(t, env.db.ResetAllMtimes(), "force fallback rewrite")
+	require.NoError(t, env.db.SetSessionDataVersion(t.Context(), sessionID, db.CurrentDataVersion()))
+	require.NoError(t, env.db.ResetAllMtimes(t.Context()), "force fallback rewrite")
 	require.NoError(t, env.engine.SyncSingleSession(sessionID))
-	assert.Less(t, env.db.GetSessionDataVersion(sessionID), db.CurrentDataVersion(),
+	assert.Less(t, env.db.GetSessionDataVersion(t.Context(), sessionID), db.CurrentDataVersion(),
 		"single-session DB decode fallback should demote previously current rows")
 }
 
@@ -904,7 +906,7 @@ func copyAntigravityCLITestSchemaTemplate(t *testing.T, path string) {
 	t.Helper()
 	copySQLiteSchemaTemplate(
 		t, path, "antigravity cli", &antigravityCLISchemaOnce,
-		&antigravityCLISchemaBytes, &antigravityCLISchemaErr,
+		&antigravityCLISchemaBytes, &errAntigravityCLISchema,
 		antigravityCLITestSchema,
 	)
 }
@@ -921,9 +923,9 @@ func openAntigravityCLITestWALDB(t *testing.T, path string) *sql.DB {
 	t.Helper()
 	conn := openAntigravityCLITestDB(t, path)
 
-	_, err := conn.Exec(`PRAGMA journal_mode=WAL`)
+	_, err := conn.ExecContext(t.Context(), `PRAGMA journal_mode=WAL`)
 	require.NoError(t, err, "enable WAL mode")
-	_, err = conn.Exec(`PRAGMA wal_autocheckpoint=0`)
+	_, err = conn.ExecContext(t.Context(), `PRAGMA wal_autocheckpoint=0`)
 	require.NoError(t, err, "disable WAL autocheckpoint")
 
 	return conn
@@ -934,7 +936,7 @@ func insertAntigravityCLIStep(
 ) {
 	t.Helper()
 	payload := antigravityCLIStringPayload(content)
-	_, err := conn.Exec(
+	_, err := conn.ExecContext(t.Context(),
 		`INSERT INTO steps (idx, step_type, step_payload) VALUES (?, ?, ?)`,
 		idx, stepType, payload,
 	)

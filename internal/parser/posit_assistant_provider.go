@@ -3,7 +3,9 @@ package parser
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -120,7 +122,7 @@ func (p *positAssistantProvider) Parse(
 	}
 	src, ok := p.sources.sourceFromRef(req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("posit-assistant source path unavailable")
+		return ParseOutcome{}, errors.New("posit-assistant source path unavailable")
 	}
 	if req.Source.ProjectHint != "" {
 		src.Project = req.Source.ProjectHint
@@ -434,7 +436,7 @@ func (s positAssistantSourceSet) Fingerprint(
 	}
 	src, ok := s.sourceFromRef(source)
 	if !ok {
-		return SourceFingerprint{}, fmt.Errorf("posit-assistant source path unavailable")
+		return SourceFingerprint{}, errors.New("posit-assistant source path unavailable")
 	}
 	info, err := os.Stat(src.Path)
 	if err != nil {
@@ -542,7 +544,7 @@ func positAssistantSourceHash(convPath, lmPath, uePath, wsPath string) (string, 
 	}
 	h := sha256.New()
 	_, _ = h.Write([]byte(combined))
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func (s positAssistantSourceSet) sourceFromRef(

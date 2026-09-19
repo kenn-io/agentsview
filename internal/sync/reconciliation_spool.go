@@ -16,8 +16,10 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-const reconciliationPageSize = 256
-const maxReconciliationSourceStateBytes = 4096
+const (
+	reconciliationPageSize            = 256
+	maxReconciliationSourceStateBytes = 4096
+)
 
 type reconciliationCandidate struct {
 	Provider       parser.AgentType
@@ -93,7 +95,7 @@ type reconciliationSpoolStore interface {
 	LastAddWon() bool
 	LastAddReplaced() (reconciliationCandidate, bool)
 	Metrics() ReconciliationMetrics
-	CloseAndRemove() error
+	CloseAndRemove(ctx context.Context) error
 }
 
 type reconciliationSourceScope struct {
@@ -187,7 +189,7 @@ func (spool *reconciliationSpool) ContainsSourceIdentity(
 	return true, nil
 }
 
-func newReconciliationSpool(archivePath string) (*reconciliationSpool, error) {
+func newReconciliationSpool(ctx context.Context, archivePath string) (*reconciliationSpool, error) {
 	dir := filepath.Dir(archivePath)
 	file, err := os.CreateTemp(dir, ".agentsview-reconcile-*.db")
 	if err != nil {
@@ -211,15 +213,15 @@ func newReconciliationSpool(archivePath string) (*reconciliationSpool, error) {
 	}
 	database.SetMaxOpenConns(1)
 	spool := &reconciliationSpool{path: path, db: database}
-	if err := spool.initialize(); err != nil {
-		_ = spool.CloseAndRemove()
+	if err := spool.initialize(ctx); err != nil {
+		_ = spool.CloseAndRemove(ctx)
 		return nil, err
 	}
 	return spool, nil
 }
 
 func reconciliationSpoolDSN(path string) string {
-	uri := ""
+	var uri string
 	switch {
 	case windowsDrivePath(path):
 		slashPath := "/" + strings.ReplaceAll(path, `\`, "/")
@@ -242,8 +244,8 @@ func windowsDrivePath(path string) bool {
 	return path[0] >= 'A' && path[0] <= 'Z' || path[0] >= 'a' && path[0] <= 'z'
 }
 
-func (spool *reconciliationSpool) initialize() error {
-	_, err := spool.db.Exec(`
+func (spool *reconciliationSpool) initialize(ctx context.Context) error {
+	_, err := spool.db.ExecContext(ctx, `
 		PRAGMA busy_timeout = 5000;
 		PRAGMA journal_mode = WAL;
 		PRAGMA synchronous = NORMAL;
@@ -559,7 +561,7 @@ func (spool *reconciliationSpool) Metrics() ReconciliationMetrics {
 	return spool.metrics
 }
 
-func (spool *reconciliationSpool) closeDB() error {
+func (spool *reconciliationSpool) closeDB(ctx context.Context) error {
 	spool.mu.Lock()
 	if spool.closed {
 		spool.mu.Unlock()
@@ -569,13 +571,13 @@ func (spool *reconciliationSpool) closeDB() error {
 	sealed := spool.sealed
 	spool.mu.Unlock()
 	if !sealed {
-		_, _ = spool.db.Exec("ROLLBACK")
+		_, _ = spool.db.ExecContext(context.WithoutCancel(ctx), "ROLLBACK")
 	}
 	return spool.db.Close()
 }
 
-func (spool *reconciliationSpool) CloseAndRemove() error {
-	closeErr := spool.closeDB()
+func (spool *reconciliationSpool) CloseAndRemove(ctx context.Context) error {
+	closeErr := spool.closeDB(ctx)
 	var removeErr error
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		if err := os.Remove(spool.path + suffix); err != nil &&

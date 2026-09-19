@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
@@ -86,7 +87,7 @@ CREATE INDEX session_message_time_created_idx ON session_message (time_created);
 
 // Simulate the persisted states produced by Prompted, Step.Started, Text.Ended,
 // and Step.Ended. Updates replace data while preserving the initial event seq.
-func (s *source) writeSQLiteV2Turns(tx *sql.Tx, n, contentBytes int) error {
+func (s *source) writeSQLiteV2Turns(ctx context.Context, tx *sql.Tx, n, contentBytes int) error {
 	for j := range n {
 		turn := s.Turns + j
 		stamp := s.Start.Add(time.Duration(turn) * time.Minute).UnixMilli()
@@ -105,7 +106,7 @@ func (s *source) writeSQLiteV2Turns(tx *sql.Tx, n, contentBytes int) error {
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(`INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			if _, err := tx.ExecContext(ctx, `INSERT INTO session_message (id, session_id, type, seq, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 				id, s.ID, role, turn*10+roleIndex, stamp+int64(roleIndex), stamp+int64(roleIndex), string(encoded)); err != nil {
 				return err
 			}
@@ -118,12 +119,12 @@ func (s *source) writeSQLiteV2Turns(tx *sql.Tx, n, contentBytes int) error {
 				if err != nil {
 					return err
 				}
-				if _, err := tx.Exec(`UPDATE session_message SET data = ?, time_updated = ? WHERE id = ?`, string(encoded), stamp+2, id); err != nil {
+				if _, err := tx.ExecContext(ctx, `UPDATE session_message SET data = ?, time_updated = ? WHERE id = ?`, string(encoded), stamp+2, id); err != nil {
 					return err
 				}
 			}
 		}
-		if _, err := tx.Exec(`UPDATE session_v2 SET time_updated = ? WHERE id = ?`, stamp+2, s.ID); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE session_v2 SET time_updated = ? WHERE id = ?`, stamp+2, s.ID); err != nil {
 			return err
 		}
 	}

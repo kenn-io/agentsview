@@ -33,17 +33,17 @@ func TestSessionSyncUsesInstallationIdentityAndPreservesHistoricalNames(t *testi
 		cfg, err := config.LoadMinimal()
 		require.NoError(t, err)
 		cfg.AgentDirs = map[parser.AgentType][]string{parser.AgentClaude: {filepath.Dir(root)}}
-		svc, closeService, err := syncService(cfg, transport{Mode: transportDirect})
+		svc, closeService, err := syncService(t.Context(), cfg, transport{Mode: transportDirect})
 		require.NoError(t, err)
 		detail, err := svc.Sync(t.Context(), service.SyncInput{Path: path})
 		closeService()
 		require.NoError(t, err)
 		assert.Equal(t, id, detail.Machine)
 
-		database, err := openDB(cfg)
+		database, err := openDB(t.Context(), cfg)
 		require.NoError(t, err)
 		if name == "Laptop" {
-			require.NoError(t, database.UpsertSession(db.Session{
+			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 				ID: "historical", Project: "project", Agent: "claude", Machine: "old-host",
 			}))
 		}

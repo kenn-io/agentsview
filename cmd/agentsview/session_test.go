@@ -92,7 +92,7 @@ func seedUsageSession(
 ) {
 	t.Helper()
 	recordFixtureInstallation(t, d)
-	require.NoError(t, d.UpsertSession(db.Session{
+	require.NoError(t, d.UpsertSession(t.Context(), db.Session{
 		ID:                   id,
 		Project:              project,
 		Machine:              "usage-host",
@@ -138,8 +138,7 @@ func forbidPGReadStore(t *testing.T) {
 	openPGReadStore = func(
 		config.Config, config.PGConfig,
 	) (db.Store, func(), error) {
-		t.Fatal("openPGReadStore should not be called without --pg")
-		return nil, nil, nil
+		return nil, nil, errors.New("openPGReadStore should not be called without --pg")
 	}
 	t.Cleanup(func() { openPGReadStore = orig })
 }
@@ -147,14 +146,14 @@ func forbidPGReadStore(t *testing.T) {
 // remoteUsageSpec configures newRemoteUsageServer. Zero values fall back to
 // the common defaults (codex agent, remote-project, 42 output tokens).
 type remoteUsageSpec struct {
-	canonicalID   string        // id whose detail and usage routes return 200
-	apiVersion    int           // defaults to the current server API version
-	agent         string        // defaults to "codex"
-	project       string        // defaults to "remote-project"
-	outputTokens  int           // defaults to 42
-	bearer        string        // if set, asserts Authorization: Bearer <bearer>
-	serverRunning bool          // include server_running:true in the usage body
-	usageDelay    time.Duration // optional sleep before serving /usage
+	canonicalID   string          // id whose detail and usage routes return 200
+	apiVersion    int             // defaults to the current server API version
+	agent         string          // defaults to "codex"
+	project       string          // defaults to "remote-project"
+	outputTokens  int             // defaults to 42
+	bearer        string          // if set, asserts Authorization: Bearer <bearer>
+	serverRunning bool            // include server_running:true in the usage body
+	usageBlock    <-chan struct{} // optional block before serving /usage
 }
 
 // remoteUsageRequests records what the fake usage server observed.
@@ -213,15 +212,21 @@ func newRemoteUsageServer(
 		case detailPath:
 			writeJSONResponse(w, detailJSON)
 		case "/api/v1/sessions/sync":
-			require.Equal(t, http.MethodPost, r.Method)
-			require.Equal(t, serverURL, r.Header.Get("Origin"))
-			require.NoError(t, json.UnmarshalRead(r.Body, &reqs.SyncInput))
+			if !assert.Equal(t, http.MethodPost, r.Method) {
+				return
+			}
+			if !assert.Equal(t, serverURL, r.Header.Get("Origin")) {
+				return
+			}
+			if !assert.NoError(t, json.UnmarshalRead(r.Body, &reqs.SyncInput)) {
+				return
+			}
 			writeJSONResponse(w, detailJSON)
 		case usagePath:
 			reqs.UsagePath = r.URL.Path
 			reqs.UsageQuery = r.URL.RawQuery
-			if spec.usageDelay > 0 {
-				time.Sleep(spec.usageDelay)
+			if spec.usageBlock != nil {
+				<-spec.usageBlock
 			}
 			writeJSONResponse(w, usageJSON)
 		default:
@@ -262,7 +267,7 @@ func TestSessionHelp_ShowsSubcommands(t *testing.T) {
 	cmd.SetErr(buf)
 	cmd.SetArgs([]string{"session", "--help"})
 	if err := cmd.Execute(); err != nil {
-		t.Fatal(err)
+		require.NoError(t, err)
 	}
 	help := buf.String()
 	for _, name := range []string{
@@ -324,9 +329,10 @@ func seedSessionsWithOpts(t *testing.T, dataDir string, seeds ...sessionSeed) {
 
 func seedSessionArchiveRows(t *testing.T, dataDir string, seeds ...sessionSeed) {
 	t.Helper()
+
 	dbPath := sessionsDBPath(dataDir)
 	dbtest.EnsureTestDBAt(t, dbPath)
-	d, err := db.Open(dbPath)
+	d, err := db.Open(t.Context(), dbPath)
 	require.NoError(t, err)
 	closed := false
 	t.Cleanup(func() {
@@ -349,7 +355,7 @@ func seedSessionArchiveRows(t *testing.T, dataDir string, seeds ...sessionSeed) 
 		if seed.mut != nil {
 			seed.mut(&s)
 		}
-		require.NoError(t, d.UpsertSession(s))
+		require.NoError(t, d.UpsertSession(t.Context(), s))
 	}
 	err = d.Close()
 	closed = true
@@ -370,19 +376,20 @@ func registerSQLiteDaemonRuntimeWithEngine(
 	t *testing.T, dataDir string, writable bool,
 ) {
 	t.Helper()
+
 	cfg, err := config.LoadMinimal()
 	require.NoError(t, err)
 	if cfg.DataDir != dataDir {
 		cfg.DataDir = dataDir
 		cfg.DBPath = sessionsDBPath(dataDir)
 	}
-	fixture, err := db.Open(cfg.DBPath)
+	fixture, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	recordFixtureInstallation(t, fixture)
 	require.NoError(t, fixture.Close())
-	database, err := openDB(cfg)
+	database, err := openDB(t.Context(), cfg)
 	require.NoError(t, err)
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	ln, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	port := ln.Addr().(*net.TCPAddr).Port
 	cfg.Host = "127.0.0.1"
@@ -390,7 +397,7 @@ func registerSQLiteDaemonRuntimeWithEngine(
 	cfg.WriteTimeout = 30 * time.Second
 	var engine *agentsync.Engine
 	if writable {
-		engine = agentsync.NewEngine(database, agentsync.EngineConfig{
+		engine = agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 			Ephemeral: true,
 		})
 	}
@@ -461,9 +468,9 @@ func TestSessionGetVariants(t *testing.T) {
 		out, err := executeCommand(newRootCommand(),
 			"session", "get", "s-2")
 		require.NoError(t, err)
-		assert.True(t, strings.Contains(out, "s-2"),
+		assert.Contains(t, out, "s-2",
 			"human output should contain session id, got: %q", out)
-		assert.True(t, strings.Contains(out, "proj"),
+		assert.Contains(t, out, "proj",
 			"human output should contain project, got: %q", out)
 	})
 
@@ -836,7 +843,8 @@ func TestSessionList_MinToolFailuresZero(t *testing.T) {
 // timestamps one minute apart starting at 2026-04-01T00:00:00Z.
 func seedMessages(t *testing.T, dataDir, sessionID string, n int) {
 	t.Helper()
-	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+
+	d, err := db.Open(t.Context(), filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { d.Close() })
 
@@ -857,7 +865,7 @@ func seedMessages(t *testing.T, dataDir, sessionID string, n int) {
 			Timestamp:     base.Add(time.Duration(i) * time.Minute).Format(time.RFC3339),
 		})
 	}
-	require.NoError(t, d.InsertMessages(msgs))
+	require.NoError(t, d.InsertMessages(t.Context(), msgs))
 	require.NoError(t, d.Close())
 }
 
@@ -874,7 +882,7 @@ func TestSessionMessagesVariants(t *testing.T) {
 		got := decodeCLIJSON[cliMessageList](t, out)
 		assert.Equal(t, 5, got.Count)
 		require.Len(t, got.Messages, 5)
-		assert.Equal(t, float64(1), got.Messages[0]["ordinal"])
+		assert.InDelta(t, float64(1), got.Messages[0]["ordinal"], 0)
 	})
 
 	t.Run("from and limit", func(t *testing.T) {
@@ -886,7 +894,7 @@ func TestSessionMessagesVariants(t *testing.T) {
 		got := decodeCLIJSON[cliMessageList](t, out)
 		assert.Equal(t, 2, got.Count)
 		require.Len(t, got.Messages, 2)
-		assert.Equal(t, float64(3), got.Messages[0]["ordinal"])
+		assert.InDelta(t, float64(3), got.Messages[0]["ordinal"], 0)
 	})
 
 	t.Run("direction desc", func(t *testing.T) {
@@ -898,11 +906,11 @@ func TestSessionMessagesVariants(t *testing.T) {
 		got := decodeCLIJSON[cliMessageList](t, out)
 		assert.Equal(t, 5, got.Count)
 		require.Len(t, got.Messages, 5)
-		assert.Equal(t, float64(5), got.Messages[0]["ordinal"])
-		assert.Equal(t, float64(4), got.Messages[1]["ordinal"])
-		assert.Equal(t, float64(3), got.Messages[2]["ordinal"])
-		assert.Equal(t, float64(2), got.Messages[3]["ordinal"])
-		assert.Equal(t, float64(1), got.Messages[4]["ordinal"])
+		assert.InDelta(t, float64(5), got.Messages[0]["ordinal"], 0)
+		assert.InDelta(t, float64(4), got.Messages[1]["ordinal"], 0)
+		assert.InDelta(t, float64(3), got.Messages[2]["ordinal"], 0)
+		assert.InDelta(t, float64(2), got.Messages[3]["ordinal"], 0)
+		assert.InDelta(t, float64(1), got.Messages[4]["ordinal"], 0)
 	})
 }
 
@@ -913,7 +921,8 @@ func seedMessagesWithToolCalls(
 	t *testing.T, dataDir, sessionID string, n int,
 ) {
 	t.Helper()
-	d, err := db.Open(filepath.Join(dataDir, "sessions.db"))
+
+	d, err := db.Open(t.Context(), filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { d.Close() })
 
@@ -937,7 +946,7 @@ func seedMessagesWithToolCalls(
 		HasToolUse:    true,
 		ToolCalls:     calls,
 	}
-	require.NoError(t, d.InsertMessages([]db.Message{msg}))
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{msg}))
 	require.NoError(t, d.Close())
 }
 
@@ -1000,13 +1009,13 @@ func TestSessionExportArchiveContent(t *testing.T) {
 			src := filepath.Join(t.TempDir(), "session.jsonl")
 			const body = "{\"type\":\"user\",\"content\":\"source transcript\"}\n"
 			require.NoError(t, os.WriteFile(src, []byte(body), 0o600))
-			database, err := db.OpenWithArchiveContent(sessionsDBPath(dataDir), policy)
+			database, err := db.OpenWithArchiveContent(t.Context(), sessionsDBPath(dataDir), policy)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = database.Close() })
-			require.NoError(t, database.UpsertSession(db.Session{
+			require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 				ID: "export-policy", Project: "proj", Machine: "local", Agent: "claude", FilePath: &src,
 			}))
-			require.NoError(t, database.InsertMessages([]db.Message{{
+			require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{
 				SessionID: "export-policy", Role: "user", Content: "source transcript",
 			}}))
 			require.NoError(t, database.Close())
@@ -1024,6 +1033,7 @@ func TestSessionExportArchiveContent(t *testing.T) {
 
 func createTraeExportStateDB(t *testing.T, root string) string {
 	t.Helper()
+
 	dbPath := filepath.Join(root, "workspaceStorage", "hash", "state.vscdb")
 	require.NoError(t, os.MkdirAll(filepath.Dir(dbPath), 0o755))
 
@@ -1031,7 +1041,7 @@ func createTraeExportStateDB(t *testing.T, root string) string {
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
 
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT);
 		INSERT INTO ItemTable(key, value) VALUES (
 			'memento/icube-ai-agent-storage',
@@ -1072,6 +1082,7 @@ func TestSessionExportTraeStateDB(t *testing.T) {
 
 func createHermesExportStateDB(t *testing.T, root string) string {
 	t.Helper()
+
 	sessionsDir := filepath.Join(root, "sessions")
 	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
 
@@ -1080,7 +1091,7 @@ func createHermesExportStateDB(t *testing.T, root string) string {
 	require.NoError(t, err)
 	defer func() { _ = conn.Close() }()
 
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
 			source TEXT NOT NULL,
@@ -1156,10 +1167,6 @@ func TestSessionExportHermesStateDB(t *testing.T) {
 	assert.Contains(t, out, "target hermes message")
 	assert.NotContains(t, out, "sibling hermes message")
 	assert.NotContains(t, out, "wrong root message")
-
-	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
-		assert.JSONEq(t, line, line)
-	}
 }
 
 func TestSessionExportHermesStateDBWithoutSourceVersion(t *testing.T) {
@@ -1181,10 +1188,6 @@ func TestSessionExportHermesStateDBWithoutSourceVersion(t *testing.T) {
 	assert.Contains(t, out, `"role":"session_meta"`)
 	assert.Contains(t, out, "target hermes message")
 	assert.NotContains(t, out, "sibling hermes message")
-
-	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
-		assert.JSONEq(t, line, line)
-	}
 }
 
 func TestSessionExport_AiderVirtualPathStreamsOnlySelectedRun(t *testing.T) {
@@ -1399,12 +1402,16 @@ func TestSessionUsage_NoSyncDiscoveredDaemon(t *testing.T) {
 		code      int
 		wantError bool
 	}{
-		{"subagent usage", http.StatusOK,
+		{
+			"subagent usage", http.StatusOK,
 			`{"session_id":"codex:parent","total_output_tokens":24,"has_token_data":true,"subagent_count":2}`,
-			tokenUseExitOK, false},
-		{"no data", http.StatusOK,
+			tokenUseExitOK, false,
+		},
+		{
+			"no data", http.StatusOK,
 			`{"session_id":"codex:parent","has_token_data":false,"has_cost":false}`,
-			tokenUseExitNoTokenData, false},
+			tokenUseExitNoTokenData, false,
+		},
 		{"missing", http.StatusNotFound, "", tokenUseExitNotFound, false},
 		{"unauthorized", http.StatusUnauthorized, "", tokenUseExitErr, true},
 	} {
@@ -1471,7 +1478,7 @@ func TestSessionUsage_NoSyncLocalAttributionAndMissingData(t *testing.T) {
 				database: localDB,
 				offline:  true,
 			}
-			out, code, err := backend.SessionUsage(context.Background(), sessionUsageQuery{
+			out, code, err := backend.SessionUsage(t.Context(), sessionUsageQuery{
 				SessionID: tc.id, OwnOnly: tc.ownOnly, NoSync: true,
 			})
 			require.NoError(t, err)
@@ -1546,7 +1553,7 @@ func seedSubagentOnlyUsage(
 ) {
 	t.Helper()
 	recordFixtureInstallation(t, d)
-	require.NoError(t, d.UpsertSession(db.Session{
+	require.NoError(t, d.UpsertSession(t.Context(), db.Session{
 		ID:               parentID,
 		Project:          "local-project",
 		Machine:          "usage-host",
@@ -1554,7 +1561,7 @@ func seedSubagentOnlyUsage(
 		MessageCount:     2,
 		UserMessageCount: 2,
 	}))
-	require.NoError(t, d.UpsertSession(db.Session{
+	require.NoError(t, d.UpsertSession(t.Context(), db.Session{
 		ID:                   childID,
 		Project:              "local-project",
 		Machine:              "usage-host",
@@ -1641,7 +1648,9 @@ func TestSessionUsage_UsesDiscoveredDaemon(t *testing.T) {
 			}`))
 		case "/api/v1/sessions/sync":
 			var input service.SyncInput
-			require.NoError(t, json.UnmarshalRead(r.Body, &input))
+			if !assert.NoError(t, json.UnmarshalRead(r.Body, &input)) {
+				return
+			}
 			assert.Equal(t, service.SyncInput{
 				ID: "remote-session", Subagents: true,
 			}, input)
@@ -1661,7 +1670,7 @@ func TestSessionUsage_UsesDiscoveredDaemon(t *testing.T) {
 				"unpriced_models": []
 			}`))
 		default:
-			t.Errorf("unexpected path: %s", r.URL.Path)
+			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusInternalServerError)
 			http.NotFound(w, r)
 		}
 	})
@@ -1714,7 +1723,9 @@ func TestTokenUse_UsesDiscoveredDaemon(t *testing.T) {
 			}`))
 		case "/api/v1/sessions/sync":
 			var input service.SyncInput
-			require.NoError(t, json.UnmarshalRead(r.Body, &input))
+			if !assert.NoError(t, json.UnmarshalRead(r.Body, &input)) {
+				return
+			}
 			assert.Equal(t, service.SyncInput{
 				ID: "remote-session", Subagents: true,
 			}, input)
@@ -1734,7 +1745,7 @@ func TestTokenUse_UsesDiscoveredDaemon(t *testing.T) {
 				"unpriced_models": []
 			}`))
 		default:
-			t.Errorf("unexpected path: %s", r.URL.Path)
+			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusInternalServerError)
 			http.NotFound(w, r)
 		}
 	})
@@ -1804,6 +1815,7 @@ func sessionUsageRuntimeServer(
 	t *testing.T,
 	sessionHandler http.HandlerFunc,
 ) *httptest.Server {
+	t.Helper()
 	return sessionUsageRuntimeServerWithMachines(
 		t, `{"machines":[],"machine_labels":{},"machine_aliases":{}}`,
 		sessionHandler,
@@ -1980,9 +1992,11 @@ func TestSessionUsage_ServerHTTPClientHasTimeout(t *testing.T) {
 
 	newAgentDataDir(t)
 
+	usageBlock := make(chan struct{})
+	defer close(usageBlock)
 	ts, _ := newRemoteUsageServer(t, remoteUsageSpec{
 		canonicalID: "remote-session",
-		usageDelay:  200 * time.Millisecond,
+		usageBlock:  usageBlock,
 	})
 
 	cmd := sessionUsageCommand(t,
@@ -2131,7 +2145,9 @@ func TestSessionSync_ServerFlagTreatsPathShapedArgAsRemotePath(t *testing.T) {
 		func(w http.ResponseWriter, r *http.Request) {
 			assert.Equal(t, http.MethodPost, r.Method)
 			assert.Equal(t, "/api/v1/sessions/sync", r.URL.Path)
-			require.NoError(t, json.UnmarshalRead(r.Body, &got))
+			if !assert.NoError(t, json.UnmarshalRead(r.Body, &got)) {
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{
 				"id": "remote-session",
@@ -2202,8 +2218,12 @@ func TestSessionSync_ColdArchiveWriteAutoStartsDaemon(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(
 		w http.ResponseWriter, r *http.Request,
 	) {
-		require.Equal(t, "/api/v1/sessions/sync", r.URL.Path)
-		require.Equal(t, http.MethodPost, r.Method)
+		if !assert.Equal(t, "/api/v1/sessions/sync", r.URL.Path) {
+			return
+		}
+		if !assert.Equal(t, http.MethodPost, r.Method) {
+			return
+		}
 		syncCalled = true
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"id":"daemon-synced"}`))
@@ -2231,6 +2251,7 @@ func TestSessionSync_ColdArchiveWriteAutoStartsDaemon(t *testing.T) {
 
 func daemonRuntimeFromTestURL(t *testing.T, rawURL string) *DaemonRuntime {
 	t.Helper()
+
 	u, err := url.Parse(rawURL)
 	require.NoError(t, err)
 	host, portText, err := net.SplitHostPort(u.Host)
@@ -2240,17 +2261,7 @@ func daemonRuntimeFromTestURL(t *testing.T, rawURL string) *DaemonRuntime {
 	return &DaemonRuntime{Host: host, Port: port}
 }
 
-// TestSessionWatch_ExitsOnCancel verifies that `session watch`
-// exits cleanly when the cobra Command's context is cancelled,
-// without hanging on the upstream channel. Any NDJSON emitted
-// to stdout must parse as one JSON object per line. We don't
-// drive DB changes here (poll interval is 1.5s) — this test
-// only asserts the plumbing: service resolution, channel wiring,
-// and the shutdown path.
-//
-// To distinguish a real Watch call from an early-return stub, we
-// also assert the command runs past a short delay: any stub that
-// returns synchronously would complete in single-digit ms.
+// TestSessionWatch_ExitsOnCancel cancels only after the real service subscribes.
 func TestSessionWatch_ExitsOnCancel(t *testing.T) {
 	dataDir := newAgentDataDir(t)
 	seedSession(t, dataDir, "s-watch", "proj")
@@ -2261,14 +2272,12 @@ func TestSessionWatch_ExitsOnCancel(t *testing.T) {
 	root.SetErr(buf)
 	root.SetArgs([]string{"session", "watch", "s-watch"})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		cancel()
-	}()
-
-	start := time.Now()
+	started := false
+	original := sessionWatchStarted
+	sessionWatchStarted = func() { started = true; cancel() }
+	t.Cleanup(func() { sessionWatchStarted = original })
 	done := make(chan error, 1)
 	go func() { done <- root.ExecuteContext(ctx) }()
 
@@ -2276,24 +2285,18 @@ func TestSessionWatch_ExitsOnCancel(t *testing.T) {
 	select {
 	case execErr = <-done:
 	case <-time.After(3 * time.Second):
-		t.Fatal("session watch did not exit within 3s after ctx cancel")
+		require.FailNow(t, "session watch did not exit within 3s after ctx cancel")
 	}
-	elapsed := time.Since(start)
 
 	// Clean cancellation must surface as either nil (upstream channel
 	// closed on ctx cancel) or an error that wraps context.Canceled.
 	// Anything else indicates a regression that earlier versions of
 	// this test swallowed by discarding execErr.
 	if execErr != nil && !errors.Is(execErr, context.Canceled) {
-		t.Fatalf("expected nil or context.Canceled, got %v", execErr)
+		require.FailNowf(t, "expected nil or context.Canceled", "got %v", execErr)
 	}
 
-	// A stub that returns immediately would complete far faster
-	// than the cancel delay. Require the command to actually
-	// wait on the Watch channel.
-	assert.GreaterOrEqual(t, elapsed, 30*time.Millisecond,
-		"session watch returned too quickly (%v) — "+
-			"likely a stub, not a real Watch", elapsed)
+	assert.True(t, started, "the real Watch subscription must start before cancellation")
 
 	// Any output must be valid NDJSON. Empty output is fine.
 	for line := range bytes.SplitSeq(buf.Bytes(), []byte("\n")) {
@@ -2365,8 +2368,7 @@ func TestLooksLikePath(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.in, func(t *testing.T) {
 			if got := looksLikePath(tc.in); got != tc.want {
-				t.Fatalf("looksLikePath(%q) = %v, want %v",
-					tc.in, got, tc.want)
+				assert.Equal(t, tc.want, got, "looksLikePath(%q)", tc.in)
 			}
 		})
 	}

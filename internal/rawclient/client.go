@@ -127,7 +127,7 @@ func NewClient(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("rawclient: invalid base URL %q", cfg.BaseURL)
 	}
 	if cfg.DeviceID == "" || cfg.Credential == "" {
-		return nil, fmt.Errorf("rawclient: device ID and credential are required")
+		return nil, errors.New("rawclient: device ID and credential are required")
 	}
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {

@@ -129,12 +129,12 @@ type SyncStats struct {
 	cwdFilteredFiles int
 }
 
-func (s SyncStats) shouldEmitSync() bool {
+func (s *SyncStats) shouldEmitSync() bool {
 	return s.Tombstoned > 0 ||
 		(!s.Aborted && (s.Synced > 0 || s.CwdUpdated > 0 || s.ArchiveRebuilt))
 }
 
-func (s SyncStats) hasSessionChanges() bool {
+func (s *SyncStats) hasSessionChanges() bool {
 	return s.Synced > 0 || s.CwdUpdated > 0 || s.Tombstoned > 0
 }
 
@@ -204,7 +204,7 @@ func (s SanitizeStats) IsZero() bool {
 
 // IsZero reports whether the run observed no anomalies at all, so the CLI
 // summary can omit the anomaly section entirely on clean runs.
-func (a AnomalyStats) IsZero() bool {
+func (a *AnomalyStats) IsZero() bool {
 	return a.UnsupportedSourceLayoutsTotal == 0 &&
 		a.MalformedLinesTotal == 0 &&
 		a.UnknownSchemaSessionsTotal == 0 &&

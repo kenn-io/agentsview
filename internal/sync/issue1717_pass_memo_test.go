@@ -259,13 +259,13 @@ func newIssue1717Provider(
 	provider.cond = stdsync.NewCond(&provider.mu)
 	provider.mutate = func() {
 		if err := os.RemoveAll(mainRepo); err != nil {
-			t.Errorf("remove initial repository: %v", err)
+			assert.Failf(t, "test failed", "remove initial repository: %v", err)
 		}
 		if err := os.MkdirAll(
 			filepath.Join(newRepo, ".git", "worktrees", "deleted-child"),
 			0o755,
 		); err != nil {
-			t.Errorf("create replacement repository: %v", err)
+			assert.Failf(t, "test failed", "create replacement repository: %v", err)
 		}
 	}
 	return provider, root
@@ -275,7 +275,7 @@ func newIssue1717Engine(
 	t *testing.T, provider *issue1717Provider, root string,
 ) *Engine {
 	t.Helper()
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			provider.Def.Type: {root},
 		},

@@ -18,6 +18,7 @@ import (
 )
 
 type fileOperations struct {
+	openRoot  func(*os.Root, string) (*os.File, error)
 	stat      func(string) (os.FileInfo, error)
 	rename    func(string, string) error
 	remove    func(string) error
@@ -44,12 +45,12 @@ type capturePlanScope struct {
 func openCapturePlanScope(plan parser.RawCapturePlan) (*capturePlanScope, error) {
 	captureRoot, err := os.OpenRoot(plan.CaptureRoot)
 	if err != nil {
-		return nil, fmt.Errorf("rawcapture: open capture root: filesystem error")
+		return nil, errors.New("rawcapture: open capture root: filesystem error")
 	}
 	captureInfo, err := captureRoot.Stat(".")
 	if err != nil {
 		_ = captureRoot.Close()
-		return nil, fmt.Errorf("rawcapture: stat capture root: filesystem error")
+		return nil, errors.New("rawcapture: stat capture root: filesystem error")
 	}
 	scope := &capturePlanScope{
 		roots: []*os.Root{captureRoot}, captureInfo: captureInfo,
@@ -60,13 +61,13 @@ func openCapturePlanScope(plan parser.RawCapturePlan) (*capturePlanScope, error)
 		configuredRoot, err = os.OpenRoot(plan.ConfiguredRoot)
 		if err != nil {
 			_ = captureRoot.Close()
-			return nil, fmt.Errorf("rawcapture: open configured root: filesystem error")
+			return nil, errors.New("rawcapture: open configured root: filesystem error")
 		}
 		scope.roots = append(scope.roots, configuredRoot)
 		scope.configuredInfo, err = configuredRoot.Stat(".")
 		if err != nil {
 			_ = scope.Close()
-			return nil, fmt.Errorf("rawcapture: stat configured root: filesystem error")
+			return nil, errors.New("rawcapture: stat configured root: filesystem error")
 		}
 	}
 	// Sidecar roots hold provider inputs that live outside both roots,
@@ -76,13 +77,13 @@ func openCapturePlanScope(plan parser.RawCapturePlan) (*capturePlanScope, error)
 		sidecarRoot, err := os.OpenRoot(sidecarPath)
 		if err != nil {
 			_ = scope.Close()
-			return nil, fmt.Errorf("rawcapture: open sidecar root: filesystem error")
+			return nil, errors.New("rawcapture: open sidecar root: filesystem error")
 		}
 		scope.roots = append(scope.roots, sidecarRoot)
 		info, err := sidecarRoot.Stat(".")
 		if err != nil {
 			_ = scope.Close()
-			return nil, fmt.Errorf("rawcapture: stat sidecar root: filesystem error")
+			return nil, errors.New("rawcapture: stat sidecar root: filesystem error")
 		}
 		scope.sidecarInfo = append(scope.sidecarInfo, info)
 		sidecarRoots = append(sidecarRoots, sidecarRoot)
@@ -152,7 +153,7 @@ func (s *capturePlanScope) MatchesRoots(plan parser.RawCapturePlan) bool {
 
 func defaultFileOperations() fileOperations {
 	return fileOperations{
-		stat: os.Stat, rename: os.Rename, remove: os.Remove,
+		openRoot: (*os.Root).Open, stat: os.Stat, rename: os.Rename, remove: os.Remove,
 		removeAll: os.RemoveAll, syncDir: syncDirectory,
 	}
 }
@@ -483,11 +484,11 @@ func (c *Capturer) installObject(
 	destination := c.store.ObjectPath(ref)
 	if info, err := c.files.stat(destination); err == nil {
 		if !info.Mode().IsRegular() || info.Size() != ref.Length {
-			return false, fmt.Errorf("rawcapture: existing object has conflicting size")
+			return false, errors.New("rawcapture: existing object has conflicting size")
 		}
 		digest, length, err := hashFileContext(ctx, destination)
 		if err != nil || digest != ref.SHA256 || length != ref.Length {
-			return false, fmt.Errorf("rawcapture: existing object failed verification")
+			return false, errors.New("rawcapture: existing object failed verification")
 		}
 		return false, nil
 	} else if !os.IsNotExist(err) {
@@ -509,7 +510,7 @@ func (c *Capturer) installObject(
 		)
 	}
 	if err := c.files.syncDir(filepath.Dir(destination)); err != nil {
-		return true, fmt.Errorf("rawcapture: sync object directory: filesystem error")
+		return true, errors.New("rawcapture: sync object directory: filesystem error")
 	}
 	return true, nil
 }
@@ -523,7 +524,7 @@ func (c *Capturer) syncObjectDirectoryHierarchy() error {
 		filepath.Join(spoolDir, "objects", "sha256"),
 	} {
 		if err := c.files.syncDir(directory); err != nil {
-			return fmt.Errorf("rawcapture: sync object directory hierarchy: filesystem error")
+			return errors.New("rawcapture: sync object directory hierarchy: filesystem error")
 		}
 	}
 	return nil

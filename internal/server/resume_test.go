@@ -169,9 +169,7 @@ func TestDetectTerminalLinux_EnvTerminal(t *testing.T) {
 	// Create a fake terminal binary on PATH.
 	binDir := t.TempDir()
 	fakeBin := filepath.Join(binDir, "myterm")
-	require.NoError(t,
-		os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755),
-	)
+	require.NoError(t, os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755))
 	t.Setenv("PATH", binDir)
 	t.Setenv("TERMINAL", "myterm")
 
@@ -188,9 +186,7 @@ func TestDetectTerminalLinux_EnvTerminalWithArgs(t *testing.T) {
 	}
 	binDir := t.TempDir()
 	fakeBin := filepath.Join(binDir, "kitty")
-	require.NoError(t,
-		os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755),
-	)
+	require.NoError(t, os.WriteFile(fakeBin, []byte("#!/bin/sh\n"), 0o755))
 	t.Setenv("PATH", binDir)
 	t.Setenv("TERMINAL", "kitty --single-instance")
 
@@ -234,7 +230,7 @@ func TestLaunchClaudeDesktop(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cmd := launchClaudeDesktop(tt.sessionID, tt.cwd)
+			cmd := launchClaudeDesktop(t.Context(), tt.sessionID, tt.cwd)
 			require.NotEmpty(t, cmd.Path,
 				"expected non-empty command path")
 			// The command should be "open <url>".

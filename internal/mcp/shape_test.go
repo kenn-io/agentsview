@@ -56,7 +56,7 @@ func TestRoleAllowed(t *testing.T) {
 
 func TestStrval(t *testing.T) {
 	t.Parallel()
-	assert.Equal(t, "", strval(nil))
+	assert.Empty(t, strval(nil))
 	v := "x"
 	assert.Equal(t, "x", strval(&v))
 }

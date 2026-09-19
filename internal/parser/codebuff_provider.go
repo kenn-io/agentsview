@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -364,7 +365,7 @@ func codebuffFingerprintSource(src singleFileSource) (SourceFingerprint, error) 
 			}
 		}
 	}
-	fingerprint.Hash = fmt.Sprintf("%x", h.Sum(nil))
+	fingerprint.Hash = hex.EncodeToString(h.Sum(nil))
 
 	return fingerprint, nil
 }

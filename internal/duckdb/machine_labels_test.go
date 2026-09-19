@@ -12,12 +12,12 @@ import (
 func TestPushMachineMetadataWithoutSessionChanges(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
-	require.NoError(t, local.SetSyncState("machine_label:installation-a", "Laptop"))
-	require.NoError(t, local.SetSyncState("machine_alias:old-owner", "installation-a"))
+	require.NoError(t, local.SetSyncState(ctx, "machine_label:installation-a", "Laptop"))
+	require.NoError(t, local.SetSyncState(ctx, "machine_alias:old-owner", "installation-a"))
 	_, err := Push(ctx, path, local, "installation-a", SyncOptions{}, true, nil)
 	require.NoError(t, err)
 
-	store, err := NewStore(path)
+	store, err := NewStore(ctx, path)
 	require.NoError(t, err)
 	labels, err := store.GetMachineLabels(ctx)
 	require.NoError(t, err)
@@ -27,13 +27,13 @@ func TestPushMachineMetadataWithoutSessionChanges(t *testing.T) {
 	assert.Equal(t, map[string]string{"old-owner": "installation-a"}, aliases)
 	require.NoError(t, store.Close())
 
-	require.NoError(t, local.SetSyncState("machine_label:installation-a", "Work laptop"))
-	require.NoError(t, local.SetSyncState("machine_alias:older-owner", "installation-a"))
+	require.NoError(t, local.SetSyncState(ctx, "machine_label:installation-a", "Work laptop"))
+	require.NoError(t, local.SetSyncState(ctx, "machine_alias:older-owner", "installation-a"))
 	result, err := Push(ctx, path, local, "installation-a", SyncOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.Zero(t, result.SessionsPushed)
 
-	store, err = NewStore(path)
+	store, err = NewStore(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	labels, err = store.GetMachineLabels(ctx)

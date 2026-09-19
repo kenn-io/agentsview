@@ -3,11 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/json/v2"
-	"go.kenn.io/agentsview/internal/db"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"go.kenn.io/agentsview/internal/db"
 
 	"github.com/stretchr/testify/require"
 )

@@ -83,8 +83,7 @@ func TestSQLiteContainerStateDetectsFileReplacement(t *testing.T) {
 		"write replacement container with identical bytes")
 	require.NoError(t, os.Rename(replacement, dbPath),
 		"swap replacement over container")
-	require.NoError(t,
-		os.Chtimes(dbPath, info.ModTime(), info.ModTime()),
+	require.NoError(t, os.Chtimes(dbPath, info.ModTime(), info.ModTime()),
 		"restore container mtime")
 
 	after, ok := StatSQLiteContainerState(dbPath)
@@ -150,10 +149,9 @@ func TestOpenCodeProjectsCacheReusesUntilContainerChanges(t *testing.T) {
 	defer db.Close()
 	seeder.AddProject("prj_1", "/home/user/code/app-one")
 
-	first, err := loadOpenCodeProjectsCached(db, dbPath)
+	first, err := loadOpenCodeProjectsCached(t.Context(), db, dbPath)
 	require.NoError(t, err)
-	assert.Equal(t,
-		map[string]string{"prj_1": "/home/user/code/app-one"}, first)
+	assert.Equal(t, map[string]string{"prj_1": "/home/user/code/app-one"}, first)
 
 	// Poison the cached copy to make hits observable: an unchanged
 	// container must serve the poisoned entry back, and a changed one must
@@ -164,18 +162,18 @@ func TestOpenCodeProjectsCacheReusesUntilContainerChanges(t *testing.T) {
 	openCodeProjectsCache[dbPath] = entry
 	openCodeProjectsCacheMu.Unlock()
 
-	second, err := loadOpenCodeProjectsCached(db, dbPath)
+	second, err := loadOpenCodeProjectsCached(t.Context(), db, dbPath)
 	require.NoError(t, err)
 	assert.Equal(t, "cached-marker", second["prj_1"],
 		"an unchanged container must be served from the cache")
 
-	_, err = db.Exec(
+	_, err = db.ExecContext(t.Context(),
 		"UPDATE project SET worktree = ? WHERE id = ?",
 		"/home/user/code/renamed", "prj_1",
 	)
 	require.NoError(t, err)
 
-	third, err := loadOpenCodeProjectsCached(db, dbPath)
+	third, err := loadOpenCodeProjectsCached(t.Context(), db, dbPath)
 	require.NoError(t, err)
 	assert.Equal(t, "/home/user/code/renamed", third["prj_1"],
 		"a committed write must invalidate the cached projects")

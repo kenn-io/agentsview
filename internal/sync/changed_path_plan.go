@@ -64,7 +64,7 @@ func (e *Engine) PlanChangedPathsContext(
 
 func normalizeChangedPhysicalPath(path string) (string, error) {
 	if path == "" || strings.IndexByte(path, 0) >= 0 || !filepath.IsAbs(path) {
-		return "", fmt.Errorf("changed path is not a trusted absolute physical path")
+		return "", errors.New("changed path is not a trusted absolute physical path")
 	}
 	return filepath.Clean(path), nil
 }
@@ -116,7 +116,7 @@ func (e *Engine) planOneChangedPath(
 			// classifier so title-only changes select only changed sessions and
 			// preserve the live/archive copy already tracked by the archive.
 			attribution.files = append(
-				attribution.files, e.classifyCodexIndexPath(path)...,
+				attribution.files, e.classifyCodexIndexPath(ctx, path)...,
 			)
 			continue
 		}
@@ -228,7 +228,7 @@ func (e *Engine) resolveClaudeDuplicateAttribution(
 		return err
 	}
 	expanded = dedupeDiscoveredFiles(expanded)
-	preferredFiles := e.dedupeClaudeDiscoveredFiles(expanded)
+	preferredFiles := e.dedupeClaudeDiscoveredFiles(ctx, expanded)
 	preferredBySession := make(map[string]parser.DiscoveredFile)
 	for _, file := range preferredFiles {
 		if !isClaudeFormatTranscriptFile(file) {
@@ -320,7 +320,7 @@ func (e *Engine) expandAffectedClaudeDuplicateCandidates(
 		}
 		seenSessions[sessionKey] = struct{}{}
 
-		storedPath := e.db.GetSessionFilePath(fullID)
+		storedPath := e.db.GetSessionFilePath(ctx, fullID)
 		if storedPath == "" {
 			continue
 		}
@@ -508,7 +508,7 @@ func changedPathSourceKey(file parser.DiscoveredFile) string {
 }
 
 // PruneScope projects only armed input attribution into invalidation work.
-func (plan ChangedPathPlan) PruneScope(
+func (plan *ChangedPathPlan) PruneScope(
 	armedPhysicalPaths map[string]struct{},
 ) ChangedPathPruneScope {
 	armedPhysicalPaths = normalizeChangedPathSet(armedPhysicalPaths)
@@ -530,7 +530,7 @@ func (plan ChangedPathPlan) PruneScope(
 
 // CountCachedSuppressedInputs maps cached source results back to distinct
 // disarmed pending inputs without exposing their paths.
-func (plan ChangedPathPlan) CountCachedSuppressedInputs(
+func (plan *ChangedPathPlan) CountCachedSuppressedInputs(
 	armedPhysicalPaths map[string]struct{},
 	cachedSourceKeys map[string]struct{},
 	cachedFallbackProviders map[parser.AgentType]int,
@@ -614,7 +614,7 @@ func (e *Engine) discoverChangedPathFallbackProviders(
 			}
 		}
 		providerFiles = sortAndDedupeChangedPathFiles(providerFiles)
-		providerFiles = e.dedupeClaudeDiscoveredFiles(providerFiles)
+		providerFiles = e.dedupeClaudeDiscoveredFiles(ctx, providerFiles)
 		providerFiles = sortAndDedupeChangedPathFiles(providerFiles)
 		counts[agent] = len(providerFiles)
 		files = append(files, providerFiles...)

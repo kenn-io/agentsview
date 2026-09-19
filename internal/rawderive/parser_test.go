@@ -382,6 +382,8 @@ func TestProviderParserMatchesPlanEntriesAcrossEquivalentPathSpellings(t *testin
 		{
 			name: "materialization root contains a symlinked directory",
 			prepare: func(t *testing.T, base string) (string, string, string, bool) {
+				t.Helper()
+
 				realDir := filepath.Join(base, "real")
 				if err := os.MkdirAll(realDir, 0o700); err != nil {
 					return "", "", "", false
@@ -400,6 +402,8 @@ func TestProviderParserMatchesPlanEntriesAcrossEquivalentPathSpellings(t *testin
 		{
 			name: "plan entry reaches the materialized file through a symlink",
 			prepare: func(t *testing.T, base string) (string, string, string, bool) {
+				t.Helper()
+
 				root := filepath.Join(base, "mat")
 				if err := os.MkdirAll(root, 0o700); err != nil {
 					return "", "", "", false
@@ -445,6 +449,7 @@ func TestProviderParserMatchesPlanEntriesAcrossEquivalentPathSpellings(t *testin
 		})
 	}
 }
+
 func TestProviderParserHostedParseMatchesLocalPersistedToolResults(t *testing.T) {
 	t.Parallel()
 	clientRoot := t.TempDir()
@@ -507,8 +512,7 @@ func TestProviderParserHostedParseMatchesLocalPersistedToolResults(t *testing.T)
 	assert.Equal(t, localToolResults[0].ContentLength, hostedToolResults[0].ContentLength)
 	assert.Equal(t, fullOutput, parser.DecodeContent(hostedToolResults[0].ContentRaw),
 		"materialized parse must resolve persisted tool results exactly like local parse")
-	assert.Equal(t,
-		localOutcome.Results[0].Result.Session.File.Path,
+	assert.Equal(t, localOutcome.Results[0].Result.Session.File.Path,
 		hosted.Outcome.Results[0].Result.Session.File.Path,
 		"the hosted session must keep the captured client path")
 }
@@ -524,6 +528,7 @@ func manifestFromCapturePlan(
 	source parser.SourceRef,
 ) (rawsync.CanonicalManifest, map[rawsync.ObjectRef][]byte) {
 	t.Helper()
+
 	plan, supported, err := parser.ResolveRawCapturePlan(t.Context(), provider, source)
 	require.NoError(t, err)
 	require.True(t, supported)
@@ -638,14 +643,11 @@ func TestProviderParserHostedParseMatchesLocalBackgroundForkLineage(t *testing.T
 	require.Len(t, hostedResult.Messages, 2,
 		"materialized parse must trim the replayed prefix like local parse")
 	for i := range hostedResult.Messages {
-		assert.Equal(t,
-			localOutcome.Results[0].Result.Messages[i].Content,
+		assert.Equal(t, localOutcome.Results[0].Result.Messages[i].Content,
 			hostedResult.Messages[i].Content)
-		assert.Equal(t,
-			localOutcome.Results[0].Result.Messages[i].Role,
+		assert.Equal(t, localOutcome.Results[0].Result.Messages[i].Role,
 			hostedResult.Messages[i].Role)
-		assert.Equal(t,
-			localOutcome.Results[0].Result.Messages[i].Timestamp,
+		assert.Equal(t, localOutcome.Results[0].Result.Messages[i].Timestamp,
 			hostedResult.Messages[i].Timestamp)
 	}
 	assert.Equal(t, forkPath, hostedSession.File.Path,
@@ -653,6 +655,7 @@ func TestProviderParserHostedParseMatchesLocalBackgroundForkLineage(t *testing.T
 }
 
 func TestProviderParserHostedParseMatchesLocalCodexForkLineage(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name         string
 		layout       string
@@ -677,6 +680,7 @@ func TestProviderParserHostedParseMatchesLocalCodexForkLineage(t *testing.T) {
 }
 
 func TestProviderParserHostedCodexAliasHomeMetadata(t *testing.T) {
+	t.Parallel()
 	const id = "11111111-1111-4111-8111-111111111111"
 	type index struct {
 		home   int
@@ -795,6 +799,7 @@ func testProviderParserHostedCodexForkLineage(
 	shadowParent bool,
 ) {
 	t.Helper()
+
 	clientBase := t.TempDir()
 	clientRoot := filepath.Join(clientBase, layout)
 	parentRoot := clientRoot
@@ -887,12 +892,10 @@ func testProviderParserHostedCodexForkLineage(
 	hostedResult := hosted.Outcome.Results[0]
 	assert.Equal(t, parser.DataVersionCurrent, hostedResult.DataVersion)
 	assert.Empty(t, hostedResult.RetryReason)
-	assert.Equal(t,
-		localOutcome.Results[0].Result.Session.ParentSessionID,
+	assert.Equal(t, localOutcome.Results[0].Result.Session.ParentSessionID,
 		hostedResult.Result.Session.ParentSessionID,
 	)
-	assert.Equal(t,
-		localOutcome.Results[0].Result.Session.SessionName,
+	assert.Equal(t, localOutcome.Results[0].Result.Session.SessionName,
 		hostedResult.Result.Session.SessionName,
 		"the parent-side session index must remain visible from the sessions root",
 	)
@@ -941,7 +944,7 @@ func TestProviderParserRejectsMiskeyedCodexManifest(t *testing.T) {
 	_, err = dispatch.Parse(t.Context(), manifest, materialized)
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, rawsync.ErrInvalid)
+	require.ErrorIs(t, err, rawsync.ErrInvalid)
 	assert.Contains(t, err.Error(), "manifest matched 0 provider sources")
 	assert.NotContains(t, err.Error(), materialized.Root())
 }
@@ -980,7 +983,7 @@ func TestProviderParserRejectsMiskeyedDatabaseManifest(t *testing.T) {
 	_, err = dispatch.Parse(t.Context(), manifest, materialized)
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, rawsync.ErrInvalid)
+	require.ErrorIs(t, err, rawsync.ErrInvalid)
 	assert.Contains(t, err.Error(), "manifest matched 0 provider sources")
 	assert.NotContains(t, err.Error(), materialized.Root())
 }
@@ -1089,7 +1092,7 @@ func TestProviderParserRejectsProviderWithoutRawCaptureSupportBeforeDiscovery(t 
 	})
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, rawsync.ErrInvalid)
+	require.ErrorIs(t, err, rawsync.ErrInvalid)
 	assert.Contains(t, err.Error(), parser.ProviderFeatureRawCapture)
 	assert.False(t, parsed.Tombstone)
 	assert.Empty(t, parsed.Outcome.Results)
@@ -1432,12 +1435,10 @@ func TestProviderParserParsesEveryForgeSessionFromMaterializedSnapshot(t *testin
 	assert.NotContains(t, first.Session.File.Path, materialized.Root())
 	assert.Equal(t, int(2), first.Session.MessageCount)
 	assert.Equal(t, int(2), second.Session.MessageCount)
-	assert.Equal(t,
-		time.Date(2026, 5, 2, 10, 0, 16, 848497543, time.UTC).UnixNano(),
+	assert.Equal(t, time.Date(2026, 5, 2, 10, 0, 16, 848497543, time.UTC).UnixNano(),
 		first.Session.File.Mtime,
 		"database-derived session timestamps must stay source-derived")
-	assert.Equal(t,
-		time.Date(2026, 5, 3, 10, 00, 16, 848497543, time.UTC).UnixNano(),
+	assert.Equal(t, time.Date(2026, 5, 3, 10, 0o0, 16, 848497543, time.UTC).UnixNano(),
 		second.Session.File.Mtime)
 	assert.NotEqual(t, sourceModTime.UnixNano(), first.Session.File.Mtime)
 }
@@ -1477,7 +1478,7 @@ func TestProviderParserPreservesCrushProjectAndArchivePolicy(t *testing.T) {
 	dbPath := filepath.Join(dataDir, parser.CrushDBName)
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = db.Exec(`
+	_, err = db.ExecContext(t.Context(), `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY, parent_session_id TEXT, title TEXT NOT NULL,
 			message_count INTEGER NOT NULL DEFAULT 0,
@@ -1544,19 +1545,19 @@ func TestProviderParserPreservesCrushProjectAndArchivePolicy(t *testing.T) {
 	db, err = sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	defer db.Close()
-	_, err = db.Exec(`INSERT INTO sessions (id, title, updated_at, created_at)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO sessions (id, title, updated_at, created_at)
 		VALUES ('session-2', 'Second session', 1789093626, 1789093626)`)
 	require.NoError(t, err)
 	for _, remaining := range []int{2, 1, 0} {
 		if remaining < 2 {
 			id := fmt.Sprintf("session-%d", remaining+1)
-			_, err = db.Exec("DELETE FROM messages WHERE session_id = ?", id)
+			_, err = db.ExecContext(t.Context(), "DELETE FROM messages WHERE session_id = ?", id)
 			require.NoError(t, err)
-			_, err = db.Exec("DELETE FROM sessions WHERE id = ?", id)
+			_, err = db.ExecContext(t.Context(), "DELETE FROM sessions WHERE id = ?", id)
 			require.NoError(t, err)
 		}
 		if remaining == 1 {
-			_, err = db.Exec(`UPDATE messages SET parts =
+			_, err = db.ExecContext(t.Context(), `UPDATE messages SET parts =
 				'[{"type":"text","data":{"text":"updated"}}]' WHERE id = 'message-1'`)
 			require.NoError(t, err)
 		}
@@ -1600,10 +1601,11 @@ func forgeSnapshotFixtureWithCwd(
 	t *testing.T, conversations map[string]string, cwd string,
 ) []byte {
 	t.Helper()
+
 	dbPath := filepath.Join(t.TempDir(), parser.ForgeDBFilename)
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = db.Exec(`CREATE TABLE conversations (
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE conversations (
 		conversation_id TEXT PRIMARY KEY NOT NULL,
 		title TEXT,
 		workspace_id BIGINT NOT NULL,
@@ -1651,7 +1653,7 @@ func forgeSnapshotFixtureWithCwd(
 				}
 			]
 		}`, id, strconv.Quote(systemInformation))
-		_, err = db.Exec(
+		_, err = db.ExecContext(t.Context(),
 			`INSERT INTO conversations
 			 (conversation_id, title, workspace_id, context, created_at, updated_at, metrics)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)`,

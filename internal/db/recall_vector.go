@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -241,7 +242,7 @@ func (db *DB) scanRecallEmbeddingCompatibility(
 		return "", err
 	}
 	if !hasState {
-		return "", fmt.Errorf("recall corpus revision state is unavailable")
+		return "", errors.New("recall corpus revision state is unavailable")
 	}
 	hasDeletions, err := db.recallTableExists(ctx, "recall_embedding_deletions")
 	if err != nil {

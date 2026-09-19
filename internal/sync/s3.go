@@ -185,7 +185,7 @@ func (e *Engine) processS3Session(
 ) processResult {
 	idPrefix := s3SessionIDPrefix(file.Machine)
 	sourceFingerprint := s3SourceFingerprint(file)
-	sourceChanged := e.s3SourceMetadataChangedFromInfo(
+	sourceChanged := e.s3SourceMetadataChangedFromInfo(ctx,
 		file, p,
 		sourceInfo.Size(),
 		sourceInfo.ModTime().UnixNano(),
@@ -195,7 +195,7 @@ func (e *Engine) processS3Session(
 	case parser.AgentClaude:
 		sessionID := strings.TrimSuffix(sourceInfo.Name(), ".jsonl")
 		fullID := applyIDPrefixToID(idPrefix, sessionID)
-		primaryPath := e.db.GetSessionFilePathNotSourceMissing(fullID)
+		primaryPath := e.db.GetSessionFilePathNotSourceMissing(ctx, fullID)
 		if primaryPath == "" && !e.forceParse {
 			fresh, _ := e.claudeSourceFreshWithoutPrimary(
 				ctx, file.Path, file.Path, sourceInfo, sourceFingerprint,
@@ -204,7 +204,7 @@ func (e *Engine) processS3Session(
 				return processResult{skip: true}
 			}
 		}
-		if e.shouldSkipFileWithPrefix(
+		if e.shouldSkipFileWithPrefix(ctx,
 			idPrefix, sessionID, sourceInfo, sourceFingerprint,
 		) &&
 			primaryPath == file.Path &&
@@ -221,11 +221,11 @@ func (e *Engine) processS3Session(
 			file.Agent, strings.TrimSuffix(sourceInfo.Name(), ".jsonl"),
 		)
 		fullID := applyIDPrefixToID(idPrefix, sessionID)
-		if e.shouldSkipFileWithPrefix(
+		if e.shouldSkipFileWithPrefix(ctx,
 			idPrefix, sessionID, sourceInfo, sourceFingerprint,
 		) &&
-			e.db.GetSessionFilePathNotSourceMissing(fullID) == file.Path &&
-			e.db.GetDataVersionByAgentPath(
+			e.db.GetSessionFilePathNotSourceMissing(ctx, fullID) == file.Path &&
+			e.db.GetDataVersionByAgentPath(ctx,
 				file.Path, string(parser.AgentIcodemate),
 			) >= db.CurrentDataVersion() {
 			sess, _ := e.db.GetSession(ctx, fullID)
@@ -240,18 +240,17 @@ func (e *Engine) processS3Session(
 		); uuid != "" {
 			sessionID := "codex:" + uuid
 			fullID := applyIDPrefixToID(idPrefix, sessionID)
-			if e.shouldSkipFileWithPrefix(
+			if e.shouldSkipFileWithPrefix(ctx,
 				idPrefix, sessionID, sourceInfo, sourceFingerprint,
 			) &&
-				e.db.GetSessionFilePath(fullID) == file.Path {
+				e.db.GetSessionFilePath(ctx, fullID) == file.Path {
 				sess, _ := e.db.GetSession(ctx, fullID)
 				indexNameChanged := false
 				if sess != nil &&
 					sess.Project != "" &&
 					!parser.NeedsProjectReparse(sess.Project) {
 					var indexErr error
-					indexNameChanged, indexErr =
-						e.s3CodexIndexSessionNameChanged(file, uuid)
+					indexNameChanged, indexErr = e.s3CodexIndexSessionNameChanged(file, uuid)
 					if indexErr != nil {
 						return processResult{
 							err:         indexErr,
@@ -272,10 +271,10 @@ func (e *Engine) processS3Session(
 		if rawID != "" {
 			fullID := applyIDPrefixToID(idPrefix, rawID)
 			if !e.forceParseRequested(file) && !sourceChanged &&
-				e.shouldSkipFileWithPrefix(
+				e.shouldSkipFileWithPrefix(ctx,
 					idPrefix, rawID, sourceInfo, sourceFingerprint,
 				) &&
-				e.db.GetSessionFilePath(fullID) == file.Path {
+				e.db.GetSessionFilePath(ctx, fullID) == file.Path {
 				sess, _ := e.db.GetSession(ctx, fullID)
 				if sess != nil &&
 					sess.Project != "" &&
@@ -414,8 +413,7 @@ func (e *Engine) processS3Session(
 		if !e.forceParseRequested(file) &&
 			!res.suppressPresenceSweep && res.providerFailureCount == 0 &&
 			len(res.retrySessionIDs) == 0 && !res.noCacheSkip {
-			res.claudeRowlessFreshnessKey =
-				e.claudeRowlessFreshnessCacheKey(file.Path, sourceFingerprint)
+			res.claudeRowlessFreshnessKey = e.claudeRowlessFreshnessCacheKey(file.Path, sourceFingerprint)
 		}
 	case parser.AgentIcodemate:
 		if res.suppressPresenceSweep || res.providerWideFailureCount > 0 {
@@ -436,6 +434,8 @@ func (e *Engine) processS3Session(
 			}
 		}
 		res.sourceMissingMembers = missing
+	default:
+		// Other providers do not derive missing members from S3 results.
 	}
 	res.retentionLease = lease
 	return res

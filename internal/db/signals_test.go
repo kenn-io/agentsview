@@ -2,9 +2,8 @@ package db
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -12,7 +11,7 @@ import (
 
 func TestUpdateSessionSignals(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "sig-1", "proj", func(s *Session) {
 		s.MessageCount = 5
@@ -43,7 +42,7 @@ func TestUpdateSessionSignals(t *testing.T) {
 			RunawayToolLoopCount:        1,
 		},
 	}
-	require.NoError(t, d.UpdateSessionSignals("sig-1", update),
+	require.NoError(t, d.UpdateSessionSignals(ctx, "sig-1", update),
 		"UpdateSessionSignals")
 
 	got, err := d.GetSessionFull(ctx, "sig-1")
@@ -73,7 +72,7 @@ func TestUpdateSessionSignals(t *testing.T) {
 
 	assert.Nil(t, got.SignalsPendingSince, "SignalsPendingSince")
 	require.NotNil(t, got.ContextPressureMax, "ContextPressureMax")
-	assert.Equal(t, 0.85, *got.ContextPressureMax, "ContextPressureMax")
+	assert.InDelta(t, 0.85, *got.ContextPressureMax, 0, "ContextPressureMax")
 	require.NotNil(t, got.HealthScore, "HealthScore")
 	assert.Equal(t, 72, *got.HealthScore, "HealthScore")
 	require.NotNil(t, got.HealthGrade, "HealthGrade")
@@ -87,7 +86,7 @@ func TestUpdateSessionSignals(t *testing.T) {
 		OutcomeConfidence:   "low",
 		SignalsPendingSince: &pending,
 	}
-	require.NoError(t, d.UpdateSessionSignals("sig-1", update2),
+	require.NoError(t, d.UpdateSessionSignals(ctx, "sig-1", update2),
 		"UpdateSessionSignals (2nd)")
 
 	got2, err := d.GetSessionFull(ctx, "sig-1")
@@ -118,9 +117,12 @@ func TestUpdateSessionSignals(t *testing.T) {
 // PG-backed deployments.
 func TestUpdateSessionSignalsBumpsLocalModifiedAt(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "lm-1", "proj")
+
+	_, err := d.getWriter().Exec(ctx, "UPDATE sessions SET local_modified_at = ? WHERE id = ?", "2000-01-01T00:00:00.000Z", "lm-1")
+	require.NoError(t, err)
 
 	// Snapshot local_modified_at after the initial upsert.
 	beforeRow, err := d.GetSessionFull(ctx, "lm-1")
@@ -131,11 +133,7 @@ func TestUpdateSessionSignalsBumpsLocalModifiedAt(t *testing.T) {
 		before = *beforeRow.LocalModifiedAt
 	}
 
-	// SQLite's strftime('now') ticks at millisecond precision.
-	// Sleep a few ms so a re-set produces a strictly later value.
-	time.Sleep(5 * time.Millisecond)
-
-	require.NoError(t, d.UpdateSessionSignals("lm-1", SessionSignalUpdate{
+	require.NoError(t, d.UpdateSessionSignals(ctx, "lm-1", SessionSignalUpdate{
 		ToolFailureSignalCount: 1,
 		Outcome:                "completed",
 		OutcomeConfidence:      "high",
@@ -154,7 +152,7 @@ func TestUpdateSessionSignalsBumpsLocalModifiedAt(t *testing.T) {
 
 func TestPendingSignalSessions(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	cutoff := "2024-06-01T12:00:00Z"
 
@@ -165,7 +163,7 @@ func TestPendingSignalSessions(t *testing.T) {
 		OutcomeConfidence:   "low",
 		SignalsPendingSince: new("2024-06-01T10:00:00Z"),
 	}
-	require.NoError(t, d.UpdateSessionSignals("ps-old", old),
+	require.NoError(t, d.UpdateSessionSignals(ctx, "ps-old", old),
 		"UpdateSessionSignals ps-old")
 
 	// Session with pending_since after cutoff -- should NOT match.
@@ -175,7 +173,7 @@ func TestPendingSignalSessions(t *testing.T) {
 		OutcomeConfidence:   "low",
 		SignalsPendingSince: new("2024-06-01T14:00:00Z"),
 	}
-	require.NoError(t, d.UpdateSessionSignals("ps-new", newer),
+	require.NoError(t, d.UpdateSessionSignals(ctx, "ps-new", newer),
 		"UpdateSessionSignals ps-new")
 
 	// Session with no pending_since -- should NOT match.
@@ -195,7 +193,7 @@ func TestPendingSignalSessions(t *testing.T) {
 // startup retries.
 func TestBackfillSignalsMarkerOnlyOnSuccess(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "ok-1", "p")
 	insertSession(t, d, "ok-2", "p")
@@ -206,9 +204,9 @@ func TestBackfillSignalsMarkerOnlyOnSuccess(t *testing.T) {
 	compute := func(_ context.Context, id string) error {
 		if id == "fail-1" && failOnce {
 			failOnce = false
-			return fmt.Errorf("simulated failure")
+			return errors.New("simulated failure")
 		}
-		return d.UpdateSessionSignals(id, SessionSignalUpdate{
+		return d.UpdateSessionSignals(ctx, id, SessionSignalUpdate{
 			QualitySignals: QualitySignals{
 				Version: CurrentQualitySignalVersion,
 			},
@@ -260,7 +258,7 @@ func TestBackfillSignalsMarkerOnlyOnSuccess(t *testing.T) {
 // instead of freezing pre-append derived data as current. Only the
 // signal update itself restores the version.
 func TestMessageWritesInvalidateQualitySignalVersion(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	tests := []struct {
 		name  string
 		write func(t *testing.T, d *DB, id string)
@@ -268,18 +266,26 @@ func TestMessageWritesInvalidateQualitySignalVersion(t *testing.T) {
 		{
 			name: "InsertMessages",
 			write: func(t *testing.T, d *DB, id string) {
-				require.NoError(t, d.InsertMessages([]Message{
-					{SessionID: id, Ordinal: 1, Role: "user",
-						Content: "appended"},
+				t.Helper()
+
+				require.NoError(t, d.InsertMessages(ctx, []Message{
+					{
+						SessionID: id, Ordinal: 1, Role: "user",
+						Content: "appended",
+					},
 				}), "InsertMessages")
 			},
 		},
 		{
 			name: "WriteSessionIncremental",
 			write: func(t *testing.T, d *DB, id string) {
-				_, werr := d.WriteSessionIncremental(id,
-					[]Message{{SessionID: id, Ordinal: 1,
-						Role: "user", Content: "appended"}},
+				t.Helper()
+
+				_, werr := d.WriteSessionIncremental(ctx, id,
+					[]Message{{
+						SessionID: id, Ordinal: 1,
+						Role: "user", Content: "appended",
+					}},
 					IncrementalSessionUpdate{
 						MsgCount: 2, UserMsgCount: 2, NextOrdinal: 2,
 					},
@@ -290,9 +296,13 @@ func TestMessageWritesInvalidateQualitySignalVersion(t *testing.T) {
 		{
 			name: "ReplaceSessionMessages",
 			write: func(t *testing.T, d *DB, id string) {
-				require.NoError(t, d.ReplaceSessionMessages(id,
-					[]Message{{SessionID: id, Ordinal: 0,
-						Role: "user", Content: "rewritten"}},
+				t.Helper()
+
+				require.NoError(t, d.ReplaceSessionMessages(ctx, id,
+					[]Message{{
+						SessionID: id, Ordinal: 0,
+						Role: "user", Content: "rewritten",
+					}},
 				), "ReplaceSessionMessages")
 			},
 		},
@@ -303,7 +313,7 @@ func TestMessageWritesInvalidateQualitySignalVersion(t *testing.T) {
 			const id = "sess"
 			insertSession(t, d, id, "p")
 			insertMessages(t, d, userMsg(id, 0, "hello"))
-			require.NoError(t, d.UpdateSessionSignals(id, SessionSignalUpdate{
+			require.NoError(t, d.UpdateSessionSignals(ctx, id, SessionSignalUpdate{
 				QualitySignals: QualitySignals{
 					Version: CurrentQualitySignalVersion,
 				},
@@ -328,20 +338,20 @@ func TestMessageWritesInvalidateQualitySignalVersion(t *testing.T) {
 // version instead of walking the whole archive.
 func TestBackfillSignalsSkipsCurrentVersionsWithoutMarker(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "current-1", "p")
 	insertSession(t, d, "current-2", "p")
 	insertSession(t, d, "stale", "p")
 
 	for _, id := range []string{"current-1", "current-2"} {
-		require.NoError(t, d.UpdateSessionSignals(id, SessionSignalUpdate{
+		require.NoError(t, d.UpdateSessionSignals(ctx, id, SessionSignalUpdate{
 			QualitySignals: QualitySignals{
 				Version: CurrentQualitySignalVersion,
 			},
 		}), "UpdateSessionSignals %s", id)
 	}
-	require.NoError(t, d.UpdateSessionSignals("stale", SessionSignalUpdate{
+	require.NoError(t, d.UpdateSessionSignals(ctx, "stale", SessionSignalUpdate{
 		QualitySignals: QualitySignals{
 			Version: CurrentQualitySignalVersion - 1,
 		},
@@ -352,7 +362,7 @@ func TestBackfillSignalsSkipsCurrentVersionsWithoutMarker(t *testing.T) {
 		ctx,
 		func(_ context.Context, id string) error {
 			calls = append(calls, id)
-			return d.UpdateSessionSignals(id, SessionSignalUpdate{
+			return d.UpdateSessionSignals(ctx, id, SessionSignalUpdate{
 				QualitySignals: QualitySignals{
 					Version: CurrentQualitySignalVersion,
 				},
@@ -365,7 +375,7 @@ func TestBackfillSignalsSkipsCurrentVersionsWithoutMarker(t *testing.T) {
 
 func TestBackfillSignalsRecomputesStaleQualityVersions(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "stale", "p")
 	insertSession(t, d, "current", "p")
@@ -373,22 +383,22 @@ func TestBackfillSignalsRecomputesStaleQualityVersions(t *testing.T) {
 		s.MessageCount = 0
 	})
 
-	if err := d.UpdateSessionSignals("stale", SessionSignalUpdate{
+	if err := d.UpdateSessionSignals(ctx, "stale", SessionSignalUpdate{
 		QualitySignals: QualitySignals{
 			Version: CurrentQualitySignalVersion - 1,
 		},
 	}); err != nil {
-		t.Fatalf("UpdateSessionSignals stale: %v", err)
+		require.NoError(t, err, "UpdateSessionSignals stale")
 	}
-	if err := d.UpdateSessionSignals("current", SessionSignalUpdate{
+	if err := d.UpdateSessionSignals(ctx, "current", SessionSignalUpdate{
 		QualitySignals: QualitySignals{
 			Version: CurrentQualitySignalVersion,
 		},
 	}); err != nil {
-		t.Fatalf("UpdateSessionSignals current: %v", err)
+		require.NoError(t, err, "UpdateSessionSignals current")
 	}
-	if err := d.MarkSignalsBackfillDone(); err != nil {
-		t.Fatalf("MarkSignalsBackfillDone: %v", err)
+	if err := d.MarkSignalsBackfillDone(ctx); err != nil {
+		require.NoError(t, err, "MarkSignalsBackfillDone")
 	}
 
 	var calls []string
@@ -399,9 +409,9 @@ func TestBackfillSignalsRecomputesStaleQualityVersions(t *testing.T) {
 			return nil
 		},
 	); err != nil {
-		t.Fatalf("BackfillSignals: %v", err)
+		require.NoError(t, err, "BackfillSignals")
 	}
 	if len(calls) != 1 || calls[0] != "stale" {
-		t.Fatalf("calls = %v, want [stale]", calls)
+		require.Equal(t, []string{"stale"}, calls, "calls")
 	}
 }

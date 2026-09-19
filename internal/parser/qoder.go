@@ -102,7 +102,7 @@ func qoderCollectFlatProject(
 	root string, entries []os.DirEntry,
 ) []DiscoveredFile {
 	var files []DiscoveredFile
-	var any bool
+	var value bool
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
 			continue
@@ -117,9 +117,9 @@ func qoderCollectFlatProject(
 			Project: qoderFlatProjectHint(root),
 			Agent:   AgentQoder,
 		})
-		any = true
+		value = true
 	}
-	if !any {
+	if !value {
 		return nil
 	}
 	return files
@@ -218,7 +218,7 @@ func DecodeQoderProjectDir(encoded string) string {
 		return NormalizeName(encoded)
 	}
 	parts := strings.Split(encoded, "-")
-	for i := 0; i < len(parts)-1; i++ {
+	for i := range len(parts) - 1 {
 		if isQoderProjectParentDir(parts[i]) {
 			project := strings.Join(parts[i+1:], "-")
 			if project != "" {

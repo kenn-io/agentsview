@@ -5,6 +5,7 @@ package usagefacts
 import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -465,7 +466,7 @@ func parseTokenIntLiteral(value string) (int64, bool) {
 	if err == nil {
 		return parsed, true
 	}
-	if numErr, ok := err.(*strconv.NumError); ok && numErr.Err == strconv.ErrRange {
+	if errors.Is(err, strconv.ErrRange) {
 		if strings.HasPrefix(value, "-") {
 			return -1 << 63, true
 		}

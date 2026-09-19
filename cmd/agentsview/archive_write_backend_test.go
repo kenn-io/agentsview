@@ -59,17 +59,19 @@ func TestDaemonPushHeartbeat(t *testing.T) {
 // starts reporting real progress, heartbeat lines must not interleave with
 // the in-place progress line.
 func TestDaemonPushProgressSilencesHeartbeat(t *testing.T) {
-	orig := daemonPushHeartbeatInterval
-	daemonPushHeartbeatInterval = 50 * time.Millisecond
-	t.Cleanup(func() { daemonPushHeartbeatInterval = orig })
-
 	out := captureStdout(t, func() {
-		onProgress, finish := daemonPushProgress(
-			"PostgreSQL", newPGPushProgressPrinter(),
-		)
-		onProgress(postgres.PushProgress{SessionsDone: 1, SessionsTotal: 2})
-		time.Sleep(150 * time.Millisecond)
-		finish()
+		synctest.Test(t, func(t *testing.T) {
+			orig := daemonPushHeartbeatInterval
+			daemonPushHeartbeatInterval = 50 * time.Millisecond
+			t.Cleanup(func() { daemonPushHeartbeatInterval = orig })
+
+			onProgress, finish := daemonPushProgress(
+				"PostgreSQL", newPGPushProgressPrinter(),
+			)
+			onProgress(postgres.PushProgress{SessionsDone: 1, SessionsTotal: 2})
+			synctest.Sleep(150 * time.Millisecond)
+			finish()
+		})
 	})
 
 	assert.Contains(t, out, "Pushing to PostgreSQL via the local daemon")
@@ -119,7 +121,7 @@ func TestLocalPGPushEnsuresPricingBeforeConnecting(t *testing.T) {
 	}
 
 	_, err := backend.PGPush(
-		context.Background(),
+		t.Context(),
 		pgTargetSelection{PG: config.PGConfig{URL: unreachablePGURL}},
 		PGPushConfig{}, nil, nil,
 	)
@@ -146,7 +148,7 @@ func TestLocalPGWatchPusherUsesBackendPricingEnsure(t *testing.T) {
 	)
 
 	require.NoError(t, pusher.push(
-		context.Background(), reasonChange, false,
+		t.Context(), reasonChange, false,
 	))
 	assert.Equal(t, 1, ensureCalls)
 	assert.Equal(t, 1, target.pushes)
@@ -170,7 +172,7 @@ func TestLocalArchiveWriteBackendDuckDBPushUsesConfiguredRemoteURL(t *testing.T)
 
 	captureStdout(t, func() {
 		_, err := backend.DuckDBPush(
-			context.Background(),
+			t.Context(),
 			config.DuckDBConfig{
 				URL:         "quack:https://duck.example.test",
 				MachineName: "workstation",
@@ -191,7 +193,7 @@ func TestLocalArchiveWriteBackendDuckDBPushValidatesRemoteBeforeLocalSync(t *tes
 	var err error
 	out := captureStdout(t, func() {
 		_, err = backend.DuckDBPush(
-			context.Background(),
+			t.Context(),
 			config.DuckDBConfig{
 				URL:         "quack:https://duck.example.test",
 				MachineName: "workstation",
@@ -236,7 +238,7 @@ func TestLocalArchiveWriteBackendDuckDBPushRejectsIncompleteDiscovery(t *testing
 	})
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "local sync discovery incomplete")
+	require.ErrorContains(t, err, "local sync discovery incomplete")
 	assert.NotContains(t, out, "Opening DuckDB mirror",
 		"an incomplete local archive must stop before mirror push")
 }
@@ -268,7 +270,7 @@ func TestLocalArchiveWriteBackendPGPushRejectsDeferredProcessing(t *testing.T) {
 	})
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "local sync processing incomplete")
+	require.ErrorContains(t, err, "local sync processing incomplete")
 	assert.NotContains(t, out, "Connecting to PostgreSQL")
 }
 
@@ -279,10 +281,10 @@ func TestRunPGWatchStartupSyncFallsBackAfterAbortedResync(t *testing.T) {
 		func(s *db.Session) {
 			s.FilePath = &missingPath
 		})
-	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{})
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{})
 
 	didResync, err := runPGWatchStartupSync(
-		context.Background(), engine, true,
+		t.Context(), engine, true,
 	)
 
 	require.NoError(t, err)
@@ -330,7 +332,7 @@ func (p *startupDiscoveryFailureProvider) Parse(
 func TestRunPGWatchStartupSyncReportsIncompleteDiscovery(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	root := t.TempDir()
-	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCowork: {root}},
 		ProviderFactories: []parser.ProviderFactory{
 			startupDiscoveryFailureFactory{err: errors.New("listing failed")},
@@ -425,7 +427,7 @@ func TestDaemonPGPushWatchSendsClaimedBatchAndProbesRecovery(t *testing.T) {
 		}},
 		watchHooks: h.hooks(),
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() {
@@ -483,7 +485,7 @@ func TestDaemonPGPushWatchRenameProbesDeferredRecoveryAtExecution(t *testing.T) 
 		}},
 		watchHooks: h.hooks(),
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() {
@@ -767,7 +769,7 @@ func TestPushWatchProductionOwnersRetainPartialStartupUntilPeriodicSuccess(
 		t.Run(owner.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				h := newPushWatchOwnerHarness(1)
-				ctx, cancel := context.WithCancel(context.Background())
+				ctx, cancel := context.WithCancel(t.Context())
 				t.Cleanup(cancel)
 				done := make(chan error, 1)
 				go func() { done <- owner.run(ctx, h.hooks()) }()
@@ -828,7 +830,7 @@ func TestPushWatchProductionOwnersRetryPartialAuthoritativeBatch(
 		t.Run(owner.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				h := newPushWatchOwnerHarness(2)
-				ctx, cancel := context.WithCancel(context.Background())
+				ctx, cancel := context.WithCancel(t.Context())
 				t.Cleanup(cancel)
 				done := make(chan error, 1)
 				go func() { done <- owner.run(ctx, h.hooks()) }()
@@ -889,7 +891,7 @@ func TestPushWatchProductionOwnersFallbackUsesActiveIntervalFloor(t *testing.T) 
 		t.Run(owner.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				h := newPushWatchOwnerHarness()
-				ctx, cancel := context.WithCancel(context.Background())
+				ctx, cancel := context.WithCancel(t.Context())
 				t.Cleanup(cancel)
 				done := make(chan error, 1)
 				go func() { done <- owner.run(ctx, h.hooks()) }()
@@ -955,7 +957,7 @@ func TestPushWatchCollectingCallbackAcknowledgesOnlyReconciliationBatches(t *tes
 		t.Context(), loop, syncpkg.WatchBatch{Paths: []string{"session.jsonl"}},
 	), "ordinary changes only enqueue non-blocking work")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	err := notifyPushForWatchBatch(ctx, loop, syncpkg.WatchBatch{FullSync: true})
 	require.ErrorIs(t, err, context.Canceled,
@@ -1006,8 +1008,7 @@ func TestDaemonPGPushWatchRelevancePreservesExplicitCurrentDirectoryRoot(t *test
 		},
 	}
 	loop, _, _ := newTestLoop(func(context.Context, pushReason) error {
-		t.Fatal("explicit current-directory roots must suppress SHM-only batches")
-		return nil
+		return errors.New("explicit current-directory roots must suppress SHM-only batches")
 	})
 	require.NoError(t, notifyPushForWatchBatchWithConfig(
 		t.Context(), loop, cfg, syncpkg.WatchBatch{
@@ -1078,7 +1079,7 @@ func TestDaemonPushWatchOwnersSuppressOpenCodeSHMOnlyBatches(t *testing.T) {
 	for _, owner := range owners {
 		t.Run(owner.name, func(t *testing.T) {
 			h := newPushWatchOwnerHarness()
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
 			done := make(chan error, 1)
 			go func() { done <- owner.run(ctx, h.hooks()) }()
@@ -1140,8 +1141,7 @@ func TestDaemonPGPushWatchSuppressesNonDataOpenCodeWALBatches(t *testing.T) {
 				},
 			}
 			loop, _, _ := newTestLoop(func(context.Context, pushReason) error {
-				t.Fatal("non-data WAL batches must not schedule a push")
-				return nil
+				return errors.New("non-data WAL batches must not schedule a push")
 			})
 			require.NoError(t, notifyPushForWatchBatchWithConfig(
 				t.Context(), loop, cfg, syncpkg.WatchBatch{Paths: []string{walPath}},
@@ -1170,8 +1170,10 @@ func TestDaemonPGPushWatchRetainsDataBearingMixedBatches(t *testing.T) {
 	}{
 		{
 			name: "main database",
-			paths: []string{filepath.Join(root, "opencode.db-shm"),
-				filepath.Join(root, "opencode.db")},
+			paths: []string{
+				filepath.Join(root, "opencode.db-shm"),
+				filepath.Join(root, "opencode.db"),
+			},
 		},
 		{
 			name:  "framed WAL",
@@ -1179,8 +1181,10 @@ func TestDaemonPGPushWatchRetainsDataBearingMixedBatches(t *testing.T) {
 		},
 		{
 			name: "unknown sidecar",
-			paths: []string{filepath.Join(root, "opencode.db-shm"),
-				filepath.Join(root, "opencode.db-backup")},
+			paths: []string{
+				filepath.Join(root, "opencode.db-shm"),
+				filepath.Join(root, "opencode.db-backup"),
+			},
 		},
 		{
 			name:  "wrong root",
@@ -1244,8 +1248,7 @@ func TestDaemonPGPushWatchRelevanceDoesNotEnumerateSessions(t *testing.T) {
 		var err error
 		allocations := testing.AllocsPerRun(20, func() {
 			loop, _, _ := newTestLoop(func(context.Context, pushReason) error {
-				t.Fatal("bounded SHM classification must suppress the push")
-				return nil
+				return errors.New("bounded SHM classification must suppress the push")
 			})
 			err = notifyPushForWatchBatchWithConfig(
 				t.Context(), loop, cfg, syncpkg.WatchBatch{
@@ -1317,9 +1320,7 @@ func TestPushWatchRelevancePreservesAuthoritativeBatches(t *testing.T) {
 				require.NoError(t, <-done)
 				assert.Equal(t, reasonChange, <-pushed)
 			} else {
-				require.NoError(t,
-					notifyPushForWatchBatchWithConfig(t.Context(), loop, cfg, tc.batch),
-				)
+				require.NoError(t, notifyPushForWatchBatchWithConfig(t.Context(), loop, cfg, tc.batch))
 			}
 			if tc.waitForPush {
 				pending, _ := pushLoopPendingState(loop)
@@ -1363,7 +1364,7 @@ func TestResolveArchiveWriteBackendCopiesNoSyncRuntime(t *testing.T) {
 	t.Cleanup(func() { RemoveDaemonRuntime(dataDir) })
 
 	backend, cleanup, err := resolveArchiveWriteBackend(
-		context.Background(), config.Config{DataDir: dataDir},
+		t.Context(), config.Config{DataDir: dataDir},
 	)
 	require.NoError(t, err)
 	t.Cleanup(cleanup)
@@ -1476,7 +1477,7 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() {
@@ -1491,9 +1492,9 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		assert.Contains(t, roots, codexRoot,
 			"the unwatchable root's polling obligation must reach the pg watch poller")
 	case err := <-done:
-		t.Fatalf("pg watch exited before registering obligations: %v", err)
+		require.FailNowf(t, "pg watch exited before registering obligations", "%v", err)
 	case <-time.After(10 * time.Second):
-		t.Fatal("no polling obligation was registered for the unwatchable root")
+		require.FailNow(t, "no polling obligation was registered for the unwatchable root")
 	}
 
 	// A session lands under the unwatched scope; only the poller's
@@ -1518,7 +1519,7 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		case ticks <- time.Now():
 		default:
 		}
-		session, err := database.GetSession(context.Background(), "codex:"+uuid)
+		session, err := database.GetSession(t.Context(), "codex:"+uuid)
 		return err == nil && session != nil
 	}, 10*time.Second, 20*time.Millisecond,
 		"the returned root must be reconciled by the poller without watcher events or floor pushes")
@@ -1528,7 +1529,7 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 	case err := <-done:
 		require.NoError(t, err)
 	case <-time.After(30 * time.Second):
-		t.Fatal("pg watch did not shut down")
+		require.FailNow(t, "pg watch did not shut down")
 	}
 }
 
@@ -1594,7 +1595,7 @@ func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		},
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() {
@@ -1609,9 +1610,9 @@ func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		assert.Contains(t, roots, codexRoot,
 			"the unwatchable root's polling obligation must reach the duckdb watch poller")
 	case err := <-done:
-		t.Fatalf("duckdb watch exited before registering obligations: %v", err)
+		require.FailNowf(t, "duckdb watch exited before registering obligations", "%v", err)
 	case <-time.After(10 * time.Second):
-		t.Fatal("no polling obligation was registered for the unwatchable root")
+		require.FailNow(t, "no polling obligation was registered for the unwatchable root")
 	}
 
 	uuid := "e5f6a7b8-5555-4666-8777-888899990000"
@@ -1634,7 +1635,7 @@ func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		case ticks <- time.Now():
 		default:
 		}
-		session, err := database.GetSession(context.Background(), "codex:"+uuid)
+		session, err := database.GetSession(t.Context(), "codex:"+uuid)
 		return err == nil && session != nil
 	}, 10*time.Second, 20*time.Millisecond,
 		"the returned root must be reconciled by the poller without watcher events or floor pushes")
@@ -1644,7 +1645,7 @@ func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 	case err := <-done:
 		require.NoError(t, err)
 	case <-time.After(30 * time.Second):
-		t.Fatal("duckdb watch did not shut down")
+		require.FailNow(t, "duckdb watch did not shut down")
 	}
 }
 

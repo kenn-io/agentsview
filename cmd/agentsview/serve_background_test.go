@@ -6,6 +6,7 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -112,7 +113,7 @@ func TestRunServeBackgroundReplaceOverridesDevRefusal(t *testing.T) {
 	setTestVersion(t, "dev")
 
 	var stopped bool
-	stubStopDaemonRuntimeForUpgrade(t, func(
+	stubStopDaemonRuntimeForUpgrade(t, func(ctx context.Context,
 		_ config.Config, rt *DaemonRuntime,
 	) error {
 		stopped = true
@@ -123,13 +124,13 @@ func TestRunServeBackgroundReplaceOverridesDevRefusal(t *testing.T) {
 
 	newHost, newPort := testPingServer(t)
 	oldStart := startServeBackgroundProcessForRun
-	startServeBackgroundProcessForRun = func(
+	startServeBackgroundProcessForRun = func(ctx context.Context,
 		_ config.Config, arguments []string,
 	) (*exec.Cmd, string, error) {
 		assert.NotContains(t, arguments, "--replace")
 		_, err := WriteDaemonRuntime(dir, newHost, newPort, "dev", false)
 		require.NoError(t, err)
-		cmd := exec.Command("sleep", "2")
+		cmd := exec.CommandContext(t.Context(), "sleep", "2")
 		require.NoError(t, cmd.Start())
 		t.Cleanup(func() { _ = cmd.Process.Kill() })
 		return cmd, "test.log", nil
@@ -139,7 +140,7 @@ func TestRunServeBackgroundReplaceOverridesDevRefusal(t *testing.T) {
 		RemoveDaemonRuntime(dir)
 	})
 
-	runServeBackground(
+	runServeBackground(t.Context(),
 		config.Config{DataDir: dir},
 		[]string{"serve", "--background", "--replace"},
 		serveReplacementOptions{Replace: true},
@@ -154,13 +155,13 @@ func TestRunServeBackgroundGeneratesAuthTokenForRemoteSync(t *testing.T) {
 	var gotCfg config.Config
 
 	oldStart := startServeBackgroundProcessForRun
-	startServeBackgroundProcessForRun = func(
+	startServeBackgroundProcessForRun = func(ctx context.Context,
 		cfg config.Config, _ []string,
 	) (*exec.Cmd, string, error) {
 		gotCfg = cfg
 		_, err := WriteDaemonRuntime(dir, host, port, version, false)
 		require.NoError(t, err)
-		cmd := exec.Command("sleep", "2")
+		cmd := exec.CommandContext(t.Context(), "sleep", "2")
 		require.NoError(t, cmd.Start())
 		t.Cleanup(func() { _ = cmd.Process.Kill() })
 		return cmd, "test.log", nil
@@ -170,7 +171,7 @@ func TestRunServeBackgroundGeneratesAuthTokenForRemoteSync(t *testing.T) {
 		RemoveDaemonRuntime(dir)
 	})
 
-	runServeBackground(
+	runServeBackground(t.Context(),
 		config.Config{DataDir: dir},
 		[]string{"serve", "--background"},
 		serveReplacementOptions{},
@@ -197,11 +198,10 @@ func TestRunServeBackgroundReplaceWaitsForExternalStartLock(t *testing.T) {
 	forbidStopDaemonRuntimeForUpgrade(t,
 		"background replacement must not stop while foreground owns start lock")
 	oldStart := startServeBackgroundProcessForRun
-	startServeBackgroundProcessForRun = func(
+	startServeBackgroundProcessForRun = func(context.Context,
 		config.Config, []string,
 	) (*exec.Cmd, string, error) {
-		t.Fatal("background replacement must not spawn while waiting on foreground")
-		return nil, "", nil
+		return nil, "", errors.New("background replacement must not spawn while waiting on foreground")
 	}
 	t.Cleanup(func() { startServeBackgroundProcessForRun = oldStart })
 
@@ -211,16 +211,16 @@ func TestRunServeBackgroundReplaceWaitsForExternalStartLock(t *testing.T) {
 		select {
 		case <-oldProbed:
 		case <-time.After(2 * time.Second):
-			published <- fmt.Errorf("old daemon was not probed")
+			published <- errors.New("old daemon was not probed")
 			return
 		}
 		published <- publishDaemonRuntimeAndUnlockWhenVisible(
-			dir, newHost, newPort, "dev", unlockStart,
+			t, dir, newHost, newPort, "dev", unlockStart,
 		)
 	}()
 
 	out := captureStdout(t, func() {
-		runServeBackground(
+		runServeBackground(t.Context(),
 			config.Config{DataDir: dir},
 			[]string{"serve", "--background", "--replace"},
 			serveReplacementOptions{Replace: true},
@@ -233,28 +233,46 @@ func TestRunServeBackgroundReplaceWaitsForExternalStartLock(t *testing.T) {
 }
 
 func publishDaemonRuntimeAndUnlockWhenVisible(
-	dataDir, host string, port int, version string, unlock func(),
+	t *testing.T, dataDir, host string, port int, version string, unlock func(),
 ) error {
-	err := publishDaemonRuntimeWhenVisible(dataDir, host, port, version)
+	t.Helper()
+	err := publishDaemonRuntimeWhenVisible(t, dataDir, host, port, version)
 	unlock()
 	return err
 }
 
+func unlockAfterBackgroundProbe(t *testing.T, unlock func()) {
+	t.Helper()
+	runAfterBackgroundProbe(t, unlock)
+}
+
+func runAfterBackgroundProbe(t *testing.T, action func()) {
+	t.Helper()
+	probed := make(chan struct{})
+	var once sync.Once
+	old := backgroundServeProbeHook
+	backgroundServeProbeHook = func() { once.Do(func() { close(probed) }) }
+	t.Cleanup(func() { backgroundServeProbeHook = old })
+	go func() {
+		<-probed
+		action()
+	}()
+}
+
 func publishDaemonRuntimeWhenVisible(
-	dataDir, host string, port int, version string,
+	t *testing.T, dataDir, host string, port int, version string,
 ) error {
+	t.Helper()
 	RemoveDaemonRuntime(dataDir)
 	_, err := WriteDaemonRuntime(dataDir, host, port, version, false)
 	if err != nil {
 		return err
 	}
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if rt := FindDaemonRuntime(dataDir); rt != nil &&
-			!rt.ReadOnly && rt.Port == port {
-			return nil
-		}
-		time.Sleep(10 * time.Millisecond)
+	if assert.Eventually(t, func() bool {
+		rt := FindDaemonRuntime(dataDir)
+		return rt != nil && !rt.ReadOnly && rt.Port == port
+	}, 2*time.Second, 10*time.Millisecond) {
+		return nil
 	}
 	return fmt.Errorf(
 		"published daemon runtime %s:%d was not visible",
@@ -276,7 +294,7 @@ func TestRunServeBackgroundReplaceContinuesAfterExternalStartupAbort(
 	unlockStart := holdExternalDaemonStartLock(t, dir)
 
 	var stopped bool
-	stubStopDaemonRuntimeForUpgrade(t, func(
+	stubStopDaemonRuntimeForUpgrade(t, func(ctx context.Context,
 		_ config.Config, rt *DaemonRuntime,
 	) error {
 		stopped = true
@@ -287,13 +305,13 @@ func TestRunServeBackgroundReplaceContinuesAfterExternalStartupAbort(
 
 	newHost, newPort := testPingServer(t)
 	oldStart := startServeBackgroundProcessForRun
-	startServeBackgroundProcessForRun = func(
+	startServeBackgroundProcessForRun = func(ctx context.Context,
 		_ config.Config, arguments []string,
 	) (*exec.Cmd, string, error) {
 		assert.NotContains(t, arguments, "--replace")
 		_, err := WriteDaemonRuntime(dir, newHost, newPort, "dev", false)
 		require.NoError(t, err)
-		cmd := exec.Command("sleep", "2")
+		cmd := exec.CommandContext(t.Context(), "sleep", "2")
 		require.NoError(t, cmd.Start())
 		t.Cleanup(func() { _ = cmd.Process.Kill() })
 		return cmd, "test.log", nil
@@ -304,13 +322,12 @@ func TestRunServeBackgroundReplaceContinuesAfterExternalStartupAbort(
 	})
 
 	released := make(chan struct{})
-	go func() {
-		time.Sleep(2 * startProbeTick())
+	unlockAfterBackgroundProbe(t, func() {
 		unlockStart()
 		close(released)
-	}()
+	})
 
-	runServeBackground(
+	runServeBackground(t.Context(),
 		config.Config{DataDir: dir},
 		[]string{"serve", "--background", "--replace"},
 		serveReplacementOptions{Replace: true},
@@ -334,7 +351,7 @@ func TestRunServeBackgroundReplaceKeepsSameVersionTargetAfterStartupAbort(
 	unlockStart := holdExternalDaemonStartLock(t, dir)
 
 	var stopped bool
-	stubStopDaemonRuntimeForUpgrade(t, func(
+	stubStopDaemonRuntimeForUpgrade(t, func(ctx context.Context,
 		_ config.Config, rt *DaemonRuntime,
 	) error {
 		stopped = true
@@ -345,13 +362,13 @@ func TestRunServeBackgroundReplaceKeepsSameVersionTargetAfterStartupAbort(
 
 	newHost, newPort := testPingServer(t)
 	oldStart := startServeBackgroundProcessForRun
-	startServeBackgroundProcessForRun = func(
+	startServeBackgroundProcessForRun = func(ctx context.Context,
 		_ config.Config, arguments []string,
 	) (*exec.Cmd, string, error) {
 		assert.NotContains(t, arguments, "--replace")
 		_, err := WriteDaemonRuntime(dir, newHost, newPort, "1.0.0", false)
 		require.NoError(t, err)
-		cmd := exec.Command("sleep", "2")
+		cmd := exec.CommandContext(t.Context(), "sleep", "2")
 		require.NoError(t, cmd.Start())
 		t.Cleanup(func() { _ = cmd.Process.Kill() })
 		return cmd, "test.log", nil
@@ -362,13 +379,12 @@ func TestRunServeBackgroundReplaceKeepsSameVersionTargetAfterStartupAbort(
 	})
 
 	released := make(chan struct{})
-	go func() {
-		time.Sleep(2 * startProbeTick())
+	unlockAfterBackgroundProbe(t, func() {
 		unlockStart()
 		close(released)
-	}()
+	})
 
-	runServeBackground(
+	runServeBackground(t.Context(),
 		config.Config{DataDir: dir},
 		[]string{"serve", "--background", "--replace"},
 		serveReplacementOptions{Replace: true},
@@ -395,7 +411,7 @@ func TestRunServeBackgroundReplaceKeepsUnresponsiveTargetAfterStartupAbort(
 	unlockStart := holdExternalDaemonStartLock(t, dir)
 
 	var stopped bool
-	stubStopDaemonRuntimeForUpgrade(t, func(
+	stubStopDaemonRuntimeForUpgrade(t, func(ctx context.Context,
 		_ config.Config, rt *DaemonRuntime,
 	) error {
 		stopped = true
@@ -407,13 +423,13 @@ func TestRunServeBackgroundReplaceKeepsUnresponsiveTargetAfterStartupAbort(
 
 	newHost, newPort := testPingServer(t)
 	oldStart := startServeBackgroundProcessForRun
-	startServeBackgroundProcessForRun = func(
+	startServeBackgroundProcessForRun = func(ctx context.Context,
 		_ config.Config, arguments []string,
 	) (*exec.Cmd, string, error) {
 		assert.NotContains(t, arguments, "--replace")
 		_, err := WriteDaemonRuntime(dir, newHost, newPort, "1.0.0", false)
 		require.NoError(t, err)
-		cmd := exec.Command("sleep", "2")
+		cmd := exec.CommandContext(t.Context(), "sleep", "2")
 		require.NoError(t, cmd.Start())
 		t.Cleanup(func() { _ = cmd.Process.Kill() })
 		return cmd, "test.log", nil
@@ -424,13 +440,12 @@ func TestRunServeBackgroundReplaceKeepsUnresponsiveTargetAfterStartupAbort(
 	})
 
 	released := make(chan struct{})
-	go func() {
-		time.Sleep(2 * startProbeTick())
+	unlockAfterBackgroundProbe(t, func() {
 		unlockStart()
 		close(released)
-	}()
+	})
 
-	runServeBackground(
+	runServeBackground(t.Context(),
 		config.Config{DataDir: dir},
 		[]string{"serve", "--background", "--replace"},
 		serveReplacementOptions{Replace: true},
@@ -445,7 +460,7 @@ func TestRunServeBackgroundRejectsTooNewDatabaseBeforeStop(t *testing.T) {
 	dbPath := writeTooNewSQLiteDB(t, dir)
 
 	stopMarker := filepath.Join(dir, "stop-called")
-	cmd := exec.Command(
+	cmd := exec.CommandContext(t.Context(),
 		os.Args[0],
 		"-test.run=TestRunServeBackgroundRejectsTooNewDatabaseBeforeStopHelper",
 		"--",
@@ -483,7 +498,7 @@ func TestStartServeBackgroundRejectsMultipleWritableDaemons(t *testing.T) {
 	))
 	require.NoError(t, err)
 
-	result, err := startServeBackground(
+	result, err := startServeBackground(t.Context(),
 		config.Config{DataDir: dir},
 		[]string{"serve", "--background"},
 		serveReplacementOptions{},
@@ -491,9 +506,9 @@ func TestStartServeBackgroundRejectsMultipleWritableDaemons(t *testing.T) {
 	)
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "multiple writable agentsview daemons")
-	assert.ErrorContains(t, err, strconv.Itoa(pids[0]))
-	assert.ErrorContains(t, err, strconv.Itoa(pids[1]))
+	require.ErrorContains(t, err, "multiple writable agentsview daemons")
+	require.ErrorContains(t, err, strconv.Itoa(pids[0]))
+	require.ErrorContains(t, err, strconv.Itoa(pids[1]))
 	assert.False(t, result.Started)
 	assert.Nil(t, result.Runtime)
 }
@@ -514,7 +529,7 @@ func TestStartServeBackgroundCountsAuthenticatedLegacyWriterForUniqueness(
 	))
 	require.NoError(t, err)
 
-	result, err := startServeBackground(
+	result, err := startServeBackground(t.Context(),
 		config.Config{DataDir: dir, AuthToken: token},
 		[]string{"serve", "--background"},
 		serveReplacementOptions{},
@@ -522,9 +537,9 @@ func TestStartServeBackgroundCountsAuthenticatedLegacyWriterForUniqueness(
 	)
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "multiple writable agentsview daemons")
-	assert.ErrorContains(t, err, strconv.Itoa(os.Getpid()))
-	assert.ErrorContains(t, err, strconv.Itoa(secondPID))
+	require.ErrorContains(t, err, "multiple writable agentsview daemons")
+	require.ErrorContains(t, err, strconv.Itoa(os.Getpid()))
+	require.ErrorContains(t, err, strconv.Itoa(secondPID))
 	assert.False(t, result.Started)
 	assert.Nil(t, result.Runtime)
 	assertPathRemoved(t, legacyPath, "authenticated legacy state should migrate")
@@ -538,7 +553,7 @@ func TestStartServeBackgroundValidatesConfigBeforeReplacementStop(t *testing.T) 
 	setTestVersion(t, "1.1.0")
 
 	stopCalls := 0
-	stubStopDaemonRuntimeForUpgrade(t, func(
+	stubStopDaemonRuntimeForUpgrade(t, func(ctx context.Context,
 		_ config.Config, _ *DaemonRuntime,
 	) error {
 		stopCalls++
@@ -547,7 +562,7 @@ func TestStartServeBackgroundValidatesConfigBeforeReplacementStop(t *testing.T) 
 	})
 	startCalls := 0
 	oldStart := startServeBackgroundProcessForRun
-	startServeBackgroundProcessForRun = func(
+	startServeBackgroundProcessForRun = func(context.Context,
 		config.Config, []string,
 	) (*exec.Cmd, string, error) {
 		startCalls++
@@ -558,7 +573,7 @@ func TestStartServeBackgroundValidatesConfigBeforeReplacementStop(t *testing.T) 
 		RemoveDaemonRuntime(dir)
 	})
 
-	result, err := startServeBackground(
+	result, err := startServeBackground(t.Context(),
 		config.Config{DataDir: dir, Host: "0.0.0.0"},
 		[]string{"serve", "--background"},
 		serveReplacementOptions{},
@@ -566,7 +581,7 @@ func TestStartServeBackgroundValidatesConfigBeforeReplacementStop(t *testing.T) 
 	)
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "require_auth")
+	require.ErrorContains(t, err, "require_auth")
 	assert.Zero(t, stopCalls, "invalid config must preserve the incumbent")
 	assert.Zero(t, startCalls, "invalid config must not launch a child")
 	assert.False(t, result.Started)
@@ -590,7 +605,7 @@ func TestRunServeBackgroundRejectsTooNewDatabaseBeforeStopHelper(t *testing.T) {
 	_, err := WriteDaemonRuntime(dir, host, port, "1.0.0", false)
 	require.NoError(t, err)
 
-	stopDaemonRuntimeForUpgrade = func(
+	stopDaemonRuntimeForUpgrade = func(ctx context.Context,
 		_ config.Config, rt *DaemonRuntime,
 	) error {
 		require.NotNil(t, rt)
@@ -600,13 +615,13 @@ func TestRunServeBackgroundRejectsTooNewDatabaseBeforeStopHelper(t *testing.T) {
 		}
 		return nil
 	}
-	startServeBackgroundProcessForRun = func(
+	startServeBackgroundProcessForRun = func(context.Context,
 		config.Config, []string,
 	) (*exec.Cmd, string, error) {
-		return nil, "", fmt.Errorf("start should not run")
+		return nil, "", errors.New("start should not run")
 	}
 
-	runServeBackground(
+	runServeBackground(t.Context(),
 		config.Config{DataDir: dir, DBPath: dbPath},
 		[]string{"serve", "--background", "--replace"},
 		serveReplacementOptions{Replace: true},
@@ -629,7 +644,7 @@ func TestServeBackgroundReplaceCommandUsesParentReplacementUnderLaunchLock(
 	t.Cleanup(func() { os.Args = oldArgs })
 
 	var stopped bool
-	stubStopDaemonRuntimeForUpgrade(t, func(
+	stubStopDaemonRuntimeForUpgrade(t, func(ctx context.Context,
 		_ config.Config, rt *DaemonRuntime,
 	) error {
 		stopped = true
@@ -647,7 +662,7 @@ func TestServeBackgroundReplaceCommandUsesParentReplacementUnderLaunchLock(
 	newHost, newPort := testPingServer(t)
 	oldStart := startServeBackgroundProcessForRun
 	var gotArgs []string
-	startServeBackgroundProcessForRun = func(
+	startServeBackgroundProcessForRun = func(ctx context.Context,
 		_ config.Config, arguments []string,
 	) (*exec.Cmd, string, error) {
 		gotArgs = append([]string(nil), arguments...)
@@ -655,7 +670,7 @@ func TestServeBackgroundReplaceCommandUsesParentReplacementUnderLaunchLock(
 		assert.NotContains(t, arguments, "--background")
 		_, err := WriteDaemonRuntime(dir, newHost, newPort, "1.0.0", false)
 		require.NoError(t, err)
-		cmd := exec.Command("sleep", "2")
+		cmd := exec.CommandContext(t.Context(), "sleep", "2")
 		require.NoError(t, cmd.Start())
 		t.Cleanup(func() { _ = cmd.Process.Kill() })
 		return cmd, "test.log", nil
@@ -678,9 +693,7 @@ func TestServeCommandParsesBackgroundFlag(t *testing.T) {
 	dataDir := testDataDir(t)
 
 	cmd := newServeCommand()
-	require.NoError(t,
-		cmd.Flags().Parse([]string{"--background", "--port", "9090"}),
-	)
+	require.NoError(t, cmd.Flags().Parse([]string{"--background", "--port", "9090"}))
 	got, err := cmd.Flags().GetBool("background")
 	require.NoError(t, err)
 	assert.True(t, got)
@@ -755,7 +768,7 @@ func TestEnsureBackgroundServeExistingDaemon(t *testing.T) {
 
 	cfg := config.Config{DataDir: dir}
 	rt, err := ensureBackgroundServe(
-		context.Background(), &cfg, 100*time.Millisecond,
+		t.Context(), &cfg, 100*time.Millisecond,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, rt)
@@ -769,8 +782,8 @@ func TestEnsureBackgroundServeCancellationLeavesChildRunning(t *testing.T) {
 	defer cancel()
 	oldStart := startServeBackgroundProcessForEnsure
 	var child *exec.Cmd
-	startServeBackgroundProcessForEnsure = func(config.Config, []string) (*exec.Cmd, string, error) {
-		child = exec.Command("sleep", "60")
+	startServeBackgroundProcessForEnsure = func(context.Context, config.Config, []string) (*exec.Cmd, string, error) {
+		child = exec.CommandContext(t.Context(), "sleep", "60")
 		configureServeBackgroundCommand(child)
 		require.NoError(t, child.Start())
 		cancel()
@@ -825,7 +838,7 @@ func TestEnsureBackgroundServeGeneratesAuthTokenForRemoteSync(t *testing.T) {
 	var gotCfg config.Config
 
 	oldStartProcess := startServeBackgroundProcessForEnsure
-	startServeBackgroundProcessForEnsure = func(
+	startServeBackgroundProcessForEnsure = func(ctx context.Context,
 		cfg config.Config, _ []string,
 	) (*exec.Cmd, string, error) {
 		gotCfg = cfg
@@ -833,7 +846,7 @@ func TestEnsureBackgroundServeGeneratesAuthTokenForRemoteSync(t *testing.T) {
 		if err != nil {
 			return nil, "", err
 		}
-		cmd := exec.Command("sleep", "2")
+		cmd := exec.CommandContext(t.Context(), "sleep", "2")
 		if err := cmd.Start(); err != nil {
 			return nil, "", err
 		}
@@ -846,7 +859,7 @@ func TestEnsureBackgroundServeGeneratesAuthTokenForRemoteSync(t *testing.T) {
 	})
 
 	cfg := config.Config{DataDir: dir}
-	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+	rt, err := ensureBackgroundServe(t.Context(), &cfg, time.Second)
 
 	require.NoError(t, err)
 	require.NotNil(t, rt)
@@ -869,7 +882,7 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseBeforeReplacingCompatibleDaemo
 	setTestVersion(t, "1.1.0")
 
 	var stopped bool
-	stubStopDaemonRuntimeForUpgrade(t, func(
+	stubStopDaemonRuntimeForUpgrade(t, func(context.Context,
 		config.Config, *DaemonRuntime,
 	) error {
 		stopped = true
@@ -877,10 +890,10 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseBeforeReplacingCompatibleDaemo
 		return nil
 	})
 	oldStartProcess := startServeBackgroundProcessForEnsure
-	startServeBackgroundProcessForEnsure = func(
+	startServeBackgroundProcessForEnsure = func(context.Context,
 		config.Config, []string,
 	) (*exec.Cmd, string, error) {
-		return nil, "", fmt.Errorf("start should not run")
+		return nil, "", errors.New("start should not run")
 	}
 	t.Cleanup(func() {
 		startServeBackgroundProcessForEnsure = oldStartProcess
@@ -888,7 +901,7 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseBeforeReplacingCompatibleDaemo
 	})
 
 	cfg := config.Config{DataDir: dir, DBPath: dbPath}
-	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+	rt, err := ensureBackgroundServe(t.Context(), &cfg, time.Second)
 
 	require.Error(t, err)
 	assert.True(t, db.IsDataVersionTooNew(err))
@@ -911,7 +924,7 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseBeforeReplacingIncompatibleDae
 	setTestVersion(t, "1.1.0")
 
 	var stopped bool
-	stubStopDaemonRuntimeForUpgrade(t, func(
+	stubStopDaemonRuntimeForUpgrade(t, func(context.Context,
 		config.Config, *DaemonRuntime,
 	) error {
 		stopped = true
@@ -919,15 +932,15 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseBeforeReplacingIncompatibleDae
 		return nil
 	})
 	oldStartProcess := startServeBackgroundProcessForEnsure
-	startServeBackgroundProcessForEnsure = func(
+	startServeBackgroundProcessForEnsure = func(context.Context,
 		config.Config, []string,
 	) (*exec.Cmd, string, error) {
-		return nil, "", fmt.Errorf("start should not run")
+		return nil, "", errors.New("start should not run")
 	}
 	t.Cleanup(func() { startServeBackgroundProcessForEnsure = oldStartProcess })
 
 	cfg := config.Config{DataDir: dir, DBPath: dbPath}
-	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+	rt, err := ensureBackgroundServe(t.Context(), &cfg, time.Second)
 
 	require.Error(t, err)
 	assert.True(t, db.IsDataVersionTooNew(err))
@@ -980,11 +993,10 @@ func TestEnsureBackgroundServeReplacementWaitsForExternalStartLock(
 			forbidStopDaemonRuntimeForUpgrade(t,
 				"auto-start replacement must not stop while foreground owns start lock")
 			oldStart := startServeBackgroundProcessForEnsure
-			startServeBackgroundProcessForEnsure = func(
+			startServeBackgroundProcessForEnsure = func(context.Context,
 				config.Config, []string,
 			) (*exec.Cmd, string, error) {
-				t.Fatal("auto-start must not spawn while waiting on foreground")
-				return nil, "", nil
+				return nil, "", errors.New("auto-start must not spawn while waiting on foreground")
 			}
 			t.Cleanup(func() {
 				startServeBackgroundProcessForEnsure = oldStart
@@ -992,16 +1004,15 @@ func TestEnsureBackgroundServeReplacementWaitsForExternalStartLock(
 
 			newHost, newPort := testPingServer(t)
 			published := make(chan error, 1)
-			go func() {
-				time.Sleep(2 * startProbeTick())
+			runAfterBackgroundProbe(t, func() {
 				published <- publishDaemonRuntimeAndUnlockWhenVisible(
-					dir, newHost, newPort, "1.1.0", unlockStart,
+					t, dir, newHost, newPort, "1.1.0", unlockStart,
 				)
-			}()
+			})
 
 			cfg := config.Config{DataDir: dir}
 			rt, err := ensureBackgroundServe(
-				context.Background(), &cfg, time.Second,
+				t.Context(), &cfg, time.Second,
 			)
 
 			require.NoError(t, <-published)
@@ -1050,11 +1061,10 @@ func TestEnsureBackgroundServeReprobesWhenExternalStartupFinishesBeforeWait(
 	forbidStopDaemonRuntimeForUpgrade(t,
 		"auto-start replacement must re-probe after foreground startup wins")
 	oldStart := startServeBackgroundProcessForEnsure
-	startServeBackgroundProcessForEnsure = func(
+	startServeBackgroundProcessForEnsure = func(context.Context,
 		config.Config, []string,
 	) (*exec.Cmd, string, error) {
-		t.Fatal("auto-start must not spawn after foreground startup wins")
-		return nil, "", nil
+		return nil, "", errors.New("auto-start must not spawn after foreground startup wins")
 	}
 	t.Cleanup(func() {
 		startServeBackgroundProcessForEnsure = oldStart
@@ -1062,14 +1072,14 @@ func TestEnsureBackgroundServeReprobesWhenExternalStartupFinishesBeforeWait(
 
 	cfg := config.Config{DataDir: dir}
 	rt, err := ensureBackgroundServe(
-		context.Background(), &cfg, time.Second,
+		t.Context(), &cfg, time.Second,
 	)
 
 	select {
 	case publishErr := <-published:
 		require.NoError(t, publishErr)
 	case <-time.After(time.Second):
-		t.Fatal("old daemon probe did not publish replacement runtime")
+		require.FailNow(t, "old daemon probe did not publish replacement runtime")
 	}
 	require.NoError(t, err)
 	require.NotNil(t, rt)
@@ -1085,7 +1095,7 @@ func TestWaitForBackgroundServeReady_UsesStartupStateFallbackWithoutRuntimeRecor
 
 	waitCh := make(chan error)
 	rt, err := waitForBackgroundServeReady(
-		context.Background(), dir, "", waitCh, time.Second,
+		t.Context(), dir, "", waitCh, time.Second,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, rt)
@@ -1113,7 +1123,7 @@ func TestWaitForBackgroundServeReadyAttachedObservesProgressWithoutTimeout(
 	errCh := make(chan error, 1)
 	go func() {
 		rt, waitErr := waitForBackgroundServeReadyWithPolicy(
-			context.Background(), dir, "", waitCh, 20*time.Millisecond,
+			t.Context(), dir, "", waitCh, 20*time.Millisecond,
 			backgroundServeReadyWaitPolicy{
 				Attached: true,
 				Observe: func(st *startupState, _ time.Duration) {
@@ -1135,11 +1145,11 @@ func TestWaitForBackgroundServeReadyAttachedObservesProgressWithoutTimeout(
 		assert.Equal(t, "initial sync", st.Phase)
 		assert.Equal(t, "12/40 sessions", st.Detail)
 	case <-time.After(time.Second):
-		t.Fatal("attached readiness wait did not observe startup progress")
+		require.FailNow(t, "attached readiness wait did not observe startup progress")
 	}
 	select {
 	case err := <-errCh:
-		t.Fatalf("attached readiness wait returned at legacy timeout: %v", err)
+		require.FailNowf(t, "attached readiness wait returned at legacy timeout", "%v", err)
 	case <-time.After(40 * time.Millisecond):
 	}
 
@@ -1155,7 +1165,7 @@ func TestWaitForBackgroundServeReadyAttachedObservesProgressWithoutTimeout(
 		require.NotNil(t, rt)
 		assert.Equal(t, port, rt.Port)
 	case <-time.After(time.Second):
-		t.Fatal("attached readiness wait did not return authoritative runtime")
+		require.FailNow(t, "attached readiness wait did not return authoritative runtime")
 	}
 }
 
@@ -1180,11 +1190,12 @@ func TestWaitForBackgroundServeReadyRenewsTimeoutOnStartupProgress(t *testing.T)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
 	initialObserved := make(chan struct{}, 1)
+	updatedObserved := make(chan struct{}, 1)
 	resultCh := make(chan *DaemonRuntime, 1)
 	errCh := make(chan error, 1)
 	go func() {
 		rt, waitErr := waitForBackgroundServeReadyWithPolicy(
-			context.Background(), dir, "", make(chan error), 500*time.Millisecond,
+			t.Context(), dir, "", make(chan error), 500*time.Millisecond,
 			backgroundServeReadyWaitPolicy{
 				Observe: func(st *startupState, _ time.Duration) {
 					if st == nil {
@@ -1193,6 +1204,12 @@ func TestWaitForBackgroundServeReadyRenewsTimeoutOnStartupProgress(t *testing.T)
 					select {
 					case initialObserved <- struct{}{}:
 					default:
+					}
+					if st.Detail == "2/2 sessions" {
+						select {
+						case updatedObserved <- struct{}{}:
+						default:
+						}
 					}
 				},
 			},
@@ -1204,15 +1221,19 @@ func TestWaitForBackgroundServeReadyRenewsTimeoutOnStartupProgress(t *testing.T)
 	select {
 	case <-initialObserved:
 	case <-time.After(time.Second):
-		t.Fatal("readiness wait did not observe initial startup state")
+		require.FailNow(t, "readiness wait did not observe initial startup state")
 	}
 	select {
 	case <-initialObserved:
 	case <-time.After(time.Second):
-		t.Fatal("readiness wait did not reach its final poll before timeout")
+		require.FailNow(t, "readiness wait did not reach its final poll before timeout")
 	}
 	writeState("2/2 sessions", updatedAt.Add(time.Second))
-	time.Sleep(250 * time.Millisecond)
+	select {
+	case <-updatedObserved:
+	case <-time.After(time.Second):
+		require.FailNow(t, "readiness wait did not observe updated startup state")
+	}
 	host, port := testPingServer(t)
 	_, err := WriteDaemonRuntime(dir, host, port, version, false)
 	require.NoError(t, err)
@@ -1225,7 +1246,7 @@ func TestWaitForBackgroundServeReadyRenewsTimeoutOnStartupProgress(t *testing.T)
 		require.NotNil(t, rt)
 		assert.Equal(t, port, rt.Port)
 	case <-time.After(time.Second):
-		t.Fatal("readiness wait did not return authoritative runtime")
+		require.FailNow(t, "readiness wait did not return authoritative runtime")
 	}
 }
 
@@ -1247,7 +1268,7 @@ func TestWaitForBackgroundServeReadyTimesOutWithoutNewStartupProgress(t *testing
 
 	startedAt := time.Now()
 	rt, err := waitForBackgroundServeReady(
-		context.Background(), dir, "", make(chan error), 40*time.Millisecond,
+		t.Context(), dir, "", make(chan error), 40*time.Millisecond,
 	)
 	require.NoError(t, err)
 	assert.Nil(t, rt)
@@ -1259,7 +1280,7 @@ func TestWaitForBackgroundServeReadyReprobesRuntimeAtTimeout(t *testing.T) {
 	dir := runtimeTestDir(t)
 	host, port := testPingServer(t)
 	rt, err := waitForBackgroundServeReadyWithPolicy(
-		context.Background(), dir, "", make(chan error), 20*time.Millisecond,
+		t.Context(), dir, "", make(chan error), 20*time.Millisecond,
 		backgroundServeReadyWaitPolicy{
 			Observe: func(*startupState, time.Duration) {
 				_, writeErr := WriteDaemonRuntime(dir, host, port, version, false)
@@ -1280,22 +1301,22 @@ func TestWaitForBackgroundServeReadyAttachedChildExitAndCancellation(t *testing.
 		waitCh := make(chan error, 1)
 		waitCh <- errors.New("exit status 7")
 		rt, err := waitForBackgroundServeReadyWithPolicy(
-			context.Background(), runtimeTestDir(t), "", waitCh,
+			t.Context(), runtimeTestDir(t), "", waitCh,
 			20*time.Millisecond, backgroundServeReadyWaitPolicy{Attached: true},
 		)
 		require.Error(t, err)
-		assert.ErrorContains(t, err, "exit status 7")
+		require.ErrorContains(t, err, "exit status 7")
 		assert.Nil(t, rt)
 	})
 
 	t.Run("context cancellation", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		rt, err := waitForBackgroundServeReadyWithPolicy(
 			ctx, runtimeTestDir(t), "", make(chan error),
 			20*time.Millisecond, backgroundServeReadyWaitPolicy{Attached: true},
 		)
-		assert.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, context.Canceled)
 		assert.Nil(t, rt)
 	})
 }
@@ -1318,7 +1339,7 @@ func TestEnsureBackgroundServeLaunchLoserReplacesStaleDaemonAfterStartup(
 	unlockStart := holdExternalDaemonStartLock(t, dir)
 
 	var stopped bool
-	stubStopDaemonRuntimeForUpgrade(t, func(
+	stubStopDaemonRuntimeForUpgrade(t, func(ctx context.Context,
 		_ config.Config, rt *DaemonRuntime,
 	) error {
 		stopped = true
@@ -1329,14 +1350,14 @@ func TestEnsureBackgroundServeLaunchLoserReplacesStaleDaemonAfterStartup(
 
 	newHost, newPort := testPingServer(t)
 	oldStart := startServeBackgroundProcessForEnsure
-	startServeBackgroundProcessForEnsure = func(
+	startServeBackgroundProcessForEnsure = func(context.Context,
 		config.Config, []string,
 	) (*exec.Cmd, string, error) {
 		_, err := WriteDaemonRuntime(dir, newHost, newPort, "1.1.0", false)
 		if err != nil {
 			return nil, "", err
 		}
-		cmd := exec.Command("sleep", "2")
+		cmd := exec.CommandContext(t.Context(), "sleep", "2")
 		if err := cmd.Start(); err != nil {
 			return nil, "", err
 		}
@@ -1346,18 +1367,17 @@ func TestEnsureBackgroundServeLaunchLoserReplacesStaleDaemonAfterStartup(
 	t.Cleanup(func() { startServeBackgroundProcessForEnsure = oldStart })
 
 	released := make(chan struct{})
-	go func() {
-		time.Sleep(2 * startProbeTick())
+	runAfterBackgroundProbe(t, func() {
 		// The parent launch lock clears before the child finishes startup.
 		// Preserve that lifecycle ordering now that unlockStart waits until
 		// the child lock is observably released.
 		_ = launchLock.Unlock()
 		unlockStart()
 		close(released)
-	}()
+	})
 
 	cfg := config.Config{DataDir: dir}
-	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+	rt, err := ensureBackgroundServe(t.Context(), &cfg, time.Second)
 
 	<-released
 	require.NoError(t, err)
@@ -1380,7 +1400,7 @@ func TestEnsureBackgroundServeReplacesStaleDaemonAfterExternalStartupAbort(
 	unlockStart := holdExternalDaemonStartLock(t, dir)
 
 	var stopped bool
-	stubStopDaemonRuntimeForUpgrade(t, func(
+	stubStopDaemonRuntimeForUpgrade(t, func(ctx context.Context,
 		_ config.Config, rt *DaemonRuntime,
 	) error {
 		stopped = true
@@ -1391,14 +1411,14 @@ func TestEnsureBackgroundServeReplacesStaleDaemonAfterExternalStartupAbort(
 
 	newHost, newPort := testPingServer(t)
 	oldStart := startServeBackgroundProcessForEnsure
-	startServeBackgroundProcessForEnsure = func(
+	startServeBackgroundProcessForEnsure = func(context.Context,
 		config.Config, []string,
 	) (*exec.Cmd, string, error) {
 		_, err := WriteDaemonRuntime(dir, newHost, newPort, "1.1.0", false)
 		if err != nil {
 			return nil, "", err
 		}
-		cmd := exec.Command("sleep", "2")
+		cmd := exec.CommandContext(t.Context(), "sleep", "2")
 		if err := cmd.Start(); err != nil {
 			return nil, "", err
 		}
@@ -1408,14 +1428,13 @@ func TestEnsureBackgroundServeReplacesStaleDaemonAfterExternalStartupAbort(
 	t.Cleanup(func() { startServeBackgroundProcessForEnsure = oldStart })
 
 	released := make(chan struct{})
-	go func() {
-		time.Sleep(2 * startProbeTick())
+	runAfterBackgroundProbe(t, func() {
 		unlockStart()
 		close(released)
-	}()
+	})
 
 	cfg := config.Config{DataDir: dir}
-	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+	rt, err := ensureBackgroundServe(t.Context(), &cfg, time.Second)
 
 	<-released
 	require.NoError(t, err)
@@ -1435,7 +1454,7 @@ func TestEnsureBackgroundServeIncompatibleDaemonReturnsError(t *testing.T) {
 
 	cfg := config.Config{DataDir: dir}
 	rt, err := ensureBackgroundServe(
-		context.Background(), &cfg, 100*time.Millisecond,
+		t.Context(), &cfg, 100*time.Millisecond,
 	)
 	require.Error(t, err)
 	assert.Nil(t, rt)
@@ -1454,7 +1473,7 @@ func TestEnsureBackgroundServeIgnoresIncompatibleReadOnlyDaemon(t *testing.T) {
 
 	newHost, newPort := testPingServer(t)
 	oldStartProcess := startServeBackgroundProcessForEnsure
-	startServeBackgroundProcessForEnsure = func(
+	startServeBackgroundProcessForEnsure = func(ctx context.Context,
 		_ config.Config, _ []string,
 	) (*exec.Cmd, string, error) {
 		if _, err := WriteDaemonRuntime(
@@ -1462,7 +1481,7 @@ func TestEnsureBackgroundServeIgnoresIncompatibleReadOnlyDaemon(t *testing.T) {
 		); err != nil {
 			return nil, "", err
 		}
-		cmd := exec.Command("sleep", "2")
+		cmd := exec.CommandContext(t.Context(), "sleep", "2")
 		if err := cmd.Start(); err != nil {
 			return nil, "", err
 		}
@@ -1475,7 +1494,7 @@ func TestEnsureBackgroundServeIgnoresIncompatibleReadOnlyDaemon(t *testing.T) {
 	})
 
 	cfg := config.Config{DataDir: dir}
-	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+	rt, err := ensureBackgroundServe(t.Context(), &cfg, time.Second)
 	require.NoError(t, err)
 	require.NotNil(t, rt)
 	assert.False(t, rt.ReadOnly)
@@ -1502,7 +1521,7 @@ func TestEnsureBackgroundServeLaunchLoserReportsIncompatibleDaemon(
 
 	cfg := config.Config{DataDir: dir}
 	rt, err := ensureBackgroundServe(
-		context.Background(), &cfg, 50*time.Millisecond,
+		t.Context(), &cfg, 50*time.Millisecond,
 	)
 	require.Error(t, err)
 	assert.Nil(t, rt)
@@ -1530,15 +1549,20 @@ func TestEnsureBackgroundServeLaunchLoserWaitsThroughReplacementGap(
 	newHost, newPort := testPingServer(t)
 	published := make(chan error, 1)
 	go func() {
-		time.Sleep(2 * startProbeTick())
+		if !assert.Eventually(t, func() bool {
+			return FindDaemonRuntime(dir) == nil
+		}, 2*time.Second, 10*time.Millisecond) {
+			published <- errors.New("replacement gap was not observed")
+			return
+		}
 		published <- publishDaemonRuntimeWhenVisible(
-			dir, newHost, newPort, version,
+			t, dir, newHost, newPort, version,
 		)
 	}()
 
 	cfg := config.Config{DataDir: dir}
 	rt, err := ensureBackgroundServe(
-		context.Background(), &cfg, 2*time.Second,
+		t.Context(), &cfg, 2*time.Second,
 	)
 	require.NoError(t, err)
 	require.NoError(t, <-published)
@@ -1557,7 +1581,7 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseAfterStartupWait(
 	setTestVersion(t, "1.1.0")
 
 	var stopped bool
-	stubStopDaemonRuntimeForUpgrade(t, func(
+	stubStopDaemonRuntimeForUpgrade(t, func(context.Context,
 		config.Config, *DaemonRuntime,
 	) error {
 		stopped = true
@@ -1565,10 +1589,10 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseAfterStartupWait(
 		return nil
 	})
 	oldStartProcess := startServeBackgroundProcessForEnsure
-	startServeBackgroundProcessForEnsure = func(
+	startServeBackgroundProcessForEnsure = func(context.Context,
 		config.Config, []string,
 	) (*exec.Cmd, string, error) {
-		return nil, "", fmt.Errorf("start should not run")
+		return nil, "", errors.New("start should not run")
 	}
 	t.Cleanup(func() { startServeBackgroundProcessForEnsure = oldStartProcess })
 
@@ -1604,12 +1628,11 @@ func TestEnsureBackgroundServeChecksTooNewDatabaseAfterStartupWait(
 	}()
 
 	cfg := config.Config{DataDir: dir, DBPath: dbPath}
-	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+	rt, err := ensureBackgroundServe(t.Context(), &cfg, time.Second)
 
 	require.NoError(t, <-errCh)
 	require.Error(t, err)
-	assert.True(
-		t,
+	assert.True(t,
 		db.IsDataVersionTooNew(err),
 		"expected data-version-too-new error, got %v",
 		err,
@@ -1631,10 +1654,10 @@ func TestEnsureBackgroundServeLaunchLoserIgnoresReadOnlyRuntimeDuringReplacement
 	MarkDaemonStarting(dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 	oldStartProcess := startServeBackgroundProcessForEnsure
-	startServeBackgroundProcessForEnsure = func(
+	startServeBackgroundProcessForEnsure = func(context.Context,
 		config.Config, []string,
 	) (*exec.Cmd, string, error) {
-		return nil, "", fmt.Errorf("start should not run")
+		return nil, "", errors.New("start should not run")
 	}
 	t.Cleanup(func() { startServeBackgroundProcessForEnsure = oldStartProcess })
 
@@ -1647,19 +1670,18 @@ func TestEnsureBackgroundServeLaunchLoserIgnoresReadOnlyRuntimeDuringReplacement
 
 	writableHost, writablePort := testPingServer(t)
 	published := make(chan error, 1)
-	go func() {
-		time.Sleep(2 * startProbeTick())
+	runAfterBackgroundProbe(t, func() {
 		err := publishDaemonRuntimeWhenVisible(
-			dir, writableHost, writablePort, version,
+			t, dir, writableHost, writablePort, version,
 		)
 		UnmarkDaemonStarting(dir)
 		releaseLaunchLock()
 		published <- err
-	}()
+	})
 
 	cfg := config.Config{DataDir: dir}
 	rt, err := ensureBackgroundServe(
-		context.Background(), &cfg, 2*time.Second,
+		t.Context(), &cfg, 2*time.Second,
 	)
 	require.NoError(t, err)
 	require.NoError(t, <-published)
@@ -1681,7 +1703,7 @@ func TestEnsureBackgroundServeReplacesIncompatibleDaemonAfterStartupWait(
 
 	oldStop := stopDaemonRuntimeForUpgrade
 	var stopped bool
-	stopDaemonRuntimeForUpgrade = func(
+	stopDaemonRuntimeForUpgrade = func(ctx context.Context,
 		_ config.Config, rt *DaemonRuntime,
 	) error {
 		stopped = true
@@ -1694,7 +1716,7 @@ func TestEnsureBackgroundServeReplacesIncompatibleDaemonAfterStartupWait(
 	newHost, newPort := testPingServer(t)
 	oldStartProcess := startServeBackgroundProcessForEnsure
 	var started bool
-	startServeBackgroundProcessForEnsure = func(
+	startServeBackgroundProcessForEnsure = func(context.Context,
 		config.Config, []string,
 	) (*exec.Cmd, string, error) {
 		started = true
@@ -1703,7 +1725,7 @@ func TestEnsureBackgroundServeReplacesIncompatibleDaemonAfterStartupWait(
 		); err != nil {
 			return nil, "", err
 		}
-		cmd := exec.Command("sleep", "2")
+		cmd := exec.CommandContext(t.Context(), "sleep", "2")
 		if err := cmd.Start(); err != nil {
 			return nil, "", err
 		}
@@ -1747,7 +1769,7 @@ func TestEnsureBackgroundServeReplacesIncompatibleDaemonAfterStartupWait(
 	}()
 
 	cfg := config.Config{DataDir: dir}
-	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+	rt, err := ensureBackgroundServe(t.Context(), &cfg, time.Second)
 	require.NoError(t, <-errCh)
 	require.NoError(t, err)
 	require.NotNil(t, rt)
@@ -1773,13 +1795,13 @@ func TestEnsureBackgroundServeRejectsMultipleWritableDaemons(t *testing.T) {
 
 	cfg := config.Config{DataDir: dir}
 	rt, err := ensureBackgroundServe(
-		context.Background(), &cfg, 25*time.Millisecond,
+		t.Context(), &cfg, 25*time.Millisecond,
 	)
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "multiple writable agentsview daemons")
-	assert.ErrorContains(t, err, strconv.Itoa(pids[0]))
-	assert.ErrorContains(t, err, strconv.Itoa(pids[1]))
+	require.ErrorContains(t, err, "multiple writable agentsview daemons")
+	require.ErrorContains(t, err, strconv.Itoa(pids[0]))
+	require.ErrorContains(t, err, strconv.Itoa(pids[1]))
 	assert.Nil(t, rt)
 }
 
@@ -1791,7 +1813,7 @@ func TestEnsureBackgroundServeValidatesConfigBeforeReplacementStop(t *testing.T)
 	setTestVersion(t, "1.1.0")
 
 	stopCalls := 0
-	stubStopDaemonRuntimeForUpgrade(t, func(
+	stubStopDaemonRuntimeForUpgrade(t, func(ctx context.Context,
 		_ config.Config, _ *DaemonRuntime,
 	) error {
 		stopCalls++
@@ -1800,7 +1822,7 @@ func TestEnsureBackgroundServeValidatesConfigBeforeReplacementStop(t *testing.T)
 	})
 	startCalls := 0
 	oldStart := startServeBackgroundProcessForEnsure
-	startServeBackgroundProcessForEnsure = func(
+	startServeBackgroundProcessForEnsure = func(context.Context,
 		config.Config, []string,
 	) (*exec.Cmd, string, error) {
 		startCalls++
@@ -1812,10 +1834,10 @@ func TestEnsureBackgroundServeValidatesConfigBeforeReplacementStop(t *testing.T)
 	})
 
 	cfg := config.Config{DataDir: dir, Host: "0.0.0.0"}
-	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+	rt, err := ensureBackgroundServe(t.Context(), &cfg, time.Second)
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "require_auth")
+	require.ErrorContains(t, err, "require_auth")
 	assert.Zero(t, stopCalls, "invalid config must preserve the incumbent")
 	assert.Zero(t, startCalls, "invalid config must not launch a child")
 	assert.Nil(t, rt)
@@ -1830,7 +1852,7 @@ func TestEnsureBackgroundServePassesNoSyncToChild(t *testing.T) {
 
 	oldStartProcess := startServeBackgroundProcessForEnsure
 	var gotArgs []string
-	startServeBackgroundProcessForEnsure = func(
+	startServeBackgroundProcessForEnsure = func(ctx context.Context,
 		_ config.Config, arguments []string,
 	) (*exec.Cmd, string, error) {
 		gotArgs = append([]string(nil), arguments...)
@@ -1839,7 +1861,7 @@ func TestEnsureBackgroundServePassesNoSyncToChild(t *testing.T) {
 		); err != nil {
 			return nil, "", err
 		}
-		cmd := exec.Command("sleep", "2")
+		cmd := exec.CommandContext(t.Context(), "sleep", "2")
 		if err := cmd.Start(); err != nil {
 			return nil, "", err
 		}
@@ -1852,7 +1874,7 @@ func TestEnsureBackgroundServePassesNoSyncToChild(t *testing.T) {
 	})
 
 	cfg := config.Config{DataDir: dir, NoSync: true}
-	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+	rt, err := ensureBackgroundServe(t.Context(), &cfg, time.Second)
 	require.NoError(t, err)
 	require.NotNil(t, rt)
 	assert.Equal(t, []string{"serve", "--no-sync"}, gotArgs)
@@ -1865,7 +1887,7 @@ func TestEnsureBackgroundServePassesSkipInitialSyncToChild(t *testing.T) {
 
 	oldStartProcess := startServeBackgroundProcessForEnsure
 	var gotArgs []string
-	startServeBackgroundProcessForEnsure = func(
+	startServeBackgroundProcessForEnsure = func(ctx context.Context,
 		_ config.Config, arguments []string,
 	) (*exec.Cmd, string, error) {
 		gotArgs = append([]string(nil), arguments...)
@@ -1874,7 +1896,7 @@ func TestEnsureBackgroundServePassesSkipInitialSyncToChild(t *testing.T) {
 		); err != nil {
 			return nil, "", err
 		}
-		cmd := exec.Command("sleep", "2")
+		cmd := exec.CommandContext(t.Context(), "sleep", "2")
 		if err := cmd.Start(); err != nil {
 			return nil, "", err
 		}
@@ -1887,7 +1909,7 @@ func TestEnsureBackgroundServePassesSkipInitialSyncToChild(t *testing.T) {
 	})
 
 	cfg := config.Config{DataDir: dir, SkipInitialSync: true}
-	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+	rt, err := ensureBackgroundServe(t.Context(), &cfg, time.Second)
 	require.NoError(t, err)
 	require.NotNil(t, rt)
 	assert.Equal(t, []string{"serve", "--skip-initial-sync"}, gotArgs)
@@ -1908,7 +1930,7 @@ func TestEnsureBackgroundServePreservesNoSyncWhenReplacingOlderDaemon(
 	t.Cleanup(func() { version = oldVersion })
 
 	oldStop := stopDaemonRuntimeForUpgrade
-	stopDaemonRuntimeForUpgrade = func(
+	stopDaemonRuntimeForUpgrade = func(ctx context.Context,
 		_ config.Config, rt *DaemonRuntime,
 	) error {
 		assert.True(t, rt.NoSync)
@@ -1920,7 +1942,7 @@ func TestEnsureBackgroundServePreservesNoSyncWhenReplacingOlderDaemon(
 	newHost, newPort := testPingServer(t)
 	oldStartProcess := startServeBackgroundProcessForEnsure
 	var gotArgs []string
-	startServeBackgroundProcessForEnsure = func(
+	startServeBackgroundProcessForEnsure = func(ctx context.Context,
 		_ config.Config, arguments []string,
 	) (*exec.Cmd, string, error) {
 		gotArgs = append([]string(nil), arguments...)
@@ -1929,7 +1951,7 @@ func TestEnsureBackgroundServePreservesNoSyncWhenReplacingOlderDaemon(
 		); err != nil {
 			return nil, "", err
 		}
-		cmd := exec.Command("sleep", "2")
+		cmd := exec.CommandContext(t.Context(), "sleep", "2")
 		if err := cmd.Start(); err != nil {
 			return nil, "", err
 		}
@@ -1942,7 +1964,7 @@ func TestEnsureBackgroundServePreservesNoSyncWhenReplacingOlderDaemon(
 	})
 
 	cfg := config.Config{DataDir: dir}
-	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+	rt, err := ensureBackgroundServe(t.Context(), &cfg, time.Second)
 	require.NoError(t, err)
 	require.NotNil(t, rt)
 	assert.Equal(t, newPort, rt.Port)
@@ -1993,7 +2015,7 @@ func TestRunServeBackgroundPreservesNoSyncWhenReplacingOlderDaemon(
 			t.Cleanup(func() { version = oldVersion })
 
 			oldStop := stopDaemonRuntimeForUpgrade
-			stopDaemonRuntimeForUpgrade = func(
+			stopDaemonRuntimeForUpgrade = func(ctx context.Context,
 				_ config.Config, rt *DaemonRuntime,
 			) error {
 				assert.True(t, rt.NoSync)
@@ -2005,7 +2027,7 @@ func TestRunServeBackgroundPreservesNoSyncWhenReplacingOlderDaemon(
 			newHost, newPort := testPingServer(t)
 			oldStart := startServeBackgroundProcessForRun
 			var gotArgs []string
-			startServeBackgroundProcessForRun = func(
+			startServeBackgroundProcessForRun = func(ctx context.Context,
 				_ config.Config, arguments []string,
 			) (*exec.Cmd, string, error) {
 				gotArgs = serveBackgroundChildArgs(arguments)
@@ -2014,7 +2036,7 @@ func TestRunServeBackgroundPreservesNoSyncWhenReplacingOlderDaemon(
 				); err != nil {
 					return nil, "", err
 				}
-				cmd := exec.Command("sleep", "2")
+				cmd := exec.CommandContext(t.Context(), "sleep", "2")
 				if err := cmd.Start(); err != nil {
 					return nil, "", err
 				}
@@ -2026,7 +2048,7 @@ func TestRunServeBackgroundPreservesNoSyncWhenReplacingOlderDaemon(
 				RemoveDaemonRuntime(dir)
 			})
 
-			runServeBackground(
+			runServeBackground(t.Context(),
 				config.Config{DataDir: dir},
 				[]string{"serve", "--background"},
 				serveReplacementOptions{},
@@ -2077,7 +2099,7 @@ func TestRunServeBackgroundConfigOnlyDoesNotAdoptReplacedDaemonNoSync(
 			tt.writeRuntime(t, dir, oldHost, oldPort)
 			setTestVersion(t, "1.1.0")
 
-			stubStopDaemonRuntimeForUpgrade(t, func(
+			stubStopDaemonRuntimeForUpgrade(t, func(ctx context.Context,
 				cfg config.Config, rt *DaemonRuntime,
 			) error {
 				assert.False(t, cfg.NoSync)
@@ -2089,7 +2111,7 @@ func TestRunServeBackgroundConfigOnlyDoesNotAdoptReplacedDaemonNoSync(
 			newHost, newPort := testPingServer(t)
 			oldStart := startServeBackgroundProcessForRun
 			var gotArgs []string
-			startServeBackgroundProcessForRun = func(
+			startServeBackgroundProcessForRun = func(ctx context.Context,
 				cfg config.Config, arguments []string,
 			) (*exec.Cmd, string, error) {
 				assert.False(t, cfg.NoSync)
@@ -2100,7 +2122,7 @@ func TestRunServeBackgroundConfigOnlyDoesNotAdoptReplacedDaemonNoSync(
 				if err != nil {
 					return nil, "test.log", err
 				}
-				cmd := exec.Command("sleep", "2")
+				cmd := exec.CommandContext(t.Context(), "sleep", "2")
 				if err := cmd.Start(); err != nil {
 					return nil, "test.log", err
 				}
@@ -2112,7 +2134,7 @@ func TestRunServeBackgroundConfigOnlyDoesNotAdoptReplacedDaemonNoSync(
 				RemoveDaemonRuntime(dir)
 			})
 
-			result, err := startServeBackground(
+			result, err := startServeBackground(t.Context(),
 				config.Config{DataDir: dir},
 				[]string{"serve", "--background", "--no-sync"},
 				serveReplacementOptions{},
@@ -2138,7 +2160,7 @@ func TestRunServeBackgroundConfigOnlyIgnoresConfigNoSync(t *testing.T) {
 
 	oldStart := startServeBackgroundProcessForRun
 	var gotArgs []string
-	startServeBackgroundProcessForRun = func(
+	startServeBackgroundProcessForRun = func(ctx context.Context,
 		_ config.Config, arguments []string,
 	) (*exec.Cmd, string, error) {
 		gotArgs = append([]string(nil), arguments...)
@@ -2146,7 +2168,7 @@ func TestRunServeBackgroundConfigOnlyIgnoresConfigNoSync(t *testing.T) {
 		if err != nil {
 			return nil, "test.log", err
 		}
-		cmd := exec.Command("sleep", "2")
+		cmd := exec.CommandContext(t.Context(), "sleep", "2")
 		if err := cmd.Start(); err != nil {
 			return nil, "test.log", err
 		}
@@ -2158,7 +2180,7 @@ func TestRunServeBackgroundConfigOnlyIgnoresConfigNoSync(t *testing.T) {
 		RemoveDaemonRuntime(dir)
 	})
 
-	result, err := startServeBackground(
+	result, err := startServeBackground(t.Context(),
 		config.Config{DataDir: dir, NoSync: true},
 		nil,
 		serveReplacementOptions{},
@@ -2186,7 +2208,7 @@ func TestRunServeBackgroundConfigOnlyReadOnlyRuntimeStartsWritableChild(
 	oldStart := startServeBackgroundProcessForRun
 	var gotArgs []string
 	var writablePath string
-	startServeBackgroundProcessForRun = func(
+	startServeBackgroundProcessForRun = func(ctx context.Context,
 		_ config.Config, arguments []string,
 	) (*exec.Cmd, string, error) {
 		gotArgs = append([]string(nil), arguments...)
@@ -2203,7 +2225,7 @@ func TestRunServeBackgroundConfigOnlyReadOnlyRuntimeStartsWritableChild(
 		if err != nil {
 			return nil, "test.log", err
 		}
-		cmd := exec.Command("sleep", "2")
+		cmd := exec.CommandContext(t.Context(), "sleep", "2")
 		if err := cmd.Start(); err != nil {
 			return nil, "test.log", err
 		}
@@ -2217,7 +2239,7 @@ func TestRunServeBackgroundConfigOnlyReadOnlyRuntimeStartsWritableChild(
 		}
 	})
 
-	result, err := startServeBackground(
+	result, err := startServeBackground(t.Context(),
 		config.Config{DataDir: dir},
 		nil,
 		serveReplacementOptions{},
@@ -2255,15 +2277,14 @@ func TestBackgroundStartResultDistinguishesExistingDaemonAndStartedChild(
 		t.Cleanup(func() { RemoveDaemonRuntime(dir) })
 
 		oldStart := startServeBackgroundProcessForRun
-		startServeBackgroundProcessForRun = func(
+		startServeBackgroundProcessForRun = func(context.Context,
 			config.Config, []string,
 		) (*exec.Cmd, string, error) {
-			t.Fatal("existing writable daemon must be reused")
-			return nil, "", nil
+			return nil, "", errors.New("existing writable daemon must be reused")
 		}
 		t.Cleanup(func() { startServeBackgroundProcessForRun = oldStart })
 
-		result, err := startServeBackground(
+		result, err := startServeBackground(t.Context(),
 			config.Config{DataDir: dir},
 			[]string{"serve", "--background"},
 			serveReplacementOptions{},
@@ -2284,7 +2305,7 @@ func TestBackgroundStartResultDistinguishesExistingDaemonAndStartedChild(
 		host, port := testPingServer(t)
 
 		oldStart := startServeBackgroundProcessForRun
-		startServeBackgroundProcessForRun = func(
+		startServeBackgroundProcessForRun = func(ctx context.Context,
 			_ config.Config, arguments []string,
 		) (*exec.Cmd, string, error) {
 			assert.Equal(t, []string{"serve"}, arguments)
@@ -2292,7 +2313,7 @@ func TestBackgroundStartResultDistinguishesExistingDaemonAndStartedChild(
 			if err != nil {
 				return nil, "test.log", err
 			}
-			cmd := exec.Command("sleep", "2")
+			cmd := exec.CommandContext(t.Context(), "sleep", "2")
 			if err := cmd.Start(); err != nil {
 				return nil, "test.log", err
 			}
@@ -2304,7 +2325,7 @@ func TestBackgroundStartResultDistinguishesExistingDaemonAndStartedChild(
 			RemoveDaemonRuntime(dir)
 		})
 
-		result, err := startServeBackground(
+		result, err := startServeBackground(t.Context(),
 			config.Config{DataDir: dir},
 			[]string{"serve", "--background"},
 			serveReplacementOptions{},
@@ -2328,7 +2349,7 @@ func TestStartServeBackgroundReturnsStartupErrorWithLogPath(t *testing.T) {
 	launched := false
 
 	oldStart := startServeBackgroundProcessForRun
-	startServeBackgroundProcessForRun = func(
+	startServeBackgroundProcessForRun = func(ctx context.Context,
 		_ config.Config, arguments []string,
 	) (*exec.Cmd, string, error) {
 		assert.Equal(t, []string{"serve"}, arguments)
@@ -2336,7 +2357,7 @@ func TestStartServeBackgroundReturnsStartupErrorWithLogPath(t *testing.T) {
 	}
 	t.Cleanup(func() { startServeBackgroundProcessForRun = oldStart })
 
-	result, err := startServeBackground(
+	result, err := startServeBackground(t.Context(),
 		config.Config{DataDir: dir},
 		nil,
 		serveReplacementOptions{},
@@ -2350,7 +2371,7 @@ func TestStartServeBackgroundReturnsStartupErrorWithLogPath(t *testing.T) {
 	)
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, startErr)
+	require.ErrorIs(t, err, startErr)
 	assert.Equal(t, "daemon start: fork failed", err.Error())
 	assert.False(t, result.Started)
 	assert.Equal(t, logPath, result.LogPath)
@@ -2363,7 +2384,7 @@ func TestRunServeBackgroundLaunchErrorPreservesLegacyFatalOutput(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	logPath := filepath.Join(dir, "serve.log")
 
-	cmd := exec.Command(
+	cmd := exec.CommandContext(t.Context(),
 		os.Args[0],
 		"-test.run=^TestRunServeBackgroundLaunchErrorHelper$",
 	)
@@ -2377,8 +2398,7 @@ func TestRunServeBackgroundLaunchErrorPreservesLegacyFatalOutput(t *testing.T) {
 	var exitErr *exec.ExitError
 	require.ErrorAs(t, err, &exitErr)
 	assert.Equal(t, 1, exitErr.ExitCode())
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		"fatal: serve background: starting server: fork failed\n",
 		string(out),
 	)
@@ -2393,12 +2413,12 @@ func TestRunServeBackgroundLaunchErrorHelper(t *testing.T) {
 	require.NotEmpty(t, dir)
 	require.NotEmpty(t, logPath)
 
-	startServeBackgroundProcessForRun = func(
+	startServeBackgroundProcessForRun = func(context.Context,
 		config.Config, []string,
 	) (*exec.Cmd, string, error) {
 		return nil, logPath, errors.New("starting server: fork failed")
 	}
-	runServeBackground(
+	runServeBackground(t.Context(),
 		config.Config{DataDir: dir},
 		[]string{"serve", "--background"},
 		serveReplacementOptions{},
@@ -2410,7 +2430,7 @@ func TestRunServeBackgroundReadinessErrorRetainsLegacyLogsOutput(t *testing.T) {
 	require.NoError(t, os.MkdirAll(dir, 0o700))
 	logPath := filepath.Join(dir, "serve.log")
 
-	cmd := exec.Command(
+	cmd := exec.CommandContext(t.Context(),
 		os.Args[0],
 		"-test.run=^TestRunServeBackgroundReadinessErrorHelper$",
 	)
@@ -2424,8 +2444,7 @@ func TestRunServeBackgroundReadinessErrorRetainsLegacyLogsOutput(t *testing.T) {
 	var exitErr *exec.ExitError
 	require.ErrorAs(t, err, &exitErr)
 	assert.Equal(t, 1, exitErr.ExitCode())
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		"fatal: serve background: server exited before becoming ready: "+
 			"server process exited\nLogs: "+logPath+"\n",
 		string(out),
@@ -2441,16 +2460,16 @@ func TestRunServeBackgroundReadinessErrorHelper(t *testing.T) {
 	require.NotEmpty(t, dir)
 	require.NotEmpty(t, logPath)
 
-	startServeBackgroundProcessForRun = func(
+	startServeBackgroundProcessForRun = func(context.Context,
 		config.Config, []string,
 	) (*exec.Cmd, string, error) {
-		child := exec.Command(os.Args[0], "-test.run=^$")
+		child := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^$")
 		if err := child.Start(); err != nil {
 			return nil, logPath, err
 		}
 		return child, logPath, nil
 	}
-	runServeBackground(
+	runServeBackground(t.Context(),
 		config.Config{DataDir: dir},
 		[]string{"serve", "--background"},
 		serveReplacementOptions{},
@@ -2462,7 +2481,7 @@ func TestStartServeBackgroundProcessOpenErrorReturnsLogPath(t *testing.T) {
 	notDirectory := filepath.Join(dir, "not-a-directory")
 	require.NoError(t, os.WriteFile(notDirectory, []byte("file"), 0o600))
 
-	child, logPath, err := startServeBackgroundProcess(
+	child, logPath, err := startServeBackgroundProcess(t.Context(),
 		config.Config{DataDir: notDirectory}, []string{"serve"},
 	)
 
@@ -2482,7 +2501,7 @@ func TestRunServeBackgroundKeepsInvocationNoSyncWhenReplacingSyncingDaemon(
 	require.NoError(t, err)
 	setTestVersion(t, "1.1.0")
 
-	stubStopDaemonRuntimeForUpgrade(t, func(
+	stubStopDaemonRuntimeForUpgrade(t, func(ctx context.Context,
 		_ config.Config, rt *DaemonRuntime,
 	) error {
 		assert.False(t, rt.NoSync)
@@ -2493,13 +2512,13 @@ func TestRunServeBackgroundKeepsInvocationNoSyncWhenReplacingSyncingDaemon(
 	newHost, newPort := testPingServer(t)
 	oldStart := startServeBackgroundProcessForRun
 	var gotArgs []string
-	startServeBackgroundProcessForRun = func(
+	startServeBackgroundProcessForRun = func(ctx context.Context,
 		_ config.Config, arguments []string,
 	) (*exec.Cmd, string, error) {
 		gotArgs = append([]string(nil), arguments...)
 		_, err := WriteDaemonRuntime(dir, newHost, newPort, "1.1.0", false)
 		require.NoError(t, err)
-		cmd := exec.Command("sleep", "2")
+		cmd := exec.CommandContext(t.Context(), "sleep", "2")
 		require.NoError(t, cmd.Start())
 		t.Cleanup(func() { _ = cmd.Process.Kill() })
 		return cmd, "test.log", nil
@@ -2509,7 +2528,7 @@ func TestRunServeBackgroundKeepsInvocationNoSyncWhenReplacingSyncingDaemon(
 		RemoveDaemonRuntime(dir)
 	})
 
-	runServeBackground(
+	runServeBackground(t.Context(),
 		config.Config{DataDir: dir},
 		[]string{"serve", "--background", "--no-sync"},
 		serveReplacementOptions{},
@@ -2605,8 +2624,7 @@ func TestEnsureBackgroundServeConcurrentLaunchConvergesOnDaemon(t *testing.T) {
 
 	host, port := testPingServer(t)
 	errCh := make(chan error, 1)
-	go func() {
-		time.Sleep(2 * startProbeTick())
+	runAfterBackgroundProbe(t, func() {
 		MarkDaemonStarting(dir)
 		_, err := WriteDaemonRuntime(dir, host, port, "test", false)
 		if err == nil {
@@ -2614,10 +2632,10 @@ func TestEnsureBackgroundServeConcurrentLaunchConvergesOnDaemon(t *testing.T) {
 			err = launchLock.Unlock()
 		}
 		errCh <- err
-	}()
+	})
 
 	cfg := config.Config{DataDir: dir}
-	rt, err := ensureBackgroundServe(context.Background(), &cfg, time.Second)
+	rt, err := ensureBackgroundServe(t.Context(), &cfg, time.Second)
 	require.NoError(t, err)
 	require.NotNil(t, rt)
 	assert.Equal(t, port, rt.Port)
@@ -2659,15 +2677,16 @@ func TestConfigureServeBackgroundCommandSetsProcessAttributes(t *testing.T) {
 
 func writeTooNewSQLiteDB(t *testing.T, dir string) string {
 	t.Helper()
+
 	dbPath := filepath.Join(dir, "sessions.db")
-	database, err := db.Open(dbPath)
+	database, err := db.Open(t.Context(), dbPath)
 	require.NoError(t, err)
 	require.NoError(t, database.Close())
 
 	futureVersion := db.CurrentDataVersion() + 10
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = conn.Exec(fmt.Sprintf("PRAGMA user_version = %d", futureVersion))
+	_, err = conn.ExecContext(t.Context(), fmt.Sprintf("PRAGMA user_version = %d", futureVersion))
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 	return dbPath
@@ -2678,8 +2697,51 @@ func writeTooNewSQLiteDB(t *testing.T, dir string) string {
 // non-nil SysProcAttr for platform-specific assertions.
 func requireConfiguredServeBackgroundSysProcAttr(t *testing.T) *syscall.SysProcAttr {
 	t.Helper()
-	cmd := exec.Command("agentsview")
+	cmd := exec.CommandContext(t.Context(), "agentsview")
 	configureServeBackgroundCommand(cmd)
 	require.NotNil(t, cmd.SysProcAttr)
 	return cmd.SysProcAttr
+}
+
+func TestStartServeBackgroundProcessSurvivesLauncherCancellation(t *testing.T) {
+	const childAddress = "AGENTSVIEW_TEST_BACKGROUND_ADDRESS"
+	if address := os.Getenv(childAddress); address != "" {
+		var dialer net.Dialer
+		conn, err := dialer.DialContext(t.Context(), "tcp", address)
+		require.NoError(t, err)
+		defer conn.Close()
+		require.NoError(t, conn.SetDeadline(time.Now().Add(10*time.Second)))
+		var message [1]byte
+		_, err = conn.Read(message[:])
+		require.NoError(t, err)
+		_, err = conn.Write(message[:])
+		require.NoError(t, err)
+		return
+	}
+	listener, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	require.NoError(t, err)
+	defer listener.Close()
+	require.NoError(t, listener.SetDeadline(time.Now().Add(10*time.Second)))
+	t.Setenv(childAddress, listener.Addr().String())
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	child, _, err := startServeBackgroundProcess(ctx, config.Config{DataDir: t.TempDir()},
+		[]string{"-test.run=^TestStartServeBackgroundProcessSurvivesLauncherCancellation$"})
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_ = child.Process.Kill()
+		_ = child.Wait()
+	})
+	cancel()
+	conn, err := listener.AcceptTCP()
+	require.NoError(t, err)
+	defer conn.Close()
+	require.NoError(t, conn.SetDeadline(time.Now().Add(10*time.Second)))
+	_, err = conn.Write([]byte("x"))
+	require.NoError(t, err)
+	var reply [1]byte
+	_, err = conn.Read(reply[:])
+	require.NoError(t, err)
+	assert.Equal(t, byte('x'), reply[0])
+	require.NoError(t, child.Wait())
 }

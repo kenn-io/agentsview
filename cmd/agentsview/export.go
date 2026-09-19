@@ -126,7 +126,7 @@ func newExportStatusCommand() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("loading config: %w", err)
 			}
-			database, err := openExportReadOnlyDB(appCfg)
+			database, err := openExportReadOnlyDB(cmd.Context(), appCfg)
 			if err != nil {
 				return err
 			}
@@ -149,21 +149,21 @@ func newExportStatusCommand() *cobra.Command {
 	}
 }
 
-func openExportReadOnlyDB(appCfg config.Config) (*db.DB, error) {
-	database, err := openReadOnlyDB(appCfg)
+func openExportReadOnlyDB(ctx context.Context, appCfg config.Config) (*db.DB, error) {
+	database, err := openReadOnlyDB(ctx, appCfg)
 	if err == nil {
 		return database, nil
 	}
 	if !db.IsSchemaUpgradeRequired(err) {
 		return nil, fmt.Errorf("open local archive: %w", err)
 	}
-	if upgradeErr := db.UpgradeExportSchemaInPlace(
+	if upgradeErr := db.UpgradeExportSchemaInPlace(ctx,
 		appCfg.DBPath, err,
 	); upgradeErr != nil {
 		return nil, fmt.Errorf(
 			"upgrade local archive schema for export: %w", upgradeErr)
 	}
-	database, err = openReadOnlyDB(appCfg)
+	database, err = openReadOnlyDB(ctx, appCfg)
 	if err != nil {
 		return nil, fmt.Errorf("reopen upgraded local archive: %w", err)
 	}
@@ -264,7 +264,7 @@ func runExportSessions(cmd *cobra.Command, cfg exportSessionsConfig) error {
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
-	database, err := openExportReadOnlyDB(appCfg)
+	database, err := openExportReadOnlyDB(cmd.Context(), appCfg)
 	if err != nil {
 		return err
 	}
@@ -550,8 +550,7 @@ func cloneExportSessionsPricing(
 	clone.Models = make(map[string]export.ModelPricingProvenance,
 		len(block.Models))
 	for model, provenance := range block.Models {
-		clone.Models[model] =
-			cloneExportSessionsModelProvenance(provenance)
+		clone.Models[model] = cloneExportSessionsModelProvenance(provenance)
 	}
 	return &clone
 }

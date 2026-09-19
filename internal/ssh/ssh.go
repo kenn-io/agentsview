@@ -3,6 +3,7 @@ package ssh
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -52,10 +53,10 @@ func buildSSHArgsForRemoteCommand(
 	host, user string, port int, sshOpts []string, remoteCmd string,
 ) ([]string, error) {
 	if isOptionShapedTargetPart(host) {
-		return nil, fmt.Errorf("ssh target host must not begin with '-'")
+		return nil, errors.New("ssh target host must not begin with '-'")
 	}
 	if isOptionShapedTargetPart(user) {
-		return nil, fmt.Errorf("ssh target user must not begin with '-'")
+		return nil, errors.New("ssh target user must not begin with '-'")
 	}
 	target := host
 	if user != "" {

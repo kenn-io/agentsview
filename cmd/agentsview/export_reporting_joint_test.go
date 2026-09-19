@@ -46,7 +46,7 @@ func TestExportJointProjectScopeAgreesAcrossHourDayAndDigest(t *testing.T) {
 	var day export.ReportingDay
 	require.NoError(t, json.Unmarshal([]byte(out), &day))
 	assert.Equal(t, int64(200), day.Hours[11].Usage.Totals.OutputTokens)
-	assert.Equal(t, 3.0, day.Hours[11].Activity.Totals.AgentMinutes)
+	assert.InEpsilon(t, 3.0, day.Hours[11].Activity.Totals.AgentMinutes, 1e-9)
 	assert.NotContains(t, out, "fixture-cross")
 	assert.NotContains(t, out, `"content"`)
 	for _, cell := range day.Hours[11].Joint.Cells {
@@ -78,14 +78,16 @@ func TestExportJointRejectsScopeOnOldVersionBeforeOpening(t *testing.T) {
 	} {
 		t.Run(args[1], func(t *testing.T) {
 			opened := false
-			deps := exportReportingDeps{now: time.Now,
+			deps := exportReportingDeps{
+				now: time.Now,
 				openDatabase: func(*cobra.Command) (*db.DB, func(), error) {
 					opened = true
 					return nil, nil, errors.New("archive must not be opened")
-				}}
+				},
+			}
 			out, _, err := executeExportSessionsCommand(newExportReportingTestRootWithDeps(deps),
 				append(args, "--schema-version", "3", "--project-key", "synthetic-key")...)
-			assert.ErrorContains(t, err, "project scope requires reporting schema 4")
+			require.ErrorContains(t, err, "project scope requires reporting schema 4")
 			assert.False(t, opened)
 			assert.Empty(t, out)
 		})
@@ -119,8 +121,8 @@ func TestExportJointBucketResolutionAcrossCommands(t *testing.T) {
 			for _, hour := range day.Hours {
 				assert.Len(t, hour.Activity.Buckets, tc.count, "quiet hours use the same resolution")
 			}
-			assert.Equal(t, 3.0, day.Hours[11].Activity.Totals.AgentMinutes, "bucket size must not change the inactivity gap cap")
-			assert.Equal(t, tc.firstBucketMinutes, day.Hours[11].Activity.Buckets[0].AgentMinutes)
+			assert.InEpsilon(t, 3.0, day.Hours[11].Activity.Totals.AgentMinutes, 1e-9, "bucket size must not change the inactivity gap cap")
+			assert.InEpsilon(t, tc.firstBucketMinutes, day.Hours[11].Activity.Buckets[0].AgentMinutes, 1e-9)
 			assert.Equal(t, int64(256), day.Hours[11].Usage.Totals.OutputTokens)
 			assert.Equal(t, int64(71_000), day.Hours[11].Usage.Totals.Cost.Microdollars)
 			found := false
@@ -150,7 +152,7 @@ func TestExportJointBucketResolutionAcrossCommands(t *testing.T) {
 			for _, document := range []string{out, hourOut, digestOut} {
 				var wire map[string]any
 				require.NoError(t, json.Unmarshal([]byte(document), &wire))
-				assert.Equal(t, float64(tc.seconds), wire["bucket_seconds"])
+				assert.InEpsilon(t, float64(tc.seconds), wire["bucket_seconds"], 1e-9)
 			}
 		})
 	}
@@ -174,14 +176,16 @@ func TestExportJointRejectsInvalidBucketBeforeOpening(t *testing.T) {
 		} {
 			t.Run(args[1]+"/v"+tc.version+"/"+tc.bucket, func(t *testing.T) {
 				opened := false
-				deps := exportReportingDeps{now: time.Now,
+				deps := exportReportingDeps{
+					now: time.Now,
 					openDatabase: func(*cobra.Command) (*db.DB, func(), error) {
 						opened = true
 						return nil, nil, errors.New("archive must not be opened")
-					}}
+					},
+				}
 				out, _, err := executeExportSessionsCommand(newExportReportingTestRootWithDeps(deps),
 					append(append([]string(nil), args...), "--schema-version", tc.version, "--bucket", tc.bucket)...)
-				assert.ErrorContains(t, err, tc.message)
+				require.ErrorContains(t, err, tc.message)
 				assert.False(t, opened)
 				assert.Empty(t, out)
 			})

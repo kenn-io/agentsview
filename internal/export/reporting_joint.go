@@ -2,6 +2,7 @@ package export
 
 import (
 	"cmp"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -21,7 +22,7 @@ func ParseReportingBucket(version int, value string) (time.Duration, error) {
 		return DefaultReportingBucket, nil
 	}
 	if version != ReportingJointSchemaVersion {
-		return 0, fmt.Errorf("bucket selection requires reporting schema 4")
+		return 0, errors.New("bucket selection requires reporting schema 4")
 	}
 	bucket, err := time.ParseDuration(value)
 	if err != nil {
@@ -32,7 +33,7 @@ func ParseReportingBucket(version int, value string) (time.Duration, error) {
 
 func validateReportingBucketDuration(bucket time.Duration) error {
 	if bucket < time.Minute || bucket > time.Hour || bucket%time.Minute != 0 || time.Hour%bucket != 0 {
-		return fmt.Errorf("reporting bucket must be a positive whole-minute divisor of one hour")
+		return errors.New("reporting bucket must be a positive whole-minute divisor of one hour")
 	}
 	return nil
 }
@@ -40,13 +41,13 @@ func validateReportingBucketDuration(bucket time.Duration) error {
 func reportingBucketDuration(version, seconds int) (time.Duration, error) {
 	if version != ReportingJointSchemaVersion {
 		if seconds != 0 {
-			return 0, fmt.Errorf("bucket_seconds requires reporting schema 4")
+			return 0, errors.New("bucket_seconds requires reporting schema 4")
 		}
 		return DefaultReportingBucket, nil
 	}
 	// Check before converting to Duration so malformed wire values cannot wrap.
 	if seconds < 60 || seconds > 3600 {
-		return 0, fmt.Errorf("reporting bucket_seconds must be between 60 and 3600")
+		return 0, errors.New("reporting bucket_seconds must be between 60 and 3600")
 	}
 	bucket := time.Duration(seconds) * time.Second
 	return bucket, validateReportingBucketDuration(bucket)
@@ -91,11 +92,11 @@ type ReportingCellPricing struct {
 // ValidateReportingProjectScope checks the scope before a caller opens SQLite.
 func ValidateReportingProjectScope(version int, keys []string) error {
 	if len(keys) > 0 && version != ReportingJointSchemaVersion {
-		return fmt.Errorf("project scope requires reporting schema 4")
+		return errors.New("project scope requires reporting schema 4")
 	}
 	for _, key := range keys {
 		if strings.TrimSpace(key) == "" {
-			return fmt.Errorf("project scope contains an empty key")
+			return errors.New("project scope contains an empty key")
 		}
 	}
 	return nil
@@ -104,12 +105,12 @@ func ValidateReportingProjectScope(version int, keys []string) error {
 func normalizeReportingJoint(hour ReportingHour) (*ReportingJoint, error) {
 	if hour.SchemaVersion != ReportingJointSchemaVersion {
 		if hour.Joint != nil {
-			return nil, fmt.Errorf("joint cells require reporting schema 4")
+			return nil, errors.New("joint cells require reporting schema 4")
 		}
 		return nil, nil
 	}
 	if hour.Joint == nil {
-		return nil, fmt.Errorf("reporting schema 4 requires joint cells")
+		return nil, errors.New("reporting schema 4 requires joint cells")
 	}
 	joint := *hour.Joint
 	if joint.Projects == nil {
@@ -138,19 +139,21 @@ func normalizeReportingJoint(hour ReportingHour) (*ReportingJoint, error) {
 			return nil, fmt.Errorf("joint cell has invalid bucket %q", cell.BucketStart)
 		}
 		if i > 0 && compareReportingCells(joint.Cells[i-1], cell) == 0 {
-			return nil, fmt.Errorf("duplicate joint cell")
+			return nil, errors.New("duplicate joint cell")
 		}
 		if len(joint.ProjectKeys) > 0 && !slices.Contains(joint.ProjectKeys, cell.ProjectKey) {
-			return nil, fmt.Errorf("joint cell is outside project scope")
+			return nil, errors.New("joint cell is outside project scope")
 		}
 	}
 	return &joint, nil
 }
 
 func compareReportingCells(a, b ReportingCell) int {
-	for _, order := range []int{cmp.Compare(a.BucketStart, b.BucketStart),
+	for _, order := range []int{
+		cmp.Compare(a.BucketStart, b.BucketStart),
 		cmp.Compare(a.ProjectKey, b.ProjectKey), cmp.Compare(a.Agent, b.Agent),
-		cmp.Compare(a.Model, b.Model), cmp.Compare(a.Automation, b.Automation)} {
+		cmp.Compare(a.Model, b.Model), cmp.Compare(a.Automation, b.Automation),
+	} {
 		if order != 0 {
 			return order
 		}

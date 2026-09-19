@@ -150,9 +150,9 @@ type openAPIResponse struct {
 	Content map[string]any `json:"content"`
 }
 
-func missingEnvRef(t testing.TB, name string) string {
-	t.Helper()
-	require.NoError(t, os.Unsetenv(name))
+func missingEnvRef(tb testing.TB, name string) string {
+	tb.Helper()
+	require.NoError(tb, os.Unsetenv(name))
 	return "${" + name + "}"
 }
 
@@ -160,38 +160,38 @@ func testServerWithConfig(cfg config.Config) *Server {
 	return &Server{cfg: cfg}
 }
 
-func readOpenAPISpec(t testing.TB, h http.Handler) openAPISpec {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/api/openapi.json", nil)
+func readOpenAPISpec(tb testing.TB, h http.Handler) openAPISpec {
+	tb.Helper()
+	req := httptest.NewRequestWithContext(tb.Context(), http.MethodGet, "/api/openapi.json", nil)
 	req.Host = "127.0.0.1:0"
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
-	require.Equal(t, http.StatusOK, w.Code, "body: %s", w.Body.String())
+	require.Equal(tb, http.StatusOK, w.Code, "body: %s", w.Body.String())
 	var spec openAPISpec
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &spec))
+	require.NoError(tb, json.Unmarshal(w.Body.Bytes(), &spec))
 	return spec
 }
 
 func requireOpenAPIOperation(
-	t testing.TB,
+	tb testing.TB,
 	spec openAPISpec,
 	method string,
 	path string,
 ) openAPIOperation {
-	t.Helper()
-	require.Contains(t, spec.Paths, path)
-	require.Contains(t, spec.Paths[path], method)
+	tb.Helper()
+	require.Contains(tb, spec.Paths, path)
+	require.Contains(tb, spec.Paths[path], method)
 	return spec.Paths[path][method]
 }
 
 func assertStreamingResponseContent(
-	t testing.TB,
+	tb testing.TB,
 	content map[string]any,
 ) {
-	t.Helper()
-	assert.Contains(t, content, "text/event-stream")
-	assert.Contains(t, content, "application/json")
+	tb.Helper()
+	assert.Contains(tb, content, "text/event-stream")
+	assert.Contains(tb, content, "application/json")
 }
 
 func TestPGPushConfigRequestOverrideSkipsDaemonEnvResolution(t *testing.T) {
@@ -233,7 +233,7 @@ func TestClickHousePushConfigRequestOverride(t *testing.T) {
 
 func TestClickHousePushRejectsIncludeAndExcludeProjects(t *testing.T) {
 	s := testServerWithConfig(config.Config{})
-	_, err := s.humaClickHousePush(context.Background(), &daemonPushInput{
+	_, err := s.humaClickHousePush(t.Context(), &daemonPushInput{
 		Body: daemonPushRequest{
 			Projects:        []string{"alpha"},
 			ExcludeProjects: []string{"beta"},
@@ -249,7 +249,7 @@ func TestClickHousePushRejectsIncludeAndExcludeProjects(t *testing.T) {
 func TestPGPushRejectsIncludeAndExcludeProjects(t *testing.T) {
 	s := testServerWithConfig(config.Config{})
 
-	_, err := s.humaPGPush(context.Background(), &daemonPushInput{
+	_, err := s.humaPGPush(t.Context(), &daemonPushInput{
 		Body: daemonPushRequest{
 			Projects:        []string{"alpha"},
 			ExcludeProjects: []string{"beta"},
@@ -277,7 +277,7 @@ func TestPGPushEnsuresPricingAfterLocalSync(t *testing.T) {
 		return nil
 	}
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost,
 		"/api/v1/push/pg",
 		strings.NewReader(`{"full":false,"pg":{"url":"postgres://nobody:nobody@127.0.0.1:1/test?sslmode=disable","schema":"agentsview","machine_name":"test","allow_insecure":false}}`),
@@ -300,7 +300,7 @@ func TestPGPushEnsuresPricingAfterLocalSync(t *testing.T) {
 func TestDuckDBPushRejectsIncludeAndExcludeProjects(t *testing.T) {
 	s := testServerWithConfig(config.Config{})
 
-	_, err := s.humaDuckDBPush(context.Background(), &daemonPushInput{
+	_, err := s.humaDuckDBPush(t.Context(), &daemonPushInput{
 		Body: daemonPushRequest{
 			Projects:        []string{"alpha"},
 			ExcludeProjects: []string{"beta"},
@@ -321,7 +321,7 @@ func TestDuckDBPushRejectsIncludeAndExcludeProjects(t *testing.T) {
 func TestDuckDBPushRejectsRemoteURLAsBadRequest(t *testing.T) {
 	s := testServer(t, 30)
 
-	_, err := s.humaDuckDBPush(context.Background(), &daemonPushInput{
+	_, err := s.humaDuckDBPush(t.Context(), &daemonPushInput{
 		Body: daemonPushRequest{
 			DuckDB: &config.DuckDBConfig{
 				URL:         "quack:https://duck.example.test",
@@ -411,7 +411,7 @@ func TestDuckDBPushRejectsMismatchedMirrorPathAsBadRequest(t *testing.T) {
 		MachineName: "daemon",
 	}
 
-	_, err := s.humaDuckDBPush(context.Background(), &daemonPushInput{
+	_, err := s.humaDuckDBPush(t.Context(), &daemonPushInput{
 		Body: daemonPushRequest{
 			DuckDB: &config.DuckDBConfig{
 				Path:        filepath.Join(t.TempDir(), "sessions.db"),
@@ -469,7 +469,7 @@ func TestPushRoutesReturn503WhileWriterClosedForSSE(t *testing.T) {
 	defer func() { assert.NoError(t, database.ReopenWriter()) }()
 
 	for _, path := range []string{"/api/v1/push/pg", "/api/v1/push/duckdb"} {
-		req := httptest.NewRequest(
+		req := httptest.NewRequestWithContext(t.Context(),
 			http.MethodPost, path, strings.NewReader(`{"full":false}`),
 		)
 		req.Host = "127.0.0.1:0"
@@ -553,11 +553,11 @@ func TestSyncThenRunForPushWorkerRunnerRouting(t *testing.T) {
 			}
 			f := newSyncRouteFixture(t, opts...)
 			f.writeClaudeSession(t, "proj/session.jsonl", "push coordinator")
-			engine := f.srv.syncEngineForLocal(f.db)
+			engine := f.srv.syncEngineForLocal(t.Context(), f.db)
 			t.Cleanup(engine.Close)
 
 			err := f.srv.syncThenRunForPush(
-				context.Background(), engine, f.db, tt.full, nil, nil,
+				t.Context(), engine, f.db, tt.full, nil, nil,
 				func(forceFull bool) error {
 					workCalls++
 					assert.Equal(t, tt.wantForceFull, forceFull)
@@ -582,11 +582,11 @@ func TestSyncThenRunForPushRunnerErrorSkipsPush(t *testing.T) {
 	) (syncpkg.SyncStats, error) {
 		return syncpkg.SyncStats{}, errors.New("resync build reported failed")
 	}))
-	engine := f.srv.syncEngineForLocal(f.db)
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
 	t.Cleanup(engine.Close)
 
 	err := f.srv.syncThenRunForPush(
-		context.Background(), engine, f.db, true, nil, nil,
+		t.Context(), engine, f.db, true, nil, nil,
 		func(bool) error {
 			require.FailNow(t, "push work must not run after a failed worker pass")
 			return nil
@@ -610,13 +610,13 @@ func TestSyncThenRunForPushCopiesHealthyArchiveBesideCorruptSource(t *testing.T)
 {"type":"user/message","seq":2,"time":1700000000003,"data":{"id":"user","role":"user","source":{"kind":"user"},"content":[{"type":"text","text":"missing event"}]},"surfaceOp":"append"}
 {"type":"turn/end","seq":3,"time":1700000000004,"data":{"turn":1,"status":"completed"}}
 `), 0o600))
-	engine := f.srv.syncEngineForLocal(f.db)
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
 	t.Cleanup(engine.Close)
 	for _, accept := range []string{"application/json", "text/event-stream"} {
 		t.Run(accept, func(t *testing.T) {
 			var copied []string
 			recorder := httptest.NewRecorder()
-			request := httptest.NewRequest(http.MethodPost, "/api/v1/push/pg", nil)
+			request := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/push/pg", nil)
 			request.Header.Set("Accept", accept)
 			hctx := humago.NewContext(&huma.Operation{}, request, recorder)
 			runPushStream(hctx, func(_ func(postgres.PushProgress)) (any, error) {
@@ -628,8 +628,10 @@ func TestSyncThenRunForPushCopiesHealthyArchiveBesideCorruptSource(t *testing.T)
 						require.NoError(t, err)
 						require.NotNil(t, session)
 						copied = append(copied, session.ID)
-						result = postgres.PushResult{SessionsPushed: 1, Errors: 2,
-							Vectors: postgres.VectorPushResult{SessionsDeferred: 3}}
+						result = postgres.PushResult{
+							SessionsPushed: 1, Errors: 2,
+							Vectors: postgres.VectorPushResult{SessionsDeferred: 3},
+						}
 						return nil
 					})
 				return result, err
@@ -660,7 +662,7 @@ func TestSyncThenRunForPushDeferredWorkerSkipsPush(t *testing.T) {
 	) (syncpkg.SyncStats, error) {
 		return syncpkg.SyncStats{Deferred: 1}, nil
 	}))
-	engine := f.srv.syncEngineForLocal(f.db)
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
 	t.Cleanup(engine.Close)
 
 	err := f.srv.syncThenRunForPush(
@@ -679,7 +681,7 @@ func TestSyncThenRunForPushAppliesCurrentWatchBatchBeforeWork(t *testing.T) {
 	f := newSyncRouteFixture(t)
 	changed := f.writeClaudeSession(t, "proj/changed.jsonl", "scoped daemon push")
 	untouched := f.writeClaudeSession(t, "proj/untouched.jsonl", "must stay cold")
-	engine := f.srv.syncEngineForLocal(f.db)
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
 	t.Cleanup(engine.Close)
 	batch := syncpkg.WatchBatch{Paths: []string{changed}}
 
@@ -713,7 +715,7 @@ func TestSyncThenRunForPushStaleArchiveIgnoresBatchAndUsesWorker(t *testing.T) {
 		}),
 	)
 	path := f.writeClaudeSession(t, "proj/changed.jsonl", "stale scoped push")
-	engine := f.srv.syncEngineForLocal(f.db)
+	engine := f.srv.syncEngineForLocal(t.Context(), f.db)
 	t.Cleanup(engine.Close)
 	batch := syncpkg.WatchBatch{Paths: []string{path}}
 	workCalls := 0

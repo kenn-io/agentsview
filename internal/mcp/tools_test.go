@@ -61,14 +61,14 @@ func seedFTSSession(t *testing.T, d *db.DB, id, project, content, endedAt string
 		ended := endedAt
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg(id, 0, content),
 	}))
 }
 
 func TestSearchSessions_ReturnsHitsWithOrdinal(t *testing.T) {
 	ts, d := newTestToolset(t)
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("FTS not available")
 	}
 	seedFTSSession(t, d, "s1", "proj-a",
@@ -76,7 +76,7 @@ func TestSearchSessions_ReturnsHitsWithOrdinal(t *testing.T) {
 	seedFTSSession(t, d, "s2", "proj-b",
 		"lazy dogs", "2024-06-15T10:00:00Z")
 
-	_, out, err := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+	_, out, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{
 		Query: "fox",
 	})
 	require.NoError(t, err)
@@ -116,7 +116,7 @@ func TestSearchSessions_SessionIDLookup(t *testing.T) {
 	dbtest.SeedSession(t, d, "host~trashed", "trash-project", func(s *db.Session) {
 		s.EndedAt = new("2024-06-08T10:00:00Z")
 	})
-	require.NoError(t, d.SoftDeleteSession("host~trashed"))
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "host~trashed"))
 
 	tests := []struct {
 		name        string
@@ -164,7 +164,7 @@ func TestSearchSessions_SessionIDLookup(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, out, err := ts.searchSessions(context.Background(), nil, tc.input)
+			_, out, err := ts.searchSessions(t.Context(), nil, tc.input)
 			require.NoError(t, err)
 			require.Len(t, out.Results, 1)
 			assert.Equal(t, tc.wantID, out.Results[0].SessionID)
@@ -178,27 +178,26 @@ func TestSearchSessions_SessionIDLookup(t *testing.T) {
 		})
 	}
 
-	_, _, ambiguityErr := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+	_, _, ambiguityErr := ts.searchSessions(t.Context(), nil, searchSessionsIn{
 		SessionID: "ambiguous",
 	})
 	require.ErrorContains(t, ambiguityErr, "ambiguous session UUID")
 
-	_, _, trashedErr := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+	_, _, trashedErr := ts.searchSessions(t.Context(), nil, searchSessionsIn{
 		SessionID: "trashed",
 	})
 	require.ErrorContains(t, trashedErr, "session not found")
 
-	_, _, missingErr := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+	_, _, missingErr := ts.searchSessions(t.Context(), nil, searchSessionsIn{
 		SessionID: "missing",
 	})
 	require.ErrorContains(t, missingErr, "session not found")
 
-	_, _, entryErr := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+	_, _, entryErr := ts.searchSessions(t.Context(), nil, searchSessionsIn{
 		SessionID: "E",
 	})
 	require.ErrorContains(t, entryErr, "session not found")
 	t.Logf("head: ambiguity_error=%q trashed_error=%q missing_error=%q entry_error=%q", ambiguityErr, trashedErr, missingErr, entryErr)
-
 }
 
 type sessionIDRoutingService struct {
@@ -268,7 +267,7 @@ func TestSearchSessions_SessionIDRouting(t *testing.T) {
 				rawIDs:  tc.rawIDs,
 			}
 			ts := &toolset{svc: svc}
-			_, out, err := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+			_, out, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{
 				SessionID: tc.requested,
 			})
 			require.NoError(t, err)
@@ -285,7 +284,7 @@ func TestSearchSessions_SessionIDRouting(t *testing.T) {
 
 func TestSearchSessions_ChineseSegmentation(t *testing.T) {
 	ts, d := newTestToolset(t)
-	if !d.HasCJKFTS() {
+	if !d.HasCJKFTS(t.Context()) {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
 	}
 	seedFTSSession(t, d, "chinese", "proj",
@@ -313,7 +312,7 @@ func TestSearchSessions_JapaneseAndKoreanTerms(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ts, d := newTestToolset(t)
-			if !d.HasCJKFTS() {
+			if !d.HasCJKFTS(t.Context()) {
 				t.Skip("simple FTS5 runtime is not installed for this test process")
 			}
 			seedFTSSession(t, d, "match", "proj", tc.match, "2024-06-15T10:00:00Z")
@@ -351,7 +350,7 @@ func TestSearchSessions_QuerySyntax(t *testing.T) {
 
 func TestSearchSessions_ExcludesRecentlyActive(t *testing.T) {
 	ts, d := newTestToolset(t)
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("FTS not available")
 	}
 	// s1 ended an hour before fixedNow -> kept; s2 ended 5 min before -> excluded.
@@ -371,7 +370,7 @@ func TestSearchSessions_ExcludesRecentlyActive(t *testing.T) {
 
 func mustSearch(t *testing.T, ts *toolset, in searchSessionsIn) searchSessionsOut {
 	t.Helper()
-	_, out, err := ts.searchSessions(context.Background(), nil, in)
+	_, out, err := ts.searchSessions(t.Context(), nil, in)
 	require.NoError(t, err)
 	return out
 }
@@ -381,7 +380,7 @@ func mustSearch(t *testing.T, ts *toolset, in searchSessionsIn) searchSessionsOu
 // non-overlapping page.
 func TestSearchSessions_Pagination(t *testing.T) {
 	ts, d := newTestToolset(t)
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("FTS not available")
 	}
 	// Six sessions all matching "pageterm", with increasing ended_at so
@@ -422,7 +421,7 @@ func TestListSessions_ReturnsRows(t *testing.T) {
 		s.UserMessageCount = 2
 	})
 
-	_, out, err := ts.listSessions(context.Background(), nil, listSessionsIn{
+	_, out, err := ts.listSessions(t.Context(), nil, listSessionsIn{
 		Project: "proj-a",
 	})
 	require.NoError(t, err)
@@ -434,7 +433,7 @@ func TestListSessions_ReturnsRows(t *testing.T) {
 func TestQueryRecall_ThreadsVectorModeAndReturnsDistilledEntries(t *testing.T) {
 	ts, d := newTestToolset(t)
 	dbtest.SeedSession(t, d, "s1", "agentsview")
-	_, err := d.InsertRecallEntry(db.RecallEntry{
+	_, err := d.InsertRecallEntry(t.Context(), db.RecallEntry{
 		ID: "semantic-entry", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "Connection reuse", Body: "Keep idle resources available.",
 		Project: "agentsview", SourceSessionID: "s1",
@@ -445,7 +444,7 @@ func TestQueryRecall_ThreadsVectorModeAndReturnsDistilledEntries(t *testing.T) {
 	}}})
 
 	_, out, err := ts.queryRecall(
-		context.Background(), nil,
+		t.Context(), nil,
 		queryRecallIn{
 			Query: "database pool", Mode: db.RecallQueryModeVector,
 			Project: "agentsview", Limit: 5,
@@ -471,14 +470,14 @@ func TestGetSessionOverview_ChronologicalTail(t *testing.T) {
 		s.Cwd = cwd
 		s.FirstMessage = &first
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("s1", 0, "open the door"),
 		dbtest.AsstMsg("s1", 1, "opening"),
 		dbtest.UserMsg("s1", 2, "now close it"),
 		dbtest.AsstMsg("s1", 3, "closed"),
 	}))
 
-	_, out, err := ts.sessionOverview(context.Background(), nil, sessionOverviewIn{
+	_, out, err := ts.sessionOverview(t.Context(), nil, sessionOverviewIn{
 		SessionID: "s1",
 	})
 	require.NoError(t, err)
@@ -496,7 +495,7 @@ func TestGetSessionOverview_ChronologicalTail(t *testing.T) {
 
 func TestGetSessionOverview_NotFound(t *testing.T) {
 	ts, _ := newTestToolset(t)
-	_, _, err := ts.sessionOverview(context.Background(), nil, sessionOverviewIn{
+	_, _, err := ts.sessionOverview(t.Context(), nil, sessionOverviewIn{
 		SessionID: "nope",
 	})
 	require.Error(t, err)
@@ -517,13 +516,13 @@ func TestGetMessages_RoleFilterAndTruncation(t *testing.T) {
 		SessionID: "s1", Ordinal: 1, Role: "system",
 		Content: "system noise", IsSystem: true, ContentLength: len("system noise"),
 	}
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("s1", 0, string(long)),
 		sysMsg,
 		dbtest.AsstMsg("s1", 2, "short reply"),
 	}))
 
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID:          "s1",
 		MaxCharsPerMessage: 10,
 	})
@@ -551,7 +550,7 @@ func TestGetMessages_ExplicitSystemRoleStillFiltered(t *testing.T) {
 		s.MessageCount = 3
 		s.UserMessageCount = 1
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("s1", 0, "hello"),
 		{
 			SessionID: "s1", Ordinal: 1, Role: "system",
@@ -560,7 +559,7 @@ func TestGetMessages_ExplicitSystemRoleStillFiltered(t *testing.T) {
 		dbtest.AsstMsg("s1", 2, "short reply"),
 	}))
 
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1",
 		Roles:     []string{"system", "assistant"},
 	})
@@ -586,12 +585,12 @@ func TestSearchContent_SubstringMatch(t *testing.T) {
 		ended := "2024-06-15T10:00:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("s1", 0, "error code DEADBEEF here"),
 		dbtest.AsstMsg("s1", 1, "looking into it"),
 	}))
 
-	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "DEADBEEF",
 		Mode:    "substring",
 	})
@@ -613,13 +612,13 @@ func TestSearchContent_ContextRedactsSecretByDefault(t *testing.T) {
 		ended := "2024-06-15T10:00:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("s1", 0, "my key is AKIA7QHWN2DKR4FYPLJM ok"),
 		dbtest.AsstMsg("s1", 1, "noted"),
 		dbtest.UserMsg("s1", 2, "DEADBEEF marks the match"),
 	}))
 
-	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "DEADBEEF", Mode: "substring", Context: 2,
 	})
 	require.NoError(t, err)
@@ -646,7 +645,7 @@ func TestSearchContent_ExcludesActiveSessionWithOldMatch(t *testing.T) {
 		ended := "2024-06-15T11:59:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{
 		SessionID: "active", Ordinal: 0, Role: "user",
 		Content: "old needle here", ContentLength: len("old needle here"),
 		Timestamp: "2024-06-15T10:00:00Z",
@@ -658,7 +657,7 @@ func TestSearchContent_ExcludesActiveSessionWithOldMatch(t *testing.T) {
 		ended := "2024-06-15T10:00:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{{
 		SessionID: "idle", Ordinal: 0, Role: "user",
 		Content: "idle needle here", ContentLength: len("idle needle here"),
 		Timestamp: "2024-06-15T10:00:00Z",
@@ -666,7 +665,7 @@ func TestSearchContent_ExcludesActiveSessionWithOldMatch(t *testing.T) {
 
 	// Default (include_active=false): the active session is excluded despite
 	// its old match; only the idle session is returned.
-	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "needle", Mode: "substring",
 	})
 	require.NoError(t, err)
@@ -675,7 +674,7 @@ func TestSearchContent_ExcludesActiveSessionWithOldMatch(t *testing.T) {
 	assert.Equal(t, 1, out.ExcludedActive)
 
 	// include_active=true returns both, excluding nothing.
-	_, all, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, all, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "needle", Mode: "substring", IncludeActive: true,
 	})
 	require.NoError(t, err)
@@ -697,12 +696,12 @@ func TestSearchContent_TimestamplessSessionExcludedByCreatedAt(t *testing.T) {
 		s.MessageCount = 3
 		s.UserMessageCount = 2
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("fresh", 0, "needle in a fresh session"),
 	}))
 
 	// Default guard excludes the still-active session despite no start/end.
-	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "needle", Mode: "substring",
 	})
 	require.NoError(t, err)
@@ -710,7 +709,7 @@ func TestSearchContent_TimestamplessSessionExcludedByCreatedAt(t *testing.T) {
 	assert.Equal(t, 1, out.ExcludedActive)
 
 	// include_active=true surfaces it.
-	_, all, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, all, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "needle", Mode: "substring", IncludeActive: true,
 	})
 	require.NoError(t, err)
@@ -719,7 +718,7 @@ func TestSearchContent_TimestamplessSessionExcludedByCreatedAt(t *testing.T) {
 
 func TestUsageSummary_EmptyRange(t *testing.T) {
 	ts, _ := newTestToolset(t)
-	_, out, err := ts.usageSummary(context.Background(), nil, usageSummaryIn{
+	_, out, err := ts.usageSummary(t.Context(), nil, usageSummaryIn{
 		From: "2024-06-01", To: "2024-06-03",
 	})
 	require.NoError(t, err)
@@ -750,7 +749,7 @@ func TestUsageSummary_RequestsOneShotSessions(t *testing.T) {
 	t.Parallel()
 	rec := &recordingService{}
 	ts := &toolset{svc: rec, now: func() time.Time { return fixedNow }}
-	_, _, err := ts.usageSummary(context.Background(), nil, usageSummaryIn{
+	_, _, err := ts.usageSummary(t.Context(), nil, usageSummaryIn{
 		From: "2024-06-01", To: "2024-06-02", Project: "p", Agent: "claude",
 	})
 	require.NoError(t, err)
@@ -769,7 +768,7 @@ func TestSearchContent_ExcludesOneShotByDefault(t *testing.T) {
 		s.MessageCount = 1
 		s.UserMessageCount = 1
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("one", 0, "marker ZEBRA42"),
 	}))
 	// Multi-turn with the same marker; old ended_at keeps it inactive.
@@ -779,12 +778,12 @@ func TestSearchContent_ExcludesOneShotByDefault(t *testing.T) {
 		ended := "2024-06-15T10:00:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("multi", 0, "marker ZEBRA42"),
 		dbtest.AsstMsg("multi", 1, "ok"),
 	}))
 
-	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "ZEBRA42", Mode: "substring",
 	})
 	require.NoError(t, err)
@@ -825,10 +824,10 @@ func TestSearchContent_SessionClassOptIns(t *testing.T) {
 				if session.users > 1 {
 					messages = append(messages, dbtest.AsstMsg(session.id, 1, "reply"))
 				}
-				require.NoError(t, d.InsertMessages(messages))
+				require.NoError(t, d.InsertMessages(t.Context(), messages))
 			}
 
-			_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+			_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 				Pattern: "shared class marker", Mode: "substring",
 				IncludeOneShot: tc.includeOneShot, IncludeAutomated: tc.automated,
 			})
@@ -849,18 +848,18 @@ func TestSearchContent_OneShotOptInKeepsActiveGuard(t *testing.T) {
 		s.UserMessageCount = 1
 		s.EndedAt = new("2024-06-15T11:59:00Z")
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("active-one", 0, "active one-shot marker"),
 	}))
 
-	_, excluded, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, excluded, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "active one-shot marker", Mode: "substring", IncludeOneShot: true,
 	})
 	require.NoError(t, err)
 	assert.Empty(t, excluded.Matches)
 	assert.Equal(t, 1, excluded.ExcludedActive)
 
-	_, included, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, included, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "active one-shot marker", Mode: "substring",
 		IncludeOneShot: true, IncludeActive: true,
 	})
@@ -882,14 +881,14 @@ func TestSearchContent_OrdinalRangeSpansRun(t *testing.T) {
 		ended := "2024-06-15T10:00:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("run1", 0, "the question"),
 		dbtest.AsstMsg("run1", 1, "RUNHIT step one"),
 		dbtest.AsstMsg("run1", 2, "RUNHIT step two"),
 		dbtest.UserMsg("run1", 3, "next question"),
 	}))
 
-	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "RUNHIT", Mode: "substring",
 	})
 	require.NoError(t, err)
@@ -915,7 +914,7 @@ func TestSearchContent_SidechainSubordinateRoundTrip(t *testing.T) {
 		ended := "2024-06-15T10:00:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("side1", 0, "the question"),
 		{
 			SessionID: "side1", Ordinal: 1, Role: "assistant",
@@ -929,7 +928,7 @@ func TestSearchContent_SidechainSubordinateRoundTrip(t *testing.T) {
 		},
 	}))
 
-	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "SIDEHIT", Mode: "substring",
 	})
 	require.NoError(t, err)
@@ -953,12 +952,12 @@ func TestSearchContent_SingleMessageOrdinalRangeAndOmittedFields(t *testing.T) {
 		ended := "2024-06-15T10:00:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("solo1", 0, "SOLOHIT alone"),
 		dbtest.UserMsg("solo1", 1, "an unrelated follow-up"),
 	}))
 
-	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "SOLOHIT", Mode: "substring",
 	})
 	require.NoError(t, err)
@@ -990,7 +989,7 @@ func TestGetMessages_DescAndFromAnchor(t *testing.T) {
 		s.MessageCount = 5
 		s.UserMessageCount = 3
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("s1", 0, "m0"),
 		dbtest.AsstMsg("s1", 1, "m1"),
 		dbtest.UserMsg("s1", 2, "m2"),
@@ -999,7 +998,7 @@ func TestGetMessages_DescAndFromAnchor(t *testing.T) {
 	}))
 
 	// desc with no anchor -> newest first.
-	_, desc, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, desc, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Direction: "desc",
 	})
 	require.NoError(t, err)
@@ -1008,7 +1007,7 @@ func TestGetMessages_DescAndFromAnchor(t *testing.T) {
 
 	// asc anchored at ordinal 2 -> starts at 2, ascending.
 	from := 2
-	_, asc, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, asc, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Direction: "asc", From: &from,
 	})
 	require.NoError(t, err)
@@ -1029,14 +1028,14 @@ func TestGetMessages_FromZeroAnchors(t *testing.T) {
 		s.MessageCount = 3
 		s.UserMessageCount = 2
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("s1", 0, "m0"),
 		dbtest.AsstMsg("s1", 1, "m1"),
 		dbtest.UserMsg("s1", 2, "m2"),
 	}))
 
 	zero := 0
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Direction: "desc", From: &zero,
 	})
 	require.NoError(t, err)
@@ -1055,7 +1054,7 @@ func TestGetMessages_ExcludesSystemPrefixedUserMessage(t *testing.T) {
 		s.MessageCount = 2
 		s.UserMessageCount = 1
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("s1", 0, "real question"),
 		// User role, is_system not set, but a system content prefix.
 		{
@@ -1065,7 +1064,7 @@ func TestGetMessages_ExcludesSystemPrefixedUserMessage(t *testing.T) {
 		},
 	}))
 
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1",
 	})
 	require.NoError(t, err)
@@ -1086,7 +1085,7 @@ func TestGetMessages_NextFromCursor(t *testing.T) {
 		ended := "2024-06-15T10:00:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("s1", 0, "m0"),
 		dbtest.AsstMsg("s1", 1, "m1"),
 		dbtest.UserMsg("s1", 2, "m2"),
@@ -1095,7 +1094,7 @@ func TestGetMessages_NextFromCursor(t *testing.T) {
 	}))
 
 	// asc page 1: ordinals 0,1 -> next_from 2.
-	_, p1, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, p1, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Direction: "asc", Limit: 2,
 	})
 	require.NoError(t, err)
@@ -1105,7 +1104,7 @@ func TestGetMessages_NextFromCursor(t *testing.T) {
 	assert.Equal(t, 2, *p1.NextFrom)
 
 	// asc page 2 from the cursor: ordinals 2,3 -> next_from 4.
-	_, p2, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, p2, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Direction: "asc", Limit: 2, From: p1.NextFrom,
 	})
 	require.NoError(t, err)
@@ -1115,7 +1114,7 @@ func TestGetMessages_NextFromCursor(t *testing.T) {
 	assert.Equal(t, 4, *p2.NextFrom)
 
 	// asc final page: ordinal 4 only; partial page has no next cursor.
-	_, p3, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, p3, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Direction: "asc", Limit: 2, From: p2.NextFrom,
 	})
 	require.NoError(t, err)
@@ -1124,7 +1123,7 @@ func TestGetMessages_NextFromCursor(t *testing.T) {
 	assert.Nil(t, p3.NextFrom, "final partial page omits next_from")
 
 	// desc page 1 from newest: ordinals 4,3 -> next_from 2 (anchor moves down).
-	_, dpage, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, dpage, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Direction: "desc", Limit: 2,
 	})
 	require.NoError(t, err)
@@ -1146,7 +1145,7 @@ func TestGetMessages_NextFromUsesScannedNotVisible(t *testing.T) {
 		ended := "2024-06-15T10:00:00Z"
 		s.EndedAt = &ended
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("s1", 0, "v0"),
 		{
 			SessionID: "s1", Ordinal: 1, Role: "system",
@@ -1156,7 +1155,7 @@ func TestGetMessages_NextFromUsesScannedNotVisible(t *testing.T) {
 	}))
 
 	// asc, limit 2: raw page = ordinals 0,1; ordinal 1 (system) is filtered.
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Direction: "asc", Limit: 2,
 	})
 	require.NoError(t, err)
@@ -1202,7 +1201,7 @@ func TestGetMessages_FilteredReconcilesWithMessageCount(t *testing.T) {
 	dbtest.SeedSessionWithMessages(t, d, "s1", "proj", msgs,
 		dbtest.WithMessageCounts(len(msgs), 3))
 
-	_, ov, err := ts.sessionOverview(context.Background(), nil,
+	_, ov, err := ts.sessionOverview(t.Context(), nil,
 		sessionOverviewIn{SessionID: "s1"})
 	require.NoError(t, err)
 	require.Equal(t, len(msgs), ov.Session.MessageCount)
@@ -1220,7 +1219,7 @@ func TestGetMessages_FilteredReconcilesWithMessageCount(t *testing.T) {
 			returned, filtered := 0, 0
 			var from *int
 			for range len(msgs) + 1 { // bounded: a sweep never needs more pages
-				_, out, err := ts.getMessages(context.Background(), nil,
+				_, out, err := ts.getMessages(t.Context(), nil,
 					getMessagesIn{
 						SessionID: "s1", Direction: "asc",
 						Limit: 3, From: from, Roles: tt.roles,
@@ -1245,7 +1244,7 @@ func TestGetMessages_FilteredReconcilesWithMessageCount(t *testing.T) {
 // activity expression.
 func TestSearchSessions_TimestamplessExcludedByCreatedAt(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("FTS not available")
 	}
 	ts := &toolset{svc: service.NewDirectBackend(d, nil), now: time.Now}
@@ -1254,18 +1253,18 @@ func TestSearchSessions_TimestamplessExcludedByCreatedAt(t *testing.T) {
 		s.MessageCount = 2
 		s.UserMessageCount = 1
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("fresh", 0, "uniquesearchmarker here"),
 	}))
 
-	_, out, err := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+	_, out, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{
 		Query: "uniquesearchmarker",
 	})
 	require.NoError(t, err)
 	assert.Empty(t, out.Results)
 	assert.Equal(t, 1, out.ExcludedActive)
 
-	_, all, err := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+	_, all, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{
 		Query: "uniquesearchmarker", IncludeActive: true,
 	})
 	require.NoError(t, err)
@@ -1277,7 +1276,7 @@ func TestSearchSessions_TimestamplessExcludedByCreatedAt(t *testing.T) {
 // inference, and the structured-output round-trip through the SDK.
 func TestServer_EndToEnd(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("FTS not available")
 	}
 	seedFTSSession(t, d, "s1", "proj", "unique end-to-end marker", "2024-01-01T10:00:00Z")
@@ -1287,7 +1286,7 @@ func TestServer_EndToEnd(t *testing.T) {
 		Now:     func() time.Time { return fixedNow },
 	})
 
-	ctx := context.Background()
+	ctx := t.Context()
 	st, ct := newInMemoryPair(t, srv)
 
 	tools, err := ct.ListTools(ctx, nil)
@@ -1345,7 +1344,7 @@ func TestServer_SearchContentIncludeOneShot(t *testing.T) {
 		require.NoError(t, st.Wait())
 	}()
 
-	ctx := context.Background()
+	ctx := t.Context()
 	withOneShot, err := ct.CallTool(ctx, callParams(ToolSearchContent, map[string]any{
 		"pattern": "wire one-shot marker", "mode": "substring", "agent": "pi",
 		"include_active": true, "include_one_shot": true,
@@ -1439,11 +1438,11 @@ func TestSearchContent_SemanticUnavailableMapsToRemediationError(t *testing.T) {
 	fake := &fakeContentSearchService{err: service.ErrSemanticUnavailable}
 	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 
-	_, _, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "how do I configure retries", Mode: "semantic", IncludeActive: true,
 	})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, service.ErrSemanticUnavailable)
+	require.ErrorIs(t, err, service.ErrSemanticUnavailable)
 	assert.Contains(t, err.Error(), "embeddings build")
 	assert.Equal(t, "semantic", fake.lastReq.Mode)
 }
@@ -1458,7 +1457,7 @@ func TestSearchContent_ScopeRejectedOnLexicalModes(t *testing.T) {
 
 	for _, mode := range []string{"", "substring", "regex", "fts"} {
 		t.Run("mode="+mode, func(t *testing.T) {
-			_, _, err := ts.searchContent(context.Background(), nil, searchContentIn{
+			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
 				Pattern: "needle", Mode: mode, Scope: "top", IncludeActive: true,
 			})
 			require.Error(t, err)
@@ -1479,7 +1478,7 @@ func TestSearchContent_ScopeForwardedForSemanticModes(t *testing.T) {
 			fake := &fakeContentSearchService{result: &service.ContentSearchResult{}}
 			ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 
-			_, _, err := ts.searchContent(context.Background(), nil, searchContentIn{
+			_, _, err := ts.searchContent(t.Context(), nil, searchContentIn{
 				Pattern: "retries", Mode: mode, Scope: "subordinate", IncludeActive: true,
 			})
 			require.NoError(t, err)
@@ -1514,7 +1513,7 @@ func TestSearchContent_ContextThreading(t *testing.T) {
 	}
 	ts := &toolset{svc: fake, now: func() time.Time { return fixedNow }}
 
-	_, out, err := ts.searchContent(context.Background(), nil, searchContentIn{
+	_, out, err := ts.searchContent(t.Context(), nil, searchContentIn{
 		Pattern: "hit", Context: 5, IncludeActive: true,
 	})
 	require.NoError(t, err)
@@ -1543,7 +1542,7 @@ func TestGetMessages_AroundValidation(t *testing.T) {
 		s.MessageCount = 3
 		s.UserMessageCount = 2
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("s1", 0, "m0"),
 		dbtest.AsstMsg("s1", 1, "m1"),
 		dbtest.UserMsg("s1", 2, "m2"),
@@ -1573,7 +1572,7 @@ func TestGetMessages_AroundValidation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, err := ts.getMessages(context.Background(), nil, tt.in)
+			_, _, err := ts.getMessages(t.Context(), nil, tt.in)
 			require.Error(t, err)
 			assert.Equal(t, tt.wantErr, err.Error())
 		})
@@ -1589,7 +1588,7 @@ func TestGetMessages_AroundNextFromIsLastPlusOne(t *testing.T) {
 		s.MessageCount = 5
 		s.UserMessageCount = 3
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("s1", 0, "m0"),
 		dbtest.AsstMsg("s1", 1, "m1"),
 		dbtest.UserMsg("s1", 2, "m2"),
@@ -1598,7 +1597,7 @@ func TestGetMessages_AroundNextFromIsLastPlusOne(t *testing.T) {
 	}))
 
 	anchor, before, after := 2, 1, 1
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Around: &anchor, Before: &before, After: &after,
 	})
 	require.NoError(t, err)
@@ -1623,7 +1622,7 @@ func TestGetMessages_AroundDefaultRolesExcludesTool(t *testing.T) {
 		s.MessageCount = 5
 		s.UserMessageCount = 2
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("s1", 0, "m0"),
 		{SessionID: "s1", Ordinal: 1, Role: "tool", Content: "tool dump", ContentLength: 9},
 		dbtest.AsstMsg("s1", 2, "m2"),
@@ -1632,7 +1631,7 @@ func TestGetMessages_AroundDefaultRolesExcludesTool(t *testing.T) {
 	}))
 
 	anchor := 2
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Around: &anchor,
 	})
 	require.NoError(t, err)
@@ -1653,7 +1652,7 @@ func TestGetMessages_AroundSuppressesSystemAnchor(t *testing.T) {
 		s.MessageCount = 3
 		s.UserMessageCount = 2
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("s1", 0, "m0"),
 		{
 			SessionID: "s1", Ordinal: 1, Role: "system",
@@ -1663,7 +1662,7 @@ func TestGetMessages_AroundSuppressesSystemAnchor(t *testing.T) {
 	}))
 
 	anchor, before, after := 1, 1, 1
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Around: &anchor, Before: &before, After: &after,
 	})
 	require.NoError(t, err)
@@ -1684,14 +1683,14 @@ func TestGetMessages_AroundSuppressesToolRoleAnchor(t *testing.T) {
 		s.MessageCount = 3
 		s.UserMessageCount = 2
 	})
-	require.NoError(t, d.InsertMessages([]db.Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []db.Message{
 		dbtest.UserMsg("s1", 0, "m0"),
 		{SessionID: "s1", Ordinal: 1, Role: "tool", Content: "tool dump", ContentLength: 9},
 		dbtest.AsstMsg("s1", 2, "m2"),
 	}))
 
 	anchor, before, after := 1, 1, 1
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Around: &anchor, Before: &before, After: &after,
 	})
 	require.NoError(t, err)
@@ -1715,10 +1714,10 @@ func TestGetMessages_AroundClampsOversizedWindow(t *testing.T) {
 		s.MessageCount = total
 		s.UserMessageCount = total
 	})
-	require.NoError(t, d.InsertMessages(dbtest.UserMessagesf("s1", total, "m%d")))
+	require.NoError(t, d.InsertMessages(t.Context(), dbtest.UserMessagesf("s1", total, "m%d")))
 
 	anchor, huge := total/2, 1_000_000_000
-	_, out, err := ts.getMessages(context.Background(), nil, getMessagesIn{
+	_, out, err := ts.getMessages(t.Context(), nil, getMessagesIn{
 		SessionID: "s1", Around: &anchor, Before: &huge, After: &huge,
 		Roles: []string{"user"},
 	})
@@ -1732,7 +1731,7 @@ func TestGetMessages_AroundClampsOversizedWindow(t *testing.T) {
 
 func TestSearchSessions_DateRange(t *testing.T) {
 	ts, d := newTestToolset(t)
-	require.True(t, d.HasFTS(), "run with -tags fts5")
+	require.True(t, d.HasFTS(t.Context()), "run with -tags fts5")
 	fixtures := []struct{ id, start, end string }{
 		{"early", "2024-06-01T10:00:00Z", "2024-06-01T11:00:00Z"},
 		{"boundary", "2024-06-02T23:59:59Z", "2024-06-02T23:59:59Z"},
@@ -1745,7 +1744,7 @@ func TestSearchSessions_DateRange(t *testing.T) {
 			s.EndedAt = new(f.end)
 			s.SessionName = new("datefilter name")
 		})
-		require.NoError(t, d.InsertMessages([]db.Message{dbtest.UserMsg(f.id, 0, "datefilter message")}))
+		require.NoError(t, d.InsertMessages(t.Context(), []db.Message{dbtest.UserMsg(f.id, 0, "datefilter message")}))
 	}
 	srv := newServer(ServeOptions{Service: ts.svc, Now: ts.now})
 	st, ct := newInMemoryPair(t, srv)
@@ -1771,7 +1770,7 @@ func TestSearchSessions_DateRange(t *testing.T) {
 				}
 				var ids []string
 				for range len(fixtures) + 1 {
-					res, err := ct.CallTool(context.Background(), callParams(ToolSearchSessions, args))
+					res, err := ct.CallTool(t.Context(), callParams(ToolSearchSessions, args))
 					require.NoError(t, err)
 					require.False(t, res.IsError, "%+v", res.Content)
 					raw, err := json.Marshal(res.StructuredContent)
@@ -1802,7 +1801,7 @@ func TestSearchSessions_RejectsInvalidDateRange(t *testing.T) {
 		{"malformed to", "", "2024-02-30", "invalid date format: use YYYY-MM-DD"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := ts.searchSessions(context.Background(), nil, searchSessionsIn{
+			_, _, err := ts.searchSessions(t.Context(), nil, searchSessionsIn{
 				Query: "hello", DateFrom: tc.from, DateTo: tc.to,
 			})
 			var inputErr *db.SearchInputError

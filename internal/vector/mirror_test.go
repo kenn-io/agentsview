@@ -80,7 +80,7 @@ func runDoc(
 
 func openTestIndex(t *testing.T) *Index {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "vectors.db")
 	ix, err := Open(ctx, path, false, 4000)
 	require.NoError(t, err)
@@ -102,7 +102,7 @@ type vectorMessagesRow struct {
 func readMirrorRow(t *testing.T, ix *Index, docKey string) (vectorMessagesRow, bool) {
 	t.Helper()
 	var row vectorMessagesRow
-	err := ix.db.QueryRow(
+	err := ix.db.QueryRowContext(t.Context(),
 		`SELECT session_id, ordinal, ordinal_end, subordinate, offsets, content, content_hash
 		 FROM vector_messages WHERE doc_key = ?`, docKey,
 	).Scan(&row.sessionID, &row.ordinal, &row.ordinalEnd, &row.subordinate,
@@ -115,7 +115,8 @@ func readMirrorRow(t *testing.T, ix *Index, docKey string) (vectorMessagesRow, b
 
 func mirrorDocKeys(t *testing.T, ix *Index) []string {
 	t.Helper()
-	rows, err := ix.db.Query(`SELECT doc_key FROM vector_messages ORDER BY doc_key`)
+
+	rows, err := ix.db.QueryContext(t.Context(), `SELECT doc_key FROM vector_messages ORDER BY doc_key`)
 	require.NoError(t, err)
 	defer rows.Close()
 	var keys []string
@@ -145,7 +146,7 @@ func TestDocKey(t *testing.T) {
 
 func TestRefreshInitialFullInsertsRowsWithCorrectDocKeys(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{unit: userDoc("s1", "u1", 0, "hello"), endedAt: "2024-01-01T00:00:00Z"},
@@ -175,7 +176,7 @@ func TestRefreshInitialFullInsertsRowsWithCorrectDocKeys(t *testing.T) {
 // and the offsets JSON, alongside content and content_hash.
 func TestRefreshRunRowPersistsUnitColumns(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	offsets := []db.UnitOffset{
 		{Ordinal: 1, RuneStart: 0, ByteStart: 0},
@@ -216,7 +217,7 @@ func TestRefreshRunRowPersistsUnitColumns(t *testing.T) {
 // fallback key.
 func TestRefreshRunWithoutSourceUUIDFallsBackToOrdinalKey(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{
@@ -233,7 +234,7 @@ func TestRefreshRunWithoutSourceUUIDFallsBackToOrdinalKey(t *testing.T) {
 
 func TestRefreshContentChangeUpdatesHash(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{unit: userDoc("s1", "u1", 0, "hello"), endedAt: "2024-01-01T00:00:00Z"},
@@ -261,7 +262,7 @@ func TestRefreshContentChangeUpdatesHash(t *testing.T) {
 // an untouched run in another session must keep its embedding stamp.
 func TestRefreshTrailingAppendKeepsRunDocKeyAndReembedsOnlyIt(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{
@@ -292,7 +293,8 @@ func TestRefreshTrailingAppendKeepsRunDocKeyAndReembedsOnlyIt(t *testing.T) {
 
 	// A third assistant message is appended to s1's trailing run.
 	src.rows[0].unit = runDoc("s1", "a1", 1, 3, "first\n\nsecond\n\nthird", []db.UnitOffset{
-		{Ordinal: 1}, {Ordinal: 2, RuneStart: 7, ByteStart: 7},
+		{Ordinal: 1},
+		{Ordinal: 2, RuneStart: 7, ByteStart: 7},
 		{Ordinal: 3, RuneStart: 15, ByteStart: 15},
 	})
 	src.rows[0].endedAt = "2024-01-02T00:00:00Z"
@@ -328,12 +330,13 @@ func TestRefreshTrailingAppendKeepsRunDocKeyAndReembedsOnlyIt(t *testing.T) {
 // delete anything.
 func TestRefreshMidRunUserSplitCreatesSecondHalfUnderNewKey(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{
 			unit: runDoc("s1", "a0", 0, 3, "a0\n\na1\n\na2\n\na3", []db.UnitOffset{
-				{Ordinal: 0}, {Ordinal: 1, RuneStart: 4, ByteStart: 4},
+				{Ordinal: 0},
+				{Ordinal: 1, RuneStart: 4, ByteStart: 4},
 				{Ordinal: 2, RuneStart: 8, ByteStart: 8},
 				{Ordinal: 3, RuneStart: 12, ByteStart: 12},
 			}),
@@ -387,7 +390,7 @@ func TestRefreshMidRunUserSplitCreatesSecondHalfUnderNewKey(t *testing.T) {
 // stamps are deleted along with its mirror row.
 func TestRefreshRunReplacingVanishedRunSlotEvictsVectorsBeforeRow(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{
@@ -413,7 +416,8 @@ func TestRefreshRunReplacingVanishedRunSlotEvictsVectorsBeforeRow(t *testing.T) 
 	src.rows = []fakeUnit{
 		{
 			unit: runDoc("s1", "b2", 2, 4, "new\n\nrun\n\nhere", []db.UnitOffset{
-				{Ordinal: 2}, {Ordinal: 3, RuneStart: 5, ByteStart: 5},
+				{Ordinal: 2},
+				{Ordinal: 3, RuneStart: 5, ByteStart: 5},
 				{Ordinal: 4, RuneStart: 10, ByteStart: 10},
 			}),
 			endedAt: "2024-01-02T00:00:00Z",
@@ -425,13 +429,13 @@ func TestRefreshRunReplacingVanishedRunSlotEvictsVectorsBeforeRow(t *testing.T) 
 	assert.Equal(t, []string{"r:s1:b2"}, mirrorDocKeys(t, ix))
 
 	var stampCount int
-	require.NoError(t, ix.db.QueryRow(
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_stamps WHERE doc_key = ?`, "r:s1:a2",
 	).Scan(&stampCount))
 	assert.Zero(t, stampCount, "evicted run's stamps must be gone")
 
 	var chunkCount int
-	require.NoError(t, ix.db.QueryRow(
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_chunks WHERE doc_key = ?`, "r:s1:a2",
 	).Scan(&chunkCount))
 	assert.Zero(t, chunkCount, "evicted run's chunks must be gone")
@@ -439,7 +443,7 @@ func TestRefreshRunReplacingVanishedRunSlotEvictsVectorsBeforeRow(t *testing.T) 
 
 func TestRefreshOrdinalShiftOnUUIDRowKeepsHashStampSurvives(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{unit: userDoc("s1", "u1", 0, "hello"), endedAt: "2024-01-01T00:00:00Z"},
@@ -478,7 +482,7 @@ func TestRefreshOrdinalShiftOnUUIDRowKeepsHashStampSurvives(t *testing.T) {
 
 func TestRefreshOrdinalShiftOntoStaleLegacySlotEvictsIt(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// First refresh: a legacy o:-keyed row occupies (s1, 3).
 	src := &fakeUnitSource{rows: []fakeUnit{
@@ -515,13 +519,13 @@ func TestRefreshOrdinalShiftOntoStaleLegacySlotEvictsIt(t *testing.T) {
 	// the key, because its mirror row is already gone before full-mode
 	// reconciliation runs.
 	var stampCount int
-	require.NoError(t, ix.db.QueryRow(
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_stamps WHERE doc_key = ?`, "o:s1:3",
 	).Scan(&stampCount))
 	assert.Zero(t, stampCount, "evicted doc_key's stamps should be gone")
 
 	var chunkCount int
-	require.NoError(t, ix.db.QueryRow(
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_chunks WHERE doc_key = ?`, "o:s1:3",
 	).Scan(&chunkCount))
 	assert.Zero(t, chunkCount, "evicted doc_key's chunks should be gone")
@@ -529,7 +533,7 @@ func TestRefreshOrdinalShiftOntoStaleLegacySlotEvictsIt(t *testing.T) {
 
 func TestRefreshFullDeletesVanishedIdentitiesAndVectors(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{unit: userDoc("s1", "u1", 0, "hello"), endedAt: "2024-01-01T00:00:00Z"},
@@ -547,7 +551,7 @@ func TestRefreshFullDeletesVanishedIdentitiesAndVectors(t *testing.T) {
 		[]kitvec.ChunkVector{{ChunkIndex: 0, Vector: kitvec.Vector{1, 0, 0}}}))
 
 	var stampCount int
-	require.NoError(t, ix.db.QueryRow(
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_stamps WHERE doc_key = ?`, "u:s1:u2",
 	).Scan(&stampCount))
 	require.Equal(t, 1, stampCount)
@@ -561,13 +565,13 @@ func TestRefreshFullDeletesVanishedIdentitiesAndVectors(t *testing.T) {
 	_, ok = readMirrorRow(t, ix, "u:s1:u2")
 	assert.False(t, ok, "mirror row for vanished identity should be gone")
 
-	require.NoError(t, ix.db.QueryRow(
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_stamps WHERE doc_key = ?`, "u:s1:u2",
 	).Scan(&stampCount))
 	assert.Zero(t, stampCount, "stamp for vanished identity should be gone")
 
 	var chunkCount int
-	require.NoError(t, ix.db.QueryRow(
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_chunks WHERE doc_key = ?`, "u:s1:u2",
 	).Scan(&chunkCount))
 	assert.Zero(t, chunkCount, "chunks for vanished identity should be gone")
@@ -583,7 +587,7 @@ func TestRefreshFullDeletesVanishedIdentitiesAndVectors(t *testing.T) {
 // row is physically removed exactly once.
 func TestRefreshFullEvictionOfVanishedOccupantCountsDeletedOnce(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// First refresh: a legacy o:-keyed row occupies (s1, 3); u1 sits at (s1, 0).
 	src := &fakeUnitSource{rows: []fakeUnit{
@@ -619,13 +623,13 @@ func TestRefreshFullEvictionOfVanishedOccupantCountsDeletedOnce(t *testing.T) {
 	assert.ElementsMatch(t, []string{"u:s1:u1"}, mirrorDocKeys(t, ix))
 
 	var stampCount int
-	require.NoError(t, ix.db.QueryRow(
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_stamps WHERE doc_key = ?`, "o:s1:3",
 	).Scan(&stampCount))
 	assert.Zero(t, stampCount, "evicted doc_key's stamps should be gone")
 
 	var chunkCount int
-	require.NoError(t, ix.db.QueryRow(
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_chunks WHERE doc_key = ?`, "o:s1:3",
 	).Scan(&chunkCount))
 	assert.Zero(t, chunkCount, "evicted doc_key's chunks should be gone")
@@ -633,14 +637,14 @@ func TestRefreshFullEvictionOfVanishedOccupantCountsDeletedOnce(t *testing.T) {
 
 func TestRefreshIncrementalUsesWatermark(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{unit: userDoc("s1", "u1", 0, "hello"), endedAt: "2024-01-01T00:00:00Z"},
 	}}
 	_, err := ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
-	assert.Equal(t, "", src.gotSince, "full refresh should scan from the beginning")
+	assert.Empty(t, src.gotSince, "full refresh should scan from the beginning")
 
 	src.rows = append(src.rows, fakeUnit{
 		unit: userDoc("s2", "u2", 0, "later"), endedAt: "2024-01-02T00:00:00Z",
@@ -661,7 +665,7 @@ func TestRefreshIncrementalUsesWatermark(t *testing.T) {
 
 func TestRefreshIncrementalTombstoneDeletesOnlyChangedDocument(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{unit: userDoc("entry-1", "entry-1", 0, "first"), endedAt: "2026-01-01T00:00:00Z"},
 		{unit: userDoc("entry-2", "entry-2", 0, "second"), endedAt: "2026-01-01T00:00:00Z"},
@@ -691,7 +695,7 @@ func TestRefreshIncrementalTombstoneDeletesOnlyChangedDocument(t *testing.T) {
 // stamped document is not spuriously evicted and re-embedded.
 func TestRefreshDuplicateSourceUUIDGetsStableOccurrenceKeys(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{unit: userDoc("s1", "dup", 0, "first"), endedAt: "2024-01-01T00:00:00Z"},
@@ -741,7 +745,7 @@ func TestRefreshDuplicateSourceUUIDGetsStableOccurrenceKeys(t *testing.T) {
 // order, stable across refreshes.
 func TestRefreshDuplicateRunFirstMessageUUIDGetsOccurrenceSuffixes(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{unit: userDoc("s1", "dup", 0, "user first"), endedAt: "2024-01-01T00:00:00Z"},
@@ -761,8 +765,7 @@ func TestRefreshDuplicateRunFirstMessageUUIDGetsOccurrenceSuffixes(t *testing.T)
 	stats, err := ix.Refresh(ctx, src, true, true)
 	require.NoError(t, err)
 	assert.Equal(t, RefreshStats{Upserted: 4, Deleted: 0, Unchanged: 0}, stats)
-	assert.Equal(t,
-		[]string{"o:s1:3", "r:s1:dup#2", "r:s1:dup#3", "u:s1:dup"},
+	assert.Equal(t, []string{"o:s1:3", "r:s1:dup#2", "r:s1:dup#3", "u:s1:dup"},
 		mirrorDocKeys(t, ix),
 		"occurrence suffixes must be assigned in (session_id, ordinal) scan order")
 
@@ -783,7 +786,7 @@ func TestRefreshDuplicateRunFirstMessageUUIDGetsOccurrenceSuffixes(t *testing.T)
 // reinserted anywhere in the scan should reach store.DeleteVectors.
 func TestRefreshCascadingOrdinalShiftReinsertsEvictedKeysWithoutLosingCoverage(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{unit: userDoc("s1", "u0", 0, "zero"), endedAt: "2024-01-01T00:00:00Z"},
@@ -823,7 +826,7 @@ func TestRefreshCascadingOrdinalShiftReinsertsEvictedKeysWithoutLosingCoverage(t
 		require.True(t, ok, "%s must still be in the mirror", key)
 
 		var stampCount int
-		require.NoError(t, ix.db.QueryRow(
+		require.NoError(t, ix.db.QueryRowContext(ctx,
 			`SELECT COUNT(*) FROM message_vectors_stamps WHERE doc_key = ? AND revision = ?`,
 			key, row.contentHash,
 		).Scan(&stampCount))
@@ -941,7 +944,7 @@ func TestDocKeyInjectiveWithDelimiterCharacters(t *testing.T) {
 }
 
 func TestRefreshReadOnlyIndexRejected(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "vectors.db")
 	rw, err := Open(ctx, path, false, 4000)
 	require.NoError(t, err)
@@ -965,7 +968,7 @@ func TestRefreshReadOnlyIndexRejected(t *testing.T) {
 // wedging refreshes until a full rebuild.
 func TestRefreshParkedLeftoverFromInterruptedRunDoesNotCollide(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// A legacy occupant at (s1, 9), plus u1 and u2 elsewhere.
 	src := &fakeUnitSource{rows: []fakeUnit{
@@ -977,7 +980,7 @@ func TestRefreshParkedLeftoverFromInterruptedRunDoesNotCollide(t *testing.T) {
 	require.NoError(t, err)
 
 	// Simulate the interrupted run's leftover: u2 parked at -1.
-	_, err = ix.db.Exec(`UPDATE vector_messages SET ordinal = -1 WHERE doc_key = 'u:s1:u2'`)
+	_, err = ix.db.ExecContext(ctx, `UPDATE vector_messages SET ordinal = -1 WHERE doc_key = 'u:s1:u2'`)
 	require.NoError(t, err)
 
 	// Next run: u1 shifts onto the legacy occupant's slot, forcing a fresh
@@ -994,7 +997,7 @@ func TestRefreshParkedLeftoverFromInterruptedRunDoesNotCollide(t *testing.T) {
 	assert.Equal(t, 5, row.ordinal, "the leftover parked row self-heals on rescan")
 
 	var parked int
-	require.NoError(t, ix.db.QueryRow(
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM vector_messages WHERE ordinal < 0`).Scan(&parked))
 	assert.Zero(t, parked, "no parked rows survive a completed full refresh")
 }

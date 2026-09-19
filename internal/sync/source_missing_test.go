@@ -10,6 +10,7 @@ import (
 
 func assertSourceMissingState(t *testing.T, session *db.Session) {
 	t.Helper()
+
 	require.NotNil(t, session)
 	assert.Nil(t, session.DeletedAt,
 		"missing source material must not put the session in user trash")

@@ -85,7 +85,7 @@ func newPiebaldTestDB(t *testing.T) string {
 		)`,
 	}
 	for _, stmt := range stmts {
-		_, err := db.Exec(stmt)
+		_, err := db.ExecContext(t.Context(), stmt)
 		require.NoError(t, err, "exec schema")
 	}
 	return dbPath
@@ -96,16 +96,17 @@ func execPiebaldTestSQL(t *testing.T, dbPath, stmt string, args ...any) {
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open test db")
 	defer db.Close()
-	_, err = db.Exec(stmt, args...)
+	_, err = db.ExecContext(t.Context(), stmt, args...)
 	require.NoError(t, err, "exec %q", stmt)
 }
 
 func withPiebaldTestTx(t *testing.T, dbPath string, fn func(*sql.Tx)) {
 	t.Helper()
+
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open test db")
 	defer db.Close()
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(t.Context(), nil)
 	require.NoError(t, err, "begin test tx")
 	defer tx.Rollback()
 	fn(tx)
@@ -114,7 +115,7 @@ func withPiebaldTestTx(t *testing.T, dbPath string, fn func(*sql.Tx)) {
 
 func execPiebaldTestTx(t *testing.T, tx *sql.Tx, stmt string, args ...any) {
 	t.Helper()
-	_, err := tx.Exec(stmt, args...)
+	_, err := tx.ExecContext(t.Context(), stmt, args...)
 	require.NoError(t, err, "exec %q", stmt)
 }
 

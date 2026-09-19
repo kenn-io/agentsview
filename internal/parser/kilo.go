@@ -1,6 +1,9 @@
 package parser
 
-import "strings"
+import (
+	"context"
+	"strings"
+)
 
 // Kilo uses OpenCode's storage format, but sessions are exposed as a
 // distinct agent with the kilo: ID prefix. The OpenCode-format provider
@@ -19,14 +22,14 @@ func ListKiloSessionMeta(dbPath string) ([]OpenCodeSessionMeta, error) {
 	return metas, nil
 }
 
-func KiloSourceMtime(sourcePath string) (int64, error) {
+func KiloSourceMtime(ctx context.Context, sourcePath string) (int64, error) {
 	if sourcePath == "" {
 		return 0, nil
 	}
 	if dbPath, sessionID, ok := parseOpenCodeFormatVirtualPath(
 		kiloFmt.dbName, sourcePath,
 	); ok {
-		return openCodeSQLiteSessionMtime(dbPath, sessionID)
+		return openCodeSQLiteSessionMtime(ctx, dbPath, sessionID)
 	}
 	return openCodeStorageSessionMtime(sourcePath)
 }

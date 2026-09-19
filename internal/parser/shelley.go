@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"hash"
 	"hash/fnv"
@@ -104,7 +105,7 @@ func ShelleyVirtualPath(dbPath, conversationID string) string {
 
 // ShelleyConversationExists reports whether the Shelley DB has a
 // conversation row with the given ID.
-func ShelleyConversationExists(dbPath, conversationID string) bool {
+func ShelleyConversationExists(ctx context.Context, dbPath, conversationID string) bool {
 	if dbPath == "" || conversationID == "" || !IsRegularFile(dbPath) {
 		return false
 	}
@@ -115,7 +116,7 @@ func ShelleyConversationExists(dbPath, conversationID string) bool {
 	defer conn.Close()
 
 	var found int
-	err = conn.QueryRow(
+	err = conn.QueryRowContext(ctx,
 		`SELECT 1 FROM conversations WHERE conversation_id = ? LIMIT 1`,
 		conversationID,
 	).Scan(&found)
@@ -331,7 +332,7 @@ func forEachShelleyConversationMetaQuery(
 // edits.
 // This value is watcher-only and never written to file_mtime or
 // range-filtered, so the sub-second term is harmless here.
-func ShelleySourceMtime(path string) (int64, error) {
+func ShelleySourceMtime(ctx context.Context, path string) (int64, error) {
 	dbPath, conversationID, ok := parseShelleyVirtualPath(path)
 	if !ok {
 		return 0, fmt.Errorf("not a shelley virtual path: %s", path)
@@ -342,7 +343,7 @@ func ShelleySourceMtime(path string) (int64, error) {
 	}
 	defer conn.Close()
 
-	conv, err := loadShelleyConversation(conn, conversationID)
+	conv, err := loadShelleyConversation(ctx, conn, conversationID)
 	if err != nil {
 		return 0, fmt.Errorf(
 			"loading shelley conversation mtime %s: %w",
@@ -350,7 +351,7 @@ func ShelleySourceMtime(path string) (int64, error) {
 		)
 	}
 
-	rows, err := conn.Query(
+	rows, err := conn.QueryContext(ctx,
 		`SELECT COALESCE(sequence_id, 0), COALESCE(type, ''),
 		        COALESCE(llm_data, ''), COALESCE(user_data, ''),
 		        COALESCE(usage_data, ''), COALESCE(created_at, '')
@@ -400,17 +401,17 @@ func openShelleyDB(dbPath string) (*sql.DB, error) {
 // parseShelleyConversationFromDB parses one conversation using an
 // already-open connection. Callers parsing multiple conversations should
 // open the DB once and call this in a loop.
-func parseShelleyConversationFromDB(
+func parseShelleyConversationFromDB(ctx context.Context,
 	conn *sql.DB, dbPath, rawID, machine string, dbInfo os.FileInfo,
 ) (*ParseResult, error) {
-	conv, err := loadShelleyConversation(conn, rawID)
-	if err == sql.ErrNoRows {
+	conv, err := loadShelleyConversation(ctx, conn, rawID)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	messages, fingerprint, err := loadShelleyMessages(conn, conv)
+	messages, fingerprint, err := loadShelleyMessages(ctx, conn, conv)
 	if err != nil {
 		return nil, err
 	}
@@ -434,12 +435,12 @@ type shelleyConversationRow struct {
 	model                string
 }
 
-func loadShelleyConversation(
+func loadShelleyConversation(ctx context.Context,
 	conn *sql.DB, conversationID string,
 ) (shelleyConversationRow, error) {
 	row := shelleyConversationRow{conversationID: conversationID}
 	var userInitiated int64
-	err := conn.QueryRow(
+	err := conn.QueryRowContext(ctx,
 		`SELECT COALESCE(slug, ''), COALESCE(user_initiated, 1),
 		        COALESCE(created_at, ''), COALESCE(updated_at, ''),
 		        COALESCE(cwd, ''), COALESCE(parent_conversation_id, ''),
@@ -467,7 +468,7 @@ type shelleyMessageRow struct {
 	createdAt  string
 }
 
-func loadShelleyMessages(
+func loadShelleyMessages(ctx context.Context,
 	conn *sql.DB, conv shelleyConversationRow,
 ) ([]ParsedMessage, string, error) {
 	// All generations are included, ordered by sequence_id. A generation
@@ -475,7 +476,7 @@ func loadShelleyMessages(
 	// (e.g. distillation); older-generation rows remain as real history
 	// and must not be hidden. sequence_id is unique per conversation
 	// across generations, so it is a safe Ordinal.
-	rows, err := conn.Query(
+	rows, err := conn.QueryContext(ctx,
 		`SELECT COALESCE(sequence_id, 0), COALESCE(type, ''),
 		        COALESCE(llm_data, ''), COALESCE(user_data, ''),
 		        COALESCE(usage_data, ''), COALESCE(created_at, '')

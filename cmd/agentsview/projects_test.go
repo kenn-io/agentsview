@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -33,7 +32,7 @@ func TestFetchHTTPProjects(t *testing.T) {
 	defer ts.Close()
 
 	projects, err := fetchHTTPProjects(
-		context.Background(),
+		t.Context(),
 		transport{Mode: transportHTTP, URL: ts.URL},
 		"secret-token",
 		true,
@@ -64,7 +63,7 @@ func TestFetchHTTPProjectsTimesOutStalledDaemon(t *testing.T) {
 	t.Cleanup(func() { projectsHTTPClient = oldClient })
 
 	_, err := fetchHTTPProjects(
-		context.Background(),
+		t.Context(),
 		transport{Mode: transportHTTP, URL: ts.URL},
 		"",
 		false,

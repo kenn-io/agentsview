@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -129,8 +130,7 @@ func (db *DB) assembleDailyUsageFacts(
 		for key, cost := range costs {
 			bucket := accum[key]
 			if bucket == nil {
-				return DailyUsageResult{}, fmt.Errorf(
-					"daily usage cost has no token bucket")
+				return DailyUsageResult{}, errors.New("daily usage cost has no token bucket")
 			}
 			var addErr error
 			bucket.cost, addErr = money.Add(bucket.cost, cost)
@@ -176,7 +176,6 @@ func (db *DB) assembleDailyUsageFacts(
 
 func recordUsageFactsPricing(
 	resolver *export.PricingResolver, group usageFactsGroup,
-
 ) error {
 	timestamp := usagePricingTimestamp(group.PricingTimestamp)
 	_, baseLookup := resolver.ResolveAt(

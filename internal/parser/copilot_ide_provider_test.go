@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -33,7 +32,7 @@ func TestVSCodeCopilotProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 2)
 	assert.Equal(t, filepath.Join(root, "workspaceStorage"), plan.Roots[0].Path)
@@ -41,13 +40,13 @@ func TestVSCodeCopilotProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, filepath.Join(root, "globalStorage"), plan.Roots[1].Path)
 	assert.True(t, plan.Roots[1].Recursive)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, jsonlPath, discovered[0].DisplayPath)
 	assert.Equal(t, "copilot-app", discovered[0].ProjectHint)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~vscode-copilot:" + sessionID,
 	})
 	require.NoError(t, err)
@@ -55,21 +54,21 @@ func TestVSCodeCopilotProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, jsonlPath, found.DisplayPath)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: jsonlPath, EventKind: "write", WatchRoot: filepath.Join(root, "workspaceStorage")},
 	)
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, jsonlPath, changed[0].DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, jsonlPath, fingerprint.Key)
 	assert.Positive(t, fingerprint.Size)
 	assert.Positive(t, fingerprint.MTimeNS)
 	assert.NotEmpty(t, fingerprint.Hash)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      found,
 		Fingerprint: fingerprint,
 	})
@@ -117,26 +116,25 @@ func TestVSCodeCopilotProviderClassifiesDeletedAndMetadataPaths(t *testing.T) {
 	require.True(t, ok)
 
 	metadataChanged, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: workspacePath, EventKind: "write"},
 	)
 	require.NoError(t, err)
-	assert.ElementsMatch(t,
-		[]string{jsonlPath, jsonPath},
+	assert.ElementsMatch(t, []string{jsonlPath, jsonPath},
 		sourceDisplayPaths(metadataChanged),
 	)
 	require.Len(t, metadataChanged, 2)
-	beforeMetadata, err := provider.Fingerprint(context.Background(), metadataChanged[0])
+	beforeMetadata, err := provider.Fingerprint(t.Context(), metadataChanged[0])
 	require.NoError(t, err)
 	writeSourceFile(t, workspacePath,
 		`{"folder":"file:///Users/alice/code/copilot-renamed-app"}`)
-	afterMetadata, err := provider.Fingerprint(context.Background(), metadataChanged[0])
+	afterMetadata, err := provider.Fingerprint(t.Context(), metadataChanged[0])
 	require.NoError(t, err)
 	assert.NotEqual(t, beforeMetadata.Hash, afterMetadata.Hash)
 
 	require.NoError(t, os.Remove(jsonlPath))
 	deletedJSONL, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: jsonlPath, EventKind: "remove"},
 	)
 	require.NoError(t, err)
@@ -145,7 +143,7 @@ func TestVSCodeCopilotProviderClassifiesDeletedAndMetadataPaths(t *testing.T) {
 
 	require.NoError(t, os.Remove(globalPath))
 	deletedGlobal, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: globalPath, EventKind: "remove"},
 	)
 	require.NoError(t, err)
@@ -187,21 +185,21 @@ func TestVisualStudioCopilotProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.False(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{"*_VSGitHubCopilot_traces.jsonl"}, plan.Roots[0].IncludeGlobs)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	virtualPath := VisualStudioCopilotVirtualPath(tracePath, conversationID)
 	assert.Equal(t, virtualPath, discovered[0].DisplayPath)
 	assert.Equal(t, "visualstudio", discovered[0].ProjectHint)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: conversationID,
 	})
 	require.NoError(t, err)
@@ -209,14 +207,14 @@ func TestVisualStudioCopilotProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, virtualPath, found.DisplayPath)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: tracePath, EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, tracePath, changed[0].DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, virtualPath, fingerprint.Key)
 	assert.Positive(t, fingerprint.Size)
@@ -225,7 +223,7 @@ func TestVisualStudioCopilotProviderSourceMethods(t *testing.T) {
 
 	foundWithProject := found
 	foundWithProject.ProjectHint = "stored-solution"
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      foundWithProject,
 		Fingerprint: fingerprint,
 	})
@@ -280,7 +278,7 @@ func TestVisualStudioCopilotProviderClassifiesDeletedTraceAndFansOutPhysicalTrac
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 2)
 	assert.ElementsMatch(t, []string{
@@ -289,16 +287,16 @@ func TestVisualStudioCopilotProviderClassifiesDeletedTraceAndFansOutPhysicalTrac
 	}, sourceDisplayPaths(discovered))
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: tracePath, EventKind: "write"},
 	)
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, tracePath, changed[0].DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), changed[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), changed[0])
 	require.NoError(t, err)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      changed[0],
 		Fingerprint: fingerprint,
 	})
@@ -312,7 +310,7 @@ func TestVisualStudioCopilotProviderClassifiesDeletedTraceAndFansOutPhysicalTrac
 
 	require.NoError(t, os.Remove(tracePath))
 	deleted, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:              tracePath,
 			EventKind:         "remove",
@@ -345,7 +343,7 @@ func TestVisualStudioCopilotProviderTombstonesDeletedVS2026SessionFile(
 	provider, ok := NewProvider(AgentVSCopilot, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	virtualPath := VisualStudioCopilotVirtualPath(sessionPath, conversationID)
@@ -353,7 +351,7 @@ func TestVisualStudioCopilotProviderTombstonesDeletedVS2026SessionFile(
 
 	require.NoError(t, os.Remove(sessionPath))
 	deleted, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:              sessionPath,
 			EventKind:         "remove",
@@ -397,22 +395,21 @@ func TestVisualStudioCopilotProviderCanonicalizesVS2026SessionFileIDCase(
 	provider, ok := NewProvider(AgentVSCopilot, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	virtualPath := VisualStudioCopilotVirtualPath(sessionPath, conversationID)
 	assert.Equal(t, virtualPath, discovered[0].DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), discovered[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), discovered[0])
 	require.NoError(t, err)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      discovered[0],
 		Fingerprint: fingerprint,
 	})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
-	assert.Equal(t,
-		"visualstudio-copilot:"+conversationID,
+	assert.Equal(t, "visualstudio-copilot:"+conversationID,
 		outcome.Results[0].Result.Session.ID,
 	)
 }
@@ -438,7 +435,7 @@ func TestVisualStudioCopilotProviderTombstonesUppercaseVS2026SessionFileID(
 	provider, ok := NewProvider(AgentVSCopilot, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	virtualPath := VisualStudioCopilotVirtualPath(sessionPath, conversationID)
@@ -446,7 +443,7 @@ func TestVisualStudioCopilotProviderTombstonesUppercaseVS2026SessionFileID(
 
 	require.NoError(t, os.Remove(sessionPath))
 	deleted, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:              sessionPath,
 			EventKind:         "remove",
@@ -457,11 +454,11 @@ func TestVisualStudioCopilotProviderTombstonesUppercaseVS2026SessionFileID(
 	require.Len(t, deleted, 1)
 	assert.Equal(t, virtualPath, deleted[0].DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), deleted[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), deleted[0])
 	require.NoError(t, err)
 	assert.Equal(t, SourceFingerprint{Key: virtualPath}, fingerprint)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      deleted[0],
 		Fingerprint: fingerprint,
 	})
@@ -511,7 +508,7 @@ func TestVisualStudioCopilotProviderSupportsVS2026RootModes(
 			})
 			require.True(t, ok)
 
-			plan, err := provider.WatchPlan(context.Background())
+			plan, err := provider.WatchPlan(t.Context())
 			require.NoError(t, err)
 			switch tc.name {
 			case "project root":
@@ -534,12 +531,12 @@ func TestVisualStudioCopilotProviderSupportsVS2026RootModes(
 				assert.False(t, plan.Roots[1].Recursive)
 			}
 
-			discovered, err := provider.Discover(context.Background())
+			discovered, err := provider.Discover(t.Context())
 			require.NoError(t, err)
 			require.Len(t, discovered, 1)
 			assert.Equal(t, virtualPath, discovered[0].DisplayPath)
 
-			found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+			found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 				RawSessionID: conversationID,
 			})
 			require.NoError(t, err)
@@ -547,7 +544,7 @@ func TestVisualStudioCopilotProviderSupportsVS2026RootModes(
 			assert.Equal(t, virtualPath, found.DisplayPath)
 
 			changed, err := provider.SourcesForChangedPath(
-				context.Background(),
+				t.Context(),
 				ChangedPathRequest{
 					Path:      sessionPath,
 					EventKind: "write",
@@ -558,14 +555,14 @@ func TestVisualStudioCopilotProviderSupportsVS2026RootModes(
 			require.Len(t, changed, 1)
 			assert.Equal(t, virtualPath, changed[0].DisplayPath)
 
-			fingerprint, err := provider.Fingerprint(context.Background(), changed[0])
+			fingerprint, err := provider.Fingerprint(t.Context(), changed[0])
 			require.NoError(t, err)
 			assert.Equal(t, virtualPath, fingerprint.Key)
 			assert.Positive(t, fingerprint.Size)
 			assert.Positive(t, fingerprint.MTimeNS)
 			assert.NotEmpty(t, fingerprint.Hash)
 
-			parseOutcome, err := provider.Parse(context.Background(), ParseRequest{
+			parseOutcome, err := provider.Parse(t.Context(), ParseRequest{
 				Source:      changed[0],
 				Fingerprint: fingerprint,
 			})
@@ -624,7 +621,7 @@ func TestVisualStudioCopilotProviderClassifiesMixedCaseVS2026Layout(
 			require.True(t, ok)
 
 			changed, err := provider.SourcesForChangedPath(
-				context.Background(),
+				t.Context(),
 				ChangedPathRequest{
 					Path:      sessionPath,
 					EventKind: "write",
@@ -663,7 +660,7 @@ func TestVisualStudioCopilotProviderDiscoversMixedCaseVS2026Layout(
 	require.True(t, ok)
 	virtualPath := VisualStudioCopilotVirtualPath(sessionPath, conversationID)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 3)
 	assert.Equal(t, root, plan.Roots[0].Path)
@@ -673,12 +670,12 @@ func TestVisualStudioCopilotProviderDiscoversMixedCaseVS2026Layout(
 	assert.Equal(t, filepath.Dir(sessionPath), plan.Roots[2].Path)
 	assert.False(t, plan.Roots[2].Recursive)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, virtualPath, discovered[0].DisplayPath)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: conversationID,
 	})
 	require.NoError(t, err)
@@ -744,7 +741,7 @@ func TestVisualStudioCopilotProviderDiscoversSymlinkedVS2026Dirs(
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 3)
 	assert.Equal(t, vsRoot, plan.Roots[1].Path)
@@ -752,7 +749,7 @@ func TestVisualStudioCopilotProviderDiscoversSymlinkedVS2026Dirs(
 	assert.Equal(t, filepath.Dir(sessionPath), plan.Roots[2].Path)
 	assert.False(t, plan.Roots[2].Recursive)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, virtualPath, discovered[0].DisplayPath)
@@ -767,7 +764,7 @@ func TestVisualStudioCopilotProviderDiscoversSymlinkedVS2026Dirs(
 	require.Len(t, streamed, 1)
 	assert.Equal(t, virtualPath, streamed[0].DisplayPath)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: conversationID,
 	})
 	require.NoError(t, err)
@@ -807,13 +804,13 @@ func TestVisualStudioCopilotProviderCanonicalizesMixedLegacyAndVS2026Sources(
 	provider, ok := NewProvider(AgentVSCopilot, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	virtualPath := VisualStudioCopilotVirtualPath(sessionPath, conversationID)
 	assert.Equal(t, virtualPath, discovered[0].DisplayPath)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: conversationID,
 	})
 	require.NoError(t, err)
@@ -844,7 +841,7 @@ func TestVisualStudioCopilotProviderDeletesVS2026SessionTombstone(
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	virtualPath := VisualStudioCopilotVirtualPath(sessionPath, conversationID)
@@ -853,7 +850,7 @@ func TestVisualStudioCopilotProviderDeletesVS2026SessionTombstone(
 	require.NoError(t, os.Remove(sessionPath))
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:              sessionPath,
 			EventKind:         "remove",
@@ -865,11 +862,11 @@ func TestVisualStudioCopilotProviderDeletesVS2026SessionTombstone(
 	require.Len(t, changed, 1)
 	assert.Equal(t, virtualPath, changed[0].DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), changed[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), changed[0])
 	require.NoError(t, err)
 	assert.Equal(t, SourceFingerprint{Key: virtualPath}, fingerprint)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      changed[0],
 		Fingerprint: fingerprint,
 	})
@@ -915,7 +912,7 @@ func TestVisualStudioCopilotProviderRecanonicalizesDeletedVS2026Session(
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	vsVirtualPath := VisualStudioCopilotVirtualPath(sessionPath, conversationID)
@@ -924,7 +921,7 @@ func TestVisualStudioCopilotProviderRecanonicalizesDeletedVS2026Session(
 	require.NoError(t, os.Remove(sessionPath))
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:              sessionPath,
 			EventKind:         "remove",
@@ -938,9 +935,9 @@ func TestVisualStudioCopilotProviderRecanonicalizesDeletedVS2026Session(
 	legacyVirtualPath := VisualStudioCopilotVirtualPath(legacyPath, conversationID)
 	assert.Equal(t, legacyVirtualPath, changed[0].DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), changed[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), changed[0])
 	require.NoError(t, err)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      changed[0],
 		Fingerprint: fingerprint,
 	})
@@ -948,8 +945,7 @@ func TestVisualStudioCopilotProviderRecanonicalizesDeletedVS2026Session(
 	assert.True(t, outcome.ResultSetComplete)
 	assert.True(t, outcome.ForceReplace)
 	require.Len(t, outcome.Results, 1)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		string(AgentVSCopilot)+":"+conversationID,
 		outcome.Results[0].Result.Session.ID,
 	)
@@ -971,7 +967,7 @@ func TestVisualStudioCopilotProviderFindSourceRejectsMissingVS2026VirtualPath(
 	})
 	require.True(t, ok)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID:       conversationID,
 		StoredFilePath:     virtualPath,
 		FingerprintKey:     virtualPath,
@@ -1008,7 +1004,7 @@ func TestVisualStudioCopilotProviderRejectsOutsideVS2026SessionLayout(
 	require.True(t, ok)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      invalidPath,
 			EventKind: "write",
@@ -1017,7 +1013,7 @@ func TestVisualStudioCopilotProviderRejectsOutsideVS2026SessionLayout(
 	)
 	require.NoError(t, err)
 	assert.Empty(t, changed)
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, discovered)
 }
@@ -1046,7 +1042,7 @@ func TestVisualStudioCopilotProviderRejectsNonGUIDVS2026SessionFileNames(
 	require.True(t, ok)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      invalidPath,
 			EventKind: "write",
@@ -1056,7 +1052,7 @@ func TestVisualStudioCopilotProviderRejectsNonGUIDVS2026SessionFileNames(
 	require.NoError(t, err)
 	assert.Empty(t, changed)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, discovered)
 }

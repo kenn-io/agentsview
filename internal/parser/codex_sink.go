@@ -1,5 +1,7 @@
 package parser
 
+import
+
 // CodexSessionSink receives the normalized operations of one Codex
 // transcript decode. The decoder owns parse-time state (cursor, fork
 // gate, prompt replay observation, pending-agent attribution) and emits
@@ -32,11 +34,13 @@ package parser
 //     reserved ordinal, deduplicated by key
 //   - Finalize             — stable-sort by ordinal (ties keep emission
 //     order) and renumber 0..n-1
+"context"
+
 type CodexSessionSink interface {
 	AppendMessage(m ParsedMessage) int
 	ReserveOrdinal() int
 	InsertMessage(m ParsedMessage) int
-	AppendToolResultEvent(callID string, target *ParsedToolCallPosition, ev ParsedToolResultEvent)
+	AppendToolResultEvent(ctx context.Context, callID string, target *ParsedToolCallPosition, ev ParsedToolResultEvent)
 	SetCallSubagentSessionID(callID string, target *ParsedToolCallPosition, sessionID string)
 	ApplyTokenUsageToLastAssistant(raw string) bool
 	InsertOrphanMessage(key string, m ParsedMessage) bool

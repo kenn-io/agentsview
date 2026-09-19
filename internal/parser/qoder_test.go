@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -65,8 +64,8 @@ func TestParseQoderSession(t *testing.T) {
 	sess := results[0].Session
 	assert.Equal(t, "qoder:11111111-1111-4111-8111-111111111111", sess.ID)
 	assert.Equal(t, AgentQoder, sess.Agent)
-	assert.Equal(t, "", sess.AgentLabel)
-	assert.Equal(t, "", sess.Entrypoint)
+	assert.Empty(t, sess.AgentLabel)
+	assert.Empty(t, sess.Entrypoint)
 	assert.Equal(t, "sample-project", sess.Project)
 	assert.Equal(t, cwd, sess.Cwd)
 	assert.Equal(t, "help me", sess.FirstMessage)
@@ -147,13 +146,13 @@ func TestQoderProviderParseStampsCompositeFingerprint(t *testing.T) {
 		Machine: "local",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fingerprint,
 	})
@@ -199,12 +198,12 @@ func TestParseQoderSubagentExclusionIDs(t *testing.T) {
 
 	provider, ok := NewProvider(AgentQoder, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "11111111-1111-4111-8111-111111111111:subagent:agent-123",
 	})
 	require.NoError(t, err)
 	require.True(t, found)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  source,
 		Machine: "local",
 	})

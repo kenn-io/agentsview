@@ -25,7 +25,7 @@ func TestEvenerRespectsBlockedResultCategories(t *testing.T) {
 			text := strings.ReplaceAll(string(source), "exec_command", category)
 			text = strings.ReplaceAll(text, `"content":"/workspace/demo"`, `"content":"result-marker"`)
 			require.NoError(t, os.WriteFile(filepath.Join(sessions, "demo.transcript.jsonl"), []byte(text), 0o600))
-			engine := NewEngine(database, EngineConfig{
+			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentEvener: {root}}, Machine: "local",
 				BlockedResultCategories: []string{"Read", "Glob"},
 			})
@@ -65,7 +65,7 @@ func TestEvenerArchiveLifecycle(t *testing.T) {
 	metaPath := filepath.Join(sessions, "demo.meta.json")
 	require.NoError(t, os.WriteFile(path, source, 0o600))
 	require.NoError(t, os.WriteFile(metaPath, []byte(`{"id":"demo","name":"Orchard investigation"}`), 0o600))
-	engine := NewEngine(database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentType("evener"): {root}}, Machine: "local"})
+	engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentType("evener"): {root}}, Machine: "local"})
 	t.Cleanup(engine.Close)
 	ctx := t.Context()
 	first := engine.SyncAll(ctx, nil)
@@ -108,9 +108,9 @@ func TestEvenerArchiveLifecycle(t *testing.T) {
 	assert.Zero(t, unchanged.Synced)
 
 	// Only a sibling metadata write changes; the transcript remains untouched.
-	beforeMetadata := engine.SourceMtime(session.ID)
+	beforeMetadata := engine.SourceMtime(ctx, session.ID)
 	require.NoError(t, os.WriteFile(metaPath, []byte(`{"id":"demo","name":"Orchard diagnosis"}`), 0o600))
-	assert.NotEqual(t, beforeMetadata, engine.SourceMtime(session.ID), "session polling must notice metadata-only updates")
+	assert.NotEqual(t, beforeMetadata, engine.SourceMtime(ctx, session.ID), "session polling must notice metadata-only updates")
 	renamed := engine.SyncAll(ctx, nil)
 	require.Zero(t, renamed.Failed)
 	session, err = database.GetSessionFull(ctx, session.ID)
@@ -184,7 +184,7 @@ func TestEvenerRelationshipsAndParentArrival(t *testing.T) {
 	child += "{\"kind\":\"entry\",\"seq\":4,\"turn\":{\"kind\":\"USER_INPUT\",\"message\":{\"role\":\"user\",\"content\":[{\"kind\":\"text\",\"text\":\"Try the fork approach\"}]}}}\n"
 	require.NoError(t, os.WriteFile(filepath.Join(sessions, "fork.transcript.jsonl"), []byte(child), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(sessions, "fork.meta.json"), []byte(`{"id":"fork","parent_session_id":"demo","divergence_turn":4}`), 0o600))
-	engine := NewEngine(database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentEvener: {root}}, Machine: "local"})
+	engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentEvener: {root}}, Machine: "local"})
 	t.Cleanup(engine.Close)
 	ctx := t.Context()
 	require.Zero(t, engine.SyncAll(ctx, nil).Failed)
@@ -199,9 +199,9 @@ func TestEvenerRelationshipsAndParentArrival(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, messages, 4, "unfinished parent cannot own the copied prefix")
 	assert.Equal(t, 20, messages[1].OutputTokens)
-	before := engine.SourceMtime("evener:fork")
+	before := engine.SourceMtime(ctx, "evener:fork")
 	require.NoError(t, os.WriteFile(filepath.Join(sessions, "demo.transcript.jsonl"), parent, 0o600))
-	assert.NotEqual(t, before, engine.SourceMtime("evener:fork"))
+	assert.NotEqual(t, before, engine.SourceMtime(ctx, "evener:fork"))
 	parentMeta := filepath.Join(sessions, "demo.meta.json")
 	for _, invalid := range []string{`{bad}`, `{"id":"another-session"}`} {
 		require.NoError(t, os.WriteFile(parentMeta, []byte(invalid), 0o600))
@@ -211,9 +211,9 @@ func TestEvenerRelationshipsAndParentArrival(t *testing.T) {
 		require.Len(t, messages, 4, "invalid parent metadata prevents prefix ownership")
 		assert.Equal(t, 20, messages[1].OutputTokens)
 	}
-	before = engine.SourceMtime("evener:fork")
+	before = engine.SourceMtime(ctx, "evener:fork")
 	require.NoError(t, os.Remove(parentMeta))
-	assert.NotEqual(t, before, engine.SourceMtime("evener:fork"), "parent metadata removal refreshes child")
+	assert.NotEqual(t, before, engine.SourceMtime(ctx, "evener:fork"), "parent metadata removal refreshes child")
 	subagent := strings.Replace(string(parent), `"session_id":"demo"`, `"session_id":"worker","parent_session_id":"demo"`, 1)
 	require.NoError(t, os.WriteFile(filepath.Join(sessions, "worker.transcript.jsonl"), []byte(subagent), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(sessions, "worker.meta.json"), []byte(`{"id":"worker","parent_session_id":"demo","is_subagent":true}`), 0o600))
@@ -249,7 +249,7 @@ func TestEvenerRemoteImportDoesNotStampStatDigest(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, source, 0o600))
 	rewrite := func(p string) string { return "remote:" + p }
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentEvener: {root}},
 		Machine:   "remote", PathRewriter: rewrite, Ephemeral: true,
 	})

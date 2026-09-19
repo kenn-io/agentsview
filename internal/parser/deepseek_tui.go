@@ -70,8 +70,7 @@ func parseDeepSeekTUISession(
 			}
 		}
 
-		content, thinking, hasThinking, hasToolUse, calls, results :=
-			extractDeepSeekTUIContent(msg.Get("content"))
+		content, thinking, hasThinking, hasToolUse, calls, results := extractDeepSeekTUIContent(msg.Get("content"))
 		if strings.TrimSpace(content) == "" && len(calls) == 0 &&
 			len(results) == 0 {
 			return true

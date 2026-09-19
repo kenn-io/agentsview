@@ -100,6 +100,7 @@ func TestSkillsInstall_StatesAndForce(t *testing.T) {
 		{
 			name: "current",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				writeSkillFile(t, path, freshClaudeSkill(t).Content)
 			},
 			wantMsgNoForce: "up to date",
@@ -107,6 +108,7 @@ func TestSkillsInstall_StatesAndForce(t *testing.T) {
 		{
 			name: "stale",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				writeSkillFile(t, path, staleClaudeContent())
 			},
 			wantMsgNoForce: "updated",
@@ -114,6 +116,7 @@ func TestSkillsInstall_StatesAndForce(t *testing.T) {
 		{
 			name: "modified",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				writeSkillFile(t, path, modifiedClaudeContent(t))
 			},
 			wantMsgNoForce: refusalMsg,
@@ -122,6 +125,7 @@ func TestSkillsInstall_StatesAndForce(t *testing.T) {
 		{
 			name: "foreign",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				writeSkillFile(t, path, foreignClaudeContent)
 			},
 			wantMsgNoForce: refusalMsg,
@@ -245,6 +249,7 @@ func TestSkillsList_ReportsEachState(t *testing.T) {
 		{
 			name: "current",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				writeSkillFile(t, path, freshClaudeSkill(t).Content)
 			},
 			want: "current",
@@ -252,6 +257,7 @@ func TestSkillsList_ReportsEachState(t *testing.T) {
 		{
 			name: "stale",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				writeSkillFile(t, path, staleClaudeContent())
 			},
 			want: "stale",
@@ -259,6 +265,7 @@ func TestSkillsList_ReportsEachState(t *testing.T) {
 		{
 			name: "modified",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				writeSkillFile(t, path, modifiedClaudeContent(t))
 			},
 			want: "modified",
@@ -266,6 +273,7 @@ func TestSkillsList_ReportsEachState(t *testing.T) {
 		{
 			name: "foreign",
 			seed: func(t *testing.T, path string) {
+				t.Helper()
 				writeSkillFile(t, path, foreignClaudeContent)
 			},
 			want: "foreign",
@@ -323,7 +331,7 @@ func TestSkillsList_HumanTableHasHeaderAndColumns(t *testing.T) {
 func initTestGitRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
-	cmd := exec.Command("git", "init", "-q", "-b", "main")
+	cmd := exec.CommandContext(t.Context(), "git", "init", "-q", "-b", "main")
 	cmd.Dir = repo
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git init: %s", out)

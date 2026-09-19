@@ -1,7 +1,6 @@
 package extract
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json/v2"
 	"errors"
@@ -26,13 +25,13 @@ import (
 
 func newTestArchive(t *testing.T) *db.DB {
 	t.Helper()
-	d, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	d, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
 	if err != nil {
-		t.Fatalf("opening archive: %v", err)
+		require.FailNowf(t, "test failed", "opening archive: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := d.Close(); err != nil {
-			t.Errorf("closing archive: %v", err)
+			assert.Failf(t, "test failed", "closing archive: %v", err)
 		}
 	})
 	return d
@@ -66,36 +65,52 @@ func seedSession(t *testing.T, d *db.DB, id string, msgs []db.Message, mutate fu
 // filtering left ordinal gaps.
 func seedSessionRows(t *testing.T, d *db.DB, s db.Session, msgs []db.Message) {
 	t.Helper()
+
 	id := s.ID
-	if err := d.UpsertSession(s); err != nil {
-		t.Fatalf("seeding session %s: %v", id, err)
+	if err := d.UpsertSession(t.Context(), s); err != nil {
+		require.FailNowf(t, "test failed", "seeding session %s: %v", id, err)
 	}
 	for i := range msgs {
 		msgs[i].SessionID = id
 	}
 	if len(msgs) > 0 {
-		if err := d.InsertMessages(msgs); err != nil {
-			t.Fatalf("seeding messages for %s: %v", id, err)
+		if err := d.InsertMessages(t.Context(), msgs); err != nil {
+			require.FailNowf(t, "test failed", "seeding messages for %s: %v", id, err)
 		}
 	}
 	// Extraction requires a current clean secret scan, not just a zero
 	// leak count.
-	if err := d.ReplaceSessionSecretFindings(
+	if err := d.ReplaceSessionSecretFindings(t.Context(),
 		id, nil, 0, secrets.RulesVersion(),
 	); err != nil {
-		t.Fatalf("stamping secret scan for %s: %v", id, err)
+		require.FailNowf(t, "test failed", "stamping secret scan for %s: %v", id, err)
 	}
-	settleSessionWrite()
+	backdateSessionWrite(t, d)
 }
 
-// settleSessionWrite pushes subsequent pass cutoffs into a later millisecond
-// than the seed writes. Timestamps carry millisecond precision, and the
-// done-revisit gate treats a write in the same millisecond as the cutoff as
-// after it (the safe direction); without the gap a session extracted in the
-// same millisecond it was seeded reads as perpetually changed. Production
-// has the quiet period between the last write and any pass.
-func settleSessionWrite() {
-	time.Sleep(2 * time.Millisecond)
+func updateSessionWrite(t *testing.T, d *db.DB, offset string) {
+	t.Helper()
+	err := d.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
+			"UPDATE sessions SET local_modified_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', ?)", offset)
+		return err
+	})
+	require.NoError(t, err, "updating session fixture timestamp")
+}
+
+func backdateSessionWrite(t *testing.T, d *db.DB) {
+	t.Helper()
+	updateSessionWrite(t, d, "-1 second")
+}
+
+func settleSessionWrite(t *testing.T, d *db.DB) {
+	t.Helper()
+	updateSessionWrite(t, d, "+1 second")
+}
+
+func markSessionWrite(t *testing.T, d *db.DB) {
+	t.Helper()
+	updateSessionWrite(t, d, "0 seconds")
 }
 
 // growSession appends messages and settles the session the way a sync pass
@@ -104,27 +119,28 @@ func settleSessionWrite() {
 // itself revokes it), which also bumps local_modified_at.
 func growSession(t *testing.T, d *db.DB, id string, msgs []db.Message, startOrdinal int) {
 	t.Helper()
+
 	for i := range msgs {
 		msgs[i].SessionID = id
 		msgs[i].Ordinal = startOrdinal + i
 	}
-	if err := d.InsertMessages(msgs); err != nil {
-		t.Fatalf("growing session %s: %v", id, err)
+	if err := d.InsertMessages(t.Context(), msgs); err != nil {
+		require.FailNowf(t, "test failed", "growing session %s: %v", id, err)
 	}
-	session, err := d.GetSessionFull(context.Background(), id)
+	session, err := d.GetSessionFull(t.Context(), id)
 	if err != nil || session == nil {
-		t.Fatalf("loading grown session %s: %v", id, err)
+		require.FailNowf(t, "test failed", "loading grown session %s: %v", id, err)
 	}
 	session.MessageCount = startOrdinal + len(msgs)
-	if err := d.UpsertSession(*session); err != nil {
-		t.Fatalf("updating grown session %s: %v", id, err)
+	if err := d.UpsertSession(t.Context(), *session); err != nil {
+		require.FailNowf(t, "test failed", "updating grown session %s: %v", id, err)
 	}
-	if err := d.ReplaceSessionSecretFindings(
+	if err := d.ReplaceSessionSecretFindings(t.Context(),
 		id, nil, 0, secrets.RulesVersion(),
 	); err != nil {
-		t.Fatalf("re-stamping secret scan for %s: %v", id, err)
+		require.FailNowf(t, "test failed", "re-stamping secret scan for %s: %v", id, err)
 	}
-	settleSessionWrite()
+	markSessionWrite(t, d)
 }
 
 // eligibleExtractableSession returns a *db.Session that passes every
@@ -250,7 +266,7 @@ func completionBody(t *testing.T, content string) string {
 		"usage": map[string]any{"prompt_tokens": 7, "completion_tokens": 3},
 	})
 	if err != nil {
-		t.Fatal(err)
+		require.FailNow(t, fmt.Sprint(err))
 	}
 	return string(raw)
 }
@@ -270,7 +286,7 @@ func modelServer(
 				} `json:"messages"`
 			}
 			if err := json.UnmarshalRead(r.Body, &payload); err != nil {
-				t.Errorf("decoding request: %v", err)
+				assert.Failf(t, "test failed", "decoding request: %v", err)
 			}
 			text := payload.Messages[len(payload.Messages)-1].Content
 			call := log.add(text)
@@ -283,6 +299,8 @@ func modelServer(
 }
 
 func alwaysEntries(t *testing.T, titles ...string) func(string, int) (int, string) {
+	t.Helper()
+
 	return func(string, int) (int, string) {
 		return http.StatusOK, completionBody(t, entriesJSON(t, titles...))
 	}
@@ -314,14 +332,14 @@ func newManager(
 	}
 	m, err := NewManager(cfg)
 	if err != nil {
-		t.Fatalf("NewManager: %v", err)
+		require.FailNowf(t, "test failed", "NewManager: %v", err)
 	}
 	return m
 }
 
 func TestManagerRunPassExtractsMapsAndActivates(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, func(text string, _ int) (int, string) {
 		content := `{"entries":[{"type":"decision","title":"t",` +
 			`"body":"chose sqlite","entities":["sqlite","storage"]}]}`
@@ -332,68 +350,68 @@ func TestManagerRunPassExtractsMapsAndActivates(t *testing.T) {
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Sessions != 1 || result.Failed != 0 {
-		t.Fatalf("result = %+v, want 1 session, 0 failed", result)
+		require.FailNowf(t, "test failed", "result = %+v, want 1 session, 0 failed", result)
 	}
 	if result.Units != 2 || result.Entries != 2 {
-		t.Fatalf("result = %+v, want 2 units, 2 entries", result)
+		require.FailNowf(t, "test failed", "result = %+v, want 2 units, 2 entries", result)
 	}
 	if log.count() != 2 {
-		t.Fatalf("model calls = %d, want 2 (intent + action)", log.count())
+		require.FailNowf(t, "test failed", "model calls = %d, want 2 (intent + action)", log.count())
 	}
 
 	entry, err := d.GetRecallEntry(ctx, EntryID(m.Fingerprint(), "sess-1", 0, 0))
 	if err != nil {
-		t.Fatalf("GetRecallEntry: %v", err)
+		require.FailNowf(t, "test failed", "GetRecallEntry: %v", err)
 	}
 	if entry == nil {
-		t.Fatal("expected entry at deterministic id for unit 0")
+		require.FailNow(t, "expected entry at deterministic id for unit 0")
 	}
 	if entry.Type != "decision" || entry.Title != "t" {
-		t.Fatalf("entry type/title = %s/%s", entry.Type, entry.Title)
+		require.FailNowf(t, "test failed", "entry type/title = %s/%s", entry.Type, entry.Title)
 	}
 	if entry.Body != "chose sqlite\nEntities: sqlite; storage" {
-		t.Fatalf("entry body = %q, entities must be folded into the body",
+		require.FailNowf(t, "test failed", "entry body = %q, entities must be folded into the body",
 			entry.Body)
 	}
 	if entry.Trigger != "" {
-		t.Fatalf("trigger = %q, want empty", entry.Trigger)
+		require.FailNowf(t, "test failed", "trigger = %q, want empty", entry.Trigger)
 	}
 	if entry.ReviewState != "unreviewed_auto" || entry.Status != "accepted" {
-		t.Fatalf("review/status = %s/%s", entry.ReviewState, entry.Status)
+		require.FailNowf(t, "test failed", "review/status = %s/%s", entry.ReviewState, entry.Status)
 	}
 	if entry.SourceSessionID != "sess-1" ||
 		entry.SourceRunID != m.Fingerprint() {
-		t.Fatalf("provenance = %+v", entry)
+		require.FailNowf(t, "test failed", "provenance = %+v", entry)
 	}
 	if entry.ExtractorMethod != "turns-v1" || entry.Model != "test-model" {
-		t.Fatalf("method/model = %s/%s", entry.ExtractorMethod, entry.Model)
+		require.FailNowf(t, "test failed", "method/model = %s/%s", entry.ExtractorMethod, entry.Model)
 	}
 	if entry.Project != "proj" || entry.CWD != "/work/proj" ||
 		entry.GitBranch != "main" || entry.Agent != "claude" {
-		t.Fatalf("session context = %+v", entry)
+		require.FailNowf(t, "test failed", "session context = %+v", entry)
 	}
 	if len(entry.Evidence) != 1 {
-		t.Fatalf("evidence rows = %d, want 1", len(entry.Evidence))
+		require.FailNowf(t, "test failed", "evidence rows = %d, want 1", len(entry.Evidence))
 	}
 	ev := entry.Evidence[0]
 	if ev.SessionID != "sess-1" ||
 		ev.MessageStartOrdinal != 0 || ev.MessageEndOrdinal != 0 {
-		t.Fatalf("evidence = %+v, want ordinal range 0-0", ev)
+		require.FailNowf(t, "test failed", "evidence = %+v, want ordinal range 0-0", ev)
 	}
 
 	generations, err := d.ExtractGenerations(ctx)
 	if err != nil {
-		t.Fatalf("ExtractGenerations: %v", err)
+		require.FailNowf(t, "test failed", "ExtractGenerations: %v", err)
 	}
 	if len(generations) != 1 ||
 		generations[0].State != db.ExtractGenerationActive {
-		t.Fatalf("generations = %+v, want one active", generations)
+		require.FailNowf(t, "test failed", "generations = %+v, want one active", generations)
 	}
 	if !result.Activated {
-		t.Fatal("result must report activation")
+		require.FailNow(t, "result must report activation")
 	}
 }
 
@@ -409,19 +427,19 @@ func TestManagerActivatesOverTransientlyIneligibleUnfinishedSession(
 ) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
-	d, err := db.Open(path)
+	d, err := db.Open(t.Context(), path)
 	if err != nil {
-		t.Fatalf("opening archive: %v", err)
+		require.FailNowf(t, "test failed", "opening archive: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := d.Close(); err != nil {
-			t.Errorf("closing archive: %v", err)
+			assert.Failf(t, "test failed", "closing archive: %v", err)
 		}
 	})
-	ctx := context.Background()
+	ctx := t.Context()
 	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
 	if err != nil {
-		t.Fatalf("opening side connection: %v", err)
+		require.FailNowf(t, "test failed", "opening side connection: %v", err)
 	}
 	t.Cleanup(func() { _ = side.Close() })
 	server, _ := modelServer(t, func(_ string, _ int) (int, string) {
@@ -434,34 +452,34 @@ func TestManagerActivatesOverTransientlyIneligibleUnfinishedSession(
 		Fingerprint: m.Fingerprint(), Model: "test-model",
 		Segmenter: "turns-v1",
 	}); err != nil {
-		t.Fatalf("ensuring generation: %v", err)
+		require.FailNowf(t, "test failed", "ensuring generation: %v", err)
 	}
 	if _, err := d.UpsertExtractProgress(ctx, db.ExtractProgressUpsert{
 		SessionID: "sess-b", Fingerprint: m.Fingerprint(),
 		ContentDigest: "dg", UnitsTotal: 2, StampedAt: time.Now(),
 	}); err != nil {
-		t.Fatalf("seeding pending row: %v", err)
+		require.FailNowf(t, "test failed", "seeding pending row: %v", err)
 	}
-	if _, err := side.Exec(
+	if _, err := side.ExecContext(ctx,
 		"UPDATE sessions SET ended_at = NULL WHERE id = 'sess-b'",
 	); err != nil {
-		t.Fatalf("reopening sess-b: %v", err)
+		require.FailNowf(t, "test failed", "reopening sess-b: %v", err)
 	}
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if !result.Activated {
-		t.Fatal("activation must look through a transiently ineligible " +
+		require.FailNow(t, "activation must look through a transiently ineligible "+
 			"pending row instead of waiting for extraction that cannot run")
 	}
 	if _, found, err := d.ExtractProgress(
 		ctx, "sess-b", m.Fingerprint(),
 	); err != nil {
-		t.Fatalf("ExtractProgress: %v", err)
+		require.FailNowf(t, "test failed", "ExtractProgress: %v", err)
 	} else if found {
-		t.Fatal("the unfinishable pending row must be cleared so the " +
+		require.FailNow(t, "the unfinishable pending row must be cleared so the "+
 			"session is rediscovered once it settles")
 	}
 }
@@ -489,25 +507,25 @@ func TestManagerRefusesUnitStraddlingSecret(t *testing.T) {
 	}, nil)
 	m := newManager(t, d, server.URL, nil)
 
-	result, err := m.RunPass(context.Background(), PassOptions{})
+	result, err := m.RunPass(t.Context(), PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if log.count() != 0 {
-		t.Fatalf("model calls = %d, want 0: a transcript with a secret "+
+		require.FailNowf(t, "test failed", "model calls = %d, want 0: a transcript with a secret "+
 			"straddling a unit's message boundary must never reach the "+
 			"model", log.count())
 	}
 	if result.Failed != 1 {
-		t.Fatalf("failed = %d, want 1", result.Failed)
+		require.FailNowf(t, "test failed", "failed = %d, want 1", result.Failed)
 	}
 	entry, err := d.GetRecallEntry(
-		context.Background(), EntryID(m.Fingerprint(), "sess-1", 1, 0))
+		t.Context(), EntryID(m.Fingerprint(), "sess-1", 1, 0))
 	if err != nil {
-		t.Fatalf("GetRecallEntry: %v", err)
+		require.FailNowf(t, "test failed", "GetRecallEntry: %v", err)
 	}
 	if entry != nil {
-		t.Fatalf("entry staged from a secret-bearing unit: %+v", entry)
+		require.FailNowf(t, "test failed", "entry staged from a secret-bearing unit: %+v", entry)
 	}
 }
 
@@ -535,16 +553,16 @@ func TestManagerRefusesSecretSplitAcrossUnits(t *testing.T) {
 	}, nil)
 	m := newManager(t, d, server.URL, nil)
 
-	result, err := m.RunPass(context.Background(), PassOptions{})
+	result, err := m.RunPass(t.Context(), PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if log.count() != 0 {
-		t.Fatalf("model calls = %d, want 0: a key split across units must "+
+		require.FailNowf(t, "test failed", "model calls = %d, want 0: a key split across units must "+
 			"never reach the model", log.count())
 	}
 	if result.Failed != 1 {
-		t.Fatalf("failed = %d, want 1", result.Failed)
+		require.FailNowf(t, "test failed", "failed = %d, want 1", result.Failed)
 	}
 }
 
@@ -567,16 +585,16 @@ func TestManagerRefusesSecretSplitMidTokenAcrossMessages(t *testing.T) {
 	}, nil)
 	m := newManager(t, d, server.URL, nil)
 
-	result, err := m.RunPass(context.Background(), PassOptions{})
+	result, err := m.RunPass(t.Context(), PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if log.count() != 0 {
-		t.Fatalf("model calls = %d, want 0: a key split mid-token across "+
+		require.FailNowf(t, "test failed", "model calls = %d, want 0: a key split mid-token across "+
 			"messages must never reach the model", log.count())
 	}
 	if result.Failed != 1 {
-		t.Fatalf("failed = %d, want 1", result.Failed)
+		require.FailNowf(t, "test failed", "failed = %d, want 1", result.Failed)
 	}
 }
 
@@ -599,16 +617,16 @@ func TestManagerRefusesSecretSplitAcrossSystemMessage(t *testing.T) {
 	}, nil)
 	m := newManager(t, d, server.URL, nil)
 
-	result, err := m.RunPass(context.Background(), PassOptions{})
+	result, err := m.RunPass(t.Context(), PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if log.count() != 0 {
-		t.Fatalf("model calls = %d, want 0: a system message between the "+
+		require.FailNowf(t, "test failed", "model calls = %d, want 0: a system message between the "+
 			"halves must not hide a key the model reconstructs", log.count())
 	}
 	if result.Failed != 1 {
-		t.Fatalf("failed = %d, want 1", result.Failed)
+		require.FailNowf(t, "test failed", "failed = %d, want 1", result.Failed)
 	}
 }
 
@@ -629,16 +647,16 @@ func TestManagerRefusesSecretSplitAcrossBoundaryWhitespace(t *testing.T) {
 	}, nil)
 	m := newManager(t, d, server.URL, nil)
 
-	result, err := m.RunPass(context.Background(), PassOptions{})
+	result, err := m.RunPass(t.Context(), PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if log.count() != 0 {
-		t.Fatalf("model calls = %d, want 0: boundary whitespace must not "+
+		require.FailNowf(t, "test failed", "model calls = %d, want 0: boundary whitespace must not "+
 			"hide a key the model receives contiguously", log.count())
 	}
 	if result.Failed != 1 {
-		t.Fatalf("failed = %d, want 1", result.Failed)
+		require.FailNowf(t, "test failed", "failed = %d, want 1", result.Failed)
 	}
 }
 
@@ -666,16 +684,16 @@ func TestManagerExtractsBenignHighEntropyAssistantToken(t *testing.T) {
 	}, nil)
 	m := newManager(t, d, server.URL, nil)
 
-	result, err := m.RunPass(context.Background(), PassOptions{})
+	result, err := m.RunPass(t.Context(), PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Failed != 0 {
-		t.Fatalf("failed = %d, want 0: a bare high-entropy token is not a "+
+		require.FailNowf(t, "test failed", "failed = %d, want 0: a bare high-entropy token is not a "+
 			"secret and must not fail the session", result.Failed)
 	}
 	if log.count() == 0 {
-		t.Fatal("model was never called: a benign high-entropy token must " +
+		require.FailNow(t, "model was never called: a benign high-entropy token must "+
 			"not block extraction")
 	}
 }
@@ -702,31 +720,31 @@ func TestManagerBoundsOversizedUnitSplitWork(t *testing.T) {
 		cfg.Segmenter = TurnsV1{MaxWindowChars: 400}
 	})
 
-	result, err := m.RunPass(context.Background(), PassOptions{})
+	result, err := m.RunPass(t.Context(), PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Failed != 1 {
-		t.Fatalf("failed = %d, want 1: an oversized unit that blows the "+
+		require.FailNowf(t, "test failed", "failed = %d, want 1: an oversized unit that blows the "+
 			"split budget must fail the session", result.Failed)
 	}
 	if log.count() > maxUnitDistillCalls {
-		t.Fatalf("model calls = %d, want <= %d: the split budget must bound "+
+		require.FailNowf(t, "test failed", "model calls = %d, want <= %d: the split budget must bound "+
 			"overflow recovery", log.count(), maxUnitDistillCalls)
 	}
 	entry, err := d.GetRecallEntry(
-		context.Background(), EntryID(m.Fingerprint(), "sess-1", 0, 0))
+		t.Context(), EntryID(m.Fingerprint(), "sess-1", 0, 0))
 	if err != nil {
-		t.Fatalf("GetRecallEntry: %v", err)
+		require.FailNowf(t, "test failed", "GetRecallEntry: %v", err)
 	}
 	if entry != nil {
-		t.Fatalf("entry persisted despite a budget failure: %+v", entry)
+		require.FailNowf(t, "test failed", "entry persisted despite a budget failure: %+v", entry)
 	}
 }
 
 func TestManagerRunPassRetriesFailedSessionFromCursor(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	// Units: intent(u0), action(a1), intent(u2), action(a3). Call 3 (unit 2)
 	// fails until the server heals, exhausting the client's attempts.
 	server, log := modelServer(t, func(text string, call int) (int, string) {
@@ -747,43 +765,43 @@ func TestManagerRunPassRetriesFailedSessionFromCursor(t *testing.T) {
 	// failed behind its backoff.
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err == nil {
-		t.Fatal("exhausted transient retries must abort the pass")
+		require.FailNow(t, "exhausted transient retries must abort the pass")
 	}
 	if result.Failed != 1 || result.Sessions != 0 {
-		t.Fatalf("result = %+v, want the session marked failed", result)
+		require.FailNowf(t, "test failed", "result = %+v, want the session marked failed", result)
 	}
 	if result.Units != 2 || result.Entries != 2 {
-		t.Fatalf("result = %+v, want 2 units done before the failure", result)
+		require.FailNowf(t, "test failed", "result = %+v, want 2 units done before the failure", result)
 	}
 	if result.Activated {
-		t.Fatal("an aborted pass must not activate")
+		require.FailNow(t, "an aborted pass must not activate")
 	}
 
-	// Let the failure row age past the (tiny) backoff before rescanning.
-	time.Sleep(50 * time.Millisecond)
+	// The failure row is immediately retryable for this second pass.
+	m.cfg.FailureBackoff = 0
 	result, err = m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass retry: %v", err)
+		require.FailNowf(t, "test failed", "RunPass retry: %v", err)
 	}
 	if result.Sessions != 1 || result.Failed != 0 {
-		t.Fatalf("retry result = %+v, want session completed", result)
+		require.FailNowf(t, "test failed", "retry result = %+v, want session completed", result)
 	}
 	if result.Units != 2 || result.Entries != 2 {
-		t.Fatalf("retry result = %+v, want only units 2-3 redone", result)
+		require.FailNowf(t, "test failed", "retry result = %+v, want only units 2-3 redone", result)
 	}
 	// Calls: 2 ok + 2 failing attempts, then 2 for the remaining units.
 	if log.count() != 6 {
-		t.Fatalf("model calls = %d, want 6 (resume must skip done units)",
+		require.FailNowf(t, "test failed", "model calls = %d, want 6 (resume must skip done units)",
 			log.count())
 	}
 	if !result.Activated {
-		t.Fatal("completing pass must activate the generation")
+		require.FailNow(t, "completing pass must activate the generation")
 	}
 }
 
 func TestManagerSplitsOversizedUnits(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, func(text string, _ int) (int, string) {
 		if utf8.RuneCountInString(text) > 80 {
 			return http.StatusBadRequest,
@@ -805,29 +823,29 @@ func TestManagerSplitsOversizedUnits(t *testing.T) {
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Failed != 0 || result.Sessions != 1 {
-		t.Fatalf("result = %+v, want clean completion via splitting", result)
+		require.FailNowf(t, "test failed", "result = %+v, want clean completion via splitting", result)
 	}
 	if result.Entries < 3 {
-		t.Fatalf("entries = %d, want one per split leaf plus the intent",
+		require.FailNowf(t, "test failed", "entries = %d, want one per split leaf plus the intent",
 			result.Entries)
 	}
 	// Split leaves stay inside one unit: both leaf entries carry unit index 1.
 	first, err := d.GetRecallEntry(ctx, EntryID(m.Fingerprint(), "sess-1", 1, 0))
 	if err != nil || first == nil {
-		t.Fatalf("leaf entry 0 missing: %v", err)
+		require.FailNowf(t, "test failed", "leaf entry 0 missing: %v", err)
 	}
 	second, err := d.GetRecallEntry(ctx, EntryID(m.Fingerprint(), "sess-1", 1, 1))
 	if err != nil || second == nil {
-		t.Fatalf("leaf entry 1 missing: %v", err)
+		require.FailNowf(t, "test failed", "leaf entry 1 missing: %v", err)
 	}
 }
 
 func TestManagerRunPassSkipsIneligibleSessions(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-automated", turnMessages("a", "b"),
 		func(s *db.Session) { s.IsAutomated = true })
@@ -835,28 +853,28 @@ func TestManagerRunPassSkipsIneligibleSessions(t *testing.T) {
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Sessions != 0 || log.count() != 0 {
-		t.Fatalf("result = %+v with %d calls; automated sessions must never "+
+		require.FailNowf(t, "test failed", "result = %+v with %d calls; automated sessions must never "+
 			"reach the model", result, log.count())
 	}
 	if result.Activated {
-		t.Fatal("nothing extracted, nothing to activate")
+		require.FailNow(t, "nothing extracted, nothing to activate")
 	}
 
 	_, err = m.RunPass(ctx, PassOptions{SessionID: "sess-automated"})
 	if err == nil {
-		t.Fatal("explicit run on an automated session must be refused")
+		require.FailNow(t, "explicit run on an automated session must be refused")
 	}
 	if log.count() != 0 {
-		t.Fatal("refusal must happen before any model call")
+		require.FailNow(t, "refusal must happen before any model call")
 	}
 }
 
 func TestManagerExplicitSessionBypassesQuietPeriod(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-fresh", turnMessages("a", "b"),
 		func(s *db.Session) {
@@ -867,40 +885,40 @@ func TestManagerExplicitSessionBypassesQuietPeriod(t *testing.T) {
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Sessions != 0 {
-		t.Fatalf("scan must respect the quiet period, got %+v", result)
+		require.FailNowf(t, "test failed", "scan must respect the quiet period, got %+v", result)
 	}
 
 	result, err = m.RunPass(ctx, PassOptions{SessionID: "sess-fresh"})
 	if err != nil {
-		t.Fatalf("explicit RunPass: %v", err)
+		require.FailNowf(t, "test failed", "explicit RunPass: %v", err)
 	}
 	if result.Sessions != 1 {
-		t.Fatalf("explicit run must bypass the quiet period, got %+v", result)
+		require.FailNowf(t, "test failed", "explicit run must bypass the quiet period, got %+v", result)
 	}
 }
 
 func TestManagerFullPassTopsUpGrownSession(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("ask", "answer"), nil)
 	m := newManager(t, d, server.URL, nil)
 
 	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	firstCalls := log.count()
 
 	// A plain rescan leaves done sessions alone.
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass rescan: %v", err)
+		require.FailNowf(t, "test failed", "RunPass rescan: %v", err)
 	}
 	if result.Sessions != 0 || log.count() != firstCalls {
-		t.Fatalf("rescan must skip done sessions, got %+v", result)
+		require.FailNowf(t, "test failed", "rescan must skip done sessions, got %+v", result)
 	}
 
 	// The session grows; a full pass re-derives units, replaces the
@@ -909,30 +927,30 @@ func TestManagerFullPassTopsUpGrownSession(t *testing.T) {
 		turnMessages("ask", "answer", "follow-up", "more work")[2:], 2)
 	result, err = m.RunPass(ctx, PassOptions{Full: true})
 	if err != nil {
-		t.Fatalf("RunPass full: %v", err)
+		require.FailNowf(t, "test failed", "RunPass full: %v", err)
 	}
 	if result.Sessions != 1 {
-		t.Fatalf("full pass must revisit the grown session, got %+v", result)
+		require.FailNowf(t, "test failed", "full pass must revisit the grown session, got %+v", result)
 	}
 	if result.Entries != 4 {
-		t.Fatalf("entries = %d, want 4 (digest change rebuilds the "+
+		require.FailNowf(t, "test failed", "entries = %d, want 4 (digest change rebuilds the "+
 			"session's corpus)", result.Entries)
 	}
 	var count int
 	entries, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
 	if err != nil {
-		t.Fatalf("ListRecallEntries: %v", err)
+		require.FailNowf(t, "test failed", "ListRecallEntries: %v", err)
 	}
 	count = len(entries)
 	if count != 4 {
-		t.Fatalf("stored entries = %d, want exactly 4 (no stale leftovers)",
+		require.FailNowf(t, "test failed", "stored entries = %d, want exactly 4 (no stale leftovers)",
 			count)
 	}
 }
 
 func TestManagerFullPassReplacesEntriesOfChangedUnits(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	// Titles encode the unit text length so re-extraction of changed
 	// content is observable.
 	server, _ := modelServer(t, func(text string, _ int) (int, string) {
@@ -946,11 +964,11 @@ func TestManagerFullPassReplacesEntriesOfChangedUnits(t *testing.T) {
 	m := newManager(t, d, server.URL, nil)
 
 	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	before, err := d.GetRecallEntry(ctx, EntryID(m.Fingerprint(), "sess-1", 1, 0))
 	if err != nil || before == nil {
-		t.Fatalf("unit-1 entry missing after first pass: %v", err)
+		require.FailNowf(t, "test failed", "unit-1 entry missing after first pass: %v", err)
 	}
 
 	// The assistant run grows: unit 1 now packs both messages, so its
@@ -959,72 +977,72 @@ func TestManagerFullPassReplacesEntriesOfChangedUnits(t *testing.T) {
 		[]db.Message{{Role: "assistant", Content: "second answer"}}, 2)
 	result, err := m.RunPass(ctx, PassOptions{Full: true})
 	if err != nil {
-		t.Fatalf("RunPass full: %v", err)
+		require.FailNowf(t, "test failed", "RunPass full: %v", err)
 	}
 	if result.Sessions != 1 {
-		t.Fatalf("full pass must revisit the changed session, got %+v", result)
+		require.FailNowf(t, "test failed", "full pass must revisit the changed session, got %+v", result)
 	}
 	after, err := d.GetRecallEntry(ctx, EntryID(m.Fingerprint(), "sess-1", 1, 0))
 	if err != nil || after == nil {
-		t.Fatalf("unit-1 entry missing after re-extraction: %v", err)
+		require.FailNowf(t, "test failed", "unit-1 entry missing after re-extraction: %v", err)
 	}
 	if after.Title == before.Title {
-		t.Fatalf("unit-1 entry still says %q; a changed unit must not "+
+		require.FailNowf(t, "test failed", "unit-1 entry still says %q; a changed unit must not "+
 			"keep its stale entry", after.Title)
 	}
 	entries, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
 	if err != nil {
-		t.Fatalf("ListRecallEntries: %v", err)
+		require.FailNowf(t, "test failed", "ListRecallEntries: %v", err)
 	}
 	if len(entries) != 2 {
-		t.Fatalf("stored entries = %d, want 2 (stale entries removed)",
+		require.FailNowf(t, "test failed", "stored entries = %d, want 2 (stale entries removed)",
 			len(entries))
 	}
 }
 
 func TestManagerSkipsSessionsWithoutCurrentSecretScan(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	// Seed without the scan stamp: leak count 0 but never scanned.
 	ended := time.Now().Add(-time.Hour).UTC().Format("2006-01-02T15:04:05.000Z")
-	if err := d.UpsertSession(db.Session{
+	if err := d.UpsertSession(ctx, db.Session{
 		ID: "sess-unscanned", Project: "proj", Machine: "local",
 		Agent: "claude", EndedAt: &ended, MessageCount: 2,
 	}); err != nil {
-		t.Fatal(err)
+		require.FailNow(t, fmt.Sprint(err))
 	}
 	msgs := turnMessages("a", "b")
 	for i := range msgs {
 		msgs[i].SessionID = "sess-unscanned"
 		msgs[i].Ordinal = i
 	}
-	if err := d.InsertMessages(msgs); err != nil {
-		t.Fatal(err)
+	if err := d.InsertMessages(ctx, msgs); err != nil {
+		require.FailNow(t, fmt.Sprint(err))
 	}
 	m := newManager(t, d, server.URL, nil)
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Sessions != 0 || log.count() != 0 {
-		t.Fatalf("unscanned session reached the model: %+v, %d calls",
+		require.FailNowf(t, "test failed", "unscanned session reached the model: %+v, %d calls",
 			result, log.count())
 	}
 
 	_, err = m.RunPass(ctx, PassOptions{SessionID: "sess-unscanned"})
 	if err == nil {
-		t.Fatal("explicit run on an unscanned session must be refused")
+		require.FailNow(t, "explicit run on an unscanned session must be refused")
 	}
 	if log.count() != 0 {
-		t.Fatal("refusal must happen before any model call")
+		require.FailNow(t, "refusal must happen before any model call")
 	}
 }
 
 func TestManagerZeroEntryGenerationNeverActivates(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, func(string, int) (int, string) {
 		return http.StatusOK, completionBody(t, `{"entries":[]}`)
 	})
@@ -1033,23 +1051,23 @@ func TestManagerZeroEntryGenerationNeverActivates(t *testing.T) {
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Sessions != 1 {
-		t.Fatalf("result = %+v, want the session completed", result)
+		require.FailNowf(t, "test failed", "result = %+v, want the session completed", result)
 	}
 	if result.Activated {
-		t.Fatal("a generation with no entries must not auto-activate: " +
+		require.FailNow(t, "a generation with no entries must not auto-activate: "+
 			"it would replace the active corpus with nothing")
 	}
 	if err := m.Activate(ctx); err == nil {
-		t.Fatal("explicit activation of an entryless generation must be refused")
+		require.FailNow(t, "explicit activation of an entryless generation must be refused")
 	}
 }
 
 func TestManagerTryPassDropsWhenBusy(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	release := make(chan struct{})
 	inFlight := make(chan struct{}, 1)
 	server, _ := modelServer(t, func(text string, _ int) (int, string) {
@@ -1070,36 +1088,36 @@ func TestManagerTryPassDropsWhenBusy(t *testing.T) {
 	require.ErrorIs(t, m.Activate(ctx), ErrPassRunning)
 	started, _, err := m.TryPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("TryPass: %v", err)
+		require.FailNowf(t, "test failed", "TryPass: %v", err)
 	}
 	if started {
-		t.Fatal("TryPass must drop while a pass is running")
+		require.FailNow(t, "TryPass must drop while a pass is running")
 	}
 	close(release)
 	if err := <-done; err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	<-inFlight // drain the second unit's signal
 }
 
 func TestManagerActivateRefusesEmptyGeneration(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	m := newManager(t, d, server.URL, nil)
 
 	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if err := m.Activate(ctx); err == nil {
-		t.Fatal("activating a generation with no completed sessions " +
+		require.FailNow(t, "activating a generation with no completed sessions "+
 			"must be refused")
 	}
 }
 
 func TestManagerStatusReportsCoverage(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("ask", "answer"), nil)
 	seedSession(t, d, "sess-fresh", turnMessages("a", "b"),
@@ -1110,24 +1128,24 @@ func TestManagerStatusReportsCoverage(t *testing.T) {
 	m := newManager(t, d, server.URL, nil)
 
 	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	status, err := m.Status(ctx)
 	if err != nil {
-		t.Fatalf("Status: %v", err)
+		require.FailNowf(t, "test failed", "Status: %v", err)
 	}
 	if status.Fingerprint != m.Fingerprint() {
-		t.Fatalf("fingerprint = %s", status.Fingerprint)
+		require.FailNowf(t, "test failed", "fingerprint = %s", status.Fingerprint)
 	}
 	if status.Stats.Done != 1 || status.Stats.Entries != 2 {
-		t.Fatalf("stats = %+v, want 1 done session with 2 entries",
+		require.FailNowf(t, "test failed", "stats = %+v, want 1 done session with 2 entries",
 			status.Stats)
 	}
 	if len(status.Generations) != 1 {
-		t.Fatalf("generations = %+v", status.Generations)
+		require.FailNowf(t, "test failed", "generations = %+v", status.Generations)
 	}
 	if status.EligibleBacklog != 0 {
-		t.Fatalf("backlog = %d; the quiet-period session is not yet eligible",
+		require.FailNowf(t, "test failed", "backlog = %d; the quiet-period session is not yet eligible",
 			status.EligibleBacklog)
 	}
 }
@@ -1173,58 +1191,58 @@ func TestNewManagerValidatesConfig(t *testing.T) {
 			cfg := base()
 			tc.mutate(&cfg)
 			if _, err := NewManager(cfg); err == nil {
-				t.Fatal("expected config validation error")
+				require.FailNow(t, "expected config validation error")
 			}
 		})
 	}
 	if _, err := NewManager(base()); err != nil {
-		t.Fatalf("valid config rejected: %v", err)
+		require.FailNowf(t, "test failed", "valid config rejected: %v", err)
 	}
 }
 
 func TestManagerRefusesDefiniteOnlyScan(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	// Only the fast inline sync scan ran: definite rules, no candidate
 	// detection. Candidate-confidence secrets could be present undetected.
 	seedSession(t, d, "sess-inline", turnMessages("a", "b"), nil)
-	if err := d.ReplaceSessionSecretFindings(
+	if err := d.ReplaceSessionSecretFindings(ctx,
 		"sess-inline", nil, 0, secrets.DefiniteRulesVersion(),
 	); err != nil {
-		t.Fatal(err)
+		require.FailNow(t, fmt.Sprint(err))
 	}
 	m := newManager(t, d, server.URL, nil)
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Sessions != 0 || log.count() != 0 {
-		t.Fatalf("definite-only scanned session reached the model: %+v, "+
+		require.FailNowf(t, "test failed", "definite-only scanned session reached the model: %+v, "+
 			"%d calls", result, log.count())
 	}
 
 	_, err = m.RunPass(ctx, PassOptions{SessionID: "sess-inline"})
 	if err == nil {
-		t.Fatal("explicit run on a definite-only scanned session must be refused")
+		require.FailNow(t, "explicit run on a definite-only scanned session must be refused")
 	}
 	if !strings.Contains(err.Error(), "--backfill") {
-		t.Fatalf("refusal must point at the full scan: %v", err)
+		require.FailNowf(t, "test failed", "refusal must point at the full scan: %v", err)
 	}
 	if log.count() != 0 {
-		t.Fatal("refusal must happen before any model call")
+		require.FailNow(t, "refusal must happen before any model call")
 	}
 }
 
 func TestManagerRefusesSessionsWithCandidateFindings(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	// A full scan found a candidate-confidence secret: the leak count stays
 	// zero, but the finding is recorded.
 	seedSession(t, d, "sess-candidate", turnMessages("a", "b"), nil)
-	if err := d.ReplaceSessionSecretFindings(
+	if err := d.ReplaceSessionSecretFindings(ctx,
 		"sess-candidate",
 		[]db.SecretFinding{{
 			SessionID:     "sess-candidate",
@@ -1235,25 +1253,25 @@ func TestManagerRefusesSessionsWithCandidateFindings(t *testing.T) {
 		}},
 		0, secrets.RulesVersion(),
 	); err != nil {
-		t.Fatal(err)
+		require.FailNow(t, fmt.Sprint(err))
 	}
 	m := newManager(t, d, server.URL, nil)
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Sessions != 0 || log.count() != 0 {
-		t.Fatalf("session with a candidate finding reached the model: %+v, "+
+		require.FailNowf(t, "test failed", "session with a candidate finding reached the model: %+v, "+
 			"%d calls", result, log.count())
 	}
 
 	_, err = m.RunPass(ctx, PassOptions{SessionID: "sess-candidate"})
 	if err == nil {
-		t.Fatal("explicit run on a session with candidate findings must be refused")
+		require.FailNow(t, "explicit run on a session with candidate findings must be refused")
 	}
 	if log.count() != 0 {
-		t.Fatal("refusal must happen before any model call")
+		require.FailNow(t, "refusal must happen before any model call")
 	}
 }
 
@@ -1271,7 +1289,7 @@ func TestSessionSnapshotChanged(t *testing.T) {
 		}
 	}
 	if sessionSnapshotChanged(base(), base()) {
-		t.Fatal("identical snapshots must compare equal")
+		require.FailNow(t, "identical snapshots must compare equal")
 	}
 	cases := []struct {
 		name   string
@@ -1298,7 +1316,7 @@ func TestSessionSnapshotChanged(t *testing.T) {
 			after := base()
 			tc.mutate(after)
 			if !sessionSnapshotChanged(base(), after) {
-				t.Fatal("changed snapshot must be detected")
+				require.FailNow(t, "changed snapshot must be detected")
 			}
 		})
 	}
@@ -1319,16 +1337,16 @@ func TestExtractionBracketStable(t *testing.T) {
 		}
 	}
 	if !extractionBracketStable("s", base(), base()) {
-		t.Fatal("identical eligible snapshots must read as stable")
+		require.FailNow(t, "identical eligible snapshots must read as stable")
 	}
 	if extractionBracketStable("s", base(), nil) {
-		t.Fatal("a vanished session row must read as unstable")
+		require.FailNow(t, "a vanished session row must read as unstable")
 	}
 	moved := base()
 	other := "2026-01-01T00:00:01.000Z"
 	moved.LocalModifiedAt = &other
 	if extractionBracketStable("s", base(), moved) {
-		t.Fatal("a moved local_modified_at must read as unstable")
+		require.FailNow(t, "a moved local_modified_at must read as unstable")
 	}
 	// Trash and automation flags can flip without touching any field the
 	// snapshot comparison watches; the bracket must recheck eligibility.
@@ -1336,19 +1354,19 @@ func TestExtractionBracketStable(t *testing.T) {
 	deleted := "2026-01-01T00:00:02.000Z"
 	trashed.DeletedAt = &deleted
 	if extractionBracketStable("s", base(), trashed) {
-		t.Fatal("a concurrently trashed session must read as unstable")
+		require.FailNow(t, "a concurrently trashed session must read as unstable")
 	}
 	automated := base()
 	automated.IsAutomated = true
 	if extractionBracketStable("s", base(), automated) {
-		t.Fatal("a concurrently automation-flagged session must read as " +
+		require.FailNow(t, "a concurrently automation-flagged session must read as "+
 			"unstable")
 	}
 }
 
 func TestManagerStagesEntriesUntilActivation(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	seedSession(t, d, "sess-2", turnMessages("c", "d"), nil)
@@ -1358,85 +1376,84 @@ func TestManagerStagesEntriesUntilActivation(t *testing.T) {
 	// building, so its entries must not serve yet.
 	result, err := m.RunPass(ctx, PassOptions{Limit: 1})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Sessions != 1 || result.Activated {
-		t.Fatalf("result = %+v, want 1 session and no activation", result)
+		require.FailNowf(t, "test failed", "result = %+v, want 1 session and no activation", result)
 	}
 	served, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
 	if err != nil {
-		t.Fatalf("ListRecallEntries: %v", err)
+		require.FailNowf(t, "test failed", "ListRecallEntries: %v", err)
 	}
 	if len(served) != 0 {
-		t.Fatalf("%d entries served while the generation is still building; "+
+		require.FailNowf(t, "test failed", "%d entries served while the generation is still building; "+
 			"want 0 (staged as archived)", len(served))
 	}
 	staged, err := d.ListRecallEntries(ctx,
 		db.RecallQuery{Status: "archived", Limit: 50})
 	if err != nil {
-		t.Fatalf("ListRecallEntries staged: %v", err)
+		require.FailNowf(t, "test failed", "ListRecallEntries staged: %v", err)
 	}
 	if len(staged) != 2 {
-		t.Fatalf("staged entries = %d, want 2", len(staged))
+		require.FailNowf(t, "test failed", "staged entries = %d, want 2", len(staged))
 	}
 
 	// The backlog drains; activation promotes the staged corpus atomically.
 	result, err = m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if !result.Activated {
-		t.Fatalf("result = %+v, want activation once the backlog drained", result)
+		require.FailNowf(t, "test failed", "result = %+v, want activation once the backlog drained", result)
 	}
 	served, err = d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
 	if err != nil {
-		t.Fatalf("ListRecallEntries: %v", err)
+		require.FailNowf(t, "test failed", "ListRecallEntries: %v", err)
 	}
 	if len(served) != 4 {
-		t.Fatalf("served entries = %d, want all 4 after activation", len(served))
+		require.FailNowf(t, "test failed", "served entries = %d, want all 4 after activation", len(served))
 	}
 	staged, err = d.ListRecallEntries(ctx,
 		db.RecallQuery{Status: "archived", Limit: 50})
 	if err != nil {
-		t.Fatalf("ListRecallEntries staged: %v", err)
+		require.FailNowf(t, "test failed", "ListRecallEntries staged: %v", err)
 	}
 	if len(staged) != 0 {
-		t.Fatalf("staged entries = %d after activation, want 0", len(staged))
+		require.FailNowf(t, "test failed", "staged entries = %d after activation, want 0", len(staged))
 	}
 }
 
 func TestManagerSnapshotReadSeesMetadataOnlyWrites(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, "http://unused", nil)
 
 	before, err := m.sessionSnapshot(ctx, "sess-1")
 	if err != nil || before == nil {
-		t.Fatalf("sessionSnapshot before: %v", err)
+		require.FailNowf(t, "test failed", "sessionSnapshot before: %v", err)
 	}
 	// A rescan that finds only candidate findings replaces the findings
 	// under the same rules version and leak count: the only session-row
 	// signal is local_modified_at, so the snapshot read must load it.
-	time.Sleep(5 * time.Millisecond)
-	if err := d.ReplaceSessionSecretFindings(
+	if err := d.ReplaceSessionSecretFindings(ctx,
 		"sess-1", nil, 0, secrets.RulesVersion(),
 	); err != nil {
-		t.Fatal(err)
+		require.FailNow(t, fmt.Sprint(err))
 	}
 	after, err := m.sessionSnapshot(ctx, "sess-1")
 	if err != nil || after == nil {
-		t.Fatalf("sessionSnapshot after: %v", err)
+		require.FailNowf(t, "test failed", "sessionSnapshot after: %v", err)
 	}
 	if !sessionSnapshotChanged(before, after) {
-		t.Fatal("a metadata-only write between snapshot reads must be " +
+		require.FailNow(t, "a metadata-only write between snapshot reads must be "+
 			"detected; the snapshot read is blind to local_modified_at")
 	}
 }
 
 func TestManagerWatermarkLimitsScanDiscovery(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, server.URL, nil)
@@ -1448,18 +1465,18 @@ func TestManagerWatermarkLimitsScanDiscovery(t *testing.T) {
 	m.watermark = time.Now().Add(time.Hour)
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Sessions != 0 || log.count() != 0 {
-		t.Fatalf("result = %+v with %d calls; incremental discovery must "+
+		require.FailNowf(t, "test failed", "result = %+v with %d calls; incremental discovery must "+
 			"respect the watermark", result, log.count())
 	}
 	result, err = m.RunPass(ctx, PassOptions{Full: true})
 	if err != nil {
-		t.Fatalf("RunPass full: %v", err)
+		require.FailNowf(t, "test failed", "RunPass full: %v", err)
 	}
 	if result.Sessions != 0 || log.count() != 0 {
-		t.Fatalf("result = %+v with %d calls; full-pass discovery must "+
+		require.FailNowf(t, "test failed", "result = %+v with %d calls; full-pass discovery must "+
 			"respect the watermark too", result, log.count())
 	}
 
@@ -1468,75 +1485,75 @@ func TestManagerWatermarkLimitsScanDiscovery(t *testing.T) {
 	fresh := newManager(t, d, server.URL, nil)
 	result, err = fresh.RunPass(ctx, PassOptions{Full: true})
 	if err != nil {
-		t.Fatalf("fresh RunPass full: %v", err)
+		require.FailNowf(t, "test failed", "fresh RunPass full: %v", err)
 	}
 	if result.Sessions != 1 {
-		t.Fatalf("result = %+v; a fresh manager must discover unbounded", result)
+		require.FailNowf(t, "test failed", "result = %+v; a fresh manager must discover unbounded", result)
 	}
 }
 
 func TestManagerWatermarkAdvancesOnlyOnCompleteScanPasses(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, server.URL, nil)
 
 	start := time.Now()
 	if _, err := m.RunPass(ctx, PassOptions{SessionID: "sess-1"}); err != nil {
-		t.Fatalf("explicit RunPass: %v", err)
+		require.FailNowf(t, "test failed", "explicit RunPass: %v", err)
 	}
 	if !m.watermark.IsZero() {
-		t.Fatal("an explicit single-session pass must not advance the watermark")
+		require.FailNow(t, "an explicit single-session pass must not advance the watermark")
 	}
 	if _, err := m.RunPass(ctx, PassOptions{Limit: 1}); err != nil {
-		t.Fatalf("limited RunPass: %v", err)
+		require.FailNowf(t, "test failed", "limited RunPass: %v", err)
 	}
 	if !m.watermark.IsZero() {
-		t.Fatal("a limited pass leaves sessions behind and must not " +
+		require.FailNow(t, "a limited pass leaves sessions behind and must not "+
 			"advance the watermark")
 	}
 	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if m.watermark.IsZero() {
-		t.Fatal("a completed scan pass must advance the watermark")
+		require.FailNow(t, "a completed scan pass must advance the watermark")
 	}
 	lag := start.Add(-m.cfg.QuietPeriod)
 	if m.watermark.After(start) || m.watermark.Before(lag.Add(-time.Minute)) {
-		t.Fatalf("watermark = %v, want roughly pass start minus the quiet "+
+		require.FailNowf(t, "test failed", "watermark = %v, want roughly pass start minus the quiet "+
 			"period (start %v)", m.watermark, start)
 	}
 }
 
 func TestManagerFullWatermarkBoundsDoneRevisits(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("ask", "answer"), nil)
 	m := newManager(t, d, server.URL, nil)
 
 	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if !m.fullWatermark.IsZero() {
-		t.Fatal("an incremental pass must not advance the full watermark")
+		require.FailNow(t, "an incremental pass must not advance the full watermark")
 	}
 	if _, err := m.RunPass(ctx, PassOptions{Full: true}); err != nil {
-		t.Fatalf("RunPass full: %v", err)
+		require.FailNowf(t, "test failed", "RunPass full: %v", err)
 	}
 	if m.fullWatermark.IsZero() {
-		t.Fatal("a completed unlimited full pass must advance the full " +
+		require.FailNow(t, "a completed unlimited full pass must advance the full "+
 			"watermark")
 	}
 	// A limited full pass may leave revisits behind and must not advance
 	// the full watermark.
 	bounded := newManager(t, d, server.URL, nil)
 	if _, err := bounded.RunPass(ctx, PassOptions{Full: true, Limit: 1}); err != nil {
-		t.Fatalf("limited RunPass full: %v", err)
+		require.FailNowf(t, "test failed", "limited RunPass full: %v", err)
 	}
 	if !bounded.fullWatermark.IsZero() {
-		t.Fatal("a limited full pass must not advance the full watermark")
+		require.FailNow(t, "a limited full pass must not advance the full watermark")
 	}
 	firstCalls := log.count()
 
@@ -1548,10 +1565,10 @@ func TestManagerFullWatermarkBoundsDoneRevisits(t *testing.T) {
 	m.fullWatermark = time.Now().Add(time.Hour)
 	result, err := m.RunPass(ctx, PassOptions{Full: true})
 	if err != nil {
-		t.Fatalf("RunPass full: %v", err)
+		require.FailNowf(t, "test failed", "RunPass full: %v", err)
 	}
 	if result.Sessions != 0 || log.count() != firstCalls {
-		t.Fatalf("result = %+v with %d calls; done revisits must respect "+
+		require.FailNowf(t, "test failed", "result = %+v with %d calls; done revisits must respect "+
 			"the full watermark", result, log.count()-firstCalls)
 	}
 
@@ -1560,17 +1577,17 @@ func TestManagerFullWatermarkBoundsDoneRevisits(t *testing.T) {
 	fresh := newManager(t, d, server.URL, nil)
 	result, err = fresh.RunPass(ctx, PassOptions{Full: true})
 	if err != nil {
-		t.Fatalf("fresh RunPass full: %v", err)
+		require.FailNowf(t, "test failed", "fresh RunPass full: %v", err)
 	}
 	if result.Sessions != 1 {
-		t.Fatalf("result = %+v; a fresh manager must revisit the grown "+
+		require.FailNowf(t, "test failed", "result = %+v; a fresh manager must revisit the grown "+
 			"session", result)
 	}
 }
 
 func TestManagerMarksTranscriptOutOfStepRetryable(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 
@@ -1580,23 +1597,23 @@ func TestManagerMarksTranscriptOutOfStepRetryable(t *testing.T) {
 	// the model.
 	session, err := d.GetSessionFull(ctx, "sess-1")
 	if err != nil || session == nil {
-		t.Fatalf("GetSessionFull: %v", err)
+		require.FailNowf(t, "test failed", "GetSessionFull: %v", err)
 	}
 	session.MessageCount = 4
-	if err := d.UpsertSession(*session); err != nil {
-		t.Fatal(err)
+	if err := d.UpsertSession(ctx, *session); err != nil {
+		require.FailNow(t, fmt.Sprint(err))
 	}
-	settleSessionWrite()
+	settleSessionWrite(t, d)
 	m := newManager(t, d, server.URL, func(cfg *ManagerConfig) {
 		cfg.FailureBackoff = 5 * time.Millisecond
 	})
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Sessions != 0 || log.count() != 0 {
-		t.Fatalf("result = %+v with %d calls; a transcript out of step with "+
+		require.FailNowf(t, "test failed", "result = %+v with %d calls; a transcript out of step with "+
 			"the session row must not reach the model", result, log.count())
 	}
 	// The snapshot bracket was stable, so this was not a caught-mid-write
@@ -1604,43 +1621,43 @@ func TestManagerMarksTranscriptOutOfStepRetryable(t *testing.T) {
 	// session's writes and exclude it forever. The mismatch must be
 	// recorded as a retryable failure instead.
 	if result.Failed != 1 {
-		t.Fatalf("result = %+v; a stable out-of-step transcript must be "+
+		require.FailNowf(t, "test failed", "result = %+v; a stable out-of-step transcript must be "+
 			"recorded as a retryable failure, not silently skipped", result)
 	}
 	progress, found, err := d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
 	if err != nil || !found {
-		t.Fatalf("ExtractProgress: found=%v err=%v", found, err)
+		require.FailNowf(t, "test failed", "ExtractProgress: found=%v err=%v", found, err)
 	}
 	if progress.State != db.ExtractProgressFailed {
-		t.Fatalf("state = %s, want failed", progress.State)
+		require.FailNowf(t, "test failed", "state = %s, want failed", progress.State)
 	}
 	if progress.LastError == "" {
-		t.Fatal("the failure must record why the session was refused")
+		require.FailNow(t, "the failure must record why the session was refused")
 	}
 
 	// The row heals. Watermarks far ahead of every write prove the retry
 	// flows through the queue arm, which discovery bounds never gate.
 	session.MessageCount = 2
-	if err := d.UpsertSession(*session); err != nil {
-		t.Fatal(err)
+	if err := d.UpsertSession(ctx, *session); err != nil {
+		require.FailNow(t, fmt.Sprint(err))
 	}
-	settleSessionWrite()
+	settleSessionWrite(t, d)
 	m.watermark = time.Now().Add(time.Hour)
 	m.fullWatermark = time.Now().Add(time.Hour)
-	time.Sleep(10 * time.Millisecond)
+	m.cfg.FailureBackoff = 0
 	result, err = m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass retry: %v", err)
+		require.FailNowf(t, "test failed", "RunPass retry: %v", err)
 	}
 	if result.Sessions != 1 {
-		t.Fatalf("result = %+v; the healed session must extract on retry",
+		require.FailNowf(t, "test failed", "result = %+v; the healed session must extract on retry",
 			result)
 	}
 }
 
 func TestManagerReopensDoneSessionOnCountMismatch(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, server.URL, func(cfg *ManagerConfig) {
@@ -1648,7 +1665,7 @@ func TestManagerReopensDoneSessionOnCountMismatch(t *testing.T) {
 	})
 
 	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	doneCalls := log.count()
 
@@ -1658,69 +1675,69 @@ func TestManagerReopensDoneSessionOnCountMismatch(t *testing.T) {
 	// covered forever — and the transcript must not reach the model.
 	session, err := d.GetSessionFull(ctx, "sess-1")
 	if err != nil || session == nil {
-		t.Fatalf("GetSessionFull: %v", err)
+		require.FailNowf(t, "test failed", "GetSessionFull: %v", err)
 	}
 	session.MessageCount = 4
-	if err := d.UpsertSession(*session); err != nil {
-		t.Fatal(err)
+	if err := d.UpsertSession(ctx, *session); err != nil {
+		require.FailNow(t, fmt.Sprint(err))
 	}
 	// The sync batch path stamps local_modified_at on every session write;
 	// the bare test upsert does not, so stamp it explicitly or the
 	// done-revisit gate never re-opens the session.
-	if err := d.BumpLocalModifiedAt("sess-1"); err != nil {
-		t.Fatal(err)
+	if err := d.BumpLocalModifiedAt(ctx, "sess-1"); err != nil {
+		require.FailNow(t, fmt.Sprint(err))
 	}
-	settleSessionWrite()
+	settleSessionWrite(t, d)
 	result, err := m.RunPass(ctx, PassOptions{Full: true})
 	if err != nil {
-		t.Fatalf("RunPass full: %v", err)
+		require.FailNowf(t, "test failed", "RunPass full: %v", err)
 	}
 	if result.Failed != 1 || log.count() != doneCalls {
-		t.Fatalf("result = %+v with %d new calls; a same-digest count "+
+		require.FailNowf(t, "test failed", "result = %+v with %d new calls; a same-digest count "+
 			"mismatch must reopen the done row as a retryable failure",
 			result, log.count()-doneCalls)
 	}
 	progress, found, err := d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
 	if err != nil || !found {
-		t.Fatalf("ExtractProgress: found=%v err=%v", found, err)
+		require.FailNowf(t, "test failed", "ExtractProgress: found=%v err=%v", found, err)
 	}
 	if progress.State != db.ExtractProgressFailed {
-		t.Fatalf("state = %s, want failed", progress.State)
+		require.FailNowf(t, "test failed", "state = %s, want failed", progress.State)
 	}
 
 	// The row heals; the retry converges back to done.
 	session.MessageCount = 2
-	if err := d.UpsertSession(*session); err != nil {
-		t.Fatal(err)
+	if err := d.UpsertSession(ctx, *session); err != nil {
+		require.FailNow(t, fmt.Sprint(err))
 	}
-	settleSessionWrite()
-	time.Sleep(10 * time.Millisecond)
+	settleSessionWrite(t, d)
+	m.cfg.FailureBackoff = 0
 	result, err = m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass retry: %v", err)
+		require.FailNowf(t, "test failed", "RunPass retry: %v", err)
 	}
 	if result.Sessions != 1 {
-		t.Fatalf("result = %+v; the healed session must extract on retry",
+		require.FailNowf(t, "test failed", "result = %+v; the healed session must extract on retry",
 			result)
 	}
 	progress, found, err = d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
 	if err != nil || !found {
-		t.Fatalf("ExtractProgress after retry: found=%v err=%v", found, err)
+		require.FailNowf(t, "test failed", "ExtractProgress after retry: found=%v err=%v", found, err)
 	}
 	if progress.State != db.ExtractProgressDone {
-		t.Fatalf("state = %s, want done after the retry", progress.State)
+		require.FailNowf(t, "test failed", "state = %s, want done after the retry", progress.State)
 	}
 }
 
 func TestManagerRevisitSyncsEntryContext(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, server.URL, nil)
 
 	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	doneCalls := log.count()
 
@@ -1730,41 +1747,41 @@ func TestManagerRevisitSyncsEntryContext(t *testing.T) {
 	// matching Recall filters for the old context.
 	session, err := d.GetSessionFull(ctx, "sess-1")
 	if err != nil || session == nil {
-		t.Fatalf("GetSessionFull: %v", err)
+		require.FailNowf(t, "test failed", "GetSessionFull: %v", err)
 	}
 	session.Project = "proj-2"
 	session.GitBranch = "feature"
-	if err := d.UpsertSession(*session); err != nil {
-		t.Fatal(err)
+	if err := d.UpsertSession(ctx, *session); err != nil {
+		require.FailNow(t, fmt.Sprint(err))
 	}
 	// The sync batch path stamps local_modified_at on every session write;
 	// the bare test upsert does not, so stamp it explicitly or the
 	// done-revisit gate never re-opens the session.
-	if err := d.BumpLocalModifiedAt("sess-1"); err != nil {
-		t.Fatal(err)
+	if err := d.BumpLocalModifiedAt(ctx, "sess-1"); err != nil {
+		require.FailNow(t, fmt.Sprint(err))
 	}
-	settleSessionWrite()
+	settleSessionWrite(t, d)
 	result, err := m.RunPass(ctx, PassOptions{Full: true})
 	if err != nil {
-		t.Fatalf("RunPass full: %v", err)
+		require.FailNowf(t, "test failed", "RunPass full: %v", err)
 	}
 	if log.count() != doneCalls {
-		t.Fatalf("%d new model calls; a same-digest revisit must not "+
+		require.FailNowf(t, "test failed", "%d new model calls; a same-digest revisit must not "+
 			"re-extract", log.count()-doneCalls)
 	}
 	if result.Sessions != 0 || result.Failed != 0 {
-		t.Fatalf("result = %+v, want a settled revisit", result)
+		require.FailNowf(t, "test failed", "result = %+v, want a settled revisit", result)
 	}
 	entries, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
 	if err != nil {
-		t.Fatalf("ListRecallEntries: %v", err)
+		require.FailNowf(t, "test failed", "ListRecallEntries: %v", err)
 	}
 	if len(entries) == 0 {
-		t.Fatal("expected extracted entries")
+		require.FailNow(t, "expected extracted entries")
 	}
 	for _, entry := range entries {
 		if entry.Project != "proj-2" || entry.GitBranch != "feature" {
-			t.Fatalf("entry %s context = %s/%s, want proj-2/feature",
+			require.FailNowf(t, "test failed", "entry %s context = %s/%s, want proj-2/feature",
 				entry.ID, entry.Project, entry.GitBranch)
 		}
 	}
@@ -1772,13 +1789,13 @@ func TestManagerRevisitSyncsEntryContext(t *testing.T) {
 
 func TestManagerDiscardsSessionTrashedMidExtraction(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, func(_ string, call int) (int, string) {
 		if call == 2 {
 			// The session is trashed while its second unit is at the
 			// model: units after this must never be sent.
-			if err := d.SoftDeleteSession("sess-1"); err != nil {
-				t.Errorf("trashing mid-extraction: %v", err)
+			if err := d.SoftDeleteSession(ctx, "sess-1"); err != nil {
+				assert.Failf(t, "test failed", "trashing mid-extraction: %v", err)
 			}
 		}
 		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
@@ -1788,24 +1805,24 @@ func TestManagerDiscardsSessionTrashedMidExtraction(t *testing.T) {
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if log.count() != 2 {
-		t.Fatalf("model calls = %d, want 2: units after the trash must not "+
+		require.FailNowf(t, "test failed", "model calls = %d, want 2: units after the trash must not "+
 			"reach the model", log.count())
 	}
 	if result.Failed != 1 || result.Sessions != 0 {
-		t.Fatalf("result = %+v, want the trashed session recorded as a "+
+		require.FailNowf(t, "test failed", "result = %+v, want the trashed session recorded as a "+
 			"failure with discarded output", result)
 	}
 	for _, status := range []string{"", "archived"} {
 		entries, err := d.ListRecallEntries(ctx,
 			db.RecallQuery{Status: status, Limit: 50})
 		if err != nil {
-			t.Fatalf("ListRecallEntries(%q): %v", status, err)
+			require.FailNowf(t, "test failed", "ListRecallEntries(%q): %v", status, err)
 		}
 		if len(entries) != 0 {
-			t.Fatalf("%d %q entries persisted from a session trashed "+
+			require.FailNowf(t, "test failed", "%d %q entries persisted from a session trashed "+
 				"mid-extraction; want none", len(entries), status)
 		}
 	}
@@ -1815,14 +1832,14 @@ func TestManagerDiscardsSessionTrashedMidExtraction(t *testing.T) {
 	if _, found, err := d.ExtractProgress(
 		ctx, "sess-1", m.Fingerprint(),
 	); err != nil || found {
-		t.Fatalf("ExtractProgress: found=%v err=%v; a trashed session "+
+		require.FailNowf(t, "test failed", "ExtractProgress: found=%v err=%v; a trashed session "+
 			"must not keep a progress row past the pass", found, err)
 	}
 }
 
 func TestManagerStopsWhenSecretFindingAppearsMidExtraction(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, func(_ string, call int) (int, string) {
 		if call == 2 {
 			// A candidate-confidence finding lands mid-extraction under
@@ -1834,11 +1851,11 @@ func TestManagerStopsWhenSecretFindingAppearsMidExtraction(t *testing.T) {
 				Confidence: "candidate", LocationKind: "message",
 				RedactedMatch: "eyJ…", RulesVersion: secrets.RulesVersion(),
 			}
-			if err := d.ReplaceSessionSecretFindings(
+			if err := d.ReplaceSessionSecretFindings(ctx,
 				"sess-1", []db.SecretFinding{finding}, 0,
 				secrets.RulesVersion(),
 			); err != nil {
-				t.Errorf("recording finding mid-extraction: %v", err)
+				assert.Failf(t, "test failed", "recording finding mid-extraction: %v", err)
 			}
 		}
 		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
@@ -1848,24 +1865,24 @@ func TestManagerStopsWhenSecretFindingAppearsMidExtraction(t *testing.T) {
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if log.count() != 2 {
-		t.Fatalf("model calls = %d, want 2: units after the finding must "+
+		require.FailNowf(t, "test failed", "model calls = %d, want 2: units after the finding must "+
 			"not reach the model", log.count())
 	}
 	if result.Failed != 1 {
-		t.Fatalf("result = %+v, want the session recorded as a failure "+
+		require.FailNowf(t, "test failed", "result = %+v, want the session recorded as a failure "+
 			"with discarded output", result)
 	}
 	for _, status := range []string{"", "archived"} {
 		entries, err := d.ListRecallEntries(ctx,
 			db.RecallQuery{Status: status, Limit: 50})
 		if err != nil {
-			t.Fatalf("ListRecallEntries(%q): %v", status, err)
+			require.FailNowf(t, "test failed", "ListRecallEntries(%q): %v", status, err)
 		}
 		if len(entries) != 0 {
-			t.Fatalf("%d %q entries persisted after a secret finding "+
+			require.FailNowf(t, "test failed", "%d %q entries persisted after a secret finding "+
 				"appeared mid-extraction; want none", len(entries), status)
 		}
 	}
@@ -1873,12 +1890,12 @@ func TestManagerStopsWhenSecretFindingAppearsMidExtraction(t *testing.T) {
 
 func TestManagerProvenanceSurvivesTranscriptGrowth(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, server.URL, nil)
 	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 
 	// A transcript append triggers evidence reconciliation for the
@@ -1889,18 +1906,18 @@ func TestManagerProvenanceSurvivesTranscriptGrowth(t *testing.T) {
 		turnMessages("a", "b", "later", "more")[2:], 2)
 	entries, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
 	if err != nil {
-		t.Fatalf("ListRecallEntries: %v", err)
+		require.FailNowf(t, "test failed", "ListRecallEntries: %v", err)
 	}
 	if len(entries) == 0 {
-		t.Fatal("expected extracted entries")
+		require.FailNow(t, "expected extracted entries")
 	}
 	for _, entry := range entries {
 		if !entry.ProvenanceOK {
-			t.Fatalf("entry %s lost provenance on an append that never "+
+			require.FailNowf(t, "test failed", "entry %s lost provenance on an append that never "+
 				"touched its evidenced range", entry.ID)
 		}
 		if len(entry.Evidence) != 1 || entry.Evidence[0].ContentDigest == "" {
-			t.Fatalf("entry %s evidence carries no content digest; the "+
+			require.FailNowf(t, "test failed", "entry %s evidence carries no content digest; the "+
 				"reconciler revokes it on the next relevant write",
 				entry.ID)
 		}
@@ -1909,41 +1926,41 @@ func TestManagerProvenanceSurvivesTranscriptGrowth(t *testing.T) {
 
 func TestManagerFullPassReconcilesIneligibleSessions(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	seedSession(t, d, "sess-2", turnMessages("c", "d"), nil)
 	m := newManager(t, d, server.URL, nil)
 	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 
 	// The session is trashed after extraction completed: its corpus must
 	// not keep serving, and its progress row must not linger.
-	if err := d.SoftDeleteSession("sess-1"); err != nil {
-		t.Fatal(err)
+	if err := d.SoftDeleteSession(ctx, "sess-1"); err != nil {
+		require.FailNow(t, fmt.Sprint(err))
 	}
-	settleSessionWrite()
+	settleSessionWrite(t, d)
 	if _, err := m.RunPass(ctx, PassOptions{Full: true}); err != nil {
-		t.Fatalf("RunPass full: %v", err)
+		require.FailNowf(t, "test failed", "RunPass full: %v", err)
 	}
 	entries, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
 	if err != nil {
-		t.Fatalf("ListRecallEntries: %v", err)
+		require.FailNowf(t, "test failed", "ListRecallEntries: %v", err)
 	}
 	for _, entry := range entries {
 		if entry.SourceSessionID == "sess-1" {
-			t.Fatalf("entry %s still serves from a trashed session",
+			require.FailNowf(t, "test failed", "entry %s still serves from a trashed session",
 				entry.ID)
 		}
 	}
 	if len(entries) == 0 {
-		t.Fatal("the eligible session's entries must survive reconciliation")
+		require.FailNow(t, "the eligible session's entries must survive reconciliation")
 	}
 	if _, found, err := d.ExtractProgress(
 		ctx, "sess-1", m.Fingerprint(),
 	); err != nil || found {
-		t.Fatalf("progress for the trashed session: found=%v err=%v; a "+
+		require.FailNowf(t, "test failed", "progress for the trashed session: found=%v err=%v; a "+
 			"lingering row would block activation and hide re-extraction "+
 			"after restore", found, err)
 	}
@@ -1951,31 +1968,31 @@ func TestManagerFullPassReconcilesIneligibleSessions(t *testing.T) {
 
 func TestManagerIncrementalPassReconcilesIneligibleSessions(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, server.URL, nil)
 	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 
 	// With the backstop disabled, only incremental passes are ever
 	// scheduled — retraction must not depend on full passes running.
-	if err := d.SoftDeleteSession("sess-1"); err != nil {
-		t.Fatal(err)
+	if err := d.SoftDeleteSession(ctx, "sess-1"); err != nil {
+		require.FailNow(t, fmt.Sprint(err))
 	}
-	settleSessionWrite()
+	settleSessionWrite(t, d)
 	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	for _, status := range []string{"", "archived"} {
 		entries, err := d.ListRecallEntries(ctx,
 			db.RecallQuery{Status: status, Limit: 50})
 		if err != nil {
-			t.Fatalf("ListRecallEntries(%q): %v", status, err)
+			require.FailNowf(t, "test failed", "ListRecallEntries(%q): %v", status, err)
 		}
 		if len(entries) != 0 {
-			t.Fatalf("%d %q entries survive from a trashed session after "+
+			require.FailNowf(t, "test failed", "%d %q entries survive from a trashed session after "+
 				"an incremental pass", len(entries), status)
 		}
 	}
@@ -1984,71 +2001,71 @@ func TestManagerIncrementalPassReconcilesIneligibleSessions(t *testing.T) {
 func TestManagerRetriesContextSyncWhenItFails(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
-	d, err := db.Open(path)
+	d, err := db.Open(t.Context(), path)
 	if err != nil {
-		t.Fatalf("opening archive: %v", err)
+		require.FailNowf(t, "test failed", "opening archive: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := d.Close(); err != nil {
-			t.Errorf("closing archive: %v", err)
+			assert.Failf(t, "test failed", "closing archive: %v", err)
 		}
 	})
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, server.URL, nil)
 	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 
 	session, err := d.GetSessionFull(ctx, "sess-1")
 	if err != nil || session == nil {
-		t.Fatalf("GetSessionFull: %v", err)
+		require.FailNowf(t, "test failed", "GetSessionFull: %v", err)
 	}
 	session.Project = "proj-2"
-	if err := d.UpsertSession(*session); err != nil {
-		t.Fatal(err)
+	if err := d.UpsertSession(ctx, *session); err != nil {
+		require.FailNow(t, fmt.Sprint(err))
 	}
-	if err := d.BumpLocalModifiedAt("sess-1"); err != nil {
-		t.Fatal(err)
+	if err := d.BumpLocalModifiedAt(ctx, "sess-1"); err != nil {
+		require.FailNow(t, fmt.Sprint(err))
 	}
-	settleSessionWrite()
+	settleSessionWrite(t, d)
 
 	// A raw side connection installs a trigger that makes the context sync
 	// fail, standing in for any transient write failure at that point.
 	raw, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
 	if err != nil {
-		t.Fatalf("opening raw connection: %v", err)
+		require.FailNowf(t, "test failed", "opening raw connection: %v", err)
 	}
 	t.Cleanup(func() { _ = raw.Close() })
-	if _, err := raw.Exec(`CREATE TRIGGER block_context_sync
+	if _, err := raw.ExecContext(ctx, `CREATE TRIGGER block_context_sync
 		BEFORE UPDATE OF project ON recall_entries
 		BEGIN SELECT RAISE(ABORT, 'sync blocked'); END`); err != nil {
-		t.Fatalf("installing trigger: %v", err)
+		require.FailNowf(t, "test failed", "installing trigger: %v", err)
 	}
 	if _, err := m.RunPass(ctx, PassOptions{Full: true}); err == nil {
-		t.Fatal("the pass must surface the failed context sync")
+		require.FailNow(t, "the pass must surface the failed context sync")
 	}
-	if _, err := raw.Exec(
+	if _, err := raw.ExecContext(ctx,
 		"DROP TRIGGER block_context_sync"); err != nil {
-		t.Fatalf("dropping trigger: %v", err)
+		require.FailNowf(t, "test failed", "dropping trigger: %v", err)
 	}
 
 	// The failed sync must not have settled the coverage stamp: the next
 	// full pass has to revisit and repair the entries' context.
 	if _, err := m.RunPass(ctx, PassOptions{Full: true}); err != nil {
-		t.Fatalf("RunPass after repair: %v", err)
+		require.FailNowf(t, "test failed", "RunPass after repair: %v", err)
 	}
 	entries, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
 	if err != nil {
-		t.Fatalf("ListRecallEntries: %v", err)
+		require.FailNowf(t, "test failed", "ListRecallEntries: %v", err)
 	}
 	if len(entries) == 0 {
-		t.Fatal("expected extracted entries")
+		require.FailNow(t, "expected extracted entries")
 	}
 	for _, entry := range entries {
 		if entry.Project != "proj-2" {
-			t.Fatalf("entry %s project = %s, want proj-2: a failed sync "+
+			require.FailNowf(t, "test failed", "entry %s project = %s, want proj-2: a failed sync "+
 				"settled the stamp and was never retried", entry.ID,
 				entry.Project)
 		}
@@ -2057,7 +2074,7 @@ func TestManagerRetriesContextSyncWhenItFails(t *testing.T) {
 
 func TestManagerChangedDoneSessionBlocksActivation(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	seedSession(t, d, "sess-2", turnMessages("c", "d"), nil)
@@ -2065,43 +2082,52 @@ func TestManagerChangedDoneSessionBlocksActivation(t *testing.T) {
 
 	result, err := m.RunPass(ctx, PassOptions{Limit: 1})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Sessions != 1 || result.Activated {
-		t.Fatalf("result = %+v, want 1 session and no activation", result)
+		require.FailNowf(t, "test failed", "result = %+v, want 1 session and no activation", result)
 	}
 
 	// The completed session's transcript changes: its extracted corpus is
 	// stale, so the generation is not actually covered.
-	time.Sleep(5 * time.Millisecond)
 	growSession(t, d, "sess-1",
 		turnMessages("a", "b", "later", "more")[2:], 2)
 
 	status, err := m.Status(ctx)
 	if err != nil {
-		t.Fatalf("Status: %v", err)
+		require.FailNowf(t, "test failed", "Status: %v", err)
 	}
 	if status.EligibleBacklog != 2 {
-		t.Fatalf("backlog = %d, want 2: the un-extracted session and the "+
+		require.FailNowf(t, "test failed", "backlog = %d, want 2: the un-extracted session and the "+
 			"changed done session both need work", status.EligibleBacklog)
 	}
 
 	result, err = m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Activated {
-		t.Fatal("a generation with a stale completed session must not " +
+		require.FailNow(t, "a generation with a stale completed session must not "+
 			"activate; its corpus does not cover the changed transcript")
 	}
 
-	time.Sleep(5 * time.Millisecond)
+	// Coverage uses millisecond timestamps and treats equal stamps as stale.
+	// Wait for the read clock to pass the persisted write before re-extraction.
+	session, err := d.GetSessionFull(ctx, "sess-1")
+	require.NoError(t, err)
+	require.NotNil(t, session.LocalModifiedAt)
+	modifiedAt, err := time.Parse(time.RFC3339Nano, *session.LocalModifiedAt)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return time.Now().Truncate(time.Millisecond).After(modifiedAt)
+	}, time.Second, time.Millisecond)
+
 	result, err = m.RunPass(ctx, PassOptions{Full: true})
 	if err != nil {
-		t.Fatalf("RunPass full: %v", err)
+		require.FailNowf(t, "test failed", "RunPass full: %v", err)
 	}
 	if !result.Activated {
-		t.Fatalf("result = %+v; once the changed session is re-extracted "+
+		require.FailNowf(t, "test failed", "result = %+v; once the changed session is re-extracted "+
 			"the generation must activate", result)
 	}
 }
@@ -2135,28 +2161,28 @@ func gappedSessionRows(t *testing.T, d *db.DB, id string) {
 // failing the same commit on every pass.
 func TestManagerExtractsAcrossTranscriptOrdinalGap(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	gappedSessionRows(t, d, "sess-1")
 	m := newManager(t, d, server.URL, nil)
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Sessions != 1 || result.Failed != 0 {
-		t.Fatalf("result = %+v, want one completed session", result)
+		require.FailNowf(t, "test failed", "result = %+v, want one completed session", result)
 	}
 	progress, found, err := d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
 	if err != nil || !found {
-		t.Fatalf("ExtractProgress: found=%v err=%v", found, err)
+		require.FailNowf(t, "test failed", "ExtractProgress: found=%v err=%v", found, err)
 	}
 	if progress.State != db.ExtractProgressDone {
-		t.Fatalf("progress state = %s (%s), want done: a unit spanning the "+
+		require.FailNowf(t, "test failed", "progress state = %s (%s), want done: a unit spanning the "+
 			"gap can never commit", progress.State, progress.LastError)
 	}
 	if log.count() != 3 {
-		t.Fatalf("model calls = %d, want 3 (intent + one action unit per "+
+		require.FailNowf(t, "test failed", "model calls = %d, want 3 (intent + one action unit per "+
 			"side of the gap)", log.count())
 	}
 }
@@ -2169,19 +2195,19 @@ func TestManagerExtractsAcrossTranscriptOrdinalGap(t *testing.T) {
 func TestManagerBacksOffStableEvidenceFailures(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
-	d, err := db.Open(path)
+	d, err := db.Open(t.Context(), path)
 	if err != nil {
-		t.Fatalf("opening archive: %v", err)
+		require.FailNowf(t, "test failed", "opening archive: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := d.Close(); err != nil {
-			t.Errorf("closing archive: %v", err)
+			assert.Failf(t, "test failed", "closing archive: %v", err)
 		}
 	})
-	ctx := context.Background()
+	ctx := t.Context()
 	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
 	if err != nil {
-		t.Fatalf("opening side connection: %v", err)
+		require.FailNowf(t, "test failed", "opening side connection: %v", err)
 	}
 	t.Cleanup(func() { _ = side.Close() })
 	server, log := modelServer(t, func(_ string, call int) (int, string) {
@@ -2191,9 +2217,9 @@ func TestManagerBacksOffStableEvidenceFailures(t *testing.T) {
 			// transcript without any session-row write: the commit's
 			// evidence window then fails deterministically while the
 			// session re-reads as unchanged.
-			if _, err := side.Exec("DELETE FROM messages " +
+			if _, err := side.ExecContext(ctx, "DELETE FROM messages "+
 				"WHERE session_id = 'sess-1' AND ordinal = 2"); err != nil {
-				t.Errorf("deleting message row: %v", err)
+				assert.Failf(t, "test failed", "deleting message row: %v", err)
 			}
 		}
 		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
@@ -2207,18 +2233,18 @@ func TestManagerBacksOffStableEvidenceFailures(t *testing.T) {
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Failed != 1 {
-		t.Fatalf("result = %+v; a stable commit refusal must be recorded "+
+		require.FailNowf(t, "test failed", "result = %+v; a stable commit refusal must be recorded "+
 			"as a failure, not left pending", result)
 	}
 	progress, found, err := d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
 	if err != nil || !found {
-		t.Fatalf("ExtractProgress: found=%v err=%v", found, err)
+		require.FailNowf(t, "test failed", "ExtractProgress: found=%v err=%v", found, err)
 	}
 	if progress.State != db.ExtractProgressFailed || progress.LastError == "" {
-		t.Fatalf("progress = %s (%q), want a recorded failure",
+		require.FailNowf(t, "test failed", "progress = %s (%q), want a recorded failure",
 			progress.State, progress.LastError)
 	}
 	calls := log.count()
@@ -2226,10 +2252,10 @@ func TestManagerBacksOffStableEvidenceFailures(t *testing.T) {
 	// The failed row is inside its backoff window: an immediate pass must
 	// not spend another model call on it.
 	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
-		t.Fatalf("second RunPass: %v", err)
+		require.FailNowf(t, "test failed", "second RunPass: %v", err)
 	}
 	if log.count() != calls {
-		t.Fatalf("model calls grew from %d to %d; a stable failure must "+
+		require.FailNowf(t, "test failed", "model calls grew from %d to %d; a stable failure must "+
 			"back off instead of retrying every pass", calls, log.count())
 	}
 }
@@ -2241,7 +2267,7 @@ func TestManagerBacksOffStableEvidenceFailures(t *testing.T) {
 // report success while marking the whole backlog failed.
 func TestManagerAbortsPassOnEndpointScopedRejection(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, func(_ string, _ int) (int, string) {
 		return http.StatusUnauthorized, `{"error":"bad api key"}`
 	})
@@ -2251,20 +2277,20 @@ func TestManagerAbortsPassOnEndpointScopedRejection(t *testing.T) {
 
 	_, err := m.RunPass(ctx, PassOptions{})
 	if err == nil {
-		t.Fatal("an endpoint-scoped rejection must abort the pass")
+		require.FailNow(t, "an endpoint-scoped rejection must abort the pass")
 	}
 	if calls := log.count(); calls != 1 {
-		t.Fatalf("model calls = %d, want 1: every further request against "+
+		require.FailNowf(t, "test failed", "model calls = %d, want 1: every further request against "+
 			"a rejecting endpoint is doomed", calls)
 	}
 	// The visited session keeps its resumable row without burning the
 	// failure backoff: the endpoint, not the transcript, refused.
 	progress, found, perr := d.ExtractProgress(ctx, "sess-a", m.Fingerprint())
 	if perr != nil || !found {
-		t.Fatalf("ExtractProgress: found=%v err=%v", found, perr)
+		require.FailNowf(t, "test failed", "ExtractProgress: found=%v err=%v", found, perr)
 	}
 	if progress.State != db.ExtractProgressPending {
-		t.Fatalf("state = %s (%q), want pending: an endpoint failure must "+
+		require.FailNowf(t, "test failed", "state = %s (%q), want pending: an endpoint failure must "+
 			"not consume the session's backoff",
 			progress.State, progress.LastError)
 	}
@@ -2277,7 +2303,7 @@ func TestManagerAbortsPassOnEndpointScopedRejection(t *testing.T) {
 // about this transcript.
 func TestManagerAbortsPassOnSchemaViolation(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, func(_ string, _ int) (int, string) {
 		return http.StatusOK, completionBody(t, `{"wrong":"shape"}`)
 	})
@@ -2287,18 +2313,18 @@ func TestManagerAbortsPassOnSchemaViolation(t *testing.T) {
 
 	_, err := m.RunPass(ctx, PassOptions{})
 	if err == nil {
-		t.Fatal("a schema violation must abort the pass")
+		require.FailNow(t, "a schema violation must abort the pass")
 	}
 	if calls := log.count(); calls != 1 {
-		t.Fatalf("model calls = %d, want 1: a non-enforcing server dooms "+
+		require.FailNowf(t, "test failed", "model calls = %d, want 1: a non-enforcing server dooms "+
 			"every unit", calls)
 	}
 	progress, found, perr := d.ExtractProgress(ctx, "sess-a", m.Fingerprint())
 	if perr != nil || !found {
-		t.Fatalf("ExtractProgress: found=%v err=%v", found, perr)
+		require.FailNowf(t, "test failed", "ExtractProgress: found=%v err=%v", found, perr)
 	}
 	if progress.State != db.ExtractProgressPending {
-		t.Fatalf("state = %s (%q), want pending: an endpoint failure must "+
+		require.FailNowf(t, "test failed", "state = %s (%q), want pending: an endpoint failure must "+
 			"not consume the session's backoff",
 			progress.State, progress.LastError)
 	}
@@ -2327,7 +2353,7 @@ func TestManagerContinuesAfterClientOnlyResponseLimit(t *testing.T) {
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			d := newTestArchive(t)
-			ctx := context.Background()
+			ctx := t.Context()
 			server, log := modelServer(t, func(text string, _ int) (int, string) {
 				if strings.Contains(text, "oversize") {
 					return http.StatusOK, completionBody(t, tc.oversized)
@@ -2377,14 +2403,14 @@ func TestManagerContinuesAfterClientOnlyResponseLimit(t *testing.T) {
 func TestBoundedLastErrorCapsStoredText(t *testing.T) {
 	long := boundedLastError(errors.New(strings.Repeat("y", 100_000)))
 	if len(long) > maxStoredErrorBytes {
-		t.Fatalf("stored error is %d bytes, cap is %d",
+		require.FailNowf(t, "test failed", "stored error is %d bytes, cap is %d",
 			len(long), maxStoredErrorBytes)
 	}
 	if !strings.Contains(long, "truncated") {
-		t.Fatalf("capped error must say it was truncated: %.80q", long)
+		require.FailNowf(t, "test failed", "capped error must say it was truncated: %.80q", long)
 	}
 	if short := boundedLastError(errors.New("plain cause")); short != "plain cause" {
-		t.Fatalf("short error must pass through, got %q", short)
+		require.FailNowf(t, "test failed", "short error must pass through, got %q", short)
 	}
 }
 
@@ -2395,7 +2421,7 @@ func TestBoundedLastErrorCapsStoredText(t *testing.T) {
 // persistently rejecting endpoint defers retraction indefinitely.
 func TestManagerReconcilesBeforeAbortingOnEndpointRejection(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	var broken atomic.Bool
 	server, _ := modelServer(t, func(_ string, _ int) (int, string) {
 		if broken.Load() {
@@ -2406,24 +2432,24 @@ func TestManagerReconcilesBeforeAbortingOnEndpointRejection(t *testing.T) {
 	seedSession(t, d, "sess-a", turnMessages("fix the bug", "done"), nil)
 	m := newManager(t, d, server.URL, nil)
 	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
-		t.Fatalf("first RunPass: %v", err)
+		require.FailNowf(t, "test failed", "first RunPass: %v", err)
 	}
-	time.Sleep(2 * time.Millisecond)
-	if err := d.SoftDeleteSession("sess-a"); err != nil {
-		t.Fatalf("trashing sess-a: %v", err)
+	if err := d.SoftDeleteSession(ctx, "sess-a"); err != nil {
+		require.FailNowf(t, "test failed", "trashing sess-a: %v", err)
 	}
 	seedSession(t, d, "sess-b", turnMessages("ship it", "shipped"), nil)
+	settleSessionWrite(t, d)
 	broken.Store(true)
 
 	if _, err := m.RunPass(ctx, PassOptions{}); err == nil {
-		t.Fatal("an endpoint-scoped rejection must abort the pass")
+		require.FailNow(t, "an endpoint-scoped rejection must abort the pass")
 	}
 	_, found, err := d.ExtractProgress(ctx, "sess-a", m.Fingerprint())
 	if err != nil {
-		t.Fatalf("ExtractProgress: %v", err)
+		require.FailNowf(t, "test failed", "ExtractProgress: %v", err)
 	}
 	if found {
-		t.Fatal("the trashed session's progress row must be reconciled " +
+		require.FailNow(t, "the trashed session's progress row must be reconciled "+
 			"away even when the pass aborts on an endpoint failure")
 	}
 }
@@ -2437,19 +2463,19 @@ func TestManagerReconcilesBeforeAbortingOnEndpointRejection(t *testing.T) {
 func TestManagerCountMismatchDoesNotAdvanceCoverageStamp(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
-	d, err := db.Open(path)
+	d, err := db.Open(t.Context(), path)
 	if err != nil {
-		t.Fatalf("opening archive: %v", err)
+		require.FailNowf(t, "test failed", "opening archive: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := d.Close(); err != nil {
-			t.Errorf("closing archive: %v", err)
+			assert.Failf(t, "test failed", "closing archive: %v", err)
 		}
 	})
-	ctx := context.Background()
+	ctx := t.Context()
 	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
 	if err != nil {
-		t.Fatalf("opening side connection: %v", err)
+		require.FailNowf(t, "test failed", "opening side connection: %v", err)
 	}
 	t.Cleanup(func() { _ = side.Close() })
 	server, _ := modelServer(t, func(_ string, _ int) (int, string) {
@@ -2458,44 +2484,43 @@ func TestManagerCountMismatchDoesNotAdvanceCoverageStamp(t *testing.T) {
 	seedSession(t, d, "sess-1", turnMessages("fix the bug", "done"), nil)
 	m := newManager(t, d, server.URL, nil)
 	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
-		t.Fatalf("first RunPass: %v", err)
+		require.FailNowf(t, "test failed", "first RunPass: %v", err)
 	}
 	readStamp := func() string {
 		t.Helper()
 		var stamp string
-		if err := side.QueryRow(
-			"SELECT content_stamped_at FROM recall_extract_progress " +
+		if err := side.QueryRowContext(ctx,
+			"SELECT content_stamped_at FROM recall_extract_progress "+
 				"WHERE session_id = 'sess-1'").Scan(&stamp); err != nil {
-			t.Fatalf("reading coverage stamp: %v", err)
+			require.FailNowf(t, "test failed", "reading coverage stamp: %v", err)
 		}
 		return stamp
 	}
 	stamped := readStamp()
 
-	time.Sleep(2 * time.Millisecond)
 	// The session row claims more messages than the transcript holds; the
 	// digest is unchanged, so the revisit takes the same-digest arm.
-	if _, err := side.Exec(
+	if _, err := side.ExecContext(ctx,
 		"UPDATE sessions SET message_count = 5 WHERE id = 'sess-1'",
 	); err != nil {
-		t.Fatalf("forging count mismatch: %v", err)
+		require.FailNowf(t, "test failed", "forging count mismatch: %v", err)
 	}
-	if err := d.BumpLocalModifiedAt("sess-1"); err != nil {
-		t.Fatalf("bumping local write clock: %v", err)
+	if err := d.BumpLocalModifiedAt(ctx, "sess-1"); err != nil {
+		require.FailNowf(t, "test failed", "bumping local write clock: %v", err)
 	}
 	if _, err := m.RunPass(ctx, PassOptions{Full: true}); err != nil {
-		t.Fatalf("revisit RunPass: %v", err)
+		require.FailNowf(t, "test failed", "revisit RunPass: %v", err)
 	}
 	progress, found, err := d.ExtractProgress(ctx, "sess-1", m.Fingerprint())
 	if err != nil || !found {
-		t.Fatalf("ExtractProgress: found=%v err=%v", found, err)
+		require.FailNowf(t, "test failed", "ExtractProgress: found=%v err=%v", found, err)
 	}
 	if progress.State != db.ExtractProgressFailed {
-		t.Fatalf("state = %s, want failed: the mismatch must reopen the "+
+		require.FailNowf(t, "test failed", "state = %s, want failed: the mismatch must reopen the "+
 			"row", progress.State)
 	}
 	if got := readStamp(); got != stamped {
-		t.Fatalf("coverage stamp advanced from %s to %s outside the "+
+		require.FailNowf(t, "test failed", "coverage stamp advanced from %s to %s outside the "+
 			"failure transition; a crash between the two transactions "+
 			"leaves invalid coverage claimed as current", stamped, got)
 	}
@@ -2510,7 +2535,7 @@ func TestManagerCountMismatchDoesNotAdvanceCoverageStamp(t *testing.T) {
 // the rest of the backlog stays untouched and resumable.
 func TestManagerAbortsPassOnExhaustedTransientFailures(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, func(_ string, _ int) (int, string) {
 		return http.StatusInternalServerError, `{"error":"upstream down"}`
 	})
@@ -2520,25 +2545,25 @@ func TestManagerAbortsPassOnExhaustedTransientFailures(t *testing.T) {
 
 	_, err := m.RunPass(ctx, PassOptions{})
 	if err == nil {
-		t.Fatal("an exhausted retry ladder against a down endpoint must " +
+		require.FailNow(t, "an exhausted retry ladder against a down endpoint must "+
 			"abort the pass")
 	}
 	if calls := log.count(); calls != 2 {
-		t.Fatalf("model calls = %d, want 2 (one session's ladder): the "+
+		require.FailNowf(t, "test failed", "model calls = %d, want 2 (one session's ladder): the "+
 			"outage must not burn retries for every queued session", calls)
 	}
 	progress, found, perr := d.ExtractProgress(ctx, "sess-a", m.Fingerprint())
 	if perr != nil || !found {
-		t.Fatalf("ExtractProgress(sess-a): found=%v err=%v", found, perr)
+		require.FailNowf(t, "test failed", "ExtractProgress(sess-a): found=%v err=%v", found, perr)
 	}
 	if progress.State != db.ExtractProgressFailed {
-		t.Fatalf("sess-a state = %s, want failed with backoff so a "+
+		require.FailNowf(t, "test failed", "sess-a state = %s, want failed with backoff so a "+
 			"pathological unit cannot re-abort every pass", progress.State)
 	}
 	if _, found, perr = d.ExtractProgress(
 		ctx, "sess-b", m.Fingerprint(),
 	); perr != nil || found {
-		t.Fatalf("ExtractProgress(sess-b): found=%v err=%v, want no row: "+
+		require.FailNowf(t, "test failed", "ExtractProgress(sess-b): found=%v err=%v, want no row: "+
 			"the rest of the backlog stays untouched", found, perr)
 	}
 }
@@ -2550,19 +2575,19 @@ func TestManagerAbortsPassOnExhaustedTransientFailures(t *testing.T) {
 func TestManagerScheduledPassSkipsSessionReendedWithinQuietPeriod(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
-	d, err := db.Open(path)
+	d, err := db.Open(t.Context(), path)
 	if err != nil {
-		t.Fatalf("opening archive: %v", err)
+		require.FailNowf(t, "test failed", "opening archive: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := d.Close(); err != nil {
-			t.Errorf("closing archive: %v", err)
+			assert.Failf(t, "test failed", "closing archive: %v", err)
 		}
 	})
-	ctx := context.Background()
+	ctx := t.Context()
 	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
 	if err != nil {
-		t.Fatalf("opening side connection: %v", err)
+		require.FailNowf(t, "test failed", "opening side connection: %v", err)
 	}
 	t.Cleanup(func() { _ = side.Close() })
 	server, log := modelServer(t, func(_ string, call int) (int, string) {
@@ -2571,11 +2596,11 @@ func TestManagerScheduledPassSkipsSessionReendedWithinQuietPeriod(t *testing.T) 
 			// selected — ends again just now: fresh activity inside the
 			// quiet period.
 			reended := time.Now().UTC().Format(time.RFC3339Nano)
-			if _, err := side.Exec(
+			if _, err := side.ExecContext(ctx,
 				"UPDATE sessions SET ended_at = ? WHERE id = 'sess-b'",
 				reended,
 			); err != nil {
-				t.Errorf("re-ending sess-b: %v", err)
+				assert.Failf(t, "test failed", "re-ending sess-b: %v", err)
 			}
 		}
 		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
@@ -2586,21 +2611,21 @@ func TestManagerScheduledPassSkipsSessionReendedWithinQuietPeriod(t *testing.T) 
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if calls := log.count(); calls != 2 {
-		t.Fatalf("model calls = %d, want 2 (sess-a's units only): a "+
+		require.FailNowf(t, "test failed", "model calls = %d, want 2 (sess-a's units only): a "+
 			"session re-ended within the quiet period must not reach "+
 			"the model", calls)
 	}
 	if result.Sessions != 1 || result.Failed != 0 {
-		t.Fatalf("result = %+v, want one completed session and no "+
+		require.FailNowf(t, "test failed", "result = %+v, want one completed session and no "+
 			"failures: the re-ended session is drift, not an error", result)
 	}
 	if _, found, perr := d.ExtractProgress(
 		ctx, "sess-b", m.Fingerprint(),
 	); perr != nil || found {
-		t.Fatalf("ExtractProgress(sess-b): found=%v err=%v, want no row: "+
+		require.FailNowf(t, "test failed", "ExtractProgress(sess-b): found=%v err=%v, want no row: "+
 			"the session is rediscovered once its quiet period elapses",
 			found, perr)
 	}
@@ -2613,7 +2638,7 @@ func TestManagerScheduledPassSkipsSessionReendedWithinQuietPeriod(t *testing.T) 
 // aborting.
 func TestManagerBadRequestStaysSessionScoped(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, func(_ string, call int) (int, string) {
 		if call == 1 {
 			return http.StatusBadRequest, `{"error":"content refused"}`
@@ -2626,22 +2651,22 @@ func TestManagerBadRequestStaysSessionScoped(t *testing.T) {
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Failed != 1 || result.Sessions != 1 {
-		t.Fatalf("result = %+v, want the refused session failed and the "+
+		require.FailNowf(t, "test failed", "result = %+v, want the refused session failed and the "+
 			"other completed", result)
 	}
 	if calls := log.count(); calls < 2 {
-		t.Fatalf("model calls = %d, want the pass to continue past the "+
+		require.FailNowf(t, "test failed", "model calls = %d, want the pass to continue past the "+
 			"refused session", calls)
 	}
 	progress, found, perr := d.ExtractProgress(ctx, "sess-a", m.Fingerprint())
 	if perr != nil || !found {
-		t.Fatalf("ExtractProgress: found=%v err=%v", found, perr)
+		require.FailNowf(t, "test failed", "ExtractProgress: found=%v err=%v", found, perr)
 	}
 	if progress.State != db.ExtractProgressFailed {
-		t.Fatalf("state = %s (%q), want failed with backoff",
+		require.FailNowf(t, "test failed", "state = %s (%q), want failed with backoff",
 			progress.State, progress.LastError)
 	}
 }
@@ -2654,19 +2679,19 @@ func TestManagerBadRequestStaysSessionScoped(t *testing.T) {
 func TestManagerRepairsFailedZeroUnitSession(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
-	d, err := db.Open(path)
+	d, err := db.Open(t.Context(), path)
 	if err != nil {
-		t.Fatalf("opening archive: %v", err)
+		require.FailNowf(t, "test failed", "opening archive: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := d.Close(); err != nil {
-			t.Errorf("closing archive: %v", err)
+			assert.Failf(t, "test failed", "closing archive: %v", err)
 		}
 	})
-	ctx := context.Background()
+	ctx := t.Context()
 	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
 	if err != nil {
-		t.Fatalf("opening side connection: %v", err)
+		require.FailNowf(t, "test failed", "opening side connection: %v", err)
 	}
 	t.Cleanup(func() { _ = side.Close() })
 	server, log := modelServer(t, alwaysEntries(t, "x"))
@@ -2677,59 +2702,58 @@ func TestManagerRepairsFailedZeroUnitSession(t *testing.T) {
 		{Role: "user", Content: "boot", IsSystem: true},
 	}, nil)
 
-	// The failure backoff shrinks to a millisecond so the repair pass can
-	// re-select the failed row without waiting out the default window.
-	shortBackoff := func(c *ManagerConfig) { c.FailureBackoff = time.Millisecond }
+	// A nanosecond backoff makes the repair pass immediately retryable.
+	shortBackoff := func(c *ManagerConfig) { c.FailureBackoff = time.Nanosecond }
 	fingerprint := newManager(t, d, server.URL, shortBackoff).Fingerprint()
 	runPass := func(label string, opts PassOptions) db.ExtractProgress {
 		t.Helper()
-		time.Sleep(2 * time.Millisecond)
 		if _, err := newManager(t, d, server.URL, shortBackoff).RunPass(
 			ctx, opts,
 		); err != nil {
-			t.Fatalf("%s RunPass: %v", label, err)
+			require.FailNowf(t, "test failed", "%s RunPass: %v", label, err)
 		}
 		progress, found, err := d.ExtractProgress(ctx, "sess-1", fingerprint)
 		if err != nil || !found {
-			t.Fatalf("%s ExtractProgress: found=%v err=%v", label, found, err)
+			require.FailNowf(t, "test failed", "%s ExtractProgress: found=%v err=%v", label, found, err)
 		}
 		return progress
 	}
 	setMessageCount := func(count int) {
 		t.Helper()
-		if _, err := side.Exec(
+		if _, err := side.ExecContext(ctx,
 			"UPDATE sessions SET message_count = ? WHERE id = 'sess-1'",
 			count,
 		); err != nil {
-			t.Fatalf("setting message_count: %v", err)
+			require.FailNowf(t, "test failed", "setting message_count: %v", err)
 		}
-		if err := d.BumpLocalModifiedAt("sess-1"); err != nil {
-			t.Fatalf("BumpLocalModifiedAt: %v", err)
+		if err := d.BumpLocalModifiedAt(ctx, "sess-1"); err != nil {
+			require.FailNowf(t, "test failed", "BumpLocalModifiedAt: %v", err)
 		}
 	}
 
 	if progress := runPass("initial", PassOptions{}); progress.State != db.ExtractProgressDone {
-		t.Fatalf("state = %s, want done for a zero-unit session",
+		require.FailNowf(t, "test failed", "state = %s, want done for a zero-unit session",
 			progress.State)
 	}
 	// The session row drifts to claim more messages than are stored (a
 	// sync writing the row before the transcript), which fails the row.
 	setMessageCount(2)
 	if progress := runPass("mismatch", PassOptions{Full: true}); progress.State != db.ExtractProgressFailed {
-		t.Fatalf("state = %s, want failed after the count mismatch",
+		require.FailNowf(t, "test failed", "state = %s, want failed after the count mismatch",
 			progress.State)
 	}
 	// The mismatch is corrected without changing the unit digest; the
 	// revisit must repair the row instead of preserving the failure.
 	setMessageCount(1)
+	backdateSessionWrite(t, d)
 	progress := runPass("repair", PassOptions{})
 	if progress.State != db.ExtractProgressDone || progress.LastError != "" {
-		t.Fatalf("progress = %s (%q), want done with a cleared error; a "+
+		require.FailNowf(t, "test failed", "progress = %s (%q), want done with a cleared error; a "+
 			"zero-unit session must not stay failed forever",
 			progress.State, progress.LastError)
 	}
 	if calls := log.count(); calls != 0 {
-		t.Fatalf("model calls = %d, want 0 for a zero-unit session", calls)
+		require.FailNowf(t, "test failed", "model calls = %d, want 0 for a zero-unit session", calls)
 	}
 }
 
@@ -2742,19 +2766,19 @@ func TestManagerRepairsFailedZeroUnitSession(t *testing.T) {
 func TestManagerScheduledPassSkipsSessionsTrashedAfterSelection(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
-	d, err := db.Open(path)
+	d, err := db.Open(t.Context(), path)
 	if err != nil {
-		t.Fatalf("opening archive: %v", err)
+		require.FailNowf(t, "test failed", "opening archive: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := d.Close(); err != nil {
-			t.Errorf("closing archive: %v", err)
+			assert.Failf(t, "test failed", "closing archive: %v", err)
 		}
 	})
-	ctx := context.Background()
+	ctx := t.Context()
 	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
 	if err != nil {
-		t.Fatalf("opening side connection: %v", err)
+		require.FailNowf(t, "test failed", "opening side connection: %v", err)
 	}
 	t.Cleanup(func() { _ = side.Close() })
 	server, _ := modelServer(t, func(_ string, call int) (int, string) {
@@ -2763,13 +2787,13 @@ func TestManagerScheduledPassSkipsSessionsTrashedAfterSelection(t *testing.T) {
 			// two candidates — already selected — become ineligible:
 			// sess-b is trashed and sess-c's row vanishes entirely, so
 			// their first snapshots read as ineligible and missing.
-			if _, err := side.Exec("UPDATE sessions SET deleted_at = " +
+			if _, err := side.ExecContext(ctx, "UPDATE sessions SET deleted_at = "+
 				"'2026-01-01T00:00:00.000Z' WHERE id = 'sess-b'"); err != nil {
-				t.Errorf("trashing session: %v", err)
+				assert.Failf(t, "test failed", "trashing session: %v", err)
 			}
-			if _, err := side.Exec(
+			if _, err := side.ExecContext(ctx,
 				"DELETE FROM sessions WHERE id = 'sess-c'"); err != nil {
-				t.Errorf("deleting session: %v", err)
+				assert.Failf(t, "test failed", "deleting session: %v", err)
 			}
 		}
 		return http.StatusOK, completionBody(t, entriesJSON(t, "x"))
@@ -2781,18 +2805,18 @@ func TestManagerScheduledPassSkipsSessionsTrashedAfterSelection(t *testing.T) {
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v; a session trashed or deleted after "+
+		require.FailNowf(t, "test failed", "RunPass: %v; a session trashed or deleted after "+
 			"selection is drift, not a pass failure", err)
 	}
 	if result.Sessions != 1 || result.Failed != 0 {
-		t.Fatalf("result = %+v; want the surviving session done and the "+
+		require.FailNowf(t, "test failed", "result = %+v; want the surviving session done and the "+
 			"trashed and deleted ones skipped silently", result)
 	}
 	for _, id := range []string{"sess-b", "sess-c"} {
 		if _, found, err := d.ExtractProgress(
 			ctx, id, m.Fingerprint(),
 		); err != nil || found {
-			t.Fatalf("ExtractProgress(%s) = found=%v err=%v; a session "+
+			require.FailNowf(t, "test failed", "ExtractProgress(%s) = found=%v err=%v; a session "+
 				"skipped before its snapshot must leave no progress row",
 				id, found, err)
 		}
@@ -2805,27 +2829,27 @@ func TestManagerScheduledPassSkipsSessionsTrashedAfterSelection(t *testing.T) {
 // sessions were never extracted.
 func TestManagerExplicitActivateRefusesUncoveredSessions(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	seedSession(t, d, "sess-2", turnMessages("c", "d"), nil)
 	m := newManager(t, d, server.URL, nil)
 
 	if _, err := m.RunPass(ctx, PassOptions{SessionID: "sess-1"}); err != nil {
-		t.Fatalf("single-session RunPass: %v", err)
+		require.FailNowf(t, "test failed", "single-session RunPass: %v", err)
 	}
 	err := m.Activate(ctx)
 	if !errors.Is(err, db.ErrExtractActivationBlocked) {
-		t.Fatalf("Activate = %v, want ErrExtractActivationBlocked: sess-2 "+
+		require.FailNowf(t, "test failed", "Activate = %v, want ErrExtractActivationBlocked: sess-2 "+
 			"is eligible and was never extracted", err)
 	}
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("full RunPass: %v", err)
+		require.FailNowf(t, "test failed", "full RunPass: %v", err)
 	}
 	if !result.Activated {
-		t.Fatalf("result = %+v; full coverage must activate", result)
+		require.FailNowf(t, "test failed", "result = %+v; full coverage must activate", result)
 	}
 }
 
@@ -2838,59 +2862,59 @@ func TestManagerExplicitActivateRefusesUncoveredSessions(t *testing.T) {
 func TestManagerRevisitRestoresRevokedProvenance(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
-	d, err := db.Open(path)
+	d, err := db.Open(t.Context(), path)
 	if err != nil {
-		t.Fatalf("opening archive: %v", err)
+		require.FailNowf(t, "test failed", "opening archive: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := d.Close(); err != nil {
-			t.Errorf("closing archive: %v", err)
+			assert.Failf(t, "test failed", "closing archive: %v", err)
 		}
 	})
-	ctx := context.Background()
+	ctx := t.Context()
 	server, _ := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("a", "b"), nil)
 	m := newManager(t, d, server.URL, nil)
 	if _, err := m.RunPass(ctx, PassOptions{}); err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 
 	side, err := sql.Open("sqlite3", "file:"+path+"?_busy_timeout=5000")
 	if err != nil {
-		t.Fatalf("opening side connection: %v", err)
+		require.FailNowf(t, "test failed", "opening side connection: %v", err)
 	}
 	t.Cleanup(func() { _ = side.Close() })
-	if _, err := side.Exec(
+	if _, err := side.ExecContext(ctx,
 		"UPDATE recall_entries SET provenance_ok = 0"); err != nil {
-		t.Fatalf("revoking provenance: %v", err)
+		require.FailNowf(t, "test failed", "revoking provenance: %v", err)
 	}
-	if _, err := side.Exec(
+	if _, err := side.ExecContext(ctx,
 		"UPDATE recall_evidence SET content_digest = 'stale'"); err != nil {
-		t.Fatalf("staling evidence: %v", err)
+		require.FailNowf(t, "test failed", "staling evidence: %v", err)
 	}
-	if err := d.BumpLocalModifiedAt("sess-1"); err != nil {
-		t.Fatal(err)
+	if err := d.BumpLocalModifiedAt(ctx, "sess-1"); err != nil {
+		require.FailNow(t, fmt.Sprint(err))
 	}
-	settleSessionWrite()
+	settleSessionWrite(t, d)
 
 	if _, err := m.RunPass(ctx, PassOptions{Full: true}); err != nil {
-		t.Fatalf("RunPass full: %v", err)
+		require.FailNowf(t, "test failed", "RunPass full: %v", err)
 	}
 	entries, err := d.ListRecallEntries(ctx, db.RecallQuery{Limit: 50})
 	if err != nil {
-		t.Fatalf("ListRecallEntries: %v", err)
+		require.FailNowf(t, "test failed", "ListRecallEntries: %v", err)
 	}
 	if len(entries) == 0 {
-		t.Fatal("expected extracted entries")
+		require.FailNow(t, "expected extracted entries")
 	}
 	for _, entry := range entries {
 		if !entry.ProvenanceOK {
-			t.Fatalf("entry %s provenance not restored by the revisit",
+			require.FailNowf(t, "test failed", "entry %s provenance not restored by the revisit",
 				entry.ID)
 		}
 		if len(entry.Evidence) != 1 || entry.Evidence[0].ContentDigest == "" ||
 			entry.Evidence[0].ContentDigest == "stale" {
-			t.Fatalf("entry %s evidence was not rebound", entry.ID)
+			require.FailNowf(t, "test failed", "entry %s evidence was not rebound", entry.ID)
 		}
 	}
 }
@@ -2902,7 +2926,7 @@ func TestManagerRevisitRestoresRevokedProvenance(t *testing.T) {
 // boundary must re-check the content it actually sends.
 func TestManagerRunPassRefusesTranscriptMatchingSecretRules(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	secret := "ghp_" + "9KxT2mQ7Rw4ZpL8sVn3JdY6bF1cH5gAe0UqM"
 	// seedSession stamps a clean current full scan regardless of content —
@@ -2933,7 +2957,7 @@ func TestManagerRunPassRefusesTranscriptMatchingSecretRules(t *testing.T) {
 // instead of topping it up.
 func TestManagerRunPassDiscardsEntriesWhenRevisitFindsSecrets(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	seedSession(t, d, "sess-1", turnMessages("fix the bug", "done"), nil)
 	m := newManager(t, d, server.URL, nil)
@@ -2969,13 +2993,13 @@ func TestManagerRunPassDiscardsEntriesWhenRevisitFindsSecrets(t *testing.T) {
 
 func TestManagerAllowCandidateFindingsExtractsCandidateOnlySessions(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	// A full scan recorded only a candidate-confidence match (a high-entropy
 	// path, a JWT-shaped identifier): leak count zero. With
 	// candidate_findings = "allow" that must not keep the session out.
 	seedSession(t, d, "sess-candidate", turnMessages("a", "b"), nil)
-	if err := d.ReplaceSessionSecretFindings(
+	if err := d.ReplaceSessionSecretFindings(ctx,
 		"sess-candidate",
 		[]db.SecretFinding{{
 			SessionID:     "sess-candidate",
@@ -2986,7 +3010,7 @@ func TestManagerAllowCandidateFindingsExtractsCandidateOnlySessions(t *testing.T
 		}},
 		0, secrets.RulesVersion(),
 	); err != nil {
-		t.Fatal(err)
+		require.FailNow(t, fmt.Sprint(err))
 	}
 	m := newManager(t, d, server.URL, func(c *ManagerConfig) {
 		c.AllowCandidateFindings = true
@@ -2994,25 +3018,25 @@ func TestManagerAllowCandidateFindingsExtractsCandidateOnlySessions(t *testing.T
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Sessions != 1 || result.Failed != 0 || log.count() == 0 {
-		t.Fatalf("candidate-only session must be extracted when candidate "+
+		require.FailNowf(t, "test failed", "candidate-only session must be extracted when candidate "+
 			"findings are allowed: %+v, %d calls", result, log.count())
 	}
 	if _, err := m.RunPass(ctx, PassOptions{SessionID: "sess-candidate"}); err != nil {
-		t.Fatalf("explicit run on a candidate-only session must be accepted: %v", err)
+		require.FailNowf(t, "test failed", "explicit run on a candidate-only session must be accepted: %v", err)
 	}
 }
 
 func TestManagerAllowCandidateFindingsStillRefusesDefinite(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	// The relaxed policy narrows the gate to definite findings; it must not
 	// open it. A definite finding (leak count 1) keeps the session out.
 	seedSession(t, d, "sess-definite", turnMessages("a", "b"), nil)
-	if err := d.ReplaceSessionSecretFindings(
+	if err := d.ReplaceSessionSecretFindings(ctx,
 		"sess-definite",
 		[]db.SecretFinding{{
 			SessionID:     "sess-definite",
@@ -3023,7 +3047,7 @@ func TestManagerAllowCandidateFindingsStillRefusesDefinite(t *testing.T) {
 		}},
 		1, secrets.RulesVersion(),
 	); err != nil {
-		t.Fatal(err)
+		require.FailNow(t, fmt.Sprint(err))
 	}
 	m := newManager(t, d, server.URL, func(c *ManagerConfig) {
 		c.AllowCandidateFindings = true
@@ -3031,23 +3055,23 @@ func TestManagerAllowCandidateFindingsStillRefusesDefinite(t *testing.T) {
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Sessions != 0 || log.count() != 0 {
-		t.Fatalf("definite finding must still exclude the session: %+v, "+
+		require.FailNowf(t, "test failed", "definite finding must still exclude the session: %+v, "+
 			"%d calls", result, log.count())
 	}
 	if _, err := m.RunPass(ctx, PassOptions{SessionID: "sess-definite"}); err == nil {
-		t.Fatal("explicit run on a session with a definite finding must be refused")
+		require.FailNow(t, "explicit run on a session with a definite finding must be refused")
 	}
 	if log.count() != 0 {
-		t.Fatal("refusal must happen before any model call")
+		require.FailNow(t, "refusal must happen before any model call")
 	}
 }
 
 func TestManagerAllowCandidateFindingsPreSendScanIgnoresCandidateText(t *testing.T) {
 	d := newTestArchive(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	server, log := modelServer(t, alwaysEntries(t, "x"))
 	// The transcript itself contains candidate-tier material (a high-entropy
 	// assignment) that the pre-send re-scan would normally reject "despite a
@@ -3057,10 +3081,10 @@ func TestManagerAllowCandidateFindingsPreSendScanIgnoresCandidateText(t *testing
 		"set GDRIVE_FOLDER=1a4UzQ9x7LmP3nR8vT2wY5bC6dE0fG1hJ4kL7mNAHm and sync",
 		"done",
 	), nil)
-	if err := d.ReplaceSessionSecretFindings(
+	if err := d.ReplaceSessionSecretFindings(ctx,
 		"sess-entropy", nil, 0, secrets.RulesVersion(),
 	); err != nil {
-		t.Fatal(err)
+		require.FailNow(t, fmt.Sprint(err))
 	}
 	m := newManager(t, d, server.URL, func(c *ManagerConfig) {
 		c.AllowCandidateFindings = true
@@ -3068,10 +3092,10 @@ func TestManagerAllowCandidateFindingsPreSendScanIgnoresCandidateText(t *testing
 
 	result, err := m.RunPass(ctx, PassOptions{})
 	if err != nil {
-		t.Fatalf("RunPass: %v", err)
+		require.FailNowf(t, "test failed", "RunPass: %v", err)
 	}
 	if result.Failed != 0 || result.Sessions != 1 || log.count() == 0 {
-		t.Fatalf("candidate-tier text must not fail the pre-send scan when "+
+		require.FailNowf(t, "test failed", "candidate-tier text must not fail the pre-send scan when "+
 			"candidate findings are allowed: %+v, %d calls", result, log.count())
 	}
 }
@@ -3092,10 +3116,10 @@ func TestManagerArchiveContentBeforeModelCall(t *testing.T) {
 				var err error
 				if scheduled {
 					var started bool
-					started, result, err = manager.TryPass(context.Background(), PassOptions{})
+					started, result, err = manager.TryPass(t.Context(), PassOptions{})
 					assert.True(t, started)
 				} else {
-					result, err = manager.RunPass(context.Background(), PassOptions{SessionID: "stored-session"})
+					result, err = manager.RunPass(t.Context(), PassOptions{SessionID: "stored-session"})
 				}
 				if policy.UsageOnly() {
 					assert.ErrorIs(t, err, db.ErrArchiveContentExcluded)

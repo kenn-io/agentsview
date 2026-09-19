@@ -29,7 +29,7 @@ func writeEvenerFixture(t *testing.T, dir, id string, header map[string]any, tur
 		data = append(data, '\n')
 	}
 	path := filepath.Join(dir, id+".transcript.jsonl")
-	require.NoError(t, os.WriteFile(path, data, 0600))
+	require.NoError(t, os.WriteFile(path, data, 0o600))
 	return path
 }
 
@@ -41,7 +41,7 @@ func writeEvenerMeta(t *testing.T, path string, meta map[string]any) {
 	t.Helper()
 	b, err := json.Marshal(meta)
 	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(path[:len(path)-len(".transcript.jsonl")]+".meta.json", b, 0600))
+	require.NoError(t, os.WriteFile(path[:len(path)-len(".transcript.jsonl")]+".meta.json", b, 0o600))
 }
 
 func TestEvenerSemanticSession(t *testing.T) {
@@ -52,7 +52,7 @@ func TestEvenerSemanticSession(t *testing.T) {
 	answer["usage"] = map[string]any{"input_tokens": 100, "output_tokens": 20, "cache_read_tokens": 30, "cache_write_tokens": 40, "cache_write_1h_tokens": 50, "reasoning_tokens": 10}
 	path := writeEvenerFixture(t, dir, "session", nil, evenerTestTurn("USER_INPUT", "Question"), answer)
 	writeEvenerMeta(t, path, map[string]any{"id": "session", "name": "Title", "model": "current-model"})
-	sess, msgs, err := parseEvenerSession(context.Background(), path, "test")
+	sess, msgs, err := parseEvenerSession(t.Context(), path, "test")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.Len(t, msgs, 2)
@@ -78,16 +78,28 @@ func TestEvenerKindsAndContent(t *testing.T) {
 		kind, source string
 		role         RoleType
 	}{
-		{"USER_INPUT", "", RoleUser}, {"STEERING", "user", RoleUser}, {"STEERING", "", RoleSystem}, {"STEERING", "daemon", RoleSystem},
-		{"ASSISTANT", "", RoleAssistant}, {"TOOL", "", RoleTool}, {"TOOL_RESULTS", "", RoleTool}, {"SYSTEM", "", RoleSystem},
-		{"CHECKPOINT", "", RoleSystem}, {"SUMMARY", "", RoleSystem}, {"MODEL_SWITCH", "", RoleSystem}, {"TURN_FAILURE", "", RoleSystem},
-		{"HOOK_COMPLETED", "", RoleSystem}, {"ENVIRONMENT", "", RoleSystem}, {"ATTENTION_RESOLUTION", "", RoleSystem}, {"FUTURE_KIND", "", RoleSystem},
+		{"USER_INPUT", "", RoleUser},
+		{"STEERING", "user", RoleUser},
+		{"STEERING", "", RoleSystem},
+		{"STEERING", "daemon", RoleSystem},
+		{"ASSISTANT", "", RoleAssistant},
+		{"TOOL", "", RoleTool},
+		{"TOOL_RESULTS", "", RoleTool},
+		{"SYSTEM", "", RoleSystem},
+		{"CHECKPOINT", "", RoleSystem},
+		{"SUMMARY", "", RoleSystem},
+		{"MODEL_SWITCH", "", RoleSystem},
+		{"TURN_FAILURE", "", RoleSystem},
+		{"HOOK_COMPLETED", "", RoleSystem},
+		{"ENVIRONMENT", "", RoleSystem},
+		{"ATTENTION_RESOLUTION", "", RoleSystem},
+		{"FUTURE_KIND", "", RoleSystem},
 	} {
 		t.Run(tc.kind+tc.source, func(t *testing.T) {
 			turn := evenerTestTurn(tc.kind, "visible")
 			turn["steering_source"] = tc.source
 			path := writeEvenerFixture(t, t.TempDir(), "session", nil, turn)
-			_, msgs, err := parseEvenerSession(context.Background(), path, "test")
+			_, msgs, err := parseEvenerSession(t.Context(), path, "test")
 			require.NoError(t, err)
 			require.Len(t, msgs, 1)
 			assert.Equal(t, tc.role, msgs[0].Role)
@@ -98,7 +110,8 @@ func TestEvenerKindsAndContent(t *testing.T) {
 	t.Run("thinking and media", func(t *testing.T) {
 		turn := evenerTestTurn("ASSISTANT", "")
 		turn["message"] = map[string]any{"content": []any{
-			map[string]any{"kind": "text", "text": "answer"}, map[string]any{"kind": "thinking", "thinking": map[string]any{"text": "reasoning"}},
+			map[string]any{"kind": "text", "text": "answer"},
+			map[string]any{"kind": "thinking", "thinking": map[string]any{"text": "reasoning"}},
 			map[string]any{"kind": "redacted_thinking", "thinking": map[string]any{"redacted": true}},
 			map[string]any{"kind": "image", "image": map[string]any{"data": "c2VjcmV0", "media_type": "image/png"}},
 			map[string]any{"kind": "audio", "audio": map[string]any{"url": "https://example.invalid/audio"}},
@@ -107,7 +120,7 @@ func TestEvenerKindsAndContent(t *testing.T) {
 			map[string]any{"kind": "future_content", "text": "future detail"},
 		}}
 		path := writeEvenerFixture(t, t.TempDir(), "session", nil, turn)
-		_, msgs, err := parseEvenerSession(context.Background(), path, "test")
+		_, msgs, err := parseEvenerSession(t.Context(), path, "test")
 		require.NoError(t, err)
 		require.Len(t, msgs, 1)
 		assert.True(t, msgs[0].HasThinking)
@@ -127,7 +140,7 @@ func TestEvenerKindsAndContent(t *testing.T) {
 		unknown := evenerTestTurn("FUTURE_KIND", "")
 		unknown["detail"] = "retained"
 		path := writeEvenerFixture(t, t.TempDir(), "session", nil, failure, hook, unknown)
-		_, msgs, err := parseEvenerSession(context.Background(), path, "test")
+		_, msgs, err := parseEvenerSession(t.Context(), path, "test")
 		require.NoError(t, err)
 		require.Len(t, msgs, 3)
 		assert.Contains(t, msgs[0].Content, "failed")
@@ -145,7 +158,7 @@ func TestEvenerTools(t *testing.T) {
 	result := evenerTestTurn("TOOL_RESULTS", "")
 	result["message"] = map[string]any{"content": []any{map[string]any{"kind": "tool_result", "tool_result": map[string]any{"tool_call_id": "call-1", "name": "shell", "content": map[string]any{"exit_code": 1, "output": "failed"}, "is_error": true, "image_data": "c2VjcmV0"}}}}
 	path := writeEvenerFixture(t, t.TempDir(), "session", nil, call, result, result)
-	_, msgs, err := parseEvenerSession(context.Background(), path, "test")
+	_, msgs, err := parseEvenerSession(t.Context(), path, "test")
 	require.NoError(t, err)
 	require.Len(t, msgs, 3)
 	require.Len(t, msgs[0].ToolCalls, 1)
@@ -181,14 +194,14 @@ func TestEvenerModelTimelineAndUsagePresence(t *testing.T) {
 	turns = append(turns, override, evenerTestTurn("ASSISTANT", "no usage"))
 	path := writeEvenerFixture(t, t.TempDir(), "session", nil, turns...)
 	writeEvenerMeta(t, path, map[string]any{"id": "session", "model": "latest-only", "profile_id": "latest-provider"})
-	sess, msgs, err := parseEvenerSession(context.Background(), path, "test")
+	sess, msgs, err := parseEvenerSession(t.Context(), path, "test")
 	require.NoError(t, err)
 	require.Len(t, msgs, 9)
 	for i, want := range map[int]string{0: "model-a", 2: "model-b", 4: "model-c", 6: "", 7: "actual-model", 8: ""} {
 		assert.Equal(t, want, msgs[i].Model)
 	}
 	assert.Equal(t, "provider-b", msgs[4].ProviderID)
-	assert.Equal(t, "", msgs[6].ProviderID)
+	assert.Empty(t, msgs[6].ProviderID)
 	assert.NotEmpty(t, msgs[0].TokenUsage)
 	assert.True(t, msgs[0].HasOutputTokens)
 	assert.True(t, msgs[0].HasContextTokens)
@@ -202,19 +215,22 @@ func TestEvenerValidationAndFraming(t *testing.T) {
 		name, tail         string
 		truncated, wantErr bool
 	}{
-		{"partial json", `{"kind":`, true, false}, {"valid unterminated", `{"kind":"entry","turn":{"kind":"USER_INPUT"}}`, true, false},
-		{"complete malformed", "{bad}\n", false, true}, {"invalid record kind", "{\"kind\":\"response\"}\n", false, true},
+		{"partial json", `{"kind":`, true, false},
+		{"valid unterminated", `{"kind":"entry","turn":{"kind":"USER_INPUT"}}`, true, false},
+		{"complete malformed", "{bad}\n", false, true},
+		{"invalid record kind", "{\"kind\":\"response\"}\n", false, true},
 		{"missing turn", "{\"kind\":\"entry\"}\n", false, true},
-		{"invalid sequence", "{\"kind\":\"entry\",\"seq\":\"bad\",\"turn\":{\"kind\":\"USER_INPUT\"}}\n", false, true}, {"clean eof", "", false, false},
+		{"invalid sequence", "{\"kind\":\"entry\",\"seq\":\"bad\",\"turn\":{\"kind\":\"USER_INPUT\"}}\n", false, true},
+		{"clean eof", "", false, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeEvenerFixture(t, t.TempDir(), "session", nil, evenerTestTurn("USER_INPUT", "kept"))
-			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0600)
+			f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 			require.NoError(t, err)
 			_, err = f.WriteString(tc.tail)
 			require.NoError(t, err)
 			require.NoError(t, f.Close())
-			sess, msgs, err := parseEvenerSession(context.Background(), path, "test")
+			sess, msgs, err := parseEvenerSession(t.Context(), path, "test")
 			if tc.wantErr {
 				require.Error(t, err)
 				assert.Nil(t, sess)
@@ -228,7 +244,7 @@ func TestEvenerValidationAndFraming(t *testing.T) {
 	for _, header := range []map[string]any{{"format_version": 1}, {"session_id": "other"}, {"kind": "other"}} {
 		t.Run("header", func(t *testing.T) {
 			path := writeEvenerFixture(t, t.TempDir(), "session", header)
-			sess, _, err := parseEvenerSession(context.Background(), path, "test")
+			sess, _, err := parseEvenerSession(t.Context(), path, "test")
 			require.Error(t, err)
 			assert.Nil(t, sess)
 		})
@@ -237,8 +253,8 @@ func TestEvenerValidationAndFraming(t *testing.T) {
 		t.Run("metadata", func(t *testing.T) {
 			dir := t.TempDir()
 			path := writeEvenerFixture(t, dir, "session", nil)
-			require.NoError(t, os.WriteFile(filepath.Join(dir, "session.meta.json"), []byte(meta), 0600))
-			sess, _, err := parseEvenerSession(context.Background(), path, "test")
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "session.meta.json"), []byte(meta), 0o600))
+			sess, _, err := parseEvenerSession(t.Context(), path, "test")
 			require.Error(t, err)
 			assert.Nil(t, sess)
 		})
@@ -247,14 +263,14 @@ func TestEvenerValidationAndFraming(t *testing.T) {
 		path := writeEvenerFixture(t, t.TempDir(), "session", nil)
 		for _, name := range []string{"First", "Second", ""} {
 			writeEvenerMeta(t, path, map[string]any{"id": "session", "name": name})
-			sess, _, err := parseEvenerSession(context.Background(), path, "test")
+			sess, _, err := parseEvenerSession(t.Context(), path, "test")
 			require.NoError(t, err)
 			assert.Equal(t, name, sess.SessionName)
 			assert.True(t, sess.SessionNamePresent)
 		}
 	})
 	t.Run("canceled", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		cancel()
 		_, _, err := parseEvenerSession(ctx, "unused", "test")
 		require.ErrorIs(t, err, context.Canceled)
@@ -307,7 +323,7 @@ func TestEvenerVerifiedForkPrefix(t *testing.T) {
 				divergence = 0
 			}
 			writeEvenerMeta(t, path, map[string]any{"id": "child", "parent_session_id": parentID, "divergence_turn": divergence, "is_subagent": variant == "subagent"})
-			sess, msgs, err := parseEvenerSession(context.Background(), path, "test")
+			sess, msgs, err := parseEvenerSession(t.Context(), path, "test")
 			require.NoError(t, err)
 			assert.Equal(t, "evener:"+parentID, sess.ParentSessionID)
 			if variant == "verified" || variant == "nested" {
@@ -337,14 +353,14 @@ func TestEvenerDelegateStructuredState(t *testing.T) {
 			result["message"] = map[string]any{"content": []any{map[string]any{"kind": "tool_result", "tool_result": map[string]any{"tool_call_id": "delegate-call", "content": "Worker started", "tool_state": map[string]any{"delegate_id": "delegate-1", "type": "delegate", "transcript_ref": "local:child", "status": "running", "structured_result": map[string]any{"detail": "retained"}}}}}}
 			dir := t.TempDir()
 			path := writeEvenerFixture(t, dir, "session", nil, call)
-			_, pending, err := parseEvenerSession(context.Background(), path, "test")
+			_, pending, err := parseEvenerSession(t.Context(), path, "test")
 			require.NoError(t, err)
 			require.Len(t, pending, 1)
 			require.Len(t, pending[0].ToolCalls, 1)
 			assert.Equal(t, "Other", pending[0].ToolCalls[0].Category)
 			assert.Empty(t, pending[0].ToolCalls[0].SubagentSessionID)
 			writeEvenerFixture(t, dir, "session", nil, call, result)
-			_, messages, err := parseEvenerSession(context.Background(), path, "test")
+			_, messages, err := parseEvenerSession(t.Context(), path, "test")
 			require.NoError(t, err)
 			require.Len(t, messages, 2)
 			require.Len(t, messages[0].ToolCalls, 1)
@@ -383,7 +399,7 @@ func TestEvenerHeaderContextPreservesInitialInstructions(t *testing.T) {
 		"task":          "Inspect the build failure.",
 		"agent_tasks":   []any{map[string]any{"id": 1, "type": "test", "description": "Run the focused checks", "prompt": "Run the focused checks", "status": "pending"}},
 	}, evenerTestTurn("USER_INPUT", "Please fix the build."))
-	sess, msgs, err := parseEvenerSession(context.Background(), path, "test")
+	sess, msgs, err := parseEvenerSession(t.Context(), path, "test")
 	require.NoError(t, err)
 	require.Len(t, msgs, 4)
 	for i, msg := range msgs[:3] {
@@ -404,7 +420,7 @@ func TestEvenerCompactionMarksBoundaryWithoutRemovingHistory(t *testing.T) {
 	for _, kind := range []string{"CHECKPOINT", "SUMMARY"} {
 		t.Run(kind, func(t *testing.T) {
 			path := writeEvenerFixture(t, t.TempDir(), "session", nil, evenerTestTurn("USER_INPUT", "Before"), evenerTestTurn(kind, "Retained summary"), evenerTestTurn("USER_INPUT", "After"))
-			_, msgs, err := parseEvenerSession(context.Background(), path, "test")
+			_, msgs, err := parseEvenerSession(t.Context(), path, "test")
 			require.NoError(t, err)
 			require.Len(t, msgs, 3)
 			assert.Equal(t, "Before", msgs[0].Content)
@@ -432,7 +448,7 @@ func TestEvenerRelationshipRequiresMetadataEvidence(t *testing.T) {
 			if tc.meta != nil {
 				writeEvenerMeta(t, path, tc.meta)
 			}
-			sess, msgs, err := parseEvenerSession(context.Background(), path, "test")
+			sess, msgs, err := parseEvenerSession(t.Context(), path, "test")
 			require.NoError(t, err)
 			assert.Equal(t, "evener:parent", sess.ParentSessionID)
 			assert.Equal(t, tc.want, sess.RelationshipType)
@@ -445,7 +461,7 @@ func TestEvenerRedactedThinkingOmitsOpaquePayload(t *testing.T) {
 	turn := evenerTestTurn("ASSISTANT", "")
 	turn["message"] = map[string]any{"content": []any{map[string]any{"kind": "redacted_thinking", "thinking": map[string]any{"text": "opaque-encrypted-payload", "redacted": true}}, map[string]any{"kind": "text", "text": "Visible answer"}}}
 	path := writeEvenerFixture(t, t.TempDir(), "session", nil, turn)
-	_, msgs, err := parseEvenerSession(context.Background(), path, "test")
+	_, msgs, err := parseEvenerSession(t.Context(), path, "test")
 	require.NoError(t, err)
 	require.Len(t, msgs, 1)
 	assert.True(t, msgs[0].HasThinking)
@@ -464,7 +480,7 @@ func TestEvenerContentUsesTranscriptRenderingMarkers(t *testing.T) {
 		map[string]any{"kind": "text", "text": "After the tool"},
 	}}
 	path := writeEvenerFixture(t, t.TempDir(), "session", nil, turn)
-	_, msgs, err := parseEvenerSession(context.Background(), path, "test")
+	_, msgs, err := parseEvenerSession(t.Context(), path, "test")
 	require.NoError(t, err)
 	require.Len(t, msgs, 1)
 	content := msgs[0].Content

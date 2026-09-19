@@ -97,7 +97,7 @@ func s3DiscoveredSessionIDWithProvider(
 	return applyIDPrefixToID(s3SessionIDPrefix(file.Machine), id)
 }
 
-func (e *Engine) s3SourceMetadataChanged(file parser.DiscoveredFile) bool {
+func (e *Engine) s3SourceMetadataChanged(ctx context.Context, file parser.DiscoveredFile) bool {
 	if file.SourceMtime == 0 {
 		return false
 	}
@@ -105,12 +105,12 @@ func (e *Engine) s3SourceMetadataChanged(file parser.DiscoveredFile) bool {
 	if !ok {
 		return false
 	}
-	return e.s3SourceMetadataChangedFromInfo(
+	return e.s3SourceMetadataChangedFromInfo(ctx,
 		file, p, file.SourceSize, file.SourceMtime, file.SourceFingerprint,
 	)
 }
 
-func (e *Engine) s3SourceMetadataChangedFromInfo(
+func (e *Engine) s3SourceMetadataChangedFromInfo(ctx context.Context,
 	file parser.DiscoveredFile, p parser.S3Provider,
 	size, mtime int64, sourceFingerprint string,
 ) bool {
@@ -118,11 +118,11 @@ func (e *Engine) s3SourceMetadataChangedFromInfo(
 	if sessionID == "" {
 		return false
 	}
-	storedPath := e.db.GetSessionFilePath(sessionID)
+	storedPath := e.db.GetSessionFilePath(ctx, sessionID)
 	if storedPath == "" || storedPath != file.Path {
 		return true
 	}
-	storedSize, storedMtime, ok := e.db.GetSessionFileInfo(sessionID)
+	storedSize, storedMtime, ok := e.db.GetSessionFileInfo(ctx, sessionID)
 	if !ok {
 		return true
 	}
@@ -130,7 +130,7 @@ func (e *Engine) s3SourceMetadataChangedFromInfo(
 		return true
 	}
 	if sourceFingerprint != "" {
-		storedHash, ok := e.db.GetSessionFileHash(sessionID)
+		storedHash, ok := e.db.GetSessionFileHash(ctx, sessionID)
 		if !ok || storedHash != sourceFingerprint {
 			return true
 		}
@@ -298,14 +298,14 @@ func isS3SourcePath(path string) bool {
 	return strings.HasPrefix(path, "s3://")
 }
 
-func (e *Engine) shouldSkipFileWithPrefix(
+func (e *Engine) shouldSkipFileWithPrefix(ctx context.Context,
 	prefix, sessionID string, info os.FileInfo, sourceFingerprint ...string,
 ) bool {
 	if e.forceParse {
 		return false
 	}
 	fullID := applyIDPrefixToID(prefix, sessionID)
-	storedSize, storedMtime, ok := e.db.GetSessionFileInfo(
+	storedSize, storedMtime, ok := e.db.GetSessionFileInfo(ctx,
 		fullID,
 	)
 	if !ok {
@@ -316,12 +316,12 @@ func (e *Engine) shouldSkipFileWithPrefix(
 		return false
 	}
 	if len(sourceFingerprint) > 0 && sourceFingerprint[0] != "" {
-		storedHash, ok := e.db.GetSessionFileHash(fullID)
+		storedHash, ok := e.db.GetSessionFileHash(ctx, fullID)
 		if !ok || storedHash != sourceFingerprint[0] {
 			return false
 		}
 	}
-	if e.db.GetSessionDataVersion(fullID) <
+	if e.db.GetSessionDataVersion(ctx, fullID) <
 		db.CurrentDataVersion() {
 		return false
 	}

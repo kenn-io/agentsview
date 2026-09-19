@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"slices"
@@ -38,11 +39,6 @@ type RecallImportOptions struct {
 	DryRun                  bool
 	RequireExistingSessions bool
 	AllowProductionImport   bool
-}
-
-type recallImportQueryer interface {
-	recallEvidenceQueryer
-	recallQueryRower
 }
 
 type probeAcceptedRecallEntry struct {
@@ -290,7 +286,7 @@ func newRecallImportDryRunProjection() *recallImportDryRunProjection {
 
 func (p *recallImportDryRunProjection) validateSupersession(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	recall RecallEntry,
 ) error {
 	targetID := recall.SupersedesEntryID
@@ -315,7 +311,7 @@ func (p *recallImportDryRunProjection) add(recall RecallEntry) {
 
 func recallImportEntryExistsWithQueryer(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	id string,
 ) (bool, error) {
 	var duplicate bool
@@ -329,7 +325,7 @@ func recallImportEntryExistsWithQueryer(
 
 func validateRecallImportSupersessionWithQueryer(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	recall RecallEntry,
 ) error {
 	if recall.SupersedesEntryID == "" {
@@ -342,7 +338,7 @@ func validateRecallImportSupersessionWithQueryer(
 
 func rejectUnverifiedRecallImportTrustedSupersession(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	recall RecallEntry,
 ) error {
 	if recall.SupersedesEntryID == "" {
@@ -441,9 +437,7 @@ func (db *DB) importAcceptedRecallEntry(
 
 	if recall.SupersedesEntryID != "" {
 		if recall.SupersedesEntryID == recall.ID {
-			return false, fmt.Errorf(
-				"replacement entry id must differ from superseded entry id",
-			)
+			return false, errors.New("replacement entry id must differ from superseded entry id")
 		}
 		recall.SupersededByEntryID = ""
 		if err := supersedeRecallEntryTx(
@@ -451,7 +445,7 @@ func (db *DB) importAcceptedRecallEntry(
 		); err != nil {
 			return false, err
 		}
-	} else if err := insertRecallEntryTx(tx, recall); err != nil {
+	} else if err := insertRecallEntryTx(ctx, tx, recall); err != nil {
 		return false, err
 	}
 
@@ -536,7 +530,7 @@ func normalizeProbeToolUseIDs(ids []string) []string {
 
 func requireRecallImportSessionWithQueryer(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	m probeAcceptedRecallEntry,
 ) error {
 	var exists bool
@@ -556,11 +550,11 @@ func requireRecallImportSessionWithQueryer(
 
 func requireRecallImportEvidenceWithQueryer(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	recall RecallEntry,
 ) error {
 	if len(recall.Evidence) == 0 {
-		return fmt.Errorf("missing recall evidence")
+		return errors.New("missing recall evidence")
 	}
 	rangesChecked := map[string]struct{}{}
 	toolUsesChecked := map[string]struct{}{}
@@ -599,11 +593,11 @@ func requireRecallImportEvidenceWithQueryer(
 
 func bindVerifiedRecallImportEvidenceWithQueryer(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	recall *RecallEntry,
 ) error {
 	if len(recall.Evidence) == 0 {
-		return fmt.Errorf("missing recall evidence")
+		return errors.New("missing recall evidence")
 	}
 	first := recall.Evidence[0]
 	toolUseIDs := make([]string, 0, len(recall.Evidence))
@@ -611,7 +605,7 @@ func bindVerifiedRecallImportEvidenceWithQueryer(
 		if evidence.SessionID != first.SessionID ||
 			evidence.MessageStartOrdinal != first.MessageStartOrdinal ||
 			evidence.MessageEndOrdinal != first.MessageEndOrdinal {
-			return fmt.Errorf("recall evidence spans multiple windows")
+			return errors.New("recall evidence spans multiple windows")
 		}
 		if evidence.ToolUseID != "" {
 			toolUseIDs = append(toolUseIDs, evidence.ToolUseID)
@@ -636,10 +630,8 @@ func bindVerifiedRecallImportEvidenceWithQueryer(
 		return err
 	}
 	for i := range recall.Evidence {
-		recall.Evidence[i].MessageStartSourceUUID =
-			metadata.MessageStartSourceUUID
-		recall.Evidence[i].MessageEndSourceUUID =
-			metadata.MessageEndSourceUUID
+		recall.Evidence[i].MessageStartSourceUUID = metadata.MessageStartSourceUUID
+		recall.Evidence[i].MessageEndSourceUUID = metadata.MessageEndSourceUUID
 		recall.Evidence[i].ContentDigest = metadata.ContentDigest
 	}
 	return nil
@@ -647,7 +639,7 @@ func bindVerifiedRecallImportEvidenceWithQueryer(
 
 func requireRecallEvidenceRangeWithQueryer(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	evidence RecallEvidence,
 ) error {
 	want := evidence.MessageEndOrdinal - evidence.MessageStartOrdinal + 1
@@ -677,7 +669,7 @@ func requireRecallEvidenceRangeWithQueryer(
 
 func requireRecallEvidenceToolUseWithQueryer(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	evidence RecallEvidence,
 ) error {
 	var got int
@@ -754,7 +746,7 @@ func ensureRecallImportSessionTx(
 
 func validateRecallImportPlaceholderSessionStateWithQueryer(
 	ctx context.Context,
-	queryer recallImportQueryer,
+	queryer sessionExportQuerier,
 	sessionID string,
 ) error {
 	var excluded bool
@@ -809,16 +801,16 @@ func probeRecallImportItem(m probeAcceptedRecallEntry, reason string) RecallImpo
 
 func probeRecallEntryToDB(m probeAcceptedRecallEntry) (RecallEntry, error) {
 	if m.CandidateID == "" {
-		return RecallEntry{}, fmt.Errorf("missing candidate_id")
+		return RecallEntry{}, errors.New("missing candidate_id")
 	}
 	if m.SessionID == "" {
-		return RecallEntry{}, fmt.Errorf("missing session_id")
+		return RecallEntry{}, errors.New("missing session_id")
 	}
 	if err := validateImportedRecallEntryIdentities(m); err != nil {
 		return RecallEntry{}, err
 	}
 	if m.Title == "" || m.Body == "" {
-		return RecallEntry{}, fmt.Errorf("missing title or body")
+		return RecallEntry{}, errors.New("missing title or body")
 	}
 	if !validImportedRecallEntryType(m.Type) {
 		return RecallEntry{}, fmt.Errorf("invalid recall type %q", m.Type)
@@ -833,11 +825,11 @@ func probeRecallEntryToDB(m probeAcceptedRecallEntry) (RecallEntry, error) {
 		)
 	}
 	if m.Evidence.OrdinalStart == nil || m.Evidence.OrdinalEnd == nil {
-		return RecallEntry{}, fmt.Errorf("missing evidence ordinal range")
+		return RecallEntry{}, errors.New("missing evidence ordinal range")
 	}
 	if *m.Evidence.OrdinalStart < 0 ||
 		*m.Evidence.OrdinalEnd < *m.Evidence.OrdinalStart {
-		return RecallEntry{}, fmt.Errorf("invalid evidence ordinal range")
+		return RecallEntry{}, errors.New("invalid evidence ordinal range")
 	}
 	evidence := probeEvidenceToDB(m.CandidateID, m.SessionID, m.Evidence)
 	return RecallEntry{
@@ -886,9 +878,7 @@ func validateImportedRecallEntryIdentities(m probeAcceptedRecallEntry) error {
 		}
 	}
 	if slices.ContainsFunc(m.Evidence.ToolUseIDs, containsImportedControlCharacter) {
-		return fmt.Errorf(
-			"tool_use_id must not contain control characters",
-		)
+		return errors.New("tool_use_id must not contain control characters")
 	}
 	return nil
 }

@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -65,6 +64,7 @@ type zcodeTestFixture struct {
 
 func newZCodeTestFixture(t *testing.T) *zcodeTestFixture {
 	t.Helper()
+
 	root := t.TempDir()
 	cliRoot := filepath.Join(root, ".zcode", "cli")
 	dbDir := filepath.Join(cliRoot, "db")
@@ -74,7 +74,7 @@ func newZCodeTestFixture(t *testing.T) *zcodeTestFixture {
 	database, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = database.Close() })
-	_, err = database.Exec(zcodeTestSchema)
+	_, err = database.ExecContext(t.Context(), zcodeTestSchema)
 	require.NoError(t, err)
 
 	return &zcodeTestFixture{
@@ -93,7 +93,7 @@ func (f *zcodeTestFixture) insertSession(
 	projectID, workspaceID string,
 ) {
 	t.Helper()
-	_, err := f.database.Exec(`
+	_, err := f.database.ExecContext(t.Context(), `
 		INSERT INTO session (
 			id, project_id, workspace_id, directory, title,
 			time_created, time_updated
@@ -114,7 +114,7 @@ func (f *zcodeTestFixture) insertUsage(
 	durationMS, toolCallCount int64,
 ) {
 	t.Helper()
-	_, err := f.database.Exec(`
+	_, err := f.database.ExecContext(t.Context(), `
 		INSERT INTO model_usage (
 			session_id, turn_id, provider_id, model_id, status,
 			input_tokens, output_tokens, reasoning_tokens,
@@ -136,7 +136,7 @@ func (f *zcodeTestFixture) insertMessage(
 	data string,
 ) {
 	t.Helper()
-	_, err := f.database.Exec(`
+	_, err := f.database.ExecContext(t.Context(), `
 		INSERT INTO message (
 			id, session_id, time_created, data
 		) VALUES (?, ?, ?, ?)
@@ -160,7 +160,7 @@ func (f *zcodeTestFixture) insertPartAt(
 	data string,
 ) {
 	t.Helper()
-	_, err := f.database.Exec(`
+	_, err := f.database.ExecContext(t.Context(), `
 		INSERT INTO part (
 			id, message_id, session_id, time_created, data
 		) VALUES (?, ?, ?, ?, ?)
@@ -201,11 +201,11 @@ func TestZCodeParsesReportedIntegerTimestamps(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  sources[0],
 		Machine: "devbox",
 	})
@@ -247,10 +247,10 @@ func TestZCodeDiscoveryPreservesSessionsWhenUsageTableCorrupt(t *testing.T) {
 	// usage table's page. Discovery must retain session identities; the usage
 	// failure belongs to parsing each source, as in ordinary local sync.
 	var page, pageSize int
-	require.NoError(t, fixture.database.QueryRow(
+	require.NoError(t, fixture.database.QueryRowContext(t.Context(),
 		"SELECT rootpage FROM sqlite_schema WHERE name = 'model_usage'",
 	).Scan(&page))
-	require.NoError(t, fixture.database.QueryRow("PRAGMA page_size").Scan(&pageSize))
+	require.NoError(t, fixture.database.QueryRowContext(t.Context(), "PRAGMA page_size").Scan(&pageSize))
 	require.NoError(t, fixture.database.Close())
 	contents, err := os.ReadFile(fixture.DBPath)
 	require.NoError(t, err)
@@ -283,9 +283,9 @@ func TestZCodeConfiguredRootKeepsEstablishedDBLayoutPrecedence(t *testing.T) {
 	require.NoError(t, os.WriteFile(directPath, []byte("direct"), 0o600))
 	db, err := sql.Open("sqlite3", establishedPath)
 	require.NoError(t, err)
-	_, err = db.Exec(zcodeTestSchema)
+	_, err = db.ExecContext(t.Context(), zcodeTestSchema)
 	require.NoError(t, err)
-	_, err = db.Exec(`
+	_, err = db.ExecContext(t.Context(), `
 		INSERT INTO session (id, project_id, workspace_id, directory, title,
 			time_created, time_updated)
 		VALUES ('session-001', NULL, NULL, '/work/app', 'Established',
@@ -296,11 +296,11 @@ func TestZCodeConfiguredRootKeepsEstablishedDBLayoutPrecedence(t *testing.T) {
 	provider, ok := NewProvider(AgentZCode, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0], Machine: "devbox",
 	})
 	require.NoError(t, err)
@@ -429,26 +429,26 @@ func TestZCodeProviderSourceMethodsAndParse(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, fixture.DBDir, plan.Roots[0].Path)
 	assert.Contains(t, plan.Roots[0].IncludeGlobs, zcodeDBName)
 	assert.Contains(t, plan.Roots[0].IncludeGlobs, zcodeDBName+"-*")
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	source := sources[0]
 	assert.Equal(t, AgentZCode, source.Provider)
 	assert.Equal(t, fixture.DBPath+"#session-001", source.DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	assert.Equal(t, fixture.DBPath+"#session-001", fingerprint.Key)
 	assert.NotZero(t, fingerprint.MTimeNS)
 
-	foundSource, found, err := provider.FindSource(context.Background(), FindSourceRequest{
+	foundSource, found, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID:  "session-001",
 		FullSessionID: "zcode:session-001",
 	})
@@ -456,7 +456,7 @@ func TestZCodeProviderSourceMethodsAndParse(t *testing.T) {
 	require.True(t, found)
 	assert.Equal(t, source.DisplayPath, foundSource.DisplayPath)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      foundSource,
 		Fingerprint: fingerprint,
 		Machine:     "devbox",
@@ -486,8 +486,7 @@ func TestZCodeProviderSourceMethodsAndParse(t *testing.T) {
 	assert.True(t, result.Result.Messages[1].HasThinking)
 	assert.True(t, result.Result.Messages[1].HasToolUse)
 	assert.Equal(t, "claude-sonnet-4-6", result.Result.Messages[1].Model)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		"[Thinking]\nI should read the auth code first.\n[/Thinking]\nI'll inspect the auth code first.",
 		result.Result.Messages[1].Content,
 	)
@@ -496,7 +495,7 @@ func TestZCodeProviderSourceMethodsAndParse(t *testing.T) {
 	assert.Equal(t, RoleUser, result.Result.Messages[2].Role)
 	require.Len(t, result.Result.Messages[2].ToolResults, 1)
 	assert.Equal(t, "package auth", DecodeContent(result.Result.Messages[2].ToolResults[0].ContentRaw))
-	assert.Equal(t, 2, len(result.Result.UsageEvents))
+	assert.Len(t, result.Result.UsageEvents, 2)
 	assert.Equal(t, 275, sess.TotalOutputTokens)
 	assert.True(t, sess.HasTotalOutputTokens)
 	assert.Equal(t, 1075, sess.PeakContextTokens)
@@ -557,11 +556,11 @@ func TestZCodeUsageEventMapping(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: SourceFingerprint{Key: fixture.DBPath + "#session-usage"},
 		Machine:     "devbox",
@@ -647,8 +646,7 @@ func TestZCodeIngestsTranscriptMessages(t *testing.T) {
 	assert.Equal(t, RoleAssistant, result.Messages[1].Role)
 	assert.True(t, result.Messages[1].HasThinking)
 	assert.Equal(t, "I should inspect the auth flow.", result.Messages[1].ThinkingText)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		"[Thinking]\nI should inspect the auth flow.\n[/Thinking]\nI'll inspect the auth flow.",
 		result.Messages[1].Content,
 	)
@@ -786,8 +784,7 @@ func TestZCodeOpenCodeStyleReasoningAndToolParts(t *testing.T) {
 	assert.True(t, assistant.HasThinking)
 	assert.True(t, assistant.HasToolUse)
 	assert.Equal(t, "I should inspect the auth flow.", assistant.ThinkingText)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		"[Thinking]\nI should inspect the auth flow.\n[/Thinking]\nI'll inspect the auth flow.",
 		assistant.Content,
 	)
@@ -878,11 +875,11 @@ func TestZCodeFingerprintTracksUsageMtime(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 	expected := time.Date(2026, 7, 6, 13, 10, 0, 0, time.UTC).UnixNano()
 	assert.Equal(t, expected, fingerprint.MTimeNS)
@@ -922,11 +919,11 @@ func TestZCodeFingerprintTracksDBMtimeForUsageOnlyChanges(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 	assert.Equal(t, dbMtime.UnixNano(), fingerprint.MTimeNS)
 }
@@ -958,11 +955,11 @@ func TestZCodeFingerprintIgnoresShmIndexMtime(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 	assert.Equal(t, dbMtime.UnixNano(), fingerprint.MTimeNS)
 }
@@ -988,11 +985,11 @@ func TestZCodeFallsBackToDBMtimeWhenTimestampsAreMissing(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  sources[0],
 		Machine: "devbox",
 	})
@@ -1003,7 +1000,7 @@ func TestZCodeFallsBackToDBMtimeWhenTimestampsAreMissing(t *testing.T) {
 
 func TestZCodeParsesSessionWhenUsageTableIsMissing(t *testing.T) {
 	fixture := newZCodeTestFixture(t)
-	_, err := fixture.database.Exec(`DROP TABLE model_usage`)
+	_, err := fixture.database.ExecContext(t.Context(), `DROP TABLE model_usage`)
 	require.NoError(t, err)
 	fixture.insertSession(
 		t,
@@ -1022,11 +1019,11 @@ func TestZCodeParsesSessionWhenUsageTableIsMissing(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  sources[0],
 		Machine: "devbox",
 	})
@@ -1043,9 +1040,9 @@ func TestZCodeParsesSessionWhenUsageTableIsMissing(t *testing.T) {
 
 func TestZCodeMissingTranscriptTables(t *testing.T) {
 	fixture := newZCodeTestFixture(t)
-	_, err := fixture.database.Exec(`DROP TABLE part`)
+	_, err := fixture.database.ExecContext(t.Context(), `DROP TABLE part`)
 	require.NoError(t, err)
-	_, err = fixture.database.Exec(`DROP TABLE message`)
+	_, err = fixture.database.ExecContext(t.Context(), `DROP TABLE message`)
 	require.NoError(t, err)
 	fixture.insertSession(
 		t,
@@ -1093,7 +1090,7 @@ func TestZCodeProviderRootWithoutDB(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, sources)
 }
@@ -1104,6 +1101,7 @@ func nullableZCodeString(v string) any {
 	}
 	return v
 }
+
 func TestZCodeSystemMessagesAreMarkedSystem(t *testing.T) {
 	fixture := newZCodeTestFixture(t)
 	fixture.insertSession(

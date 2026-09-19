@@ -92,10 +92,12 @@ func TestPGListSecretFindings(t *testing.T) {
 		"2026-03-12T10:00:00Z",
 		nil,
 		[]db.SecretFinding{
-			{SessionID: "sf-s1", RuleName: "aws-access-key",
+			{
+				SessionID: "sf-s1", RuleName: "aws-access-key",
 				Confidence: "definite", LocationKind: "message",
 				MessageOrdinal: 0, MatchStart: 0, MatchEnd: 20,
-				MatchIndex: 0, RedactedMatch: "AKIA…", RulesVersion: "v1"},
+				MatchIndex: 0, RedactedMatch: "AKIA…", RulesVersion: "v1",
+			},
 		},
 	)
 	seedSecretFindingsSession(t, store,
@@ -103,10 +105,12 @@ func TestPGListSecretFindings(t *testing.T) {
 		"2026-03-13T10:00:00Z",
 		nil,
 		[]db.SecretFinding{
-			{SessionID: "sf-s2", RuleName: "jwt",
+			{
+				SessionID: "sf-s2", RuleName: "jwt",
 				Confidence: "candidate", LocationKind: "message",
 				MessageOrdinal: 0, MatchStart: 0, MatchEnd: 10,
-				MatchIndex: 0, RedactedMatch: "eyJ…", RulesVersion: "v1"},
+				MatchIndex: 0, RedactedMatch: "eyJ…", RulesVersion: "v1",
+			},
 		},
 	)
 
@@ -374,34 +378,62 @@ func TestPGSecretFindingSource(t *testing.T) {
 		want string
 		ok   bool
 	}{
-		{"message",
-			db.SecretFinding{SessionID: sid, LocationKind: "message",
-				MessageOrdinal: 0},
-			"key AKIA7QHWN2DKR4FYPLJM here", true},
-		{"tool_input",
-			db.SecretFinding{SessionID: sid, LocationKind: "tool_input",
-				MessageOrdinal: 0, CallIndex: ptr(0)},
-			`{"command":"printenv"}`, true},
-		{"tool_result",
-			db.SecretFinding{SessionID: sid, LocationKind: "tool_result",
-				MessageOrdinal: 0, CallIndex: ptr(0)},
-			"AWS_SECRET=topsecretvalue123", true},
-		{"tool_result_event",
-			db.SecretFinding{SessionID: sid, LocationKind: "tool_result_event",
-				MessageOrdinal: 0, CallIndex: ptr(1), EventIndex: ptr(0)},
-			"event-secret-value", true},
-		{"missing ordinal",
-			db.SecretFinding{SessionID: sid, LocationKind: "message",
-				MessageOrdinal: 99},
-			"", false},
-		{"call index out of range",
-			db.SecretFinding{SessionID: sid, LocationKind: "tool_input",
-				MessageOrdinal: 0, CallIndex: ptr(9)},
-			"", false},
-		{"tool_result skipped when events present",
-			db.SecretFinding{SessionID: sid, LocationKind: "tool_result",
-				MessageOrdinal: 0, CallIndex: ptr(1)},
-			"", false},
+		{
+			"message",
+			db.SecretFinding{
+				SessionID: sid, LocationKind: "message",
+				MessageOrdinal: 0,
+			},
+			"key AKIA7QHWN2DKR4FYPLJM here", true,
+		},
+		{
+			"tool_input",
+			db.SecretFinding{
+				SessionID: sid, LocationKind: "tool_input",
+				MessageOrdinal: 0, CallIndex: ptr(0),
+			},
+			`{"command":"printenv"}`, true,
+		},
+		{
+			"tool_result",
+			db.SecretFinding{
+				SessionID: sid, LocationKind: "tool_result",
+				MessageOrdinal: 0, CallIndex: ptr(0),
+			},
+			"AWS_SECRET=topsecretvalue123", true,
+		},
+		{
+			"tool_result_event",
+			db.SecretFinding{
+				SessionID: sid, LocationKind: "tool_result_event",
+				MessageOrdinal: 0, CallIndex: ptr(1), EventIndex: ptr(0),
+			},
+			"event-secret-value", true,
+		},
+		{
+			"missing ordinal",
+			db.SecretFinding{
+				SessionID: sid, LocationKind: "message",
+				MessageOrdinal: 99,
+			},
+			"", false,
+		},
+		{
+			"call index out of range",
+			db.SecretFinding{
+				SessionID: sid, LocationKind: "tool_input",
+				MessageOrdinal: 0, CallIndex: ptr(9),
+			},
+			"", false,
+		},
+		{
+			"tool_result skipped when events present",
+			db.SecretFinding{
+				SessionID: sid, LocationKind: "tool_result",
+				MessageOrdinal: 0, CallIndex: ptr(1),
+			},
+			"", false,
+		},
 	}
 
 	for _, tc := range cases {

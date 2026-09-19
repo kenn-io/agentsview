@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -28,7 +27,7 @@ func TestDeepSeekTUIProviderDiscoversSessions(t *testing.T) {
 		Machine: "local",
 	})
 	require.True(t, ok)
-	files, err := provider.Discover(context.Background())
+	files, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, files, 2)
 	assert.Equal(t, filepath.Join(root, "session_a.json"), files[0].DisplayPath)
@@ -51,7 +50,7 @@ func TestDeepSeekTUIProviderFindsSourceFile(t *testing.T) {
 	require.True(t, ok)
 
 	found, ok, err := provider.FindSource(
-		context.Background(),
+		t.Context(),
 		FindSourceRequest{RawSessionID: "session_123"},
 	)
 	require.NoError(t, err)
@@ -59,14 +58,14 @@ func TestDeepSeekTUIProviderFindsSourceFile(t *testing.T) {
 	assert.Equal(t, path, found.DisplayPath)
 
 	_, ok, err = provider.FindSource(
-		context.Background(),
+		t.Context(),
 		FindSourceRequest{RawSessionID: "missing"},
 	)
 	require.NoError(t, err)
 	assert.False(t, ok)
 
 	_, ok, err = provider.FindSource(
-		context.Background(),
+		t.Context(),
 		FindSourceRequest{RawSessionID: "../session_123"},
 	)
 	require.NoError(t, err)
@@ -241,7 +240,7 @@ func parseDeepSeekTUITestSession(
 	})
 	require.True(t, ok)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: SourceRef{
 			Provider:       AgentDeepSeekTUI,
 			Key:            path,

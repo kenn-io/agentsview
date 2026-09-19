@@ -38,18 +38,20 @@ func (c persistProbeContext) Err() error {
 // notification for work that did commit.
 func TestScanSecretsCountsSessionPersistedBeforeCancellation(t *testing.T) {
 	fx := newEngineFixture(t)
-	require.NoError(t, fx.db.UpsertSession(db.Session{
+	require.NoError(t, fx.db.UpsertSession(t.Context(), db.Session{
 		ID: "s1", Project: "proj", Machine: "m", Agent: "claude",
 		MessageCount: 1, UserMessageCount: 1,
 	}))
-	require.NoError(t, fx.db.ReplaceSessionMessages("s1", []db.Message{
-		{SessionID: "s1", Ordinal: 0, Role: "user",
-			Content: "no secrets here, just prose"},
+	require.NoError(t, fx.db.ReplaceSessionMessages(t.Context(), "s1", []db.Message{
+		{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "no secrets here, just prose",
+		},
 	}))
 
 	ver := secrets.RulesVersion()
 	persisted := func() bool {
-		s, err := fx.db.GetSession(context.Background(), "s1")
+		s, err := fx.db.GetSession(t.Context(), "s1")
 		require.NoError(t, err)
 		require.NotNil(t, s)
 		return s.SecretsRulesVersion == ver

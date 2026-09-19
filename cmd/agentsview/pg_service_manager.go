@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -61,21 +62,19 @@ type serviceSpec struct {
 
 func rejectEnvDependentServicePGURL(rawURL string) error {
 	if os.Getenv("AGENTSVIEW_PG_URL") != "" {
-		return fmt.Errorf(
-			"AGENTSVIEW_PG_URL is set; pg service install requires a " +
-				"literal PostgreSQL URL in config.toml, either " +
-				"legacy [pg].url or the default_pg-selected [pg.NAME].url, because background " +
-				"services do not inherit your shell environment",
+		return errors.New("AGENTSVIEW_PG_URL is set; pg service install requires a " +
+			"literal PostgreSQL URL in config.toml, either " +
+			"legacy [pg].url or the default_pg-selected [pg.NAME].url, because background " +
+			"services do not inherit your shell environment",
 		)
 	}
 	// Reuse config's expansion check so the rejection rule cannot drift
 	// from how config.ResolvePG actually expands the URL at runtime.
 	if config.IsEnvDependentURL(rawURL) {
-		return fmt.Errorf(
-			"pg.url uses environment variable expansion; pg service " +
-				"install requires a literal PostgreSQL URL in config.toml, either " +
-				"legacy [pg].url or the default_pg-selected [pg.NAME].url, because " +
-				"background services do not inherit your shell environment",
+		return errors.New("pg.url uses environment variable expansion; pg service " +
+			"install requires a literal PostgreSQL URL in config.toml, either " +
+			"legacy [pg].url or the default_pg-selected [pg.NAME].url, because " +
+			"background services do not inherit your shell environment",
 		)
 	}
 	return nil
@@ -194,9 +193,7 @@ func validateServiceKindURL(appCfg config.Config, kind serviceKind) error {
 			return err
 		}
 		if chCfg.URL == "" {
-			return fmt.Errorf(
-				"clickhouse url not configured; configure a legacy [clickhouse].url or the default_clickhouse-selected [clickhouse.NAME].url before installing the service",
-			)
+			return errors.New("clickhouse url not configured; configure a legacy [clickhouse].url or the default_clickhouse-selected [clickhouse.NAME].url before installing the service")
 		}
 		return nil
 	}
@@ -212,28 +209,24 @@ func validateServiceKindURL(appCfg config.Config, kind serviceKind) error {
 		return err
 	}
 	if pgCfg.URL == "" {
-		return fmt.Errorf(
-			"pg url not configured; configure a legacy [pg].url or the default_pg-selected [pg.NAME].url before installing the service",
-		)
+		return errors.New("pg url not configured; configure a legacy [pg].url or the default_pg-selected [pg.NAME].url before installing the service")
 	}
 	return nil
 }
 
 func rejectEnvDependentServiceClickHouseURL(rawURL string) error {
 	if os.Getenv("AGENTSVIEW_CLICKHOUSE_URL") != "" {
-		return fmt.Errorf(
-			"AGENTSVIEW_CLICKHOUSE_URL is set; clickhouse service install requires a " +
-				"literal ClickHouse URL in config.toml, either " +
-				"legacy [clickhouse].url or the default_clickhouse-selected [clickhouse.NAME].url, because background " +
-				"services do not inherit your shell environment",
+		return errors.New("AGENTSVIEW_CLICKHOUSE_URL is set; clickhouse service install requires a " +
+			"literal ClickHouse URL in config.toml, either " +
+			"legacy [clickhouse].url or the default_clickhouse-selected [clickhouse.NAME].url, because background " +
+			"services do not inherit your shell environment",
 		)
 	}
 	if config.IsEnvDependentURL(rawURL) {
-		return fmt.Errorf(
-			"clickhouse.url uses environment variable expansion; clickhouse service " +
-				"install requires a literal ClickHouse URL in config.toml, either " +
-				"legacy [clickhouse].url or the default_clickhouse-selected [clickhouse.NAME].url, because " +
-				"background services do not inherit your shell environment",
+		return errors.New("clickhouse.url uses environment variable expansion; clickhouse service " +
+			"install requires a literal ClickHouse URL in config.toml, either " +
+			"legacy [clickhouse].url or the default_clickhouse-selected [clickhouse.NAME].url, because " +
+			"background services do not inherit your shell environment",
 		)
 	}
 	return nil

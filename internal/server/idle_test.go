@@ -73,7 +73,7 @@ func serveWrappedNoContent(
 	rec := httptest.NewRecorder()
 	tracker.Wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
-	})).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	})).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 	return rec
 }
 
@@ -115,7 +115,7 @@ func TestIdleTrackerExternalRequestResetsIdle(t *testing.T) {
 			close(entered)
 			<-release
 			w.WriteHeader(http.StatusNoContent)
-		})).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+		})).ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil))
 		requestDone <- rec
 	}()
 
@@ -171,7 +171,7 @@ func TestIdleTrackerInternalWorkBlocksWithoutResettingIdle(t *testing.T) {
 
 func TestIdleTrackerTouchResetsIdleBeforeRun(t *testing.T) {
 	f := newIdleTrackerFixture(t, 30*time.Millisecond)
-	time.Sleep(45 * time.Millisecond)
+	f.tracker.lastExternal = time.Now().Add(-45 * time.Millisecond)
 	f.tracker.Touch()
 
 	f.run(t)

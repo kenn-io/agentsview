@@ -195,7 +195,7 @@ func (b *fsnotifyBackend) AddRecursive(root string, budget int) RecursiveWatchRe
 				// the result appearing fully watched — and keep walking the
 				// accessible remainder.
 				result.Unwatched++
-				return nil
+				return nil //nolint:nilerr // Unwatched subtrees are counted above so polling covers degraded native discovery.
 			}
 			if !d.IsDir() {
 				return nil

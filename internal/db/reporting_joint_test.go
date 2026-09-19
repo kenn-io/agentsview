@@ -15,8 +15,10 @@ import (
 func TestReportingJointCellsPreserveTimeAndDimensions(t *testing.T) {
 	d := testDB(t)
 	seedJointReporting(t, d)
-	opts := ReportingExportOptions{Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
-		Now: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4}
+	opts := ReportingExportOptions{
+		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Now:  time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4,
+	}
 	day, err := d.ExportReportingDay(t.Context(), opts)
 	require.NoError(t, err)
 	hour := day.Hours[12]
@@ -36,14 +38,14 @@ func TestReportingJointCellsPreserveTimeAndDimensions(t *testing.T) {
 		case cell.Project == "project-b":
 			assert.Equal(t, "agent-b", cell.Agent)
 			assert.Equal(t, "automated", cell.Automation)
-			assert.Equal(t, 3.0, cell.AgentMinutes)
+			assert.InDelta(t, 3.0, cell.AgentMinutes, 0)
 			assert.Equal(t, int64(300), cell.Usage.OutputTokens)
 		case cell.Model == "model-a":
 			assert.Equal(t, "2026-07-28T12:00:00Z", cell.BucketStart)
-			assert.Equal(t, 2.0, cell.AgentMinutes)
+			assert.InDelta(t, 2.0, cell.AgentMinutes, 0)
 			assert.Equal(t, int64(100), cell.Usage.OutputTokens)
 		case cell.BucketStart == "2026-07-28T12:00:00Z":
-			assert.Equal(t, 3.0, cell.AgentMinutes)
+			assert.InDelta(t, 3.0, cell.AgentMinutes, 0)
 			assert.Zero(t, cell.Usage.OutputTokens)
 		default:
 			assert.Equal(t, "2026-07-28T12:05:00Z", cell.BucketStart)
@@ -67,8 +69,8 @@ func TestReportingJointCellsPreserveTimeAndDimensions(t *testing.T) {
 
 	oracle, err := d.GetActivityReport(t.Context(), AnalyticsFilter{Timezone: "UTC"}, dayQuery(t, "2026-07-28", "UTC"))
 	require.NoError(t, err)
-	assert.Equal(t, 8.0, oracle.Totals.AgentMinutes)
-	assert.Equal(t, oracle.Totals.AgentMinutes, hour.Activity.Totals.AgentMinutes)
+	assert.InDelta(t, 8.0, oracle.Totals.AgentMinutes, 0)
+	assert.InDelta(t, oracle.Totals.AgentMinutes, hour.Activity.Totals.AgentMinutes, 0)
 	assert.Equal(t, oracle.Peak.Agents, hour.Activity.Peak.Agents)
 }
 
@@ -97,8 +99,10 @@ func TestReportingJointSubagentsTakePrecedenceOverAutomation(t *testing.T) {
 		})
 		insertMessages(t, d,
 			Message{SessionID: session.id, Ordinal: 0, Role: "user", Timestamp: "2026-07-28T12:00:00Z"},
-			Message{SessionID: session.id, Ordinal: 1, Role: "assistant", Timestamp: "2026-07-28T12:01:00Z",
-				Model: "model-a", TokenUsage: jsontext.Value(`{"output_tokens":10}`)},
+			Message{
+				SessionID: session.id, Ordinal: 1, Role: "assistant", Timestamp: "2026-07-28T12:01:00Z",
+				Model: "model-a", TokenUsage: jsontext.Value(`{"output_tokens":10}`),
+			},
 		)
 	}
 	day, err := d.ExportReportingDay(t.Context(), ReportingExportOptions{
@@ -121,15 +125,15 @@ func TestReportingJointSubagentsTakePrecedenceOverAutomation(t *testing.T) {
 	} {
 		cell := hour.Joint.Cells[i]
 		assert.Equal(t, want.category, cell.Automation)
-		assert.Equal(t, want.minutes, cell.AgentMinutes)
+		assert.InDelta(t, want.minutes, cell.AgentMinutes, 1e-9)
 		assert.Equal(t, want.peak, cell.MaxAgents)
 		assert.Equal(t, want.tokens, cell.Usage.OutputTokens)
 		assert.Equal(t, money.Money{Microdollars: want.tokens}, cell.Usage.Cost)
 		assert.Equal(t, cell.Usage.Cost, cell.Pricing.ComputedCost)
 	}
-	assert.Equal(t, 1.0, hour.Activity.Totals.InteractiveAgentMinutes)
-	assert.Equal(t, 2.0, hour.Activity.Totals.SubagentAgentMinutes)
-	assert.Equal(t, 1.0, hour.Activity.Totals.AutomatedAgentMinutes)
+	assert.InDelta(t, 1.0, hour.Activity.Totals.InteractiveAgentMinutes, 0)
+	assert.InDelta(t, 2.0, hour.Activity.Totals.SubagentAgentMinutes, 0)
+	assert.InDelta(t, 1.0, hour.Activity.Totals.AutomatedAgentMinutes, 0)
 	assert.Equal(t, 2, hour.Activity.Buckets[0].MaxSubagentAgents)
 	assert.Equal(t, money.Money{Microdollars: 20}, hour.Activity.Totals.SubagentCost)
 }
@@ -151,7 +155,7 @@ func TestReportingJointUsageOnlySubagentRetainsClassification(t *testing.T) {
 				s.IsAutomated = tc.automated
 			})
 			cost := money.MustParseDollars("0.003")
-			require.NoError(t, d.ReplaceSessionUsageEvents("child", []UsageEvent{{
+			require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), "child", []UsageEvent{{
 				Source: "fixture", Model: "model-a", OutputTokens: 17,
 				Cost: &cost, CostStatus: "exact", CostSource: "reported",
 				OccurredAt: "2026-07-28T09:10:00Z", DedupKey: "child-usage",
@@ -178,12 +182,14 @@ func TestReportingJointUsageOnlySubagentRetainsClassification(t *testing.T) {
 func TestReportingJointCorrectionsReplaceCellsWithinSnapshot(t *testing.T) {
 	d := testDB(t)
 	seedJointReporting(t, d)
-	opts := ReportingExportOptions{Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
-		Now: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4}
+	opts := ReportingExportOptions{
+		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Now:  time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4,
+	}
 	before, err := d.ExportReportingDay(t.Context(), opts)
 	require.NoError(t, err)
 	opts.afterSnapshot = func() {
-		_, writeErr := d.getWriter().Exec(`UPDATE messages SET model = 'model-c' WHERE session_id = 'joint-a' AND model = 'model-a'`)
+		_, writeErr := d.getWriter().Exec(t.Context(), `UPDATE messages SET model = 'model-c' WHERE session_id = 'joint-a' AND model = 'model-a'`)
 		require.NoError(t, writeErr)
 	}
 	during, err := d.ExportReportingDay(t.Context(), opts)
@@ -199,7 +205,7 @@ func TestReportingJointCorrectionsReplaceCellsWithinSnapshot(t *testing.T) {
 			assert.Equal(t, int64(1), cell.Pricing.UnpricedRows)
 		}
 	}
-	_, err = d.getWriter().Exec(`DELETE FROM sessions WHERE id IN ('joint-a', 'joint-b')`)
+	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM sessions WHERE id IN ('joint-a', 'joint-b')`)
 	require.NoError(t, err)
 	empty, err := d.ExportReportingDay(t.Context(), opts)
 	require.NoError(t, err)
@@ -247,11 +253,11 @@ func TestReportingJointScopeDoesNotRechargeDuplicateUsage(t *testing.T) {
 		s.StartedAt, s.EndedAt = Ptr("2026-07-28T09:00:00Z"), Ptr("2026-07-28T09:01:00Z")
 	})
 	reported := money.MustParseDollars("0.002")
-	require.NoError(t, d.ReplaceSessionUsageEvents("shared", []UsageEvent{{
+	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), "shared", []UsageEvent{{
 		Source: "fixture", Model: "model-a", InputTokens: 41, Cost: &reported,
 		CostStatus: "exact", CostSource: "reported", OccurredAt: "2026-07-28T09:05:00Z", DedupKey: "same",
 	}}))
-	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
+	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{
 		OccurredAt: "2026-07-28T09:05:00Z", Model: "standalone", Kind: "usage",
 		InputTokens: 17, Charged: money.MustParseDollars("0.007"), DedupKey: "shared:fixture:same",
 	}}))
@@ -260,8 +266,10 @@ func TestReportingJointScopeDoesNotRechargeDuplicateUsage(t *testing.T) {
 		Message{SessionID: "shared", Ordinal: 0, Role: "user", Timestamp: "2026-07-28T09:00:00Z"},
 		Message{SessionID: "shared", Ordinal: 1, Role: "assistant", Timestamp: "2026-07-28T09:01:00Z"},
 	)
-	opts := ReportingExportOptions{Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
-		Now: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4}
+	opts := ReportingExportOptions{
+		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Now:  time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4,
+	}
 	all, err := d.ExportReportingDay(t.Context(), opts)
 	require.NoError(t, err)
 	assert.Equal(t, int64(17), all.Hours[9].Usage.Totals.InputTokens)
@@ -275,7 +283,7 @@ func TestReportingJointScopeDoesNotRechargeDuplicateUsage(t *testing.T) {
 	opts.ProjectKeys = []string{key}
 	scoped, err := d.ExportReportingDay(t.Context(), opts)
 	require.NoError(t, err)
-	assert.Equal(t, 1.0, scoped.Hours[9].Activity.Totals.AgentMinutes)
+	assert.InDelta(t, 1.0, scoped.Hours[9].Activity.Totals.AgentMinutes, 0)
 	assert.Zero(t, scoped.Hours[9].Usage.Totals.InputTokens)
 	assert.Zero(t, scoped.Hours[9].Usage.Totals.Cost.Microdollars)
 
@@ -293,7 +301,8 @@ func TestReportingJointUnpricedTokensRetainKnownSearchFees(t *testing.T) {
 		s.Agent = "claude"
 		s.StartedAt, s.EndedAt = Ptr("2026-07-28T12:00:00Z"), Ptr("2026-07-28T12:01:00Z")
 	})
-	insertMessages(t, d, Message{SessionID: "partial-price", Ordinal: 0, Role: "assistant",
+	insertMessages(t, d, Message{
+		SessionID: "partial-price", Ordinal: 0, Role: "assistant",
 		Timestamp: "2026-07-28T12:01:00Z", Model: "synthetic-unpriced-model",
 		TokenUsage: jsontext.Value(`{"input_tokens":100,"server_tool_use":{"web_search_requests":2}}`),
 	})
@@ -318,12 +327,14 @@ func TestReportingJointStandaloneUsageDoesNotInheritEmptyLabelProject(t *testing
 		Message{SessionID: "empty-label", Ordinal: 0, Role: "user", Timestamp: "2026-07-28T09:00:00Z"},
 		Message{SessionID: "empty-label", Ordinal: 1, Role: "assistant", Timestamp: "2026-07-28T09:01:00Z"},
 	)
-	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
+	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{
 		OccurredAt: "2026-07-28T09:01:00Z", Model: "standalone", Kind: "usage",
 		InputTokens: 17, Charged: money.MustParseDollars("0.007"), DedupKey: "standalone",
 	}}))
-	opts := ReportingExportOptions{Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
-		Now: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4}
+	opts := ReportingExportOptions{
+		Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+		Now:  time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4,
+	}
 	all, err := d.ExportReportingDay(t.Context(), opts)
 	require.NoError(t, err)
 	require.Len(t, all.Hours[9].Joint.Cells, 2)
@@ -335,14 +346,14 @@ func TestReportingJointStandaloneUsageDoesNotInheritEmptyLabelProject(t *testing
 			assert.Equal(t, int64(7_000), cell.Usage.Cost.Microdollars)
 		} else {
 			sessionProjectKey = cell.ProjectKey
-			assert.Equal(t, 1.0, cell.AgentMinutes)
+			assert.InDelta(t, 1.0, cell.AgentMinutes, 0)
 		}
 	}
 	require.NotEmpty(t, sessionProjectKey, "an empty label still has a real session project identity")
 	opts.ProjectKeys = []string{sessionProjectKey}
 	scoped, err := d.ExportReportingDay(t.Context(), opts)
 	require.NoError(t, err)
-	assert.Equal(t, 1.0, scoped.Hours[9].Activity.Totals.AgentMinutes)
+	assert.InDelta(t, 1.0, scoped.Hours[9].Activity.Totals.AgentMinutes, 0)
 	assert.Zero(t, scoped.Hours[9].Usage.Totals.InputTokens)
 	assert.Zero(t, scoped.Hours[9].Usage.Totals.Cost.Microdollars)
 	require.Len(t, scoped.Hours[9].Joint.Cells, 1)

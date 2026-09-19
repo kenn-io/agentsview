@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -102,6 +101,7 @@ func TestGooseDefaultDirs(t *testing.T) {
 
 func newGooseTestFixture(t *testing.T) *gooseTestFixture {
 	t.Helper()
+
 	pathRoot := t.TempDir()
 	sessionDir := filepath.Join(pathRoot, "data", "sessions")
 	require.NoError(t, os.MkdirAll(sessionDir, 0o755))
@@ -109,7 +109,7 @@ func newGooseTestFixture(t *testing.T) *gooseTestFixture {
 	database, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	_, err = database.Exec(gooseTestSchema)
+	_, err = database.ExecContext(t.Context(), gooseTestSchema)
 	require.NoError(t, err)
 	return &gooseTestFixture{
 		pathRoot: pathRoot, sessionDir: sessionDir,
@@ -121,7 +121,7 @@ func (fixture *gooseTestFixture) insertSession(
 	t *testing.T, id, name, sessionType, parentID string,
 ) {
 	t.Helper()
-	_, err := fixture.database.Exec(`
+	_, err := fixture.database.ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, name, description, session_type, working_dir,
 			created_at, updated_at, provider_name, model_config_json,
@@ -141,7 +141,7 @@ func (fixture *gooseTestFixture) insertMessage(
 	t *testing.T, sessionID, role, content string, created int64,
 ) {
 	t.Helper()
-	_, err := fixture.database.Exec(`
+	_, err := fixture.database.ExecContext(t.Context(), `
 		INSERT INTO messages (
 			message_id, session_id, role, content_json,
 			created_timestamp, metadata_json
@@ -156,7 +156,7 @@ func (fixture *gooseTestFixture) insertUsage(
 	cost float64, costSource string, compaction bool,
 ) {
 	t.Helper()
-	_, err := fixture.database.Exec(`
+	_, err := fixture.database.ExecContext(t.Context(), `
 		INSERT INTO usage_ledger (
 			session_id, created_timestamp, model,
 			input_tokens, output_tokens, total_tokens,
@@ -190,7 +190,7 @@ func TestGooseProviderParsesTranscriptToolsRelationshipsAndUsage(t *testing.T) {
 		{"type":"systemNotification","message":"Finished review."},
 		{"type":"futureContent","secret":"ignored"}
 	]`, 1_700_000_002)
-	_, err := fixture.database.Exec(`
+	_, err := fixture.database.ExecContext(t.Context(), `
 		INSERT INTO messages (
 			message_id, session_id, role, content_json,
 			created_timestamp, metadata_json
@@ -216,23 +216,23 @@ func TestGooseProviderParsesTranscriptToolsRelationshipsAndUsage(t *testing.T) {
 		Roots: []string{fixture.pathRoot}, Machine: "devbox",
 	})
 	require.True(t, ok)
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, fixture.sessionDir, plan.Roots[0].Path)
 	assert.Contains(t, plan.Roots[0].IncludeGlobs, GooseDBName)
 	assert.Contains(t, plan.Roots[0].IncludeGlobs, GooseDBName+"-*")
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, fixture.dbPath+"#child", sources[0].DisplayPath)
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 	assert.NotZero(t, fingerprint.MTimeNS)
 	assert.Len(t, fingerprint.Hash, 64)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0], Fingerprint: fingerprint, Machine: "devbox",
 	})
 	require.NoError(t, err)
@@ -295,10 +295,10 @@ func TestGooseProviderParsesTranscriptToolsRelationshipsAndUsage(t *testing.T) {
 
 func TestGooseUsesAccumulatedUsageWhenLedgerIsUnavailable(t *testing.T) {
 	fixture := newGooseTestFixture(t)
-	_, err := fixture.database.Exec(`DROP TABLE usage_ledger`)
+	_, err := fixture.database.ExecContext(t.Context(), `DROP TABLE usage_ledger`)
 	require.NoError(t, err)
 	fixture.insertSession(t, "legacy", "Legacy", "user", "")
-	_, err = fixture.database.Exec(`
+	_, err = fixture.database.ExecContext(t.Context(), `
 		UPDATE sessions SET
 			accumulated_input_tokens = 90,
 			accumulated_output_tokens = 10,
@@ -340,7 +340,7 @@ func TestGooseChangedPathWorkStaysProportionalToNewRows(t *testing.T) {
 				Roots: []string{fixture.pathRoot}, Machine: "devbox",
 			})
 			scans := 0
-			ctx := WithSharedContainerScanObserver(context.Background(), func() { scans++ })
+			ctx := WithSharedContainerScanObserver(t.Context(), func() { scans++ })
 			_, err := provider.Discover(ctx)
 			require.NoError(t, err)
 			require.Equal(t, 1, scans, "discovery must report its full container scan")
@@ -372,7 +372,7 @@ func TestGooseTailDeletionWatcherWorkStaysBounded(t *testing.T) {
 			name: "session",
 			delete: func(t *testing.T, fixture *gooseTestFixture) {
 				t.Helper()
-				_, err := fixture.database.Exec(`DELETE FROM sessions WHERE id = 'session-tail'`)
+				_, err := fixture.database.ExecContext(t.Context(), `DELETE FROM sessions WHERE id = 'session-tail'`)
 				require.NoError(t, err)
 			},
 		},
@@ -380,7 +380,7 @@ func TestGooseTailDeletionWatcherWorkStaysBounded(t *testing.T) {
 			name: "message",
 			delete: func(t *testing.T, fixture *gooseTestFixture) {
 				t.Helper()
-				_, err := fixture.database.Exec(`DELETE FROM messages WHERE session_id = 'session-tail'`)
+				_, err := fixture.database.ExecContext(t.Context(), `DELETE FROM messages WHERE session_id = 'session-tail'`)
 				require.NoError(t, err)
 			},
 		},
@@ -388,7 +388,7 @@ func TestGooseTailDeletionWatcherWorkStaysBounded(t *testing.T) {
 			name: "usage",
 			delete: func(t *testing.T, fixture *gooseTestFixture) {
 				t.Helper()
-				_, err := fixture.database.Exec(`DELETE FROM usage_ledger WHERE session_id = 'session-tail'`)
+				_, err := fixture.database.ExecContext(t.Context(), `DELETE FROM usage_ledger WHERE session_id = 'session-tail'`)
 				require.NoError(t, err)
 			},
 		},
@@ -398,7 +398,7 @@ func TestGooseTailDeletionWatcherWorkStaysBounded(t *testing.T) {
 		for _, test := range tests {
 			t.Run(fmt.Sprintf("%d/%s", sessionCount, test.name), func(t *testing.T) {
 				fixture := newGooseTestFixture(t)
-				for i := 0; i < sessionCount-1; i++ {
+				for i := range sessionCount - 1 {
 					id := fmt.Sprintf("session-%03d", i)
 					fixture.insertSession(t, id, id, "user", "")
 					fixture.insertMessage(t, id, "user", `[{"type":"text","text":"seed"}]`, 1_700_000_000)
@@ -413,7 +413,7 @@ func TestGooseTailDeletionWatcherWorkStaysBounded(t *testing.T) {
 				})
 				require.True(t, ok)
 				scans := 0
-				ctx := WithSharedContainerScanObserver(context.Background(), func() { scans++ })
+				ctx := WithSharedContainerScanObserver(t.Context(), func() { scans++ })
 				_, err := provider.Discover(ctx)
 				require.NoError(t, err)
 				require.Equal(t, 1, scans)
@@ -444,17 +444,17 @@ func TestGooseTailDeleteKeepsInsertsFromOtherTablesInSameWindow(t *testing.T) {
 		Roots: []string{fixture.pathRoot}, Machine: "devbox",
 	})
 	require.True(t, ok)
-	_, err := provider.Discover(context.Background())
+	_, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 
 	// One debounce window: the newest session row disappears (sessions cursor
 	// invalidates) while another session gains a message.
-	_, err = fixture.database.Exec(`DELETE FROM sessions WHERE id = 'session-tail'`)
+	_, err = fixture.database.ExecContext(t.Context(), `DELETE FROM sessions WHERE id = 'session-tail'`)
 	require.NoError(t, err)
 	fixture.insertMessage(t, "session-keep", "assistant", `[{"type":"text","text":"new"}]`, 1_700_000_001)
 
 	sources, err := provider.SourcesForChangedPath(
-		context.Background(), ChangedPathRequest{
+		t.Context(), ChangedPathRequest{
 			Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
 		},
 	)
@@ -477,7 +477,7 @@ func TestGooseColdWatcherEventCommitsCursorAfterFullEnumeration(t *testing.T) {
 	})
 	require.True(t, ok)
 	sources, err := provider.SourcesForChangedPath(
-		context.Background(), ChangedPathRequest{
+		t.Context(), ChangedPathRequest{
 			Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
 		},
 	)
@@ -488,7 +488,7 @@ func TestGooseColdWatcherEventCommitsCursorAfterFullEnumeration(t *testing.T) {
 	// bounded to the newly inserted rows.
 	fixture.insertMessage(t, "session-b", "assistant", `[{"type":"text","text":"new"}]`, 1_700_000_001)
 	sources, err = provider.SourcesForChangedPath(
-		context.Background(), ChangedPathRequest{
+		t.Context(), ChangedPathRequest{
 			Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
 		},
 	)
@@ -501,24 +501,24 @@ func TestGooseDiscoveryWatermarkDoesNotRetreatWatcherCursor(t *testing.T) {
 	fixture := newGooseTestFixture(t)
 	fixture.insertSession(t, "session", "Race", "user", "")
 	fixture.insertMessage(t, "session", "user", `[{"type":"text","text":"seed"}]`, 1_700_000_000)
-	_, err := fixture.database.Exec("PRAGMA journal_mode=WAL")
+	_, err := fixture.database.ExecContext(t.Context(), "PRAGMA journal_mode=WAL")
 	require.NoError(t, err)
 
 	provider, ok := NewProvider(AgentGoose, ProviderConfig{
 		Roots: []string{fixture.pathRoot}, Machine: "devbox",
 	})
 	require.True(t, ok)
-	_, err = provider.Discover(context.Background())
+	_, err = provider.Discover(t.Context())
 	require.NoError(t, err)
 
 	// A watcher event lands mid-discovery: the row it processes must not be
 	// re-listed after the older discovery watermark is stored.
 	discoverer, ok := provider.(StreamingDiscoverer)
 	require.True(t, ok)
-	err = discoverer.DiscoverEach(context.Background(), func(SourceRef) error {
+	err = discoverer.DiscoverEach(t.Context(), func(SourceRef) error {
 		fixture.insertMessage(t, "session", "assistant", `[{"type":"text","text":"mid"}]`, 1_700_000_001)
 		sources, err := provider.SourcesForChangedPath(
-			context.Background(), ChangedPathRequest{
+			t.Context(), ChangedPathRequest{
 				Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
 			},
 		)
@@ -529,7 +529,7 @@ func TestGooseDiscoveryWatermarkDoesNotRetreatWatcherCursor(t *testing.T) {
 	require.NoError(t, err)
 
 	sources, err := provider.SourcesForChangedPath(
-		context.Background(), ChangedPathRequest{
+		t.Context(), ChangedPathRequest{
 			Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
 		},
 	)
@@ -544,7 +544,7 @@ func TestGooseDiscoveryLeavesConcurrentRowsForWatcherProcessing(t *testing.T) {
 	fixture.insertMessage(t, "session", "user", `[
 		{"type":"text","text":"Initial prompt"}
 	]`, 1_700_000_000)
-	_, err := fixture.database.Exec("PRAGMA journal_mode=WAL")
+	_, err := fixture.database.ExecContext(t.Context(), "PRAGMA journal_mode=WAL")
 	require.NoError(t, err)
 
 	provider, ok := NewProvider(AgentGoose, ProviderConfig{
@@ -553,7 +553,7 @@ func TestGooseDiscoveryLeavesConcurrentRowsForWatcherProcessing(t *testing.T) {
 	require.True(t, ok)
 	discoverer, ok := provider.(StreamingDiscoverer)
 	require.True(t, ok)
-	err = discoverer.DiscoverEach(context.Background(), func(SourceRef) error {
+	err = discoverer.DiscoverEach(t.Context(), func(SourceRef) error {
 		fixture.insertMessage(t, "session", "assistant", `[
 			{"type":"text","text":"Committed during discovery"}
 		]`, 1_700_000_001)
@@ -562,7 +562,7 @@ func TestGooseDiscoveryLeavesConcurrentRowsForWatcherProcessing(t *testing.T) {
 	require.NoError(t, err)
 
 	sources, err := provider.SourcesForChangedPath(
-		context.Background(), ChangedPathRequest{
+		t.Context(), ChangedPathRequest{
 			Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
 		},
 	)
@@ -580,11 +580,11 @@ func TestGooseFailedDiscoveryDoesNotPublishWatermark(t *testing.T) {
 	discoverer, ok := provider.(StreamingDiscoverer)
 	require.True(t, ok)
 	stop := errors.New("consumer stopped discovery")
-	err := discoverer.DiscoverEach(context.Background(), func(SourceRef) error { return stop })
+	err := discoverer.DiscoverEach(t.Context(), func(SourceRef) error { return stop })
 	require.ErrorIs(t, err, stop)
 
 	// A failed enumeration must leave the next event cold, even without new rows.
-	sources, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: fixture.dbPath + "-wal", WatchRoot: fixture.sessionDir,
 	})
 	require.NoError(t, err)
@@ -604,12 +604,12 @@ func TestGooseChangedSchemaReenumeratesOnce(t *testing.T) {
 			fixture.insertSession(t, "session-b", "b", "user", "")
 			provider, ok := NewProvider(AgentGoose, ProviderConfig{Roots: []string{fixture.pathRoot}})
 			require.True(t, ok)
-			_, err := provider.Discover(context.Background())
+			_, err := provider.Discover(t.Context())
 			require.NoError(t, err)
-			_, err = fixture.database.Exec(change.sql)
+			_, err = fixture.database.ExecContext(t.Context(), change.sql)
 			require.NoError(t, err)
 			scans := 0
-			ctx := WithSharedContainerScanObserver(context.Background(), func() { scans++ })
+			ctx := WithSharedContainerScanObserver(t.Context(), func() { scans++ })
 			req := ChangedPathRequest{Path: fixture.dbPath, WatchRoot: fixture.sessionDir}
 			sources, err := provider.SourcesForChangedPath(ctx, req)
 			require.NoError(t, err)
@@ -629,14 +629,14 @@ func TestGooseChangedSchemaReenumeratesOnce(t *testing.T) {
 func TestGooseDiscoveryRejectsUnsupportedMessagesSchema(t *testing.T) {
 	fixture := newGooseTestFixture(t)
 	fixture.insertSession(t, "session", "Old", "user", "")
-	_, err := fixture.database.Exec(`ALTER TABLE messages DROP COLUMN metadata_json`)
+	_, err := fixture.database.ExecContext(t.Context(), `ALTER TABLE messages DROP COLUMN metadata_json`)
 	require.NoError(t, err)
 
 	provider, ok := NewProvider(AgentGoose, ProviderConfig{
 		Roots: []string{fixture.pathRoot}, Machine: "devbox",
 	})
 	require.True(t, ok)
-	_, err = provider.Discover(context.Background())
+	_, err = provider.Discover(t.Context())
 	require.ErrorContains(t, err, "unsupported goose messages schema")
 	assert.ErrorContains(t, err, "metadata_json")
 }
@@ -649,7 +649,7 @@ func TestGooseParsesSessionsSchemaWithoutOptionalColumns(t *testing.T) {
 	database, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	_, err = database.Exec(`
+	_, err = database.ExecContext(t.Context(), `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
 			working_dir TEXT NOT NULL,
@@ -678,10 +678,10 @@ func TestGooseParsesSessionsSchemaWithoutOptionalColumns(t *testing.T) {
 		Roots: []string{pathRoot}, Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	fingerprint, err := provider.Fingerprint(context.Background(), sources[0])
+	fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 	assert.Len(t, fingerprint.Hash, 64)
 
@@ -720,7 +720,7 @@ func TestGooseLedgerModelFallsBackToSessionModel(t *testing.T) {
 	fixture.insertSession(t, "session", "Carried", "user", "")
 	fixture.insertMessage(t, "session", "user", `[{"type":"text","text":"hi"}]`, 1_700_000_000)
 	// Upstream inserts carried_forward rows without a model.
-	_, err := fixture.database.Exec(`
+	_, err := fixture.database.ExecContext(t.Context(), `
 		INSERT INTO usage_ledger (
 			session_id, created_timestamp, model, input_tokens, output_tokens,
 			total_tokens, cache_read_tokens, cache_write_tokens,
@@ -767,13 +767,13 @@ func TestGooseObservedSessionsDatabase(t *testing.T) {
 		Roots: []string{filepath.Dir(dbPath)}, Machine: "observed-fixture",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.NotEmpty(t, sources)
 	for _, source := range sources {
-		fingerprint, err := provider.Fingerprint(context.Background(), source)
+		fingerprint, err := provider.Fingerprint(t.Context(), source)
 		require.NoError(t, err)
-		outcome, err := provider.Parse(context.Background(), ParseRequest{
+		outcome, err := provider.Parse(t.Context(), ParseRequest{
 			Source: source, Fingerprint: fingerprint, Machine: "observed-fixture",
 		})
 		require.NoError(t, err)

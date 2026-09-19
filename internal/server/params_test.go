@@ -193,7 +193,7 @@ func TestParseNonNegativeIntParam(t *testing.T) {
 }
 
 func TestClampLimit(t *testing.T) {
-	const max = 1000
+	const maximum = 1000
 	const defaultLimit = 100
 	tests := []struct {
 		name  string
@@ -203,14 +203,14 @@ func TestClampLimit(t *testing.T) {
 		{"zero uses default", 0, defaultLimit},
 		{"negative uses default", -1, defaultLimit},
 		{"within range", defaultLimit / 2, defaultLimit / 2},
-		{"at max", max, max},
-		{"exceeds max", max + 1, max},
+		{"at max", maximum, maximum},
+		{"exceeds max", maximum + 1, maximum},
 		{"default itself", defaultLimit, defaultLimit},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assert.Equal(t, tt.want, clampLimit(tt.limit, defaultLimit, max))
+			assert.Equal(t, tt.want, clampLimit(tt.limit, defaultLimit, maximum))
 		})
 	}
 }

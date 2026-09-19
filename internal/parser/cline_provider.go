@@ -115,14 +115,14 @@ func clineDiscoverEach(
 		metaPath := filepath.Join(sessionsDir, sessionID, sessionID+".json")
 		info, err := clineRegularFileInfo(metaPath, true)
 		if err != nil || info == nil {
-			return nil
+			return nil //nolint:nilerr // Missing or unreadable optional session companions are skipped during discovery.
 		}
 
 		messagesPath := filepath.Join(
 			filepath.Dir(metaPath), sessionID+".messages.json",
 		)
 		if _, err := clineRegularFileInfo(messagesPath, true); err != nil {
-			return nil
+			return nil //nolint:nilerr // Missing or unreadable optional session companions are skipped during discovery.
 		}
 		return yield(singleFileMatch{Path: metaPath})
 	})

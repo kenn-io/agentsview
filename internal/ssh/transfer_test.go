@@ -3,7 +3,6 @@ package ssh
 import (
 	"archive/tar"
 	"bytes"
-	"context"
 	"database/sql"
 	"io"
 	"os"
@@ -96,7 +95,7 @@ func TestBuildTarCommandStreamsPathListToTar(t *testing.T) {
 		nil,
 		nil,
 	)
-	cmd := exec.Command("sh")
+	cmd := exec.CommandContext(t.Context(), "sh")
 	cmd.Stdin = strings.NewReader(script)
 	archive, err := cmd.Output()
 	require.NoError(t, err)
@@ -128,7 +127,7 @@ func TestBuildTarCommandSkipsMissingFileScopedPath(t *testing.T) {
 		nil,
 		nil,
 	)
-	cmd := exec.Command("sh")
+	cmd := exec.CommandContext(t.Context(), "sh")
 	cmd.Stdin = strings.NewReader(script)
 	archive, err := cmd.Output()
 	require.NoError(t, err)
@@ -147,18 +146,17 @@ func TestBuildTarCommandSnapshotsHermesStateDBWithoutSidecars(t *testing.T) {
 	writer, err := sql.Open("sqlite3", stateDB)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = writer.Close() })
-	_, err = writer.Exec(`
+	_, err = writer.ExecContext(t.Context(), `
 		CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT);
 		INSERT INTO sessions (id, title) VALUES ('session', 'Main database');
 	`)
 	require.NoError(t, err)
 	var journalMode string
-	require.NoError(t,
-		writer.QueryRow(`PRAGMA journal_mode = WAL`).Scan(&journalMode))
+	require.NoError(t, writer.QueryRowContext(t.Context(), `PRAGMA journal_mode = WAL`).Scan(&journalMode))
 	assert.Equal(t, "wal", journalMode)
-	_, err = writer.Exec(`PRAGMA wal_autocheckpoint = 0`)
+	_, err = writer.ExecContext(t.Context(), `PRAGMA wal_autocheckpoint = 0`)
 	require.NoError(t, err)
-	_, err = writer.Exec(`UPDATE sessions SET title = 'Committed in WAL'`)
+	_, err = writer.ExecContext(t.Context(), `UPDATE sessions SET title = 'Committed in WAL'`)
 	require.NoError(t, err)
 	wal := stateDB + "-wal"
 	shm := stateDB + "-shm"
@@ -170,7 +168,7 @@ func TestBuildTarCommandSnapshotsHermesStateDBWithoutSidecars(t *testing.T) {
 		[]string{wal, shm, stateDB + "-journal"},
 		nil,
 	)
-	cmd := exec.Command("sh")
+	cmd := exec.CommandContext(t.Context(), "sh")
 	cmd.Stdin = strings.NewReader(script)
 	archive, err := cmd.CombinedOutput()
 	require.NoError(t, err, "snapshot command output: %s", archive)
@@ -179,7 +177,7 @@ func TestBuildTarCommandSnapshotsHermesStateDBWithoutSidecars(t *testing.T) {
 
 	extracted := t.TempDir()
 	_, err = remotesync.ExtractTarStream(
-		context.Background(), bytes.NewReader(archive), extracted,
+		t.Context(), bytes.NewReader(archive), extracted,
 	)
 	require.NoError(t, err)
 	extractedDB := filepath.Join(extracted, strings.TrimPrefix(stateDB, "/"))
@@ -187,8 +185,7 @@ func TestBuildTarCommandSnapshotsHermesStateDBWithoutSidecars(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, snapshot.Close()) })
 	var title string
-	require.NoError(t,
-		snapshot.QueryRow(`SELECT title FROM sessions WHERE id = 'session'`).Scan(&title))
+	require.NoError(t, snapshot.QueryRowContext(t.Context(), `SELECT title FROM sessions WHERE id = 'session'`).Scan(&title))
 	assert.Equal(t, "Committed in WAL", title)
 }
 
@@ -208,7 +205,7 @@ func TestBuildTarCommandExcludesRemoteSyncExcludedAgentState(t *testing.T) {
 		nil,
 		nil,
 	)
-	cmd := exec.Command("sh")
+	cmd := exec.CommandContext(t.Context(), "sh")
 	cmd.Stdin = strings.NewReader(script)
 	archive, err := cmd.CombinedOutput()
 	require.NoError(t, err, "archive command output: %s", archive)
@@ -233,7 +230,7 @@ func TestBuildTarCommandPrunesForbiddenRootNestedInAllowedRoot(t *testing.T) {
 		map[parser.AgentType][]string{parser.AgentClaude: {allowed}},
 		nil, nil, []string{forbidden},
 	)
-	cmd := exec.Command("sh")
+	cmd := exec.CommandContext(t.Context(), "sh")
 	cmd.Stdin = strings.NewReader(script)
 	archive, err := cmd.CombinedOutput()
 
@@ -282,7 +279,7 @@ func TestBuildTarCommandPrunesBracketCharredForbiddenRootNestedInAllowedRoot(t *
 		map[parser.AgentType][]string{parser.AgentClaude: {allowed}},
 		nil, nil, []string{forbidden},
 	)
-	cmd := exec.Command("sh")
+	cmd := exec.CommandContext(t.Context(), "sh")
 	cmd.Stdin = strings.NewReader(script)
 	archive, err := cmd.CombinedOutput()
 
@@ -309,7 +306,7 @@ func TestBuildTarCommandRejectsSymlinkedHermesSQLitePaths(t *testing.T) {
 			map[parser.AgentType][]string{parser.AgentHermes: {stateDB}},
 			nil, nil, nil,
 		)
-		cmd := exec.Command("sh")
+		cmd := exec.CommandContext(t.Context(), "sh")
 		cmd.Stdin = strings.NewReader(script)
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
@@ -333,7 +330,7 @@ func TestBuildTarCommandRejectsSymlinkedHermesSQLitePaths(t *testing.T) {
 			map[parser.AgentType][]string{parser.AgentHermes: {stateDB}},
 			nil, []string{wal}, nil,
 		)
-		cmd := exec.Command("sh")
+		cmd := exec.CommandContext(t.Context(), "sh")
 		cmd.Stdin = strings.NewReader(script)
 		var stderr bytes.Buffer
 		cmd.Stderr = &stderr
@@ -371,7 +368,7 @@ func TestBuildTarCommandSkipsFailedHermesSnapshotAndKeepsOtherData(t *testing.T)
 		},
 		nil, []string{badStateDB, goodStateDB}, nil,
 	)
-	cmd := exec.Command("sh")
+	cmd := exec.CommandContext(t.Context(), "sh")
 	cmd.Stdin = strings.NewReader(script)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -414,7 +411,7 @@ func TestBuildTarCommandWithoutPythonKeepsTranscriptsAndOtherAgents(t *testing.T
 	remoteBin := t.TempDir()
 	require.NoError(t, os.Symlink(tarPath, filepath.Join(remoteBin, "tar")))
 
-	cmd := exec.Command("sh")
+	cmd := exec.CommandContext(t.Context(), "sh")
 	cmd.Env = []string{"PATH=" + remoteBin}
 	cmd.Stdin = strings.NewReader(script)
 	var stderr bytes.Buffer
@@ -455,7 +452,7 @@ func TestDownloadAndExtractReportsSuccessfulSSHStderr(t *testing.T) {
 	require.NoError(t, err)
 	os.Stderr = stderrWriter
 	extracted, syncErr := downloadAndExtract(
-		context.Background(), "remote", "", 0, nil, nil, nil, nil, nil,
+		t.Context(), "remote", "", 0, nil, nil, nil, nil, nil,
 	)
 	closeErr := stderrWriter.Close()
 	os.Stderr = originalStderr
@@ -473,9 +470,10 @@ func TestDownloadAndExtractReportsSuccessfulSSHStderr(t *testing.T) {
 
 func writeSSHTestSQLiteDB(t *testing.T, path string) {
 	t.Helper()
+
 	database, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
-	_, err = database.Exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY)`)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE sessions (id TEXT PRIMARY KEY)`)
 	require.NoError(t, err)
 	require.NoError(t, database.Close())
 }
@@ -494,7 +492,7 @@ func TestBuildTarCommandSkipsLineDelimitedUnsafePath(t *testing.T) {
 	require.NoError(t, os.WriteFile(unsafeFile, []byte("{}\n"), 0o644))
 
 	script := buildTarCommand(nil, nil, []string{safeFile, unsafeFile}, nil)
-	cmd := exec.Command("sh")
+	cmd := exec.CommandContext(t.Context(), "sh")
 	cmd.Stdin = strings.NewReader(script)
 	archive, err := cmd.Output()
 	require.NoError(t, err)
@@ -581,7 +579,7 @@ func TestBuildTarCommandPythonBranchPrunesForbiddenRootNestedInAllowedRoot(
 	writer, err := sql.Open("sqlite3", stateDB)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = writer.Close() })
-	_, err = writer.Exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY)`)
+	_, err = writer.ExecContext(t.Context(), `CREATE TABLE sessions (id TEXT PRIMARY KEY)`)
 	require.NoError(t, err)
 
 	script := buildTarCommand(
@@ -593,7 +591,7 @@ func TestBuildTarCommandPythonBranchPrunesForbiddenRootNestedInAllowedRoot(
 	)
 	require.Contains(t, script, "python3",
 		"a Hermes state.db must route through the Python snapshot branch")
-	cmd := exec.Command("sh")
+	cmd := exec.CommandContext(t.Context(), "sh")
 	cmd.Stdin = strings.NewReader(script)
 	archive, err := cmd.CombinedOutput()
 	require.NoError(t, err, "archive command output: %s", archive)

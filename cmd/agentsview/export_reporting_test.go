@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -294,7 +293,7 @@ func TestExportReportingFallbackPricingOnUnseededArchive(t *testing.T) {
 	dataDir := testDataDir(t)
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	model := exactFallbackPricedModel(t)
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:               "fixture-fallback-priced",
 		Machine:          "fixture-machine",
 		Agent:            "agent fallback",
@@ -303,7 +302,7 @@ func TestExportReportingFallbackPricingOnUnseededArchive(t *testing.T) {
 		MessageCount:     2,
 		UserMessageCount: 1,
 	}))
-	require.NoError(t, database.InsertMessages([]db.Message{
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{
 		{
 			SessionID:     "fixture-fallback-priced",
 			Ordinal:       0,
@@ -325,7 +324,7 @@ func TestExportReportingFallbackPricingOnUnseededArchive(t *testing.T) {
 			),
 		},
 	}))
-	seeded, err := database.HasModelPricingRows(context.Background())
+	seeded, err := database.HasModelPricingRows(t.Context())
 	require.NoError(t, err)
 	assert.False(t, seeded)
 	require.NoError(t, database.Close())
@@ -354,7 +353,7 @@ func TestExportReportingSnapshotStoredPricingOverridesInstalledFallback(
 		require.NoError(t, database.Close())
 	})
 	model := exactFallbackPricedModel(t)
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:               "fixture-snapshot-pricing",
 		Machine:          "fixture-machine",
 		Agent:            "agent snapshot",
@@ -363,7 +362,7 @@ func TestExportReportingSnapshotStoredPricingOverridesInstalledFallback(
 		MessageCount:     2,
 		UserMessageCount: 1,
 	}))
-	require.NoError(t, database.InsertMessages([]db.Message{
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{
 		{
 			SessionID:     "fixture-snapshot-pricing",
 			Ordinal:       0,
@@ -418,8 +417,7 @@ func TestExportReportingSnapshotStoredPricingOverridesInstalledFallback(
 
 	var hour export.ReportingHour
 	require.NoError(t, json.Unmarshal([]byte(stdout), &hour))
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		money.Money{Microdollars: 351_000},
 		hour.Usage.Totals.Cost,
 	)
@@ -474,8 +472,8 @@ func TestExportReportingGolden(t *testing.T) {
 	} else {
 		for name, contents := range got {
 			want, err := os.ReadFile(filepath.Join(base, name))
-			require.NoError(
-				t, err, "read %s (run with -update to generate)", name,
+			require.NoError(t,
+				err, "read %s (run with -update to generate)", name,
 			)
 			assert.Equal(t, string(want), string(contents), name)
 		}
@@ -510,16 +508,14 @@ func TestExportReportingGolden(t *testing.T) {
 	assert.Equal(t, reportingGoldenUsageAgent, hour.Usage.ByAgent[1].Key)
 	assert.Equal(t, "cursor", hour.Usage.ByAgent[2].Key)
 	require.Len(t, hour.Usage.ByProject, 2)
-	assert.ElementsMatch(
-		t,
+	assert.ElementsMatch(t,
 		[]string{reportingGoldenProject, reportingGoldenUsageProject},
 		[]string{
 			hour.Usage.ByProject[0].Project,
 			hour.Usage.ByProject[1].Project,
 		},
 	)
-	assert.Greater(
-		t,
+	assert.Greater(t,
 		hour.Usage.Totals.Cost.Microdollars,
 		hour.Activity.Totals.Cost.Microdollars,
 	)
@@ -571,10 +567,11 @@ func buildExportReportingGoldenDocuments(
 
 func seedExportReportingGoldenArchive(t *testing.T) {
 	t.Helper()
+
 	dataDir := testDataDir(t)
 	database := dbtest.OpenTestDBAt(t, filepath.Join(dataDir, "sessions.db"))
 	require.NoError(t, database.SetArchiveIdentityForTest(
-		context.Background(),
+		t.Context(),
 		"reporting-fixture-archive",
 		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 	))
@@ -591,7 +588,7 @@ func seedExportReportingGoldenArchive(t *testing.T) {
 		},
 	}))
 	require.NoError(t, database.UpsertProjectIdentityObservation(
-		context.Background(),
+		t.Context(),
 		export.ProjectIdentityObservation{
 			SessionID: "fixture-cross",
 			Project:   reportingGoldenProject,
@@ -602,7 +599,7 @@ func seedExportReportingGoldenArchive(t *testing.T) {
 			),
 		},
 	))
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:               "fixture-cross",
 		Project:          reportingGoldenProject,
 		Machine:          "fixture-machine",
@@ -612,7 +609,7 @@ func seedExportReportingGoldenArchive(t *testing.T) {
 		MessageCount:     2,
 		UserMessageCount: 1,
 	}))
-	require.NoError(t, database.InsertMessages([]db.Message{
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{
 		{
 			SessionID: "fixture-cross",
 			Ordinal:   1,
@@ -634,7 +631,7 @@ func seedExportReportingGoldenArchive(t *testing.T) {
 			),
 		},
 	}))
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:               "fixture-duplicate-later",
 		Project:          reportingGoldenProject,
 		Machine:          "fixture-machine",
@@ -644,7 +641,7 @@ func seedExportReportingGoldenArchive(t *testing.T) {
 		MessageCount:     1,
 		UserMessageCount: 0,
 	}))
-	require.NoError(t, database.InsertMessages([]db.Message{{
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{{
 		SessionID:       "fixture-duplicate-later",
 		Ordinal:         1,
 		Role:            "assistant",
@@ -657,7 +654,7 @@ func seedExportReportingGoldenArchive(t *testing.T) {
 			`{"input_tokens":1000,"output_tokens":200,"cache_creation_input_tokens":30,"cache_read_input_tokens":40}`,
 		),
 	}}))
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:           "fixture-usage-only",
 		Project:      reportingGoldenUsageProject,
 		Machine:      "fixture-machine",
@@ -667,7 +664,7 @@ func seedExportReportingGoldenArchive(t *testing.T) {
 		MessageCount: 1,
 	}))
 	usageOnlyCost := money.MustParseDollars("0.005")
-	require.NoError(t, database.ReplaceSessionUsageEvents(
+	require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(),
 		"fixture-usage-only",
 		[]db.UsageEvent{{
 			Source:       "fixture-source",
@@ -681,7 +678,7 @@ func seedExportReportingGoldenArchive(t *testing.T) {
 			DedupKey:     "fixture-usage-only",
 		}},
 	))
-	require.NoError(t, database.InsertCursorUsageEvents([]db.CursorUsageEvent{{
+	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{{
 		OccurredAt:       "2026-07-28T11:05:00Z",
 		Model:            reportingGoldenStandalone,
 		Kind:             "usage",
@@ -715,6 +712,7 @@ func assertDigestDayMatchesReportingDay(
 	day export.ReportingDay,
 ) {
 	t.Helper()
+
 	assert.Equal(t, day.Date, digest.Date)
 	assert.Equal(t, day.Complete, digest.Complete)
 	assert.Equal(t, day.HasData, digest.HasData)

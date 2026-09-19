@@ -1,8 +1,6 @@
 package db
 
 import (
-	"context"
-	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -29,7 +27,7 @@ func seedSearchSession(t *testing.T, d *DB, id, project string, msgs [][2]string
 			Content: rc[1], Timestamp: "2026-05-20T12:00:0" + itoa(i) + "Z",
 		})
 	}
-	require.NoError(t, d.ReplaceSessionMessages(id, out), "ReplaceSessionMessages")
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, out), "ReplaceSessionMessages")
 }
 
 func TestSearchContentSubstringMessages(t *testing.T) {
@@ -38,7 +36,7 @@ func TestSearchContentSubstringMessages(t *testing.T) {
 		{"user", "please find the DATABASE_URL value"},
 		{"assistant", "sure, here is the answer"},
 	})
-	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	got, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "database_url", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50,
 	})
@@ -69,7 +67,7 @@ func TestSearchContentRedactsStraddlingSecret(t *testing.T) {
 		Pattern: "attached key", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50,
 	}
-	got, err := d.SearchContent(context.Background(), base)
+	got, err := d.SearchContent(t.Context(), base)
 	require.NoError(t, err, "SearchContent")
 	require.Len(t, got.Matches, 1)
 	assert.NotContains(t, got.Matches[0].Snippet, "SECRETKEYMATERIAL",
@@ -79,7 +77,7 @@ func TestSearchContentRedactsStraddlingSecret(t *testing.T) {
 
 	// Reveal opts out of redaction (localhost-gated upstream): raw bytes show.
 	base.RevealSecrets = true
-	rev, err := d.SearchContent(context.Background(), base)
+	rev, err := d.SearchContent(t.Context(), base)
 	require.NoError(t, err, "SearchContent reveal")
 	assert.Contains(t, rev.Matches[0].Snippet, "SECRETKEYMATERIAL",
 		"reveal snippet should show raw bytes")
@@ -169,10 +167,10 @@ func TestSearchContentToolIO(t *testing.T) {
 			ResultContent: "AWS_SECRET=topsecretvalue123",
 		}},
 	}}
-	require.NoError(t, d.ReplaceSessionMessages("s2", msgs),
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s2", msgs),
 		"ReplaceSessionMessages")
 	// match in tool input
-	in, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	in, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "printenv", Mode: "substring",
 		Sources: []string{"tool_input"}, Limit: 50,
 	})
@@ -181,7 +179,7 @@ func TestSearchContentToolIO(t *testing.T) {
 	require.Equal(t, "tool_input", in.Matches[0].Location, "Location")
 	assert.Equal(t, "Bash", in.Matches[0].ToolName, "ToolName")
 	// match in tool result
-	res, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	res, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "topsecretvalue", Mode: "substring",
 		Sources: []string{"tool_result"}, Limit: 50,
 	})
@@ -217,7 +215,7 @@ func TestSearchContentEmptyToolUseIDNotSuppressed(t *testing.T) {
 			},
 		},
 	}}
-	require.NoError(t, d.ReplaceSessionMessages("empti", msgs),
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "empti", msgs),
 		"ReplaceSessionMessages")
 	// ReplaceSessionMessages routes empty ToolUseID through nilIfEmpty so
 	// it lands as NULL. NULL = NULL is false in SQL, so the dedup bug we
@@ -229,11 +227,11 @@ func TestSearchContentEmptyToolUseIDNotSuppressed(t *testing.T) {
 		"UPDATE tool_calls SET tool_use_id = '' WHERE session_id = 'empti'",
 		"UPDATE tool_result_events SET tool_use_id = '' WHERE session_id = 'empti'",
 	} {
-		_, err := d.getWriter().Exec(sql)
+		_, err := d.getWriter().Exec(t.Context(), sql)
 		require.NoError(t, err, "force empty tool_use_id")
 	}
 	for _, mode := range []string{"substring", "regex"} {
-		got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+		got, err := d.SearchContent(t.Context(), ContentSearchFilter{
 			Pattern: "FINDA", Mode: mode,
 			Sources: []string{"tool_result"}, Limit: 50,
 		})
@@ -244,7 +242,7 @@ func TestSearchContentEmptyToolUseIDNotSuppressed(t *testing.T) {
 			"%s: want 1 tool_result", mode)
 	}
 	// The event-delivered result is still searchable via the events branch.
-	ev, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	ev, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "FINDB", Mode: "substring",
 		Sources: []string{"tool_result"}, Limit: 50,
 	})
@@ -273,7 +271,7 @@ func TestSearchContentPaginationStableAcrossTies(t *testing.T) {
 			ResultContent: "FINDME in result",
 		}},
 	}}
-	require.NoError(t, d.ReplaceSessionMessages("tie", msgs),
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "tie", msgs),
 		"ReplaceSessionMessages")
 	base := ContentSearchFilter{
 		Pattern: "FINDME", Mode: "substring",
@@ -281,7 +279,7 @@ func TestSearchContentPaginationStableAcrossTies(t *testing.T) {
 	}
 	full := base
 	full.Limit = 50
-	all, err := d.SearchContent(context.Background(), full)
+	all, err := d.SearchContent(t.Context(), full)
 	require.NoError(t, err, "SearchContent full")
 	require.Len(t, all.Matches, 3, "tied matches")
 	// The tie-break orders the three sources deterministically by source rank.
@@ -295,7 +293,7 @@ func TestSearchContentPaginationStableAcrossTies(t *testing.T) {
 		p := base
 		p.Limit = 1
 		p.Cursor = cursor
-		page, err := d.SearchContent(context.Background(), p)
+		page, err := d.SearchContent(t.Context(), p)
 		require.NoError(t, err, "SearchContent page at cursor %d", cursor)
 		paged = append(paged, page.Matches...)
 		if page.NextCursor == 0 {
@@ -317,7 +315,7 @@ func TestSearchContentRegex(t *testing.T) {
 		{"user", "key AKIA" + "7QHWN2DKR4FYPLJM here"},
 		{"assistant", "no secrets in this line"},
 	})
-	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	got, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: `AKIA[0-9A-Z]{16}`, Mode: "regex",
 		Sources: []string{"messages"}, Limit: 50,
 	})
@@ -328,7 +326,7 @@ func TestSearchContentRegex(t *testing.T) {
 
 func TestSearchContentUnknownSource(t *testing.T) {
 	d := testDB(t)
-	_, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	_, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "x", Mode: "substring", Sources: []string{"messages", "bogus"},
 	})
 	require.Error(t, err, "expected error for unknown source name")
@@ -336,7 +334,7 @@ func TestSearchContentUnknownSource(t *testing.T) {
 
 func TestSearchContentRegexInvalid(t *testing.T) {
 	d := testDB(t)
-	_, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	_, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: `(unclosed`, Mode: "regex", Sources: []string{"messages"},
 	})
 	require.Error(t, err, "expected error for invalid regex")
@@ -344,13 +342,13 @@ func TestSearchContentRegexInvalid(t *testing.T) {
 
 func TestSearchContentFTS(t *testing.T) {
 	d := testDB(t)
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("fts5 not available")
 	}
 	seedSearchSession(t, d, "f1", "proj", [][2]string{
 		{"user", "optimize the database query performance"},
 	})
-	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	got, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "optimize", Mode: "fts",
 		Sources: []string{"messages"}, Limit: 50,
 	})
@@ -361,7 +359,7 @@ func TestSearchContentFTS(t *testing.T) {
 
 func TestSearchContentFTSPhraseSnippetFallsBackToFirstToken(t *testing.T) {
 	d := testDB(t)
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("fts5 not available")
 	}
 	body := strings.Repeat("prefix ", 30) + "foo-bar lives here"
@@ -369,7 +367,7 @@ func TestSearchContentFTSPhraseSnippetFallsBackToFirstToken(t *testing.T) {
 		{"user", body},
 	})
 
-	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	got, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: `"foo bar"`, Mode: "fts",
 		Sources: []string{"messages"}, Limit: 50,
 	})
@@ -380,7 +378,7 @@ func TestSearchContentFTSPhraseSnippetFallsBackToFirstToken(t *testing.T) {
 
 func TestSearchContentFTSInvalidQuery(t *testing.T) {
 	d := testDB(t)
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("fts5 not available")
 	}
 	seedSearchSession(t, d, "f2", "proj", [][2]string{
@@ -388,32 +386,32 @@ func TestSearchContentFTSInvalidQuery(t *testing.T) {
 	})
 	// A lone double quote is an unbalanced FTS phrase, so SQLite raises a
 	// generic syntax error that must be classified as user input, not a 500.
-	_, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	_, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: `"`, Mode: "fts",
 		Sources: []string{"messages"}, Limit: 50,
 	})
 	var inputErr *SearchInputError
-	require.True(t, errors.As(err, &inputErr),
+	require.ErrorAs(t, err, &inputErr,
 		"malformed FTS query error = %v, want *SearchInputError", err)
 }
 
 func TestSearchContentFTSUnavailable(t *testing.T) {
 	d := testDB(t)
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("fts5 not available")
 	}
 	// Drop the FTS table so HasFTS reports unavailable; the FTS search must
 	// then fail with an internal (non-input) error rather than being
 	// misclassified as an invalid user query (HTTP 400).
-	_, err := d.getWriter().Exec("DROP TABLE IF EXISTS messages_fts")
+	_, err := d.getWriter().Exec(t.Context(), "DROP TABLE IF EXISTS messages_fts")
 	require.NoError(t, err, "drop messages_fts")
-	_, err = d.SearchContent(context.Background(), ContentSearchFilter{
+	_, err = d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "x", Mode: "fts",
 		Sources: []string{"messages"}, Limit: 50,
 	})
 	require.Error(t, err, "expected error when FTS is unavailable")
 	var inputErr *SearchInputError
-	assert.False(t, errors.As(err, &inputErr),
+	assert.NotErrorAs(t, err, &inputErr,
 		"FTS-unavailable misclassified as input error: %v", err)
 }
 
@@ -426,18 +424,20 @@ func TestSearchContentExcludeSystem(t *testing.T) {
 	// Plain content (no legacy system-prefix string) so the exclusion is
 	// driven solely by the persisted is_system flag, not SystemPrefixSQL.
 	msgs := []Message{
-		{SessionID: "s3", Ordinal: 0, Role: "user",
+		{
+			SessionID: "s3", Ordinal: 0, Role: "user",
 			Content: "ordinary message holding NEEDLE", IsSystem: true,
-			Timestamp: "2026-05-20T12:00:00Z"},
+			Timestamp: "2026-05-20T12:00:00Z",
+		},
 	}
-	require.NoError(t, d.ReplaceSessionMessages("s3", msgs),
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "s3", msgs),
 		"ReplaceSessionMessages")
-	withSys, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	withSys, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"}, Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent with system")
 	assert.Len(t, withSys.Matches, 1, "default should include system messages")
-	noSys, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	noSys, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"},
 		ExcludeSystem: true, Limit: 50,
 	})
@@ -462,15 +462,15 @@ func TestSearchContentExcludesAutomatedByDefault(t *testing.T) {
 		SessionID: "auto", Ordinal: 0, Role: "user",
 		Content: "automated NEEDLE run", Timestamp: "2026-05-20T12:00:00Z",
 	}}
-	require.NoError(t, d.ReplaceSessionMessages("auto", msgs),
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "auto", msgs),
 		"ReplaceSessionMessages")
-	def, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	def, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"}, Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent")
 	assert.Empty(t, def.Matches,
 		"automated session should be excluded by default")
-	inc, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	inc, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"},
 		IncludeAutomated: true, Limit: 50,
 	})
@@ -490,15 +490,15 @@ func TestSearchContentExcludesOneShotByDefault(t *testing.T) {
 		SessionID: "one", Ordinal: 0, Role: "user",
 		Content: "leaked NEEDLE token", Timestamp: "2026-05-20T12:00:00Z",
 	}}
-	require.NoError(t, d.ReplaceSessionMessages("one", msgs),
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "one", msgs),
 		"ReplaceSessionMessages")
-	def, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	def, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"}, Limit: 50,
 	})
 	require.NoError(t, err, "SearchContent")
 	assert.Empty(t, def.Matches,
 		"one-shot session should be excluded by default")
-	inc, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	inc, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"},
 		IncludeOneShot: true, Limit: 50,
 	})
@@ -528,9 +528,9 @@ func TestSearchContentToolResultDedup(t *testing.T) {
 			}},
 		}},
 	}}
-	require.NoError(t, d.ReplaceSessionMessages("dup", msgs),
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), "dup", msgs),
 		"ReplaceSessionMessages")
-	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	got, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "DUPNEEDLE", Mode: "substring",
 		Sources: []string{"tool_result"}, Limit: 50,
 	})
@@ -547,13 +547,13 @@ func TestSearchContentCursorPagination(t *testing.T) {
 		{"user", "beta NEEDLE two"},
 		{"user", "gamma NEEDLE three"},
 	})
-	first, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	first, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"}, Limit: 2,
 	})
 	require.NoError(t, err, "SearchContent page1")
 	require.Len(t, first.Matches, 2, "page1 matches")
 	require.Equal(t, 2, first.NextCursor, "page1 cursor")
-	second, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	second, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "NEEDLE", Mode: "substring", Sources: []string{"messages"},
 		Limit: 2, Cursor: first.NextCursor,
 	})
@@ -578,10 +578,10 @@ func TestSearchContentMultiSourceWithProjectFilter(t *testing.T) {
 				InputJSON: `{"command":"FINDME"}`, ResultContent: "out FINDME",
 			}},
 		}}
-		require.NoError(t, d.ReplaceSessionMessages(id, msgs),
+		require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, msgs),
 			"ReplaceSessionMessages %s", id)
 	}
-	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	got, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "FINDME", Mode: "substring",
 		Sources: []string{"messages", "tool_input", "tool_result"},
 		Project: "alpha", Limit: 50,
@@ -614,7 +614,7 @@ func TestSearchContentDateFilterUsesRequestedTimezone(t *testing.T) {
 		})
 	}
 
-	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	got, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "TIMEZONE_NEEDLE", Mode: "substring",
 		Sources: []string{"messages"}, Date: "2024-06-16",
 		Timezone: "America/New_York", Limit: 50,
@@ -686,7 +686,7 @@ func seedUnitSession(
 			msgs[i].Timestamp = fmt.Sprintf("2026-05-20T12:00:%02dZ", i)
 		}
 	}
-	require.NoError(t, d.ReplaceSessionMessages(id, msgs),
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(), id, msgs),
 		"ReplaceSessionMessages %s", id)
 }
 
@@ -718,7 +718,7 @@ func TestSearchContentSubstringDerivedRunRange(t *testing.T) {
 		{Ordinal: 4, Role: "assistant", Content: "RUNHIT step three"},
 		{Ordinal: 5, Role: "user", Content: "next question"},
 	})
-	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	got, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "RUNHIT", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50,
 	})
@@ -739,7 +739,7 @@ func TestSearchContentSubstringDerivedRunRange(t *testing.T) {
 
 	// ExcludeSystem drops the system row but leaves the derived ranges of the
 	// surviving rows unchanged.
-	ex, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	ex, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "RUNHIT", Mode: "substring",
 		Sources: []string{"messages"}, ExcludeSystem: true, Limit: 50,
 	})
@@ -765,7 +765,7 @@ func TestSearchContentSubstringSidechainRunSubordinate(t *testing.T) {
 		{Ordinal: 2, Role: "assistant", Content: "SIDEHIT step b", IsSidechain: true},
 		{Ordinal: 3, Role: "assistant", Content: "main MAINHIT answer"},
 	})
-	side, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	side, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "SIDEHIT", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50,
 	})
@@ -777,7 +777,7 @@ func TestSearchContentSubstringSidechainRunSubordinate(t *testing.T) {
 		assert.True(t, m.Sidechain, "anchor sidechain flag")
 		assert.Empty(t, m.Relationship, "no session lineage")
 	}
-	main, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	main, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "MAINHIT", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50,
 	})
@@ -806,7 +806,7 @@ func TestSearchContentSubstringSubagentLineage(t *testing.T) {
 		{Ordinal: 0, Role: "user", Content: "subagent prompt"},
 		{Ordinal: 1, Role: "assistant", Content: "SUBHIT answer"},
 	})
-	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	got, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "SUBHIT", Mode: "substring",
 		Sources: []string{"messages"}, IncludeChildren: true, Limit: 50,
 	})
@@ -828,16 +828,18 @@ func TestSearchContentToolDerivedRunRange(t *testing.T) {
 	d := testDB(t)
 	seedUnitSession(t, d, "tool1", nil, []Message{
 		{Ordinal: 0, Role: "user", Content: "the question"},
-		{Ordinal: 1, Role: "assistant", Content: "running the tool",
+		{
+			Ordinal: 1, Role: "assistant", Content: "running the tool",
 			ToolCalls: []ToolCall{{
 				ToolName: "Bash", Category: "Bash", ToolUseID: "tu1",
 				InputJSON:     `{"command":"TOOLHIT"}`,
 				ResultContent: "output RESHIT data",
-			}}},
+			}},
+		},
 		{Ordinal: 2, Role: "assistant", Content: "continuing the answer"},
 		{Ordinal: 3, Role: "user", Content: "thanks"},
 	})
-	in, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	in, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "TOOLHIT", Mode: "substring",
 		Sources: []string{"tool_input"}, Limit: 50,
 	})
@@ -848,7 +850,7 @@ func TestSearchContentToolDerivedRunRange(t *testing.T) {
 	assert.Equal(t, [2]int{1, 2}, in.Matches[0].OrdinalRange,
 		"tool_input anchor classified from the real message row")
 
-	res, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	res, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "RESHIT", Mode: "substring",
 		Sources: []string{"tool_result"}, Limit: 50,
 	})
@@ -867,14 +869,16 @@ func TestSearchContentToolAnchorUsesRealRowRole(t *testing.T) {
 	d := testDB(t)
 	seedUnitSession(t, d, "toolu", nil, []Message{
 		{Ordinal: 0, Role: "user", Content: "prompt"},
-		{Ordinal: 1, Role: "user", Content: "user-attached call",
+		{
+			Ordinal: 1, Role: "user", Content: "user-attached call",
 			ToolCalls: []ToolCall{{
 				ToolName: "Bash", Category: "Bash", ToolUseID: "tuu",
 				InputJSON: `{"command":"UHIT"}`,
-			}}},
+			}},
+		},
 		{Ordinal: 2, Role: "assistant", Content: "assistant reply"},
 	})
-	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	got, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "UHIT", Mode: "substring",
 		Sources: []string{"tool_input"}, Limit: 50,
 	})
@@ -904,7 +908,7 @@ func TestSearchContentToolResultEventsDerived(t *testing.T) {
 		s.ParentSessionID = Ptr("boss")
 		s.RelationshipType = "subagent"
 	})
-	_, err := d.getWriter().Exec(`INSERT INTO tool_result_events
+	_, err := d.getWriter().Exec(t.Context(), `INSERT INTO tool_result_events
 		(session_id, tool_call_message_ordinal, tool_use_id, source, status,
 		 content, content_length, timestamp, event_index)
 		VALUES ('evorph', 7, 'tux', 'stdout', 'success',
@@ -913,7 +917,8 @@ func TestSearchContentToolResultEventsDerived(t *testing.T) {
 
 	seedUnitSession(t, d, "evrun", nil, []Message{
 		{Ordinal: 0, Role: "user", Content: "the question"},
-		{Ordinal: 1, Role: "assistant", Content: "running",
+		{
+			Ordinal: 1, Role: "assistant", Content: "running",
 			ToolCalls: []ToolCall{{
 				ToolName: "Bash", Category: "Bash", ToolUseID: "tu1",
 				InputJSON: `{"command":"x"}`,
@@ -921,11 +926,12 @@ func TestSearchContentToolResultEventsDerived(t *testing.T) {
 					ToolUseID: "tu1", Source: "stdout", Status: "success",
 					Content: "EVHIT streamed output", EventIndex: 0,
 				}},
-			}}},
+			}},
+		},
 		{Ordinal: 2, Role: "assistant", Content: "wrapping up"},
 	})
 
-	orph, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	orph, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "ORPHHIT", Mode: "substring",
 		Sources: []string{"tool_result"}, IncludeChildren: true, Limit: 50,
 	})
@@ -939,7 +945,7 @@ func TestSearchContentToolResultEventsDerived(t *testing.T) {
 	assert.Equal(t, "subagent", m.Relationship, "Relationship from sessions join")
 	assert.Equal(t, "boss", m.ParentSessionID, "ParentSessionID from sessions join")
 
-	ev, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	ev, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "EVHIT", Mode: "substring",
 		Sources: []string{"tool_result"}, Limit: 50,
 	})
@@ -959,7 +965,7 @@ func TestSearchContentRegexDerivedRange(t *testing.T) {
 		{Ordinal: 1, Role: "assistant", Content: "RXHIT alpha"},
 		{Ordinal: 2, Role: "assistant", Content: "RXHIT beta"},
 	})
-	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	got, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: `RXHIT [a-z]+`, Mode: "regex",
 		Sources: []string{"messages"}, Limit: 50,
 	})
@@ -974,7 +980,7 @@ func TestSearchContentRegexDerivedRange(t *testing.T) {
 // the shared derivation pass.
 func TestSearchContentFTSDerivedRange(t *testing.T) {
 	d := testDB(t)
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("fts5 not available")
 	}
 	seedUnitSession(t, d, "fx1", nil, []Message{
@@ -982,7 +988,7 @@ func TestSearchContentFTSDerivedRange(t *testing.T) {
 		{Ordinal: 1, Role: "assistant", Content: "ftshit alpha step"},
 		{Ordinal: 2, Role: "assistant", Content: "ftshit beta step"},
 	})
-	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	got, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "ftshit", Mode: "fts",
 		Sources: []string{"messages"}, Limit: 50,
 	})
@@ -1023,14 +1029,14 @@ func TestSearchContentExcludeSessionIDs(t *testing.T) {
 		{"assistant", "ok"},
 	})
 
-	all, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	all, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "needle", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 50,
 	})
 	require.NoError(t, err)
 	require.Len(t, all.Matches, 2)
 
-	got, err := d.SearchContent(context.Background(), ContentSearchFilter{
+	got, err := d.SearchContent(t.Context(), ContentSearchFilter{
 		Pattern: "needle", Mode: "substring",
 		Sources: []string{"messages"}, Limit: 1,
 		ExcludeSessionIDs: []string{"drop", " drop "},

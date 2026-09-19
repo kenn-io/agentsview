@@ -51,7 +51,7 @@ func TestStoreGetAnalyticsSessionShape_AutonomyExcludesSystemUsers(
 		StartedAt:    &started,
 		MessageCount: 8,
 	}
-	require.NoError(t, local.UpsertSession(sess), "upsert session")
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert session")
 
 	msgs := []db.Message{
 		{
@@ -83,7 +83,7 @@ func TestStoreGetAnalyticsSessionShape_AutonomyExcludesSystemUsers(
 			Content:    "tool call",
 		})
 	}
-	require.NoError(t, local.InsertMessages(msgs), "insert messages")
+	require.NoError(t, local.InsertMessages(t.Context(), msgs), "insert messages")
 
 	_, err = ps.Push(ctx, false, nil)
 	require.NoError(t, err, "push")

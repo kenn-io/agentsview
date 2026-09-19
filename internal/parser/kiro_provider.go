@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -127,7 +128,7 @@ func (p *kiroProvider) Parse(
 	}
 	src, ok := p.sources.sourceFromRef(req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("kiro source path unavailable")
+		return ParseOutcome{}, errors.New("kiro source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	switch src.Kind {
@@ -600,7 +601,7 @@ func (s kiroSourceSet) SourcesForChangedPath(
 				sources = append(sources, winner)
 			}
 		}
-		tombstones, err := s.changedPathTombstones(root, source, req.StoredSourcePaths, winners)
+		tombstones, err := s.changedPathTombstones(ctx, root, source, req.StoredSourcePaths, winners)
 		if err != nil {
 			return nil, err
 		}
@@ -666,7 +667,7 @@ func (s kiroSourceSet) sourceForSession(
 	}
 	var candidates []SourceRef
 	if changedSrc, ok := s.sourceFromRef(changed); ok &&
-		changedSrc.Kind != kiroSourceSQLiteDB && kiroSourceExists(changed) {
+		changedSrc.Kind != kiroSourceSQLiteDB && kiroSourceExists(ctx, changed) {
 		s.setSourceMTime(&changed)
 		candidates = append(candidates, changed)
 	}
@@ -679,7 +680,7 @@ func (s kiroSourceSet) sourceForSession(
 			return SourceRef{}, false, err
 		}
 		if dbPath != "" {
-			meta, found, err := KiroSQLiteSessionMetaForID(dbPath, sessionID)
+			meta, found, err := KiroSQLiteSessionMetaForID(ctx, dbPath, sessionID)
 			if err != nil {
 				return SourceRef{}, false, fmt.Errorf(
 					"find Kiro SQLite session %s: %w", sessionID, err,
@@ -704,7 +705,7 @@ func (s kiroSourceSet) sourceForSession(
 				candidates = append(candidates, source)
 			}
 		}
-		legacySources, err := s.legacySourcesForSession(root, sessionID, changed)
+		legacySources, err := s.legacySourcesForSession(ctx, root, sessionID, changed)
 		if err != nil {
 			return SourceRef{}, false, err
 		}
@@ -720,7 +721,7 @@ func (s kiroSourceSet) sourceForSession(
 // legacySourcesForSession resolves the legacy transcripts that can carry
 // sessionID with bounded exact-path probes: legacy identity is derived from
 // the file name, so only <root>/<id>.jsonl and <root>/cli/<id>.jsonl qualify.
-func (s kiroSourceSet) legacySourcesForSession(
+func (s kiroSourceSet) legacySourcesForSession(ctx context.Context,
 	root, sessionID string, changed SourceRef,
 ) ([]SourceRef, error) {
 	root = filepath.Clean(root)
@@ -728,7 +729,7 @@ func (s kiroSourceSet) legacySourcesForSession(
 	if changedSrc, ok := s.sourceFromRef(changed); ok &&
 		changedSrc.Kind == kiroSourceLegacyJSONL &&
 		samePath(changedSrc.Root, root) &&
-		kiroSourceExists(changed) &&
+		kiroSourceExists(ctx, changed) &&
 		KiroSessionIDFromPath(changedSrc.Path) == sessionID {
 		paths[filepath.Clean(changedSrc.Path)] = struct{}{}
 	}
@@ -802,7 +803,7 @@ func (s kiroSourceSet) StoredSourceHintScopes(
 // be force-replaced out of the archive, matching the db-backed providers.
 // A vanished database file yields no tombstones, preserving the stored sessions
 // (per the persistent-archive rule).
-func (s kiroSourceSet) changedPathTombstones(
+func (s kiroSourceSet) changedPathTombstones(ctx context.Context,
 	root string,
 	changed SourceRef,
 	storedPaths []string,
@@ -826,7 +827,7 @@ func (s kiroSourceSet) changedPathTombstones(
 		if !samePath(member.DBPath, src.DBPath) {
 			continue
 		}
-		exists, err := KiroSQLiteSessionExistsWithError(member.DBPath, member.SessionID)
+		exists, err := KiroSQLiteSessionExistsWithError(ctx, member.DBPath, member.SessionID)
 		if err != nil {
 			return nil, fmt.Errorf("check Kiro SQLite session %s: %w", member.SessionID, err)
 		}
@@ -863,7 +864,7 @@ func (s kiroSourceSet) FindSource(
 		}
 		for _, root := range s.roots {
 			if source, ok := s.sourceRef(root, path, true); ok {
-				if req.RequireFreshSource && !kiroSourceExists(source) {
+				if req.RequireFreshSource && !kiroSourceExists(ctx, source) {
 					continue
 				}
 				if req.RawSessionID == "" {
@@ -889,7 +890,7 @@ func (s kiroSourceSet) FindSource(
 			return SourceRef{}, false, dbPathErr
 		}
 		if dbPath != "" {
-			exists, err := KiroSQLiteSessionExistsWithError(dbPath, req.RawSessionID)
+			exists, err := KiroSQLiteSessionExistsWithError(ctx, dbPath, req.RawSessionID)
 			if err != nil {
 				return SourceRef{}, false, fmt.Errorf(
 					"find Kiro SQLite session %s: %w", req.RawSessionID, err,
@@ -938,7 +939,7 @@ func (s kiroSourceSet) FindSource(
 	return SourceRef{}, false, nil
 }
 
-func kiroSourceExists(source SourceRef) bool {
+func kiroSourceExists(ctx context.Context, source SourceRef) bool {
 	src, ok := source.Opaque.(kiroSource)
 	if !ok {
 		ptr, ok := source.Opaque.(*kiroSource)
@@ -949,7 +950,7 @@ func kiroSourceExists(source SourceRef) bool {
 	}
 	switch src.Kind {
 	case kiroSourceSQLiteSession:
-		return KiroSQLiteSessionExists(src.DBPath, src.SessionID)
+		return KiroSQLiteSessionExists(ctx, src.DBPath, src.SessionID)
 	case kiroSourceSQLiteDB:
 		return IsRegularFile(src.DBPath)
 	default:
@@ -966,7 +967,7 @@ func (s kiroSourceSet) Fingerprint(
 	}
 	src, ok := s.sourceFromRef(source)
 	if !ok {
-		return SourceFingerprint{}, fmt.Errorf("kiro source path unavailable")
+		return SourceFingerprint{}, errors.New("kiro source path unavailable")
 	}
 	key := firstNonEmptyJSONLString(source.FingerprintKey, source.Key, src.Path)
 	if src.Kind == kiroSourceSQLiteSession {
@@ -976,7 +977,7 @@ func (s kiroSourceSet) Fingerprint(
 			}
 			return SourceFingerprint{}, fmt.Errorf("stat %s: %w", src.DBPath, err)
 		}
-		row, err := loadKiroSQLiteRow(src.DBPath, src.SessionID)
+		row, err := loadKiroSQLiteRow(ctx, src.DBPath, src.SessionID)
 		if err != nil {
 			if errors.Is(err, sql.ErrNoRows) {
 				return SourceFingerprint{Key: key}, nil
@@ -1039,8 +1040,10 @@ func (s kiroSourceSet) Fingerprint(
 				fingerprint.MTimeNS = sideInfo.ModTime().UnixNano()
 			}
 		}
+	case kiroSourceSQLiteDB, kiroSourceSQLiteSession:
+		// SQLite sources have no JSONL sidecar.
 	}
-	hash := ""
+	var hash string
 	switch src.Kind {
 	case kiroSourceCurrentJSONL:
 		sidecar = ""
@@ -1077,7 +1080,7 @@ func hashKiroJSONLSource(transcript, sidecar string) (string, error) {
 		}
 	}
 	digest := sha256.Sum256([]byte("kiro-current\x00" + transcriptHash + "\x00" + sidecarHash))
-	return fmt.Sprintf("%x", digest[:]), nil
+	return hex.EncodeToString(digest[:]), nil
 }
 
 func (s kiroSourceSet) sourceFromRef(source SourceRef) (kiroSource, bool) {
@@ -1210,6 +1213,8 @@ func (s kiroSourceSet) newSourceRef(
 		key = sessionID
 	case kiroSourceLegacyJSONL:
 		key = KiroSessionIDFromPath(path)
+	case kiroSourceSQLiteDB:
+		// Whole databases retain their path as the source key.
 	}
 	return SourceRef{
 		Provider:       AgentKiro,

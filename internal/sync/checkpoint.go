@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -95,13 +96,13 @@ func (e *Engine) codexCheckpointFingerprint(
 	// replacement committed but before its checkpoint upsert) must never
 	// seed a resume: mark it invalid so the caller rebuilds
 	// authoritatively.
-	inc, ok := e.db.GetSessionForIncremental(
+	inc, ok := e.db.GetSessionForIncremental(ctx,
 		lookupPath, string(file.Agent),
 	)
 	if !ok {
 		return res, nil
 	}
-	cp, _, err := e.db.GetParserCheckpoint(inc.ID)
+	cp, _, err := e.db.GetParserCheckpoint(ctx, inc.ID)
 	if err != nil {
 		return res, fmt.Errorf("loading checkpoint %s: %w", inc.ID, err)
 	}
@@ -120,7 +121,7 @@ func (e *Engine) codexCheckpointFingerprint(
 		cp.Agent != string(file.Agent) {
 		return res, nil
 	}
-	storedHash, hasStoredHash := e.db.GetFileHashByAgentPath(
+	storedHash, hasStoredHash := e.db.GetFileHashByAgentPath(ctx,
 		lookupPath, string(file.Agent),
 	)
 	if !hasStoredHash || storedHash != cp.Hash ||
@@ -132,11 +133,11 @@ func (e *Engine) codexCheckpointFingerprint(
 		res.decision = codexCheckpointInvalid
 		return res, nil
 	}
-	if e.db.GetDataVersionByAgentPath(lookupPath, string(file.Agent)) <
+	if e.db.GetDataVersionByAgentPath(ctx, lookupPath, string(file.Agent)) <
 		db.CurrentDataVersion() {
 		return res, nil
 	}
-	if e.pathNeedsProjectReparse(file.Agent, path) {
+	if e.pathNeedsProjectReparse(ctx, file.Agent, path) {
 		return res, nil
 	}
 	if file.Agent == parser.AgentCodex && e.codexIndexSessionNameChanged(path) {
@@ -145,7 +146,7 @@ func (e *Engine) codexCheckpointFingerprint(
 
 	info, err := os.Stat(path)
 	if err != nil {
-		return res, nil // missing/raced source: existing path handles it
+		return res, nil //nolint:nilerr // Missing or invalid incremental state falls back to the full source parse.
 	}
 	inode, device := getFileIdentity(path, info)
 	if inode != int64(cp.FileInode) || device != int64(cp.FileDevice) {
@@ -200,11 +201,11 @@ func (e *Engine) codexCheckpointFingerprint(
 	matches, err := codexCheckpointAnchorMatches(path, cp)
 	if err != nil || !matches {
 		res.decision = codexCheckpointInvalid
-		return res, nil
+		return res, nil //nolint:nilerr // Missing or invalid incremental state falls back to the full source parse.
 	}
 	// The append branch loads the lazy payload (cursor + hash state); the
 	// unchanged branch above never touches it.
-	blobs, hasBlobs, err := e.db.GetParserCheckpointBlobs(inc.ID)
+	blobs, hasBlobs, err := e.db.GetParserCheckpointBlobs(ctx, inc.ID)
 	if err != nil {
 		return res, fmt.Errorf("loading checkpoint blobs %s: %w", inc.ID, err)
 	}
@@ -215,14 +216,14 @@ func (e *Engine) codexCheckpointFingerprint(
 	stateDigest, err := codexHashStateDigest(blobs.HashState)
 	if err != nil || stateDigest != cp.Hash {
 		res.decision = codexCheckpointInvalid
-		return res, nil
+		return res, nil //nolint:nilerr // Missing or invalid incremental state falls back to the full source parse.
 	}
 	_, hash, err := codexResumeHash(
 		path, cp.Offset, info.Size(), blobs.HashState,
 	)
 	if err != nil {
 		res.decision = codexCheckpointInvalid
-		return res, nil
+		return res, nil //nolint:nilerr // Missing or invalid incremental state falls back to the full source parse.
 	}
 	res.decision = codexCheckpointAppend
 	res.checkpoint = cp
@@ -309,7 +310,7 @@ func codexResumeHash(
 	h := sha256.New()
 	unmarshaler, ok := h.(encoding.BinaryUnmarshaler)
 	if !ok {
-		return nil, "", fmt.Errorf("sha256 does not support state restore")
+		return nil, "", errors.New("sha256 does not support state restore")
 	}
 	if err := unmarshaler.UnmarshalBinary(state); err != nil {
 		return nil, "", fmt.Errorf("restoring hash state: %w", err)
@@ -340,7 +341,7 @@ func codexHashStateDigest(state []byte) (string, error) {
 	h := sha256.New()
 	unmarshaler, ok := h.(encoding.BinaryUnmarshaler)
 	if !ok {
-		return "", fmt.Errorf("sha256 does not support state restore")
+		return "", errors.New("sha256 does not support state restore")
 	}
 	if err := unmarshaler.UnmarshalBinary(state); err != nil {
 		return "", fmt.Errorf("restoring hash state: %w", err)
@@ -405,20 +406,21 @@ func buildCodexCheckpoint(
 	nextOrdinal int,
 	anchorDigest string,
 ) (*db.ParserCheckpoint, db.ParserCheckpointBlobs) {
-	return &db.ParserCheckpoint{
+	checkpoint := &db.ParserCheckpoint{
 		SessionID:        sessionID,
 		FileChangeTime:   changeTime,
 		Agent:            agent,
 		FilePath:         storedPath,
-		FileInode:        uint64(inode),
-		FileDevice:       uint64(device),
+		FileInode:        inode,
+		FileDevice:       device,
 		FileMTime:        mtime,
 		Offset:           newOffset,
 		TailAnchorDigest: anchorDigest,
 		Hash:             hash,
 		NextOrdinal:      nextOrdinal,
 		Version:          codexCheckpointVersion,
-	}, db.ParserCheckpointBlobs{
+	}
+	return checkpoint, db.ParserCheckpointBlobs{
 		SessionID: sessionID,
 		Cursor:    cursor,
 		HashState: hashState,
