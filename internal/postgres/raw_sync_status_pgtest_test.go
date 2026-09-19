@@ -406,6 +406,13 @@ func TestRawSyncStatusPostgresParseCompletion(t *testing.T) {
 	shortClaim, err := metadata.ClaimRawParseJobs(ctx, "status-worker", 1, time.Minute)
 	require.NoError(t, err)
 	assert.Empty(t, shortClaim)
+	var terminalCompletion time.Time
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT updated_at FROM raw_ingest_jobs
+		WHERE tenant_id = $1 AND manifest_id = $2
+			AND processing_version = 'status-test-version'`,
+		enrollment.Identity.TenantID, first.ManifestID).Scan(&terminalCompletion))
+	assert.Equal(t, fixedCompletion.UTC(), terminalCompletion.UTC())
 
 	tombstone := commitRawStatusGenerationKind(t, metadata, enrollment.Identity, object, rawsync.Manifest{
 		CaptureID:             "completion-tombstone",
