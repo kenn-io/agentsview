@@ -70,6 +70,7 @@ type codexSessionBuilder struct {
 	sessionID                   string
 	parentSessionID             string
 	relationshipType            RelationshipType
+	sessionKind                 string
 	project                     string
 	callNames                   map[string]string
 	agentSpawnCalls             map[string]string
@@ -419,6 +420,9 @@ func (b *codexSessionBuilder) handleSessionMeta(
 	if b.parentSessionID != "" {
 		b.parentSessionID = codexSubagentSessionID(b.parentSessionID)
 		b.relationshipType = RelSubagent
+	}
+	if payload.Get("originator").Str == codexOriginatorExec {
+		b.sessionKind = SessionKindNonInteractive
 	}
 
 	if cwd := payload.Get("cwd").Str; cwd != "" {
@@ -1878,6 +1882,7 @@ func (p *codexProvider) parseCodexSessionSnapshotStreaming(
 		Agent:              AgentCodex,
 		ParentSessionID:    b.parentSessionID,
 		RelationshipType:   b.relationshipType,
+		SessionKind:        b.sessionKind,
 		Cwd:                b.cwd,
 		FirstMessage:       b.firstMessage,
 		SessionName:        sessionName,

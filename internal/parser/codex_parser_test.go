@@ -581,6 +581,7 @@ func TestParseCodexSession_ExecOriginator(t *testing.T) {
 		sess, msgs := runCodexParserTest(t, "test.jsonl", execContent, false)
 		require.NotNil(t, sess)
 		assert.Equal(t, "codex:abc", sess.ID)
+		assert.Equal(t, SessionKindNonInteractive, sess.SessionKind)
 		assert.Equal(t, 1, len(msgs))
 	})
 
@@ -588,7 +589,18 @@ func TestParseCodexSession_ExecOriginator(t *testing.T) {
 		sess, msgs := runCodexParserTest(t, "test.jsonl", execContent, true)
 		require.NotNil(t, sess)
 		assert.Equal(t, "codex:abc", sess.ID)
+		assert.Equal(t, SessionKindNonInteractive, sess.SessionKind)
 		assert.Equal(t, 1, len(msgs))
+	})
+
+	t.Run("interactive originator stays interactive", func(t *testing.T) {
+		content := testjsonl.JoinJSONL(
+			testjsonl.CodexSessionMetaJSON("abc", "/tmp", "codex-tui", tsEarly),
+			testjsonl.CodexMsgJSON("user", "test", tsEarlyS1),
+		)
+		sess, _ := runCodexParserTest(t, "test.jsonl", content, false)
+		require.NotNil(t, sess)
+		assert.Empty(t, sess.SessionKind)
 	})
 }
 
