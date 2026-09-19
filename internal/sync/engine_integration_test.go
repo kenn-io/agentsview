@@ -6539,6 +6539,9 @@ func TestCodexExplicitBlankIndexTitleClearsStoredTitle(t *testing.T) {
 }
 
 func TestSyncAllWarmGateCodexIndexSameStatRenameRefreshesName(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("NTFS Chtimes restores ChangeTime with mtime")
+	}
 	root := t.TempDir()
 	codexDir := filepath.Join(root, "sessions")
 	require.NoError(t, os.MkdirAll(codexDir, 0o755))
@@ -6588,13 +6591,11 @@ func TestSyncAllWarmGateCodexIndexSameStatRenameRefreshesName(t *testing.T) {
 	require.Equal(t, transcriptTime.UnixNano(), *sess.FileMtime,
 		"transcript mtime must remain the stored watermark")
 
-	// Simulate a missed watcher event: rewrite only the sidecar, preserving
-	// size, and advance its mtime. Restoring the old mtime also restores NTFS
-	// ChangeTime (Chtimes), so the multi-file stat digest matches the warm
-	// digest and Windows skips the rename.
+	// Simulate a missed watcher event: rewrite only the sidecar while restoring
+	// its lower mtime and preserving its size. The full sync must still reload
+	// the index and repair the persisted title.
 	require.NoError(t, os.WriteFile(indexPath, renamedIndex, 0o644))
-	parser.EvictCodexSessionIndex(indexPath)
-	require.NoError(t, os.Chtimes(indexPath, time.Now(), time.Now()))
+	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
 
 	third := env.engine.SyncAll(context.Background(), nil)
 	require.Equal(t, 1, third.Synced,
