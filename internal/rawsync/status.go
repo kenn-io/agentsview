@@ -15,17 +15,19 @@ type Status struct {
 	Uploads           UploadStatusSummary `json:"uploads"`
 }
 
-// SourceHeadStatus describes one source head and its current parse state.
+// SourceHeadStatus describes one source head and its current generation's
+// parse state.
 type SourceHeadStatus struct {
-	DeviceID         string           `json:"device_id"`
-	ConfiguredRootID string           `json:"configured_root_id"`
-	Provider         parser.AgentType `json:"provider"`
-	SourceKey        string           `json:"source_key"`
-	Generation       int64            `json:"generation"`
-	LastAcceptedAt   *time.Time       `json:"last_accepted_at"`
-	ParsePending     bool             `json:"parse_pending"`
-	ParseLeased      bool             `json:"parse_leased"`
-	ParseFailed      bool             `json:"parse_failed"`
+	DeviceID             string           `json:"device_id"`
+	ConfiguredRootID     string           `json:"configured_root_id"`
+	Provider             parser.AgentType `json:"provider"`
+	SourceKey            string           `json:"source_key"`
+	Generation           int64            `json:"generation"`
+	LastAcceptedAt       *time.Time       `json:"last_accepted_at"`
+	LastParseCompletedAt *time.Time       `json:"last_parse_completed_at"`
+	ParsePending         bool             `json:"parse_pending"`
+	ParseLeased          bool             `json:"parse_leased"`
+	ParseFailed          bool             `json:"parse_failed"`
 }
 
 // ParseJobCounts groups parse jobs by their durable processing state.

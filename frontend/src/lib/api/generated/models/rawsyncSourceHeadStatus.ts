@@ -8,6 +8,8 @@ export interface RawsyncSourceHeadStatus {
   generation: number;
   /** @nullable */
   last_accepted_at: string | null;
+  /** @nullable */
+  last_parse_completed_at: string | null;
   parse_failed: boolean;
   parse_leased: boolean;
   parse_pending: boolean;

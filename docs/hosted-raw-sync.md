@@ -74,6 +74,12 @@ export AGENTSVIEW_RAW_SYNC_CREDENTIAL=device-credential
 agentsview raw-sync watch
 ```
 
+To read hosted status without starting the watcher, run:
+
+```bash
+agentsview raw-sync server-status
+```
+
 The command performs an initial bounded audit, watches for changes, repeats the
 audit every 15 minutes by default, and retries uploads every minute. Captures
 and upload state are kept under `raw-sync/` in the configured AgentsView data
@@ -131,7 +137,9 @@ returned token as `Authorization: Bearer <token>` to
 
 - `source_heads` lists each device, configured root, provider, source key,
   generation, current manifest acceptance time, and independent parse-pending,
-  parse-leased, and parse-failed flags.
+  parse-leased, and parse-failed flags. `last_parse_completed_at` is the latest
+  `updated_at` of a completed parse job for the current manifest. It is `null`
+  for generation-zero heads or when no current parse job has completed.
 - `parse_jobs` counts `ready`, `leased`, `retrying`, `complete`, `failed`, and
   `superseded` parse jobs, including historical generations.
 - `active_device_count` and `devices` report unrevoked devices. Each device's
@@ -143,8 +151,16 @@ returned token as `Authorization: Bearer <token>` to
 Empty `source_heads` and `devices` values are `[]`. A generation-zero head has a
 `null` `last_accepted_at` and false parse flags. Status reads use one read-only
 PostgreSQL transaction and do not expire uploads, alter leases, or change any
-raw-sync state. `agentsview raw-sync status` remains a local command that reads
-the laptop checkpoint.
+raw-sync state. `pipeline_depth` is the sum of `ready`, `leased`, and `retrying`
+parse jobs, including jobs from historical generations that the server has not
+yet superseded. `parse_lag_seconds` is the signed difference between the
+acceptance time and completion time of the most recently completed current
+parse, in seconds. It is `null` when no source head has both timestamps.
+`last_parse_completed_at` and `parse_lag_seconds` stay `null` until hosted
+parsing records completions, while `pipeline_depth` remains the numeric sum.
+`agentsview raw-sync status` remains a local command that reads the laptop
+checkpoint. If the hosted server returns HTTP 404, `server-status` prints that
+local status output instead.
 
 PostgreSQL stores device, token, manifest, receipt, source-head, and parse-job
 metadata. The raw object repository is opened lazily under `raw-sync/` in the

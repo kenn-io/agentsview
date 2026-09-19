@@ -19255,15 +19255,16 @@ type RawsyncParseJobCounts struct {
 }
 
 type RawsyncSourceHeadStatus struct {
-	ConfiguredRootID string     `json:"configured_root_id" validate:"required"`
-	DeviceID         string     `json:"device_id" validate:"required"`
-	Generation       int64      `json:"generation"`
-	LastAcceptedAt   *time.Time `json:"last_accepted_at,omitempty" validate:"required"`
-	ParseFailed      bool       `json:"parse_failed"`
-	ParseLeased      bool       `json:"parse_leased"`
-	ParsePending     bool       `json:"parse_pending"`
-	Provider         string     `json:"provider" validate:"required"`
-	SourceKey        string     `json:"source_key" validate:"required"`
+	ConfiguredRootID     string     `json:"configured_root_id" validate:"required"`
+	DeviceID             string     `json:"device_id" validate:"required"`
+	Generation           int64      `json:"generation"`
+	LastAcceptedAt       *time.Time `json:"last_accepted_at,omitempty" validate:"required"`
+	LastParseCompletedAt *time.Time `json:"last_parse_completed_at,omitempty" validate:"required"`
+	ParseFailed          bool       `json:"parse_failed"`
+	ParseLeased          bool       `json:"parse_leased"`
+	ParsePending         bool       `json:"parse_pending"`
+	Provider             string     `json:"provider" validate:"required"`
+	SourceKey            string     `json:"source_key" validate:"required"`
 }
 
 func (r RawsyncSourceHeadStatus) Validate() error {
