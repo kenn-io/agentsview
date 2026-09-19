@@ -581,7 +581,7 @@ func TestParseCodexSession_ExecOriginator(t *testing.T) {
 		sess, msgs := runCodexParserTest(t, "test.jsonl", execContent, false)
 		require.NotNil(t, sess)
 		assert.Equal(t, "codex:abc", sess.ID)
-		assert.Equal(t, SessionKindNonInteractive, sess.SessionKind)
+		assert.Empty(t, sess.SessionKind)
 		assert.Equal(t, 1, len(msgs))
 	})
 
@@ -589,7 +589,7 @@ func TestParseCodexSession_ExecOriginator(t *testing.T) {
 		sess, msgs := runCodexParserTest(t, "test.jsonl", execContent, true)
 		require.NotNil(t, sess)
 		assert.Equal(t, "codex:abc", sess.ID)
-		assert.Equal(t, SessionKindNonInteractive, sess.SessionKind)
+		assert.Empty(t, sess.SessionKind)
 		assert.Equal(t, 1, len(msgs))
 	})
 
@@ -602,6 +602,23 @@ func TestParseCodexSession_ExecOriginator(t *testing.T) {
 		require.NotNil(t, sess)
 		assert.Empty(t, sess.SessionKind)
 	})
+}
+
+func TestParseCodexSession_RoborevThreadSource(t *testing.T) {
+	content := testjsonl.JoinJSONL(
+		fmt.Sprintf(
+			`{"timestamp":%q,"type":"session_meta","payload":{"id":%q,"cwd":"/tmp","originator":"codex_exec","source":"exec","thread_source":"roborev"}}`,
+			tsEarly, "abc",
+		),
+		testjsonl.CodexMsgJSON("user", "test", tsEarlyS1),
+	)
+
+	sess, _ := runCodexParserTest(t, "test.jsonl", content, false)
+
+	require.NotNil(t, sess)
+	assert.Equal(t, SessionKindRoborev, sess.SessionKind)
+	assert.Empty(t, sess.ParentSessionID)
+	assert.Equal(t, RelNone, sess.RelationshipType)
 }
 
 func TestCodexBuilderCanUseLexicalProjectDiscovery(t *testing.T) {

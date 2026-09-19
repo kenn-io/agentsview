@@ -1112,7 +1112,7 @@ func TestCurrentDataVersionCodexGuardianLineage(t *testing.T) {
 
 func TestCurrentDataVersionCodexExecSessionKind(t *testing.T) {
 	assert.GreaterOrEqual(t, CurrentDataVersion(), 112,
-		"version 112 is the data-version boundary for Codex exec non-interactive session kind")
+		"version 112 is the data-version boundary for Codex roborev thread_source session kind")
 }
 
 func TestCurrentDataVersionCursorTurnTimestamps(t *testing.T) {

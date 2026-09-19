@@ -24,11 +24,11 @@ func TestIsAutomatedSessionMetadata(t *testing.T) {
 		want        bool
 	}{
 		{"GrokNonInteractive", "grok", parser.SessionKindNonInteractive, true},
-		{"CodexNonInteractive", "codex", parser.SessionKindNonInteractive, true},
-		{"TraeXNonInteractive", "traex", parser.SessionKindNonInteractive, true},
+		{"CodexRoborev", "codex", parser.SessionKindRoborev, true},
 		{"EmptyKind", "codex", "", false},
 		{"ClaudeBackground", "claude", "bg", false},
 		{"GrokInteractive", "grok", "", false},
+		{"CodexExecWithoutTag", "codex", parser.SessionKindNonInteractive, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

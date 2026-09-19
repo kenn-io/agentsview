@@ -1283,6 +1283,10 @@ const (
 // identifies a non-interactive invocation.
 const SessionKindNonInteractive = "non-interactive"
 
+// SessionKindRoborev marks a Codex session whose session_meta thread_source
+// is the roborev feature tag (`codex exec --thread-source roborev`).
+const SessionKindRoborev = "roborev"
+
 // FileInfo holds file system metadata for a session source file.
 type FileInfo struct {
 	Path   string
