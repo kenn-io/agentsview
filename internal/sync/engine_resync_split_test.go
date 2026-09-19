@@ -45,6 +45,129 @@ func newResyncSplitEngine(t *testing.T) (*Engine, *db.DB, string) {
 	return engine, database, root
 }
 
+func newResyncFailureEngine(t *testing.T) (
+	*Engine, *db.DB, *directStreamingProvider, string, string,
+) {
+	t.Helper()
+	root := t.TempDir()
+	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, database.Close()) })
+	path := filepath.Join(root, "source.jsonl")
+	require.NoError(t, os.WriteFile(path, []byte("source"), 0o600))
+	const agent parser.AgentType = "resync-failure"
+	source := parser.SourceRef{
+		Provider: agent, Key: path, DisplayPath: path, FingerprintKey: path,
+	}
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	started := time.Unix(1704067200, 0)
+	provider := &directStreamingProvider{
+		Def: parser.AgentDef{Type: agent, FileBased: true},
+		Caps: parser.Capabilities{Source: parser.SourceCapabilities{
+			DiscoverSources:    parser.CapabilitySupported,
+			StreamingDiscovery: parser.CapabilitySupported,
+			WatchSources:       parser.CapabilitySupported,
+		}},
+		source:        &source,
+		fingerprint:   parser.SourceFingerprint{Key: path, MTimeNS: info.ModTime().UnixNano()},
+		allowDiscover: true,
+		parseOutcome: parser.ParseOutcome{
+			Results: []parser.ParseResultOutcome{{
+				Result: parser.ParseResult{Session: parser.ParsedSession{
+					ID: "resync-failure", Agent: agent,
+					Project: "project", Machine: "local",
+					StartedAt: started, EndedAt: started,
+					File: parser.FileInfo{Path: path},
+				}},
+				DataVersion: parser.DataVersionCurrent,
+			}},
+			ResultSetComplete: true,
+		},
+	}
+	engine := NewEngine(database, EngineConfig{
+		AgentDirs: map[parser.AgentType][]string{agent: {root}},
+		Machine:   "local",
+		ProviderFactories: []parser.ProviderFactory{
+			directStreamingFactory{provider: provider},
+		},
+		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+			agent: parser.ProviderMigrationProviderAuthoritative,
+		},
+	})
+	t.Cleanup(engine.Close)
+	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+	return engine, database, provider, root, path
+}
+
+func TestAbortedResyncKeepsSourceFailures(t *testing.T) {
+	for _, useBuild := range []bool{false, true} {
+		t.Run(map[bool]string{false: "resync-all", true: "resync-build"}[useBuild], func(t *testing.T) {
+			engine, database, provider, root, path := newResyncFailureEngine(t)
+			provider.parseErr = errors.New("malformed source")
+
+			var stats SyncStats
+			if useBuild {
+				_, buildStats, err := engine.ResyncBuild(context.Background(), nil)
+				require.NoError(t, err)
+				stats = buildStats
+			} else {
+				stats = engine.ResyncAll(context.Background(), nil)
+			}
+			require.True(t, stats.Aborted)
+
+			parsed := provider.parseCalls.Load()
+			next := engine.processFile(t.Context(), parser.DiscoveredFile{
+				Path: path, Agent: provider.Def.Type,
+				ProviderSource: provider.source, ProviderProcess: true,
+			})
+			require.Error(t, next.err)
+			assert.True(t, next.cachedFailure)
+			assert.Equal(t, parsed, provider.parseCalls.Load(),
+				"the pass after an aborted resync must not reparse the broken source")
+
+			restarted := NewEngine(database, EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{provider.Def.Type: {root}},
+				Machine:   "local",
+				ProviderFactories: []parser.ProviderFactory{
+					directStreamingFactory{provider: provider},
+				},
+				ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
+					provider.Def.Type: parser.ProviderMigrationProviderAuthoritative,
+				},
+			})
+			t.Cleanup(restarted.Close)
+			afterRestart := restarted.processFile(t.Context(), parser.DiscoveredFile{
+				Path: path, Agent: provider.Def.Type,
+				ProviderSource: provider.source, ProviderProcess: true,
+			})
+			require.Error(t, afterRestart.err)
+			assert.True(t, afterRestart.cachedFailure,
+				"the failure must survive a restart after the aborted resync")
+		})
+	}
+}
+
+func TestCanceledResyncDoesNotRecordSourceFailure(t *testing.T) {
+	engine, _, provider, _, path := newResyncFailureEngine(t)
+	provider.parseErr = errors.New("malformed source")
+	ctx, cancel := context.WithCancel(context.Background())
+	provider.parseCancel = cancel
+
+	_, stats, err := engine.ResyncBuild(ctx, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	assert.True(t, stats.Aborted)
+
+	provider.parseCancel = nil
+	next := engine.processFile(t.Context(), parser.DiscoveredFile{
+		Path: path, Agent: provider.Def.Type,
+		ProviderSource: provider.source, ProviderProcess: true,
+	})
+	require.Error(t, next.err)
+	assert.False(t, next.cachedFailure,
+		"a failure seen while the pass was being canceled may be an artifact of cancellation")
+}
+
 // TestResyncBuildThenSwapMatchesResyncAll drives the split resync path
 // end-to-end: build the replacement, swap it in, reset caches. It must preserve
 // an orphan session whose source file was deleted, clean up the temp file, and

@@ -1064,15 +1064,22 @@ type directStreamingProvider struct {
 	discoverRelease  <-chan struct{}
 	parseStarted     chan<- struct{}
 	parseRelease     <-chan struct{}
+	parseCancel      context.CancelFunc
 	parseForce       atomic.Bool
 	source           *parser.SourceRef
 	parseErr         error
+	fingerprintErr   error
 	parseOutcome     parser.ParseOutcome
 	fingerprint      parser.SourceFingerprint
+	allowDiscover    bool
+	allowFindSource  bool
 }
 
 func (provider *directStreamingProvider) Discover(context.Context) ([]parser.SourceRef, error) {
 	provider.discoverCalls.Add(1)
+	if provider.allowDiscover && provider.source != nil {
+		return []parser.SourceRef{*provider.source}, nil
+	}
 	return nil, errors.New("collecting discovery must not run")
 }
 
@@ -1101,6 +1108,19 @@ func (provider *directStreamingProvider) DiscoverEach(
 	return nil
 }
 
+func (provider *directStreamingProvider) FindSource(
+	_ context.Context, req parser.FindSourceRequest,
+) (parser.SourceRef, bool, error) {
+	if !provider.allowFindSource || provider.source == nil {
+		return parser.SourceRef{}, false, nil
+	}
+	if req.StoredFilePath == provider.source.DisplayPath ||
+		req.FingerprintKey == provider.source.FingerprintKey {
+		return *provider.source, true, nil
+	}
+	return parser.SourceRef{}, false, nil
+}
+
 func (*directStreamingProvider) WatchPlan(context.Context) (parser.WatchPlan, error) {
 	return parser.WatchPlan{}, nil
 }
@@ -1118,6 +1138,9 @@ func (provider *directStreamingProvider) SourcesForChangedPath(
 func (provider *directStreamingProvider) Fingerprint(
 	context.Context, parser.SourceRef,
 ) (parser.SourceFingerprint, error) {
+	if provider.fingerprintErr != nil {
+		return parser.SourceFingerprint{}, provider.fingerprintErr
+	}
 	return provider.fingerprint, nil
 }
 
@@ -1139,6 +1162,9 @@ func (provider *directStreamingProvider) Parse(
 		}
 	}
 	provider.parseForce.Store(req.ForceParse)
+	if provider.parseCancel != nil {
+		provider.parseCancel()
+	}
 	return provider.parseOutcome, provider.parseErr
 }
 
@@ -1303,6 +1329,43 @@ func seedActiveBaselineSource(
 		FilePath: &path, FileSize: &size, FileMtime: &mtime,
 	}))
 	require.NoError(t, database.SetSessionDataVersion(id, db.CurrentDataVersion()))
+}
+
+func TestChangedPathSyncCancellationDoesNotPersistSkipCache(t *testing.T) {
+	const agent parser.AgentType = "changed-path-cancel"
+
+	database, engine, provider, _, path := newChangedPathOutcomeEngine(
+		t, agent, func(string) parser.ParseOutcome { return parser.ParseOutcome{} },
+	)
+	info, err := os.Stat(path)
+	require.NoError(t, err)
+	provider.fingerprint = parser.SourceFingerprint{
+		Key: path, MTimeNS: info.ModTime().UnixNano(),
+	}
+	engine.cacheSkip(filepath.Join(filepath.Dir(path), "seeded-skip.jsonl"), 42)
+	engine.failures.Record(
+		providerAgentSkipCacheKey(path, agent),
+		db.SourceFailure{MTimeNS: info.ModTime().UnixNano()},
+	)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	engine.syncMu.Lock()
+	_, _, err = engine.applyChangedPathSyncLocked(ctx, preparedChangedPathSync{
+		files: []parser.DiscoveredFile{{
+			Path: path, Agent: agent,
+			ProviderSource: provider.source, ProviderProcess: true,
+		}},
+	})
+	engine.syncMu.Unlock()
+	require.Error(t, err)
+
+	skipped, err := database.LoadSkippedFiles()
+	require.NoError(t, err)
+	assert.Empty(t, skipped)
+	failures, err := database.LoadSourceFailures()
+	require.NoError(t, err)
+	assert.Empty(t, failures)
 }
 
 func TestSyncPathsWriteFailureDoesNotBaselineExistingActiveSource(t *testing.T) {
@@ -2914,6 +2977,7 @@ func TestReconcileWatchRootsCancellationDuringLaterSpoolPage(t *testing.T) {
 		},
 	})
 	t.Cleanup(engine.Close)
+	engine.cacheSkip(filepath.Join(root, "seeded-skip.jsonl"), 42)
 	ctx, cancel := context.WithCancel(t.Context())
 	engine.reconciliationSpoolFactory = func(path string) (reconciliationSpoolStore, error) {
 		spool, err := newReconciliationSpool(path)
@@ -2929,6 +2993,10 @@ func TestReconcileWatchRootsCancellationDuringLaterSpoolPage(t *testing.T) {
 	result := engine.LastReconciliationResult()
 	assert.True(t, result.Aborted)
 	assert.Equal(t, reconciliationPageSize, result.Metrics.MaxSpoolPageRows)
+	skipped, loadErr := database.LoadSkippedFiles()
+	require.NoError(t, loadErr)
+	assert.Empty(t, skipped,
+		"a canceled direct pass must not persist the archive-sized skip cache")
 }
 
 func TestReconcileWatchRootsPartialSecondPageArchiveWriteFailure(t *testing.T) {
