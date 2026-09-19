@@ -132,6 +132,71 @@ func TestExtractToolCallRowsSequenceEvidence(t *testing.T) {
 	}}, got.Sequences)
 }
 
+func TestExtractToolCallRowsStagedSummary(t *testing.T) {
+	msgs := []db.Message{
+		{
+			Ordinal: 8,
+			ToolCalls: []db.ToolCall{{
+				ToolUseID: "empty-call", ToolName: "Grep",
+				ResultEvents: []db.ToolResultEvent{{Status: "completed"}},
+			}},
+		},
+		{
+			Ordinal: 9,
+			ToolCalls: []db.ToolCall{{
+				ToolUseID: "staged-call", ToolName: "Read",
+				ResultContent: "agent-a:\nstaged:7\n\nagent-b:\nstaged:8",
+			}},
+		},
+	}
+
+	rows := extractToolCallRows(msgs)
+	got := signals.ExtractToolSequences(rows, false)
+	assert.Equal(t, []signals.ToolCallOutcome{
+		{ToolUseID: "empty-call", MessageOrdinal: 8, CallIndex: 0,
+			ToolName: "Grep", Outcome: signals.ToolOutcomeEmpty,
+			Repeat: signals.ToolRepeatNone},
+		{ToolUseID: "staged-call", MessageOrdinal: 9, CallIndex: 0,
+			ToolName: "Read", Outcome: signals.ToolOutcomeUnknown,
+			Repeat: signals.ToolRepeatNone, ToolChanged: true},
+	}, got.Calls)
+	assert.Equal(t, []signals.ToolSequence{{
+		Start: 0, End: 2, ToolChanged: true,
+		Ending: signals.ToolSequenceEndingOpen,
+	}}, got.Sequences)
+}
+
+func TestExtractToolCallRowsRestoresSingleEventSummary(t *testing.T) {
+	const content = "restored event text"
+	msgs := []db.Message{{
+		Ordinal: 8,
+		ToolCalls: []db.ToolCall{{
+			ToolUseID: "restored-call", ToolName: "Read",
+			ResultContentLength: len(content),
+			ResultEvents: []db.ToolResultEvent{{
+				Content: content, ContentLength: len(content),
+			}},
+		}},
+	}}
+	db.RestoreMessageResultContent(msgs)
+	rows := extractToolCallRows(msgs)
+	assert.Equal(t, content, rows[0].ResultContent)
+	assert.Equal(t, signals.ToolOutcomeContent,
+		signals.ExtractToolSequences(rows, false).Calls[0].Outcome)
+
+	msgs[0].ToolCalls[0].ResultContent = ""
+	msgs[0].ToolCalls[0].ResultContentLength = len(content)
+	msgs[0].ToolCalls[0].ResultEvents = []db.ToolResultEvent{
+		{Content: "first", ContentLength: 5},
+		{Content: "second", ContentLength: 6},
+	}
+	db.RestoreMessageResultContent(msgs)
+	rows = extractToolCallRows(msgs)
+	assert.Empty(t, rows[0].ResultContent)
+	assert.Equal(t, signals.ToolOutcomeUnknown,
+		signals.ExtractToolSequences(rows, false).Calls[0].Outcome)
+}
+
 func TestExtractContextTokens(t *testing.T) {
 	msgs := []db.Message{
 		{Ordinal: 0, Role: "user"},

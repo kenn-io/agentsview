@@ -299,6 +299,25 @@ func TestExtractToolSequences_Endings(t *testing.T) {
 	assert.Empty(t, ExtractToolSequences([]ToolCallRow{
 		unknown, {ToolName: "Bash", ResultContent: "done"},
 	}, true).Sequences)
+
+	activeUnknown := ExtractToolSequences([]ToolCallRow{
+		empty,
+		{ToolName: "Read", ResultContent: "staged:7\n\nstaged:8"},
+	}, false)
+	assert.Equal(t, []ToolSequence{{
+		Start: 0, End: 2, ToolChanged: true,
+		Ending: ToolSequenceEndingOpen,
+	}}, activeUnknown.Sequences)
+
+	activeUnknownRecovered := ExtractToolSequences([]ToolCallRow{
+		empty,
+		{ToolName: "Read", EventStatus: "running", ResultContent: "partial"},
+		{ToolName: "Bash", ResultContent: "done"},
+	}, false)
+	assert.Equal(t, []ToolSequence{{
+		Start: 0, End: 3, ToolChanged: true,
+		Ending: ToolSequenceEndingRecovered,
+	}}, activeUnknownRecovered.Sequences)
 }
 
 func TestExtractToolSequences_Invariants(t *testing.T) {
