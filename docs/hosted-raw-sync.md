@@ -80,11 +80,12 @@ To read hosted status without starting the watcher, run:
 agentsview raw-sync server-status
 ```
 
-The command performs an initial bounded audit, watches for changes, repeats the
-audit every 15 minutes by default, and retries uploads every minute. Captures
-and upload state are kept under `raw-sync/` in the configured AgentsView data
-directory. `agentsview raw-sync status` prints path-free JSON describing the
-local checkpoint, pending work, retry time, failures, and coverage.
+`raw-sync watch` performs an initial bounded audit, watches for changes, repeats
+the audit every 15 minutes by default, and retries uploads every minute.
+Captures and upload state are kept under `raw-sync/` in the configured
+AgentsView data directory. `agentsview raw-sync status` prints path-free JSON
+describing the local checkpoint, pending work, retry time, failures, and
+coverage.
 
 The normal writable `agentsview serve` daemon has its own parser watcher. Run
 both only when local parsed sessions and hosted raw custody are both required;
