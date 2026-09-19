@@ -12,6 +12,28 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
+func TestReadStatusHonorsProjectFilters(t *testing.T) {
+	_, syncer, local := newPushedStore(t)
+	ctx := context.Background()
+	archiveID, err := local.GetArchiveID(ctx)
+	require.NoError(t, err)
+
+	all, err := ReadStatus(ctx, syncer.target, fixtureMachine, archiveID, nil, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 3, all.Sessions)
+	assert.Equal(t, 4, all.Messages)
+
+	alpha, err := ReadStatus(ctx, syncer.target, fixtureMachine, archiveID, []string{"alpha"}, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 2, alpha.Sessions, "alpha root and its child")
+	assert.Equal(t, 3, alpha.Messages)
+
+	notAlpha, err := ReadStatus(ctx, syncer.target, fixtureMachine, archiveID, nil, []string{"alpha"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, notAlpha.Sessions)
+	assert.Equal(t, 1, notAlpha.Messages)
+}
+
 func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 	store, _, _ := newPushedStore(t)
 	ctx := context.Background()

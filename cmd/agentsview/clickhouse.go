@@ -372,11 +372,12 @@ func runClickHouseStatusTarget(
 	); err != nil {
 		return err
 	}
-	if _, _, err := resolveClickHousePushProjects(target.Config, ClickHousePushConfig{
+	projects, exclude, err := resolveClickHousePushProjects(target.Config, ClickHousePushConfig{
 		ProjectsFlag:    cfg.ProjectsFlag,
 		ExcludeProjects: cfg.ExcludeProjects,
 		AllProjects:     cfg.AllProjects,
-	}); err != nil {
+	})
+	if err != nil {
 		return err
 	}
 
@@ -393,6 +394,7 @@ func runClickHouseStatusTarget(
 	}
 	status, err := clickhouse.ReadStatus(
 		ctx, clickHouseTarget(target.Config), target.Config.MachineName, archiveID,
+		projects, exclude,
 	)
 	if err != nil {
 		return err
@@ -400,6 +402,9 @@ func runClickHouseStatusTarget(
 	fmt.Printf("Machine:            %s\n", status.Machine)
 	fmt.Printf("Last push:          %s\n", valueOrNever(status.LastPushAt))
 	fmt.Printf("Last push machine:  %s\n", status.LastPushMachine)
+	if status.Scope != "" {
+		fmt.Printf("Push scope:         %s\n", status.Scope)
+	}
 	fmt.Printf("ClickHouse sessions: %d\n", status.Sessions)
 	fmt.Printf("ClickHouse messages: %d\n", status.Messages)
 	if status.SchemaMissing {

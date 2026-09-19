@@ -208,10 +208,9 @@ func clickActivityReportCandidateWhere(
 	// subquery other backends use; ClickHouse does not evaluate those.
 	where += `
 		AND (COALESCE(s.ended_at, s.last_message_at, s.started_at, s.created_at) >= ` + chTimestampSQL + `
-			OR EXISTS (
-				SELECT 1 FROM tool_result_events tre
-				WHERE tre.session_id = s.id
-					AND tre.source = 'tool_execution'
+			OR s.id IN (
+				SELECT tre.session_id FROM tool_result_events tre
+				WHERE tre.source = 'tool_execution'
 					AND tre.status IN ('completed', 'errored')
 					AND tre.timestamp >= ` + chTimestampSQL + `
 			))

@@ -232,7 +232,7 @@ func sortedCopy(values []string) []string {
 
 // Status reads this archive's push state and the mirror's row counts.
 func (s *Sync) Status(ctx context.Context) (SyncStatus, error) {
-	return ReadStatus(ctx, s.target, s.machine, s.archiveID)
+	return ReadStatus(ctx, s.target, s.machine, s.archiveID, s.projects, s.excludeProjects)
 }
 
 // ReadStatus reads a mirror's status without needing the local archive
@@ -240,6 +240,7 @@ func (s *Sync) Status(ctx context.Context) (SyncStatus, error) {
 // SchemaMissing instead of failing.
 func ReadStatus(
 	ctx context.Context, target Target, machine, archiveID string,
+	projects, exclude []string,
 ) (SyncStatus, error) {
 	status := SyncStatus{Machine: machine}
 	conn, err := Open(ctx, target)
@@ -269,15 +270,43 @@ func ReadStatus(
 	status.LastPushAt = meta[archiveMetadataKey(lastPushAtKeyBase, archiveID)]
 	status.LastPushMachine = meta[archiveMetadataKey(lastPushMachineKeyBase, archiveID)]
 	status.Scope = meta[archiveMetadataKey(pushScopeKeyBase, archiveID)]
-	if err := conn.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM sessions`).Scan(&status.Sessions); err != nil {
+	sessionSQL := `SELECT COUNT(*) FROM sessions`
+	messageSQL := `SELECT COUNT(*) FROM messages`
+	var sessionArgs, messageArgs []any
+	if pred, args := statusProjectPredicate(projects, exclude); pred != "" {
+		sessionSQL += " WHERE " + pred
+		messageSQL += " WHERE session_id IN (SELECT id FROM sessions WHERE " + pred + ")"
+		sessionArgs = args
+		messageArgs = args
+	}
+	if err := conn.QueryRowContext(ctx, sessionSQL, sessionArgs...).Scan(&status.Sessions); err != nil {
 		return status, fmt.Errorf("counting clickhouse sessions: %w", err)
 	}
-	if err := conn.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM messages`).Scan(&status.Messages); err != nil {
+	if err := conn.QueryRowContext(ctx, messageSQL, messageArgs...).Scan(&status.Messages); err != nil {
 		return status, fmt.Errorf("counting clickhouse messages: %w", err)
 	}
 	return status, nil
+}
+
+func statusProjectPredicate(projects, exclude []string) (string, []any) {
+	switch {
+	case len(projects) > 0:
+		ph, args := statusInPlaceholders(projects)
+		return "project IN (" + ph + ")", args
+	case len(exclude) > 0:
+		ph, args := statusInPlaceholders(exclude)
+		return "project NOT IN (" + ph + ")", args
+	default:
+		return "", nil
+	}
+}
+
+func statusInPlaceholders(values []string) (string, []any) {
+	args := make([]any, len(values))
+	for i, v := range values {
+		args[i] = v
+	}
+	return strings.TrimSuffix(strings.Repeat("?,", len(values)), ","), args
 }
 
 // ValidateProjectFilters rejects a push that both includes and excludes

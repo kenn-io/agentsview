@@ -242,6 +242,7 @@ func readServiceLastPush(
 		}
 		status, err := clickhouse.ReadStatus(
 			ctx, clickHouseTarget(target.Config), target.Config.MachineName, archiveID,
+			nil, nil,
 		)
 		if err != nil {
 			return "", err
