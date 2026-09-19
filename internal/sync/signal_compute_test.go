@@ -119,12 +119,16 @@ func TestExtractToolCallRowsSequenceEvidence(t *testing.T) {
 	rows := extractToolCallRows(msgs)
 	got := signals.ExtractToolSequences(rows, false)
 	assert.Equal(t, []signals.ToolCallOutcome{
-		{ToolUseID: "empty-call", MessageOrdinal: 8, CallIndex: 0,
+		{
+			ToolUseID: "empty-call", MessageOrdinal: 8, CallIndex: 0,
 			ToolName: "Grep", Outcome: signals.ToolOutcomeEmpty,
-			Repeat: signals.ToolRepeatNone},
-		{ToolUseID: "read-call", MessageOrdinal: 9, CallIndex: 0,
+			Repeat: signals.ToolRepeatNone,
+		},
+		{
+			ToolUseID: "read-call", MessageOrdinal: 9, CallIndex: 0,
 			ToolName: "Read", Outcome: signals.ToolOutcomeContent,
-			Repeat: signals.ToolRepeatNone, ToolChanged: true},
+			Repeat: signals.ToolRepeatNone, ToolChanged: true,
+		},
 	}, got.Calls)
 	assert.Equal(t, []signals.ToolSequence{{
 		Start: 0, End: 2, ToolChanged: true,
@@ -153,12 +157,16 @@ func TestExtractToolCallRowsStagedSummary(t *testing.T) {
 	rows := extractToolCallRows(msgs)
 	got := signals.ExtractToolSequences(rows, false)
 	assert.Equal(t, []signals.ToolCallOutcome{
-		{ToolUseID: "empty-call", MessageOrdinal: 8, CallIndex: 0,
+		{
+			ToolUseID: "empty-call", MessageOrdinal: 8, CallIndex: 0,
 			ToolName: "Grep", Outcome: signals.ToolOutcomeEmpty,
-			Repeat: signals.ToolRepeatNone},
-		{ToolUseID: "staged-call", MessageOrdinal: 9, CallIndex: 0,
+			Repeat: signals.ToolRepeatNone,
+		},
+		{
+			ToolUseID: "staged-call", MessageOrdinal: 9, CallIndex: 0,
 			ToolName: "Read", Outcome: signals.ToolOutcomeUnknown,
-			Repeat: signals.ToolRepeatNone, ToolChanged: true},
+			Repeat: signals.ToolRepeatNone, ToolChanged: true,
+		},
 	}, got.Calls)
 	assert.Equal(t, []signals.ToolSequence{{
 		Start: 0, End: 2, ToolChanged: true,

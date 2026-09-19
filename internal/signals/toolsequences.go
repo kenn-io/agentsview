@@ -6,9 +6,11 @@ import (
 	"strings"
 )
 
-type ToolOutcome string
-type ToolRepeat string
-type ToolSequenceEnding string
+type (
+	ToolOutcome        string
+	ToolRepeat         string
+	ToolSequenceEnding string
+)
 
 const (
 	ToolOutcomeErrored ToolOutcome = "errored"

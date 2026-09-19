@@ -247,32 +247,48 @@ func TestClassifyToolOutcome(t *testing.T) {
 
 func TestExtractToolSequences_Example(t *testing.T) {
 	calls := []ToolCallRow{
-		{ToolUseID: "empty-1", MessageOrdinal: 4, CallIndex: 0,
+		{
+			ToolUseID: "empty-1", MessageOrdinal: 4, CallIndex: 0,
 			ToolName: "Grep", InputJSON: `{"path":"/tmp","query":"needle"}`,
-			EventStatus: "completed"},
-		{ToolUseID: "empty-2", MessageOrdinal: 5, CallIndex: 0,
+			EventStatus: "completed",
+		},
+		{
+			ToolUseID: "empty-2", MessageOrdinal: 5, CallIndex: 0,
 			ToolName: "Grep", InputJSON: `{"path":"/tmp","query":"needle"}`,
-			EventStatus: "completed"},
-		{ToolUseID: "switch-1", MessageOrdinal: 6, CallIndex: 0,
-			ToolName: "Glob", ResultContent: "No files found"},
-		{ToolUseID: "content-1", MessageOrdinal: 7, CallIndex: 1,
-			ToolName: "Read", ResultContent: "package signals"},
+			EventStatus: "completed",
+		},
+		{
+			ToolUseID: "switch-1", MessageOrdinal: 6, CallIndex: 0,
+			ToolName: "Glob", ResultContent: "No files found",
+		},
+		{
+			ToolUseID: "content-1", MessageOrdinal: 7, CallIndex: 1,
+			ToolName: "Read", ResultContent: "package signals",
+		},
 	}
 
 	got := ExtractToolSequences(calls, false)
 	assert.Equal(t, []ToolCallOutcome{
-		{ToolUseID: "empty-1", MessageOrdinal: 4, CallIndex: 0,
+		{
+			ToolUseID: "empty-1", MessageOrdinal: 4, CallIndex: 0,
 			ToolName: "Grep", Outcome: ToolOutcomeEmpty,
-			Repeat: ToolRepeatNone},
-		{ToolUseID: "empty-2", MessageOrdinal: 5, CallIndex: 0,
+			Repeat: ToolRepeatNone,
+		},
+		{
+			ToolUseID: "empty-2", MessageOrdinal: 5, CallIndex: 0,
 			ToolName: "Grep", Outcome: ToolOutcomeEmpty,
-			Repeat: ToolRepeatIdentical},
-		{ToolUseID: "switch-1", MessageOrdinal: 6, CallIndex: 0,
+			Repeat: ToolRepeatIdentical,
+		},
+		{
+			ToolUseID: "switch-1", MessageOrdinal: 6, CallIndex: 0,
 			ToolName: "Glob", Outcome: ToolOutcomeEmpty,
-			Repeat: ToolRepeatNone, ToolChanged: true},
-		{ToolUseID: "content-1", MessageOrdinal: 7, CallIndex: 1,
+			Repeat: ToolRepeatNone, ToolChanged: true,
+		},
+		{
+			ToolUseID: "content-1", MessageOrdinal: 7, CallIndex: 1,
 			ToolName: "Read", Outcome: ToolOutcomeContent,
-			Repeat: ToolRepeatNone, ToolChanged: true},
+			Repeat: ToolRepeatNone, ToolChanged: true,
+		},
 	}, got.Calls)
 	assert.Equal(t, []ToolSequence{{
 		Start: 0, End: 4, Identical: true, ToolChanged: true,
@@ -282,16 +298,26 @@ func TestExtractToolSequences_Example(t *testing.T) {
 
 func TestExtractToolSequences_Repeats(t *testing.T) {
 	calls := []ToolCallRow{
-		{ToolName: "Grep", InputJSON: `{"path":"/tmp","line":1}`,
-			EventStatus: "errored"},
-		{ToolName: "Grep", InputJSON: `{"path":"/tmp","line":1}`,
-			EventStatus: "errored"},
-		{ToolName: "Grep", InputJSON: "{\n  \"line\": 1,\n  \"path\": \"/tmp\"\n}",
-			EventStatus: "errored"},
-		{ToolName: "Read", InputJSON: `{"path":"/tmp"}`,
-			EventStatus: "errored"},
-		{ToolName: "Read", InputJSON: `{"path":"/tmp"}`,
-			ResultContent: "content"},
+		{
+			ToolName: "Grep", InputJSON: `{"path":"/tmp","line":1}`,
+			EventStatus: "errored",
+		},
+		{
+			ToolName: "Grep", InputJSON: `{"path":"/tmp","line":1}`,
+			EventStatus: "errored",
+		},
+		{
+			ToolName: "Grep", InputJSON: "{\n  \"line\": 1,\n  \"path\": \"/tmp\"\n}",
+			EventStatus: "errored",
+		},
+		{
+			ToolName: "Read", InputJSON: `{"path":"/tmp"}`,
+			EventStatus: "errored",
+		},
+		{
+			ToolName: "Read", InputJSON: `{"path":"/tmp"}`,
+			ResultContent: "content",
+		},
 	}
 
 	got := ExtractToolSequences(calls, false)
@@ -357,12 +383,18 @@ func TestExtractToolSequences_Endings(t *testing.T) {
 
 func TestExtractToolSequences_Invariants(t *testing.T) {
 	calls := []ToolCallRow{
-		{ToolUseID: "duplicate", MessageOrdinal: 3, CallIndex: 2,
-			ToolName: "Grep", InputJSON: `{"q":1}`, EventStatus: "completed"},
-		{ToolUseID: "duplicate", MessageOrdinal: 4, CallIndex: 0,
-			ToolName: "Grep", InputJSON: `{"q":1}`, EventStatus: "completed"},
-		{MessageOrdinal: 5, CallIndex: 1, ToolName: "Bash",
-			ResultContent: "answer"},
+		{
+			ToolUseID: "duplicate", MessageOrdinal: 3, CallIndex: 2,
+			ToolName: "Grep", InputJSON: `{"q":1}`, EventStatus: "completed",
+		},
+		{
+			ToolUseID: "duplicate", MessageOrdinal: 4, CallIndex: 0,
+			ToolName: "Grep", InputJSON: `{"q":1}`, EventStatus: "completed",
+		},
+		{
+			MessageOrdinal: 5, CallIndex: 1, ToolName: "Bash",
+			ResultContent: "answer",
+		},
 	}
 	original := append([]ToolCallRow(nil), calls...)
 	got := ExtractToolSequences(calls, false)
