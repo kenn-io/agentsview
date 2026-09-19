@@ -141,7 +141,7 @@ func startsToolSequence(outcome ToolOutcome) bool {
 }
 
 func classifyToolOutcome(call ToolCallRow) ToolOutcome {
-	if IsFailure(call) {
+	if IsFailure(call) || call.EventStatus == "error" || call.EventStatus == "denied" {
 		return ToolOutcomeErrored
 	}
 	if call.EventStatus != "" && call.EventStatus != "completed" &&

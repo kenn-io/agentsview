@@ -21,6 +21,16 @@ func TestClassifyToolOutcome(t *testing.T) {
 			want: ToolOutcomeErrored,
 		},
 		{
+			name: "provider error status",
+			call: ToolCallRow{EventStatus: "error", ResultContent: "ok"},
+			want: ToolOutcomeErrored,
+		},
+		{
+			name: "provider denied status",
+			call: ToolCallRow{EventStatus: "denied", ResultContent: "ok"},
+			want: ToolOutcomeErrored,
+		},
+		{
 			name: "cancelled status",
 			call: ToolCallRow{EventStatus: "cancelled"},
 			want: ToolOutcomeErrored,
