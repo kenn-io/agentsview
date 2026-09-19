@@ -245,6 +245,13 @@ func TestRawSyncStatusPostgresHTTP(t *testing.T) {
 			AND processing_version = 'complete-version'`,
 		currentCompletedAt, firstIdentity.TenantID, secondCommit.ManifestID)
 	require.NoError(t, err)
+	laterCompletedAt := currentCompletedAt.Add(30 * time.Second)
+	_, err = pg.ExecContext(ctx, `
+		INSERT INTO raw_ingest_jobs (
+			tenant_id, manifest_id, stage, processing_version, state, updated_at
+		) VALUES ($1, $2, 'parse', 'later-complete-version', 'complete', $3)`,
+		firstIdentity.TenantID, secondCommit.ManifestID, laterCompletedAt)
+	require.NoError(t, err)
 	_, err = pg.ExecContext(ctx, `
 		UPDATE raw_ingest_jobs
 		SET state = 'complete', updated_at = $1
@@ -255,7 +262,7 @@ func TestRawSyncStatusPostgresHTTP(t *testing.T) {
 	require.NoError(t, err)
 	current = findRawStatusHead(t, status.SourceHeads, "current.jsonl")
 	require.NotNil(t, current.LastParseCompletedAt)
-	assert.Equal(t, currentCompletedAt.UTC(), *current.LastParseCompletedAt)
+	assert.Equal(t, laterCompletedAt.UTC(), *current.LastParseCompletedAt)
 
 	wrongScope, err := auth.IssueToken(
 		ctx, first.Identity.DeviceID, first.Credential, rawsync.ScopeCommit,
