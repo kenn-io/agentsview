@@ -650,15 +650,6 @@ func TestRawSyncCustodyDeadlineReturnsGatewayTimeout(t *testing.T) {
 	t.Parallel()
 
 	identity := rawsync.AuthIdentity{TenantID: "tenant-a", DeviceID: "dev-a"}
-	auth := &rawSyncAuthStub{
-		authenticateToken: func(
-			context.Context,
-			string,
-			rawsync.DeviceTokenScope,
-		) (rawsync.AuthIdentity, error) {
-			return identity, nil
-		},
-	}
 
 	tests := []struct {
 		name    string
@@ -707,6 +698,16 @@ func TestRawSyncCustodyDeadlineReturnsGatewayTimeout(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+
+			auth := &rawSyncAuthStub{
+				authenticateToken: func(
+					context.Context,
+					string,
+					rawsync.DeviceTokenScope,
+				) (rawsync.AuthIdentity, error) {
+					return identity, nil
+				},
+			}
 			srv := newRawSyncHTTPTestServer(t, auth, tt.custody)
 			recorder := serveRawSyncJSON(
 				t, srv, http.MethodPost, tt.path, tt.body, tt.bearer, "",
