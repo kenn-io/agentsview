@@ -251,6 +251,28 @@ func TestSearchTreatsUnderscoreAsLiteral(t *testing.T) {
 	assert.Equal(t, fixtureAlphaID, literal.Results[0].SessionID)
 }
 
+func TestGetSessionFullReturnsFilePath(t *testing.T) {
+	store, _, local := newPushedStore(t)
+	ctx := context.Background()
+	want, err := local.GetSessionFull(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	require.NotNil(t, want)
+	require.NotNil(t, want.FilePath)
+
+	got, err := store.GetSessionFull(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	require.NotNil(t, got.FilePath)
+	assert.Equal(t, *want.FilePath, *got.FilePath)
+	assert.Nil(t, got.FileHash)
+	assert.Nil(t, got.LocalModifiedAt)
+
+	listed, err := store.GetSession(ctx, fixtureAlphaID)
+	require.NoError(t, err)
+	require.NotNil(t, listed)
+	assert.Nil(t, listed.FilePath)
+}
+
 func TestStoreGetSessionHidesTrash(t *testing.T) {
 	ctx := context.Background()
 	store, syncer, local := newPushedStore(t)

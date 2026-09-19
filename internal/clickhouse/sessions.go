@@ -35,6 +35,12 @@ const sessionCols = `id, project, project_assigned, machine, agent,
 	secret_leak_count, secrets_rules_version,
 	deleted_at, deletion_cause, termination_status, transcript_revision`
 
+// sessionFullCols is the GetSessionFull list. It adds file_path the way
+// PostgreSQL serve does, and omits volatile fingerprint columns
+// (file_size, file_mtime, file_hash, local_modified_at).
+const sessionFullCols = sessionCols + `,
+	file_path`
+
 // sessionActivityExpr orders sessions by their most recent activity.
 const sessionActivityExpr = "COALESCE(ended_at, started_at, created_at)"
 
@@ -266,8 +272,8 @@ func (s *Store) GetSession(ctx context.Context, id string) (*db.Session, error) 
 }
 
 func (s *Store) GetSessionFull(ctx context.Context, id string) (*db.Session, error) {
-	row := s.queryRowContext(ctx, "SELECT "+sessionCols+" FROM sessions WHERE id = ?", id)
-	sess, err := scanSession(row)
+	row := s.queryRowContext(ctx, "SELECT "+sessionFullCols+" FROM sessions WHERE id = ?", id)
+	sess, err := scanSessionWithSource(row, true)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
