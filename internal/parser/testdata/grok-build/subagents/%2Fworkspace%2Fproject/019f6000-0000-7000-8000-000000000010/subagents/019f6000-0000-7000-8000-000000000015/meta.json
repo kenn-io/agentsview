@@ -1,0 +1,13 @@
+{
+  "subagent_id": "019f6000-0000-7000-8000-000000000015",
+  "parent_session_id": "019f6000-0000-7000-8000-000000000010",
+  "child_session_id": "019f6000-0000-7000-8000-000000000015",
+  "subagent_type": "general-purpose",
+  "description": "Edit in a worktree",
+  "prompt": "Patch the parser in isolation",
+  "status": "completed",
+  "started_at": "2026-07-18T10:09:00Z",
+  "completed_at": "2026-07-18T10:12:00Z",
+  "effective_context_source": "new",
+  "child_cwd": "/workspace/worktree-child"
+}

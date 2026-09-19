@@ -1,0 +1,17 @@
+{
+  "info": {
+    "id": "019f6000-0000-7000-8000-000000000011",
+    "cwd": "/workspace/project"
+  },
+  "session_summary": "Search the parser",
+  "generated_title": "Parser search",
+  "session_kind": "subagent",
+  "created_at": "2026-07-18T10:01:00Z",
+  "updated_at": "2026-07-18T10:05:00Z",
+  "num_messages": 2,
+  "num_chat_messages": 2,
+  "current_model_id": "grok-4.5",
+  "git_root_dir": "/workspace/project",
+  "head_branch": "main",
+  "agent_name": "explore"
+}

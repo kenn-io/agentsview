@@ -12,15 +12,15 @@
 
 ## Task Routes
 
-| Task or path                                                                  | Read before editing                  |
-| ----------------------------------------------------------------------------- | ------------------------------------ |
-| Features, bug fixes, tests, or test helpers                                   | `docs/agents/testing.md`             |
-| SQLite, PostgreSQL, CockroachDB, DuckDB, archive resync, or storage queries   | `docs/agents/storage.md`             |
-| Watchers, polling, sync scheduling, background work, or memory investigations | `docs/agents/background-work.md`     |
-| Build commands, toolchains, CI build tags, or dependencies                    | `docs/agents/build.md`               |
-| S3 ingest, `S3Provider`, or `Source.S3Discovery`                              | `docs/agents/s3-providers.md`        |
-| Any frontend file                                                             | `frontend/AGENTS.md`                 |
-| Frontend controls, styling, or reusable components                            | `frontend/AGENTS.md` and `DESIGN.md` |
+| Task or path                                                                            | Read before editing                  |
+| --------------------------------------------------------------------------------------- | ------------------------------------ |
+| Features, bug fixes, tests, or test helpers                                             | `docs/agents/testing.md`             |
+| SQLite, PostgreSQL, CockroachDB, DuckDB, ClickHouse, archive resync, or storage queries | `docs/agents/storage.md`             |
+| Watchers, polling, sync scheduling, background work, or memory investigations           | `docs/agents/background-work.md`     |
+| Build commands, toolchains, CI build tags, or dependencies                              | `docs/agents/build.md`               |
+| S3 ingest, `S3Provider`, or `Source.S3Discovery`                                        | `docs/agents/s3-providers.md`        |
+| Any frontend file                                                                       | `frontend/AGENTS.md`                 |
+| Frontend controls, styling, or reusable components                                      | `frontend/AGENTS.md` and `DESIGN.md` |
 
 The `README.md` and `Makefile` are the sources for project facts, setup, and
 commands. Do not copy their catalogues into this file.
@@ -128,12 +128,13 @@ only until its separately owned format-alignment work lands.
 ## Project Map
 
 agentsview syncs local AI agent sessions into SQLite, serves a Svelte 5 web UI,
-and can mirror data to PostgreSQL or DuckDB.
+and can mirror data to PostgreSQL, DuckDB, or ClickHouse.
 
 - `cmd/agentsview/`: CLI and server entry points
 - `internal/db/`: SQLite archive and search
 - `internal/postgres/`: PostgreSQL sync and read store
 - `internal/duckdb/`: disposable DuckDB mirror and Quack reads
+- `internal/clickhouse/`: ClickHouse remote mirror and read store
 - `internal/parser/`: agent session parsers
 - `internal/server/`: HTTP API and SSE
 - `internal/sync/`: discovery, file watching, and sync

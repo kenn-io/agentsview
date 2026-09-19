@@ -2,9 +2,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount, type ComponentProps } from "svelte";
 import type { Session } from "../../api/types.js";
-import type { DbMessage as Message } from "../../api/generated/index.js";
+import type {
+  DbMessage as Message,
+  DbSessionTiming as SessionTiming,
+} from "../../api/generated/index.js";
 import { setLocale } from "../../i18n/index.js";
 import MessageContent from "./MessageContent.svelte";
+
+const timingState = vi.hoisted(() => ({ timing: null as SessionTiming | null }));
+vi.mock("../../stores/sessionTiming.svelte.js", () => ({ sessionTiming: timingState }));
 
 const copyMock = vi.hoisted(() => vi.fn().mockResolvedValue(true));
 const mermaidMock = vi.hoisted(() => vi.fn(() => ({ renderNow: vi.fn(), disconnect: vi.fn() })));
@@ -146,6 +152,7 @@ beforeEach(() => {
 afterEach(async () => {
   for (const component of components.splice(0)) await unmount(component);
   document.body.replaceChildren();
+  timingState.timing = null;
   setLocale("en");
   vi.clearAllMocks();
   state.sessions = [];
@@ -157,6 +164,78 @@ afterEach(async () => {
 });
 
 describe("MessageContent", () => {
+  it("omits duration for legacy calls without stored timing", async () => {
+    await render(message({ content: "[Bash]\npwd", has_tool_use: true }));
+    expect(document.querySelector(".tool-duration")).toBeNull();
+  });
+
+  it.each([
+    { duration: 2000, running: false, label: "2.0s" },
+    { duration: 0, running: false, label: "0ms" },
+    { duration: null, running: false, label: "unknown" },
+    { duration: null, running: true, label: "running" },
+    { duration: null, running: true, turnDurationMs: 5000, label: "unknown" },
+  ])(
+    "uses the call evidence for $label, running=$running",
+    async ({ duration, running, turnDurationMs, label }) => {
+      timingState.timing = {
+        session_id: "session-1",
+        total_duration_ms: 6000,
+        tool_duration_ms: duration ?? 0,
+        turn_count: 1,
+        tool_call_count: 1,
+        subagent_count: 0,
+        slowest_call: null,
+        by_category: [],
+        activity: [],
+        activity_totals: {
+          tool_ms: duration ?? 0,
+          unattributed_ms: 6000 - (duration ?? 0),
+        },
+        running,
+        turns: [
+          {
+            message_id: 1,
+            ordinal: 0,
+            started_at: "2026-02-20T12:30:00Z",
+            duration_ms: turnDurationMs ?? (running ? null : 5000),
+            primary_category: "Bash",
+            calls: [
+              {
+                tool_use_id: "call-1",
+                tool_name: "Bash",
+                category: "Bash",
+                duration_ms: duration,
+                is_parallel: false,
+                input_preview: "pwd",
+              },
+            ],
+          },
+        ],
+      };
+      await render(
+        message({
+          id: 1,
+          content: "",
+          has_tool_use: true,
+          tool_calls: [
+            {
+              tool_use_id: "call-1",
+              tool_name: "Bash",
+              category: "Bash",
+              input_json: '{"command":"pwd"}',
+            },
+          ],
+        }),
+      );
+
+      const actual = document.querySelector(".tool-duration")?.textContent?.trim();
+      if (label === "running") expect(actual).toMatch(/^running /);
+      else if (label === "unknown") expect(actual).toBeUndefined();
+      else expect(actual).toBe(label);
+    },
+  );
+
   it.each([
     [
       "inline teammate",

@@ -497,7 +497,12 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // header ID, and native Pi sessions with a resolved parent are classified as
 // forks. Re-parse stored native Pi sessions to repair lineage edges and fork
 // classification.)
-const dataVersion = 110
+// (111: Devin message source identities are now session-scoped. Existing
+// Devin rows carry bare node_id/step_id SourceUUIDs that collide across
+// sessions in usage deduplication; a fingerprint change cannot cover this
+// because the source bytes are unchanged, so existing sessions need
+// re-parsing.)
+const dataVersion = 111
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -1744,7 +1749,7 @@ func OpenReadOnly(path string) (*DB, error) {
 		return nil, fmt.Errorf("opening read-only reader: %w", err)
 	}
 
-	schemaStale, _, err := probeDatabaseConn(reader)
+	schemaStale, dataStale, err := probeDatabaseConn(reader)
 	if err != nil {
 		reader.Close()
 		return nil, fmt.Errorf(
@@ -1766,6 +1771,7 @@ func OpenReadOnly(path string) (*DB, error) {
 		path: path, readOnly: true,
 		usageCache: newUsageCacheManager(path),
 	}
+	db.dataStale.Store(dataStale)
 	db.usageCache.attachArchive(db)
 	db.reader.Store(reader)
 	db.cursorSecret = make([]byte, 32)
@@ -2939,6 +2945,12 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 		return err
 	}
 	if err := db.backfillToolCallFieldsLocked(w); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := scopeLegacyDevinSourceUUIDsLocked(ctx, w); err != nil {
 		return err
 	}
 

@@ -30,6 +30,8 @@ func TestNormalizeToolCategory(t *testing.T) {
 		{"apply_patch", "Edit"},
 		{"write_stdin", "Bash"},
 		{"shell", "Bash"},
+		{"spawn_agent", "Task"},
+		{"spawn_subagent", "Task"},
 
 		// Gemini tools
 		{"read_file", "Read"},

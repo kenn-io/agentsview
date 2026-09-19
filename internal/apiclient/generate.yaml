@@ -47,11 +47,13 @@ filter:
       - post-api-v1-sync-remotes
       - post-api-v1-push-pg
       - post-api-v1-push-duckdb
+      - post-api-v1-push-clickhouse
       - post-api-v1-remote-sync-manifest
       - post-api-v1-remote-sync-archive
       - get-api-v1-remote-sync-targets
       - post-api-v1-artifacts-exchange
       - post-api-v1-raw-sync-tokens
+      - get-api-v1-raw-sync-status
       - post-api-v1-raw-sync-objects-missing
       - post-api-v1-raw-sync-uploads
       - head-api-v1-raw-sync-uploads-upload-id

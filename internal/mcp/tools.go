@@ -567,17 +567,19 @@ func (t *toolset) getMessagesAround(
 // --- search_content ---
 
 type searchContentIn struct {
-	Pattern       string `json:"pattern" jsonschema:"Natural-language query for semantic/hybrid, or exact substring/regex for lexical search across message text and tool inputs/results."`
-	Mode          string `json:"mode,omitempty" jsonschema:"substring (default), regex, semantic, or hybrid. Prefer hybrid or semantic for contextual questions when a vector search index is configured."`
-	Scope         string `json:"scope,omitempty" jsonschema:"Semantic/hybrid result scope: top, all, or subordinate (default all). Only valid with mode semantic or hybrid."`
-	Project       string `json:"project,omitempty" jsonschema:"Restrict to one project."`
-	Agent         string `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
-	DateFrom      string `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
-	DateTo        string `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
-	Limit         int    `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 30."`
-	Cursor        int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
-	IncludeActive bool   `json:"include_active,omitempty" jsonschema:"Include matches from sessions active in the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
-	Context       int    `json:"context,omitempty" jsonschema:"Messages of context before/after each match (max 10)."`
+	Pattern          string `json:"pattern" jsonschema:"Natural-language query for semantic/hybrid, or exact substring/regex for lexical search across message text and tool inputs/results."`
+	Mode             string `json:"mode,omitempty" jsonschema:"substring (default), regex, semantic, or hybrid. Prefer hybrid or semantic for contextual questions when a vector search index is configured."`
+	Scope            string `json:"scope,omitempty" jsonschema:"Semantic/hybrid result scope: top, all, or subordinate (default all). Only valid with mode semantic or hybrid."`
+	Project          string `json:"project,omitempty" jsonschema:"Restrict to one project."`
+	Agent            string `json:"agent,omitempty" jsonschema:"Restrict to one agent."`
+	DateFrom         string `json:"date_from,omitempty" jsonschema:"Only sessions on or after this date (YYYY-MM-DD)."`
+	DateTo           string `json:"date_to,omitempty" jsonschema:"Only sessions on or before this date (YYYY-MM-DD)."`
+	Limit            int    `json:"limit,omitempty" jsonschema:"Max matches, default 10, max 30."`
+	Cursor           int    `json:"cursor,omitempty" jsonschema:"Pagination cursor from a previous next_cursor."`
+	IncludeActive    bool   `json:"include_active,omitempty" jsonschema:"Include matches from sessions active in the last 10 minutes. Default false: the conversation you are in right now is also recorded, so without this exclusion you would find yourself."`
+	IncludeOneShot   bool   `json:"include_one_shot,omitempty" jsonschema:"Include one-shot sessions. Default false."`
+	IncludeAutomated bool   `json:"include_automated,omitempty" jsonschema:"Include automated sessions. Default false."`
+	Context          int    `json:"context,omitempty" jsonschema:"Messages of context before/after each match (max 10)."`
 }
 
 // contextMessage is a truncated view of a service-level db.Message, used
@@ -642,16 +644,18 @@ func (t *toolset) searchContent(
 			"scope is only supported for semantic and hybrid search modes")
 	}
 	res, err := t.svc.SearchContent(ctx, service.ContentSearchRequest{
-		Pattern:  in.Pattern,
-		Mode:     in.Mode,
-		Scope:    in.Scope,
-		Project:  in.Project,
-		Agent:    in.Agent,
-		DateFrom: in.DateFrom,
-		DateTo:   in.DateTo,
-		Limit:    clampLimit(in.Limit, defaultSearchLimit, maxSearchLimit),
-		Cursor:   in.Cursor,
-		Context:  in.Context,
+		Pattern:          in.Pattern,
+		Mode:             in.Mode,
+		Scope:            in.Scope,
+		Project:          in.Project,
+		Agent:            in.Agent,
+		DateFrom:         in.DateFrom,
+		DateTo:           in.DateTo,
+		Limit:            clampLimit(in.Limit, defaultSearchLimit, maxSearchLimit),
+		Cursor:           in.Cursor,
+		Context:          in.Context,
+		IncludeOneShot:   in.IncludeOneShot,
+		IncludeAutomated: in.IncludeAutomated,
 	})
 	if err != nil {
 		return nil, searchContentOut{}, err

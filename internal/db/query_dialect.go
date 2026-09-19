@@ -52,6 +52,39 @@ type QueryDialect struct {
 	sidebarChildRelationships   []string
 	canonicalChildRelationships []string
 	nullsLast                   bool
+	// recursiveUnion is the set operator joining the anchor and recursive
+	// members of the IncludeChildren tree CTE. Empty means "UNION"; ClickHouse
+	// accepts only "UNION ALL" inside a recursive CTE.
+	recursiveUnion string
+	// starredPredicate renders the Starred filter for the given session id
+	// expression. Nil renders the correlated EXISTS the row stores use;
+	// ClickHouse needs an uncorrelated IN subquery.
+	starredPredicate func(idExpr string) string
+	// orphanPredicate renders the "parent row is missing" test used by
+	// BuildCanonicalRootWhere. Nil renders SidebarOrphanPredicate.
+	orphanPredicate func(sessionAlias, parentAlias string) string
+}
+
+func (d QueryDialect) recursiveUnionSQL() string {
+	if d.recursiveUnion == "" {
+		return "UNION"
+	}
+	return d.recursiveUnion
+}
+
+func (d QueryDialect) starredPredicateSQL(idExpr string) string {
+	if d.starredPredicate != nil {
+		return d.starredPredicate(idExpr)
+	}
+	return "EXISTS (SELECT 1 FROM starred_sessions ss WHERE ss.session_id = " +
+		idExpr + ")"
+}
+
+func (d QueryDialect) orphanPredicateSQL(sessionAlias, parentAlias string) string {
+	if d.orphanPredicate != nil {
+		return d.orphanPredicate(sessionAlias, parentAlias)
+	}
+	return SidebarOrphanPredicate(sessionAlias, parentAlias)
 }
 
 func outerSessionID(q func(string) string) string {
@@ -137,6 +170,72 @@ func PostgresQueryDialect() QueryDialect {
 		sidebarChildRelationships:   []string{"subagent", "fork"},
 		canonicalChildRelationships: []string{"subagent", "fork", "continuation"},
 		nullsLast:                   true,
+	}
+}
+
+// ClickHouseQueryDialect returns the ClickHouse SQL fragments used by the
+// read-only ClickHouse mirror store. It does not couple to
+// internal/clickhouse. ClickHouse differences from the row stores: recursive
+// CTEs accept only UNION ALL, correlated subqueries are not relied on (the
+// starred and orphan predicates use IN subqueries and the date-end expression
+// reads the push-time last_message_at column), LIKE escapes with a backslash
+// and has no ESCAPE clause, and regex matching goes through match() with an
+// inline case-insensitive flag.
+func ClickHouseQueryDialect() QueryDialect {
+	return QueryDialect{
+		name:             "clickhouse",
+		placeholderStyle: placeholderQuestion,
+		trueLiteral:      "true",
+		falseLiteral:     "false",
+		dateStartExpr: func(q func(string) string) string {
+			return "COALESCE(" + q("started_at") + ", " + q("created_at") + ")"
+		},
+		dateEndExpr: func(q func(string) string) string {
+			return "COALESCE(" + q("ended_at") + ", " + q("last_message_at") +
+				", " + q("started_at") + ", " + q("created_at") + ")"
+		},
+		dateParam:           clickhouseTimestampParam,
+		activityParam:       clickhouseTimestampParam,
+		cursorActivityExpr:  "COALESCE(ended_at, started_at, created_at)",
+		cursorParam:         clickhouseTimestampParam,
+		castCursor:          clickhouseCastCursor,
+		terminationExpr:     "COALESCE(ended_at, started_at, created_at)",
+		terminationKind:     timestampCast,
+		caseInsensitiveLike: "ILIKE",
+		regexPredicate: func(col, ph string) string {
+			return "match(" + col + ", concat('(?i)', " + ph + "))"
+		},
+		sidebarChildRelationships:   []string{"subagent", "fork"},
+		canonicalChildRelationships: []string{"subagent", "fork", "continuation"},
+		nullsLast:                   true,
+		recursiveUnion:              "UNION ALL",
+		starredPredicate: func(idExpr string) string {
+			return idExpr + " IN (SELECT session_id FROM starred_sessions)"
+		},
+		orphanPredicate: func(sessionAlias, _ string) string {
+			// NULL NOT IN (...) is unknown in SQL, so a child whose parent
+			// id is NULL would drop out of the sidebar. NOT EXISTS treats
+			// that row as an orphan; the IS NULL arm matches that.
+			return "(" + sessionAlias + ".parent_session_id IS NULL OR " +
+				sessionAlias + ".parent_session_id NOT IN (SELECT id FROM sessions))"
+		},
+	}
+}
+
+func clickhouseTimestampParam(ph string) string {
+	return "parseDateTime64BestEffort(" + ph + ", 6, 'UTC')"
+}
+
+func clickhouseCastCursor(ph string, kind valueKind) string {
+	switch kind {
+	case kindTimestamp:
+		return clickhouseTimestampParam(ph)
+	case kindInt:
+		return "toInt64(" + ph + ")"
+	case kindReal:
+		return "toFloat64(" + ph + ")"
+	default:
+		return ph
 	}
 }
 
@@ -479,7 +578,7 @@ func BuildCanonicalRootWhere(dialect QueryDialect, sessionAlias string, includeO
 	}
 	return `(` + base + ` OR (` +
 		CanonicalChildRelationshipPredicate(dialect, sessionAlias) + ` AND ` +
-		SidebarOrphanPredicate(sessionAlias, "parent") + `))`
+		dialect.orphanPredicateSQL(sessionAlias, "parent") + `))`
 }
 
 func buildSessionFilterWithBuilder(
@@ -547,7 +646,7 @@ func buildSessionFilterWithBuilder(
 		" WHERE root_session.message_count > 0" +
 		" AND root_session.deleted_at IS NULL AND " +
 		rootMatch +
-		" UNION " +
+		" " + b.dialect.recursiveUnionSQL() + " " +
 		"SELECT s.id FROM sessions s" +
 		" JOIN tree t ON s.parent_session_id = t.id" +
 		" WHERE s.message_count > 0 AND s.deleted_at IS NULL" +
@@ -658,9 +757,7 @@ func sessionFilterPredicates(
 		preds = append(preds, pred)
 	}
 	if f.Starred {
-		preds = append(preds,
-			"EXISTS (SELECT 1 FROM starred_sessions ss WHERE ss.session_id = "+
-				q("id")+")")
+		preds = append(preds, b.dialect.starredPredicateSQL(q("id")))
 	}
 	return preds, oneShotPred
 }

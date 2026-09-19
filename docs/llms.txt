@@ -48,6 +48,7 @@ The Markdown pages are canonical for machine readers; the HTML routes drop the
 
 - [PostgreSQL Sync](https://agentsview.io/docs/pg-sync.md): Push sync, an auto-push service, and a read-only server for teams.
 - [DuckDB Mirror](https://agentsview.io/docs/duckdb.md): Mirror the SQLite archive into DuckDB, locally or over the Quack remote protocol.
+- [ClickHouse Sync](https://agentsview.io/docs/clickhouse-sync.md): Push the SQLite archive into ClickHouse and serve a read-only web UI from it.
 - [Filesystem Session Sync](https://agentsview.io/docs/filesystem-sync.md): View sessions from multiple machines by transporting native session directories.
 - [Artifact Folder Sync](https://agentsview.io/docs/artifact-sync.md): Exchange normalized sessions between archives through a trusted folder.
 - [Hosted Raw Sync](https://agentsview.io/docs/hosted-raw-sync.md): Keep original provider files from several devices in one hosted archive with authenticated, resumable uploads.

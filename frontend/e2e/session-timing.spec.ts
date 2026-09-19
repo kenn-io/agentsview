@@ -1,15 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 
-// Spec for the Session Vital Signs panel. Replaces the old
-// ActivityMinimap spec — the minimap component is gone, and
-// the right column now shows the four-section vital-signs
-// panel rendered by SessionVitals.svelte.
-//
-// The fixture session `test-session-duration-showcase` is
-// seeded by cmd/testfixture and exercised by scripts/e2e-server.sh.
-// It contains: a solo Read turn, a parallel turn (two Reads + one
-// Task with a sub-agent), and a slow Bash turn — exactly the
-// shape needed to cover all four section interactions.
+// The served fixture includes measured Bash and closed-child Task execution plus unknown Read calls.
 
 const SHOWCASE = "test-session-duration-showcase";
 const SHOWCASE_WORKTREE =
@@ -42,7 +33,7 @@ async function gotoShowcase(page: Page) {
 }
 
 test.describe("Session Vital Signs", () => {
-  test("renders all four sections", async ({ page }) => {
+  test("renders all five sections", async ({ page }) => {
     await gotoShowcase(page);
 
     // Section labels are not semantic headings, so match the compact
@@ -50,13 +41,118 @@ test.describe("Session Vital Signs", () => {
     // sections keep text-only labels.
     const headers = page
       .locator(".v-section .v-h")
-      .filter({ hasText: /(Session|Time spent|Timeline|Calls)/ });
-    await expect(headers).toHaveCount(4);
+      .filter({ hasText: /(Session|Turn activity|Time spent|Timeline|Calls)/ });
+    await expect(headers).toHaveCount(5);
 
     await expect(page.locator(".v-section .v-h", { hasText: "Session" })).toBeVisible();
+    await expect(page.locator(".v-section .v-h", { hasText: "Turn activity" })).toBeVisible();
     await expect(page.locator(".v-section .v-h", { hasText: "Time spent" })).toBeVisible();
     await expect(page.locator(".v-section .v-h", { hasText: "Timeline" })).toBeVisible();
     await expect(page.locator(".v-section .v-h", { hasText: "Calls" })).toBeVisible();
+  });
+
+  test("shows measured execution and unknown calls with horizontal activity tracks", async ({
+    page,
+  }, testInfo) => {
+    await gotoShowcase(page);
+
+    const response = await page.request.get(`/api/v1/sessions/${SHOWCASE}/timing`);
+    expect(response.ok()).toBe(true);
+    const timing = await response.json();
+    expect(timing.tool_duration_ms).toBe(140_000);
+    expect(timing.activity_totals).toEqual({
+      tool_ms: 140_000,
+      unattributed_ms: 35_000,
+    });
+    expect(timing.activity).toEqual([
+      expect.objectContaining({
+        ordinal: 0,
+        duration_ms: 139_000,
+        tool_ms: 120_000,
+        unattributed_ms: 19_000,
+        running: false,
+      }),
+      expect.objectContaining({
+        ordinal: 5,
+        duration_ms: 36_000,
+        tool_ms: 20_000,
+        unattributed_ms: 16_000,
+        running: false,
+      }),
+    ]);
+
+    const bash = page
+      .locator(".calls .call")
+      .filter({ has: page.locator(".cn", { hasText: "Bash" }) });
+    await expect(bash.locator(".cd")).toHaveText("20.0s");
+    const read = page
+      .locator(".calls .call")
+      .filter({ has: page.locator(".cn", { hasText: "Read" }) });
+    await expect(read.locator(".cd")).toHaveText(["unknown", "unknown", "unknown"]);
+    const task = page
+      .locator(".calls .call")
+      .filter({ has: page.locator(".cn", { hasText: "Task" }) });
+    await expect(task.locator(".cd")).toHaveText("2m 0s");
+
+    const activity = page.locator('.activity-row[data-activity-ordinal="5"]');
+    await expect(activity.locator('[data-activity-kind="tool"]')).toHaveAttribute(
+      "title",
+      "Tool execution · 20.0s",
+    );
+    await expect(activity.locator('[data-activity-kind="unattributed"]')).toHaveAttribute(
+      "title",
+      "Unattributed · 16.0s",
+    );
+    const layout = await activity.locator(".activity-track").evaluate((element) => {
+      const track = element.getBoundingClientRect();
+      const row = element.closest(".activity-row")!;
+      const rowBounds = row.getBoundingClientRect();
+      const tool = element.querySelector('[data-activity-kind="tool"]')!.getBoundingClientRect();
+      const unattributed = element
+        .querySelector('[data-activity-kind="unattributed"]')!
+        .getBoundingClientRect();
+      return {
+        display: getComputedStyle(element).display,
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        rowClientWidth: row.clientWidth,
+        rowScrollWidth: row.scrollWidth,
+        rowLeft: rowBounds.left,
+        rowRight: rowBounds.right,
+        trackLeft: track.left,
+        trackRight: track.right,
+        toolLeft: tool.left,
+        toolRight: tool.right,
+        toolTop: tool.top,
+        unattributedLeft: unattributed.left,
+        unattributedRight: unattributed.right,
+        unattributedTop: unattributed.top,
+      };
+    });
+    expect(layout.display).toBe("flex");
+    expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth);
+    expect(layout.rowScrollWidth).toBeLessThanOrEqual(layout.rowClientWidth);
+    expect(layout.trackLeft).toBeGreaterThanOrEqual(layout.rowLeft);
+    expect(layout.trackRight).toBeLessThanOrEqual(layout.rowRight);
+    expect(layout.toolTop).toBe(layout.unattributedTop);
+    expect(layout.toolLeft).toBeGreaterThanOrEqual(layout.trackLeft);
+    expect(layout.toolRight).toBeCloseTo(layout.unattributedLeft, 0);
+    expect(layout.unattributedRight).toBeLessThanOrEqual(layout.trackRight + 1);
+    expect(layout.toolRight - layout.toolLeft).toBeGreaterThan(0);
+    expect(layout.unattributedRight - layout.unattributedLeft).toBeGreaterThan(0);
+
+    const scroller = page.locator(SCROLLER);
+    await scroller.evaluate((element) => {
+      element.scrollTop = 0;
+    });
+    await activity.click();
+    await expect
+      .poll(() => scroller.evaluate((element) => element.scrollTop), { timeout: 15_000 })
+      .toBeGreaterThan(0);
+    await expect(
+      page.getByText("Confirm the slow path with the auth tests.", { exact: true }),
+    ).toBeInViewport();
+    await page.screenshot({ path: testInfo.outputPath("turn-activity.png"), fullPage: true });
   });
 
   test("keeps an absolute mixed-direction worktree path ordered", async ({ page }) => {
@@ -239,11 +335,7 @@ test.describe("Session Vital Signs", () => {
       el.scrollTop = 0;
     });
 
-    // The slow threshold algorithm marks only the longest call
-    // when fewer than 10 measurable calls exist; in the showcase
-    // that's the Task call (120s) inside the parallel group.
-    // We want a `.call` body click (not the chevron), so target
-    // the row's name span explicitly.
+    // The measured Bash call is the only call eligible for the slow marker.
     const slowCall = page.locator(".call.slow").first();
     await expect(slowCall).toBeVisible();
     await slowCall.locator(".cn").click();

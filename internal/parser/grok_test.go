@@ -1302,6 +1302,7 @@ func TestGrokProviderWatchPlanIncludesParsedCompanions(t *testing.T) {
 			"chat_history.jsonl",
 			"updates.jsonl",
 			"prompt_context.json",
+			"meta.json",
 		},
 		plan.Roots[0].IncludeGlobs,
 	)

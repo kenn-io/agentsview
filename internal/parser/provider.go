@@ -1166,6 +1166,8 @@ func providerFactoryForDef(def AgentDef) ProviderFactory {
 		return newCodexProviderFactory(def)
 	case AgentTraeX:
 		return newTraeXProviderFactory(def)
+	case AgentAugureCode:
+		return newAugureCodeProviderFactory(def)
 	case AgentCopilot:
 		return newCopilotProviderFactory(def)
 	case AgentCowork:

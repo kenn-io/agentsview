@@ -457,29 +457,32 @@ func TestEmbedSchedulerLaterBackstopStartsFreshLifecycle(t *testing.T) {
 func TestEmbedSchedulerExhaustedBackstopCarriesIntoNextNotification(
 	t *testing.T,
 ) {
-	buildErr := errors.New("embedding request rejected")
-	fake := &fakeEmbedManager{results: []fakeTryBuildResult{
-		{started: true, err: buildErr},
-		{started: true, err: buildErr},
-		{started: true},
-	}}
-	s := newEmbedScheduler(
-		fake, 20*time.Millisecond, 200*time.Millisecond, false, nil,
-	)
-	go s.Run(t.Context())
-	defer s.Stop()
+	synctest.Test(t, func(t *testing.T) {
+		buildErr := errors.New("embedding request rejected")
+		fake := &fakeEmbedManager{results: []fakeTryBuildResult{
+			{started: true, err: buildErr},
+			{started: true, err: buildErr},
+			{started: true},
+		}}
+		s := newEmbedScheduler(
+			fake, 20*time.Millisecond, 200*time.Millisecond, false, nil,
+		)
+		go s.Run(t.Context())
+		defer s.Stop()
 
-	waitForSchedulerCondition(t, func() bool { return fake.callCount() >= 2 },
-		"expected the failed backstop and its bounded retry")
-	s.Notify()
-	waitForSchedulerConditionWithin(t, 100*time.Millisecond,
-		func() bool { return fake.callCount() >= 3 },
-		"a new notification should recover the deferred reconciliation")
+		// Finish the failed tick and its retry before sending new work,
+		// keeping the clock before the next periodic tick at 400ms.
+		synctest.Sleep(250 * time.Millisecond)
+		require.Equal(t, 2, fake.callCount(),
+			"expected the failed backstop and its bounded retry")
+		s.Notify()
+		synctest.Sleep(20 * time.Millisecond)
 
-	assert.Equal(t, []vector.BuildRequest{
-		{Backstop: true}, {Backstop: true}, {Backstop: true},
-	}, fake.callsSnapshot(),
-		"retry exhaustion must preserve full-reconciliation intent")
+		assert.Equal(t, []vector.BuildRequest{
+			{Backstop: true}, {Backstop: true}, {Backstop: true},
+		}, fake.callsSnapshot(),
+			"retry exhaustion must preserve full-reconciliation intent")
+	})
 }
 
 // TestEmbedSchedulerDroppedBackstopRetriesOnNextDebouncedBuild is the fix-4

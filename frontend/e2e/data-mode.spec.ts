@@ -19,7 +19,7 @@ function waitForApiResponse(page: Page, method: string, pathname: string) {
       return response.request().method() === method && url.pathname === pathname && response.ok();
     })
     .then(async (response) => {
-      await response.body();
+      await response.finished();
       return response;
     });
 }
@@ -32,8 +32,38 @@ test.describe("Data mode project reclassification", () => {
 
   test.skip(
     ({ browserName }) => browserName !== "chromium",
-    "the workflow mutates the shared fixture once",
+    "the workflow mutates the shared fixture",
   );
+
+  test.afterEach(async ({ request, baseURL, browserName }) => {
+    if (!mappingWorkspaceE2EEnabled || isDuckDBBackend || browserName !== "chromium") return;
+
+    // Restore the shared fixture even when an assertion fails after Save.
+    // Deleting the rule alone does not undo the session reclassification.
+    const response = await request.get("/api/v1/settings/worktree-mappings", {
+      params: { machine },
+    });
+    await expect(response).toBeOK();
+    const { mappings } = await response.json();
+    const headers = { Origin: baseURL! };
+    for (const mapping of mappings) {
+      if (mapping.path_prefix !== broaderPrefix) continue;
+      const restored = await request.put(`/api/v1/settings/worktree-mappings/${mapping.id}`, {
+        headers,
+        data: { path_prefix: broaderPrefix, project: wrongProject, enabled: true },
+      });
+      await expect(restored).toBeOK();
+      const applied = await request.post("/api/v1/settings/worktree-mappings/apply", {
+        headers,
+        data: { machine },
+      });
+      await expect(applied).toBeOK();
+      const deleted = await request.delete(`/api/v1/settings/worktree-mappings/${mapping.id}`, {
+        headers,
+      });
+      await expect(deleted).toBeOK();
+    }
+  });
 
   test("keeps the bulk destination and Save visible while observed folders scroll", async ({
     page,

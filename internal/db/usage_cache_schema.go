@@ -42,7 +42,10 @@ const (
 	// at the untagged model's catalog rate. EffectivePricingDigest hashes
 	// only catalog rows, so the same facts and catalog would otherwise keep
 	// the unpriced costs.
-	usageCacheFormatVersion             = 12
+	// Version 13 rebuilds facts and rollups with session-scoped Devin
+	// message source identities: bare node_id/step_id values collide
+	// across sessions, so previously deduplicated Devin usage was dropped.
+	usageCacheFormatVersion             = 13
 	usageCacheApplicationID             = 0x41565543
 	usageCacheKind                      = "agentsview-usage-facts"
 	usageCacheRetirementProtocolVersion = 1

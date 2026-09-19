@@ -1416,6 +1416,11 @@ func openReadOnlyDB(cfg config.Config) (*db.DB, error) {
 	if err != nil {
 		return nil, schemaUpgradeHint(err)
 	}
+	if database.NeedsResync() {
+		database.Close()
+		return nil, appendDaemonRestartUpgradeHint(
+			fmt.Errorf("opening read-only database: archive data needs resync"))
+	}
 	applyCustomPricing(database, cfg)
 	if err := applyCursorSecret(database, cfg); err != nil {
 		database.Close()

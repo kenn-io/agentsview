@@ -1252,6 +1252,37 @@ func TestOpenRejectsNewerDataVersion(t *testing.T) {
 		"expected too-new data version error")
 }
 
+func TestOpenAcceptsArchiveUserVersion111(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+
+	d, err := Open(path)
+	requireNoError(t, err, "initial open")
+	err = d.UpsertSession(Session{
+		ID:           "s1",
+		Project:      "proj",
+		Machine:      "local",
+		Agent:        "codex",
+		MessageCount: 1,
+		FileMtime:    new(int64(12345)),
+	})
+	requireNoError(t, err, "insert session")
+	require.NoError(t, d.Close())
+
+	conn, err := sql.Open("sqlite3", path)
+	requireNoError(t, err, "raw sqlite open")
+	_, err = conn.Exec("PRAGMA user_version = 111")
+	requireNoError(t, err, "set archive version 111")
+	require.NoError(t, conn.Close())
+
+	d2, err := Open(path)
+	requireNoError(t, err, "open version-111 archive")
+	t.Cleanup(func() { require.NoError(t, d2.Close()) })
+	page, err := d2.ListSessions(context.Background(), SessionFilter{Limit: 100})
+	requireNoError(t, err, "list sessions")
+	require.Len(t, page.Sessions, 1)
+}
+
 func TestOpenProbeErrorPropagates(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("skipping: chmod semantics differ on Windows")

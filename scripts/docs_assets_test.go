@@ -481,6 +481,7 @@ var builtDocsRoutes = func() []string {
 		"pg-sync",
 		"hosted-raw-sync",
 		"duckdb",
+		"clickhouse-sync",
 	}
 	routes := []string{"/", "/guide/", "/docs/"}
 	for _, page := range pages {

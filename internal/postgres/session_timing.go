@@ -46,6 +46,8 @@ func (s *Store) queryTurnRows(
 	rows, err := s.pg.QueryContext(ctx, `
 		SELECT
 		  m2.ordinal, m2.timestamp, m2.has_tool_use,
+		  m2.role, m2.is_system, m2.is_system_prefixed,
+		  m2.source_subtype, m2.content_length,
 		  CASE
 		    WHEN NOT m2.has_tool_use THEN NULL
 		    WHEN m2.delta_ms < 0    THEN NULL
@@ -54,6 +56,9 @@ func (s *Store) queryTurnRows(
 		FROM (
 		  SELECT
 		    m.session_id, m.ordinal, m.timestamp, m.has_tool_use,
+		    m.role, m.is_system,
+		    CASE WHEN `+db.PostgresSystemPrefixSQL("m.content", "m.role")+` THEN FALSE ELSE TRUE END AS is_system_prefixed,
+		    COALESCE(m.source_subtype, '') AS source_subtype, m.content_length,
 		    (round(EXTRACT(EPOCH FROM (
 		      COALESCE(
 		        LEAD(m.timestamp) OVER (ORDER BY m.ordinal),
@@ -76,14 +81,22 @@ func (s *Store) queryTurnRows(
 		var ordinal int
 		var ts *time.Time
 		var hasToolUse bool
+		var role, sourceSubtype string
+		var isSystem, isSystemPrefixed bool
+		var contentLength int
 		var dur sql.NullInt64
-		if err := rows.Scan(&ordinal, &ts, &hasToolUse, &dur); err != nil {
+		if err := rows.Scan(&ordinal, &ts, &hasToolUse, &role, &isSystem, &isSystemPrefixed, &sourceSubtype, &contentLength, &dur); err != nil {
 			return nil, fmt.Errorf("scanning timing turn: %w", err)
 		}
 		r := db.TurnRow{
-			MessageID:  int64(ordinal),
-			Ordinal:    int64(ordinal),
-			HasToolUse: hasToolUse,
+			MessageID:        int64(ordinal),
+			Ordinal:          int64(ordinal),
+			HasToolUse:       hasToolUse,
+			Role:             role,
+			IsSystem:         isSystem,
+			IsSystemPrefixed: isSystemPrefixed,
+			SourceSubtype:    sourceSubtype,
+			ContentLength:    contentLength,
 		}
 		if ts != nil {
 			r.Timestamp = FormatISO8601(*ts)
@@ -100,7 +113,6 @@ func (s *Store) queryTurnRows(
 func (s *Store) queryCallRows(
 	ctx context.Context, sessionID string,
 ) ([]db.CallRow, error) {
-	now := time.Now().UTC()
 	rows, err := s.pg.QueryContext(ctx, `
 		SELECT
 		  tc.message_ordinal,
@@ -133,21 +145,15 @@ func (s *Store) queryCallRows(
 		      AND tre.timestamp IS NOT NULL
 		    ORDER BY tre.event_index DESC
 		    LIMIT 1
-		  ) AS execution_completed_at,
-		  CASE
-		    WHEN tc.subagent_session_id IS NOT NULL
-		         AND s_sub.started_at IS NOT NULL THEN
-		      (round(EXTRACT(EPOCH FROM (
-		        COALESCE(s_sub.ended_at, $1::timestamptz) - s_sub.started_at
-		      )) * 1000))::bigint
-		    ELSE NULL
-		  END AS subagent_duration_ms
+		  ) AS execution_completed_at
+		  ,s_sub.started_at
+		  ,s_sub.ended_at
 		FROM tool_calls tc
 		LEFT JOIN sessions s_sub
 		  ON s_sub.id = tc.subagent_session_id
-		WHERE tc.session_id = $2
+		WHERE tc.session_id = $1
 		ORDER BY tc.message_ordinal, tc.id
-	`, now, sessionID)
+	`, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("querying timing calls: %w", err)
 	}
@@ -157,13 +163,12 @@ func (s *Store) queryCallRows(
 	for rows.Next() {
 		var msgOrdinal int
 		var toolUseID, inputJSON, skill, sub sql.NullString
-		var executionStarted, executionCompleted *time.Time
+		var executionStarted, executionCompleted, subagentStarted, subagentEnded *time.Time
 		var toolName, category string
-		var subDur sql.NullInt64
 		if err := rows.Scan(
 			&msgOrdinal, &toolUseID, &toolName, &category,
 			&skill, &sub, &inputJSON, &executionStarted, &executionCompleted,
-			&subDur,
+			&subagentStarted, &subagentEnded,
 		); err != nil {
 			return nil, fmt.Errorf("scanning timing call: %w", err)
 		}
@@ -186,14 +191,17 @@ func (s *Store) queryCallRows(
 		if inputJSON.Valid {
 			r.InputJSON = inputJSON.String
 		}
-		if subDur.Valid {
-			v := subDur.Int64
-			r.DurationMs = &v
-		} else if executionStarted != nil && executionCompleted != nil &&
-			!executionCompleted.Before(*executionStarted) {
-			v := executionCompleted.Sub(*executionStarted).Milliseconds()
-			r.DurationMs = &v
-			r.CompletedAt = FormatISO8601(*executionCompleted)
+		if executionStarted != nil {
+			r.ExecutionStart = FormatISO8601(*executionStarted)
+		}
+		if executionCompleted != nil {
+			r.ExecutionEnd = FormatISO8601(*executionCompleted)
+		}
+		if subagentStarted != nil {
+			r.SubagentStart = FormatISO8601(*subagentStarted)
+		}
+		if subagentEnded != nil {
+			r.SubagentEnd = FormatISO8601(*subagentEnded)
 		}
 		out = append(out, r)
 	}

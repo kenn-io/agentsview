@@ -1382,3 +1382,189 @@ func TestPinMessageRepinRefreshesSourceUUID(t *testing.T) {
 	assert.Equal(t, updatedNote, *gotNote)
 	assert.Equal(t, initialCreatedAt, gotCreatedAt, "created_at must be preserved")
 }
+
+// TestPushRestoresDevinPinAcrossSourceUUIDRescope covers a Devin session
+// pushed while its stored source uuids were bare node ids: the PG pin
+// records that bare uuid, and the next push — carrying the re-parsed
+// session-scoped uuids the parser emits since data version 111 — must
+// re-attach the pin instead of dropping it. Remote sessions reach the
+// same outcome under a "host~devin:<raw>" id; a non-Devin host-prefixed
+// session gets no translation, so its pin on a bare uuid drops when the
+// replacement rows no longer carry it.
+func TestPushRestoresDevinPinAcrossSourceUUIDRescope(t *testing.T) {
+	pgURL := testPGURL(t)
+
+	tests := []struct {
+		name      string
+		sessionID string
+		wantPin   bool
+	}{
+		{"local devin session", "devin:pg-pin-rescope", true},
+		{"remote devin session", "host~devin:pg-pin-rescope", true},
+		{"non-devin host session", "host~other:pg-pin-rescope", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cleanPGSchema(t, pgURL)
+			t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+			local := testDB(t)
+			ps, err := New(
+				pgURL, "agentsview", local,
+				"curation-machine", true, SyncOptions{},
+			)
+			require.NoError(t, err, "New sync")
+			defer ps.Close()
+
+			ctx := context.Background()
+			require.NoError(t, ps.EnsureSchema(ctx), "EnsureSchema")
+
+			sess := db.Session{
+				ID:           tt.sessionID,
+				Project:      "proj-curation",
+				Machine:      "local",
+				Agent:        "devin",
+				MessageCount: 2,
+				CreatedAt:    "2026-05-01T00:00:00Z",
+			}
+			require.NoError(t, local.UpsertSession(sess), "UpsertSession old")
+			require.NoError(t, local.InsertMessages([]db.Message{
+				{
+					SessionID: tt.sessionID, Ordinal: 0,
+					Role: "user", Content: "task",
+					SourceUUID: "1",
+				},
+				{
+					SessionID: tt.sessionID, Ordinal: 1,
+					Role: "assistant", Content: "working",
+					SourceUUID: "2",
+				},
+			}), "InsertMessages old")
+			_, err = ps.Push(ctx, false, nil)
+			require.NoError(t, err, "Push old")
+
+			store, err := NewStore(pgURL, "agentsview", true)
+			require.NoError(t, err, "NewStore")
+			defer store.Close()
+			_, err = store.PinMessage(tt.sessionID, 1, nil)
+			require.NoError(t, err, "PinMessage")
+
+			// The re-parse stores the same messages under
+			// session-scoped uuids; the changed uuid forces the full
+			// replace path that snapshots and restores pins.
+			require.NoError(t, local.ReplaceSessionMessages(
+				tt.sessionID, []db.Message{
+					{
+						SessionID: tt.sessionID, Ordinal: 0,
+						Role: "user", Content: "task",
+						SourceUUID: "pg-pin-rescope:1",
+					},
+					{
+						SessionID: tt.sessionID, Ordinal: 1,
+						Role: "assistant", Content: "working",
+						SourceUUID: "pg-pin-rescope:2",
+					},
+				}), "ReplaceSessionMessages")
+			_, err = ps.Push(ctx, true, nil)
+			require.NoError(t, err, "Push new")
+
+			pins, err := store.ListPinnedMessages(ctx, tt.sessionID, "")
+			require.NoError(t, err, "ListPinnedMessages")
+			if !tt.wantPin {
+				assert.Empty(t, pins,
+					"a non-Devin session must not translate a bare uuid")
+				return
+			}
+			require.Len(t, pins, 1,
+				"pin must survive the bare-to-scoped uuid reparse push")
+			assert.Equal(t, 1, pins[0].Ordinal)
+		})
+	}
+}
+
+// TestPushDropsDevinPinWhenBareAndScopedUUIDsCoexist pins a bare Devin
+// node id, then pushes a replacement message set in which that bare id
+// and its session-scoped form BOTH survive — the shape a mixed-version
+// remote push can leave behind. Resolution accepts both forms as
+// candidates, so the saved uniqueness and multiplicity counts must be
+// measured against the combined candidate set; measured per candidate
+// form, each row would look unique and the pin would attach to whichever
+// row the scan returned first.
+func TestPushDropsDevinPinWhenBareAndScopedUUIDsCoexist(t *testing.T) {
+	pgURL := testPGURL(t)
+	cleanPGSchema(t, pgURL)
+	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
+
+	local := testDB(t)
+	ps, err := New(
+		pgURL, "agentsview", local,
+		"curation-machine", true, SyncOptions{},
+	)
+	require.NoError(t, err, "New sync")
+	defer ps.Close()
+
+	ctx := context.Background()
+	require.NoError(t, ps.EnsureSchema(ctx), "EnsureSchema")
+
+	const sessionID = "devin:pg-pin-coexist"
+	sess := db.Session{
+		ID:           sessionID,
+		Project:      "proj-curation",
+		Machine:      "local",
+		Agent:        "devin",
+		MessageCount: 2,
+		CreatedAt:    "2026-05-01T00:00:00Z",
+	}
+	require.NoError(t, local.UpsertSession(sess), "UpsertSession old")
+	require.NoError(t, local.InsertMessages([]db.Message{
+		{
+			SessionID: sessionID, Ordinal: 0,
+			Role: "user", Content: "task",
+			SourceUUID: "1",
+		},
+		{
+			SessionID: sessionID, Ordinal: 1,
+			Role: "assistant", Content: "working",
+			SourceUUID: "2",
+		},
+	}), "InsertMessages old")
+	_, err = ps.Push(ctx, false, nil)
+	require.NoError(t, err, "Push old")
+
+	store, err := NewStore(pgURL, "agentsview", true)
+	require.NoError(t, err, "NewStore")
+	defer store.Close()
+	_, err = store.PinMessage(sessionID, 1, nil)
+	require.NoError(t, err, "PinMessage")
+
+	// The replacement keeps a stale bare-uuid row — as an older remote
+	// writer could leave behind — alongside the scoped restamp of the
+	// pinned message; both carry the pinned row's role and content, so
+	// only the combined candidate count exposes the ambiguity.
+	require.NoError(t, local.ReplaceSessionMessages(
+		sessionID, []db.Message{
+			{
+				SessionID: sessionID, Ordinal: 0,
+				Role: "user", Content: "task",
+				SourceUUID: "pg-pin-coexist:1",
+			},
+			{
+				SessionID: sessionID, Ordinal: 1,
+				Role: "assistant", Content: "working",
+				SourceUUID: "2",
+			},
+			{
+				SessionID: sessionID, Ordinal: 2,
+				Role: "assistant", Content: "working",
+				SourceUUID: "pg-pin-coexist:2",
+			},
+		}), "ReplaceSessionMessages")
+	_, err = ps.Push(ctx, true, nil)
+	require.NoError(t, err, "Push new")
+
+	pins, err := store.ListPinnedMessages(ctx, sessionID, "")
+	require.NoError(t, err, "ListPinnedMessages")
+	assert.Empty(t, pins,
+		"bare and scoped uuid rows coexisting must drop the pin, "+
+			"not attach it to an arbitrary candidate")
+}

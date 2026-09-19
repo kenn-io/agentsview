@@ -556,7 +556,7 @@ func TestLoadActivityReportUsageCandidatesBoundsFilteredWorkingSet(t *testing.T)
 		})
 	}
 
-	candidates, _, err := d.loadActivityReportUsageCandidatesFrom(
+	candidates, _, _, err := d.loadActivityReportUsageCandidatesFrom(
 		ctx, d.getReader(), []string{"candidate"},
 		"2026-06-15T10:00:00Z", "2026-06-17T10:00:00Z", false)
 	require.NoError(t, err)

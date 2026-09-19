@@ -121,6 +121,7 @@ func newRootCommand() *cobra.Command {
 	root.AddCommand(newPGCommand())
 	root.AddCommand(newRawSyncCommand())
 	root.AddCommand(newDuckDBCommand())
+	root.AddCommand(newClickHouseCommand())
 	root.AddCommand(newEmbeddingsCommand())
 	root.AddCommand(newSessionCommand())
 	root.AddCommand(newCaptureCommand())

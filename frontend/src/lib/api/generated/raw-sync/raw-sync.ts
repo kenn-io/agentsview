@@ -12,6 +12,7 @@ import type {
   RawSyncUploadResponse,
   RawSyncUploadStartInputBody,
   RawsyncManifest,
+  RawsyncStatus,
 } from "../models";
 
 import { orvalFetch } from "../../runtime.ts";
@@ -89,6 +90,22 @@ export const postApiV1RawSyncObjectsMissing = async (
     method: "POST",
     headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
     body: JSON.stringify(rawSyncMissingObjectsInputBody),
+  });
+};
+
+export const getGetApiV1RawSyncStatusUrl = () => {
+  return `/api/v1/raw-sync/status`;
+};
+
+/**
+ * @summary Read hosted raw sync status
+ */
+export const getApiV1RawSyncStatus = async (
+  options?: Parameters<typeof orvalFetch>[1],
+): Promise<RawsyncStatus> => {
+  return orvalFetch<RawsyncStatus>(getGetApiV1RawSyncStatusUrl(), {
+    ...options,
+    method: "GET",
   });
 };
 

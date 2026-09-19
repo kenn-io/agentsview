@@ -363,7 +363,7 @@ func parseDevinSession(dbPath, rawSessionID, machine string) (*ParsedSession, []
 	)
 
 	steps.ForEach(func(_, step gjson.Result) bool {
-		msg, ok := parseDevinStep(step, stepOrdinal, model)
+		msg, ok := parseDevinStep(rawSessionID, step, stepOrdinal, model)
 		stepOrdinal++
 		if !ok {
 			return true
@@ -432,7 +432,7 @@ func parseDevinSessionFromMessageNodes(
 		userMsgCount int
 	)
 	for _, row := range chain {
-		msg, ok, err := parseDevinDBMessageNode(row, len(messages), model)
+		msg, ok, err := parseDevinDBMessageNode(rawSessionID, row, len(messages), model)
 		if err != nil {
 			return nil, nil, false, err
 		}
@@ -565,6 +565,7 @@ func listDevinMessageNodes(dbPath, rawSessionID string) ([]devinMessageNodeRow, 
 }
 
 func parseDevinDBMessageNode(
+	rawSessionID string,
 	row devinMessageNodeRow,
 	ordinal int,
 	model string,
@@ -637,12 +638,20 @@ func parseDevinDBMessageNode(
 		OutputTokens:     outputTokens,
 		HasContextTokens: hasContextTokens,
 		HasOutputTokens:  hasOutputTokens,
-		SourceUUID:       fmt.Sprintf("%d", row.NodeID),
+		SourceUUID:       devinNodeSourceUUID(rawSessionID, row.NodeID),
 	}
 	if row.ParentNodeID.Valid {
-		msg.SourceParentUUID = fmt.Sprintf("%d", row.ParentNodeID.Int64)
+		msg.SourceParentUUID = devinNodeSourceUUID(rawSessionID, row.ParentNodeID.Int64)
 	}
 	return msg, true, nil
+}
+
+// devinNodeSourceUUID scopes a message_nodes identity to its session. Devin's
+// node_id is a per-session sequence (UNIQUE(session_id, node_id)), so bare ids
+// collide across sessions in usage deduplication; prefixing the session id
+// makes the source identity global.
+func devinNodeSourceUUID(rawSessionID string, nodeID int64) string {
+	return fmt.Sprintf("%s:%d", rawSessionID, nodeID)
 }
 
 // devinTokenUsageFromNodeMetrics reads the per-assistant-message token counters
@@ -957,7 +966,7 @@ func positiveGJSONInt(value gjson.Result) (int, bool) {
 	return 0, false
 }
 
-func parseDevinStep(step gjson.Result, ordinal int, model string) (ParsedMessage, bool) {
+func parseDevinStep(rawSessionID string, step gjson.Result, ordinal int, model string) (ParsedMessage, bool) {
 	role, isSystem, ok := devinRoleForSource(step.Get("source").Str)
 	if !ok {
 		return ParsedMessage{}, false
@@ -1006,7 +1015,7 @@ func parseDevinStep(step gjson.Result, ordinal int, model string) (ParsedMessage
 		OutputTokens:     outputTokens,
 		HasContextTokens: hasContextTokens,
 		HasOutputTokens:  hasOutputTokens,
-		SourceUUID:       devinStepID(step.Get("step_id")),
+		SourceUUID:       devinStepSourceUUID(rawSessionID, step.Get("step_id")),
 	}, true
 }
 
@@ -1060,6 +1069,17 @@ func nonNegativeGJSONInt(value gjson.Result) (int, bool) {
 		return 0, true
 	}
 	return n, true
+}
+
+// devinStepSourceUUID scopes a transcript step_id the way
+// devinNodeSourceUUID scopes node_id: step_id is also a per-session sequence.
+// A step without a usable step_id yields "" rather than a bare prefix.
+func devinStepSourceUUID(rawSessionID string, stepID gjson.Result) string {
+	id := devinStepID(stepID)
+	if id == "" {
+		return ""
+	}
+	return rawSessionID + ":" + id
 }
 
 func devinStepID(stepID gjson.Result) string {

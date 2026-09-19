@@ -6,7 +6,7 @@
 // Note: this test lives in the frontend tree so vitest picks it up, but its
 // captured HTML artifacts are written to ../../.test-data18/ at the worktree
 // root for human inspection. Don't delete that directory.
-import { afterEach, describe, expect, it } from "vite-plus/test";
+import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { mount, tick, unmount } from "svelte";
 // @ts-ignore -- @types/node is not in devDependencies; harmless at runtime.
 import { mkdirSync, writeFileSync } from "node:fs";
@@ -116,22 +116,22 @@ describe("CallRow", () => {
     unmount(c);
   });
 
-  it("renders a live call with the live class on .cbar and .cd", async () => {
+  it("renders an open call with live elapsed time", async () => {
     const c = mount(CallRow, {
       target: document.body,
       props: {
-        call: makeCall({ duration_ms: 4000 }),
+        call: makeCall({ duration_ms: null }),
         barWidthPct: 60,
         isLive: true,
+        liveDurationMs: 4000,
       },
     });
     await tick();
     const html = document.body.innerHTML;
     dumpHtml("call-row-live.html", html);
 
-    expect(html).toMatch(hasClasses("cbar", "live"));
-    expect(html).toMatch(hasClasses("cd", "live"));
-    expect(html).toContain(m.call_row_running_duration({ duration: "4.0s" }));
+    expect(document.querySelector(".cd")?.textContent?.trim()).toBe("running 4.0s+");
+    expect(document.querySelector<HTMLElement>(".cbar")?.style.width).toBe("0%");
 
     unmount(c);
   });
@@ -194,35 +194,33 @@ describe("CallRow", () => {
     unmount(c);
   });
 
-  it("uses sharedDurationLabel when call has no duration", async () => {
+  it("renders missing call duration as unknown even with a shared duration", async () => {
     const c = mount(CallRow, {
       target: document.body,
       props: {
         call: makeCall({ duration_ms: null }),
         barWidthPct: 25,
-        isShared: true,
-        sharedDurationLabel: "≤2.5s",
       },
     });
     await tick();
     const html = document.body.innerHTML;
     dumpHtml("call-row-shared.html", html);
 
-    expect(html).toContain("≤2.5s");
-    expect(html).toMatch(hasClasses("cbar", "shared"));
+    expect(document.querySelector(".cd")?.textContent?.trim()).toBe("unknown");
+    expect(document.querySelector<HTMLElement>(".cbar")?.style.width).toBe("0%");
 
     unmount(c);
   });
 });
 
 describe("CallGroup", () => {
-  it("renders the rail, header chip, member rows, and forwards isLive to last row only", async () => {
+  it("preserves call counts and navigation with measured, missing and open durations", async () => {
     const calls: CallTiming[] = [
       makeCall({
         tool_use_id: "tu-1",
         tool_name: "Read",
         category: "Read",
-        duration_ms: null,
+        duration_ms: 1230,
         input_preview: "main.go",
       }),
       makeCall({
@@ -240,55 +238,44 @@ describe("CallGroup", () => {
         input_preview: "ls -la",
       }),
     ];
+    const onCallClick = vi.fn();
     const c = mount(CallGroup, {
       target: document.body,
       props: {
         calls,
-        groupDurationMs: 2500,
         barScalePct: () => 40,
-        headerBarPct: 70,
-        onCallClick: () => {},
+        onCallClick,
         onSubagentExpand: () => {},
         expandedSubagentIds: new Set<string>(),
         isLive: true,
+        liveDurationMs: 4000,
       },
     });
     await tick();
     const html = document.body.innerHTML;
     dumpHtml("call-group-live.html", html);
 
-    expect(html).toMatch(hasClasses("cgroup"));
-    expect(html).toMatch(hasClasses("cg-rail"));
-    expect(html).toMatch(hasClasses("cg-members"));
-    expect(html).toMatch(hasClasses("cg-header"));
-    expect(html).toMatch(hasClasses("cg-h-label"));
-    expect(html).toContain(
-      `${m.call_group_parallel_label()} · ${m.call_group_parallel_call_count({
-        count: 3,
-        countLabel: "3",
-      })}`,
-    );
-    expect(html).toMatch(hasClasses("cg-h-bar-wrap"));
-    expect(html).toMatch(hasClasses("cg-h-bar"));
-    expect(html).toContain("width: 70%");
-    expect(html).toMatch(hasClasses("cg-h-dur"));
-    expect(html).toContain("2.5s");
+    expect(document.querySelector(".cg-header")?.textContent?.trim()).toBe("parallel · 3 calls");
+    expect([...document.querySelectorAll(".cd")].map((el) => el.textContent?.trim())).toEqual([
+      "1.2s",
+      "unknown",
+      "running 4.0s+",
+    ]);
+    expect(
+      [...document.querySelectorAll<HTMLElement>(".cbar")].map((el) => el.style.width),
+    ).toEqual(["40%", "0%", "0%"]);
+    expect([...document.querySelectorAll(".ca")].map((el) => el.textContent)).toEqual([
+      "main.go",
+      "config.go",
+      "ls -la",
+    ]);
 
-    // The last row should be live; the first two should NOT be.
-    const liveOccurrences = html.match(/\bcbar\b[^"]*\blive\b/g) ?? [];
-    expect(liveOccurrences.length).toBe(1);
-
-    // Per the spec, .shared and .live are mutually exclusive encodings: the
-    // first two siblings render with .shared, the live last row drops it.
-    const sharedOccurrences = html.match(/\bcbar\b[^"]*\bshared\b/g) ?? [];
-    expect(sharedOccurrences.length).toBe(2);
-
-    // The live cbar must not also carry the .shared modifier.
-    expect(html).not.toMatch(/\bcbar\b[^"]*\bshared\b[^"]*\blive\b/);
-    expect(html).not.toMatch(/\bcbar\b[^"]*\blive\b[^"]*\bshared\b/);
-
-    // Shared duration label "≤2.5s" should appear on rows w/o duration.
-    expect(html).toContain("≤2.5s");
+    const rows = document.querySelectorAll<HTMLElement>('.call[role="button"]');
+    expect(rows).toHaveLength(3);
+    rows[0]!.click();
+    rows[1]!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    rows[2]!.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+    expect(onCallClick.mock.calls).toEqual([[calls[0]], [calls[1]], [calls[2]]]);
 
     unmount(c);
   });
@@ -313,9 +300,7 @@ describe("CallGroup", () => {
       target: document.body,
       props: {
         calls,
-        groupDurationMs: 1500,
         barScalePct: () => 30,
-        headerBarPct: 50,
         onCallClick: () => {},
         onSubagentExpand: () => {},
         expandedSubagentIds: new Set<string>(),
@@ -336,7 +321,7 @@ describe("CallGroup", () => {
     unmount(c);
   });
 
-  it("renders an em-dash header duration when groupDurationMs is null", async () => {
+  it("renders measured call durations and count when the group duration is unknown", async () => {
     const calls: CallTiming[] = [
       makeCall({ tool_use_id: "x1", duration_ms: 100 }),
       makeCall({ tool_use_id: "x2", duration_ms: 200 }),
@@ -345,9 +330,7 @@ describe("CallGroup", () => {
       target: document.body,
       props: {
         calls,
-        groupDurationMs: null,
         barScalePct: () => 10,
-        headerBarPct: 12,
         onCallClick: () => {},
         onSubagentExpand: () => {},
         expandedSubagentIds: new Set<string>(),
@@ -357,7 +340,14 @@ describe("CallGroup", () => {
     const html = document.body.innerHTML;
     dumpHtml("call-group-unknown.html", html);
 
-    expect(html).toContain("—");
+    expect(document.querySelector(".cg-header")?.textContent?.trim()).toBe("parallel · 2 calls");
+    expect([...document.querySelectorAll(".cd")].map((el) => el.textContent?.trim())).toEqual([
+      "100ms",
+      "200ms",
+    ]);
+    expect(
+      [...document.querySelectorAll<HTMLElement>(".cbar")].map((el) => el.style.width),
+    ).toEqual(["10%", "10%"]);
 
     unmount(c);
   });

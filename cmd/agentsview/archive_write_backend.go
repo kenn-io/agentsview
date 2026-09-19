@@ -12,6 +12,7 @@ import (
 	stdsync "sync"
 	"time"
 
+	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
@@ -49,6 +50,22 @@ type archiveWriteBackend interface {
 		ctx context.Context,
 		target pgTargetSelection,
 		cfg PGPushConfig,
+		projects []string,
+		excludeProjects []string,
+		debounce time.Duration,
+		interval time.Duration,
+	) error
+	ClickHousePush(
+		ctx context.Context,
+		target clickHouseTargetSelection,
+		cfg ClickHousePushConfig,
+		projects []string,
+		excludeProjects []string,
+	) (clickhouse.PushResult, error)
+	ClickHousePushWatch(
+		ctx context.Context,
+		target clickHouseTargetSelection,
+		cfg ClickHousePushConfig,
 		projects []string,
 		excludeProjects []string,
 		debounce time.Duration,
@@ -398,11 +415,11 @@ func resolveArchiveWriteBackend(
 		return nil, nil, err
 	}
 	return &localArchiveWriteBackend{
-		appCfg:   appCfg,
-		database: database,
-	}, func() {
-		closeWriteDB(database, writeLock)
-	}, nil
+			appCfg:   appCfg,
+			database: database,
+		}, func() {
+			closeWriteDB(database, writeLock)
+		}, nil
 }
 
 type daemonArchiveWriteBackend struct {
@@ -513,6 +530,113 @@ func (b daemonArchiveWriteBackend) PGPush(
 		},
 		onProgress,
 	)
+}
+
+func (b daemonArchiveWriteBackend) ClickHousePush(
+	ctx context.Context,
+	target clickHouseTargetSelection,
+	cfg ClickHousePushConfig,
+	projects []string,
+	excludeProjects []string,
+) (clickhouse.PushResult, error) {
+	onProgress, finish := daemonPushProgress(
+		"ClickHouse", newClickHousePushProgressPrinter(),
+	)
+	defer finish()
+	return postDaemonPush[clickhouse.PushResult](
+		ctx, b.tr, b.appCfg.AuthToken, daemonPushClickHouse,
+		apiclient.DaemonPushRequest{
+			Full:            cfg.Full,
+			Projects:        projects,
+			ExcludeProjects: excludeProjects,
+			Clickhouse: &apiclient.ConfigClickHouseConfig{
+				URL:             target.Config.URL,
+				Database:        target.Config.Database,
+				MachineName:     target.Config.MachineName,
+				AllowInsecure:   target.Config.AllowInsecure,
+				Projects:        target.Config.Projects,
+				ExcludeProjects: target.Config.ExcludeProjects,
+			},
+			WatchBatch:    generatedWatchBatch(cfg.WatchBatch),
+			WatchRecovery: generatedWatchRecovery(cfg.WatchRecovery),
+		},
+		onProgress,
+	)
+}
+
+func (b daemonArchiveWriteBackend) ClickHousePushWatch(
+	ctx context.Context,
+	target clickHouseTargetSelection,
+	cfg ClickHousePushConfig,
+	projects []string,
+	exclude []string,
+	debounce time.Duration,
+	interval time.Duration,
+) error {
+	if interval <= 0 {
+		interval = defaultWatchInterval
+	}
+	if debounce <= 0 {
+		debounce = defaultWatchDebounce
+	}
+	push := func(
+		pctx context.Context, reason pushReason, full bool,
+		batch *syncpkg.WatchBatch,
+	) error {
+		pushCfg := cfg
+		pushCfg.Full = full
+		pushCfg.WatchBatch = batch
+		pushCfg.WatchRecovery = watchRecoveryForBatch(b.appCfg, batch)
+		var res clickhouse.PushResult
+		var err error
+		backend := archiveWriteBackend(b)
+		cleanup := func() {}
+		if reason != reasonStartup {
+			backend, cleanup, err = resolveArchiveWriteBackend(pctx, b.appCfg)
+			if err != nil {
+				return err
+			}
+		}
+		defer cleanup()
+		res, err = backend.ClickHousePush(
+			pctx, target, pushCfg, projects, exclude,
+		)
+		if err != nil {
+			return err
+		}
+		return completeClickHouseWatchPush(res, reason)
+	}
+	loop, stopLoop := newArchivePushLoop(
+		b.watchHooks, "clickhouse watch", debounce, interval,
+		func(c context.Context, r pushReason, batch *syncpkg.WatchBatch) error {
+			return push(c, r, false, batch)
+		},
+	)
+	defer stopLoop()
+
+	stopWatcher, openDispatch, unwatchedDirs := startArchivePushWatcher(
+		b.watchHooks, b.appCfg, nil,
+		func(callbackCtx context.Context, batch syncpkg.WatchBatch) error {
+			return notifyPushForWatchBatchWithConfig(
+				callbackCtx, loop, b.appCfg, batch,
+			)
+		},
+		syncpkg.WatcherOptions{OnCoverageDegraded: loop.NotifyCoverageDegraded},
+	)
+	defer stopWatcher()
+	if len(unwatchedDirs) > 0 {
+		log.Printf(
+			"clickhouse watch: %d root(s) not watched; relying on the %s floor for coverage",
+			len(unwatchedDirs), interval,
+		)
+	}
+	initialErr := push(ctx, reasonStartup, cfg.Full, nil)
+	if initialErr != nil {
+		log.Printf("clickhouse watch: initial daemon push failed: %v", initialErr)
+	}
+	completePushWatchStartup(ctx, initialErr, loop, openDispatch)
+	loop.Run(ctx)
+	return nil
 }
 
 func (b daemonArchiveWriteBackend) DuckDBPush(
@@ -857,6 +981,84 @@ func (b *localArchiveWriteBackend) PGPush(
 	return result, nil
 }
 
+func (b *localArchiveWriteBackend) ClickHousePush(
+	ctx context.Context,
+	target clickHouseTargetSelection,
+	cfg ClickHousePushConfig,
+	projects []string,
+	excludeProjects []string,
+) (clickhouse.PushResult, error) {
+	didResync, err := runLocalSyncAuthoritative(
+		ctx, b.appCfg, b.database, cfg.Full,
+	)
+	if err != nil {
+		return clickhouse.PushResult{}, err
+	}
+	if err := ctx.Err(); err != nil {
+		return clickhouse.PushResult{}, err
+	}
+	if err := b.ensureCurrentPricing(ctx); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return clickhouse.PushResult{}, ctxErr
+		}
+		log.Printf("warning: pricing refresh failed: %v", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return clickhouse.PushResult{}, err
+	}
+	forceFull := cfg.Full || didResync
+	return b.clickHouseMirrorPush(ctx, target, projects, excludeProjects, forceFull)
+}
+
+func (b *localArchiveWriteBackend) clickHouseMirrorPush(
+	ctx context.Context,
+	target clickHouseTargetSelection,
+	projects, excludeProjects []string,
+	forceFull bool,
+) (clickhouse.PushResult, error) {
+	if err := clickhouse.CheckTransportSecurity(
+		target.Config.URL, target.Config.AllowInsecure,
+	); err != nil {
+		return clickhouse.PushResult{}, err
+	}
+
+	fmt.Println("Connecting to ClickHouse...")
+	connectStart := time.Now()
+	applyClassifierConfig(b.appCfg)
+	syncer, err := clickhouse.New(
+		ctx, clickHouseTarget(target.Config), b.database,
+		target.Config.MachineName,
+		clickhouse.SyncOptions{Projects: projects, ExcludeProjects: excludeProjects},
+	)
+	if err != nil {
+		return clickhouse.PushResult{}, err
+	}
+	defer syncer.Close()
+	fmt.Printf(
+		"Connected to ClickHouse in %s\n",
+		time.Since(connectStart).Round(time.Millisecond),
+	)
+
+	fmt.Println("Preparing ClickHouse schema...")
+	schemaStart := time.Now()
+	if err := syncer.EnsureSchema(ctx); err != nil {
+		return clickhouse.PushResult{}, fmt.Errorf("schema: %w", err)
+	}
+	fmt.Printf(
+		"ClickHouse schema ready in %s\n",
+		time.Since(schemaStart).Round(time.Millisecond),
+	)
+	fmt.Println("Starting ClickHouse push...")
+	result, err := syncer.PushWithOptions(ctx, clickhouse.PushOptions{
+		Full: forceFull,
+	}, newClickHousePushProgressPrinter())
+	fmt.Print("\r\033[K")
+	if err != nil {
+		return clickhouse.PushResult{}, err
+	}
+	return result, nil
+}
+
 func (b *localArchiveWriteBackend) DuckDBPush(
 	ctx context.Context,
 	duckCfg config.DuckDBConfig,
@@ -1088,6 +1290,132 @@ func logDuckDBWatchPushResult(res duckdbsync.PushResult, reason pushReason) {
 		"duckdb watch: pushed %d sessions, %d messages (%s)",
 		res.SessionsPushed, res.MessagesPushed, reason,
 	)
+}
+
+func (b *localArchiveWriteBackend) newClickHousePusher(
+	engine *syncpkg.Engine,
+	target clickHouseTargetSelection,
+	projects, exclude []string,
+) *clickHousePusher {
+	return &clickHousePusher{
+		localSync: func(c context.Context) error {
+			stats := engine.SyncAll(c, nil)
+			if err := c.Err(); err != nil {
+				return err
+			}
+			if !stats.AuthoritativeDiscoveryComplete() {
+				return errors.New("local sync discovery incomplete")
+			}
+			if !stats.ProcessingComplete() {
+				return errors.New("local sync processing incomplete")
+			}
+			engine.FlushSignals()
+			return nil
+		},
+		ensurePricing: b.ensureCurrentPricing,
+		mirrorPush: func(c context.Context, forceFull bool) (
+			clickhouse.PushResult, error,
+		) {
+			return b.clickHouseMirrorPush(c, target, projects, exclude, forceFull)
+		},
+	}
+}
+
+func (b *localArchiveWriteBackend) ClickHousePushWatch(
+	ctx context.Context,
+	target clickHouseTargetSelection,
+	cfg ClickHousePushConfig,
+	projects []string,
+	exclude []string,
+	debounce time.Duration,
+	interval time.Duration,
+) error {
+	if interval <= 0 {
+		interval = defaultWatchInterval
+	}
+	if debounce <= 0 {
+		debounce = defaultWatchDebounce
+	}
+	for _, def := range parser.Registry {
+		if !b.appCfg.IsUserConfigured(def.Type) {
+			continue
+		}
+		warnMissingDirs(b.appCfg.ResolveDirs(def.Type), string(def.Type))
+	}
+	cleanResyncTemp(b.appCfg.DBPath)
+
+	engine := syncpkg.NewEngine(b.database, syncpkg.EngineConfig{
+		AgentDirs:               b.appCfg.AgentDirs,
+		SourceMachines:          b.appCfg.SourceMachines,
+		ProviderMetadata:        b.appCfg.ProviderMetadata,
+		DisabledAgents:          b.appCfg.DisabledAgents,
+		IncludeCwdPrefixes:      b.appCfg.SyncIncludeCwdPrefixes,
+		ScanProtectedPaths:      b.appCfg.ScanProtectedPaths,
+		Machine:                 b.appCfg.InstallationID,
+		BlockedResultCategories: b.appCfg.ResultContentBlockedCategories,
+		ArchiveContent:          b.appCfg.ArchiveContent,
+	})
+	defer engine.Close()
+
+	pusher := b.newClickHousePusher(engine, target, projects, exclude)
+	pusher.scopedSync = func(
+		c context.Context,
+		batch syncpkg.WatchBatch,
+		recovery *syncpkg.WatchRecoveryScope,
+		work func() error,
+	) error {
+		_, err := engine.SyncWatchBatchThenRun(c, batch, recovery, work)
+		return err
+	}
+
+	loop, stopLoop := newArchivePushLoop(
+		b.watchHooks,
+		"clickhouse watch", debounce, interval,
+		func(c context.Context, r pushReason, batch *syncpkg.WatchBatch) error {
+			return pusher.pushBatch(
+				c, r, false, batch, watchRecoveryForBatch(b.appCfg, batch),
+			)
+		},
+	)
+	defer stopLoop()
+
+	poller := newArchivePushUnwatchedPoller(ctx, b.watchHooks, engine)
+	defer poller.Stop()
+
+	stopWatcher, openDispatch, unwatchedDirs := startArchivePushWatcher(
+		b.watchHooks, b.appCfg, engine,
+		archivePushWatchBatchCallback(b.appCfg, loop),
+		archivePushWatchWatcherOptions(loop, poller),
+	)
+	defer stopWatcher()
+	if len(unwatchedDirs) > 0 {
+		log.Printf(
+			"clickhouse watch: %d root(s) not watched; polling every %s",
+			len(unwatchedDirs), unwatchedPollInterval,
+		)
+	}
+
+	startupSync := runPGWatchStartupSync
+	if b.watchHooks != nil && b.watchHooks.duckDBStartupSync != nil {
+		startupSync = b.watchHooks.duckDBStartupSync
+	}
+	didResync, startupErr := startupSync(ctx, engine, cfg.Full)
+	if startupErr != nil && errors.Is(startupErr, context.Canceled) {
+		return nil
+	}
+	initialErr := startupErr
+	if initialErr == nil {
+		initialErr = pusher.push(ctx, reasonStartup, didResync)
+	}
+	if initialErr != nil {
+		if errors.Is(initialErr, context.Canceled) && ctx.Err() != nil {
+			return nil
+		}
+		log.Printf("clickhouse watch: initial push failed: %v", initialErr)
+	}
+	completePushWatchStartup(ctx, initialErr, loop, openDispatch)
+	loop.Run(ctx)
+	return nil
 }
 
 func (b *localArchiveWriteBackend) PGPushWatch(

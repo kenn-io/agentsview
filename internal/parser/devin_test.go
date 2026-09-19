@@ -273,7 +273,7 @@ func TestParseDevinSession(t *testing.T) {
 
 	assert.Equal(t, RoleSystem, msgs[0].Role)
 	assert.True(t, msgs[0].IsSystem)
-	assert.Equal(t, "100", msgs[0].SourceUUID)
+	assert.Equal(t, "session-123:100", msgs[0].SourceUUID)
 
 	assert.Equal(t, RoleUser, msgs[1].Role)
 	assert.False(t, msgs[1].IsSystem)
@@ -702,6 +702,78 @@ func TestParseDevinSessionMessageNodesPreferGenerationModel(t *testing.T) {
 	assert.Equal(t, "adaptive", msgs[0].Model)
 	// Assistant node's per-message generation_model wins over the session alias.
 	assert.Equal(t, "claude-opus-4-6-thinking", msgs[1].Model)
+}
+
+// Devin node_id is a per-session sequence (UNIQUE(session_id, node_id)), so
+// two sessions emit identical bare ids. Source identities must carry the
+// session prefix or cross-session usage deduplication would treat the second
+// session's messages as repeats of the first.
+func TestDevinMessageNodeSourceUUIDIsSessionScoped(t *testing.T) {
+	fixture := newDevinTestFixture(t,
+		devinSessionRow{
+			ID:               "sess-a",
+			Title:            "Session A",
+			WorkingDirectory: "/tmp/scope-a",
+			Model:            "model-a",
+			CreatedAt:        new(int64(1704103200)),
+			LastActivityAt:   new(int64(1704103209)),
+			MainChainID:      new(int64(2)),
+		},
+		devinSessionRow{
+			ID:               "sess-b",
+			Title:            "Session B",
+			WorkingDirectory: "/tmp/scope-b",
+			Model:            "model-b",
+			CreatedAt:        new(int64(1704103300)),
+			LastActivityAt:   new(int64(1704103309)),
+			MainChainID:      new(int64(2)),
+		},
+	)
+	fixture.insertMessageNodes(t,
+		devinSyntheticMessageNodeRow{SessionID: "sess-a", NodeID: 1, ChatMessage: `{"role":"user","content":"question a"}`, CreatedAt: 1704103201},
+		devinSyntheticMessageNodeRow{SessionID: "sess-a", NodeID: 2, ParentNodeID: new(int64(1)), ChatMessage: `{"role":"assistant","content":"answer a","metadata":{"metrics":{"input_tokens":4,"output_tokens":6}}}`, CreatedAt: 1704103205},
+		devinSyntheticMessageNodeRow{SessionID: "sess-b", NodeID: 1, ChatMessage: `{"role":"user","content":"question b"}`, CreatedAt: 1704103301},
+		devinSyntheticMessageNodeRow{SessionID: "sess-b", NodeID: 2, ParentNodeID: new(int64(1)), ChatMessage: `{"role":"assistant","content":"answer b","metadata":{"metrics":{"input_tokens":4,"output_tokens":6}}}`, CreatedAt: 1704103305},
+	)
+
+	_, msgsA, err := parseDevinSession(fixture.DBPath, "sess-a", "local")
+	require.NoError(t, err)
+	require.Len(t, msgsA, 2)
+	assert.Equal(t, "sess-a:1", msgsA[0].SourceUUID)
+	assert.Equal(t, "sess-a:2", msgsA[1].SourceUUID)
+	assert.Equal(t, "sess-a:1", msgsA[1].SourceParentUUID)
+
+	_, msgsB, err := parseDevinSession(fixture.DBPath, "sess-b", "local")
+	require.NoError(t, err)
+	require.Len(t, msgsB, 2)
+	assert.Equal(t, "sess-b:1", msgsB[0].SourceUUID)
+	assert.Equal(t, "sess-b:2", msgsB[1].SourceUUID)
+	assert.Equal(t, "sess-b:1", msgsB[1].SourceParentUUID)
+
+	assert.NotEqual(t, msgsA[1].SourceUUID, msgsB[1].SourceUUID)
+}
+
+func TestDevinTranscriptStepSourceUUIDIsSessionScoped(t *testing.T) {
+	const sessionID = "sess-step-uuid"
+	dbPath, _ := newDevinSessionFixture(t, devinSessionRow{
+		ID:               sessionID,
+		Title:            "Step source ids",
+		WorkingDirectory: "/tmp/step-uuid",
+		Model:            "model",
+		CreatedAt:        new(int64(1704103200)),
+		LastActivityAt:   new(int64(1704103209)),
+	}, `{
+		"steps":[
+			{"step_id":1,"source":"user","timestamp":"2024-01-01T10:00:01Z","message":"question"},
+			{"source":"agent","timestamp":"2024-01-01T10:00:05Z","message":"answer"}
+		]
+	}`)
+
+	_, msgs, err := parseDevinSession(dbPath, sessionID, "local")
+	require.NoError(t, err)
+	require.Len(t, msgs, 2)
+	assert.Equal(t, "sess-step-uuid:1", msgs[0].SourceUUID)
+	assert.Empty(t, msgs[1].SourceUUID)
 }
 
 func TestParseDevinSessionMessageNodesDanglingMainChainFallsBackToAllNodes(t *testing.T) {

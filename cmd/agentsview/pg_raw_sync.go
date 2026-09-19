@@ -65,7 +65,8 @@ func preparePGRawSyncServices(
 		return nil, nil, errors.Join(err, custody.Close())
 	}
 	return combinePGRawSyncOptions(
-			server.WithRawSyncServices(auth, custody), uploadOption,
+			server.WithRawSyncServices(auth, custody),
+			server.WithRawSyncStatus(metadata), uploadOption,
 		), func() error {
 			return errors.Join(closeUploads(), custody.Close())
 		}, nil

@@ -1,7 +1,7 @@
 # Storage Rules
 
-Read this file before changing SQLite, PostgreSQL, CockroachDB, DuckDB, archive
-resync, or storage queries.
+Read this file before changing SQLite, PostgreSQL, CockroachDB, DuckDB,
+ClickHouse, archive resync, or storage queries.
 
 ## SQLite Archive
 
@@ -322,6 +322,29 @@ to recover the text.
   to a remote DuckDB service.
 - Replace a file only after identifying it as an agentsview DuckDB mirror. Fail
   closed for unknown files.
+
+## ClickHouse Mirror
+
+- SQLite is the archive. `clickhouse push` writes ClickHouse. `clickhouse serve`
+  queries ClickHouse for the HTTP API and UI. Dashboard writes (rename, trash,
+  insights, stars, pins) return `db.ErrReadOnly` and stay on SQLite. Never
+  delete, drop, truncate, or recreate SQLite to handle a ClickHouse schema or
+  data-version change. Design decisions live in
+  [ClickHouse push and serve](../internal/clickhouse-mirror.md).
+- Keep push order per batch: insert dependents, then
+  `DELETE ... WHERE session_id IN (...) AND push_version < v`, then session
+  rows. Store every ClickHouse push cursor and version in the mirror's
+  `sync_metadata`. Never store ClickHouse sync state in SQLite.
+- Every mirrored table is `ReplacingMergeTree(push_version)`. Every connection
+  sets `final = 1`. Do not write `FINAL` in query text. `OpenForAdmin`
+  bootstraps through the server `default` database; do not ping a DSN-path
+  database that does not exist yet.
+- Design ClickHouse SQL for MergeTree. Do not paste PostgreSQL or DuckDB queries
+  unchanged. Orphan filters must treat `parent_session_id IS NULL` as an
+  orphan (`NULL NOT IN (...)` is unknown).
+- Tests use the `chtest` build tag. Run `make test-clickhouse` against a
+  dedicated test server (`TEST_CLICKHOUSE_URL` or the compose service). Do not
+  point those tests at a live mirror.
 
 ## PostgreSQL Integration Tests
 

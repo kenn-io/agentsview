@@ -644,6 +644,42 @@ add an archived or maintained mirror without replacing the original identity.
   unmarked legacy notification rows. Transcript-only archive copies apply the
   same pre-version-100 user-row removal as Codex.
 
+## Augure Code (`augure-code`)
+
+- **Format:** Codex-compatible rollout JSONL under a dated `YYYY/MM/DD` tree at
+  `~/.augure/sessions` (one home-relative root on all platforms). Newer rollouts
+  add a top-level `ordinal` on every record; older files omit it. The
+  `event_msg:thread_settings_applied` record carries the applied
+  `model`/`reasoning_effort`/provider id, while `turn_context` remains the
+  parser's model source. No `archived_sessions/` directory, `history.jsonl`, or
+  `session_index.jsonl` sidecar has been observed under `~/.augure`.
+- **Evidence:** `no-public-source`.
+- **Upstream:** Augure publishes no producer source; https://augureai.ca was
+  checked 2026-09-11 and offers no public repo. The equivalence to Codex rests
+  on local Augure CLI 1.0.2-1.0.6 rollouts with `originator: "codex-tui"`,
+  `rate_limits.limit_id: "codex"`, Codex field shapes throughout
+  (`session_meta`, `response_item`, `event_msg:token_count`, `turn_context`),
+  plus Augure's own `legacy_migration.json` documenting a one-time import from
+  a stock `~/.codex` layout, which identifies it as a fork of the evidenced
+  codex-rs recorder rather than an independent format. A de-identified rollout
+  is retained as a fixture. The companion `~/.augure/state_5.sqlite` and
+  `thread_history_1.sqlite` projection databases are redundant for parsing and
+  are deliberately not consumed; their `_sqlx_migrations` bookkeeping tables
+  are not format markers.
+- **Usage and cost:** `token_count` records carry the Codex fields, so
+  normalization follows the Codex entry. Models observed are proprietary Augure
+  slugs (`ossington-5`, `ossington-4-1`, `rosedale-1`) absent from the pricing
+  catalog, so their events price as unpriced until catalog coverage appears.
+- **Agentsview:** `internal/parser/augure.go` relabels the shared Codex parser
+  (`internal/parser/codex.go`, `internal/parser/codex_provider.go`) onto the
+  `augure-code:` ID namespace, and `internal/sync` gates the format-shaped
+  branches on `isCodexFormatAgent`. The `session_index.jsonl` and S3 branches
+  stay Codex-only because Augure Code writes no index file and has no archive
+  layout.
+- **Archive projection (2026-09-13):** Augure Code sessions share the Codex
+  unmarked-notification shape, so the archive curation user-row removal that
+  covers Codex and TraeX also covers `augure-code`.
+
 ## GitHub Copilot CLI (`copilot`)
 
 - **Format:** Flat session JSONL or a session directory containing
@@ -841,6 +877,24 @@ add an archived or maintained mirror without replacing the original identity.
   supplies it. Agentsview treats only an explicit true value in a valid,
   session-associated file as durable automation evidence; file presence, a
   missing field, or a missing file does not classify a session as automated.
+
+- **Subagent attribution (reverified 2026-09-18):** Grok Build stores each
+  `spawn_subagent` child as a sibling session directory in the normal sessions
+  tree. The parent also writes `subagents/<id>/meta.json` with
+  `parent_session_id`, `child_session_id` (equal to `subagent_id`), and
+  optional `resumed_from`. The child is not nested under `subagents/`. A
+  worktree-isolated child can land in a different encoded cwd group;
+  `meta.json` still lives under the parent. Child `summary.json` uses
+  `session_kind` values `subagent`, `subagent_resume`, or `subagent_fork`.
+  `summary.json` `parent_session_id` remains the source session for a fork or
+  restore, including resume-from copies that point at the previous child
+  rather than the spawning parent. Agentsview parents a child from the parent's
+  `meta.json` as `relationship_type = 'subagent'` with parent id
+  `grok:<parent-id>`, and keeps fork or restore sessions that only have
+  `parent_session_id` as `fork`. Spawn tool results that include `subagent_id`
+  attach that child on the parent's `spawn_subagent` call. Reverified against
+  the pinned session guide (`17-sessions.md`) and the `SubagentMeta` writer in
+  `xai-grok-shell` at the commit above.
 
 - **Agentsview:** `internal/parser/grok.go`, `internal/parser/grok_provider.go`,
   colocated tests, and the sanitized upstream-generated fixtures in
@@ -1781,8 +1835,8 @@ schemas keep their existing ordering behavior.
   parent as forks. Because the default filename does not contain the header
   UUID, identity lookup that arrives with only a bare header UUID and no
   stored path or fingerprint hint scans discovered session headers after the
-  filename and directory lookups miss. Data version 109 reparses stored
-  native Pi sessions to repair lineage edges and fork classification.
+  filename and directory lookups miss. Data version 109 reparses stored native
+  Pi sessions to repair lineage edges and fork classification.
 
 ## Prime Agent (`prime-agent`)
 
@@ -1913,29 +1967,29 @@ schemas keep their existing ordering behavior.
 ## DeepSeek Harness (`deepseek-harness`)
 
 - **Format:** Released session generations `0` through `3` are stored as JSONL
-  under `<sessions-root>/<project>/<encoded-session-id>/`. Generation zero uses
-  the suffix-only `session.jsonl` (or the default checksummed multi-frame zstd
-  encoding at `session.jsonl.zstd`); generation `N > 0` carries a lowercase
-  numeric component at `session.vN.jsonl[.zstd]`. One session directory can
-  retain several immutable generations; the numerically newest canonical
-  generation is current. The immutable header records session identity, cwd,
-  creation time, seed lineage, delegation origin, and agent preset. Event rows
-  carry a contiguous `seq`. Generations 0 and 1 may encode runs of assistant
-  deltas with the `text-chunks`, `reasoning-chunks`, and `tool-call-chunks`
-  packed storage rows, and their `sourceEventSeqs` uses non-negative safe
-  integers and inclusive `[start, end]` ranges, mixed entry by entry:
-  `[[138, 144]]` represents seven sequences. This provenance compression was
-  introduced in upstream commit
+  under `<sessions-root>/<project>/<encoded-session-id>/`. Generation zero
+  uses the suffix-only `session.jsonl` (or the default checksummed multi-frame
+  zstd encoding at `session.jsonl.zstd`); generation `N > 0` carries a
+  lowercase numeric component at `session.vN.jsonl[.zstd]`. One session
+  directory can retain several immutable generations; the numerically newest
+  canonical generation is current. The immutable header records session
+  identity, cwd, creation time, seed lineage, delegation origin, and agent
+  preset. Event rows carry a contiguous `seq`. Generations 0 and 1 may encode
+  runs of assistant deltas with the `text-chunks`, `reasoning-chunks`, and
+  `tool-call-chunks` packed storage rows, and their `sourceEventSeqs` uses
+  non-negative safe integers and inclusive `[start, end]` ranges, mixed entry
+  by entry: `[[138, 144]]` represents seven sequences. This provenance
+  compression was introduced in upstream commit
   [df76bc6](https://github.com/deepseek-ai/deepseek-harness/commit/df76bc695b4bdff093369ab22a506cd37ca087c1).
   Generation 2 embeds the timed assistant stream in `assistant/message` and
   records settled non-surface attempts as `assistant/attempt`; generation 3
   additionally promotes the system prompt to a `system/message` surface event,
   renames the PTC dispatch tags to `tool/ptc-dispatch[-start]`, and spells
   replacement coordinates as `startSeq`/`endSeq`. Session IDs are arbitrary
-  non-empty strings and are injectively encoded before use as a directory name.
-  A sessions root belongs to one physical encoding; the upstream backend
-  rejects an opposite-suffix artifact rather than providing mixed-root fallback
-  or migration.
+  non-empty strings and are injectively encoded before use as a directory
+  name. A sessions root belongs to one physical encoding; the upstream backend
+  rejects an opposite-suffix artifact rather than providing mixed-root
+  fallback or migration.
 
 - **Evidence:** `source`.
 
@@ -1983,31 +2037,31 @@ schemas keep their existing ordering behavior.
 
 - **Agentsview:** `internal/parser/deepseek_harness.go`,
   `internal/parser/deepseek_harness_format.go`, and
-  `internal/parser/deepseek_harness_provider.go`. Released generations 0 through
-  3 are accepted, and discovery prefers the newest canonical generation in a
-  session directory. Only events at or after a child's inherited cut contribute
-  transcript rows and usage, while the full log validates event and turn/step
-  structure and folds the latest title and agent preset. Surface replacements
-  are excluded from the human transcript; a chunk-only generation-0 or
-  generation-1 live response is positioned from its first assistant chunk and
-  reconstructed until a final assistant message replaces it on the next
-  authoritative parse. Generation-2 and later messages read embedded stream
-  usage and finish reasons when the outer data omits them, and generation-3
-  system messages join the transcript as system rows. Agentsview reversibly
-  escapes `%` and the reserved remote-host separator `~` in canonical session
-  IDs. Explicit raw-ID lookups remain literal; canonical escaping is decoded
-  only when lookup starts from a full session ID. Per-response usage events are
-  the sole analytics rows, while messages retain explicit context/output token
-  fields without duplicating the raw Harness usage blob into `token_usage`.
-  Plain and zstd artifacts in one session directory are treated as one logical
-  source and rejected while both exist; a change maps directly to the surviving
-  sibling once that conflict is removed. The version-0 inventory accepts all
-  released event names, including `model/selection`, delivery tracking, subagent
-  model policy, and team events; those metadata events do not add transcript
-  rows. The version-0 provenance validator accepts mixed safe-integer and
-  inclusive-range entries without allocating an expanded list. Model-selection
-  reasoning effort is not imported. The optional Harness SQLite persistence
-  backend is not supported.
+  `internal/parser/deepseek_harness_provider.go`. Released generations 0
+  through 3 are accepted, and discovery prefers the newest canonical
+  generation in a session directory. Only events at or after a child's
+  inherited cut contribute transcript rows and usage, while the full log
+  validates event and turn/step structure and folds the latest title and agent
+  preset. Surface replacements are excluded from the human transcript; a
+  chunk-only generation-0 or generation-1 live response is positioned from its
+  first assistant chunk and reconstructed until a final assistant message
+  replaces it on the next authoritative parse. Generation-2 and later messages
+  read embedded stream usage and finish reasons when the outer data omits
+  them, and generation-3 system messages join the transcript as system rows.
+  Agentsview reversibly escapes `%` and the reserved remote-host separator `~`
+  in canonical session IDs. Explicit raw-ID lookups remain literal; canonical
+  escaping is decoded only when lookup starts from a full session ID.
+  Per-response usage events are the sole analytics rows, while messages retain
+  explicit context/output token fields without duplicating the raw Harness
+  usage blob into `token_usage`. Plain and zstd artifacts in one session
+  directory are treated as one logical source and rejected while both exist; a
+  change maps directly to the surviving sibling once that conflict is removed.
+  The version-0 inventory accepts all released event names, including
+  `model/selection`, delivery tracking, subagent model policy, and team
+  events; those metadata events do not add transcript rows. The version-0
+  provenance validator accepts mixed safe-integer and inclusive-range entries
+  without allocating an expanded list. Model-selection reasoning effort is not
+  imported. The optional Harness SQLite persistence backend is not supported.
 
 - **Later formats:** Agentsview reads the on-disk generations directly and does
   not run upstream's v0-to-v3 migrations. Generation-1 rows keep the version-0
@@ -2337,6 +2391,11 @@ schemas keep their existing ordering behavior.
   match (see `EffortTierBaseModel` in `internal/pricing/normalize.go`). Truly
   opaque names (`adaptive`, `compactor`, `MODEL_PRIVATE_*`, Devin codenames
   such as `claude-5-fable-*`) have no catalog entry and remain unpriced.
+  `message_nodes.node_id` and transcript `step_id` are per-session sequences
+  (`UNIQUE(session_id, node_id)` in the Devin DDL), so message source
+  identities are prefixed with the session id to stay unique under
+  cross-session usage deduplication. Verified against a live Devin CLI
+  database 2026-09-17.
 - **Agentsview:** `internal/parser/devin.go` and
   `internal/parser/devin_provider.go`; metric aliases are implementation
   evidence because the upstream schema is unavailable.
@@ -2736,20 +2795,25 @@ schemas keep their existing ordering behavior.
 
 ## CodeBuddy (`codebuddy`)
 
-- **Format:** Hierarchical session manifest (`index.json`) and individual message
-  files (`messages/*.json`). Workspace metadata lives in the parent
+- **Format:** Hierarchical session manifest (`index.json`) and individual
+  message files (`messages/*.json`). Workspace metadata lives in the parent
   `index.json`. Message and `extra` envelopes accept JSON objects or encoded
   JSON strings. Source text blocks are concatenated; working directories are
   extracted independently from the user envelope. Explicit `thinking` and
   `reasoning` content blocks are retained as thinking text.
 - **Evidence:** `no-public-source`.
-- **Upstream:** Tencent CodeBuddy's product site and public repositories were searched 2026-09-17; no authoritative persistence producer or versioned schema is publicly published. Storage format and accounting semantics were verified against local Tencent CodeBuddy IDE and CodeBuddyExtension session data under `CodeBuddyExtension/Data/history`.
+- **Upstream:** Tencent CodeBuddy's product site and public repositories were
+  searched 2026-09-17; no authoritative persistence producer or versioned
+  schema is publicly published. Storage format and accounting semantics were
+  verified against local Tencent CodeBuddy IDE and CodeBuddyExtension session
+  data under `CodeBuddyExtension/Data/history`.
 - **Usage and cost:** The parser interprets `lastStepInputTokens` as inclusive
   input, subtracts `lastStepCachedInputTokens` for uncached input (floored at
   zero), and preserves `lastStepOutputTokens` and
-  `statsSnapshot.thinkingTokens` separately. Missing, null, or negative counters
-  do not establish known usage; explicit zero does. Cache-only records do not
-  establish a complete context size. Monetary cost is catalog-derived.
+  `statsSnapshot.thinkingTokens` separately. Missing, null, or negative
+  counters do not establish known usage; explicit zero does. Cache-only
+  records do not establish a complete context size. Monetary cost is
+  catalog-derived.
 - **Verification boundary:** Parser behavior was reverified on 2026-09-17 with
   synthetic regression fixtures in `internal/parser/codebuddy_test.go`,
   including thinking-only and usage-only messages, composite fingerprints,
@@ -2760,10 +2824,10 @@ schemas keep their existing ordering behavior.
   manifests with no readable messages produce an empty session replacement,
   clearing previously stored messages. Invalid JSON or a missing/non-array
   `messages` field is a parse error and preserves the archive. Integration
-  fixtures cover empty manifests, deleted or invalid message files, and invalid
-  manifests after an initial import. These
-  fixtures do not independently establish producer counter semantics. The
-  original local artifact observation above has no pinned producer version; whether thinking
+  fixtures cover empty manifests, deleted or invalid message files, and
+  invalid manifests after an initial import. These fixtures do not
+  independently establish producer counter semantics. The original local
+  artifact observation above has no pinned producer version; whether thinking
   snapshots are cumulative and which releases include cached input in the input
   counter remain unverified. Do not treat this as audited billing parity.
 - **Agentsview:** `internal/parser/codebuddy.go` and

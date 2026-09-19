@@ -47,6 +47,12 @@ jobs:
           make sqlite-vec-header
           echo "CGO_CFLAGS=-O2 -g -I$GITHUB_WORKSPACE/.sqlite-include" >> "$GITHUB_ENV"
 
+      - name: Prepare SQLite header
+        if: runner.os == 'Linux'
+        run: |
+          make sqlite-vec-header
+          echo "CGO_CFLAGS=-O2 -g -I$GITHUB_WORKSPACE/.sqlite-include" >> "$GITHUB_ENV"
+
       - name: Install lint tools
         run: |
           make lint-tools
@@ -604,6 +610,19 @@ jobs:
           --health-interval 2s
           --health-timeout 5s
           --health-retries 10
+      clickhouse:
+        image: clickhouse/clickhouse-server:25.8
+        env:
+          CLICKHOUSE_SKIP_USER_SETUP: "1"
+        ports:
+          - 18123:8123
+          - 19000:9000
+        options: >-
+          --tmpfs /var/lib/clickhouse
+          --health-cmd "clickhouse-client --query 'SELECT 1'"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
@@ -628,6 +647,12 @@ jobs:
         env:
           CGO_ENABLED: "1"
           TEST_PG_URL: postgres://agentsview_test:agentsview_test_password@localhost:5433/agentsview_test?sslmode=disable
+
+      - name: Run ClickHouse integration tests
+        run: make test-clickhouse-ci
+        env:
+          CGO_ENABLED: "1"
+          TEST_CLICKHOUSE_URL: clickhouse://localhost:19000/default
 
       - name: Build SSH test container
         run: bash scripts/retry.sh 3 10 docker build -t agentsview-sshd -f testdata/ssh/Dockerfile .

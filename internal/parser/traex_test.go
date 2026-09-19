@@ -71,7 +71,7 @@ func TestRelabelCodexResultAsTraeX(t *testing.T) {
 		}},
 	}}
 
-	relabelCodexResultAsTraeX(sess, msgs)
+	relabelCodexResultAsTraeX(sess, msgs, nil)
 
 	assert.Equal(t, "traex:child", sess.ID)
 	assert.Equal(t, "traex:parent", sess.ParentSessionID)
@@ -99,7 +99,7 @@ func TestRelabelCodexResultAsTraeXIncremental(t *testing.T) {
 		}},
 	}}
 	require.NotPanics(t, func() {
-		relabelCodexResultAsTraeX(nil, msgs)
+		relabelCodexResultAsTraeX(nil, msgs, nil)
 	})
 	assert.Equal(
 		t, "traex:spawned", msgs[0].ToolCalls[0].SubagentSessionID,

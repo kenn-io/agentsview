@@ -331,7 +331,6 @@
       }
     }
   ],
-  "parallel_group_each_duration": "각각 ≤ {duration}",
   "parallel_group_running": "실행 중...",
   "subagent_inline_label": "서브에이전트 세션",
   "subagent_inline_message_count": [
@@ -1472,9 +1471,15 @@
   "session_vitals_jump_to_call": "호출로 이동",
   "session_vitals_turns": "턴",
   "session_vitals_subagents": "서브에이전트",
+  "session_vitals_activity": "턴별 활동",
+  "session_vitals_activity_tool": "도구 실행",
+  "session_vitals_activity_unattributed": "미분류",
+  "session_vitals_activity_turn": "턴 {ordinal} · {duration}",
+  "session_vitals_not_measured": "측정되지 않음",
+  "session_vitals_activity_hint": "단계의 시작과 끝이 측정되지 않은 시간은 미분류로 표시됩니다.",
   "session_vitals_time_spent": "소요 시간",
   "session_vitals_clear_category_filter": "카테고리 필터 지우기",
-  "session_vitals_completed_turns_hint": "완료된 턴 · 클릭하여 강조 표시",
+  "session_vitals_completed_turns_hint": "측정된 도구 시간 · 클릭하여 강조",
   "session_vitals_timeline": "타임라인",
   "session_vitals_click_marks_to_scroll": "표시를 클릭하면 스크롤 이동",
   "session_vitals_jump_to_turn": "{time}의 {category} 턴으로 이동",

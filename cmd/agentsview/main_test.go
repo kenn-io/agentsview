@@ -2484,6 +2484,31 @@ func TestPrintSyncSummaryAnomalySection(t *testing.T) {
 	})
 }
 
+func TestOpenReadOnlyDBRejectsStaleArchive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "sessions.db")
+	writer := dbtest.OpenTestDBAt(t, path)
+	require.NoError(t, writer.Close())
+	raw, err := sql.Open("sqlite3", path)
+	require.NoError(t, err)
+	_, err = raw.Exec(fmt.Sprintf("PRAGMA user_version = %d", db.CurrentDataVersion()-1))
+	require.NoError(t, err)
+	require.NoError(t, raw.Close())
+
+	// Recovery must still be able to read the archive to build its replacement.
+	recovery, err := db.OpenReadOnly(path)
+	require.NoError(t, err)
+	assert.True(t, recovery.NeedsResync())
+	require.NoError(t, recovery.Close())
+
+	reader, err := openReadOnlyDB(config.Config{DBPath: path})
+	if reader != nil {
+		t.Cleanup(func() { reader.Close() })
+	}
+	require.Error(t, err)
+	assert.Nil(t, reader)
+	assert.Contains(t, err.Error(), "agentsview daemon restart")
+}
+
 func TestSchemaUpgradeHint(t *testing.T) {
 	t.Run("guides outdated-schema errors to a daemon restart", func(t *testing.T) {
 		base := &db.SchemaUpgradeRequiredError{

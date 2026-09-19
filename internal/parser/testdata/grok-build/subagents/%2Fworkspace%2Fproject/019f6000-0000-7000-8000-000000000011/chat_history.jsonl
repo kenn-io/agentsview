@@ -1,0 +1,2 @@
+{"type":"user","content":"Find how sessions are parented"}
+{"type":"assistant","content":"Child sessions are siblings of the parent."}

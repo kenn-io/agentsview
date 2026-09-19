@@ -189,29 +189,15 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 			}
 			defer cleanup()
 			now := deps.now()
-			days := make([]export.ReportingDigestDay, 0, dayCount)
-			for date := from; !date.After(to); date = date.Add(24 * time.Hour) {
-				day, err := database.ExportReportingDay(
-					cmd.Context(),
-					db.ReportingExportOptions{
-						Date: date, Now: now, SchemaVersion: *schemaVersion,
-						ProjectKeys: *projectKeys, Bucket: *bucket,
-					},
-				)
-				if err != nil {
-					return err
-				}
-				hourDigests := make([]string, len(day.Hours))
-				for i := range day.Hours {
-					hourDigests[i] = day.Hours[i].Digest
-				}
-				days = append(days, export.ReportingDigestDay{
-					Date:        day.Date,
-					Complete:    day.Complete,
-					HasData:     day.HasData,
-					DayDigest:   day.Digest,
-					HourDigests: hourDigests,
-				})
+			days, err := database.ExportReportingDigest(
+				cmd.Context(),
+				db.ReportingDigestExportOptions{
+					From: from, To: to, Now: now, SchemaVersion: *schemaVersion,
+					ProjectKeys: *projectKeys, Bucket: *bucket,
+				},
+			)
+			if err != nil {
+				return err
 			}
 			digest := export.ReportingDigest{
 				SchemaVersion: *schemaVersion,

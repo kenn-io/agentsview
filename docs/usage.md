@@ -829,43 +829,54 @@ state instead of a score. See
 ### Session Vital Signs
 
 The right column of an open session shows a **Session Vital Signs** panel with
-timing data derived from the message timestamps. Toggle it from the session
+elapsed turn time and measured tool durations. Toggle it from the session
 header.
 
 ![Session Vital Signs in context](/docs/assets/generated/screenshots/session-vital-signs.png)
 
-It has five stacked sections when experimental Recall is available:
+The panel contains these sections, including experimental Recall when available:
 
 - **Session summary** — repository and worktree context recorded by the trace,
-  total wall-clock, turn count, tool call count, sub-agent count, and the
-  slowest call as a clickable link that scrolls the conversation to that call.
-  Live sessions show a `running …+` indicator that ticks forward.
+    total wall-clock, turn count, tool call count, sub-agent count, and the
+    slowest call as a clickable link that scrolls the conversation to that call.
+    Live sessions show a `running …+` indicator that ticks forward.
 - **Recall (experimental)** — provenance-linked entries whose evidence comes
-  from the current session. Evidence-range links jump to the supporting
-  transcript message. An empty state appears when the local archive has no
-  matching entries.
+    from the current session. Evidence-range links jump to the supporting
+    transcript message. An empty state appears when the local archive has no
+    matching entries.
+- **Turn activity** — each visible user prompt starts a window that ends at the
+    next prompt or the session boundary. Bars separate measured tool execution
+    from unattributed time. Thinking and response generation are not measured.
 - **Time spent** — per-category aggregate bars across the normalized taxonomy
-  (`Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`, `Task`, `Tool`, `Other`,
-  plus a `Mixed` bucket for turns split across categories). Click a row to
-  filter the rest of the panel to that category.
+    (`Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`, `Task`, `Tool`, `Other`,
+    and other provider categories). Click a row to filter the rest of the panel
+    to that category.
 - **Timeline** — turns lane plus per-category lanes plus an activity lane, with
-  a legend. Hover a turn segment to see its primary category and duration
-  (e.g. `Task · 2m`); click to scroll the conversation to that turn.
+    a legend. Hover a turn segment to see its primary category and duration
+    (e.g. `Task · 2m`); click to scroll the conversation to that turn.
 - **Calls** — chronological list of tool calls with horizontal duration bars.
-  Parallel `tool_use` runs are bracketed as a single group. Call details start
-  collapsed for quicker transcript navigation. Sub-agent rows expand inline to
-  show the child session's calls.
+    Parallel `tool_use` runs are bracketed as a single group. Call details start
+    collapsed for quicker transcript navigation. Sub-agent rows expand inline to
+    show the child session's calls.
 
 ![Vital Signs panel detail](/docs/assets/generated/screenshots/vital-signs-panel.png)
 
-Inline in the conversation column, each `ToolBlock` header gets a duration
-badge, and each assistant message gets a turn-summary line ("turn 2m 18s · 3
-calls"). Parallel non-sub-agent calls render with a striped bar and a
-`≤duration` upper bound — the JSONL source has only one timestamp per assistant
-message, so per-call precision inside parallel groups isn't recoverable for
-non-sub-agent calls. Tool labels are normalized across agents, so Codex's
-`exec_command` and Claude's `Bash` show up under the same "Bash" category in
-headers and in the Calls list.
+Tool durations come from paired execution events or a closed linked child
+session. A call without either source shows `unknown`; the summary and category
+totals show **Not measured** when no calls have measured durations. A measured
+zero remains `0ms`. Categories remain available as filters even without timing.
+An open child needs a completed execution interval before its call can show a
+duration; otherwise it stays unknown until the child closes.
+
+Session tool and category totals count only time within the session boundaries.
+Individual calls retain their full measured durations, including any time
+outside the parent session. Overlapping calls count once in the session total
+and once per category, so category totals can overlap each other.
+
+Inline in the conversation column, tool headers show measured durations when
+available, and assistant messages show turn-summary lines. Tool labels are
+normalized across agents, so Codex's `exec_command` and Claude's `Bash` show up
+under the same "Bash" category in headers and in the Calls list.
 
 Call duration bars in the Calls list are scaled relative to the longest call in
 scope, not total session wall-clock — so even in long sessions where any single

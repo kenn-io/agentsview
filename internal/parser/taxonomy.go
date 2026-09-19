@@ -33,7 +33,7 @@ func NormalizeToolCategory(rawName string) string {
 		return "Read"
 	case "apply_patch":
 		return "Edit"
-	case "spawn_agent":
+	case "spawn_agent", "spawn_subagent":
 		return "Task"
 
 	// Gemini tools

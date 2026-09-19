@@ -15,6 +15,7 @@ describe("KNOWN_AGENTS", () => {
       "cowork",
       "codex",
       "traex",
+      "augure-code",
       "copilot",
       "devin",
       "evener",
@@ -79,6 +80,7 @@ describe("agentColor", () => {
     expect(agentColor("claude")).toBe("var(--accent-blue)");
     expect(agentColor("codex")).toBe("var(--accent-green)");
     expect(agentColor("traex")).toBe("var(--accent-coral)");
+    expect(agentColor("augure-code")).toBe("var(--accent-lime)");
     expect(agentColor("copilot")).toBe("var(--accent-amber)");
     expect(agentColor("devin")).toBe("var(--accent-red)");
     expect(agentColor("evener")).toBe("var(--accent-teal)");
@@ -178,6 +180,7 @@ describe("agentLabel", () => {
     expect(agentLabel("roocode")).toBe("RooCode");
     expect(agentLabel("omnigent")).toBe("Omnigent");
     expect(agentLabel("traex")).toBe("TraeX");
+    expect(agentLabel("augure-code")).toBe("Augure Code");
     expect(agentLabel("opencodereview")).toBe("Open Code Review");
     expect(agentLabel("crush")).toBe("Charm Crush");
   });

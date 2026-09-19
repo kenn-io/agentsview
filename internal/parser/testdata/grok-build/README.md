@@ -28,3 +28,7 @@ cargo run --manifest-path "$GROK_BUILD_CHECKOUT/Cargo.toml" \
 The fixtures use invented workspace paths, session IDs, prompts, and model
 metadata. Go-side expectations remain hand-authored so the fixture producer is
 not also the test oracle.
+
+`subagents/` is a hand-written layout for spawn parenting. It is not produced by
+`generate.rs`. The parent writes `subagents/<id>/meta.json`. Child sessions stay
+sibling directories, including a worktree child under a second encoded cwd.

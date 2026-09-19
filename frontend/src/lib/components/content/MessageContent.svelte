@@ -158,10 +158,13 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
     }
     return map;
   });
-  function soloDurationLabel(ct: CallTiming | undefined, turn: TurnTiming | undefined, msg: Message): string | undefined {
-    if (ct?.subagent_session_id && ct.duration_ms != null) return formatDuration(ct.duration_ms);
-    if (turn?.duration_ms != null) return formatDuration(turn.duration_ms);
-    if (sessionTiming.timing?.running && turn != null) {
+  function soloDurationLabel(
+    ct: CallTiming | undefined,
+    turn: TurnTiming | undefined,
+    msg: Message,
+  ): string | undefined {
+    if (ct?.duration_ms != null) return formatDuration(ct.duration_ms);
+    if (sessionTiming.timing?.running && turn != null && turn.duration_ms == null) {
       const startMs = new Date(turn.started_at ?? msg.timestamp).getTime();
       const elapsed = Number.isNaN(startMs) ? 0 : Math.max(0, liveTick.now - startMs);
       return m.message_content_running_duration({ duration: formatDuration(elapsed) });
@@ -333,12 +336,16 @@ import type { DbMessage as Message } from "../../api/generated/index.js";
       {#if structuredCalls.length === 1}
         {@const soloCall = structuredCalls[0]!}
         <ToolBlock toolCall={soloCall} content="" label={displayToolName(soloCall)}
-          durationLabel={soloDurationLabel(callByToolUseID.get(soloCall.tool_use_id ?? ""), turn, message)}
+          durationLabel={soloDurationLabel(
+            callByToolUseID.get(soloCall.tool_use_id ?? ""),
+            turn,
+            message,
+          )}
           isRunning={isRunningTurn(message)}
           searchScope={activeSearchOrdinal === undefined ? undefined : { ordinal: activeSearchOrdinal, callIdx: 0 }} />
       {:else if structuredCalls.length >= 2}
         <ParallelGroup toolCalls={structuredCalls} callTimingByID={callByToolUseID}
-          turnDurationMs={turn?.duration_ms ?? null} isRunning={isRunningTurn(message)} searchOrdinal={activeSearchOrdinal} />
+          isRunning={isRunningTurn(message)} searchOrdinal={activeSearchOrdinal} />
       {:else}
         {#each segments.filter((s) => s.type === "tool") as seg, segIdx (`${message.id}-${segIdx}`)}
           <ToolBlock content={seg.content} label={seg.label} toolCall={seg.toolCall}

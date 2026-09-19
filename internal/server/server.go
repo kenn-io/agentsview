@@ -181,6 +181,7 @@ type Server struct {
 	artifactExchangeRunner ArtifactExchangeRunner
 	rawSyncDeviceAuth      RawSyncDeviceAuth
 	rawSyncCustody         RawSyncCustody
+	rawSyncStatus          RawSyncStatusReader
 	rawSyncSchemaOnly      bool
 	rawSyncUploads         RawSyncUploads
 
@@ -324,6 +325,14 @@ type RawSyncCustody interface {
 	) (rawsync.CommitResult, error)
 }
 
+// RawSyncStatusReader reads authenticated tenant-scoped raw-sync status.
+type RawSyncStatusReader interface {
+	ReadRawSyncStatus(
+		context.Context,
+		rawsync.AuthIdentity,
+	) (rawsync.Status, error)
+}
+
 // RawSyncUploads exposes authenticated resumable raw-object transfers.
 type RawSyncUploads interface {
 	Start(
@@ -358,6 +367,13 @@ func WithRawSyncServices(auth RawSyncDeviceAuth, custody RawSyncCustody) Option 
 func WithRawSyncUploads(uploads RawSyncUploads) Option {
 	return func(s *Server) {
 		s.rawSyncUploads = uploads
+	}
+}
+
+// WithRawSyncStatus enables the authenticated raw-sync status route.
+func WithRawSyncStatus(status RawSyncStatusReader) Option {
+	return func(s *Server) {
+		s.rawSyncStatus = status
 	}
 }
 

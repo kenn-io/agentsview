@@ -331,7 +331,6 @@
       }
     }
   ],
-  "parallel_group_each_duration": "每个 ≤ {duration}",
   "parallel_group_running": "运行中...",
   "subagent_inline_label": "Subagent 会话",
   "subagent_inline_message_count": [
@@ -1470,9 +1469,15 @@
   "session_vitals_jump_to_call": "跳转到调用",
   "session_vitals_turns": "回合",
   "session_vitals_subagents": "sub-agents",
+  "session_vitals_activity": "每轮活动",
+  "session_vitals_activity_tool": "工具执行",
+  "session_vitals_activity_unattributed": "未归属",
+  "session_vitals_activity_turn": "第 {ordinal} 轮 · {duration}",
+  "session_vitals_not_measured": "未测量",
+  "session_vitals_activity_hint": "没有测量到阶段起止边界的时间归为未归属。",
   "session_vitals_time_spent": "耗时分布",
   "session_vitals_clear_category_filter": "清除分类筛选",
-  "session_vitals_completed_turns_hint": "已完成回合 · 点击高亮显示",
+  "session_vitals_completed_turns_hint": "实测工具时间 · 点击高亮",
   "session_vitals_timeline": "时间线",
   "session_vitals_click_marks_to_scroll": "点击标记滚动",
   "session_vitals_jump_to_turn": "跳转到 {time} 的 {category} 回合",

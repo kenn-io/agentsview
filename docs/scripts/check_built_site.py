@@ -43,6 +43,7 @@ DOCS_PAGES = [
     "pg-sync",
     "hosted-raw-sync",
     "duckdb",
+    "clickhouse-sync",
 ]
 
 ROUTES = ["/", "/guide/", "/docs/"] + [f"/docs/{page}/" for page in DOCS_PAGES]
