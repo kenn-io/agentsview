@@ -419,6 +419,13 @@ func TestRawSyncStatusPostgresParseCompletion(t *testing.T) {
 		ExpectedParentReceipt: first.Receipt,
 		CapturedAt:            time.Date(2026, 9, 18, 11, 0, 0, 0, time.UTC),
 	}, rawsync.ManifestTombstone)
+	var afterHeadAdvance time.Time
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT updated_at FROM raw_ingest_jobs
+		WHERE tenant_id = $1 AND manifest_id = $2
+			AND processing_version = 'status-test-version'`,
+		enrollment.Identity.TenantID, first.ManifestID).Scan(&afterHeadAdvance))
+	assert.Equal(t, terminalCompletion.UTC(), afterHeadAdvance.UTC())
 	status, err = metadata.ReadRawSyncStatus(ctx, enrollment.Identity)
 	require.NoError(t, err)
 	head = findRawStatusHead(t, status.SourceHeads, "current.jsonl")
@@ -439,6 +446,13 @@ func TestRawSyncStatusPostgresParseCompletion(t *testing.T) {
 		WHERE tenant_id = $1 AND manifest_id = $2`,
 		enrollment.Identity.TenantID, first.ManifestID).Scan(&firstState))
 	assert.Equal(t, "complete", firstState)
+	var afterObsoleteClaim time.Time
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT updated_at FROM raw_ingest_jobs
+		WHERE tenant_id = $1 AND manifest_id = $2
+			AND processing_version = 'status-test-version'`,
+		enrollment.Identity.TenantID, first.ManifestID).Scan(&afterObsoleteClaim))
+	assert.Equal(t, terminalCompletion.UTC(), afterObsoleteClaim.UTC())
 	assert.NotEqual(t, first.ManifestID, tombstone.ManifestID)
 }
 
