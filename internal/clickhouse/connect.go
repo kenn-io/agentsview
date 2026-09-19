@@ -239,12 +239,12 @@ const (
 // privileges" failure, so serve can tolerate a read-only role that cannot
 // run schema statements.
 func IsPermissionError(err error) bool {
-	var ex *clickhouse.Exception
-	return errors.As(err, &ex) && ex.Code == codeAccessDenied
+	ex, ok := errors.AsType[*clickhouse.Exception](err)
+	return ok && ex.Code == codeAccessDenied
 }
 
 func isMissingTableError(err error) bool {
-	var ex *clickhouse.Exception
-	return errors.As(err, &ex) &&
+	ex, ok := errors.AsType[*clickhouse.Exception](err)
+	return ok &&
 		(ex.Code == codeUnknownTable || ex.Code == codeUnknownDatabase)
 }

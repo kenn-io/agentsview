@@ -620,7 +620,7 @@ func (s *Server) humaClickHousePush(
 		return nil, apiError(http.StatusBadRequest, err.Error())
 	}
 
-	engine := s.syncEngineForLocal(local)
+	engine := s.syncEngineForLocal(ctx, local)
 	body := in.Body
 	return &huma.StreamResponse{Body: func(hctx huma.Context) {
 		runPushStream(hctx, func(

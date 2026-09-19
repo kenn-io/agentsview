@@ -70,6 +70,8 @@ type PushOptions struct {
 }
 
 // PushResult summarizes a push.
+//
+//nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type PushResult struct {
 	SessionsPushed   int
 	MessagesPushed   int
@@ -245,7 +247,7 @@ func ReadStatus(
 	status := SyncStatus{Machine: machine}
 	conn, err := Open(ctx, target)
 	if err != nil {
-		if isMissingTableError(err) || strings.Contains(err.Error(), "does not exist") {
+		if isMissingTableError(err) {
 			status.SchemaMissing = true
 			return status, nil
 		}

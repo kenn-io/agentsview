@@ -1225,9 +1225,9 @@ func TestOpenAcceptsArchiveUserVersion111(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
 
-	d, err := Open(path)
+	d, err := Open(t.Context(), path)
 	requireNoError(t, err, "initial open")
-	err = d.UpsertSession(Session{
+	err = d.UpsertSession(t.Context(), Session{
 		ID:           "s1",
 		Project:      "proj",
 		Machine:      "local",
@@ -1240,14 +1240,14 @@ func TestOpenAcceptsArchiveUserVersion111(t *testing.T) {
 
 	conn, err := sql.Open("sqlite3", path)
 	requireNoError(t, err, "raw sqlite open")
-	_, err = conn.Exec("PRAGMA user_version = 111")
+	_, err = conn.ExecContext(t.Context(), "PRAGMA user_version = 111")
 	requireNoError(t, err, "set archive version 111")
 	require.NoError(t, conn.Close())
 
-	d2, err := Open(path)
+	d2, err := Open(t.Context(), path)
 	requireNoError(t, err, "open version-111 archive")
 	t.Cleanup(func() { require.NoError(t, d2.Close()) })
-	page, err := d2.ListSessions(context.Background(), SessionFilter{Limit: 100})
+	page, err := d2.ListSessions(t.Context(), SessionFilter{Limit: 100})
 	requireNoError(t, err, "list sessions")
 	require.Len(t, page.Sessions, 1)
 }

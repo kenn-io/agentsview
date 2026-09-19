@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -189,12 +188,12 @@ func TestAugureCodeProviderParsesDeidentifiedRollout(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, AgentAugureCode, sources[0].Provider)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  sources[0],
 		Machine: "devbox",
 	})
@@ -287,14 +286,14 @@ func TestAugureCodeProviderIgnoresCodexSidecars(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1, "no shallow session_index.jsonl watch")
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
 
 	sources, err := provider.SourcesForChangedPath(
-		context.Background(), ChangedPathRequest{Path: indexPath},
+		t.Context(), ChangedPathRequest{Path: indexPath},
 	)
 	require.NoError(t, err)
 	assert.Empty(t, sources, "index events must not fan out for a fork")

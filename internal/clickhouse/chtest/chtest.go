@@ -35,8 +35,8 @@ var (
 // ServerURL returns the DSN of the shared test server, starting a container
 // on first use unless TEST_CLICKHOUSE_URL is set. It skips the test when
 // Docker is unavailable and no URL is configured.
-func ServerURL(t testing.TB) string {
-	t.Helper()
+func ServerURL(tb testing.TB) string {
+	tb.Helper()
 	serverMu.Lock()
 	defer serverMu.Unlock()
 	if serverURL != "" {
@@ -47,9 +47,9 @@ func ServerURL(t testing.TB) string {
 		return serverURL
 	}
 	if os.Getenv("TEST_CLICKHOUSE_SKIP_CONTAINER") != "" {
-		t.Skip("TEST_CLICKHOUSE_URL not set and container start disabled")
+		tb.Skip("TEST_CLICKHOUSE_URL not set and container start disabled")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(tb.Context(), 3*time.Minute)
 	defer cancel()
 	c, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
 		Image:        Image,
@@ -60,12 +60,12 @@ func ServerURL(t testing.TB) string {
 		Started: true,
 	})
 	if err != nil {
-		t.Skipf("clickhouse container unavailable: %v", err)
+		tb.Skipf("clickhouse container unavailable: %v", err)
 	}
 	host, err := c.Host(ctx)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	port, err := c.MappedPort(ctx, "9000/tcp")
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	container = c
 	serverURL = fmt.Sprintf("clickhouse://default:@%s:%s/default", host, port.Port())
 	return serverURL
@@ -88,19 +88,19 @@ func Terminate() {
 // when the test ends. It returns the DSN (pointing at the server default
 // database) and the new database name, matching how operators configure a
 // URL plus a database key.
-func FreshDatabase(t testing.TB) (dsn, database string) {
-	t.Helper()
-	dsn = ServerURL(t)
+func FreshDatabase(tb testing.TB) (dsn, database string) {
+	tb.Helper()
+	dsn = ServerURL(tb)
 	var suffix [6]byte
 	_, err := rand.Read(suffix[:])
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	database = "agentsview_test_" + hex.EncodeToString(suffix[:])
-	admin := open(t, dsn)
-	ctx := context.Background()
+	admin := open(tb, dsn)
+	ctx := tb.Context()
 	_, err = admin.ExecContext(ctx, "CREATE DATABASE "+database)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		_, _ = admin.ExecContext(context.Background(), "DROP DATABASE IF EXISTS "+database+" SYNC")
+	require.NoError(tb, err)
+	tb.Cleanup(func() {
+		_, _ = admin.ExecContext(context.WithoutCancel(tb.Context()), "DROP DATABASE IF EXISTS "+database+" SYNC")
 		admin.Close()
 	})
 	return dsn, database
@@ -108,35 +108,35 @@ func FreshDatabase(t testing.TB) (dsn, database string) {
 
 // Open connects to the given database on the test server for raw
 // assertions.
-func Open(t testing.TB, dsn, database string) *sql.DB {
-	t.Helper()
+func Open(tb testing.TB, dsn, database string) *sql.DB {
+	tb.Helper()
 	opt, err := clickhouse.ParseDSN(dsn)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	opt.Auth.Database = database
 	opt.Settings = clickhouse.Settings{"final": 1}
 	conn := clickhouse.OpenDB(opt)
-	t.Cleanup(func() { conn.Close() })
-	require.NoError(t, conn.PingContext(context.Background()))
+	tb.Cleanup(func() { conn.Close() })
+	require.NoError(tb, conn.PingContext(tb.Context()))
 	return conn
 }
 
-func open(t testing.TB, dsn string) *sql.DB {
-	t.Helper()
+func open(tb testing.TB, dsn string) *sql.DB {
+	tb.Helper()
 	opt, err := clickhouse.ParseDSN(dsn)
-	require.NoError(t, err)
+	require.NoError(tb, err)
 	conn := clickhouse.OpenDB(opt)
-	require.NoError(t, conn.PingContext(context.Background()))
+	require.NoError(tb, conn.PingContext(tb.Context()))
 	return conn
 }
 
 // Count returns COUNT(*) for a table, optionally filtered.
-func Count(t testing.TB, conn *sql.DB, table string, where string, args ...any) int {
-	t.Helper()
+func Count(tb testing.TB, conn *sql.DB, table string, where string, args ...any) int {
+	tb.Helper()
 	query := "SELECT COUNT(*) FROM " + table
 	if strings.TrimSpace(where) != "" {
 		query += " WHERE " + where
 	}
 	var n int
-	require.NoError(t, conn.QueryRowContext(context.Background(), query, args...).Scan(&n))
+	require.NoError(tb, conn.QueryRowContext(tb.Context(), query, args...).Scan(&n))
 	return n
 }

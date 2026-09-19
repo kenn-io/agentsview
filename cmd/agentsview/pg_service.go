@@ -235,7 +235,6 @@ func readServiceLastPush(ctx context.Context,
 		); err != nil {
 			return "", err
 		}
-		ctx := context.Background()
 		archiveID, err := database.GetArchiveID(ctx)
 		if err != nil {
 			return "", err

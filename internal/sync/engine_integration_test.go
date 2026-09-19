@@ -1226,6 +1226,14 @@ func TestSyncEngineOpenCodeStorageWatcherEventDoesNotRewriteUnchanged(
 	require.False(t, stats.Aborted, "first sync aborted: %+v", stats)
 	assert.Equal(t, 1, stats.Synced, "first sync writes the session")
 	fullID := "opencode:" + sessionID
+	// Fix the initial watermark so a rewrite differs even within one millisecond.
+	require.NoError(t, env.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
+			"UPDATE sessions SET local_modified_at = ? WHERE id = ?",
+			"2000-01-01T00:00:00.000Z", fullID,
+		)
+		return err
+	}))
 	before := openCodeLocalModifiedSnapshot(t, env.db, fullID)
 
 	env.engine.SyncPaths([]string{partPath})
@@ -1237,9 +1245,6 @@ func TestSyncEngineOpenCodeStorageWatcherEventDoesNotRewriteUnchanged(
 		t, env.db, fullID, "steady storage reply",
 	)
 
-	// SQLite stamps local_modified_at with millisecond %f. Two rewrites in
-	// the same millisecond compare equal on a fast Windows runner.
-	time.Sleep(2 * time.Millisecond)
 	storage.addTextPart(
 		t, sessionID, "msg-a1", "part-a1",
 		"updated storage reply", 1704067203000,

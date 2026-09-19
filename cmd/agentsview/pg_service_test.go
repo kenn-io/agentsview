@@ -217,7 +217,7 @@ func TestWarnUninheritedServiceEnv(t *testing.T) {
 
 func TestReadServiceLastPush_ClickHouseRejectsInsecureRemote(t *testing.T) {
 	local := dbtest.OpenTestDB(t)
-	_, err := readServiceLastPush(clickHouseServiceKind, config.Config{
+	_, err := readServiceLastPush(t.Context(), clickHouseServiceKind, config.Config{
 		ClickHouse: config.ClickHouseConfig{
 			URL: "clickhouse://user:pw@ch.example.internal:9000/agentsview",
 		},

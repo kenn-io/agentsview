@@ -80,7 +80,7 @@ func (s *Store) queryRowContext(ctx context.Context, query string, args ...any) 
 
 func (s *Store) ReadOnly() bool { return true }
 
-func (s *Store) HasFTS() bool { return true }
+func (s *Store) HasFTS(_ context.Context) bool { return true }
 
 // HasSemantic returns false: the ClickHouse store has no vector search seam.
 func (s *Store) HasSemantic() bool { return false }
@@ -112,11 +112,11 @@ func (s *Store) DecodeCursor(raw string) (db.SessionCursor, error) {
 	if len(parts) == 1 {
 		data, err := base64.RawURLEncoding.DecodeString(parts[0])
 		if err != nil {
-			return db.SessionCursor{}, fmt.Errorf("%w: %v", db.ErrInvalidCursor, err)
+			return db.SessionCursor{}, fmt.Errorf("%w: %w", db.ErrInvalidCursor, err)
 		}
 		var c db.SessionCursor
 		if err := json.Unmarshal(data, &c); err != nil {
-			return db.SessionCursor{}, fmt.Errorf("%w: %v", db.ErrInvalidCursor, err)
+			return db.SessionCursor{}, fmt.Errorf("%w: %w", db.ErrInvalidCursor, err)
 		}
 		c.Total = 0
 		return c, nil
@@ -126,11 +126,11 @@ func (s *Store) DecodeCursor(raw string) (db.SessionCursor, error) {
 	}
 	data, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return db.SessionCursor{}, fmt.Errorf("%w: invalid payload: %v", db.ErrInvalidCursor, err)
+		return db.SessionCursor{}, fmt.Errorf("%w: invalid payload: %w", db.ErrInvalidCursor, err)
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return db.SessionCursor{}, fmt.Errorf("%w: invalid signature: %v", db.ErrInvalidCursor, err)
+		return db.SessionCursor{}, fmt.Errorf("%w: invalid signature: %w", db.ErrInvalidCursor, err)
 	}
 	s.cursorMu.RLock()
 	secret := append([]byte(nil), s.cursorSecret...)
@@ -142,7 +142,7 @@ func (s *Store) DecodeCursor(raw string) (db.SessionCursor, error) {
 	}
 	var c db.SessionCursor
 	if err := json.Unmarshal(data, &c); err != nil {
-		return db.SessionCursor{}, fmt.Errorf("%w: invalid json: %v", db.ErrInvalidCursor, err)
+		return db.SessionCursor{}, fmt.Errorf("%w: invalid json: %w", db.ErrInvalidCursor, err)
 	}
 	return c, nil
 }
@@ -187,7 +187,7 @@ func (s *Store) RecordRecallQueryEvent(_ context.Context, _ db.RecallQueryEvent)
 	return "", db.ErrReadOnly
 }
 
-func (s *Store) InsertRecallEntry(_ db.RecallEntry) (string, error) {
+func (s *Store) InsertRecallEntry(_ context.Context, _ db.RecallEntry) (string, error) {
 	return "", db.ErrReadOnly
 }
 

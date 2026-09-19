@@ -233,7 +233,7 @@ func TestClickHousePushConfigRequestOverride(t *testing.T) {
 
 func TestClickHousePushRejectsIncludeAndExcludeProjects(t *testing.T) {
 	s := testServerWithConfig(config.Config{})
-	_, err := s.humaClickHousePush(context.Background(), &daemonPushInput{
+	_, err := s.humaClickHousePush(t.Context(), &daemonPushInput{
 		Body: daemonPushRequest{
 			Projects:        []string{"alpha"},
 			ExcludeProjects: []string{"beta"},

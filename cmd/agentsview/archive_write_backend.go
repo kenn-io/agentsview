@@ -11,8 +11,8 @@ import (
 	stdsync "sync"
 	"time"
 
-	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/apiclient"
+	"go.kenn.io/agentsview/internal/clickhouse"
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
@@ -1345,7 +1345,7 @@ func (b *localArchiveWriteBackend) ClickHousePushWatch(
 	}
 	cleanResyncTemp(b.appCfg.DBPath)
 
-	engine := syncpkg.NewEngine(b.database, syncpkg.EngineConfig{
+	engine := syncpkg.NewEngine(ctx, b.database, syncpkg.EngineConfig{
 		AgentDirs:               b.appCfg.AgentDirs,
 		SourceMachines:          b.appCfg.SourceMachines,
 		ProviderMetadata:        b.appCfg.ProviderMetadata,

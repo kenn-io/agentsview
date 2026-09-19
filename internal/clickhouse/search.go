@@ -66,12 +66,16 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 		nameProject = "AND s.project = ?"
 	}
 	dateBuilder := db.NewQueryBuilder(db.ClickHouseQueryDialect(), 0)
+	var nameProjectDates strings.Builder
+	var projectDates strings.Builder
 	for _, pred := range dateBuilder.SessionDateRangePredicates(
 		f.DateFrom, f.DateTo, "", func(col string) string { return "s." + col },
 	) {
-		project += " AND " + pred
-		nameProject += " AND " + pred
+		projectDates.WriteString(" AND " + pred)
+		nameProjectDates.WriteString(" AND " + pred)
 	}
+	nameProject += nameProjectDates.String()
+	project += projectDates.String()
 	args = append(args, dateBuilder.Args()...)
 	args = append(args, namePattern, namePattern, namePattern, namePattern)
 	if f.Project != "" {
