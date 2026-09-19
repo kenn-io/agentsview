@@ -404,7 +404,7 @@ func classifyResultBlock(raw jsontext.Value) (image, text, ok bool) {
 	switch kind {
 	case "input_image", "agentsview_image":
 		return true, false, true
-	case "text":
+	case "input_text", "output_text", "text":
 		var value string
 		if rawText, found := fields["text"]; found {
 			if err := json.Unmarshal(rawText, &value); err != nil {

@@ -147,6 +147,22 @@ func TestClassifyToolOutcome(t *testing.T) {
 			want: ToolOutcomeUnknown,
 		},
 		{
+			name: "image with empty Codex input text",
+			call: ToolCallRow{
+				ToolName:      "Read",
+				ResultContent: `[ {"type":"input_text","text":""},{"type":"input_image","image_url":"data:image/png;base64,AAEC"} ]`,
+			},
+			want: ToolOutcomeUnknown,
+		},
+		{
+			name: "image with Codex output text",
+			call: ToolCallRow{
+				ToolName:      "Read",
+				ResultContent: `[ {"type":"output_text","text":"kept text"},{"type":"input_image","image_url":"data:image/png;base64,AAEC"} ]`,
+			},
+			want: ToolOutcomeContent,
+		},
+		{
 			name: "direct inline image with blank lines",
 			call: ToolCallRow{ToolName: "Read", ResultContent: "[\n\n{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,AAEC\"}\n]"},
 			want: ToolOutcomeUnknown,
