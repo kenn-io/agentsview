@@ -17,19 +17,23 @@ func TestExtractToolCallRows(t *testing.T) {
 			Role:    "assistant",
 			ToolCalls: []db.ToolCall{
 				{
-					ToolName:      "Bash",
-					Category:      "Bash",
-					InputJSON:     `{"command":"ls"}`,
-					ResultContent: "/tmp",
+					ToolUseID:           "call-1",
+					ToolName:            "Bash",
+					Category:            "Bash",
+					InputJSON:           `{"command":"ls"}`,
+					ResultContentLength: 4,
+					ResultContent:       "/tmp",
 					ResultEvents: []db.ToolResultEvent{
 						{Status: "completed", EventIndex: 0},
 					},
 				},
 				{
-					ToolName:      "Edit",
-					Category:      "Edit",
-					InputJSON:     `{"file":"/a.go"}`,
-					ResultContent: "ok",
+					ToolUseID:           "call-1",
+					ToolName:            "Edit",
+					Category:            "Edit",
+					InputJSON:           `{"file":"/a.go"}`,
+					ResultContentLength: 2,
+					ResultContent:       "ok",
 					// Multiple events: latest wins.
 					ResultEvents: []db.ToolResultEvent{
 						{Status: "running", EventIndex: 0},
@@ -43,9 +47,11 @@ func TestExtractToolCallRows(t *testing.T) {
 			Role:    "assistant",
 			ToolCalls: []db.ToolCall{
 				{
-					ToolName:  "Read",
-					Category:  "Read",
-					InputJSON: `{"file":"/b.go"}`,
+					ToolUseID:           "",
+					ToolName:            "Read",
+					Category:            "Read",
+					InputJSON:           `{"file":"/b.go"}`,
+					ResultContentLength: 0,
 				},
 			},
 		},
@@ -54,32 +60,76 @@ func TestExtractToolCallRows(t *testing.T) {
 	got := extractToolCallRows(msgs)
 	want := []signals.ToolCallRow{
 		{
-			ToolName:       "Bash",
-			Category:       "Bash",
-			InputJSON:      `{"command":"ls"}`,
-			ResultContent:  "/tmp",
-			MessageOrdinal: 1,
-			CallIndex:      0,
-			EventStatus:    "completed",
+			ToolUseID:           "call-1",
+			ToolName:            "Bash",
+			Category:            "Bash",
+			InputJSON:           `{"command":"ls"}`,
+			ResultContent:       "/tmp",
+			MessageOrdinal:      1,
+			CallIndex:           0,
+			ResultContentLength: 4,
+			EventStatus:         "completed",
 		},
 		{
-			ToolName:       "Edit",
-			Category:       "Edit",
-			InputJSON:      `{"file":"/a.go"}`,
-			ResultContent:  "ok",
-			MessageOrdinal: 1,
-			CallIndex:      1,
-			EventStatus:    "errored",
+			ToolUseID:           "call-1",
+			ToolName:            "Edit",
+			Category:            "Edit",
+			InputJSON:           `{"file":"/a.go"}`,
+			ResultContent:       "ok",
+			MessageOrdinal:      1,
+			CallIndex:           1,
+			ResultContentLength: 2,
+			EventStatus:         "errored",
 		},
 		{
-			ToolName:       "Read",
-			Category:       "Read",
-			InputJSON:      `{"file":"/b.go"}`,
-			MessageOrdinal: 2,
-			CallIndex:      0,
+			ToolUseID:           "",
+			ToolName:            "Read",
+			Category:            "Read",
+			InputJSON:           `{"file":"/b.go"}`,
+			MessageOrdinal:      2,
+			CallIndex:           0,
+			ResultContentLength: 0,
 		},
 	}
 	assert.Equal(t, want, got)
+}
+
+func TestExtractToolCallRowsSequenceEvidence(t *testing.T) {
+	msgs := []db.Message{
+		{
+			Ordinal: 8,
+			ToolCalls: []db.ToolCall{
+				{
+					ToolUseID: "empty-call", ToolName: "Grep",
+					ResultEvents: []db.ToolResultEvent{{Status: "completed"}},
+				},
+			},
+		},
+		{
+			Ordinal: 9,
+			ToolCalls: []db.ToolCall{
+				{
+					ToolUseID: "read-call", ToolName: "Read",
+					ResultContent: "retained result", ResultContentLength: 15,
+				},
+			},
+		},
+	}
+
+	rows := extractToolCallRows(msgs)
+	got := signals.ExtractToolSequences(rows, false)
+	assert.Equal(t, []signals.ToolCallOutcome{
+		{ToolUseID: "empty-call", MessageOrdinal: 8, CallIndex: 0,
+			ToolName: "Grep", Outcome: signals.ToolOutcomeEmpty,
+			Repeat: signals.ToolRepeatNone},
+		{ToolUseID: "read-call", MessageOrdinal: 9, CallIndex: 0,
+			ToolName: "Read", Outcome: signals.ToolOutcomeContent,
+			Repeat: signals.ToolRepeatNone, ToolChanged: true},
+	}, got.Calls)
+	assert.Equal(t, []signals.ToolSequence{{
+		Start: 0, End: 2, ToolChanged: true,
+		Ending: signals.ToolSequenceEndingRecovered,
+	}}, got.Sequences)
 }
 
 func TestExtractContextTokens(t *testing.T) {
