@@ -5169,6 +5169,11 @@ components:
           type:
             - string
             - "null"
+        last_parse_completed_at:
+          format: date-time
+          type:
+            - string
+            - "null"
         parse_failed:
           type: boolean
         parse_leased:
@@ -5186,6 +5191,7 @@ components:
         - source_key
         - generation
         - last_accepted_at
+        - last_parse_completed_at
         - parse_pending
         - parse_leased
         - parse_failed

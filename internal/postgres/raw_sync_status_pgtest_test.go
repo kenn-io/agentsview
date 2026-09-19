@@ -23,6 +23,7 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/rawderive"
 	"go.kenn.io/agentsview/internal/rawsync"
 	"go.kenn.io/agentsview/internal/server"
 )
@@ -165,6 +166,14 @@ func TestRawSyncStatusPostgresHTTP(t *testing.T) {
 	assert.True(t, current.ParsePending)
 	assert.True(t, current.ParseLeased)
 	assert.True(t, current.ParseFailed)
+	var currentCompletedAt time.Time
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT updated_at FROM raw_ingest_jobs
+		WHERE tenant_id = $1 AND manifest_id = $2
+			AND processing_version = 'complete-version'`,
+		firstIdentity.TenantID, secondCommit.ManifestID).Scan(&currentCompletedAt))
+	require.NotNil(t, current.LastParseCompletedAt)
+	assert.Equal(t, currentCompletedAt.UTC(), *current.LastParseCompletedAt)
 	zero := findRawStatusHead(t, got.SourceHeads, "zero.jsonl")
 	assert.Equal(t, int64(0), zero.Generation)
 	assert.Nil(t, zero.LastAcceptedAt)
@@ -221,8 +230,32 @@ func TestRawSyncStatusPostgresHTTP(t *testing.T) {
 			assert.Equal(t, tc.pending, head.ParsePending)
 			assert.Equal(t, tc.leased, head.ParseLeased)
 			assert.Equal(t, tc.failed, head.ParseFailed)
+			if tc.state == "complete" {
+				assert.NotNil(t, head.LastParseCompletedAt)
+			} else {
+				assert.Nil(t, head.LastParseCompletedAt)
+			}
 		})
 	}
+
+	_, err = pg.ExecContext(ctx, `
+		UPDATE raw_ingest_jobs
+		SET state = 'complete', updated_at = $1
+		WHERE tenant_id = $2 AND manifest_id = $3
+			AND processing_version = 'complete-version'`,
+		currentCompletedAt, firstIdentity.TenantID, secondCommit.ManifestID)
+	require.NoError(t, err)
+	_, err = pg.ExecContext(ctx, `
+		UPDATE raw_ingest_jobs
+		SET state = 'complete', updated_at = $1
+		WHERE tenant_id = $2 AND manifest_id = $3`,
+		time.Now().UTC().Add(time.Hour), firstIdentity.TenantID, firstCommit.ManifestID)
+	require.NoError(t, err)
+	status, err := metadata.ReadRawSyncStatus(ctx, firstIdentity)
+	require.NoError(t, err)
+	current = findRawStatusHead(t, status.SourceHeads, "current.jsonl")
+	require.NotNil(t, current.LastParseCompletedAt)
+	assert.Equal(t, currentCompletedAt.UTC(), *current.LastParseCompletedAt)
 
 	wrongScope, err := auth.IssueToken(
 		ctx, first.Identity.DeviceID, first.Credential, rawsync.ScopeCommit,
@@ -286,6 +319,115 @@ func TestRawSyncStatusPostgresEmptyHTTP(t *testing.T) {
 	assert.Nil(t, got.Uploads.OldestOpenSession)
 }
 
+func TestRawSyncStatusPostgresParseCompletion(t *testing.T) {
+	pg, _ := newPGE2ETestDatabase(t)
+	ctx := t.Context()
+	metadata, err := postgres.NewRawIngestStore(pg)
+	require.NoError(t, err)
+	authStore, err := postgres.NewRawDeviceAuthStore(pg)
+	require.NoError(t, err)
+	auth, err := rawsync.NewDeviceAuthService(authStore, time.Hour)
+	require.NoError(t, err)
+	enrollment, err := auth.EnrollDevice(ctx, "tenant-completion", "status device")
+	require.NoError(t, err)
+	object, err := rawsync.NewObjectRef(
+		"98627d5753b568650fce01e540e4b7d3a394cb56a4d922dc19ca4d0439771c98", 17,
+	)
+	require.NoError(t, err)
+	require.NoError(t, metadata.RecordVerifiedObject(ctx, enrollment.Identity, object))
+	first := commitRawStatusGenerationKind(t, metadata, enrollment.Identity, object, rawsync.Manifest{
+		CaptureID:  "completion-one",
+		CapturedAt: time.Date(2026, 9, 18, 10, 0, 0, 0, time.UTC),
+	}, rawsync.ManifestSnapshot)
+
+	leases, err := metadata.ClaimRawParseJobs(ctx, "status-worker", 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, leases, 1)
+	lease := leases[0]
+	status, err := metadata.ReadRawSyncStatus(ctx, enrollment.Identity)
+	require.NoError(t, err)
+	head := findRawStatusHead(t, status.SourceHeads, "current.jsonl")
+	assert.Nil(t, head.LastParseCompletedAt)
+	require.NoError(t, metadata.CompleteRawParseJob(ctx, lease))
+
+	var acceptedAt time.Time
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT accepted_at FROM raw_manifests
+		WHERE tenant_id = $1 AND manifest_id = $2`,
+		enrollment.Identity.TenantID, first.ManifestID).Scan(&acceptedAt))
+	var completedAt time.Time
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT updated_at FROM raw_ingest_jobs
+		WHERE tenant_id = $1 AND manifest_id = $2`,
+		enrollment.Identity.TenantID, first.ManifestID).Scan(&completedAt))
+	assert.False(t, completedAt.Before(acceptedAt))
+
+	status, err = metadata.ReadRawSyncStatus(ctx, enrollment.Identity)
+	require.NoError(t, err)
+	head = findRawStatusHead(t, status.SourceHeads, "current.jsonl")
+	require.NotNil(t, head.LastParseCompletedAt)
+	assert.Equal(t, completedAt.UTC(), *head.LastParseCompletedAt)
+
+	fixedCompletion := acceptedAt.Add(90 * time.Second)
+	_, err = pg.ExecContext(ctx, `
+		UPDATE raw_ingest_jobs SET updated_at = $1
+		WHERE tenant_id = $2 AND manifest_id = $3`,
+		fixedCompletion, enrollment.Identity.TenantID, first.ManifestID)
+	require.NoError(t, err)
+
+	srv := server.New(config.Config{Host: "127.0.0.1", Port: 0}, nil, nil,
+		server.WithRawSyncServices(&rawStatusAuthStub{identity: enrollment.Identity}, nil),
+		server.WithRawSyncStatus(metadata),
+	)
+	httpServer := httptest.NewServer(srv.Handler())
+	t.Cleanup(httpServer.Close)
+	response := rawStatusHTTPGet(t, httpServer.URL, "avdt_test")
+	body, err := io.ReadAll(response.Body)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	var got rawsync.Status
+	require.NoError(t, json.Unmarshal(body, &got))
+	head = findRawStatusHead(t, got.SourceHeads, "current.jsonl")
+	require.NotNil(t, head.LastParseCompletedAt)
+	assert.Equal(t, 90.0, head.LastParseCompletedAt.Sub(*head.LastAcceptedAt).Seconds())
+
+	assert.ErrorIs(t, metadata.HeartbeatRawParseJob(ctx, lease, time.Minute), rawderive.ErrLeaseLost)
+	assert.ErrorIs(t, metadata.RetryRawParseJob(
+		ctx, lease, time.Now().Add(time.Minute), "retry", "stale lease",
+	), rawderive.ErrLeaseLost)
+	assert.ErrorIs(t, metadata.FailRawParseJob(ctx, lease, "failed", "stale lease"), rawderive.ErrLeaseLost)
+	shortClaim, err := metadata.ClaimRawParseJobs(ctx, "status-worker", 1, time.Minute)
+	require.NoError(t, err)
+	assert.Empty(t, shortClaim)
+
+	tombstone := commitRawStatusGenerationKind(t, metadata, enrollment.Identity, object, rawsync.Manifest{
+		CaptureID:             "completion-tombstone",
+		ExpectedParentReceipt: first.Receipt,
+		CapturedAt:            time.Date(2026, 9, 18, 11, 0, 0, 0, time.UTC),
+	}, rawsync.ManifestTombstone)
+	status, err = metadata.ReadRawSyncStatus(ctx, enrollment.Identity)
+	require.NoError(t, err)
+	head = findRawStatusHead(t, status.SourceHeads, "current.jsonl")
+	assert.Equal(t, int64(2), head.Generation)
+	assert.Nil(t, head.LastParseCompletedAt)
+	leases, err = metadata.ClaimRawParseJobs(ctx, "status-worker", 1, time.Minute)
+	require.NoError(t, err)
+	require.Len(t, leases, 1)
+	require.NoError(t, metadata.CompleteRawParseJob(ctx, leases[0]))
+	status, err = metadata.ReadRawSyncStatus(ctx, enrollment.Identity)
+	require.NoError(t, err)
+	head = findRawStatusHead(t, status.SourceHeads, "current.jsonl")
+	require.NotNil(t, head.LastParseCompletedAt)
+	assert.Equal(t, int64(2), head.Generation)
+	var firstState string
+	require.NoError(t, pg.QueryRowContext(ctx, `
+		SELECT state FROM raw_ingest_jobs
+		WHERE tenant_id = $1 AND manifest_id = $2`,
+		enrollment.Identity.TenantID, first.ManifestID).Scan(&firstState))
+	assert.Equal(t, "complete", firstState)
+	assert.NotEqual(t, first.ManifestID, tombstone.ManifestID)
+}
+
 func TestRawSyncStatusRollsBackAfterQueryFailure(t *testing.T) {
 	pg, _ := newPGE2ETestDatabase(t)
 	pg.SetMaxOpenConns(1)
@@ -319,16 +461,29 @@ func commitRawStatusGeneration(
 	object rawsync.ObjectRef,
 	manifest rawsync.Manifest,
 ) rawsync.CommitResult {
+	return commitRawStatusGenerationKind(t, store, identity, object, manifest, rawsync.ManifestSnapshot)
+}
+
+func commitRawStatusGenerationKind(
+	t *testing.T,
+	store *postgres.RawIngestStore,
+	identity rawsync.AuthIdentity,
+	object rawsync.ObjectRef,
+	manifest rawsync.Manifest,
+	kind rawsync.ManifestKind,
+) rawsync.CommitResult {
 	t.Helper()
 	manifest.SchemaVersion = rawsync.ManifestSchemaVersion
 	manifest.Provider = parser.AgentCodex
 	manifest.ConfiguredRootID = "root-a"
 	manifest.SourceKey = "current.jsonl"
-	manifest.Kind = rawsync.ManifestSnapshot
-	manifest.Entries = []rawsync.Entry{{
-		Path: "current.jsonl", Type: "file", Length: object.Length,
-		Objects: []rawsync.ObjectRef{object},
-	}}
+	manifest.Kind = kind
+	if kind == rawsync.ManifestSnapshot {
+		manifest.Entries = []rawsync.Entry{{
+			Path: "current.jsonl", Type: "file", Length: object.Length,
+			Objects: []rawsync.ObjectRef{object},
+		}}
+	}
 	canonical, err := rawsync.ValidateAndCanonicalize(
 		identity, manifest, rawsync.DefaultManifestLimits(),
 	)
@@ -455,6 +610,11 @@ func assertRawStatusJSONShape(t *testing.T, body []byte) {
 		[]string{"source_heads", "parse_jobs", "active_device_count", "devices", "uploads"},
 		slices.Collect(maps.Keys(object)),
 	)
+	var heads []map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(object["source_heads"], &heads))
+	for _, head := range heads {
+		assert.Contains(t, head, "last_parse_completed_at")
+	}
 }
 
 func findRawStatusHead(
