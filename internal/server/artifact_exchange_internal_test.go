@@ -325,3 +325,22 @@ func artifactExchangeBody(t *testing.T, target string, full bool) string {
 	require.NoError(t, err)
 	return string(body)
 }
+
+func TestArtifactExchangeRejectsNonPost(t *testing.T) {
+	calls := 0
+	srv := testArtifactExchangeServer(t, func(context.Context, ArtifactExchangeRequest) (artifact.SyncResult, error) {
+		calls++
+		return artifact.SyncResult{}, nil
+	})
+	body := artifactExchangeBody(t, t.TempDir(), false)
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			req := artifactExchangeRequest(t, "127.0.0.1:4321", "127.0.0.1:43125", body)
+			req.Method = method
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+			assert.Zero(t, calls)
+		})
+	}
+}

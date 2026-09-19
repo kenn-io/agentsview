@@ -222,7 +222,12 @@ func (s *Server) syncEngineForLocal(ctx context.Context, local *db.DB) *syncpkg.
 	if s.broadcaster != nil {
 		emitter = s.broadcaster
 	}
-	s.onDemandEngine = syncpkg.NewEngine(ctx, local, syncpkg.EngineConfig{
+	// Initialization belongs to the cached engine, not its first request.
+	initCtx := s.baseCtx
+	if initCtx == nil {
+		initCtx = context.WithoutCancel(ctx)
+	}
+	s.onDemandEngine = syncpkg.NewEngine(initCtx, local, syncpkg.EngineConfig{
 		AgentDirs:               cfg.AgentDirs,
 		SourceMachines:          cfg.SourceMachines,
 		ProviderMetadata:        cfg.ProviderMetadata,
