@@ -46,7 +46,7 @@ The tracked delivery sequence and production acceptance criteria live in
 | HTTP raw transport     | Available     | Missing-object negotiation, resumable upload, manifest commit, and authenticated status reporting                            |
 | Laptop capture         | Available     | Watching, bounded audits, safe SQLite snapshots, durable spooling, checkpoints, retries, and local status                    |
 | Server derivation      | Not available | Accepted generations are not yet parsed into PostgreSQL sessions or embeddings                                               |
-| Operations and cutover | Not available | Retention, garbage collection, disaster rebuilds, and migration from `pg push` remain future work                            |
+| Operations and cutover | Partial       | `pg serve` cleans due upload sessions and spool stages at startup and every 15 minutes; accepted-generation retention, disaster rebuilds, and migration from `pg push` remain future work |
 
 ### Work still in development
 
@@ -83,6 +83,32 @@ local checkpoint, pending work, retry time, failures, and coverage.
 The normal writable `agentsview serve` daemon has its own parser watcher. Run
 both only when local parsed sessions and hosted raw custody are both required;
 doing so intentionally creates two watchers over the same provider roots.
+
+## Upload maintenance
+
+When raw-sync routes are active, `agentsview pg serve` cleans upload sessions
+and the private `raw-upload-spool` directory during startup and every 15
+minutes. It expires due open sessions, removes due terminal sessions, and
+reconciles orphaned `.part` files through the existing PostgreSQL upload store.
+Each pass uses the existing bound of up to 128 rows per SQL batch and 128 spool
+entries per directory scan. The server keeps its spool cursor between passes.
+
+Run the same bounded pass on demand with:
+
+```bash
+agentsview raw-sync clean-uploads
+```
+
+The command uses the effective PostgreSQL target and data directory paired with
+`pg serve`, so an operator can run it while the server is stopped or when
+cleanup should happen immediately. A short-lived command starts a fresh spool
+cursor, so each invocation inspects at most the first 128 entries returned by
+the spool directory. Repeating the command can revisit the same preserved
+entries. Entries beyond that window require the running server, which keeps its
+cursor between passes. The command checks that the target has the provisioned
+raw-sync schema and write privileges before creating the upload spool. It
+reports `Raw upload cleanup pass completed.` only after the cleanup store
+closes successfully.
 
 ## HTTP control plane
 
