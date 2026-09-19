@@ -68,11 +68,10 @@ func runRawSyncServerStatus(
 	status, err := client.Status(ctx)
 	if err != nil {
 		var apiErr rawclient.APIError
-		if rawclient.AsAPIError(err, &apiErr) &&
-			apiErr.Status == http.StatusNotFound {
-			return runRawSyncStatus(ctx, out)
-		}
 		if rawclient.AsAPIError(err, &apiErr) {
+			if apiErr.Status == http.StatusNotFound {
+				return runRawSyncStatus(ctx, out)
+			}
 			return fmt.Errorf("server request failed: HTTP %d", apiErr.Status)
 		}
 		if ctx.Err() != nil {
