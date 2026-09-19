@@ -97,8 +97,9 @@ func validIdentifier(name string) bool {
 }
 
 // CheckTransportSecurity rejects a target that would send credentials and
-// session content in plaintext to a non-loopback host. Native connections
-// need secure=true; HTTP connections need the https scheme. allowInsecure
+// session content in plaintext, or over TLS that skips certificate
+// verification, to a non-loopback host. Native connections need secure=true
+// without skip_verify; HTTP connections need the https scheme. allowInsecure
 // skips the check, matching the PostgreSQL allow_insecure setting.
 func CheckTransportSecurity(dsn string, allowInsecure bool) error {
 	if allowInsecure {
@@ -108,12 +109,19 @@ func CheckTransportSecurity(dsn string, allowInsecure bool) error {
 	if err != nil {
 		return fmt.Errorf("parsing clickhouse url: %w", err)
 	}
-	if opt.TLS != nil {
+	unverifiedTLS := opt.TLS != nil && opt.TLS.InsecureSkipVerify
+	if opt.TLS != nil && !unverifiedTLS {
 		return nil
 	}
 	for _, addr := range opt.Addr {
 		if isLoopback(addr) {
 			continue
+		}
+		if unverifiedTLS {
+			return fmt.Errorf(
+				"clickhouse url for %s disables TLS certificate verification; omit skip_verify, or set allow_insecure = true to accept unverified TLS",
+				addr,
+			)
 		}
 		fix := "add secure=true to the url"
 		if opt.Protocol == clickhouse.HTTP {

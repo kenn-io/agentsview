@@ -24,6 +24,25 @@ func TestCheckTransportSecurity(t *testing.T) {
 		},
 		{name: "remote native tls", dsn: "clickhouse://ch.example.internal:9440/agentsview?secure=true"},
 		{
+			name:    "remote native skip_verify",
+			dsn:     "clickhouse://user:pw@ch.example.internal:9440/agentsview?secure=true&skip_verify=true",
+			wantErr: "skip_verify",
+		},
+		{
+			name:    "remote https skip_verify",
+			dsn:     "https://user:pw@ch.example.internal:8443/agentsview?skip_verify=true",
+			wantErr: "skip_verify",
+		},
+		{
+			name: "loopback skip_verify",
+			dsn:  "clickhouse://localhost:9440/agentsview?secure=true&skip_verify=true",
+		},
+		{
+			name:          "remote skip_verify allowed",
+			dsn:           "clickhouse://ch.example.internal:9440/agentsview?secure=true&skip_verify=true",
+			allowInsecure: true,
+		},
+		{
 			name:    "remote http plain",
 			dsn:     "http://ch.example.internal:8123/agentsview",
 			wantErr: "use an https:// url",

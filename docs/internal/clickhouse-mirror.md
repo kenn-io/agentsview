@@ -92,7 +92,7 @@ is `Target.Database`, else the DSN path, else `agentsview`.
 **Named targets share the PostgreSQL parser.** `[clickhouse]`,
 `[clickhouse.NAME]`, `default_clickhouse`, reserved names, and env
 `AGENTSVIEW_CLICKHOUSE_URL|_DATABASE|_MACHINE` on the default target only.
-Non-loopback URLs need TLS unless `allow_insecure`.
+Non-loopback URLs need verified TLS unless `allow_insecure`.
 
 **CLI matches `pg` minus vectors.** `push`, `status`, `serve`, `service`. When a
 daemon owns the archive, push posts to `/api/v1/push/clickhouse`. The OS service

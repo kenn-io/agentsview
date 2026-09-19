@@ -276,7 +276,7 @@ ______________________________________________________________________
 | `url`                | ClickHouse DSN (`clickhouse://`, `http://`, or `https://`)            |
 | `database`           | Database name; overrides the DSN path; default `agentsview`           |
 | `machine_name`       | Optional machine key for this pusher                                  |
-| `allow_insecure`     | Allow plaintext to a non-loopback host                                |
+| `allow_insecure`     | Allow plaintext or unverified TLS to a non-loopback host              |
 | `projects`           | Inclusive project filter                                              |
 | `exclude_projects`   | Exclusive project filter                                              |
 | `default_clickhouse` | Named target used when more than one `[clickhouse.NAME]` block exists |
@@ -321,7 +321,9 @@ those long-running commands use.
 
 Non-loopback URLs must use TLS unless `allow_insecure = true`. For the native
 protocol, add `secure=true` to the URL (typical TLS port 9440). For HTTP, use an
-`https://` URL. Loopback (`127.0.0.1`, `localhost`) may stay plaintext.
+`https://` URL. `skip_verify=true` is rejected on a non-loopback host unless
+`allow_insecure` is set. Loopback (`127.0.0.1`, `localhost`) may stay plaintext
+or skip verification.
 
 ______________________________________________________________________
 

@@ -20,6 +20,8 @@ The latest published release is
 
 - ClickHouse analytics summaries return zeros when no sessions match, instead of
     failing the request.
+- Remote ClickHouse URLs that skip TLS certificate checks (`skip_verify=true`)
+    are rejected unless `allow_insecure` is set.
 
 ## 0.43.0
 

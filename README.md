@@ -692,7 +692,7 @@ agentsview clickhouse service install              # launchd / systemd --user
 ```
 
 `--all --watch` is rejected. `clickhouse serve` and `clickhouse service` always
-use the effective default target. Non-loopback URLs require TLS unless
+use the effective default target. Non-loopback URLs require verified TLS unless
 `allow_insecure = true`.
 
 See [ClickHouse docs](https://agentsview.io/docs/clickhouse-sync/) for setup and
