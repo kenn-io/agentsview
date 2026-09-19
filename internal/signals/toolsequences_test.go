@@ -177,10 +177,27 @@ func TestClassifyToolOutcome(t *testing.T) {
 			want: ToolOutcomeUnknown,
 		},
 		{
+			name: "joined labeled images with blank lines",
+			call: ToolCallRow{
+				ToolName: "Read",
+				ResultContent: "agent-a:\n[\n\n{\"type\":\"input_image\",\"image_url\":\"data:image/png;base64,AAEC\"}\n]" +
+					"\n\nagent-b:\n[\n\n{\"type\":\"agentsview_image\",\"text\":\"![Image: image/png, 3 bytes](asset://abc.png)\"}\n]",
+			},
+			want: ToolOutcomeUnknown,
+		},
+		{
 			name: "offload reference followed by text",
 			call: ToolCallRow{
 				ToolName:      "Read",
 				ResultContent: "![Image: image/png, 3 bytes](asset://abc.png)\nFound target in src/main.go (line 12)",
+			},
+			want: ToolOutcomeContent,
+		},
+		{
+			name: "same-line image references with text",
+			call: ToolCallRow{
+				ToolName:      "Read",
+				ResultContent: "![Image: image/png, 3 bytes](asset://a.png) Found target ![Image: image/png, 3 bytes](asset://b.png)",
 			},
 			want: ToolOutcomeContent,
 		},

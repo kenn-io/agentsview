@@ -282,11 +282,18 @@ func isOffloadedImageReference(content string) bool {
 	content = strings.TrimSpace(content)
 	if strings.ContainsAny(content, "\r\n") ||
 		!strings.HasPrefix(content, "![Image:") ||
-		!strings.HasSuffix(content, ")") {
+		strings.Count(content, "](asset://") != 1 {
 		return false
 	}
-	open := strings.LastIndex(content, "](asset://")
-	return open > 0 && !strings.ContainsAny(content[open+2:len(content)-1], "()")
+	open := strings.Index(content, "](asset://")
+	tail := content[open+2:]
+	if !strings.HasSuffix(tail, ")") ||
+		strings.IndexByte(tail, ')') != len(tail)-1 {
+		return false
+	}
+	ref := tail[:len(tail)-1]
+	return strings.HasPrefix(ref, "asset://") &&
+		!strings.ContainsAny(ref, "()")
 }
 
 func summarySections(content string) []string {
@@ -294,12 +301,45 @@ func summarySections(content string) []string {
 	if content == "" {
 		return nil
 	}
-	parts := strings.Split(content, "\n\n")
-	sections := make([]string, 0, len(parts))
-	for _, part := range parts {
-		if part = strings.TrimSpace(part); part != "" {
-			sections = append(sections, part)
+	sections := make([]string, 0)
+	start := 0
+	depth := 0
+	inString := false
+	escaped := false
+	for i := 0; i < len(content); i++ {
+		ch := content[i]
+		if inString {
+			if escaped {
+				escaped = false
+			} else if ch == '\\' {
+				escaped = true
+			} else if ch == '"' {
+				inString = false
+			}
+			continue
 		}
+		switch ch {
+		case '"':
+			inString = true
+		case '[', '{':
+			depth++
+		case ']', '}':
+			if depth > 0 {
+				depth--
+			}
+		case '\n':
+			if depth == 0 && i+1 < len(content) &&
+				content[i+1] == '\n' {
+				if part := strings.TrimSpace(content[start:i]); part != "" {
+					sections = append(sections, part)
+				}
+				start = i + 2
+				i++
+			}
+		}
+	}
+	if part := strings.TrimSpace(content[start:]); part != "" {
+		sections = append(sections, part)
 	}
 	return sections
 }
