@@ -7756,6 +7756,8 @@ func TestProcessFileSkipCacheReparsesStaleCodexDataVersion(t *testing.T) {
 		Agent: parser.AgentCodex,
 		Path:  path,
 	})
+	defer res.releaseStaged()
+	defer res.retentionLease.Release()
 	require.NoError(t, res.err)
 	require.False(t, res.skip,
 		"skip cache must not hide stale parser data versions")
