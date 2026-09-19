@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -20,8 +19,8 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
-	"go.kenn.io/agentsview/internal/jsonutil"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 const (
@@ -56,33 +55,6 @@ type pushBoundaryState struct {
 	Fingerprints map[string]string `json:"fingerprints"`
 }
 
-// PushResult summarizes a push sync operation.
-//
-//nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
-type PushResult struct {
-	SessionsPushed   int
-	MessagesPushed   int
-	SkippedConflicts int
-	Errors           int
-	Duration         time.Duration
-	Vectors          VectorPushResult
-}
-
-type pushResultJSON PushResult
-
-func (r PushResult) MarshalJSONTo(out *jsontext.Encoder) error {
-	return jsonutil.MarshalDurationFields(out, pushResultJSON(r))
-}
-
-func (r *PushResult) UnmarshalJSONFrom(in *jsontext.Decoder) error {
-	var decoded pushResultJSON
-	if err := jsonutil.UnmarshalDurationFields(in, &decoded); err != nil {
-		return err
-	}
-	*r = PushResult(decoded)
-	return nil
-}
-
 // pushPrepareProgressStride bounds how many sessions the fingerprint loop
 // processes between "preparing" progress reports.
 const pushPrepareProgressStride = 500
@@ -101,67 +73,24 @@ func timedPushSetupStep(name string, fn func() error) error {
 	return nil
 }
 
-// PushProgress is reported after each batch during Push.
-type PushProgress struct {
-	// Phase is "preparing" while per-session push fingerprints are computed
-	// (SessionsDone/SessionsTotal count candidate sessions fingerprinted; on
-	// a full push this covers every local session and can run for minutes),
-	// "" during the session/message push, and "vectors" during the vector
-	// phase, whose progress is carried by the Vector* fields.
-	Phase            string
-	SessionsDone     int
-	SessionsTotal    int
-	MessagesDone     int
-	SkippedConflicts int
-	Errors           int
-	// VectorSessionsDone counts local sessions examined by the vector
-	// phase's delta scan (most are unchanged and skipped cheaply);
-	// VectorSessionsTotal is the local candidate count and
-	// VectorChunksPushed the embedding chunks written so far.
-	VectorSessionsDone  int
-	VectorSessionsTotal int
-	VectorChunksPushed  int
-}
-
-// PushOptions controls a single push. The zero value matches Push's
-// historical behavior.
-type PushOptions struct {
-	// Full bypasses unchanged-fingerprint and unchanged-hash skips so
-	// every session is resent.
-	Full bool
-	// ScopeVectorsToChangedSessions limits the vector phase's local
-	// hash read and PG state read to this push's changed relational
-	// sessions, instead of reconciling the whole generation. Ignored
-	// when the push runs (or is internally promoted to run) full, so
-	// reset recovery and backfills keep generation-wide reconciliation.
-	ScopeVectorsToChangedSessions bool
-	// LastReconciledVectorGeneration is the PG generation id the caller
-	// last reconciled generation-wide. When a scoped push resolves a
-	// different active generation id, the vector phase promotes itself to a
-	// generation-wide read so a newly active or recreated generation is
-	// never left partially populated (see pushVectors). Zero on the first
-	// push, which the reconcile bit already forces generation-wide.
-	LastReconciledVectorGeneration int64
-}
-
 // Push syncs local sessions and messages to PostgreSQL.
 // The onProgress callback, if non-nil, is called after each
 // batch with current totals.
 func (s *Sync) Push(
 	ctx context.Context, full bool,
-	onProgress func(PushProgress),
-) (PushResult, error) {
-	return s.PushWithOptions(ctx, PushOptions{Full: full}, onProgress)
+	onProgress func(storage.PushProgress),
+) (storage.PushResult, error) {
+	return s.PushWithOptions(ctx, storage.PushOptions{Full: full}, onProgress)
 }
 
-// PushWithOptions is Push with per-push options; see PushOptions.
+// PushWithOptions is Push with per-push options; see storage.PushOptions.
 func (s *Sync) PushWithOptions(
-	ctx context.Context, opts PushOptions,
-	onProgress func(PushProgress),
-) (PushResult, error) {
+	ctx context.Context, opts storage.PushOptions,
+	onProgress func(storage.PushProgress),
+) (storage.PushResult, error) {
 	full := opts.Full
 	start := time.Now()
-	var result PushResult
+	var result storage.PushResult
 	state := s.effectiveSyncState()
 	aliasBackfillState := s.aliasBackfillSyncStateOrDefault()
 
@@ -170,7 +99,7 @@ func (s *Sync) PushWithOptions(
 	// produces no per-batch reports, and some of it runs for minutes on a
 	// full push against a remote target.
 	if onProgress != nil {
-		onProgress(PushProgress{Phase: "preparing"})
+		onProgress(storage.PushProgress{Phase: "preparing"})
 	}
 
 	if err := CheckDataVersionCompat(ctx, s.pg); err != nil {
@@ -483,7 +412,7 @@ func (s *Sync) PushWithOptions(
 		if onProgress == nil {
 			return
 		}
-		onProgress(PushProgress{
+		onProgress(storage.PushProgress{
 			Phase:         "preparing",
 			SessionsDone:  done,
 			SessionsTotal: len(sessionByID),
@@ -672,7 +601,7 @@ func (s *Sync) PushWithOptions(
 			}
 		}
 		if onProgress != nil {
-			onProgress(PushProgress{
+			onProgress(storage.PushProgress{
 				SessionsDone:     end,
 				SessionsTotal:    len(sessions),
 				MessagesDone:     result.MessagesPushed,
@@ -771,7 +700,7 @@ func (s *Sync) PushWithOptions(
 // source attached no export runs; usage-only pushes still evict owned vectors.
 // A Skipped result with an empty reason renders as nothing (an unconfigured
 // phase is not a diagnosable skip like an unavailable extension). Without this
-// the zero-valued VectorPushResult would print "Vectors: 0 session(s) pushed".
+// the zero-valued storage.VectorPushResult would print "Vectors: 0 session(s) pushed".
 // failedSessions names sessions whose session-phase push failed; their vectors
 // are deferred so pgvector data never runs ahead of the sessions/messages rows.
 // full bypasses the unchanged-hash skip so a --full push also repairs vector
@@ -783,13 +712,13 @@ func (s *Sync) runVectorPushPhase(
 	ctx context.Context, full bool, scope []string,
 	lastReconciledGeneration int64,
 	failedSessions map[string]struct{},
-	onProgress func(PushProgress),
-) (VectorPushResult, error) {
+	onProgress func(storage.PushProgress),
+) (storage.VectorPushResult, error) {
 	if s.local.ArchiveContent().UsageOnly() {
-		return VectorPushResult{Skipped: true}, s.clearUsageOnlyVectorSessions(ctx)
+		return storage.VectorPushResult{Skipped: true}, s.clearUsageOnlyVectorSessions(ctx)
 	}
 	if s.vectorSource == nil {
-		return VectorPushResult{Skipped: true}, nil
+		return storage.VectorPushResult{Skipped: true}, nil
 	}
 	res, err := s.pushVectors(
 		ctx, full, scope, lastReconciledGeneration,
@@ -1622,7 +1551,7 @@ func markSessionAliasBackfillDone(ctx context.Context, local syncStateStore) err
 }
 
 func completeSessionAliasBackfill(ctx context.Context,
-	local syncStateStore, needed bool, result PushResult,
+	local syncStateStore, needed bool, result storage.PushResult,
 ) error {
 	// Skipped ownership conflicts are sessions owned by another machine on
 	// the hub; this host neither can nor should re-push them, so they do not
@@ -1677,7 +1606,7 @@ func markSessionProvenanceBackfillDone(ctx context.Context, local syncStateStore
 // scope complete only after every session in that scope was pushed without an
 // error.
 func completeSessionProvenanceBackfill(ctx context.Context,
-	local syncStateStore, needed bool, result PushResult,
+	local syncStateStore, needed bool, result storage.PushResult,
 ) error {
 	if !needed || result.Errors > 0 {
 		return nil
@@ -1712,7 +1641,7 @@ func markTranscriptRevisionBackfillDone(ctx context.Context, local syncStateStor
 }
 
 func completeTranscriptRevisionBackfill(ctx context.Context,
-	local syncStateStore, needed bool, result PushResult,
+	local syncStateStore, needed bool, result storage.PushResult,
 ) error {
 	if !needed || result.Errors > 0 {
 		return nil
@@ -1736,7 +1665,7 @@ func applyTimestampNormalizationBackfillRequirement(ctx context.Context,
 }
 
 func completeTimestampNormalizationBackfill(ctx context.Context,
-	local syncStateStore, needed bool, result PushResult,
+	local syncStateStore, needed bool, result storage.PushResult,
 ) error {
 	if !needed || result.Errors > 0 {
 		return nil

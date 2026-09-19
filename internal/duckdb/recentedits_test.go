@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // seedDuckEdit seeds a session, message, and one Edit tool_call into a local
@@ -74,7 +75,7 @@ func newDuckRecentEditsStore(
 	ctx := t.Context()
 	local := newLocalDB(t)
 	setup(local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err, "Push to DuckDB mirror")

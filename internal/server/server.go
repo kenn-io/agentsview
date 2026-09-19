@@ -26,12 +26,12 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/insight"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/pricingrefresh"
 	"go.kenn.io/agentsview/internal/rawsync"
 	"go.kenn.io/agentsview/internal/recall/extract"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/web"
 	"go.kenn.io/kit/daemon"
@@ -52,7 +52,7 @@ type VersionInfo struct {
 // Bump it when a client-visible contract cannot be decoded safely by an older
 // CLI or daemon.
 const (
-	APIVersion = 9
+	APIVersion = 10
 	// ScopedWatchPushAPIVersion is the first daemon API that accepts bounded
 	// watcher batches and their authoritative recovery scope on push requests.
 	ScopedWatchPushAPIVersion = 7
@@ -164,7 +164,12 @@ type Server struct {
 	// vectorPushSource, when set, supplies the local vectors.db active
 	// generation to the daemon's pg push handler. Nil leaves the vector
 	// push phase skipped, e.g. when [vector] is disabled.
-	vectorPushSource postgres.VectorPushSource
+	vectorPushSource storage.VectorPushSource
+
+	// replicas and mirror are the push backends registered by the
+	// composition root; each gets a daemon push route.
+	replicas []storage.Replica
+	mirror   storage.Mirror
 
 	// localSyncRunner, when set, backs the foreground local-sync HTTP handler
 	// with the worker-backed pass instead of running SyncThenRun in process.

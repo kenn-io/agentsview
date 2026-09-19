@@ -34,6 +34,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/remotesync"
 	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/storage"
 	agentsync "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -426,8 +427,8 @@ func TestRunPGRuntimeWarningHelperProcess(t *testing.T) {
 		Port:    port,
 		DataDir: os.Getenv("AGENTSVIEW_DATA_DIR"),
 	}
-	preparePGServe = func(config.Config, string) (pgServeStartup, error) {
-		return pgServeStartup{
+	prepareReplicaServe = func(storage.Replica, config.Config, string) (replicaServeStartup, error) {
+		return replicaServeStartup{
 			cfg: appCfg, ctx: ctx,
 			rtOpts: serveRuntimeOptions{
 				Mode: "pg-serve", RequestedPort: appCfg.Port,
@@ -442,7 +443,7 @@ func TestRunPGRuntimeWarningHelperProcess(t *testing.T) {
 	// This is only an orphan guard if the parent dies; normal completion is
 	// driven by the parent observing the warning on stdout.
 	time.AfterFunc(2*time.Minute, func() { os.Exit(0) })
-	runPGServe(appCfg, "")
+	runReplicaServe(pgReplica{}, appCfg, "")
 }
 
 func TestRunDuckDBRuntimeWarningHelperProcess(t *testing.T) {
@@ -547,7 +548,7 @@ func TestPrepareServeRuntimeConfigPortZeroUsesAssignedPort(t *testing.T) {
 		"missing ephemeral port message")
 	wantURL := fmt.Sprintf("http://viewer.example:%d", cfg.Port)
 	assert.Equal(t, wantURL, cfg.PublicURL)
-	require.True(t, writePGServeRuntimeRecord(&serveRuntime{
+	require.True(t, writeReplicaServeRuntimeRecord("pg", &serveRuntime{
 		Cfg: cfg, PublicURL: browserURL(cfg),
 	}))
 	recordPath, err := runtimeStore(cfg.DataDir).Path(os.Getpid())

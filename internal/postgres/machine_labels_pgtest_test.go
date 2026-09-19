@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"go.kenn.io/agentsview/internal/storage"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,7 +19,7 @@ func TestPushMachineMetadataWithoutSessionChanges(t *testing.T) {
 	local := testDB(t)
 	require.NoError(t, local.SetSyncState(t.Context(), "machine_label:installation-a", "Laptop"))
 	require.NoError(t, local.SetSyncState(t.Context(), "machine_alias:old-owner", "installation-a"))
-	syncer, err := New(pgURL, schema, local, "installation-a", true, SyncOptions{})
+	syncer, err := New(pgURL, schema, local, "installation-a", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	require.NoError(t, syncer.EnsureSchema(ctx))
@@ -48,7 +49,7 @@ func TestPushMachineMetadataWithoutSessionChanges(t *testing.T) {
 	other := testDB(t)
 	require.NoError(t, other.SetSyncState(t.Context(), "machine_alias:old-owner", "installation-b"))
 	require.NoError(t, other.SetSyncState(t.Context(), "machine_label:installation-b", "Desktop"))
-	otherSync, err := New(pgURL, schema, other, "installation-b", true, SyncOptions{})
+	otherSync, err := New(pgURL, schema, other, "installation-b", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, otherSync.Close()) })
 	_, err = otherSync.Push(ctx, false, nil)

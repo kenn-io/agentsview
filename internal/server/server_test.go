@@ -31,7 +31,9 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
+	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/parser"
+	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/server"
 	"go.kenn.io/agentsview/internal/service"
 	"go.kenn.io/agentsview/internal/sessionwatch"
@@ -160,6 +162,7 @@ func setupWithServerOptsAndDBTemplate(
 
 	// Prepend so caller-provided srvOpts can still override.
 	srvOpts = append([]server.Option{server.WithBroadcaster(broadcaster)}, srvOpts...)
+	srvOpts = append(srvOpts, server.WithReplicas(postgres.Backend{}), server.WithMirror(duckdb.Mirror{}))
 	srv := server.New(cfg, database, engine, srvOpts...)
 
 	return &testEnv{
@@ -273,6 +276,7 @@ func setupNoSyncMode(t *testing.T) *testEnv {
 	srv := server.New(
 		cfg, database, nil,
 		server.WithBroadcaster(broadcaster),
+		server.WithReplicas(postgres.Backend{}), server.WithMirror(duckdb.Mirror{}),
 	)
 
 	return &testEnv{
@@ -3315,7 +3319,7 @@ func TestPingReportsStalledSyncWithoutLosingDaemonIdentity(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 	te := &testEnv{
-		srv: server.New(cfg, database, engine), db: database, engine: engine,
+		srv: server.New(cfg, database, engine, server.WithReplicas(postgres.Backend{}), server.WithMirror(duckdb.Mirror{})), db: database, engine: engine,
 		dataDir: dir,
 	}
 	te.handler = wrapTestHandler(cfg, te.srv.Handler())

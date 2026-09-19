@@ -1240,36 +1240,11 @@ func LoadPFlags(fs *pflag.FlagSet) (Config, error) {
 	return cfg, nil
 }
 
-// LoadPGServePFlags builds a PG serve config from a parsed Cobra/pflag FlagSet.
-func LoadPGServePFlags(fs *pflag.FlagSet) (Config, error) {
-	cfg, err := loadPGServeBase()
-	if err != nil {
-		return cfg, err
-	}
-	applyPFlags(&cfg, fs)
-	if err := finishLoadedConfig(&cfg); err != nil {
-		return cfg, err
-	}
-	return cfg, nil
-}
-
-// LoadDuckDBServePFlags builds a DuckDB serve config from a parsed Cobra/pflag
-// FlagSet. It intentionally uses the same isolated serve defaults as pg serve.
-func LoadDuckDBServePFlags(fs *pflag.FlagSet) (Config, error) {
-	cfg, err := loadPGServeBase()
-	if err != nil {
-		return cfg, err
-	}
-	applyPFlags(&cfg, fs)
-	if err := finishLoadedConfig(&cfg); err != nil {
-		return cfg, err
-	}
-	return cfg, nil
-}
-
-// LoadClickHouseServePFlags builds a ClickHouse serve config from a parsed
-// Cobra/pflag FlagSet. It uses the same isolated serve defaults as pg serve.
-func LoadClickHouseServePFlags(fs *pflag.FlagSet) (Config, error) {
+// LoadRemoteServePFlags builds the config for a serve command that reads a
+// replica or mirror instead of the local archive, from a parsed Cobra/pflag
+// FlagSet. It uses isolated serve defaults so the remote serve never picks up
+// the local archive path.
+func LoadRemoteServePFlags(fs *pflag.FlagSet) (Config, error) {
 	cfg, err := loadPGServeBase()
 	if err != nil {
 		return cfg, err

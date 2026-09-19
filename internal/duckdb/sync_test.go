@@ -22,6 +22,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/storage"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,11 +34,11 @@ import (
 func TestPushIncrementalReplacesOnlyChangedSessions(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 3)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	appendMessage(t, local, "sess-2")
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, res.Diagnostics.Full)
 	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total)
@@ -98,7 +99,7 @@ func TestPushPreservesFilesystemSourceMachineAndCuration(t *testing.T) {
 		)
 		return err
 	}))
-	_, err := Push(ctx, path, local, "push-machine", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "push-machine", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	conn, err := Open(ctx, path)
@@ -125,7 +126,7 @@ func TestPushPreservesFilesystemSourceMachineAndCuration(t *testing.T) {
 	require.NotZero(t, pinID)
 
 	res, err := Push(
-		ctx, path, local, "push-machine", SyncOptions{}, false, nil,
+		ctx, path, local, "push-machine", storage.MirrorPushOptions{}, false, nil,
 	)
 	require.NoError(t, err)
 	assert.True(t, res.Diagnostics.CurationRefreshed)
@@ -143,7 +144,7 @@ func TestPushPreservesFilesystemSourceMachineAndCuration(t *testing.T) {
 	require.NoError(t, local.UnstarSession(ctx, "sess-2"))
 	require.NoError(t, local.UnpinMessage(ctx, "sess-2", msgs[0].ID))
 	res, err = Push(
-		ctx, path, local, "push-machine", SyncOptions{}, false, nil,
+		ctx, path, local, "push-machine", storage.MirrorPushOptions{}, false, nil,
 	)
 	require.NoError(t, err)
 	assert.True(t, res.Diagnostics.CurationRefreshed)
@@ -162,7 +163,7 @@ func TestPushPreservesFilesystemSourceMachineAndCuration(t *testing.T) {
 func TestPushRepushesLegacySessionWhenResolvedMachineChanges(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "machine-a", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "machine-a", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	// Bypass the normal machine-change rebuild and widen the candidate window
@@ -172,7 +173,7 @@ func TestPushRepushesLegacySessionWhenResolvedMachineChanges(t *testing.T) {
 		t, path, lastPushCutoffMetadataKey, "2020-01-01T00:00:00.000Z",
 	)
 
-	res, err := Push(ctx, path, local, "machine-b", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "machine-b", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, res.Diagnostics.Full)
 	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total)
@@ -194,7 +195,7 @@ func TestPushRepushesLegacySessionWhenResolvedMachineChanges(t *testing.T) {
 func TestPushBoundaryEqualSessionIsNotLost(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	probe, err := ProbeMirror(ctx, path)
 	require.NoError(t, err)
@@ -202,7 +203,7 @@ func TestPushBoundaryEqualSessionIsNotLost(t *testing.T) {
 	setSessionSignalsTo(t, local, "sess-1", probe.LastPushCutoff)
 	mutateSessionContent(t, local, "sess-1")
 
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total)
 }
@@ -227,12 +228,12 @@ func TestPushFutureMarkerSessionStillReceivesLaterChanges(t *testing.T) {
 		)
 		return err
 	}))
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	mutateSessionContent(t, local, "sess-1")
 
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, res.Diagnostics.Full)
 	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total,
@@ -257,7 +258,7 @@ func TestPushFutureMarkerSessionStillReceivesLaterChanges(t *testing.T) {
 func TestPushIncrementalMirrorsUsageOnlyChange(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 2)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	// Usage-only rewrite: no message or session-file change.
@@ -272,7 +273,7 @@ func TestPushIncrementalMirrorsUsageOnlyChange(t *testing.T) {
 		OccurredAt:   "2026-02-01T00:02:30.000Z",
 	}}))
 
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, res.Diagnostics.Full)
 	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total,
@@ -294,11 +295,11 @@ func TestPushIncrementalMirrorsUsageOnlyChange(t *testing.T) {
 func TestPushAppliesDeletionJournalDelta(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 2)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	require.NoError(t, local.DeleteSession(ctx, "sess-1"))
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Diagnostics.DeletedStaleSessions)
 	assertMirrorSessionAbsent(t, path, "sess-1")
@@ -376,12 +377,12 @@ func TestPushRebuildTriggers(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			local, path := newPushFixture(t, 1)
-			_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+			_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 			require.NoError(t, err)
 
 			tt.mangle(t, path)
 
-			res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+			res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 			require.NoError(t, err)
 			assert.True(t, res.Diagnostics.Full)
 			assert.Contains(t, res.Diagnostics.RebuildReason, tt.wantReasonHas)
@@ -400,7 +401,7 @@ func TestPushRebuildsV6MirrorToRestoreSourceMachine(t *testing.T) {
 		)
 		return err
 	}))
-	_, err := Push(ctx, path, local, "push-machine", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "push-machine", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	// Recreate the relevant state of a v6 mirror: rows were attributed to
@@ -416,7 +417,7 @@ func TestPushRebuildsV6MirrorToRestoreSourceMachine(t *testing.T) {
 	setMirrorMetadataValue(t, path, schemaVersionMetadataKey, "6")
 	setSessionSignalsTo(t, local, "sess-1", "2020-01-01T00:00:00.000Z")
 
-	res, err := Push(ctx, path, local, "push-machine", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "push-machine", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Diagnostics.Full)
 	assert.Contains(t, res.Diagnostics.RebuildReason, "schema version 6")
@@ -507,7 +508,7 @@ func TestPushRefusesToReplaceUnrecognizedExistingFile(t *testing.T) {
 					before, err := os.ReadFile(path)
 					require.NoError(t, err)
 
-					_, err = Push(ctx, path, local, "m", SyncOptions{}, full, nil)
+					_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, full, nil)
 					require.Error(t, err)
 					assert.Contains(t, err.Error(),
 						"not an agentsview duckdb mirror")
@@ -534,18 +535,18 @@ func TestPushRefusesToReplaceUnrecognizedExistingFile(t *testing.T) {
 func TestPushFailsClosedWhenWriterHoldsMirror(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	held, err := Open(ctx, path)
 	require.NoError(t, err)
 
 	for _, full := range []bool{false, true} {
-		_, err = Push(ctx, path, local, "m", SyncOptions{}, full, nil)
+		_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, full, nil)
 		require.Error(t, err, "full=%v", full)
 		assert.Contains(t, err.Error(), "read-write", "full=%v", full)
 	}
-	_, err = Push(ctx, path, local, "m", SyncOptions{Automatic: true}, false, nil)
+	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
 	require.Error(t, err,
 		"an automatic push must also fail closed on a probe-time writer lock")
 
@@ -565,14 +566,14 @@ func TestPushExplicitRebuildsWhileMirrorHeldByReaders(t *testing.T) {
 	skipReopenTestOnWindows(t)
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	held, err := OpenReadOnly(ctx, path)
 	require.NoError(t, err)
 
 	appendMessage(t, local, "sess-1")
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Diagnostics.Full,
 		"a reader-held mirror cannot be updated incrementally; an explicit push must rebuild")
@@ -619,7 +620,7 @@ func TestPushIncrementalMirrorsSubagentLinkBackfill(t *testing.T) {
 	})
 	require.NoError(t, err)
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assertMirrorSessionRelationship(t, path, "child-1", "", "root")
 
@@ -628,7 +629,7 @@ func TestPushIncrementalMirrorsSubagentLinkBackfill(t *testing.T) {
 		"parent-1", "toolu_child", "child-1"))
 	require.NoError(t, local.LinkSubagentSessions())
 
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, res.Diagnostics.Full,
 		"the follow-up push must be incremental")
@@ -662,7 +663,7 @@ func assertMirrorSessionRelationship(
 // which is also asserted here via the mid-hold ProbeMirror call.
 func TestPushDefersHeldMirrorForAutomaticPushes(t *testing.T) {
 	ctx := t.Context()
-	watchOpts := SyncOptions{Automatic: true}
+	watchOpts := storage.MirrorPushOptions{Automatic: true}
 	local, path := newPushFixture(t, 1)
 	_, err := Push(ctx, path, local, "m", watchOpts, false, nil)
 	require.NoError(t, err)
@@ -702,7 +703,7 @@ func TestPushDefersHeldMirrorForAutomaticPushes(t *testing.T) {
 }
 
 // TestAutomaticIncrementalPushSkipsScopeCount pins the bounded-cost side of
-// SyncOptions.Automatic: an automatic incremental push must not run the
+// storage.MirrorPushOptions.Automatic: an automatic incremental push must not run the
 // archive-scale CountSessionsForMirrorScope diagnostics COUNT, so
 // Diagnostics.LocalSessionCount stays 0 while the same archive reports 1 on
 // an explicit incremental push. The local *db.DB offers no query
@@ -711,11 +712,11 @@ func TestPushDefersHeldMirrorForAutomaticPushes(t *testing.T) {
 func TestAutomaticIncrementalPushSkipsScopeCount(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	appendMessage(t, local, "sess-1")
-	auto, err := Push(ctx, path, local, "m", SyncOptions{Automatic: true}, false, nil)
+	auto, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
 	require.NoError(t, err)
 	require.False(t, auto.Diagnostics.Full,
 		"fixture must exercise the incremental path")
@@ -725,7 +726,7 @@ func TestAutomaticIncrementalPushSkipsScopeCount(t *testing.T) {
 		"an automatic push must skip the archive-scale scope count")
 
 	appendMessage(t, local, "sess-1")
-	explicit, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	explicit, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	require.False(t, explicit.Diagnostics.Full,
 		"fixture must exercise the incremental path")
@@ -776,14 +777,14 @@ func TestPushFailsClosedWhenMirrorLosesSentinel(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			local, path := newPushFixture(t, 1)
-			_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+			_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 			require.NoError(t, err)
 
 			tt.mangle(t, path)
 			before, err := os.ReadFile(path)
 			require.NoError(t, err)
 
-			_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+			_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "not an agentsview duckdb mirror")
 
@@ -802,12 +803,12 @@ func TestPushFailsClosedWhenMirrorLosesSentinel(t *testing.T) {
 func TestPushRebuildsOverOldSchemaVersionMirror(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	setMirrorMetadataValue(t, path, schemaVersionMetadataKey, "7")
 
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Diagnostics.Full)
 	assert.Contains(t, res.Diagnostics.RebuildReason, "schema version")
@@ -820,10 +821,10 @@ func TestPushRebuildsOverOldSchemaVersionMirror(t *testing.T) {
 func TestPushRebuildReasonReportsFullFlag(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, true, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Diagnostics.Full)
 	assert.Equal(t, "--full requested", res.Diagnostics.RebuildReason)
@@ -838,12 +839,12 @@ func TestPushRebuildReasonReportsFullFlag(t *testing.T) {
 func TestPushRebuildsWhenMirrorDeletionCursorAheadOfLocal(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	setMirrorMetadataValue(t, path, deletionRevisionMetadataKey, "5")
 
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Diagnostics.Full)
 	assert.Equal(t, "mirror deletion cursor ahead of archive; archive was rebuilt",
@@ -881,7 +882,7 @@ func TestPushRebuildsWhenMirrorBuiltFromDifferentArchive(t *testing.T) {
 	})
 	require.NoError(t, err)
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	resA, err := Push(ctx, path, archiveA, "test-machine", SyncOptions{}, false, nil)
+	resA, err := Push(ctx, path, archiveA, "test-machine", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	require.True(t, resA.Diagnostics.Full, "first push against a fresh path is a rebuild")
 
@@ -911,7 +912,7 @@ func TestPushRebuildsWhenMirrorBuiltFromDifferentArchive(t *testing.T) {
 	// a full rebuild ever copies it into the mirror.
 	setSessionSignalsTo(t, archiveB, "b-old", "2020-01-01T00:00:00.000Z")
 
-	res, err := Push(ctx, path, archiveB, "test-machine", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, archiveB, "test-machine", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Diagnostics.Full,
 		"a mirror built from a different archive must be fully rebuilt")
@@ -925,7 +926,7 @@ func TestPushRebuildsWhenMirrorBuiltFromDifferentArchive(t *testing.T) {
 
 	// The rebuilt mirror now records archive B's id, so the next push from
 	// the same archive proceeds incrementally again.
-	resAgain, err := Push(ctx, path, archiveB, "test-machine", SyncOptions{}, false, nil)
+	resAgain, err := Push(ctx, path, archiveB, "test-machine", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, resAgain.Diagnostics.Full,
 		"a matching source database id must allow the incremental path")
@@ -943,7 +944,7 @@ func TestPushRebuildsWhenArchiveIdentityIsRepaired(t *testing.T) {
 	)
 	require.NoError(t, err)
 
-	first, err := Push(ctx, path, local, "test-machine", SyncOptions{}, false, nil)
+	first, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	require.True(t, first.Diagnostics.Full)
 	oldArchiveID, err := local.GetArchiveID(ctx)
@@ -961,7 +962,7 @@ func TestPushRebuildsWhenArchiveIdentityIsRepaired(t *testing.T) {
 	assert.Equal(t, databaseID, gotDatabaseID,
 		"archive identity repair must not rely on a database generation change")
 
-	result, err := Push(ctx, path, local, "test-machine", SyncOptions{}, false, nil)
+	result, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.True(t, result.Diagnostics.Full)
 	assert.Contains(t, result.Diagnostics.RebuildReason, "source archive id changed")
@@ -1000,10 +1001,10 @@ func TestPushRebuildsWhenArchiveIdentityIsRepaired(t *testing.T) {
 func TestPushRebuildsWhenMachineNameChanges(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "machine-a", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "machine-a", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
-	res, err := Push(ctx, path, local, "machine-b", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "machine-b", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Diagnostics.Full)
 	assert.Contains(t, res.Diagnostics.RebuildReason, "machine")
@@ -1023,7 +1024,7 @@ func TestPushRebuildsWhenMachineNameChanges(t *testing.T) {
 func TestPushDoesNotAdvanceStateOnError(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	before, err := ProbeMirror(ctx, path)
 	require.NoError(t, err)
@@ -1040,7 +1041,7 @@ func TestPushDoesNotAdvanceStateOnError(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Errors)
 
@@ -1058,7 +1059,7 @@ func TestSyncFullPushCreatesExpectedRows(t *testing.T) {
 	fixture := seedDuckDBSyncFixture(t, local)
 	path := filepath.Join(t.TempDir(), "full.duckdb")
 
-	result, err := Push(ctx, path, local, "test-machine", SyncOptions{}, true, nil)
+	result, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, result.SessionsPushed)
@@ -1089,8 +1090,8 @@ func TestPushSessionBatchReturnsContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	local := newLocalDB(t)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	var result PushResult
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
+	var result storage.MirrorPushResult
 	var pushed []db.Session
 
 	err := syncer.pushSessionBatchForMode(
@@ -1136,8 +1137,8 @@ func TestPushSessionBatchLogsAbandonedSessionsAfterContextCancel(
 	}
 	_, err := local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
-	var result PushResult
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
+	var result storage.MirrorPushResult
 	var pushed []db.Session
 	var logs bytes.Buffer
 	oldLog := log.Writer()
@@ -1146,7 +1147,7 @@ func TestPushSessionBatchLogsAbandonedSessionsAfterContextCancel(
 
 	err = syncer.pushSessionBatchForMode(
 		ctx, sessions, 0, len(sessions), &result, &pushed,
-		func(p PushProgress) {
+		func(p storage.MirrorPushProgress) {
 			if p.SessionsDone == 1 {
 				cancel()
 			}
@@ -1185,7 +1186,7 @@ func TestSyncPushReportsSessionDiagnosticsByAgent(t *testing.T) {
 	require.NoError(t, err)
 	path := filepath.Join(t.TempDir(), "diagnostics.duckdb")
 
-	result, err := Push(ctx, path, local, "test-machine", SyncOptions{}, true, nil)
+	result, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
 
 	wantByAgent := map[string]int{"claude": 2, "codex": 1}
@@ -1227,10 +1228,10 @@ func TestSyncPushReportsProgressAcrossBatchBoundaries(t *testing.T) {
 	_, err := local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(t, err)
 	path := filepath.Join(t.TempDir(), "progress.duckdb")
-	var progress []PushProgress
+	var progress []storage.MirrorPushProgress
 
-	result, err := Push(ctx, path, local, "test-machine", SyncOptions{}, true,
-		func(p PushProgress) {
+	result, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, true,
+		func(p storage.MirrorPushProgress) {
 			progress = append(progress, p)
 		},
 	)
@@ -1419,7 +1420,7 @@ func perturbSessionField(base db.Session, i int) (db.Session, bool) {
 func TestPushMirrorsQualitySignalRecompute(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	sess, err := local.GetSession(ctx, "sess-1")
@@ -1449,7 +1450,7 @@ func TestPushMirrorsQualitySignalRecompute(t *testing.T) {
 		},
 	}))
 
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, res.Diagnostics.Full)
 	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total,
@@ -1477,7 +1478,7 @@ func TestSessionFingerprintsWriteColumn(t *testing.T) {
 	fixture := seedDuckDBSyncFixture(t, local)
 	path := filepath.Join(t.TempDir(), "fingerprint-column.duckdb")
 
-	_, err := Push(ctx, path, local, "test-machine", SyncOptions{}, true, nil)
+	_, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
 
 	conn, err := Open(ctx, path)
@@ -1498,7 +1499,7 @@ func TestSessionFingerprintsWriteColumn(t *testing.T) {
 func TestSyncUsesFallbackPricingWhenLocalPricingIsEmpty(t *testing.T) {
 	ctx := t.Context()
 	local := newLocalDB(t)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 
 	require.NoError(t, syncer.syncModelPricing(ctx))
@@ -1514,7 +1515,7 @@ func TestSyncUsesFallbackPricingWhenLocalPricingIsEmpty(t *testing.T) {
 func TestSyncModelPricingPreservesExistingMirrorRows(t *testing.T) {
 	ctx := t.Context()
 	local := newLocalDB(t)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.DB().ExecContext(ctx, `
 		INSERT INTO model_pricing (
@@ -1553,7 +1554,7 @@ func TestSyncModelPricingRetiresOpenRouterRows(t *testing.T) {
 			Value: `["minimax/minimax-m3"]`,
 		},
 	))
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	require.NoError(t, syncer.syncModelPricing(ctx))
 
@@ -1608,7 +1609,7 @@ func TestSyncModelPricingSkipsUnchangedMirrorRows(t *testing.T) {
 		CacheCreationPerMTok: money.MustParseDollars("1"),
 		CacheReadPerMTok:     money.MustParseDollars("0.5"),
 	}}))
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	require.NoError(t, syncer.syncModelPricing(ctx))
 	_, err := syncer.DB().ExecContext(ctx,
@@ -1646,7 +1647,7 @@ func TestSyncModelPricingBandsPersistsAndRemovesCompleteSet(t *testing.T) {
 		CacheReadPerMTok:     money.MustParseDollars("0.2"),
 	}}
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{withBand}))
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 
 	require.NoError(t, syncer.syncModelPricing(ctx))
@@ -1702,7 +1703,7 @@ func TestSyncMirrorsSessionProjectIdentitySnapshotsByArchiveGeneration(
 	generation, err := local.GetDatabaseID(ctx)
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	rev, err := syncer.syncProjectIdentityObservations(ctx, 0, false, nil)
 	require.NoError(t, err)
@@ -1790,7 +1791,7 @@ func TestFilteredIncrementalPushPublishesMovedSessionSourceSnapshot(t *testing.T
 	))
 
 	path := filepath.Join(t.TempDir(), "filtered-project-move.duckdb")
-	opts := SyncOptions{Projects: []string{targetProject}}
+	opts := storage.MirrorPushOptions{Projects: []string{targetProject}}
 	_, err := Push(ctx, path, local, duckPushMachine, opts, true, nil)
 	require.NoError(t, err)
 
@@ -1856,7 +1857,7 @@ func TestSyncPreservesAmbiguousIdentityAlongsideResolvedRemote(t *testing.T) {
 		},
 	))
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.syncProjectIdentityObservations(ctx, 0, true, nil)
 	require.NoError(t, err)
@@ -1890,7 +1891,7 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 		))
 	}
 	target := filepath.Join(t.TempDir(), "identity-filter.duckdb")
-	filtered := newTestSync(t, target, local, SyncOptions{
+	filtered := newTestSync(t, target, local, storage.MirrorPushOptions{
 		Projects: []string{"alpha"},
 	})
 	require.NoError(t, createSchema(ctx, filtered.DB()))
@@ -1921,7 +1922,7 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 		"out-of-scope changes must not republish the filtered identity scope")
 	require.NoError(t, filtered.Close())
 
-	unfiltered := newTestSync(t, target, local, SyncOptions{})
+	unfiltered := newTestSync(t, target, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, unfiltered.DB()))
 	_, err = unfiltered.syncProjectIdentityObservations(ctx, 0, false, nil)
 	require.NoError(t, err)
@@ -1965,7 +1966,7 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 		},
 	))
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	rev, err := syncer.syncProjectIdentityObservations(ctx, 0, false, nil)
 	require.NoError(t, err)
@@ -2034,7 +2035,7 @@ func TestSyncIncrementalUpdatesPinsWithoutSessionChange(t *testing.T) {
 	fixture := seedDuckDBSyncFixture(t, local)
 	path := filepath.Join(t.TempDir(), "pins.duckdb")
 
-	first, err := Push(ctx, path, local, "test-machine", SyncOptions{}, true, nil)
+	first, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
 	require.Equal(t, 2, first.SessionsPushed)
 
@@ -2045,7 +2046,7 @@ func TestSyncIncrementalUpdatesPinsWithoutSessionChange(t *testing.T) {
 	_, err = local.PinMessage(ctx, fixture.alphaID, msgs[0].ID, &note)
 	require.NoError(t, err)
 
-	second, err := Push(ctx, path, local, "test-machine", SyncOptions{}, false, nil)
+	second, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, second.SessionsPushed)
 
@@ -2064,7 +2065,7 @@ func TestClearSessionTablesRollsBackWithTransaction(t *testing.T) {
 	ctx := t.Context()
 	local := newLocalDB(t)
 	seedDuckDBSyncFixture(t, local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2103,7 +2104,7 @@ func TestSyncProjectFiltersMatchPushScope(t *testing.T) {
 
 	includePath := filepath.Join(t.TempDir(), "include.duckdb")
 	result, err := Push(ctx, includePath, local, "test-machine",
-		SyncOptions{Projects: []string{"alpha"}}, true, nil)
+		storage.MirrorPushOptions{Projects: []string{"alpha"}}, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.SessionsPushed)
 	includeConn, err := Open(ctx, includePath)
@@ -2114,7 +2115,7 @@ func TestSyncProjectFiltersMatchPushScope(t *testing.T) {
 
 	excludePath := filepath.Join(t.TempDir(), "exclude.duckdb")
 	result, err = Push(ctx, excludePath, local, "test-machine",
-		SyncOptions{ExcludeProjects: []string{"alpha"}}, true, nil)
+		storage.MirrorPushOptions{ExcludeProjects: []string{"alpha"}}, true, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.SessionsPushed)
 	excludeConn, err := Open(ctx, excludePath)
@@ -2131,7 +2132,7 @@ func TestReadStatusFromConfigReportsTargetPushMetadataAndCounts(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "status.duckdb")
 
 	before := time.Now().UTC()
-	_, err := Push(ctx, target, local, "test-machine", SyncOptions{}, true, nil)
+	_, err := Push(ctx, target, local, "test-machine", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
 	after := time.Now().UTC()
 
@@ -2165,7 +2166,7 @@ func TestReadStatusFromConfigReportsScopeAndDegradesOnMissingMetadata(t *testing
 	target := filepath.Join(t.TempDir(), "status.duckdb")
 
 	_, err := Push(ctx, target, local, "test-machine",
-		SyncOptions{Projects: []string{"alpha"}}, true, nil)
+		storage.MirrorPushOptions{Projects: []string{"alpha"}}, true, nil)
 	require.NoError(t, err)
 
 	status, err := ReadStatusFromConfig(ctx, config.DuckDBConfig{
@@ -2230,7 +2231,7 @@ func TestReadStatusFromConfigCountsAllSourceMachines(t *testing.T) {
 	seedDuckDBSyncFixture(t, local)
 	target := filepath.Join(t.TempDir(), "status.duckdb")
 
-	_, err := Push(ctx, target, local, "actual-pusher", SyncOptions{}, true, nil)
+	_, err := Push(ctx, target, local, "actual-pusher", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
 
 	conn, err := Open(ctx, target)
@@ -2261,7 +2262,7 @@ func newLocalDB(t *testing.T) *db.DB {
 }
 
 func newTestSync(
-	t *testing.T, path string, local *db.DB, opts SyncOptions,
+	t *testing.T, path string, local *db.DB, opts storage.MirrorPushOptions,
 ) *Sync {
 	t.Helper()
 	syncer, err := New(t.Context(), path, local, "test-machine", opts)
@@ -2272,7 +2273,7 @@ func newTestSync(
 	return syncer
 }
 
-func newInMemoryTestSync(t *testing.T, local *db.DB, opts SyncOptions) *Sync {
+func newInMemoryTestSync(t *testing.T, local *db.DB, opts storage.MirrorPushOptions) *Sync {
 	t.Helper()
 	return newTestSync(t, ":memory:", local, opts)
 }
@@ -2395,7 +2396,7 @@ func assertMirrorSessionAbsent(t *testing.T, path, sessionID string) {
 func TestDuckGetAnalyticsSkillsIgnoresCrossSessionDuplicateIDs(t *testing.T) {
 	ctx := t.Context()
 	local := newLocalDB(t)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	duck := syncer.DB()
 	store := NewStoreFromDB(duck)
@@ -2665,7 +2666,7 @@ func TestSyncResultDurationIsSet(t *testing.T) {
 	seedDuckDBSyncFixture(t, local)
 	path := filepath.Join(t.TempDir(), "duration.duckdb")
 
-	result, err := Push(ctx, path, local, "test-machine", SyncOptions{}, true, nil)
+	result, err := Push(ctx, path, local, "test-machine", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
 	assert.Greater(t, result.Duration, time.Duration(0))
 }
@@ -2677,7 +2678,7 @@ func TestSyncResultDurationIsSet(t *testing.T) {
 func TestDuckPushWritesSessionProvenance(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	archiveID, err := local.GetArchiveID(ctx)
@@ -2710,7 +2711,7 @@ func TestDuckPushWritesSessionProvenance(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, res.Diagnostics.Full,
 		"second push must be incremental to exercise the session-replace path")

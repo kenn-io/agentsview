@@ -21,6 +21,7 @@ import (
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )
 
@@ -36,7 +37,7 @@ type DuckDBPushConfig struct {
 	// incremental push blocked by read-only serve handles defers instead
 	// of rebuilding the whole archive on every changed batch, and
 	// archive-scale diagnostics are skipped (see
-	// duckdbsync.SyncOptions.Automatic). Explicit `duckdb push` runs leave
+	// storage.MirrorPushOptions.Automatic). Explicit `duckdb push` runs leave
 	// it false and do neither.
 	Automatic bool
 }
@@ -52,7 +53,7 @@ type duckDBPusher struct {
 		func() error,
 	) error
 	ensurePricing func(context.Context) error
-	mirrorPush    func(context.Context, bool) (duckdbsync.PushResult, error)
+	mirrorPush    func(context.Context, bool) (storage.MirrorPushResult, error)
 }
 
 func (p *duckDBPusher) push(
@@ -127,7 +128,7 @@ func runDuckDBPush(cfg DuckDBPushConfig) {
 	if err != nil {
 		fatal("duckdb push: %v", err)
 	}
-	if err := duckdbsync.ValidatePushTarget(duckCfg); err != nil {
+	if err := mirrorBackend.ValidatePushTarget(duckCfg); err != nil {
 		fatal("duckdb push: %v", err)
 	}
 	writeDuckDBPushPlan(os.Stdout, duckCfg, cfg, projects, excludeProjects)
@@ -210,7 +211,7 @@ func writeDuckDBPushPlan(
 // (missing file, schema drift, a live serve holding the mirror locked, ...)
 // silently print nothing here, leaving only the generic "Pushed N
 // sessions..." summary with no indication a full rebuild had just run.
-func writeDuckDBPushDiagnostics(w io.Writer, result duckdbsync.PushResult) {
+func writeDuckDBPushDiagnostics(w io.Writer, result storage.MirrorPushResult) {
 	if result.Diagnostics.Deferred {
 		reason := result.Diagnostics.DeferredReason
 		if reason == "" {
@@ -252,9 +253,9 @@ func writeDuckDBPushDiagnostics(w io.Writer, result duckdbsync.PushResult) {
 // formatDuckDBPushSource renders an incremental push's source counters.
 // The "local N" figure is omitted when LocalSessionCount is 0: automatic
 // pushes skip the archive-scale scope count entirely (see
-// duckdbsync.SyncOptions.Automatic), so 0 means "not counted", not an
+// storage.MirrorPushOptions.Automatic), so 0 means "not counted", not an
 // empty archive.
-func formatDuckDBPushSource(d duckdbsync.PushDiagnostics) string {
+func formatDuckDBPushSource(d storage.MirrorPushDiagnostics) string {
 	source := ""
 	if d.LocalSessionCount > 0 {
 		source = fmt.Sprintf("local %d; ", d.LocalSessionCount)
@@ -278,7 +279,7 @@ func formatDuckDBPushFilters(projects []string, excludeProjects []string) string
 	}
 }
 
-func formatDuckDBPushSessionCounts(counts duckdbsync.PushSessionCounts) string {
+func formatDuckDBPushSessionCounts(counts storage.MirrorSessionCounts) string {
 	if len(counts.ByAgent) == 0 {
 		return strconv.Itoa(counts.Total)
 	}
@@ -349,7 +350,7 @@ func loadDuckDBServeConfig(cmd *cobra.Command) (config.Config, string, error) {
 	if err != nil {
 		return config.Config{}, "", fmt.Errorf("reading base-path: %w", err)
 	}
-	cfg, err := config.LoadDuckDBServePFlags(cmd.Flags())
+	cfg, err := config.LoadRemoteServePFlags(cmd.Flags())
 	if err != nil {
 		return config.Config{}, "", fmt.Errorf("loading config: %w", err)
 	}

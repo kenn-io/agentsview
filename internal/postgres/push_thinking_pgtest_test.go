@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // TestPushThinkingText_SanitizesNullAndInvalidUTF8 verifies that
@@ -27,7 +28,7 @@ func TestPushThinkingText_SanitizesNullAndInvalidUTF8(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"thinking-test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()

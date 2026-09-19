@@ -6,6 +6,8 @@ import (
 	"database/sql"
 	"testing"
 
+	"go.kenn.io/agentsview/internal/storage"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,11 +21,11 @@ func TestPushInstallationAdoptionRebuildsWithoutSplittingHistory(t *testing.T) {
 		return err
 	}))
 	require.NoError(t, local.SetSyncState(t.Context(), "artifact_local_machine_name", owner))
-	_, err := Push(t.Context(), path, local, owner, SyncOptions{}, false, nil)
+	_, err := Push(t.Context(), path, local, owner, storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	_, err = local.EnsureInstallationIdentity(t.Context(), identity)
 	require.NoError(t, err)
-	result, err := Push(t.Context(), path, local, identity, SyncOptions{}, false, nil)
+	result, err := Push(t.Context(), path, local, identity, storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.True(t, result.Diagnostics.Full)
 	assert.Contains(t, result.Diagnostics.RebuildReason, "machine name changed")

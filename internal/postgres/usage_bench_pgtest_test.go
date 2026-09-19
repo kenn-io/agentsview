@@ -17,6 +17,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 const pgUsageBenchmarkSchemaPrefix = "agentsview_pg_usage_bench"
@@ -106,7 +107,7 @@ func openPGUsageBenchmarkFixture(t testing.TB) *pgUsageBenchmarkFixture {
 	local, err := db.Open(t.Context(), t.TempDir()+"/usage-bench.db")
 	require.NoError(err)
 	seedUsageParityFixture(t, local)
-	syncer, err := New(pgURL, schema, local, "bench-machine", true, SyncOptions{})
+	syncer, err := New(pgURL, schema, local, "bench-machine", true, storage.PusherOptions{})
 	require.NoError(err)
 	require.NoError(EnsureSchema(t.Context(), syncer.pg, schema))
 	remote, err := NewStore(pgURL, schema, true)

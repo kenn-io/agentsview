@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 type syncStateReaderStub struct {
@@ -340,7 +341,7 @@ func TestTimestampNormalizationBackfillForcesOneFullPush(t *testing.T) {
 	assert.True(t, needed)
 
 	require.NoError(t, completeTimestampNormalizationBackfill(
-		t.Context(), store, needed, PushResult{},
+		t.Context(), store, needed, storage.PushResult{},
 	))
 	full, needed, err = applyTimestampNormalizationBackfillRequirement(
 		t.Context(), store, false,
@@ -354,7 +355,7 @@ func TestTimestampNormalizationBackfillRetriesAfterPushErrors(t *testing.T) {
 	store := &syncStateStoreStub{}
 
 	require.NoError(t, completeTimestampNormalizationBackfill(t.Context(),
-		store, true, PushResult{Errors: 1},
+		store, true, storage.PushResult{Errors: 1},
 	))
 	assert.Empty(t, store.values[timestampNormalizationBackfillStateKey])
 }
@@ -362,18 +363,18 @@ func TestTimestampNormalizationBackfillRetriesAfterPushErrors(t *testing.T) {
 func TestCompleteSessionAliasBackfillMarksDoneUnlessErrors(t *testing.T) {
 	for _, tc := range []struct {
 		name string
-		res  PushResult
+		res  storage.PushResult
 		want string
 	}{
 		{name: "clean", want: "1"},
-		{name: "errors", res: PushResult{Errors: 1}},
+		{name: "errors", res: storage.PushResult{Errors: 1}},
 		// Skipped ownership conflicts are other machines' sessions this host
 		// can never push; they must not block the one-time backfill marker,
 		// or a shared hub can never leave the forced-full-push state.
-		{name: "skipped conflicts", res: PushResult{SkippedConflicts: 1}, want: "1"},
+		{name: "skipped conflicts", res: storage.PushResult{SkippedConflicts: 1}, want: "1"},
 		{
 			name: "errors with skipped conflicts",
-			res:  PushResult{Errors: 1, SkippedConflicts: 2},
+			res:  storage.PushResult{Errors: 1, SkippedConflicts: 2},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -422,7 +423,7 @@ func TestSessionAliasBackfillRequirementUsesSyncAliasStateAcrossFilters(t *testi
 	require.NoError(t, completeSessionAliasBackfill(t.Context(),
 		syncA.aliasBackfillSyncStateOrDefault(),
 		true,
-		PushResult{},
+		storage.PushResult{},
 	))
 
 	full, needed, err = applySessionAliasBackfillRequirement(t.Context(),

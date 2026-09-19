@@ -12,6 +12,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // seedDuckCandidateSession inserts a minimal session with one message, using
@@ -96,7 +97,7 @@ func TestDuckWorktreeCandidatesArchiveWideMatchesSQLite(t *testing.T) {
 		Agent: "codex",
 	}), "seed zero-message session")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
 	projects, err := local.BuildProjectIdentityMap(ctx, []string{project})
@@ -159,7 +160,7 @@ func TestDuckWorktreeCandidatesExcludeDifferentProjectKeys(t *testing.T) {
 			},
 		))
 	}
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
 	projects, err := local.BuildProjectIdentityMap(
@@ -201,7 +202,7 @@ func TestDuckListArchiveWorktreeCandidatesKeyMismatch(t *testing.T) {
 	setDuckCandidateSnapshot(t, ctx, local, "session-a", project,
 		"/srv/worktrees/repo", "/srv/worktrees/repo/feature")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
 	duckStore := NewStoreFromDB(syncer.DB())

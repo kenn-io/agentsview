@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // TestDuckPushReplicatesWorktreeMappings verifies that a push publishes a
@@ -25,7 +26,7 @@ func TestDuckPushReplicatesWorktreeMappings(t *testing.T) {
 		})
 	require.NoError(t, err, "CreateWorktreeProjectMapping")
 
-	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err, "Push")
 
 	archiveID, err := local.GetArchiveID(ctx)
@@ -77,7 +78,7 @@ func TestDuckFilteredMappingPublicationOmitsOutOfScopeMetadata(t *testing.T) {
 	)
 	require.NoError(t, err, "create dynamic mapping")
 
-	opts := SyncOptions{Projects: []string{"alpha"}}
+	opts := storage.MirrorPushOptions{Projects: []string{"alpha"}}
 	_, err = Push(ctx, path, local, "m", opts, false, nil)
 	require.NoError(t, err, "initial filtered Push")
 
@@ -138,7 +139,7 @@ func TestDuckFullPublicationClearsOnlyOwnArchive(t *testing.T) {
 			Enabled: true,
 		})
 	require.NoError(t, err, "CreateWorktreeProjectMapping")
-	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err, "initial Push")
 
 	archiveID, err := local.GetArchiveID(ctx)
@@ -167,7 +168,7 @@ func TestDuckFullPublicationClearsOnlyOwnArchive(t *testing.T) {
 	require.NoError(t, err, "zero mapping revision cursor")
 	require.NoError(t, conn.Close())
 
-	result, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	result, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err, "Push")
 	require.False(t, result.Diagnostics.Full,
 		"push must stay incremental so the full publication path, not a "+
@@ -212,7 +213,7 @@ func TestDuckMappingDeleteTombstones(t *testing.T) {
 			Enabled: true,
 		})
 	require.NoError(t, err, "CreateWorktreeProjectMapping")
-	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err, "first Push")
 
 	probe, err := ProbeMirror(ctx, path)
@@ -243,7 +244,7 @@ func TestDuckMappingDeleteTombstones(t *testing.T) {
 			Enabled: true,
 		})
 	require.NoError(t, err, "CreateWorktreeProjectMapping second mapping")
-	result, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	result, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err, "second Push")
 	assert.False(t, result.Diagnostics.Full,
 		"second push must be incremental to exercise the delta path")

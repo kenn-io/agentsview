@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestStoreSessionAndMessageTokenUsage(t *testing.T) {
@@ -83,7 +84,7 @@ func TestPushTokenUsageToPostgres(t *testing.T) {
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	local := testDB(t)
-	ps, err := New(pgURL, "agentsview", local, "test-machine", true, SyncOptions{})
+	ps, err := New(pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
 

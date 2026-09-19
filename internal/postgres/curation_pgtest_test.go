@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func reconcilePinnedMessages(
@@ -145,7 +146,7 @@ func TestPushPreservesMultiplePGPinsBySourceUUID(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"curation-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "New sync")
 	defer ps.Close()
@@ -272,7 +273,7 @@ func TestPushDropsEditedLegacyPinInBothStores(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"curation-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "New sync")
 	defer ps.Close()
@@ -463,7 +464,7 @@ func TestPushReconcilesPGPinsByPriorMessageIdentity(t *testing.T) {
 			local := testDB(t)
 			ps, err := New(
 				pgURL, "agentsview", local,
-				"curation-machine", true, SyncOptions{},
+				"curation-machine", true, storage.PusherOptions{},
 			)
 			require.NoError(t, err, "New sync")
 			defer ps.Close()
@@ -1411,7 +1412,7 @@ func TestPushRestoresDevinPinAcrossSourceUUIDRescope(t *testing.T) {
 			local := testDB(t)
 			ps, err := New(
 				pgURL, "agentsview", local,
-				"curation-machine", true, SyncOptions{},
+				"curation-machine", true, storage.PusherOptions{},
 			)
 			require.NoError(t, err, "New sync")
 			defer ps.Close()
@@ -1498,7 +1499,7 @@ func TestPushDropsDevinPinWhenBareAndScopedUUIDsCoexist(t *testing.T) {
 	local := testDB(t)
 	ps, err := New(
 		pgURL, "agentsview", local,
-		"curation-machine", true, SyncOptions{},
+		"curation-machine", true, storage.PusherOptions{},
 	)
 	require.NoError(t, err, "New sync")
 	defer ps.Close()

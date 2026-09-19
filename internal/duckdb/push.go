@@ -21,6 +21,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func (s *Sync) syncModelPricing(ctx context.Context) error {
@@ -796,7 +797,7 @@ func duckFallbackPricingRows() []db.ModelPricing {
 // so a never-mirrored out-of-scope deletion stays invisible to filtered
 // diagnostics. Work stays bounded by the delta either way.
 func (s *Sync) applyDeletionDelta(
-	ctx context.Context, after, through int64, result *PushResult,
+	ctx context.Context, after, through int64, result *storage.MirrorPushResult,
 ) error {
 	tombstones, err := s.local.LoadSessionDeletionDelta(
 		ctx, after, through, nil, nil,

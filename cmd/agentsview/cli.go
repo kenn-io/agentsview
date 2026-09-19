@@ -319,7 +319,7 @@ func newOpenAPICommand() *cobra.Command {
 				Version:   version,
 				Commit:    commit,
 				BuildDate: buildDate,
-			})
+			}, pushBackendOptions()...)
 			var data []byte
 			var err error
 			if yamlOutput {
@@ -667,116 +667,9 @@ func newActivityReportCommand() *cobra.Command {
 }
 
 func newPGCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:          "pg",
-		Short:        "PostgreSQL sync and serve commands",
-		GroupID:      groupData,
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return cmd.Help()
-		},
-	}
-	cmd.AddCommand(newPGPushCommand())
-	cmd.AddCommand(newPGStatusCommand())
-	cmd.AddCommand(newPGServeCommand())
-	cmd.AddCommand(newPGVectorsCommand())
-	cmd.AddCommand(newPGServiceCommand())
-	return cmd
-}
-
-func newPGPushCommand() *cobra.Command {
-	var cfg PGPushConfig
-	cmd := &cobra.Command{
-		Use:          "push [target]",
-		Short:        "Push local data to PostgreSQL",
-		SilenceUsage: true,
-		Args:         cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			targetName := ""
-			if len(args) == 1 {
-				targetName = args[0]
-			}
-			if cfg.AllTargets && cfg.Watch {
-				return fmt.Errorf(
-					"pg push --watch: %w",
-					errors.New("--all cannot be combined with --watch"),
-				)
-			}
-			if cfg.Watch {
-				if err := runPGPushWatch(cfg, targetName); err != nil {
-					return fmt.Errorf("pg push --watch: %w", err)
-				}
-				return nil
-			}
-			if cmd.Flags().Changed("debounce") || cmd.Flags().Changed("interval") {
-				fmt.Fprintln(os.Stderr,
-					"warning: --debounce and --interval have no effect without --watch")
-			}
-			if err := runPGPush(cfg, targetName); err != nil {
-				return fmt.Errorf("pg push: %w", err)
-			}
-			return nil
-		},
-	}
-	cmd.Flags().BoolVar(&cfg.AllTargets, "all", false, "Push every configured PG target sequentially")
-	cmd.Flags().BoolVar(&cfg.Full, "full", false, "Force full local resync and PG push")
-	cmd.Flags().StringVar(&cfg.ProjectsFlag, "projects", "", "Comma-separated list of projects to push (inclusive)")
-	cmd.Flags().StringVar(&cfg.ExcludeProjects, "exclude-projects", "", "Comma-separated list of projects to exclude from push")
-	cmd.Flags().BoolVar(&cfg.AllProjects, "all-projects", false, "Ignore configured project filters for this run")
-	cmd.Flags().BoolVar(&cfg.Watch, "watch", false, "Run continuously, pushing on change plus a periodic floor")
-	cmd.Flags().DurationVar(&cfg.Debounce, "debounce", defaultWatchDebounce, "Coalesce window after a change before pushing (--watch only)")
-	cmd.Flags().DurationVar(&cfg.Interval, "interval", defaultWatchInterval, "Periodic floor push interval (--watch only)")
-	cmd.Flags().BoolVar(&cfg.NoVectors, "no-vectors", false, "Skip pushing semantic-search vectors")
-	return cmd
-}
-
-func newPGStatusCommand() *cobra.Command {
-	var cfg PGStatusConfig
-	cmd := &cobra.Command{
-		Use:          "status [target]",
-		Short:        "Show PG sync status",
-		SilenceUsage: true,
-		Args:         cobra.MaximumNArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			targetName := ""
-			if len(args) == 1 {
-				targetName = args[0]
-			}
-			if err := runPGStatus(cmd.Context(), targetName, cfg); err != nil {
-				return fmt.Errorf("pg status: %w", err)
-			}
-			return nil
-		},
-	}
-	cmd.Flags().BoolVar(&cfg.AllTargets, "all", false, "Show status for every configured PG target")
-	cmd.Flags().StringVar(&cfg.ProjectsFlag, "projects", "", "Comma-separated list of projects whose push status to show")
-	cmd.Flags().StringVar(&cfg.ExcludeProjects, "exclude-projects", "", "Comma-separated list of excluded projects whose push status to show")
-	cmd.Flags().BoolVar(&cfg.AllProjects, "all-projects", false, "Ignore configured project filters for this status")
-	return cmd
-}
-
-func newPGServeCommand() *cobra.Command {
-	cmd := &cobra.Command{
-		Use:          "serve",
-		Short:        "Serve from PostgreSQL (read-only)",
-		SilenceUsage: true,
-		Args:         cobra.NoArgs,
-		Run: func(cmd *cobra.Command, args []string) {
-			appCfg, basePath, err := loadPGServeConfig(cmd)
-			if err != nil {
-				fatal("%v", err)
-			}
-			runPGServe(appCfg, basePath)
-		},
-	}
-	cmd.Flags().String(
-		"base-path",
-		"",
-		"URL prefix for reverse-proxy subpath (e.g. /agentsview)",
+	return newReplicaCommand(
+		pgReplica{}, newPGVectorsCommand(), newPGServiceCommand(),
 	)
-	config.RegisterServePFlags(cmd.Flags())
-	return cmd
 }
 
 func newDuckDBCommand() *cobra.Command {

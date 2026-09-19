@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestQuackLoopbackAttachRoundTrip(t *testing.T) {
@@ -252,7 +253,7 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 		t, local, "alpha", "duck-sync-edit",
 		0, 0, "src/main.go", "2026-01-10T02:00:00Z",
 	)
-	result, err := Push(ctx, path, local, "quack-client", SyncOptions{}, true, nil)
+	result, err := Push(ctx, path, local, "quack-client", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err, "push analytics fixture into local mirror")
 	assert.Equal(t, 3, result.SessionsPushed)
 	assert.Equal(t, 4, result.MessagesPushed)

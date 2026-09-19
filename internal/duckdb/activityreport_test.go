@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // duckDayQuery resolves a single-day "day" Query for date/tz against a
@@ -46,7 +47,7 @@ func activityReportStore(
 	}
 	_, err := local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)

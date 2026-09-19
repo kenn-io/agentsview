@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // seedDuckWindowMessages seeds a session with 12 messages (ordinals 0..11)
@@ -55,7 +56,7 @@ func newDuckWindowStore(t *testing.T, setup func(local *db.DB)) *Store {
 	ctx := t.Context()
 	local := newLocalDB(t)
 	setup(local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err, "Push to DuckDB mirror")

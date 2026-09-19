@@ -11,7 +11,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/vector"
 )
 
@@ -101,7 +101,7 @@ func buildTestVectorsDB(t *testing.T, cfg config.Config) {
 // closePushSource registers a cleanup that closes the adapter's vectors.db
 // handle. Required on Windows, where TempDir removal fails while the sqlite
 // file is still open.
-func closePushSource(t *testing.T, src postgres.VectorPushSource) {
+func closePushSource(t *testing.T, src storage.VectorPushSource) {
 	t.Helper()
 	t.Cleanup(func() {
 		require.NoError(t, src.(*vectorPushSource).Close())
@@ -187,7 +187,7 @@ func TestVectorPushSourceNotReadyDuringRebuild(t *testing.T) {
 
 	_, ok, err := src.BeginExport(ctx, []string{"session-1"})
 	require.Error(t, err)
-	require.ErrorIs(t, err, postgres.ErrVectorSourceNotReady)
+	require.ErrorIs(t, err, storage.ErrVectorSourceNotReady)
 	assert.False(t, ok)
 }
 
@@ -231,7 +231,7 @@ func TestVectorPushSourceScopedGenerationIgnoresOutOfScopePendingDocs(t *testing
 
 	_, ok, err = src.BeginExport(ctx, nil)
 	require.Error(t, err)
-	require.ErrorIs(t, err, postgres.ErrVectorSourceNotReady)
+	require.ErrorIs(t, err, storage.ErrVectorSourceNotReady)
 	assert.False(t, ok)
 }
 

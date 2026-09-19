@@ -15,9 +15,10 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
-type syncStateStore = SyncStateStore
+type syncStateStore = storage.SyncStateStore
 
 type scopedSyncStateStore struct {
 	base          syncStateStore
@@ -177,7 +178,7 @@ type Sync struct {
 
 	// vectorSource, when set, supplies the local vectors.db active generation
 	// pushed as a phase at the end of Push. Nil disables the phase.
-	vectorSource VectorPushSource
+	vectorSource storage.VectorPushSource
 	// afterVectorApply is a full/scoped post-apply test hook.
 	afterVectorApply func()
 	// beforeVectorWitnessRecord is a generation-wide pre-witness test hook.
@@ -208,24 +209,6 @@ func (s *Sync) aliasBackfillSyncStateOrDefault() syncStateStore {
 	return s.effectiveSyncState()
 }
 
-// SyncOptions holds optional configuration for a Sync instance.
-type SyncOptions struct {
-	// Projects limits push scope to these project names.
-	// Mutually exclusive with ExcludeProjects.
-	Projects []string
-	// ExcludeProjects excludes these project names from push.
-	// Mutually exclusive with Projects.
-	ExcludeProjects []string
-	// SyncStateTarget scopes per-target push watermarks and fingerprints.
-	SyncStateTarget string
-	// MigrateLegacySyncState moves unsuffixed legacy sync-state keys into the
-	// named default target the first time that target runs.
-	MigrateLegacySyncState bool
-	// VectorSource, when non-nil, enables the vector push phase, replicating
-	// the local vectors.db active generation into PG. Nil skips the phase.
-	VectorSource VectorPushSource
-}
-
 // New creates a Sync instance and verifies the PG connection.
 // The machine name must not be "local", which is reserved as the
 // SQLite sentinel for sessions that originated on this machine.
@@ -234,7 +217,7 @@ type SyncOptions struct {
 func New(
 	pgURL, schema string, local *db.DB,
 	machine string, allowInsecure bool,
-	opts SyncOptions,
+	opts storage.PusherOptions,
 ) (*Sync, error) {
 	if pgURL == "" {
 		return nil, errors.New("postgres URL is required")
@@ -252,7 +235,7 @@ func New(
 	if local == nil {
 		return nil, errors.New("local db is required")
 	}
-	if err := ValidateProjectFilters(
+	if err := storage.ValidateProjectFilters(
 		opts.Projects,
 		opts.ExcludeProjects,
 	); err != nil {
@@ -305,14 +288,6 @@ func New(
 
 func hasProjectFilter(projects, excludeProjects []string) bool {
 	return len(projects) > 0 || len(excludeProjects) > 0
-}
-
-// ValidateProjectFilters rejects ambiguous include/exclude project filters.
-func ValidateProjectFilters(projects, excludeProjects []string) error {
-	if len(projects) > 0 && len(excludeProjects) > 0 {
-		return errors.New("projects and exclude_projects are mutually exclusive")
-	}
-	return nil
 }
 
 func pushSyncStateScope(
@@ -542,7 +517,7 @@ func readStatus(
 }
 
 func ReadLastPushAt(ctx context.Context,
-	local SyncStateStore,
+	local storage.SyncStateStore,
 	target string,
 	projects, excludeProjects []string,
 	migrateLegacy bool,

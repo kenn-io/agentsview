@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // TestPushWorkBoundedByChangedBatchNotArchiveSize is the AGENTS.md
@@ -29,13 +30,13 @@ func TestPushWorkBoundedByChangedBatchNotArchiveSize(t *testing.T) {
 	for _, size := range []int{20, 400} {
 		t.Run(fmt.Sprintf("archive_%d", size), func(t *testing.T) {
 			local, path := newPushFixture(t, size)
-			_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+			_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 			require.NoError(t, err)
 
 			appendMessage(t, local, "sess-7")
 			require.NoError(t, local.DeleteSession(ctx, "sess-3"))
 
-			res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+			res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 			require.NoError(t, err)
 			assert.False(t, res.Diagnostics.Full)
 			// Work is bounded by the changed batch regardless of archive size:
@@ -43,7 +44,7 @@ func TestPushWorkBoundedByChangedBatchNotArchiveSize(t *testing.T) {
 			assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total)
 			assert.Equal(t, 1, res.Diagnostics.DeletedStaleSessions)
 			// And an untouched follow-up push does nothing:
-			res2, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+			res2, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 			require.NoError(t, err)
 			assert.Zero(t, res2.Diagnostics.PushedSessions.Total)
 			assert.Zero(t, res2.Diagnostics.DeletedStaleSessions)
@@ -68,7 +69,7 @@ func TestRebuildUnderReaderNeverErrorsAndEventuallyServesRebuiltData(t *testing.
 	skipReopenTestOnWindows(t)
 	ctx := t.Context()
 	local, path := newPushFixture(t, 3)
-	_, err := rebuildMirror(ctx, path, local, "m", SyncOptions{}, nil)
+	_, err := rebuildMirror(ctx, path, local, "m", storage.MirrorPushOptions{}, nil)
 	require.NoError(t, err)
 
 	store, err := NewStore(ctx, path)
@@ -92,7 +93,7 @@ func TestRebuildUnderReaderNeverErrorsAndEventuallyServesRebuiltData(t *testing.
 	require.NoError(t, local.DeleteSession(ctx, "sess-2"))
 	appendMessage(t, local, "sess-1")
 
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, true, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err, "a rebuild racing a live reader must never error")
 	assert.True(t, res.Diagnostics.Full)
 	assert.Zero(t, res.Errors)
@@ -176,7 +177,7 @@ func TestFilteredIncrementalPushScopesCandidatesPushesAndDeletes(t *testing.T) {
 	_, err := local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(t, err)
 
-	opts := SyncOptions{Projects: []string{"alpha"}}
+	opts := storage.MirrorPushOptions{Projects: []string{"alpha"}}
 	path := filepath.Join(t.TempDir(), "filtered.duckdb")
 	_, err = Push(ctx, path, local, "m", opts, true, nil)
 	require.NoError(t, err)
@@ -220,17 +221,17 @@ func TestProjectTransitionRemovesSessionFromFilteredMirror(t *testing.T) {
 	ctx := t.Context()
 	tests := []struct {
 		name      string
-		opts      SyncOptions
+		opts      storage.MirrorPushOptions
 		toProject string
 	}{
 		{
 			name:      "moves into an excluded project",
-			opts:      SyncOptions{ExcludeProjects: []string{"scratch"}},
+			opts:      storage.MirrorPushOptions{ExcludeProjects: []string{"scratch"}},
 			toProject: "scratch",
 		},
 		{
 			name:      "moves off the include allowlist",
-			opts:      SyncOptions{Projects: []string{"alpha"}},
+			opts:      storage.MirrorPushOptions{Projects: []string{"alpha"}},
 			toProject: "gamma",
 		},
 	}
@@ -268,7 +269,7 @@ func TestProjectTransitionRemovesSessionFromFilteredMirror(t *testing.T) {
 // strand the mirror row forever; the unfiltered load must apply it.
 func TestProjectTransitionThenHardDeleteAppliesTombstone(t *testing.T) {
 	ctx := t.Context()
-	opts := SyncOptions{ExcludeProjects: []string{"scratch"}}
+	opts := storage.MirrorPushOptions{ExcludeProjects: []string{"scratch"}}
 	local, path := newPushFixture(t, 2)
 	_, err := Push(ctx, path, local, "m", opts, false, nil)
 	require.NoError(t, err)
@@ -337,7 +338,7 @@ func TestReplaceCurationBoundedByLocalCurationSizeNotMirrorSize(t *testing.T) {
 			_, err = local.PinMessage(ctx, "sess-2", msgs[0].ID, &note)
 			require.NoError(t, err)
 
-			_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+			_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 			require.NoError(t, err)
 
 			// Every mirror connection below is opened and closed immediately
@@ -358,7 +359,7 @@ func TestReplaceCurationBoundedByLocalCurationSizeNotMirrorSize(t *testing.T) {
 			// work and reruns curation refresh alongside it.
 			appendMessage(t, local, "sess-3")
 
-			_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+			_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 			require.NoError(t, err)
 			assertMirrorTableCount(t, path, "starred_sessions", 0)
 			assertMirrorTableCount(t, path, "pinned_messages", 0)
@@ -380,7 +381,7 @@ func TestCurationRefreshSkipsWhenLocalCurationStateUnchanged(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	first, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	first, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.True(t, first.Diagnostics.Full, "initial push is a rebuild")
 	assertMirrorTableCountWhere(t, path, "starred_sessions", "session_id = ?", "sess-1", 1)
@@ -391,7 +392,7 @@ func TestCurationRefreshSkipsWhenLocalCurationStateUnchanged(t *testing.T) {
 	// incremental push so the curation-refresh step actually runs its
 	// unchanged-fingerprint check.
 	appendMessage(t, local, "sess-2")
-	second, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	second, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, second.Diagnostics.Full)
 	assert.False(t, second.Diagnostics.CurationRefreshed,
@@ -403,7 +404,7 @@ func TestCurationRefreshSkipsWhenLocalCurationStateUnchanged(t *testing.T) {
 	ok, err = local.StarSession(ctx, "sess-2")
 	require.NoError(t, err)
 	require.True(t, ok)
-	third, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	third, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, third.Diagnostics.Full)
 	assert.True(t, third.Diagnostics.CurationRefreshed,
@@ -411,7 +412,7 @@ func TestCurationRefreshSkipsWhenLocalCurationStateUnchanged(t *testing.T) {
 	assertMirrorTableCountWhere(t, path, "starred_sessions", "session_id = ?", "sess-2", 1)
 
 	// And a further no-op push (curation unchanged again) skips once more.
-	fourth, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	fourth, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, fourth.Diagnostics.CurationRefreshed)
 }
@@ -426,7 +427,7 @@ func TestCurationSkipsSessionsAbsentFromMirror(t *testing.T) {
 	local := newLocalDB(t)
 	seedDuckDBSyncFixture(t, local) // alpha + beta project sessions
 	path := filepath.Join(t.TempDir(), "curation-scope.duckdb")
-	opts := SyncOptions{Projects: []string{"alpha"}}
+	opts := storage.MirrorPushOptions{Projects: []string{"alpha"}}
 
 	_, err := Push(ctx, path, local, "test-machine", opts, false, nil)
 	require.NoError(t, err)
@@ -465,7 +466,7 @@ func TestCurationSkipsSessionsAbsentFromMirror(t *testing.T) {
 func TestReplaceCurationSkipsStarForSessionAbsentFromMirror(t *testing.T) {
 	ctx := t.Context()
 	local, _ := newPushFixture(t, 2)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 
 	// Mirror only sess-1; sess-2 stays local-only.
@@ -533,7 +534,7 @@ func TestCursorUsageSyncBoundedByAppendedEventsNotHistory(t *testing.T) {
 			}
 			require.NoError(t, local.InsertCursorUsageEvents(ctx, events))
 
-			_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+			_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 			require.NoError(t, err)
 			assertMirrorTableCount(t, path, "cursor_usage_events", size)
 
@@ -555,7 +556,7 @@ func TestCursorUsageSyncBoundedByAppendedEventsNotHistory(t *testing.T) {
 			}}))
 			appendMessage(t, local, "sess-1")
 
-			res, err := Push(ctx, path, local, "m", SyncOptions{Automatic: true}, false, nil)
+			res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{Automatic: true}, false, nil)
 			require.NoError(t, err)
 			assert.False(t, res.Diagnostics.Full,
 				"a valid mirror must take the incremental path")
@@ -582,7 +583,7 @@ func TestCursorUsageSyncBoundedByAppendedEventsNotHistory(t *testing.T) {
 func TestCurationRefreshRetriesUntilSkippedSessionIsMirrored(t *testing.T) {
 	ctx := t.Context()
 	local, _ := newPushFixture(t, 2)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 
 	sessions, err := local.ListSessionsForMirrorWindow(ctx, "", nil, nil)
@@ -642,7 +643,7 @@ func TestCurationFingerprintDetectsNoteOnlyEdit(t *testing.T) {
 	_, err = local.PinMessage(ctx, "sess-1", msgs[0].ID, &firstNote)
 	require.NoError(t, err)
 
-	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	secondNote := "second note"
@@ -650,7 +651,7 @@ func TestCurationFingerprintDetectsNoteOnlyEdit(t *testing.T) {
 	require.NoError(t, err)
 	appendMessage(t, local, "sess-1")
 
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Diagnostics.CurationRefreshed,
 		"a note-only pin edit must still be detected as a curation change")
@@ -693,7 +694,7 @@ func TestCurationFingerprintDetectsUnpinRepinWithSameNote(t *testing.T) {
 	_, err = local.PinMessage(ctx, "sess-2", msgs2[0].ID, &note)
 	require.NoError(t, err)
 
-	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	require.NoError(t, local.UnpinMessage(ctx, "sess-1", msgs1[0].ID))
@@ -701,7 +702,7 @@ func TestCurationFingerprintDetectsUnpinRepinWithSameNote(t *testing.T) {
 	require.NoError(t, err)
 	appendMessage(t, local, "sess-1")
 
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.True(t, res.Diagnostics.CurationRefreshed,
 		"an unpin+repin with the same note must still be detected as a curation change")
@@ -716,7 +717,7 @@ func TestCurationFingerprintDetectsUnpinRepinWithSameNote(t *testing.T) {
 func TestCurationFingerprintDistinguishesNilNoteFromEmptyNote(t *testing.T) {
 	ctx := t.Context()
 	local, _ := newPushFixture(t, 1)
-	s := newInMemoryTestSync(t, local, SyncOptions{})
+	s := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 
 	msgs, err := local.GetAllMessages(ctx, "sess-1")
 	require.NoError(t, err)

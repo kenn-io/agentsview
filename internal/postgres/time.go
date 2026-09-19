@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // Common timestamp formats found in SQLite data.
@@ -79,19 +81,11 @@ func NormalizeLocalSyncTimestamp(
 	return ts.UTC().Format(LocalSyncTimestampLayout), nil
 }
 
-// SyncStateStore is the interface needed for normalizing local
-// sync timestamps stored in SQLite.
-type SyncStateStore interface {
-	GetSyncState(ctx context.Context, key string) (string, error)
-	SetSyncState(ctx context.Context, key, value string) error
-	GetOrCreateSyncState(ctx context.Context, key, defaultValue string) (string, error)
-}
-
 // NormalizeLocalSyncStateTimestamps normalizes the last_push_at
 // watermark in the local SQLite sync state to millisecond
 // precision.
 func NormalizeLocalSyncStateTimestamps(ctx context.Context,
-	local SyncStateStore,
+	local storage.SyncStateStore,
 ) error {
 	value, err := local.GetSyncState(ctx, "last_push_at")
 	if err != nil {

@@ -509,6 +509,7 @@ func runServe(ctx context.Context, cfg config.Config, opts serveOptions, restart
 		server.WithHTTPRemoteCleanupRegistry(httpRemoteCleanupRegistry),
 		server.WithPprof(opts.Pprof),
 	}
+	srvOpts = append(srvOpts, pushBackendOptions()...)
 	srvOpts = append(srvOpts, vectorServe.ServerOpts...)
 	if src := newVectorPushSource(cfg); src != nil {
 		srvOpts = append(srvOpts, server.WithVectorPushSource(src))

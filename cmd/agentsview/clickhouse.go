@@ -419,7 +419,7 @@ func loadClickHouseServeConfig(cmd *cobra.Command) (config.Config, string, error
 	if err != nil {
 		return config.Config{}, "", fmt.Errorf("reading base-path: %w", err)
 	}
-	cfg, err := config.LoadClickHouseServePFlags(cmd.Flags())
+	cfg, err := config.LoadRemoteServePFlags(cmd.Flags())
 	if err != nil {
 		return config.Config{}, "", fmt.Errorf("loading config: %w", err)
 	}

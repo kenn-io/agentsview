@@ -14,7 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/clickhouse"
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func newPGServiceCommand() *cobra.Command {
@@ -248,21 +248,14 @@ func readServiceLastPush(ctx context.Context,
 		}
 		return status.LastPushAt, nil
 	}
-	targets, err := resolvePGTargetSelections(appCfg, "", false)
+	backend := pgReplica{}
+	target, err := storage.DefaultTarget(backend, appCfg)
 	if err != nil {
 		return "", err
 	}
-	target := targets[0]
-	target, err = resolvePGTargetConfig(appCfg, target)
-	if err != nil {
-		return "", err
-	}
-	return postgres.ReadLastPushAt(ctx,
-		database,
-		target.SyncStateTarget,
-		target.PG.Projects,
-		target.PG.ExcludeProjects,
-		target.MigrateLegacySyncState,
+	return backend.LastPushAt(
+		ctx, database, target.ReplicaTargetRef,
+		target.Projects, target.ExcludeProjects,
 	)
 }
 

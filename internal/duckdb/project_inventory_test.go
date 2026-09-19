@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // seedInventorySession inserts a session with the fields the project
@@ -166,7 +167,7 @@ func TestDuckProjectInventoryMatchesSQLite(t *testing.T) {
 	local := newLocalDB(t)
 	buildInventoryFixture(t, local, ctx)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
 	localInv, err := local.GetProjectInventory(ctx, db.ProjectDateFilter{})
@@ -231,7 +232,7 @@ func TestDuckGovernedCountExcludesAssignedSiblingEvidence(t *testing.T) {
 	_, err = local.AssignSessionProject(ctx, "assigned-reference", "alpha")
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 	localInv, err := local.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err)
@@ -248,7 +249,7 @@ func TestDuckProjectInventoryKeepsSanitizedLabelCollisionsDistinct(t *testing.T)
 	seedInventorySession(t, local, "private-b-1", "/private/repos/beta", nil)
 	seedInventorySession(t, local, "private-b-2", "/private/repos/beta", nil)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 	inv, err := NewStoreFromDB(syncer.DB()).GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err)
@@ -278,7 +279,7 @@ func TestDuckProjectInventoryIgnoresUnattributedSessions(t *testing.T) {
 	local := newLocalDB(t)
 	buildInventoryFixture(t, local, ctx)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
 	duckStore := NewStoreFromDB(syncer.DB())
@@ -339,7 +340,7 @@ func TestDuckPushPreservesSessionMachineForGovernance(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
 	rows, err := syncer.DB().QueryContext(ctx,
@@ -393,7 +394,7 @@ func TestDuckProjectInventoryCrossArchiveIsolation(t *testing.T) {
 		s.StartedAt = new("2024-01-01T00:00:00Z")
 	})
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
 	var aSessionMachine string

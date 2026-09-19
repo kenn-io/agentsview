@@ -18411,7 +18411,7 @@ type DaemonPushRequest struct {
 	LastReconciledVectorGeneration *int64                  `json:"last_reconciled_vector_generation,omitempty"`
 	MigrateLegacySyncState         *bool                   `json:"migrate_legacy_sync_state,omitempty"`
 	NoVectors                      *bool                   `json:"no_vectors,omitempty"`
-	Pg                             *ConfigPGConfig         `json:"pg,omitempty"`
+	Replica                        *StorageReplicaTarget   `json:"replica,omitempty"`
 	Projects                       []string                `json:"projects,omitempty"`
 	ScopeVectorsToChangedSessions  *bool                   `json:"scope_vectors_to_changed_sessions,omitempty"`
 	SyncStateTarget                *string                 `json:"sync_state_target,omitempty"`
@@ -18432,13 +18432,6 @@ func (d DaemonPushRequest) Validate() error {
 		if v, ok := any(d.Duckdb).(runtime.Validator); ok {
 			if err := v.Validate(); err != nil {
 				errors = errors.Append("Duckdb", err)
-			}
-		}
-	}
-	if d.Pg != nil {
-		if v, ok := any(d.Pg).(runtime.Validator); ok {
-			if err := v.Validate(); err != nil {
-				errors = errors.Append("Pg", err)
 			}
 		}
 	}
@@ -20638,4 +20631,13 @@ var typesValidator *validator.Validate
 func init() {
 	typesValidator = validator.New(validator.WithRequiredStructEnabled())
 	runtime.RegisterCustomTypeFunc(typesValidator)
+}
+
+// StorageReplicaTarget is a temporary hand patch; regenerate the client.
+type StorageReplicaTarget struct {
+	AllowInsecure *bool   `json:"allow_insecure,omitempty"`
+	MachineName   string  `json:"machine_name" validate:"required"`
+	PushVectors   *bool   `json:"push_vectors,omitempty"`
+	Schema        *string `json:"schema,omitempty"`
+	URL           string  `json:"url" validate:"required"`
 }

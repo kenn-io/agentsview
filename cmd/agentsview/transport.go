@@ -90,9 +90,7 @@ var openPGReadStore = func(
 	pgCfg config.PGConfig,
 ) (db.Store, func(), error) {
 	applyClassifierConfig(cfg)
-	store, err := postgres.NewStore(
-		pgCfg.URL, pgCfg.Schema, pgCfg.AllowInsecure,
-	)
+	store, err := pgReplica{}.OpenStore(postgres.ReplicaTarget(pgCfg))
 	if err != nil {
 		return nil, nil, err
 	}

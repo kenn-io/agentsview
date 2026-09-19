@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // projectRulesByPrefix indexes rules by path prefix for pairwise comparison
@@ -65,7 +66,7 @@ func TestDuckProjectRulesMatchesSQLite(t *testing.T) {
 	})
 	require.NoError(t, err, "CreateWorktreeProjectMapping gamma")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
 	localRules, err := local.ListProjectRules(ctx, duckPushMachine)
@@ -131,7 +132,7 @@ func TestDuckProjectRulesEmptyMachineMatchesSQLite(t *testing.T) {
 	})
 	require.NoError(t, err, "CreateWorktreeProjectMapping alpha")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
 	localRules, err := local.ListProjectRules(ctx, "")
@@ -184,7 +185,7 @@ func TestDuckProjectRulesCrossArchiveIsolation(t *testing.T) {
 	})
 	require.NoError(t, err, "CreateWorktreeProjectMapping proja")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
 	const archiveB = "archive-b"

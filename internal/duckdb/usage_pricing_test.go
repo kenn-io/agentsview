@@ -10,6 +10,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/storage"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -99,7 +100,7 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -158,7 +159,7 @@ func TestDailyUsageKimiFixedK26AliasPricing(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -211,7 +212,7 @@ func TestDailyUsageGPTReserveLunaPricing(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -298,7 +299,7 @@ func TestSessionUsageKimiDateAliasPricing(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -359,7 +360,7 @@ func TestSessionUsageKimiExactCustomAliasPricing(t *testing.T) {
 	assert.Equal(t, want.Cost, money.MustParseDollars("7"))
 	assert.Equal(t, want.Cost, want.Breakdown[0].Cost)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -429,7 +430,7 @@ func TestDailyUsageClaude1hCacheWritePricing(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -478,7 +479,7 @@ func TestDuckPositBillingPublicAPIReproduction(t *testing.T) {
 		DataVersion: 1, ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -503,7 +504,7 @@ func TestDuckPositBillingPublicAPIReproduction(t *testing.T) {
 }
 
 func TestPriceModelCasePreservesQualifiedBedrockModels(t *testing.T) {
-	syncer := newInMemoryTestSync(t, newLocalDB(t), SyncOptions{})
+	syncer := newInMemoryTestSync(t, newLocalDB(t), storage.MirrorPushOptions{})
 	for _, tt := range []struct{ model, want string }{
 		{"openai.gpt-6-astra", "bedrock_mantle/openai.gpt-6-astra"},
 		{"openai.gpt-5.4", "bedrock_mantle/openai.gpt-5.4"},

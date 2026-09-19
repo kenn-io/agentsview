@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func testDB(t *testing.T) *db.DB {
@@ -190,7 +191,7 @@ func TestNewRejectsIncludeAndExcludeProjects(t *testing.T) {
 		local,
 		"test-machine",
 		true,
-		SyncOptions{
+		storage.PusherOptions{
 			Projects:        []string{"alpha"},
 			ExcludeProjects: []string{"beta"},
 		},

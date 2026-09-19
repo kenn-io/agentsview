@@ -15,6 +15,7 @@ import (
 	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 type sessionSpec struct {
@@ -233,7 +234,7 @@ func writeDuckDBMirror(database *db.DB, path string) error {
 	}
 	ctx := context.Background()
 	result, err := duckdbsync.Push(
-		ctx, path, database, "test-machine", duckdbsync.SyncOptions{}, true, nil,
+		ctx, path, database, "test-machine", storage.MirrorPushOptions{}, true, nil,
 	)
 	if err != nil {
 		return err

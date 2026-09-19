@@ -13,6 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestMachinesExposeLabelsWithoutChangingFilterKeys(t *testing.T) {
@@ -76,7 +77,7 @@ func TestMachineAliasesOnDuckDB(t *testing.T) {
 	})
 	require.NoError(t, te.db.SetSyncState(t.Context(), "machine_alias:old-owner", "installation-a"))
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	_, err := duckdb.Push(t.Context(), path, te.db, "installation-a", duckdb.SyncOptions{}, true, nil)
+	_, err := duckdb.Push(t.Context(), path, te.db, "installation-a", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
 	store, err := duckdb.NewStore(t.Context(), path)
 	require.NoError(t, err)

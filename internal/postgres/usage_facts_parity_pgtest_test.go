@@ -14,6 +14,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 type usageParitySnapshot struct {
@@ -93,7 +94,7 @@ func TestSQLiteFactsAndPostgresLiveUsageParity(t *testing.T) {
 	seedUsageParity1hCacheFixture(t, local)
 
 	syncer, err := New(
-		pgURL, schema, local, "parity-machine", true, SyncOptions{},
+		pgURL, schema, local, "parity-machine", true, storage.PusherOptions{},
 	)
 	require.NoError(t, err, "create PostgreSQL sync")
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
@@ -209,7 +210,7 @@ func TestPGUsageFractionalMicrodollarRoundingParity(t *testing.T) {
 		},
 	}))
 
-	syncer, err := New(pgURL, schema, local, "parity-machine", true, SyncOptions{})
+	syncer, err := New(pgURL, schema, local, "parity-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	_, err = syncer.Push(t.Context(), false, nil)

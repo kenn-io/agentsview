@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestPushPreservesLegacyOffsetTimestamps(t *testing.T) {
@@ -298,13 +299,13 @@ func TestFilteredIdentityPublicationPreservesUnfilteredMetadata(t *testing.T) {
 	archiveID, err := local.GetArchiveID(ctx)
 	require.NoError(t, err)
 
-	unfiltered, err := New(pgURL, schema, local, "test-machine", true, SyncOptions{})
+	unfiltered, err := New(pgURL, schema, local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	require.NoError(t, unfiltered.EnsureSchema(ctx))
 	require.NoError(t, unfiltered.syncProjectIdentityObservations(ctx, false, nil))
 	require.NoError(t, unfiltered.Close())
 
-	filtered, err := New(pgURL, schema, local, "test-machine", true, SyncOptions{
+	filtered, err := New(pgURL, schema, local, "test-machine", true, storage.PusherOptions{
 		Projects: []string{includedProject},
 	})
 	require.NoError(t, err)
@@ -371,7 +372,7 @@ func TestFilteredIdentityPublicationAdoptsLegacyOwnerlessScope(t *testing.T) {
 	}
 
 	unfiltered, err := New(
-		pgURL, schema, local, "test-machine", true, SyncOptions{},
+		pgURL, schema, local, "test-machine", true, storage.PusherOptions{},
 	)
 	require.NoError(t, err)
 	require.NoError(t, unfiltered.EnsureSchema(ctx))
@@ -388,7 +389,7 @@ func TestFilteredIdentityPublicationAdoptsLegacyOwnerlessScope(t *testing.T) {
 
 	filtered, err := New(
 		pgURL, schema, local, "test-machine", true,
-		SyncOptions{Projects: []string{includedProject}},
+		storage.PusherOptions{Projects: []string{includedProject}},
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, filtered.Close()) })
@@ -458,7 +459,7 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 	}
 	filtered, err := New(
 		pgURL, schema, local, "laptop", true,
-		SyncOptions{Projects: []string{"alpha"}},
+		storage.PusherOptions{Projects: []string{"alpha"}},
 	)
 	require.NoError(t, err)
 	require.NoError(t, filtered.EnsureSchema(ctx))
@@ -488,7 +489,7 @@ func TestFilteredThenUnfilteredIdentityPublicationIncludesExcludedProject(
 	require.NoError(t, filtered.Close())
 
 	unfiltered, err := New(
-		pgURL, schema, local, "laptop", true, SyncOptions{},
+		pgURL, schema, local, "laptop", true, storage.PusherOptions{},
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, unfiltered.Close()) })
@@ -539,12 +540,12 @@ func TestAlternatingFilteredPublicationsPreserveEachScopesMetadata(
 	archiveID, err := local.GetArchiveID(ctx)
 	require.NoError(t, err)
 
-	alpha, err := New(pgURL, schema, local, "laptop", true, SyncOptions{
+	alpha, err := New(pgURL, schema, local, "laptop", true, storage.PusherOptions{
 		Projects: []string{"alpha"},
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, alpha.Close()) })
-	beta, err := New(pgURL, schema, local, "laptop", true, SyncOptions{
+	beta, err := New(pgURL, schema, local, "laptop", true, storage.PusherOptions{
 		Projects: []string{"beta"},
 	})
 	require.NoError(t, err)
@@ -637,7 +638,7 @@ func TestPushProjectMoveReconcilesFilteredScope(t *testing.T) {
 					ObservedAt: time.Date(2026, 7, 16, 12, 0, 0, 0, time.UTC),
 				},
 			))
-			syncer, err := New(pgURL, schema, local, "test-machine", true, SyncOptions{
+			syncer, err := New(pgURL, schema, local, "test-machine", true, storage.PusherOptions{
 				Projects: tc.projects, ExcludeProjects: tc.excludeProjects,
 			})
 			require.NoError(t, err)
@@ -763,7 +764,7 @@ func TestIdentityPublicationUpdatesOnlyChangedRowsAndAppliesTombstones(
 		},
 	))
 
-	syncer, err := New(pgURL, schema, local, "laptop", true, SyncOptions{})
+	syncer, err := New(pgURL, schema, local, "laptop", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	require.NoError(t, syncer.EnsureSchema(ctx))
@@ -3103,7 +3104,7 @@ func TestPushReportsSkippedConflicts(t *testing.T) {
 	require.NoError(t, err, "Push")
 	assert.Zero(t, res.Errors, "push should not report failed sessions")
 	assert.Zero(t, res.SessionsPushed, "conflicting session should not be counted as pushed")
-	assert.Equal(t, 1, res.SkippedConflicts, "skipped conflicts should be observable in PushResult")
+	assert.Equal(t, 1, res.SkippedConflicts, "skipped conflicts should be observable in storage.PushResult")
 }
 
 // newSessionProvenancePushSync creates a fresh schema and a Sync wired to a
@@ -3316,12 +3317,12 @@ func TestFilteredArchiveIdentityRepairPreservesOtherPublicationScope(
 		require.NoError(t, err)
 	}
 
-	alpha, err := New(pgURL, schema, local, "workstation", true, SyncOptions{
+	alpha, err := New(pgURL, schema, local, "workstation", true, storage.PusherOptions{
 		Projects: []string{"alpha"},
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, alpha.Close()) })
-	beta, err := New(pgURL, schema, local, "workstation", true, SyncOptions{
+	beta, err := New(pgURL, schema, local, "workstation", true, storage.PusherOptions{
 		Projects: []string{"beta"},
 	})
 	require.NoError(t, err)

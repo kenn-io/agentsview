@@ -14,8 +14,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/apiclient"
-	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestParseDaemonPushSSE(t *testing.T) {
@@ -28,9 +28,9 @@ func TestParseDaemonPushSSE(t *testing.T) {
 		`data: {"SessionsPushed":10,"MessagesPushed":42}` + "\n\n"
 
 	t.Run("progress then done", func(t *testing.T) {
-		var progress []postgres.PushProgress
-		result, err := consumeDaemonPushEvents[postgres.PushResult](daemonEventStream(strings.NewReader(stream(progressEvent, doneEvent))),
-			func(p postgres.PushProgress) { progress = append(progress, p) },
+		var progress []storage.PushProgress
+		result, err := consumeDaemonPushEvents[storage.PushResult](daemonEventStream(strings.NewReader(stream(progressEvent, doneEvent))),
+			func(p storage.PushProgress) { progress = append(progress, p) },
 		)
 		require.NoError(t, err)
 		assert.Equal(t, 10, result.SessionsPushed)
@@ -41,20 +41,20 @@ func TestParseDaemonPushSSE(t *testing.T) {
 	})
 
 	t.Run("nil onProgress is safe", func(t *testing.T) {
-		result, err := consumeDaemonPushEvents[postgres.PushResult, postgres.PushProgress](daemonEventStream(strings.NewReader(stream(progressEvent, doneEvent))), nil)
+		result, err := consumeDaemonPushEvents[storage.PushResult, storage.PushProgress](daemonEventStream(strings.NewReader(stream(progressEvent, doneEvent))), nil)
 		require.NoError(t, err)
 		assert.Equal(t, 10, result.SessionsPushed)
 	})
 
 	t.Run("error event fails the push", func(t *testing.T) {
 		errEvent := "event: error\n" + `data: {"error":"schema: boom"}` + "\n\n"
-		_, err := consumeDaemonPushEvents[postgres.PushResult, postgres.PushProgress](daemonEventStream(strings.NewReader(stream(progressEvent, errEvent))), nil)
+		_, err := consumeDaemonPushEvents[storage.PushResult, storage.PushProgress](daemonEventStream(strings.NewReader(stream(progressEvent, errEvent))), nil)
 		require.Error(t, err)
 		assert.Equal(t, "schema: boom", err.Error())
 	})
 
 	t.Run("stream without done event fails", func(t *testing.T) {
-		_, err := consumeDaemonPushEvents[postgres.PushResult, postgres.PushProgress](daemonEventStream(strings.NewReader(stream(progressEvent))), nil)
+		_, err := consumeDaemonPushEvents[storage.PushResult, storage.PushProgress](daemonEventStream(strings.NewReader(stream(progressEvent))), nil)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "missing done event")
 	})
@@ -88,11 +88,11 @@ func TestPostDaemonPushConsumesSSE(t *testing.T) {
 		}))
 	t.Cleanup(ts.Close)
 
-	var progress []postgres.PushProgress
-	result, err := postDaemonPush[postgres.PushResult](
-		t.Context(), transport{URL: ts.URL}, "", daemonPushPG,
+	var progress []storage.PushProgress
+	result, err := postDaemonPush[storage.PushResult](
+		t.Context(), transport{URL: ts.URL}, "", replicaPushOperations["pg"],
 		apiclient.DaemonPushRequest{},
-		func(p postgres.PushProgress) { progress = append(progress, p) },
+		func(p storage.PushProgress) { progress = append(progress, p) },
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 2, result.SessionsPushed)
@@ -110,8 +110,8 @@ func TestPostDaemonPushJSONFallback(t *testing.T) {
 		}))
 	t.Cleanup(ts.Close)
 
-	result, err := postDaemonPush[postgres.PushResult, postgres.PushProgress](
-		t.Context(), transport{URL: ts.URL}, "", daemonPushPG,
+	result, err := postDaemonPush[storage.PushResult, storage.PushProgress](
+		t.Context(), transport{URL: ts.URL}, "", replicaPushOperations["pg"],
 		apiclient.DaemonPushRequest{}, nil,
 	)
 	require.NoError(t, err)
@@ -147,8 +147,8 @@ func TestDaemonPushWatchTransportRetriesWithoutScopeForOlderSchema(t *testing.T)
 		AvailableRoots: []string{"/sessions"},
 		DeferredRoots:  []string{"/offline"},
 	}
-	result, err := postDaemonPush[postgres.PushResult, postgres.PushProgress](
-		t.Context(), transport{URL: ts.URL}, "", daemonPushPG,
+	result, err := postDaemonPush[storage.PushResult, storage.PushProgress](
+		t.Context(), transport{URL: ts.URL}, "", replicaPushOperations["pg"],
 		apiclient.DaemonPushRequest{WatchBatch: &batch, WatchRecovery: &recovery}, nil,
 	)
 	require.NoError(t, err)
@@ -172,13 +172,13 @@ func TestDaemonPushWatchTransportOmitsScopeForKnownOlderDaemon(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	batch := apiclient.SyncWatchBatch{Paths: []string{"/sessions/changed.jsonl"}}
-	result, err := postDaemonPush[postgres.PushResult, postgres.PushProgress](
+	result, err := postDaemonPush[storage.PushResult, storage.PushProgress](
 		t.Context(), transport{
 			URL: ts.URL,
 			Runtime: &DaemonRuntime{
 				API: server.ScopedWatchPushAPIVersion - 1,
 			},
-		}, "", daemonPushPG,
+		}, "", replicaPushOperations["pg"],
 		apiclient.DaemonPushRequest{WatchBatch: &batch}, nil,
 	)
 	require.NoError(t, err)

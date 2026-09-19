@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // countReopenAliasFiles counts the hardlink files openMirrorAlias creates
@@ -54,7 +55,7 @@ func buildMirrorFixture(t *testing.T, path, sessionID string) {
 	require.NoError(t, err)
 
 	_, err = rebuildMirror(
-		t.Context(), path, local, "test-machine", SyncOptions{}, nil,
+		t.Context(), path, local, "test-machine", storage.MirrorPushOptions{}, nil,
 	)
 	require.NoError(t, err)
 }

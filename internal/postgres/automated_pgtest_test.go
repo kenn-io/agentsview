@@ -13,6 +13,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestBackfillIsAutomatedPGMatchingHashUsesBoundedEvidence(t *testing.T) {
@@ -24,7 +25,7 @@ func TestBackfillIsAutomatedPGMatchingHashUsesBoundedEvidence(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"automated-audit-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -120,7 +121,7 @@ func TestBackfillIsAutomatedPGPreservesDurableClassification(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"automation-metadata-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -186,7 +187,7 @@ func TestPushSessionTrustsLocalIsAutomated(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"trust-test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -235,7 +236,7 @@ func TestBackfillIsAutomatedPGRerunsOnHashChange(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"backfill-test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -298,7 +299,7 @@ func TestBackfillIsAutomatedPGPreservesUsageOnlyClassification(t *testing.T) {
 					{SessionID: tc.id, Ordinal: 1, Role: "assistant", Content: "Finished.", Model: "model-a"},
 				}))
 			}
-			ps, err := New(pgURL, "agentsview", local, "usage-audit-machine", true, SyncOptions{})
+			ps, err := New(pgURL, "agentsview", local, "usage-audit-machine", true, storage.PusherOptions{})
 			require.NoError(t, err)
 			defer ps.Close()
 			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)

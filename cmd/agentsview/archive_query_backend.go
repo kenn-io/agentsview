@@ -89,7 +89,7 @@ func resolveArchiveQueryBackendWithConfig(
 				if policy.AutoStart && !policy.SkipInitialSync && !policy.NoSync && !tr.ReadOnly {
 					progress := newResyncProgressPrinter(os.Stderr, time.Now)
 					_, err := postDaemonPush[sync.SyncStats](ctx, tr, cfg.AuthToken,
-						daemonStartupSync, apiclient.DaemonPushRequest{}, progress.Print)
+						startupSyncOperation, apiclient.DaemonPushRequest{}, progress.Print)
 					progress.Finish()
 					if err != nil {
 						return nil, nil, fmt.Errorf("waiting for startup sync: %w", err)

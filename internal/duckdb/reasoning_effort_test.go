@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestReasoningEffortDuckDBReadAndWrite(t *testing.T) {
@@ -56,12 +57,12 @@ func TestReasoningEffortDuckDBRebuildsOldSchemaMirror(t *testing.T) {
 	messages[1].ReasoningEffort = "high"
 	require.NoError(t, local.ReplaceSessionMessages(ctx, "sess-1", messages))
 
-	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	setMirrorMetadataValue(t, path, schemaVersionMetadataKey, strconv.Itoa(SchemaVersion-1))
 
-	result, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	result, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.True(t, result.Diagnostics.Full)
 	assert.Contains(t, result.Diagnostics.RebuildReason, "schema")

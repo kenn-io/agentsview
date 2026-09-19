@@ -14,6 +14,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // webSearchPricing prices the fixture model at $1/MTok in and $2/MTok out,
@@ -85,7 +86,7 @@ func webSearchStoresFromWrites(
 	require.NoError(t, local.UpsertModelPricing(webSearchPricing))
 	_, err := local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)

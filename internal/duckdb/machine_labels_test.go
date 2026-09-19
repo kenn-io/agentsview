@@ -5,6 +5,8 @@ package duckdb
 import (
 	"testing"
 
+	"go.kenn.io/agentsview/internal/storage"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -14,7 +16,7 @@ func TestPushMachineMetadataWithoutSessionChanges(t *testing.T) {
 	local, path := newPushFixture(t, 1)
 	require.NoError(t, local.SetSyncState(ctx, "machine_label:installation-a", "Laptop"))
 	require.NoError(t, local.SetSyncState(ctx, "machine_alias:old-owner", "installation-a"))
-	_, err := Push(ctx, path, local, "installation-a", SyncOptions{}, true, nil)
+	_, err := Push(ctx, path, local, "installation-a", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
 
 	store, err := NewStore(ctx, path)
@@ -29,7 +31,7 @@ func TestPushMachineMetadataWithoutSessionChanges(t *testing.T) {
 
 	require.NoError(t, local.SetSyncState(ctx, "machine_label:installation-a", "Work laptop"))
 	require.NoError(t, local.SetSyncState(ctx, "machine_alias:older-owner", "installation-a"))
-	result, err := Push(ctx, path, local, "installation-a", SyncOptions{}, false, nil)
+	result, err := Push(ctx, path, local, "installation-a", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.Zero(t, result.SessionsPushed)
 

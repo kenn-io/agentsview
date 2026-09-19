@@ -15,6 +15,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func cleanPGSchema(t *testing.T, pgURL string) {
@@ -46,7 +47,7 @@ func TestEnsureSchemaIdempotent(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -91,7 +92,7 @@ func TestSyncScopedStateUsesTargetKeys(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{
+		storage.PusherOptions{
 			SyncStateTarget:        "work",
 			MigrateLegacySyncState: true,
 		},
@@ -269,7 +270,7 @@ func TestPushSingleSession(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -330,7 +331,7 @@ func TestPushIdempotent(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -367,7 +368,7 @@ func TestPushWithToolCalls(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -430,7 +431,7 @@ func TestPushWithToolResultEvents(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -497,7 +498,7 @@ func TestStatus(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -520,7 +521,7 @@ func TestStatusMissingSchema(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -538,7 +539,7 @@ func TestNewRejectsMachineLocal(t *testing.T) {
 	local := testDB(t)
 	_, err := New(
 		pgURL, "agentsview", local, "local", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.Error(t, err, "expected error for machine=local")
 }
@@ -548,7 +549,7 @@ func TestNewRejectsEmptyMachine(t *testing.T) {
 	local := testDB(t)
 	_, err := New(
 		pgURL, "agentsview", local, "", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.Error(t, err, "expected error for empty machine")
 }
@@ -557,7 +558,7 @@ func TestNewRejectsEmptyURL(t *testing.T) {
 	local := testDB(t)
 	_, err := New(
 		"", "agentsview", local, "test", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.Error(t, err, "expected error for empty URL")
 }
@@ -571,7 +572,7 @@ func TestPushUpdatedAtFormat(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -620,7 +621,7 @@ func TestPushBumpsUpdatedAtOnMessageRewrite(
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"machine-a", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -684,7 +685,7 @@ func TestPushFullBypassesHeuristic(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -733,7 +734,7 @@ func TestPushDetectsSchemaReset(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -814,7 +815,7 @@ func TestPushDetectsPGTargetChange(t *testing.T) {
 	syncA, err := New(
 		pgURL, "agentsview_a", local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync A")
 	defer syncA.Close()
@@ -822,7 +823,7 @@ func TestPushDetectsPGTargetChange(t *testing.T) {
 	syncB, err := New(
 		pgURL, "agentsview_b", local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync B")
 	defer syncB.Close()
@@ -888,7 +889,7 @@ func TestPushDetectsPGTargetChangeAfterFilteredPush(t *testing.T) {
 	filteredA, err := New(
 		pgURL, "agentsview_filtered_a", local,
 		"test-machine", true,
-		SyncOptions{Projects: []string{project}},
+		storage.PusherOptions{Projects: []string{project}},
 	)
 	require.NoError(t, err, "creating filtered sync A")
 	defer filteredA.Close()
@@ -896,7 +897,7 @@ func TestPushDetectsPGTargetChangeAfterFilteredPush(t *testing.T) {
 	unfilteredB, err := New(
 		pgURL, "agentsview_filtered_b", local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating unfiltered sync B")
 	defer unfilteredB.Close()
@@ -944,7 +945,7 @@ func TestPushFullAfterSchemaDropRecreatesSchema(
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	ctx := context.Background()
@@ -984,7 +985,7 @@ func TestScopedPushFullAfterSchemaDropRecreatesSchema(
 	ps, err := New(
 		pgURL, schema, local,
 		"test-machine", true,
-		SyncOptions{Projects: []string{"proj"}},
+		storage.PusherOptions{Projects: []string{"proj"}},
 	)
 	require.NoError(t, err, "creating sync")
 	ctx := context.Background()
@@ -1018,7 +1019,7 @@ func TestPushBatchesMultipleSessions(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -1086,7 +1087,7 @@ func TestPushBulkInsertManyMessages(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -1172,7 +1173,7 @@ func TestPushSimplePK(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -1244,7 +1245,7 @@ func TestPushFilteredByProject(t *testing.T) {
 	filtered, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{Projects: []string{"alpha"}},
+		storage.PusherOptions{Projects: []string{"alpha"}},
 	)
 	require.NoError(t, err, "creating filtered sync")
 	defer filtered.Close()
@@ -1274,7 +1275,7 @@ func TestPushFilteredByProject(t *testing.T) {
 	unfiltered, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating unfiltered sync")
 	defer unfiltered.Close()
@@ -1337,7 +1338,7 @@ func TestFilteredPushAfterResetDoesNotMaskUnfilteredResetRecovery(t *testing.T) 
 	unfiltered, err := New(
 		pgURL, schema, local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating unfiltered sync")
 	defer unfiltered.Close()
@@ -1351,7 +1352,7 @@ func TestFilteredPushAfterResetDoesNotMaskUnfilteredResetRecovery(t *testing.T) 
 	filtered, err := New(
 		pgURL, schema, local,
 		"test-machine", true,
-		SyncOptions{Projects: []string{"alpha"}},
+		storage.PusherOptions{Projects: []string{"alpha"}},
 	)
 	require.NoError(t, err, "creating filtered sync")
 	defer filtered.Close()
@@ -1363,7 +1364,7 @@ func TestFilteredPushAfterResetDoesNotMaskUnfilteredResetRecovery(t *testing.T) 
 	unfilteredAfterReset, err := New(
 		pgURL, schema, local,
 		"test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating unfiltered sync after reset")
 	defer unfilteredAfterReset.Close()
@@ -1415,7 +1416,7 @@ func TestFilteredPartialPushDetectsResetWithEmptyWatermark(t *testing.T) {
 	filtered, err := New(
 		pgURL, schema, local,
 		"test-machine", true,
-		SyncOptions{Projects: []string{"alpha"}},
+		storage.PusherOptions{Projects: []string{"alpha"}},
 	)
 	require.NoError(t, err, "creating filtered sync")
 	defer filtered.Close()
@@ -1465,7 +1466,7 @@ func TestFilteredPartialPushDetectsResetWithEmptyWatermark(t *testing.T) {
 	filteredAfterReset, err := New(
 		pgURL, schema, local,
 		"test-machine", true,
-		SyncOptions{Projects: []string{"alpha"}},
+		storage.PusherOptions{Projects: []string{"alpha"}},
 	)
 	require.NoError(t, err, "creating filtered sync after reset")
 	defer filteredAfterReset.Close()
@@ -1515,7 +1516,7 @@ func TestPushExcludeProject(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{ExcludeProjects: []string{"beta"}},
+		storage.PusherOptions{ExcludeProjects: []string{"beta"}},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -1556,7 +1557,7 @@ func TestPushFilteredFullIsIncremental(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"test-machine", true,
-		SyncOptions{Projects: []string{"alpha"}},
+		storage.PusherOptions{Projects: []string{"alpha"}},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"testing"
 
+	"go.kenn.io/agentsview/internal/storage"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -42,9 +44,9 @@ type notReadyVectorSource struct{}
 
 func (notReadyVectorSource) BeginExport(
 	context.Context, []string,
-) (VectorExport, bool, error) {
+) (storage.VectorExport, bool, error) {
 	return nil, false, fmt.Errorf(
-		"%w: 7 document(s) pending", ErrVectorSourceNotReady)
+		"%w: 7 document(s) pending", storage.ErrVectorSourceNotReady)
 }
 
 // TestPushVectorsSkipsWhenSourceNotReady pins that a not-ready source turns
@@ -65,7 +67,7 @@ func TestPushVectorsSkipsWhenSourceNotReady(t *testing.T) {
 // finish the vector phase without touching the source (or PG) at all.
 type spyVectorSource struct{ t *testing.T }
 
-func (s spyVectorSource) BeginExport(context.Context, []string) (VectorExport, bool, error) {
+func (s spyVectorSource) BeginExport(context.Context, []string) (storage.VectorExport, bool, error) {
 	require.FailNow(s.t, "BeginExport must not be called for an empty scope")
 	return nil, false, nil
 }

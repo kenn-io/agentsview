@@ -708,9 +708,9 @@ func TestPortExplicitProvenance(t *testing.T) {
 			name string
 			fn   func(*pflag.FlagSet) (Config, error)
 		}{
-			{name: "pg", fn: LoadPGServePFlags},
-			{name: "duckdb", fn: LoadDuckDBServePFlags},
-			{name: "clickhouse", fn: LoadClickHouseServePFlags},
+			{name: "pg", fn: LoadRemoteServePFlags},
+			{name: "duckdb", fn: LoadRemoteServePFlags},
+			{name: "clickhouse", fn: LoadRemoteServePFlags},
 		} {
 			t.Run(load.name, func(t *testing.T) {
 				setupTestEnv(t)

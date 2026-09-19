@@ -12,6 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // TestSessionUsageWithSubagentsMatchesSQLite pins DuckDB store-contract
@@ -120,7 +121,7 @@ func TestSessionUsageWithSubagentsMatchesSQLite(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err, "push to DuckDB")

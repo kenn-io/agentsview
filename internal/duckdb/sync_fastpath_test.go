@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,7 +54,7 @@ func mutateSessionStatColumns(t *testing.T, local *db.DB, sessionID string) {
 func TestSyncIncrementalStatOnlyChangeRefreshesMirrorRow(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	probe, err := ProbeMirror(ctx, path)
 	require.NoError(t, err)
@@ -61,7 +62,7 @@ func TestSyncIncrementalStatOnlyChangeRefreshesMirrorRow(t *testing.T) {
 	setSessionSignalsTo(t, local, "sess-1", probe.LastPushCutoff)
 	mutateSessionStatColumns(t, local, "sess-1")
 
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total)
 	assert.Equal(t, 0, res.Diagnostics.SkippedUnchangedSessions.Total)
@@ -91,7 +92,7 @@ func TestSyncIncrementalStatOnlyChangeRefreshesMirrorRow(t *testing.T) {
 func TestPushRepairsSessionDeletedDirectlyFromMirror(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	probe, err := ProbeMirror(ctx, path)
 	require.NoError(t, err)
@@ -104,7 +105,7 @@ func TestPushRepairsSessionDeletedDirectlyFromMirror(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
 
-	res, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	res, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.False(t, res.Diagnostics.Full)
 	assert.Equal(t, 1, res.Diagnostics.PushedSessions.Total)
@@ -117,15 +118,15 @@ func TestPushRepairsSessionDeletedDirectlyFromMirror(t *testing.T) {
 func TestSyncCheckpointPolicyRunsOnlyAfterMutatingPush(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	probe, err := ProbeMirror(ctx, path)
 	require.NoError(t, err)
-	syncer := newTestSync(t, path, local, SyncOptions{})
+	syncer := newTestSync(t, path, local, storage.MirrorPushOptions{})
 	spy := &checkpointSpy{}
 	syncer.maintenance = spy
-	_, err = syncer.runIncrementalPush(ctx, SyncOptions{}, probe, nil)
+	_, err = syncer.runIncrementalPush(ctx, storage.MirrorPushOptions{}, probe, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, spy.calls, "no session changed, no deletions: no checkpoint")
 	require.NoError(t, syncer.Close())
@@ -133,10 +134,10 @@ func TestSyncCheckpointPolicyRunsOnlyAfterMutatingPush(t *testing.T) {
 	appendMessage(t, local, "sess-1")
 	probe, err = ProbeMirror(ctx, path)
 	require.NoError(t, err)
-	syncer = newTestSync(t, path, local, SyncOptions{})
+	syncer = newTestSync(t, path, local, storage.MirrorPushOptions{})
 	spy = &checkpointSpy{}
 	syncer.maintenance = spy
-	_, err = syncer.runIncrementalPush(ctx, SyncOptions{}, probe, nil)
+	_, err = syncer.runIncrementalPush(ctx, storage.MirrorPushOptions{}, probe, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, spy.calls, "session changed: checkpoint runs once")
 }
@@ -149,7 +150,7 @@ func TestSyncCheckpointPolicyRunsOnlyAfterMutatingPush(t *testing.T) {
 func TestSyncCheckpointFailureDoesNotAdvanceMirrorMetadata(t *testing.T) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	before, err := ProbeMirror(ctx, path)
 	require.NoError(t, err)
@@ -157,10 +158,10 @@ func TestSyncCheckpointFailureDoesNotAdvanceMirrorMetadata(t *testing.T) {
 	appendMessage(t, local, "sess-1")
 	probe, err := ProbeMirror(ctx, path)
 	require.NoError(t, err)
-	syncer := newTestSync(t, path, local, SyncOptions{})
+	syncer := newTestSync(t, path, local, storage.MirrorPushOptions{})
 	syncer.maintenance = &checkpointSpy{err: errors.New("checkpoint boom")}
 
-	_, err = syncer.runIncrementalPush(ctx, SyncOptions{}, probe, nil)
+	_, err = syncer.runIncrementalPush(ctx, storage.MirrorPushOptions{}, probe, nil)
 	require.ErrorContains(t, err, "checkpoint boom")
 	require.NoError(t, syncer.Close())
 
@@ -181,7 +182,7 @@ func TestSyncCheckpointFailureAfterHardDeleteDoesNotAdvanceMirrorMetadata(
 ) {
 	ctx := t.Context()
 	local, path := newPushFixture(t, 2)
-	_, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	before, err := ProbeMirror(ctx, path)
 	require.NoError(t, err)
@@ -189,10 +190,10 @@ func TestSyncCheckpointFailureAfterHardDeleteDoesNotAdvanceMirrorMetadata(
 	require.NoError(t, local.DeleteSession(ctx, "sess-1"))
 	probe, err := ProbeMirror(ctx, path)
 	require.NoError(t, err)
-	syncer := newTestSync(t, path, local, SyncOptions{})
+	syncer := newTestSync(t, path, local, storage.MirrorPushOptions{})
 	syncer.maintenance = &checkpointSpy{err: errors.New("checkpoint boom")}
 
-	_, err = syncer.runIncrementalPush(ctx, SyncOptions{}, probe, nil)
+	_, err = syncer.runIncrementalPush(ctx, storage.MirrorPushOptions{}, probe, nil)
 	require.ErrorContains(t, err, "checkpoint boom")
 	require.NoError(t, syncer.Close())
 

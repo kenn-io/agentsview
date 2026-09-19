@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/duckdb"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestAnalyticsToolResultsAreNotUserPrompts(t *testing.T) {
@@ -34,7 +35,7 @@ func TestAnalyticsToolResultsAreNotUserPrompts(t *testing.T) {
 		{SessionID: "tool-results", Ordinal: 5, Role: "assistant", Model: "model-a", HasToolUse: true, Timestamp: started},
 	}))
 	require.NoError(t, local.UpdateSessionSignals(t.Context(), "tool-results", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion, ShortPromptCount: 1}}))
-	ps, err := New(pgURL, "agentsview", local, "analytics-test-machine", true, SyncOptions{})
+	ps, err := New(pgURL, "agentsview", local, "analytics-test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	defer ps.Close()
 	require.NoError(t, ps.EnsureSchema(ctx))
@@ -44,7 +45,7 @@ func TestAnalyticsToolResultsAreNotUserPrompts(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 	duckPath := filepath.Join(t.TempDir(), "analytics.duckdb")
-	_, err = duckdb.Push(ctx, duckPath, local, "analytics-test-machine", duckdb.SyncOptions{}, true, nil)
+	_, err = duckdb.Push(ctx, duckPath, local, "analytics-test-machine", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
 	duckStore, err := duckdb.NewStore(t.Context(), duckPath)
 	require.NoError(t, err)

@@ -16,7 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
-	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestDuckDBLongRunningSignalsIncludeSIGTERM(t *testing.T) {
@@ -89,7 +89,7 @@ func TestArchiveWriteBackendDuckDBPushPostsToDaemon(t *testing.T) {
 		excludeProjects: []string{"b"},
 		path:            "",
 		machineName:     "workstation",
-	}, duckdbsync.PushResult{
+	}, storage.MirrorPushResult{
 		SessionsPushed: 2,
 		MessagesPushed: 3,
 		Duration:       time.Second,
@@ -120,7 +120,7 @@ func TestArchiveWriteBackendDuckDBPushPostsToDaemon(t *testing.T) {
 func TestArchiveWriteBackendDuckDBPushOmitsRelativeMirrorPath(t *testing.T) {
 	ts := duckDBPushDaemonServer(t, wantDuckDBDaemonPush{
 		path: "",
-	}, duckdbsync.PushResult{})
+	}, storage.MirrorPushResult{})
 
 	backend := newDaemonArchiveWriteBackendForTest(config.Config{}, ts.URL)
 	_, err := backend.DuckDBPush(
@@ -184,7 +184,7 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 			"the CLI defers to the daemon's pinned mirror path")
 		assert.Equal(t, new(true), req.Automatic,
 			"watch-mode daemon pushes must be marked automatic")
-		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
+		writeTestJSON(t, w, storage.MirrorPushResult{SessionsPushed: 1})
 	})
 	var resolvedPushes int
 	resolved := pushRuntimeServer(t, "/api/v1/push/duckdb", func(
@@ -204,7 +204,7 @@ func TestArchiveWriteBackendDuckDBPushWatchReResolvesDaemon(t *testing.T) {
 			"the CLI defers to the daemon's pinned mirror path")
 		assert.Equal(t, new(true), req.Automatic,
 			"watch-mode daemon pushes must be marked automatic")
-		writeTestJSON(t, w, duckdbsync.PushResult{SessionsPushed: 1})
+		writeTestJSON(t, w, storage.MirrorPushResult{SessionsPushed: 1})
 	})
 	registerTestRuntime(t, dataDir, resolved.URL, false)
 
@@ -257,20 +257,20 @@ func TestWriteDuckDBPushPlanDescribesLocalTarget(t *testing.T) {
 func TestWriteDuckDBPushDiagnosticsIncludesAgentBreakdown(t *testing.T) {
 	var out bytes.Buffer
 
-	writeDuckDBPushDiagnostics(&out, duckdbsync.PushResult{
+	writeDuckDBPushDiagnostics(&out, storage.MirrorPushResult{
 		SessionsPushed: 3,
 		MessagesPushed: 7,
-		Diagnostics: duckdbsync.PushDiagnostics{
+		Diagnostics: storage.MirrorPushDiagnostics{
 			Cutoff:            "2026-07-01T12:00:00.000Z",
 			LocalSessionCount: 3,
-			CandidateSessions: duckdbsync.PushSessionCounts{
+			CandidateSessions: storage.MirrorSessionCounts{
 				Total:   3,
 				ByAgent: map[string]int{"codex": 1, "claude": 2},
 			},
-			SkippedUnchangedSessions: duckdbsync.PushSessionCounts{
+			SkippedUnchangedSessions: storage.MirrorSessionCounts{
 				Total: 0,
 			},
-			PushedSessions: duckdbsync.PushSessionCounts{
+			PushedSessions: storage.MirrorSessionCounts{
 				Total:   3,
 				ByAgent: map[string]int{"codex": 1, "claude": 2},
 			},
@@ -285,23 +285,23 @@ func TestWriteDuckDBPushDiagnosticsIncludesAgentBreakdown(t *testing.T) {
 
 // TestWriteDuckDBPushDiagnosticsOmitsSkippedLocalCount verifies the "local N"
 // figure is omitted when LocalSessionCount is 0: automatic pushes skip the
-// archive-scale scope count (see duckdbsync.SyncOptions.Automatic), so 0
+// archive-scale scope count (see storage.MirrorPushOptions.Automatic), so 0
 // means "not counted" and printing "local 0" would misreport the archive as
 // empty.
 func TestWriteDuckDBPushDiagnosticsOmitsSkippedLocalCount(t *testing.T) {
 	var out bytes.Buffer
 
-	writeDuckDBPushDiagnostics(&out, duckdbsync.PushResult{
+	writeDuckDBPushDiagnostics(&out, storage.MirrorPushResult{
 		SessionsPushed: 1,
 		MessagesPushed: 2,
-		Diagnostics: duckdbsync.PushDiagnostics{
+		Diagnostics: storage.MirrorPushDiagnostics{
 			Cutoff:            "2026-07-01T12:00:00.000Z",
 			LocalSessionCount: 0,
-			CandidateSessions: duckdbsync.PushSessionCounts{
+			CandidateSessions: storage.MirrorSessionCounts{
 				Total:   1,
 				ByAgent: map[string]int{"claude": 1},
 			},
-			PushedSessions: duckdbsync.PushSessionCounts{
+			PushedSessions: storage.MirrorSessionCounts{
 				Total:   1,
 				ByAgent: map[string]int{"claude": 1},
 			},
@@ -322,13 +322,13 @@ func TestWriteDuckDBPushDiagnosticsOmitsSkippedLocalCount(t *testing.T) {
 func TestWriteDuckDBPushDiagnosticsReportsRebuildMode(t *testing.T) {
 	var out bytes.Buffer
 
-	writeDuckDBPushDiagnostics(&out, duckdbsync.PushResult{
+	writeDuckDBPushDiagnostics(&out, storage.MirrorPushResult{
 		SessionsPushed: 2,
 		MessagesPushed: 5,
-		Diagnostics: duckdbsync.PushDiagnostics{
+		Diagnostics: storage.MirrorPushDiagnostics{
 			Full:          true,
 			RebuildReason: "missing file",
-			PushedSessions: duckdbsync.PushSessionCounts{
+			PushedSessions: storage.MirrorSessionCounts{
 				Total:   2,
 				ByAgent: map[string]int{"claude": 2},
 			},
@@ -344,14 +344,14 @@ func TestWriteDuckDBPushDiagnosticsReportsRebuildMode(t *testing.T) {
 
 // TestWriteDuckDBPushDiagnosticsReportsDeferredMode verifies a deferred
 // watch-mode push (mirror held by a live serve; see
-// duckdbsync.SyncOptions.Automatic) prints its mode and reason
+// storage.MirrorPushOptions.Automatic) prints its mode and reason
 // instead of the incremental or rebuild counters, none of which exist for
 // a push that touched nothing.
 func TestWriteDuckDBPushDiagnosticsReportsDeferredMode(t *testing.T) {
 	var out bytes.Buffer
 
-	writeDuckDBPushDiagnostics(&out, duckdbsync.PushResult{
-		Diagnostics: duckdbsync.PushDiagnostics{
+	writeDuckDBPushDiagnostics(&out, storage.MirrorPushResult{
+		Diagnostics: storage.MirrorPushDiagnostics{
 			Deferred:       true,
 			DeferredReason: "mirror is locked by a serving process; deferring until it is released",
 		},
@@ -400,7 +400,7 @@ type wantDuckDBDaemonPush struct {
 func duckDBPushDaemonServer(
 	t *testing.T,
 	want wantDuckDBDaemonPush,
-	result duckdbsync.PushResult,
+	result storage.MirrorPushResult,
 ) *httptest.Server {
 	t.Helper()
 	return duckDBPushDaemonServerAt(t, "/api/v1/push/duckdb", want, result)
@@ -410,7 +410,7 @@ func duckDBPushDaemonServerAt(
 	t *testing.T,
 	path string,
 	want wantDuckDBDaemonPush,
-	result duckdbsync.PushResult,
+	result storage.MirrorPushResult,
 ) *httptest.Server {
 	t.Helper()
 	return pushRuntimeServer(t, path, func(

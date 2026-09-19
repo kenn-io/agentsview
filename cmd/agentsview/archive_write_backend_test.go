@@ -17,10 +17,9 @@ import (
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/dbtest"
-	duckdbsync "go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/parser"
-	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/agentsview/internal/testjsonl"
 )
@@ -66,9 +65,9 @@ func TestDaemonPushProgressSilencesHeartbeat(t *testing.T) {
 			t.Cleanup(func() { daemonPushHeartbeatInterval = orig })
 
 			onProgress, finish := daemonPushProgress(
-				"PostgreSQL", newPGPushProgressPrinter(),
+				"PostgreSQL", newReplicaPushProgressPrinter(),
 			)
-			onProgress(postgres.PushProgress{SessionsDone: 1, SessionsTotal: 2})
+			onProgress(storage.PushProgress{SessionsDone: 1, SessionsTotal: 2})
 			synctest.Sleep(150 * time.Millisecond)
 			finish()
 		})
@@ -102,8 +101,8 @@ func (b *syncBuffer) String() string {
 func TestLocalArchiveWriteBackendPGPushStopsAfterCanceledLocalSync(t *testing.T) {
 	testLocalArchivePushStopsAfterCanceledSync(t,
 		func(backend *localArchiveWriteBackend, ctx context.Context) error {
-			_, err := backend.PGPush(
-				ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
+			_, err := backend.ReplicaPush(
+				ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil,
 			)
 			return err
 		})
@@ -120,10 +119,10 @@ func TestLocalPGPushEnsuresPricingBeforeConnecting(t *testing.T) {
 		return nil
 	}
 
-	_, err := backend.PGPush(
-		t.Context(),
-		pgTargetSelection{PG: config.PGConfig{URL: unreachablePGURL}},
-		PGPushConfig{}, nil, nil,
+	_, err := backend.ReplicaPush(
+		t.Context(), pgReplica{},
+		storage.ConfiguredReplica{Target: storage.ReplicaTarget{URL: unreachablePGURL}},
+		ReplicaPushConfig{}, nil, nil,
 	)
 
 	require.Error(t, err)
@@ -142,9 +141,10 @@ func TestLocalPGWatchPusherUsesBackendPricingEnsure(t *testing.T) {
 		return nil
 	}
 	target := &fakeTarget{}
-	pusher := backend.newPGPusher(
+	pusher := backend.newReplicaPusher(
+		pgReplica{},
 		func(context.Context) error { return nil },
-		func() (pgTarget, error) { return target, nil },
+		func() (storage.Pusher, error) { return target, nil },
 	)
 
 	require.NoError(t, pusher.push(
@@ -262,10 +262,10 @@ func TestLocalArchiveWriteBackendPGPushRejectsDeferredProcessing(t *testing.T) {
 
 	var err error
 	out := captureStdout(t, func() {
-		_, err = backend.PGPush(
-			t.Context(),
-			pgTargetSelection{PG: config.PGConfig{URL: unreachablePGURL}},
-			PGPushConfig{}, nil, nil,
+		_, err = backend.ReplicaPush(
+			t.Context(), pgReplica{},
+			storage.ConfiguredReplica{Target: storage.ReplicaTarget{URL: unreachablePGURL}},
+			ReplicaPushConfig{}, nil, nil,
 		)
 	})
 
@@ -352,10 +352,10 @@ func TestRunPGWatchStartupSyncReportsIncompleteDiscovery(t *testing.T) {
 func TestLocalArchiveWriteBackendPGPushWatchCanceledStartupIsClean(t *testing.T) {
 	backend := testLocalArchiveWriteBackend(t)
 
-	err := backend.PGPushWatch(
-		canceledContext(),
-		pgTargetSelection{},
-		PGPushConfig{},
+	err := backend.ReplicaPushWatch(
+		canceledContext(), pgReplica{},
+		storage.ConfiguredReplica{},
+		ReplicaPushConfig{},
 		nil,
 		nil,
 		time.Millisecond,
@@ -389,8 +389,8 @@ func pushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
 		{
 			name: "daemon PostgreSQL",
 			run: func(ctx context.Context, hooks *archivePushWatchHooks) error {
-				return (daemonArchiveWriteBackend{watchHooks: hooks}).PGPushWatch(
-					ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
+				return (daemonArchiveWriteBackend{watchHooks: hooks}).ReplicaPushWatch(
+					ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil,
 					time.Hour, time.Hour,
 				)
 			},
@@ -409,8 +409,8 @@ func pushWatchOwnerCases(t *testing.T) []pushWatchOwnerCase {
 			name: "local PostgreSQL",
 			run: func(ctx context.Context, hooks *archivePushWatchHooks) error {
 				localPostgreSQL.watchHooks = hooks
-				return localPostgreSQL.PGPushWatch(
-					ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
+				return localPostgreSQL.ReplicaPushWatch(
+					ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil,
 					time.Hour, time.Hour,
 				)
 			},
@@ -431,8 +431,8 @@ func TestDaemonPGPushWatchSendsClaimedBatchAndProbesRecovery(t *testing.T) {
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() {
-		done <- backend.PGPushWatch(
-			ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
+		done <- backend.ReplicaPushWatch(
+			ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil,
 			time.Hour, time.Hour,
 		)
 	}()
@@ -489,8 +489,8 @@ func TestDaemonPGPushWatchRenameProbesDeferredRecoveryAtExecution(t *testing.T) 
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() {
-		done <- backend.PGPushWatch(
-			ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
+		done <- backend.ReplicaPushWatch(
+			ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil,
 			time.Hour, time.Hour,
 		)
 	}()
@@ -590,23 +590,23 @@ func (h *pushWatchOwnerHarness) hooks() *archivePushWatchHooks {
 		},
 		duckDBPush: func(
 			_ context.Context, reason pushReason, _ bool,
-		) (duckdbsync.PushResult, error) {
+		) (storage.MirrorPushResult, error) {
 			attempt, partial := h.nextAttempt(reason)
 			if partial {
-				return duckdbsync.PushResult{Errors: 1}, nil
+				return storage.MirrorPushResult{Errors: 1}, nil
 			}
-			return duckdbsync.PushResult{SessionsPushed: attempt}, nil
+			return storage.MirrorPushResult{SessionsPushed: attempt}, nil
 		},
-		pgPush: func(
-			_ context.Context, reason pushReason, cfg PGPushConfig,
-		) (postgres.PushResult, error) {
+		replicaPush: func(
+			_ context.Context, reason pushReason, cfg ReplicaPushConfig,
+		) (storage.PushResult, error) {
 			attempt, partial := h.nextPGWatchAttempt(reason, cfg)
 			if partial {
-				return postgres.PushResult{Errors: 1}, nil
+				return storage.PushResult{Errors: 1}, nil
 			}
-			return postgres.PushResult{SessionsPushed: attempt}, nil
+			return storage.PushResult{SessionsPushed: attempt}, nil
 		},
-		pgStartupSync: func(
+		replicaStartupSync: func(
 			context.Context, *syncpkg.Engine, bool,
 		) (bool, error) {
 			h.mu.Lock()
@@ -624,9 +624,9 @@ func (h *pushWatchOwnerHarness) hooks() *archivePushWatchHooks {
 			h.mu.Unlock()
 			return false, nil
 		},
-		newPGPusher: func(*syncpkg.Engine) *pgPusher {
+		newReplicaPusher: func(*syncpkg.Engine) *replicaPusher {
 			target := &pushWatchPGTarget{harness: h}
-			return &pgPusher{
+			return &replicaPusher{
 				localSync: func(context.Context) error {
 					h.mu.Lock()
 					h.localPushSyncs++
@@ -634,7 +634,7 @@ func (h *pushWatchOwnerHarness) hooks() *archivePushWatchHooks {
 					h.mu.Unlock()
 					return nil
 				},
-				connect: func() (pgTarget, error) { return target, nil },
+				connect: func() (storage.Pusher, error) { return target, nil },
 			}
 		},
 		newDuckDBPusher: func(*syncpkg.Engine) *duckDBPusher {
@@ -648,12 +648,12 @@ func (h *pushWatchOwnerHarness) hooks() *archivePushWatchHooks {
 				},
 				mirrorPush: func(
 					_ context.Context, _ bool,
-				) (duckdbsync.PushResult, error) {
+				) (storage.MirrorPushResult, error) {
 					attempt, partial := h.nextAttempt("")
 					if partial {
-						return duckdbsync.PushResult{Errors: 1}, nil
+						return storage.MirrorPushResult{Errors: 1}, nil
 					}
-					return duckdbsync.PushResult{SessionsPushed: attempt}, nil
+					return storage.MirrorPushResult{SessionsPushed: attempt}, nil
 				},
 			}
 		},
@@ -679,7 +679,7 @@ func (h *pushWatchOwnerHarness) nextPGAttempt() (int, bool) {
 }
 
 func (h *pushWatchOwnerHarness) nextPGWatchAttempt(
-	reason pushReason, cfg PGPushConfig,
+	reason pushReason, cfg ReplicaPushConfig,
 ) (int, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -748,13 +748,13 @@ type pushWatchPGTarget struct {
 
 func (*pushWatchPGTarget) EnsureSchema(context.Context) error { return nil }
 func (t *pushWatchPGTarget) PushWithOptions(
-	_ context.Context, _ postgres.PushOptions, _ func(postgres.PushProgress),
-) (postgres.PushResult, error) {
+	_ context.Context, _ storage.PushOptions, _ func(storage.PushProgress),
+) (storage.PushResult, error) {
 	attempt, partial := t.harness.nextPGAttempt()
 	if partial {
-		return postgres.PushResult{Errors: 1}, nil
+		return storage.PushResult{Errors: 1}, nil
 	}
-	return postgres.PushResult{SessionsPushed: attempt}, nil
+	return storage.PushResult{SessionsPushed: attempt}, nil
 }
 func (*pushWatchPGTarget) Close() error { return nil }
 
@@ -1069,8 +1069,8 @@ func TestDaemonPushWatchOwnersSuppressOpenCodeSHMOnlyBatches(t *testing.T) {
 				backend := daemonArchiveWriteBackend{
 					appCfg: cfg, watchHooks: hooks,
 				}
-				return backend.PGPushWatch(
-					ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
+				return backend.ReplicaPushWatch(
+					ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil,
 					time.Hour, time.Hour,
 				)
 			},
@@ -1403,9 +1403,9 @@ type noopPGTarget struct{}
 
 func (noopPGTarget) EnsureSchema(context.Context) error { return nil }
 func (noopPGTarget) PushWithOptions(
-	context.Context, postgres.PushOptions, func(postgres.PushProgress),
-) (postgres.PushResult, error) {
-	return postgres.PushResult{}, nil
+	context.Context, storage.PushOptions, func(storage.PushProgress),
+) (storage.PushResult, error) {
+	return storage.PushResult{}, nil
 }
 func (noopPGTarget) Close() error { return nil }
 
@@ -1456,13 +1456,13 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 				label:    label,
 			}, func() {}
 		},
-		pgStartupSync: func(context.Context, *syncpkg.Engine, bool) (bool, error) {
+		replicaStartupSync: func(context.Context, *syncpkg.Engine, bool) (bool, error) {
 			return false, nil
 		},
-		newPGPusher: func(*syncpkg.Engine) *pgPusher {
-			return &pgPusher{
+		newReplicaPusher: func(*syncpkg.Engine) *replicaPusher {
+			return &replicaPusher{
 				localSync: func(context.Context) error { return nil },
-				connect:   func() (pgTarget, error) { return noopPGTarget{}, nil },
+				connect:   func() (storage.Pusher, error) { return noopPGTarget{}, nil },
 			}
 		},
 		newUnwatchedPoller: func(
@@ -1481,8 +1481,8 @@ func TestLocalPGPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() {
-		done <- backend.PGPushWatch(
-			ctx, pgTargetSelection{}, PGPushConfig{}, nil, nil,
+		done <- backend.ReplicaPushWatch(
+			ctx, pgReplica{}, storage.ConfiguredReplica{}, ReplicaPushConfig{}, nil, nil,
 			time.Hour, time.Hour,
 		)
 	}()
@@ -1577,8 +1577,8 @@ func TestLocalDuckDBPushWatchGivesDeferredScopesAPollingOwner(t *testing.T) {
 		newDuckDBPusher: func(*syncpkg.Engine) *duckDBPusher {
 			return &duckDBPusher{
 				localSync: func(context.Context) error { return nil },
-				mirrorPush: func(context.Context, bool) (duckdbsync.PushResult, error) {
-					return duckdbsync.PushResult{}, nil
+				mirrorPush: func(context.Context, bool) (storage.MirrorPushResult, error) {
+					return storage.MirrorPushResult{}, nil
 				},
 			}
 		},

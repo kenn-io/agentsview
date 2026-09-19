@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // TestPushSessionNameRoundTrip verifies that session_name is pushed from
@@ -130,7 +131,7 @@ func TestPushSessionNameViaPushPath(t *testing.T) {
 	local := testDB(t)
 	ps, err := New(
 		pgURL, "agentsview", local, "machine-sessionname-push", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()

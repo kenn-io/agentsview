@@ -13,6 +13,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // TestPGSessionNameVisibleInReadPaths verifies that a session with only a
@@ -122,7 +123,7 @@ func TestPGPushUsageOnlyClearsRenamedTitle(t *testing.T) {
 	cleanPGSchema(t, pgURL)
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 	local := testDB(t)
-	ps, err := New(pgURL, "agentsview", local, "test-machine", true, SyncOptions{})
+	ps, err := New(pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ps.Close() })
 	ctx := context.Background()

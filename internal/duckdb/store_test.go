@@ -23,6 +23,7 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/storage"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -195,7 +196,7 @@ func TestStoreReadsSessionsMessagesAndMetadata(t *testing.T) {
 func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
 	ctx := t.Context()
 	local := newLocalDB(t)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	duck := syncer.DB()
 	store := NewStoreFromDB(duck)
@@ -300,7 +301,7 @@ func TestStoreGetStatsPreservesRootAndScopeFilters(t *testing.T) {
 func TestStoreListTrashedSessionsOrdersNewestFirstAndCapsAt500(t *testing.T) {
 	ctx := t.Context()
 	local := newLocalDB(t)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	duck := syncer.DB()
 	store := NewStoreFromDB(duck)
@@ -467,7 +468,7 @@ func TestSearchContentFTSMatchesNonContiguousTerms(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -550,7 +551,7 @@ func TestSearchContentMatchTimestampIsRFC3339(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -631,7 +632,7 @@ func TestSearchContentOrdinalRangeSelfRange(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -686,7 +687,7 @@ func TestSearchContentRedactsSecretsUnlessRevealed(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -740,7 +741,7 @@ func TestSearchGroupsMessagesAndIncludesNameMatches(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -799,7 +800,7 @@ func TestSearchOperatorTokenNoError(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -840,7 +841,7 @@ func TestSearchMultiTermAND(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -1243,7 +1244,7 @@ func TestDuckDailyAndSessionUsageApplyPricingBandsOnlyToRequests(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -1351,7 +1352,7 @@ func TestAnalyticsTopSessionsFiltersMetricEligibility(t *testing.T) {
 	}
 	_, err := local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -1478,7 +1479,7 @@ func TestAnalyticsTopSessionsDurationUsesActiveDuration(t *testing.T) {
 	_, err := local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -1532,7 +1533,7 @@ func TestAnalyticsProjectsPopulateDailyTrendAndSortByMessages(t *testing.T) {
 	_, err := local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -1574,7 +1575,7 @@ func TestAnalyticsVelocityUsesMessageCyclesAndBreakdowns(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -1609,7 +1610,7 @@ func TestAnalyticsVelocitySingleMessageSessionsReturnArrays(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -1666,7 +1667,7 @@ func TestGetSessionTimingPopulatesSharedTimingPayload(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -1711,7 +1712,7 @@ func TestGetAllMessagesDoesNotTruncateAtDefaultLimit(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -1788,7 +1789,7 @@ func TestSearchContentRegexOrdersBySessionRecency(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -1837,7 +1838,7 @@ func TestSearchContentGitBranchFilter(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -1878,7 +1879,7 @@ func TestSearchContentDateFilterUsesRequestedTimezone(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -1950,7 +1951,7 @@ func TestSearchContentToolResultEmptyToolUseIDNotSuppressedByEvents(t *testing.T
 		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2010,7 +2011,7 @@ func TestSearchContentLegacyToolResultsUseCallIndexTieBreaker(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2086,7 +2087,7 @@ func TestSearchContentToolResultEventsUseCallIndexTieBreaker(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2167,7 +2168,7 @@ func TestAnalyticsActivityCountsToolCallRows(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2203,7 +2204,7 @@ func TestAnalyticsActivitySkipsSystemUserMessages(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2242,7 +2243,7 @@ func TestAnalyticsSessionFiltersUseMessageTimeForHourAndDay(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2296,7 +2297,7 @@ func TestAnalyticsTerminationFilterUsesSharedStateSemantics(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2329,7 +2330,7 @@ func TestAnalyticsActiveSinceParsesEquivalentOffsets(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2361,7 +2362,7 @@ func TestAnalyticsHourOfWeekRespectsSessionFilters(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2395,7 +2396,7 @@ func TestAnalyticsHourOfWeekIncludesOvernightMessages(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2438,7 +2439,7 @@ func TestTrendsTermsApplySessionFiltersAndSystemPrefixExclusion(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2479,7 +2480,7 @@ func TestDailyUsageDefaultsToLocalTimezone(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2515,7 +2516,7 @@ func TestDailyUsageActiveSinceUsesSessionActivity(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2564,7 +2565,7 @@ func TestDailyUsageHandlesBlankMessageTimestampWithoutSessionStart(t *testing.T)
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2626,7 +2627,7 @@ func TestUsageDedupesClaudeMessageIDs(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2709,7 +2710,7 @@ func TestSessionUsagePrefersCompleteClaudeSnapshot(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2785,7 +2786,7 @@ func TestUsageAggregatesPreferCompleteClaudeSnapshotAcrossSessions(t *testing.T)
 	})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2946,7 +2947,7 @@ func TestUsageAggregatesPreferLatestEqualOutputSnapshot(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -2992,7 +2993,7 @@ func TestUsageDedupesSourceUUIDWhenClaudePairIncomplete(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -3060,7 +3061,7 @@ func TestUsagePreservesSessionSummaryUsageEventTokens(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -3136,7 +3137,7 @@ func TestCopilotReportedCostSurvivesDuckDBPush(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -3222,7 +3223,7 @@ func TestDuckDBDailyUsageKeepsAuthoritativeCostSessionScoped(t *testing.T) {
 	}
 	want, err := local.GetDailyUsage(ctx, filter)
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -3275,7 +3276,7 @@ func TestDuckDBCostOnlyReportedSessionMatchesSQLite(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, want)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -3343,7 +3344,7 @@ func TestDuckDBCostOnlyCodebuffSessionHasTokenDataFalse(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -3396,7 +3397,7 @@ func TestDuckDBTokenRowsWithoutSessionFlagsMatchSQLite(t *testing.T) {
 	require.False(t, want.HasTokenData,
 		"SQLite computes HasTokenData from session flags only")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -3437,7 +3438,7 @@ func TestDailyUsageCostsReasoningOnlyRows(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -3497,7 +3498,7 @@ func TestDailyUsageCostsMessageReasoningTokens(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -3561,7 +3562,7 @@ func TestDailyUsageCostsMixedOutputAndReasoningOnlyRows(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -3631,7 +3632,7 @@ func TestUsageDedupPrefersInRangeDuplicate(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -3666,7 +3667,7 @@ func TestPushSyncsCursorUsageEventsIntoDuckDBDailyUsage(t *testing.T) {
 		IsHeadless:       false,
 	}}), "InsertCursorUsageEvents")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -3709,7 +3710,7 @@ func TestTrendsTermsWordBoundaryAndOverlapParity(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -3786,7 +3787,7 @@ func TestDailyUsageBreakdownsAndCacheSavings(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -3859,7 +3860,7 @@ func TestGetChildSessionsOrderedByStartedAt(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, local.SoftDeleteSession(ctx, "duck-child-deleted"))
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -3898,7 +3899,7 @@ func TestStoreSessionUsageRollupParity(t *testing.T) {
 		{Session: child, Messages: []db.Message{childMessage, childUnique}, DataVersion: 1, ReplaceMessages: true},
 	})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -3961,7 +3962,7 @@ func TestStoreSessionUsageRollupUsesCopilotReportedSessionCost(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -4002,7 +4003,7 @@ func TestStoreSessionUsageRollupIncludesUntimedRows(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -4045,7 +4046,7 @@ func TestStoreSessionUsageRollupHandlesNullMessageAndSessionTimestamps(t *testin
 		},
 	})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -4091,7 +4092,7 @@ func TestDuckGetAnalyticsSkillsAggregatesAcrossWeeks(t *testing.T) {
 	_, err := local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -4150,7 +4151,7 @@ func TestDuckGetAnalyticsSkillsFiltersByMessageDate(t *testing.T) {
 	_, err := local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -4181,7 +4182,7 @@ func newSyncedStore(t *testing.T) (*Store, syncFixture) {
 	ctx := t.Context()
 	local := newLocalDB(t)
 	fixture := seedDuckDBSyncFixture(t, local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -4222,7 +4223,7 @@ func TestDuckTopSessionsRanksBySelectedTokenTypes(t *testing.T) {
 	_, err := local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -4273,7 +4274,7 @@ func TestDuckUsageQuantizesCostBeforeAggregation(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -4324,7 +4325,7 @@ func TestDuckDailyUsageReturnsAggregateCostOverflow(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -4382,7 +4383,7 @@ func TestDuckDBBranchDimension(t *testing.T) {
 	_, err := local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -4566,7 +4567,7 @@ func TestGetSessionTimingActivityTimingParity(t *testing.T) {
 			}
 			_, err := local.WriteSessionBatchAtomic(t.Context(), writes)
 			require.NoError(t, err)
-			syncer := newInMemoryTestSync(t, local, SyncOptions{})
+			syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 			require.NoError(t, createSchema(ctx, syncer.DB()))
 			_, err = syncer.pushEverything(ctx, nil)
 			require.NoError(t, err)

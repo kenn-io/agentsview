@@ -15,6 +15,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // TestDuckBuildAnalyticsWhereSubagents verifies that the DuckDB
@@ -1839,7 +1840,7 @@ func newDuckAnalyticsStore(
 	local := newLocalDB(t)
 	_, err := local.WriteSessionBatchAtomic(ctx, writes)
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)

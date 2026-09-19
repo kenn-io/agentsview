@@ -14,14 +14,80 @@ import (
 	"go.kenn.io/agentsview/internal/server"
 )
 
-type daemonPushTarget int
+// daemonPushOperation invokes one generated streaming daemon operation and
+// returns its raw response parts so postDaemonPush can decode them
+// uniformly. Every daemon push route has one; the generated client has no
+// path parameter for the backend name, so each registered replica maps its
+// Name() to its generated operation in replicaPushOperations.
+type daemonPushOperation func(
+	ctx context.Context, api *apiclient.Client, body *apiclient.DaemonPushRequest,
+) (*http.Response, []byte, *runtime.Stream[[]byte], error)
 
-const (
-	daemonPushPG daemonPushTarget = iota
-	daemonPushDuckDB
-	daemonPushClickHouse
-	daemonStartupSync
-)
+// replicaPushOperations maps a replica's Name() to its generated daemon push
+// operation. Adding a replica means regenerating the API client and adding
+// its entry here.
+var replicaPushOperations = map[string]daemonPushOperation{
+	"pg": func(
+		ctx context.Context, api *apiclient.Client, body *apiclient.DaemonPushRequest,
+	) (*http.Response, []byte, *runtime.Stream[[]byte], error) {
+		response, err := api.PostAPIV1PushPgStreamWithResponse(
+			ctx, &apiclient.PostAPIV1PushPgRequestOptions{Body: body},
+		)
+		if response == nil {
+			return nil, nil, nil, err
+		}
+		return response.HTTPResponse, response.Body, response.Stream200, nil
+	},
+	"clickhouse": func(
+		ctx context.Context, api *apiclient.Client, body *apiclient.DaemonPushRequest,
+	) (*http.Response, []byte, *runtime.Stream[[]byte], error) {
+		response, err := api.PostAPIV1PushClickhouseStreamWithResponse(
+			ctx, &apiclient.PostAPIV1PushClickhouseRequestOptions{Body: body},
+		)
+		if response == nil {
+			return nil, nil, nil, err
+		}
+		return response.HTTPResponse, response.Body, response.Stream200, nil
+	},
+}
+
+func replicaPushOperation(name string) (daemonPushOperation, error) {
+	operation, ok := replicaPushOperations[name]
+	if !ok {
+		return nil, fmt.Errorf(
+			"replica backend %q has no daemon push operation; "+
+				"regenerate the API client and register it in replicaPushOperations",
+			name,
+		)
+	}
+	return operation, nil
+}
+
+func mirrorPushOperation(
+	ctx context.Context, api *apiclient.Client, body *apiclient.DaemonPushRequest,
+) (*http.Response, []byte, *runtime.Stream[[]byte], error) {
+	response, err := api.PostAPIV1PushDuckdbStreamWithResponse(
+		ctx, &apiclient.PostAPIV1PushDuckdbRequestOptions{Body: body},
+	)
+	if response == nil {
+		return nil, nil, nil, err
+	}
+	return response.HTTPResponse, response.Body, response.Stream200, nil
+}
+
+func startupSyncOperation(
+	ctx context.Context, api *apiclient.Client, _ *apiclient.DaemonPushRequest,
+) (*http.Response, []byte, *runtime.Stream[[]byte], error) {
+	response, err := api.PostAPIV1SyncStreamWithResponse(
+		ctx, &apiclient.PostAPIV1SyncRequestOptions{
+			Query: &apiclient.PostAPIV1SyncQuery{Wait: new(true), StartupOnly: new(true)},
+		},
+	)
+	if response == nil {
+		return nil, nil, nil, err
+	}
+	return response.HTTPResponse, response.Body, response.Stream200, nil
+}
 
 // postDaemonPush delegates a push to the local daemon. It negotiates an SSE
 // response so the daemon can stream per-phase progress while the push runs;
@@ -32,7 +98,7 @@ func postDaemonPush[T, P any](
 	ctx context.Context,
 	tr transport,
 	authToken string,
-	target daemonPushTarget,
+	operation daemonPushOperation,
 	body apiclient.DaemonPushRequest,
 	onProgress func(P),
 ) (T, error) {
@@ -44,36 +110,9 @@ func postDaemonPush[T, P any](
 		if err != nil {
 			return zero, err
 		}
-		var resp *http.Response
-		var payload []byte
-		var stream *runtime.Stream[[]byte]
-		switch target {
-		case daemonPushPG:
-			response, requestErr := api.PostAPIV1PushPgStreamWithResponse(ctx, &apiclient.PostAPIV1PushPgRequestOptions{Body: &body})
-			if response == nil {
-				return zero, requestErr
-			}
-			resp, payload, stream = response.HTTPResponse, response.Body, response.Stream200
-		case daemonPushDuckDB:
-			response, requestErr := api.PostAPIV1PushDuckdbStreamWithResponse(ctx, &apiclient.PostAPIV1PushDuckdbRequestOptions{Body: &body})
-			if response == nil {
-				return zero, requestErr
-			}
-			resp, payload, stream = response.HTTPResponse, response.Body, response.Stream200
-		case daemonPushClickHouse:
-			response, requestErr := api.PostAPIV1PushClickhouseStreamWithResponse(ctx, &apiclient.PostAPIV1PushClickhouseRequestOptions{Body: &body})
-			if response == nil {
-				return zero, requestErr
-			}
-			resp, payload, stream = response.HTTPResponse, response.Body, response.Stream200
-		case daemonStartupSync:
-			response, requestErr := api.PostAPIV1SyncStreamWithResponse(ctx, &apiclient.PostAPIV1SyncRequestOptions{Query: &apiclient.PostAPIV1SyncQuery{Wait: new(true), StartupOnly: new(true)}})
-			if response == nil {
-				return zero, requestErr
-			}
-			resp, payload, stream = response.HTTPResponse, response.Body, response.Stream200
-		default:
-			return zero, fmt.Errorf("unknown daemon push target: %d", target)
+		resp, payload, stream, err := operation(ctx, api, &body)
+		if resp == nil {
+			return zero, err
 		}
 		if resp.StatusCode != http.StatusOK {
 			msg := payload

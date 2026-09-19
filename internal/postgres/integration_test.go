@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // TestPGPushSecrets verifies that pg push carries secret_leak_count
@@ -24,7 +25,7 @@ func TestPGPushSecrets(t *testing.T) {
 	local := testDB(t)
 	ps, err := New(
 		pgURL, "agentsview", local, "machine-secrets", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -126,7 +127,7 @@ func TestPushSecretFindingsReportsChange(t *testing.T) {
 	local := testDB(t)
 	ps, err := New(
 		pgURL, "agentsview", local, "machine-findings-change", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -215,7 +216,7 @@ func TestPGConnectivity(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"connectivity-test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -242,7 +243,7 @@ func TestPGPushCycle(t *testing.T) {
 	local := testDB(t)
 	ps, err := New(
 		pgURL, "agentsview", local, "machine-a", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()

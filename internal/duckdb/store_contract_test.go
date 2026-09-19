@@ -9,6 +9,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/storage"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -40,7 +41,7 @@ func TestDuckDBSessionDateFilterIncludesOverlappingSessions(t *testing.T) {
 		Timestamp: "2024-06-16T11:00:00Z", ContentLength: 1,
 	}}), "insert open-session message")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err, "push to DuckDB")
@@ -92,7 +93,7 @@ func TestClaudeProvenanceRoundTrip(t *testing.T) {
 		PromptSource:  "typed",
 	}}), "insert identity message")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err, "push to DuckDB")
@@ -152,7 +153,7 @@ func TestDuckDBSidebarIndexTotalCountsCanonicalRoots(t *testing.T) {
 		require.NoError(t, local.UpsertSession(ctx, session), "upsert %s", session.ID)
 	}
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -285,7 +286,7 @@ func TestDuckDBFindSessionIDsByPartialLiteralCaseSensitive(t *testing.T) {
 			Agent: "claude", MessageCount: 1,
 		}), "upsert %q", id)
 	}
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -319,7 +320,7 @@ func TestDuckDBFindSessionIDsByRawSuffix(t *testing.T) {
 	}
 	require.NoError(t, local.SoftDeleteSession(ctx, "host~trashed"))
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -717,7 +718,7 @@ func TestDuckDBGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows
 	}})
 	require.NoError(t, err, "seed copilot session")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -785,7 +786,7 @@ func TestDuckDBGetUsageMatchingSessionCountCountsCopilotSessionByMessageTimestam
 	})
 	require.NoError(t, err, "seed copilot sessions")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -846,7 +847,7 @@ func TestDuckDBGetUsageMatchingSessionCountModelFilterAppliesToBoundedRow(
 	}})
 	require.NoError(t, err, "seed mixed-model copilot session")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -896,7 +897,7 @@ func TestDuckDBGetUsageMatchingSessionCountCountsAssistantMessageWithNoModel(
 	}})
 	require.NoError(t, err, "seed no-model copilot session")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -989,7 +990,7 @@ func TestDuckDBGetUsageMatchingSessionCountUnboundedMatchesBoundedSemantics(
 	require.NoError(t, err, "seed copilot sessions")
 	require.NoError(t, local.SoftDeleteSession(ctx, "duck-copilot-trashed"))
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)

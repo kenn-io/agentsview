@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // TestStoreGetAnalyticsSignals exercises the PG implementation
@@ -27,7 +28,7 @@ func TestStoreGetAnalyticsSignals(t *testing.T) {
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"signals-test-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()
@@ -113,7 +114,7 @@ func TestStoreGetAnalyticsSignalSessionsModelFilterUsesMatchingMessages(
 	ps, err := New(
 		pgURL, "agentsview", local,
 		"signals-model-filter-machine", true,
-		SyncOptions{},
+		storage.PusherOptions{},
 	)
 	require.NoError(t, err, "creating sync")
 	defer ps.Close()

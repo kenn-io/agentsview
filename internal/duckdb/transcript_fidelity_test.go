@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,7 +32,7 @@ func TestTranscriptFidelityRoundTripsViaDuckDBPush(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newTestSync(t, filepath.Join(t.TempDir(), "fidelity.duckdb"), local, SyncOptions{})
+	syncer := newTestSync(t, filepath.Join(t.TempDir(), "fidelity.duckdb"), local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
