@@ -1240,6 +1240,9 @@ func TestSyncEngineOpenCodeStorageWatcherEventDoesNotRewriteUnchanged(
 		t, env.db, fullID, "steady storage reply",
 	)
 
+	// SQLite stamps local_modified_at with millisecond %f. Two rewrites in
+	// the same millisecond compare equal on a fast Windows runner.
+	time.Sleep(2 * time.Millisecond)
 	storage.addTextPart(
 		t, sessionID, "msg-a1", "part-a1",
 		"updated storage reply", 1704067203000,
@@ -6585,11 +6588,13 @@ func TestSyncAllWarmGateCodexIndexSameStatRenameRefreshesName(t *testing.T) {
 	require.Equal(t, transcriptTime.UnixNano(), *sess.FileMtime,
 		"transcript mtime must remain the stored watermark")
 
-	// Simulate a missed watcher event: rewrite only the sidecar while restoring
-	// its lower mtime and preserving its size. The full sync must still reload
-	// the index and repair the persisted title.
+	// Simulate a missed watcher event: rewrite only the sidecar, preserving
+	// size, and advance its mtime. Restoring the old mtime also restores NTFS
+	// ChangeTime (Chtimes), so the multi-file stat digest matches the warm
+	// digest and Windows skips the rename.
 	require.NoError(t, os.WriteFile(indexPath, renamedIndex, 0o644))
-	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
+	parser.EvictCodexSessionIndex(indexPath)
+	require.NoError(t, os.Chtimes(indexPath, time.Now(), time.Now()))
 
 	third := env.engine.SyncAll(context.Background(), nil)
 	require.Equal(t, 1, third.Synced,
@@ -8468,6 +8473,11 @@ func TestSyncPathsOpenCodeStorageChildUpdateAdvancesSessionMtime(
 		`{"id":"part-a1","sessionID":"oc-storage-mtime","messageID":"msg-a1","type":"text","text":"updated reply","time":{"created":1704067201000}}`,
 	), 0o644)
 	require.NoError(t, err, "rewrite part")
+	// "initial reply" and "updated reply" are the same length. Windows can
+	// keep the part mtime in one granule, so the storage-gate signature
+	// matches and SyncPaths skips. Stamp a later mtime so the child is
+	// visible even when the session JSON mtime is restored.
+	setFileMtime(t, partPath, initialMtime+int64(time.Second))
 	err = os.Chtimes(
 		sessionPath,
 		time.Unix(0, sessionMtime),
