@@ -9,9 +9,10 @@ import (
 	"go.kenn.io/agentsview/internal/apiclient"
 )
 
-// tokenScopes covers this client's upload operations. Hosted status callers
-// request the status scope separately through the token endpoint.
+// tokenScopes covers NewClient's upload operations. NewStatusClient requests
+// only status through the token endpoint.
 var tokenScopes = []string{"negotiate", "upload", "commit"}
+var statusTokenScopes = []string{"status"}
 
 // tokenProvider caches one live device token and refreshes it with
 // single-flight semantics before the server-side expiry margin.
@@ -20,6 +21,7 @@ type tokenProvider struct {
 	deviceID   string
 	credential string
 	margin     time.Duration
+	scopes     []string
 
 	mu      sync.Mutex
 	current string
@@ -31,10 +33,11 @@ func newTokenProvider(
 	client *Client,
 	deviceID, credential string,
 	margin time.Duration,
+	scopes []string,
 ) *tokenProvider {
 	return &tokenProvider{
 		client: client, deviceID: deviceID, credential: credential,
-		margin: margin, refresh: make(chan struct{}, 1),
+		margin: margin, scopes: scopes, refresh: make(chan struct{}, 1),
 	}
 }
 
@@ -86,7 +89,7 @@ func (p *tokenProvider) cached() (string, bool) {
 func (p *tokenProvider) exchange(ctx context.Context) (string, error) {
 	response, err := p.client.request(func(api *apiclient.Client) (*apiclient.PostAPIV1RawSyncTokensResp, error) {
 		return api.PostAPIV1RawSyncTokensWithResponse(ctx, &apiclient.PostAPIV1RawSyncTokensRequestOptions{
-			Body:   &apiclient.RawSyncTokenInputBody{Scopes: tokenScopes},
+			Body:   &apiclient.RawSyncTokenInputBody{Scopes: p.scopes},
 			Header: &apiclient.PostAPIV1RawSyncTokensHeaders{Authorization: new("Bearer " + p.credential), XAgentsViewDeviceID: new(p.deviceID)},
 		})
 	}, "")
