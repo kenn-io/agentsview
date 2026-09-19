@@ -861,6 +861,7 @@ this opt-in is required because there is no default discovery root:
 export AIDER_DIR=~/code
 export AMP_DIR=~/custom/amp # historical local Amp threads only
 export AUGURE_CODE_SESSIONS_DIR=~/custom/augure/sessions
+export AUGURE_DESKTOP_DIR=~/custom/augure-desktop
 export ANTIGRAVITY_DIR=~/custom/antigravity
 export ANTIGRAVITY_CLI_DIR=~/custom/antigravity-cli
 export CLAUDE_PROJECTS_DIR=~/custom/claude

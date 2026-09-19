@@ -184,6 +184,38 @@ func TestResolveTargetsExcludesRemoteSyncExcludedAgentState(t *testing.T) {
 		"excluded-provider roots must remain as transfer boundaries")
 }
 
+// TestResolveTargetsExcludesAugureDesktopState pins the Augure Desktop
+// remote-sync exclusion: the fork's roots hold a raw WAL-backed state.db
+// plus non-transcript application state, so the whole root stays local and
+// is advertised only as a forbidden boundary.
+func TestResolveTargetsExcludesAugureDesktopState(t *testing.T) {
+	root := t.TempDir()
+	stateDB := filepath.Join(root, "state.db")
+	for _, path := range []string{
+		stateDB,
+		stateDB + "-wal",
+		stateDB + "-shm",
+		stateDB + "-journal",
+	} {
+		require.NoError(t, os.WriteFile(path, []byte("sqlite"), 0o644))
+	}
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "sessions"), 0o755))
+	require.NoError(t, os.WriteFile(
+		filepath.Join(root, "application_state.json"), []byte("state"), 0o600,
+	))
+
+	targets := resolveTargetsForTest(t, config.Config{
+		AgentDirs: map[parser.AgentType][]string{
+			parser.AgentAugureDesktop: {root},
+		},
+	})
+
+	assert.NotContains(t, targets.Dirs, parser.AgentAugureDesktop)
+	assert.NotContains(t, targets.Files, parser.AgentAugureDesktop)
+	assert.Equal(t, []string{filepath.Clean(root)}, targets.ForbiddenRoots,
+		"excluded-provider roots must remain as transfer boundaries")
+}
+
 func TestResolveTargetsExcludesTraeProfile(t *testing.T) {
 	root := t.TempDir()
 	traeRoot := filepath.Join(root, "TRAE", "User")

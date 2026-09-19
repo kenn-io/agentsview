@@ -14317,7 +14317,7 @@ func (e *Engine) providerFingerprintHashMatchesDB(
 // members instead of the whole archive. Providers whose fingerprint stat is
 // per-source stay stat-gated: a stat mismatch there means real change.
 func providerFingerprintHashEstablishesFreshness(agent parser.AgentType) bool {
-	return agent == parser.AgentHermes
+	return agent == parser.AgentHermes || agent == parser.AgentAugureDesktop
 }
 
 // providerSourceHashFreshDespiteStat is the stat-mismatch arm of
@@ -20683,7 +20683,8 @@ func applyProviderFingerprintFileInfo(
 	fingerprint parser.SourceFingerprint,
 	results []parser.ParseResultOutcome,
 ) {
-	if agent != parser.AgentDevin && agent != parser.AgentHermes {
+	if agent != parser.AgentDevin && agent != parser.AgentHermes &&
+		agent != parser.AgentAugureDesktop {
 		return
 	}
 	for i := range results {

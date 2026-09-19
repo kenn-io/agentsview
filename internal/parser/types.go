@@ -55,6 +55,7 @@ const (
 	AgentKiroIDE        AgentType = "kiro-ide"
 	AgentCortex         AgentType = "cortex"
 	AgentHermes         AgentType = "hermes"
+	AgentAugureDesktop  AgentType = "augure-desktop"
 	AgentGrok           AgentType = "grok"
 	AgentGoose          AgentType = "goose"
 	AgentWorkBuddy      AgentType = "workbuddy"
@@ -717,6 +718,35 @@ var Registry = []AgentDef{
 		ShallowWatchRootsFunc: ResolveHermesShallowWatchRoots,
 	},
 	{
+		// Augure Desktop v3 embeds a fork of Hermes Agent renamed to
+		// ~/.augure-desktop. The state.db schema matches Hermes's, so the
+		// Hermes state-DB parser is reused through a spec/relabel seam.
+		// Distinct agent because session IDs are a separate namespace from
+		// ~/.hermes and the products version their state.db independently.
+		// The fork marker is the store's own root name (.augure-desktop),
+		// not the schema: default discovery is marker-named so a stock
+		// Hermes store is never claimed, while explicitly configured roots
+		// are trusted as given (TraeX precedent).
+		Type:        AgentAugureDesktop,
+		DisplayName: "Augure Desktop",
+		EnvVar:      "AUGURE_DESKTOP_DIR",
+		ConfigKey:   "augure_desktop_dirs",
+		DefaultDirs: []string{
+			// macOS and Linux (POSIX per hermes_constants.py)
+			".augure-desktop",
+			// Windows
+			"AppData/Local/augure-desktop",
+		},
+		IDPrefix:  "augure-desktop:",
+		FileBased: true,
+		// The fork's roots hold the raw state.db (plus WAL/journal files)
+		// alongside non-transcript application state; copying or sanitizing
+		// the store can retain deleted pages and unrelated state. Remote
+		// sync stays disabled until there is a fresh, allowlisted export
+		// schema, matching the Omnigent chat.db precedent.
+		RemoteSyncExcluded: true,
+	},
+	{
 		Type:        AgentGrok,
 		DisplayName: "Grok",
 		EnvVar:      "GROK_DIR",
@@ -1373,6 +1403,12 @@ type ParsedSession struct {
 	// aggregateTokenPresenceKnown marks session aggregate token
 	// coverage as parser-owned and authoritative.
 	aggregateTokenPresenceKnown bool
+
+	// projectSynthesizedByHermes marks Session.Project as synthesized by
+	// the Hermes state-DB metadata ("hermes" / "hermes-<source>") rather
+	// than a caller-supplied project hint, so fork relabels can rebrand
+	// the producer name without touching explicit hints.
+	projectSynthesizedByHermes bool
 }
 
 // ParsedToolCall holds a single tool invocation extracted from
