@@ -1,0 +1,44 @@
+{
+  "session_find_whole_word": "Tam söz uyğunluğunu tap",
+  "session_find_loading_history": "Əvvəlki mesajlar yüklənir…",
+  "session_find_announce_match": "{total} uyğunluqdan {current}",
+  "session_find_block_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} uyğunluq",
+        "countPlural=other": "{count} uyğunluq"
+      }
+    }
+  ],
+  "session_find_results_group_count": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "{count} uyğunluq",
+        "countPlural=other": "{count} uyğunluq"
+      }
+    }
+  ],
+  "session_find_results_title": "Axtarış nəticələri",
+  "session_find_results_empty": "Bu sessiyada uyğunluq yoxdur",
+  "session_find_toggle_results": "Axtarış nəticələrini göstər",
+  "session_find_hide_results": "Axtarış nəticələrini gizlət",
+  "session_find_subagent_excluded": "Söhbətin daxilində göstərilən alt agent mesajları daxil edilmir.",
+  "session_find_rail_label": [
+    {
+      "declarations": ["input count", "local countPlural = count: plural"],
+      "selectors": ["countPlural"],
+      "match": {
+        "countPlural=one": "Bu sessiyada {count} uyğunluq",
+        "countPlural=other": "Bu sessiyada {count} uyğunluq"
+      }
+    }
+  ],
+  "session_find_raw_output": "Axtarış zamanı emal edilməmiş çıxış",
+  "session_find_history_incomplete": "Əvvəlki mesajları yükləmək mümkün olmadı. Nəticələr natamamdır.",
+  "session_find_retry_history": "Tarixçəni yükləməyə yenidən cəhd et",
+  "session_find_partial_results": "Qismən nəticələr"
+}

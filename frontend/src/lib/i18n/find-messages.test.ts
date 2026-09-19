@@ -7,10 +7,11 @@ import zhTW from "../../../messages/find/zh-TW.json";
 import ko from "../../../messages/find/ko.json";
 import fr from "../../../messages/find/fr.json";
 import ja from "../../../messages/find/ja.json";
+import az from "../../../messages/find/az.json";
 import baseEn from "../../../messages/en.json";
 import { m, setLocale, type SupportedLocale } from "./index.js";
 
-const catalogs = { en, "zh-CN": zhCN, "zh-TW": zhTW, ko, fr, ja };
+const catalogs = { en, "zh-CN": zhCN, "zh-TW": zhTW, ko, fr, ja, az };
 afterEach(() => setLocale("en"));
 
 describe("find message catalogs", () => {
