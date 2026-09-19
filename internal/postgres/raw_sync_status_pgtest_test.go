@@ -431,7 +431,7 @@ func TestRawSyncStatusPostgresParseCompletion(t *testing.T) {
 	head = findRawStatusHead(t, status.SourceHeads, "current.jsonl")
 	assert.Equal(t, int64(2), head.Generation)
 	assert.Nil(t, head.LastParseCompletedAt)
-	leases, err = metadata.ClaimRawParseJobs(ctx, "status-worker", 1, time.Minute)
+	leases, err = metadata.ClaimRawParseJobs(ctx, "status-worker", 2, time.Minute)
 	require.NoError(t, err)
 	require.Len(t, leases, 1)
 	require.NoError(t, metadata.CompleteRawParseJob(ctx, leases[0]))
