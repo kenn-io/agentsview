@@ -157,7 +157,7 @@ jobs:
           python-version: "3.14"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4  # v10.1.0
 
       - name: Install docs check tools
         run: |
@@ -611,7 +611,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       clickhouse:
-        image: clickhouse/clickhouse-server:25.8
+        image: clickhouse/clickhouse-server:26.5
         env:
           CLICKHOUSE_SKIP_USER_SETUP: "1"
         ports:
