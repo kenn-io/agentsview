@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"go.kenn.io/agentsview/internal/clickhouse/chtest"
 	"go.kenn.io/agentsview/internal/db"
 )
 
@@ -102,5 +103,51 @@ func TestStoreAnalyticsReads(t *testing.T) {
 		require.NoError(t, err)
 		require.NotEmpty(t, trends.Series)
 		assert.GreaterOrEqual(t, trends.Series[0].Total, 1)
+	})
+}
+
+func TestGetAnalyticsSummaryEmptyMedian(t *testing.T) {
+	ctx := context.Background()
+	filter := db.AnalyticsFilter{
+		From: "2026-01-01",
+		To:   "2026-01-31",
+	}
+
+	t.Run("empty_mirror", func(t *testing.T) {
+		dsn, database := chtest.FreshDatabase(t)
+		require.NoError(t, EnsureSchema(ctx, Target{URL: dsn, Database: database}))
+		store, err := NewStore(ctx, Target{URL: dsn, Database: database})
+		require.NoError(t, err)
+		t.Cleanup(func() { require.NoError(t, store.Close()) })
+
+		summary, err := store.GetAnalyticsSummary(ctx, filter)
+		require.NoError(t, err)
+		assert.Equal(t, 0, summary.TotalSessions)
+		assert.Equal(t, 0, summary.TotalMessages)
+		assert.Equal(t, 0, summary.MedianMessages)
+		assert.Equal(t, 0.0, summary.AvgMessages)
+	})
+
+	t.Run("unmatched_filter", func(t *testing.T) {
+		store, _, _ := newPushedStore(t)
+		summary, err := store.GetAnalyticsSummary(ctx, db.AnalyticsFilter{
+			From: "2025-01-01",
+			To:   "2025-01-31",
+		})
+		require.NoError(t, err)
+		assert.Equal(t, 0, summary.TotalSessions)
+		assert.Equal(t, 0, summary.TotalMessages)
+		assert.Equal(t, 0, summary.MedianMessages)
+		assert.Equal(t, 0.0, summary.AvgMessages)
+	})
+
+	t.Run("populated_median", func(t *testing.T) {
+		store, _, _ := newPushedStore(t)
+		summary, err := store.GetAnalyticsSummary(ctx, filter)
+		require.NoError(t, err)
+		assert.Equal(t, 3, summary.TotalSessions)
+		assert.Equal(t, 4, summary.TotalMessages)
+		// Sorted message counts: 1, 1, 2.
+		assert.Equal(t, 1, summary.MedianMessages)
 	})
 }

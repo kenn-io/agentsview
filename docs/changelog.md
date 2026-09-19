@@ -16,6 +16,11 @@ The latest published release is
     writes the copy; serve queries it. Rename, trash, and similar stay on
     SQLite. See [ClickHouse Sync](/docs/clickhouse-sync/).
 
+**Bug fixes**
+
+- ClickHouse analytics summaries return zeros when no sessions match, instead of
+    failing the request.
+
 ## 0.43.0
 
 <small>2026-09-14</small>

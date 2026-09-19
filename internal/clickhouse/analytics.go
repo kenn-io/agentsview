@@ -710,7 +710,7 @@ func (s *Store) GetAnalyticsSummary(
 			toInt64(COUNT(DISTINCT local_date)) AS active_days,
 			ifNotFinite(round(avg(message_count), 1), 0) AS avg_messages,
 			COALESCE((
-				SELECT toInt64(floor(avg(message_count)))
+				SELECT toInt64(ifNotFinite(floor(avg(message_count)), 0))
 				FROM ranked
 				WHERE rn = toInt64(floor((n + 1) / 2.0))
 					OR rn = toInt64(floor((n + 2) / 2.0))
