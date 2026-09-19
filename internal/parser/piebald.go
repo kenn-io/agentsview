@@ -170,21 +170,57 @@ type piebaldChatRow struct {
 func loadOnePiebaldChat(
 	ctx context.Context, db *sql.DB, chatID string,
 ) (piebaldChatRow, error) {
-	row := db.QueryRowContext(ctx, piebaldChatSelect(`
+	currentDirectoryPresent, err := piebaldChatHasCurrentDirectory(ctx, db)
+	if err != nil {
+		return piebaldChatRow{}, fmt.Errorf("checking piebald chats schema: %w", err)
+	}
+	row := db.QueryRowContext(ctx, piebaldChatSelect(currentDirectoryPresent, `
 		WHERE c.id = ?
 		  AND COALESCE(c.is_deleted, 0) = 0
 	`), chatID)
 	return scanPiebaldChat(row)
 }
 
-func piebaldChatSelect(where string) string {
+func piebaldChatHasCurrentDirectory(ctx context.Context, db *sql.DB) (bool, error) {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(chats)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var (
+			cid          int
+			name         string
+			columnType   string
+			notNull      int
+			defaultValue any
+			primaryKey   int
+		)
+		if err := rows.Scan(
+			&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey,
+		); err != nil {
+			return false, err
+		}
+		if strings.EqualFold(name, "current_directory") {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
+}
+
+func piebaldChatSelect(currentDirectoryPresent bool, where string) string {
+	currentDirectory := "''"
+	if currentDirectoryPresent {
+		currentDirectory = "COALESCE(c.current_directory, '')"
+	}
 	return `
 		SELECT c.id,
 		       COALESCE(c.title, ''),
 		       c.created_at,
 		       COALESCE(c.updated_at, c.created_at),
 		       c.message_count,
-		       COALESCE(c.current_directory, ''),
+		       ` + currentDirectory + `,
 		       COALESCE(c.worktree_path, ''),
 		       COALESCE(c.branch_name, ''),
 		       COALESCE(p.directory, ''),
