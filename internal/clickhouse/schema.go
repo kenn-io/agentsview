@@ -54,6 +54,7 @@ const (
 	tTime          = "DateTime64(6, 'UTC')"
 	tNullTime      = "Nullable(DateTime64(6, 'UTC'))"
 	tVersion       = "UInt64"
+	tFloatArray    = "Array(Float32)"
 	pushVersionCol = "push_version"
 )
 
@@ -447,6 +448,57 @@ var mirrorTables = []tableSpec{
 			col("created_at", tNullTime),
 		},
 		orderBy: []string{"session_id", "finding_index"},
+	},
+	// Vector tables mirror the local vectors.db export (see vector_push.go).
+	// A generation is keyed by its config fingerprint: ClickHouse has no
+	// serial ids, and the fingerprint is what a serving process matches on.
+	{
+		name: "vector_generations",
+		columns: []columnSpec{
+			col("fingerprint", tString),
+			col("model", tString),
+			col("dimension", tInt),
+			col("created_at", tNullTime),
+		},
+		orderBy: []string{"fingerprint"},
+	},
+	{
+		name: "vector_documents",
+		columns: []columnSpec{
+			col("doc_key", tString),
+			col("session_id", tString),
+			col("source_uuid", tString),
+			col("ordinal", tInt),
+			col("ordinal_end", tInt),
+			col("subordinate", tBool),
+			colDefault("offsets", tString, "'[]'"),
+			col("content", tString),
+			col("content_hash", tString),
+		},
+		orderBy: []string{"doc_key"},
+	},
+	{
+		// session_id is denormalized so a session's chunks delete in one
+		// statement without a subquery over vector_documents.
+		name: "vector_chunks",
+		columns: []columnSpec{
+			col("generation_fingerprint", tString),
+			col("doc_key", tString),
+			col("chunk_index", tInt),
+			col("session_id", tString),
+			col("embedding", tFloatArray),
+		},
+		orderBy: []string{"generation_fingerprint", "doc_key", "chunk_index"},
+	},
+	{
+		name: "vector_push_state",
+		columns: []columnSpec{
+			col("source_archive_id", tString),
+			col("generation_fingerprint", tString),
+			col("session_id", tString),
+			col("doc_agg_hash", tString),
+		},
+		orderBy: []string{"source_archive_id", "generation_fingerprint", "session_id"},
 	},
 	{
 		name:    "starred_sessions",

@@ -115,6 +115,15 @@ type ClickHouseConfig struct {
 	AllowInsecure   bool     `toml:"allow_insecure" json:"allow_insecure"`
 	Projects        []string `toml:"projects" json:"projects,omitempty"`
 	ExcludeProjects []string `toml:"exclude_projects" json:"exclude_projects,omitempty"`
+	// PushVectors gates the vector phase of clickhouse push. A pointer so an
+	// omitted key keeps the default (enabled) while an explicit false opts out.
+	PushVectors *bool `toml:"push_vectors" json:"push_vectors,omitempty"`
+}
+
+// PushVectorsEnabled reports whether clickhouse push should run its vector
+// phase: on unless push_vectors = false.
+func (c ClickHouseConfig) PushVectorsEnabled() bool {
+	return c.PushVectors == nil || *c.PushVectors
 }
 
 type clickHouseEnvOverrides struct {
@@ -138,6 +147,7 @@ var clickHouseConfigKeys = map[string]struct{}{
 	"allow_insecure":   {},
 	"projects":         {},
 	"exclude_projects": {},
+	"push_vectors":     {},
 }
 
 // DuckDBConfig holds DuckDB mirror and Quack connection settings.
@@ -1776,6 +1786,9 @@ func (c *Config) applyConfigTOML(data string) error {
 		}
 		if legacyCH.ExcludeProjects != nil {
 			c.ClickHouse.ExcludeProjects = legacyCH.ExcludeProjects
+		}
+		if legacyCH.PushVectors != nil {
+			c.ClickHouse.PushVectors = legacyCH.PushVectors
 		}
 	}
 	// Merge duckdb field-by-field so env vars override only

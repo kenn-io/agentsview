@@ -222,8 +222,13 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 		if err := db.ValidateSemanticFilter(f); err != nil {
 			return db.ContentSearchPage{}, err
 		}
-		return db.ContentSearchPage{}, db.NewSemanticUnavailableError(
-			"semantic search is not supported by the ClickHouse backend")
+		if s.getVectorSearcher() == nil {
+			return db.ContentSearchPage{}, s.semanticUnavailableError()
+		}
+		if f.Mode == "hybrid" {
+			return s.searchContentHybrid(ctx, f)
+		}
+		return s.searchContentSemantic(ctx, f)
 	}
 	if len(f.Sources) == 0 {
 		f.Sources = []string{"messages", "tool_input", "tool_result"}

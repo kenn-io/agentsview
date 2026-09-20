@@ -214,11 +214,37 @@ replica. Do not model it on DuckDB, and do not add a fourth role.
    wiring guard (`classifier_wiring_test.go`) if the backend opens stores
    through a variable not named `backend`.
 
+### Vector search on a replica
+
+Semantic and hybrid search on a replica has two seams in `internal/storage`
+(`vector_search.go`), both optional:
+
+- `storage.VectorSearchProvider` on the `Backend`: `VectorGenerations` lists the
+  embedding generations the store holds, and `OpenVectorSearcher` returns a
+  `db.VectorSearcher` over the one matching the local config fingerprint, or a
+  reason when none is ready.
+- `storage.VectorSearchStore` on the `Store`: `SetVectorSearcher` and
+  `SetSemanticUnavailableReason`, which the store's semantic and hybrid
+  `SearchContent` paths read.
+
+The push side needs no new interface: `storage.PusherOptions.VectorSource` is
+non-nil when the archive has an active generation and the target accepts vectors
+(`push_vectors`), and the pusher replicates what the export hands it.
+
+`cmd/agentsview/replica_vector_search.go` is the one serve-side gate. It runs
+for every replica in `prepareReplicaServeImpl` and on the CLI direct-read path,
+handles usage-only archives, `[vector]` disabled, fingerprint lookup, encoder
+construction, and the miss notice, then installs the searcher. A replica that
+implements neither interface gets a plain unsupported reason. PostgreSQL
+(`internal/postgres/backend.go`, `vector_search.go`) and ClickHouse
+(`internal/clickhouse/backend.go`, `vector_search.go`, `vector_push.go`) are the
+two implementations; `internal/backendcontract` asserts both.
+
 What a new backend does not touch: `internal/server` HTTP handlers,
-`archive_write_backend.go`, `replica.go`, `replica_watch.go`, or the PostgreSQL
-and DuckDB packages. `pg serve` extras (raw-upload ingestion, pgvector search)
-live in `cmd/agentsview/pg.go` behind the optional `replicaServeExtras`
-interface; a backend with no extras implements nothing.
+`archive_write_backend.go`, `replica.go`, `replica_watch.go`,
+`replica_vector_search.go`, or the PostgreSQL and DuckDB packages. `pg serve`
+extras (raw-upload ingestion) live in `cmd/agentsview/pg.go` behind the optional
+`replicaServeExtras` interface; a backend with no extras implements nothing.
 
 Known limits: `pg vectors`, the CLI direct-read transport that selects
 PostgreSQL, and `clearPGClassifierHash` remain PostgreSQL-specific. The daemon
@@ -427,10 +453,15 @@ it and `clickhouse serve` reads from it. Its push cursor lives in the mirror's
 own metadata, which is why the docs below call the database a mirror.
 
 - SQLite is the archive. `clickhouse push` writes ClickHouse. `clickhouse serve`
-  queries ClickHouse for the HTTP API and UI. Dashboard writes (rename, trash,
-  insights, stars, pins) return `db.ErrReadOnly` and stay on SQLite. Never
-  delete, drop, truncate, or recreate SQLite to handle a ClickHouse schema or
-  data-version change. Design decisions live in
+  queries ClickHouse for the HTTP API and UI. Vectors ride the same push:
+  `vector_generations`, `vector_documents`, `vector_chunks`, and
+  `vector_push_state` are ReplacingMergeTree tables keyed by config
+  fingerprint and source archive, and the searcher ranks chunks with an exact
+  `cosineDistance` scan (no vector similarity index yet; the query already has
+  the `ORDER BY distance LIMIT` shape that index accelerates). Dashboard
+  writes (rename, trash, insights, stars, pins) return `db.ErrReadOnly` and
+  stay on SQLite. Never delete, drop, truncate, or recreate SQLite to handle a
+  ClickHouse schema or data-version change. Design decisions live in
   [ClickHouse push and serve](../internal/clickhouse-mirror.md).
 - Keep push order per batch: insert dependents, then
   `DELETE ... WHERE session_id IN (...) AND push_version < v`, then session

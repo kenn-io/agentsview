@@ -76,6 +76,7 @@ func ReplicaTarget(ch config.ClickHouseConfig) storage.ReplicaTarget {
 		Schema:        ch.Database,
 		MachineName:   ch.MachineName,
 		AllowInsecure: ch.AllowInsecure,
+		PushVectors:   ch.PushVectorsEnabled(),
 	}
 }
 
@@ -209,4 +210,48 @@ func valueOrNever(v string) string {
 		return "never"
 	}
 	return v
+}
+
+// VectorGenerations lists the embedding generations pushed to store, oldest
+// first.
+func (Backend) VectorGenerations(
+	ctx context.Context, store storage.ReplicaStore,
+) ([]storage.VectorGenerationInfo, error) {
+	chStore, err := asStore(store)
+	if err != nil {
+		return nil, err
+	}
+	return ListVectorGenerationInfo(ctx, chStore.DB())
+}
+
+// OpenVectorSearcher serves the pushed generation matching gen.Fingerprint.
+// Every generation shares one chunk table, so a registered generation is
+// always ready to search.
+func (Backend) OpenVectorSearcher(
+	ctx context.Context, store storage.ReplicaStore, gen storage.VectorGenerationInfo,
+	maxInputChars int, encode storage.VectorQueryEncoder,
+) (db.VectorSearcher, string, error) {
+	chStore, err := asStore(store)
+	if err != nil {
+		return nil, "", err
+	}
+	dim, found, err := LookupVectorGeneration(ctx, chStore.DB(), gen.Fingerprint)
+	if err != nil {
+		return nil, "", err
+	}
+	if !found {
+		return nil, "ClickHouse has no embedding generation matching fingerprint " + gen.Fingerprint, nil
+	}
+	return NewVectorSearcher(chStore.DB(), gen.Fingerprint, dim, maxInputChars, encode), "", nil
+}
+
+// asStore unwraps the concrete ClickHouse store a replica-neutral caller
+// holds; only this backend opens them, so any other type is a programming
+// error.
+func asStore(store storage.ReplicaStore) (*Store, error) {
+	chStore, ok := store.(*Store)
+	if !ok {
+		return nil, fmt.Errorf("clickhouse store is %T, not *clickhouse.Store", store)
+	}
+	return chStore, nil
 }

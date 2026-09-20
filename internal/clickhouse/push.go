@@ -46,7 +46,6 @@ func (s *Sync) PushWithOptions(
 ) (storage.PushResult, error) {
 	start := time.Now()
 	var result storage.PushResult
-	result.Vectors.Skipped = true
 	if err := s.EnsureSchema(ctx); err != nil {
 		return result, err
 	}
@@ -133,11 +132,13 @@ func (s *Sync) PushWithOptions(
 		}
 	}
 
+	failed := map[string]struct{}{}
 	for offset := 0; offset < len(changed); offset += sessionPushBatchSize {
 		end := min(offset+sessionPushBatchSize, len(changed))
 		if err := s.pushBatchWithRetry(
 			ctx, changed[offset:end], fingerprints, version,
 			offset, len(changed), &result, onProgress,
+			failed,
 		); err != nil {
 			return result, err
 		}
@@ -150,6 +151,15 @@ func (s *Sync) PushWithOptions(
 	}
 	if err := s.refreshCurationIfChanged(ctx, version); err != nil {
 		return result, err
+	}
+
+	var vectorScope []string
+	if opts.ScopeVectorsToChangedSessions {
+		vectorScope = sessionIDs(changed)
+	}
+	result.Vectors, err = s.pushVectors(ctx, full, vectorScope, failed, onProgress)
+	if err != nil {
+		return result, fmt.Errorf("vector push: %w", err)
 	}
 
 	identityRevision := storedIdentity
@@ -473,6 +483,7 @@ func (s *Sync) pushBatchWithRetry(
 	ctx context.Context, batch []db.Session, fingerprints map[string]string,
 	version uint64, offset, total int, result *storage.PushResult,
 	onProgress func(storage.PushProgress),
+	failed map[string]struct{},
 ) error {
 	counts, err := s.pushSessionBatch(ctx, batch, fingerprints, version)
 	if err == nil {
@@ -502,6 +513,7 @@ func (s *Sync) pushBatchWithRetry(
 			return err
 		default:
 			result.Errors++
+			failed[sess.ID] = struct{}{}
 			log.Printf("clickhouse push: skipping session %s after error: %v", sess.ID, err)
 		}
 		reportProgress(offset+i+1, total, result, onProgress)

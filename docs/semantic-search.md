@@ -1,7 +1,4 @@
----
-title: Semantic Search
-description: Vector (semantic) search over session messages, plus hybrid search and cursor-based context retrieval
----
+## | No `VectorSearcher` wired (index never built, DuckDB backend, or a PG or ClickHouse replica with no matching pushed generation) |--- title: Semantic Search description: Vector (semantic) search over session messages, plus hybrid search and cursor-based context retrieval
 
 AgentsView can index user and assistant message content into a local vector
 store and search it by meaning instead of exact terms, alongside the existing
@@ -15,10 +12,10 @@ concurrency, and the search path — see
 
 !!! note "Backends"
 
-    Semantic and hybrid search run on the local SQLite archive and on
-    [PostgreSQL](#postgresql) via pgvector. The [DuckDB mirror](/docs/duckdb/) has
-    no vector backend, so `--semantic`/`--hybrid` against a DuckDB-backed server
-    return the "not available" error described below.
+    Semantic and hybrid search run on the local SQLite archive, on
+    [PostgreSQL](#postgresql) via pgvector, and on [ClickHouse](#clickhouse). The
+    [DuckDB mirror](/docs/duckdb/) has no vector backend, so `--semantic`/`--hybrid`
+    against a DuckDB-backed server return the "not available" error described below.
 
 ## Enabling `[vector]`
 
@@ -770,8 +767,9 @@ MCP tool error, carrying the same remediation text.
 The `--pg` read path and `agentsview pg serve` support semantic and hybrid
 search backed by [pgvector](https://github.com/pgvector/pgvector), so a shared
 PostgreSQL deployment answers `--semantic`/`--hybrid` the same way a local
-SQLite index does. Only the DuckDB mirror lacks a vector backend and still
-returns the "not available" error (HTTP 501).
+SQLite index does. [ClickHouse](#clickhouse) does the same with its own tables.
+Only the DuckDB mirror lacks a vector backend and still returns the "not
+available" error (HTTP 501).
 
 ### Pushing embeddings
 
@@ -869,6 +867,28 @@ The vector leg, the RRF fusion, the subordinate-unit penalty, scope filtering,
 and hit anchoring are identical, so top results usually agree — but the
 keyword-leg input order, and therefore fusion ties broken by keyword rank, can
 differ between the backends.
+
+## ClickHouse
+
+`agentsview clickhouse serve` supports semantic and hybrid search the same way
+`pg serve` does. `clickhouse push` runs a vector phase after the session phase
+when `[vector]` is enabled locally and the target has not set
+`push_vectors = false`; `--no-vectors` skips it for one run. The phase copies
+the machine's active embedding generation into four ClickHouse tables
+(`vector_generations`, `vector_documents`, `vector_chunks`,
+`vector_push_state`), keyed by the generation's config fingerprint and by the
+pushing archive, so several machines share one generation and each keeps its own
+delta state. Only changed sessions are re-sent, and a session's vectors are
+evicted when its session row leaves the mirror.
+
+On startup, `clickhouse serve` looks for a pushed generation whose fingerprint
+matches the local `[vector.embeddings]` config. A match installs the searcher; a
+miss starts the server normally and semantic and hybrid search return the 501
+"not available" error listing the fingerprints the mirror does have. Ranking is
+an exact cosine scan over the generation's chunks (`cosineDistance`), so results
+match the local SQLite index rather than an approximate index. The hybrid
+keyword leg is the mirror's recency-ordered term match, as on PostgreSQL.
+`pg vectors list` and `drop` have no ClickHouse counterpart yet.
 
 ## Limitations
 

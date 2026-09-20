@@ -27,6 +27,8 @@ type Sync struct {
 	machine         string
 	projects        []string
 	excludeProjects []string
+	// vectorSource, when non-nil, enables the vector push phase.
+	vectorSource storage.VectorPushSource
 
 	connMu sync.Mutex
 	conn   *sql.DB
@@ -97,6 +99,7 @@ func New(
 		machine:         machine,
 		projects:        append([]string(nil), opts.Projects...),
 		excludeProjects: append([]string(nil), opts.ExcludeProjects...),
+		vectorSource:    opts.VectorSource,
 		archiveID:       archiveID,
 	}, nil
 }

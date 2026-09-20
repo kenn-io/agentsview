@@ -49,6 +49,20 @@ func TestLoadFile_ClickHouseConfig(t *testing.T) {
 			},
 		},
 		{
+			"PushVectorsOptOut",
+			map[string]any{
+				"clickhouse": map[string]any{
+					"url":          "clickhouse://from-config",
+					"push_vectors": false,
+				},
+			},
+			"",
+			ClickHouseConfig{
+				URL:         "clickhouse://from-config",
+				PushVectors: new(false),
+			},
+		},
+		{
 			"EnvURLMergesFileFields",
 			map[string]any{
 				"clickhouse": map[string]any{
@@ -84,6 +98,7 @@ func TestLoadFile_ClickHouseConfig(t *testing.T) {
 				assert.Equal(t, tt.want.MachineName, resolved.MachineName)
 			}
 			assert.Equal(t, "agentsview", resolved.Database)
+			assert.Equal(t, tt.want.PushVectorsEnabled(), resolved.PushVectorsEnabled())
 		})
 	}
 }

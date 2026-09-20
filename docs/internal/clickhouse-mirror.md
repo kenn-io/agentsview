@@ -30,7 +30,9 @@ one database; each archive keeps its own cursor in the mirror's `sync_metadata`.
 Serve implements `db.Store` reads: session list and detail, messages, search,
 analytics, usage, activity, recent edits, project inventory, identity, stars,
 and pins. Writes on that store return `db.ErrReadOnly`. Insights reads are
-empty. `HasFTS()` is true (ILIKE). `HasSemantic()` is false.
+empty. `HasFTS()` is true (ILIKE). `HasSemantic()` is true once
+`clickhouse serve` finds a pushed embedding generation matching the local
+`[vector.embeddings]` fingerprint (see the vector decision below).
 
 ## Boundaries
 
@@ -38,7 +40,7 @@ empty. `HasFTS()` is true (ILIKE). `HasSemantic()` is false.
   schema or data-version change.
 - ClickHouse is not the system of record. A destroyed mirror is rebuilt by
   pushing again.
-- Vector search and hosted raw sync stay off this path.
+- Hosted raw sync stays off this path.
 - Cluster / `ON CLUSTER` DDL is out of scope. ClickHouse Cloud `SharedMergeTree`
   conversion needs no change here.
 - Session IDs that appear in two archives are last-writer-wins. There is no
@@ -56,6 +58,19 @@ repairs on the next push.
 Stores stay in the same `Query`/`Scan` shape as DuckDB and PostgreSQL. Every
 connection sets `final=1` so `ReplacingMergeTree` collapses duplicates without
 `FINAL` in SQL.
+
+**Vectors are pushed and searched, keyed by fingerprint and archive.**
+`clickhouse push` runs the vector phase after the session phase when the local
+archive has an active generation and `push_vectors` is not false. A generation
+is keyed by its config fingerprint (ClickHouse has no serial ids), all
+generations share one `vector_chunks` table with `Array(Float32)` embeddings,
+and per-session state is keyed by source archive so several machines push into
+one mirror without owner markers: a session's vectors are written only while its
+session row from this archive is resident, and evicted when that row goes.
+Search is an exact `cosineDistance` scan ordered nearest first; the query shape
+matches what the experimental `vector_similarity` index accelerates, which would
+need per-dimension tables and a raised `max_limit_for_vector_search_queries` if
+scale ever demands it.
 
 **Tables are `ReplacingMergeTree(push_version)`.** `push_version` is the push
 start time in Unix nanoseconds. Same-key rows from a retry collapse on merge and

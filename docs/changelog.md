@@ -19,6 +19,12 @@ The latest published release is
   or tools from any other MCP server. Register the AgentsView MCP server as
   `agentsview`. Every generated artifact is listed and protected independently
   from local edits.
+- Semantic and hybrid search work on a ClickHouse mirror. When `[vector]` is
+  enabled, `agentsview clickhouse push` copies the local embedding generation
+  into ClickHouse and `clickhouse serve` answers `--semantic`/`--hybrid` from
+  it. Set `push_vectors = false` under `[clickhouse]` or pass `--no-vectors`
+  to leave vectors out. See
+  [semantic search: ClickHouse](/docs/semantic-search/#clickhouse).
 
 ## 0.44.0
 

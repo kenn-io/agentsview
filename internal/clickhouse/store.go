@@ -34,9 +34,14 @@ type Store struct {
 	cursorMu      sync.RWMutex
 	cursorSecret  []byte
 	customPricing map[string]config.CustomModelRate
-	closeOnce     sync.Once
-	closeErr      error
-	probeCache    activityProbeCache
+
+	// vectorMu guards the searcher and reason installed by the serve gate.
+	vectorMu                  sync.RWMutex
+	vectorSearcher            db.VectorSearcher
+	semanticUnavailableReason string
+	closeOnce                 sync.Once
+	closeErr                  error
+	probeCache                activityProbeCache
 }
 
 // NewStore connects to the mirror named by t and refuses schemas or data
@@ -82,9 +87,6 @@ func (s *Store) queryRowContext(ctx context.Context, query string, args ...any) 
 func (s *Store) ReadOnly() bool { return true }
 
 func (s *Store) HasFTS(_ context.Context) bool { return true }
-
-// HasSemantic returns false: the ClickHouse store has no vector search seam.
-func (s *Store) HasSemantic() bool { return false }
 
 func (s *Store) SetCustomPricing(p map[string]config.CustomModelRate) {
 	s.customPricing = p

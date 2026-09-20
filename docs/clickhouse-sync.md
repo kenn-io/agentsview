@@ -1,7 +1,6 @@
----
-title: ClickHouse Sync
-description: Push the SQLite archive into ClickHouse and serve a read-only web UI from it
----
+## | `push_vectors` | Run the vector phase on push; default `true` | | `--no-vectors` | `false` | Skip the semantic-search vector phase for this run |
+
+## title: ClickHouse Sync description: Push the SQLite archive into ClickHouse and serve a read-only web UI from it
 
 AgentsView stores sessions locally in SQLite. `agentsview clickhouse push`
 copies those sessions into ClickHouse. `agentsview clickhouse serve` runs the
@@ -14,8 +13,9 @@ disposable local file like [DuckDB](/docs/duckdb/).
 
 The UI includes the session browser, search, analytics, usage, activity, recent
 edits, and project inventory. Rename, trash, insights, stars, and pins stay on
-the SQLite archive; the ClickHouse UI does not write them. Semantic search
-vectors and hosted raw sync are not part of this path.
+the SQLite archive; the ClickHouse UI does not write them. Semantic search works
+when `[vector]` is enabled locally and the push includes vectors (see
+[Vector Push](#vector-push)). Hosted raw sync is not part of this path.
 
 ## Quick Start
 
@@ -119,6 +119,8 @@ to fan out across every configured target. `--all --watch` is rejected.
 1. Rewrites changed sessions: dependent rows first (messages, tool calls, usage,
    secrets, pins), then a version-bounded delete of stale rows, then the
    session rows.
+1. Pushes the machine's embedding generation when `[vector]` is enabled: see
+   [Vector Push](#vector-push).
 1. Advances this archive's cursor in the mirror's `sync_metadata` only when
    every session succeeded.
 
@@ -190,6 +192,20 @@ projects = ["alpha", "beta"]
 CLI flags override config values. Use
 [`agentsview projects`](/docs/commands/#agentsview-projects) to list available
 project names.
+
+#### Vector Push
+
+When `[vector]` is enabled locally, `clickhouse push` runs a vector phase after
+the session phase, copying the machine's active embedding generation from
+`vectors.db` into ClickHouse so `clickhouse serve` can answer
+`--semantic`/`--hybrid`. Only changed sessions are re-sent; a session's vectors
+follow its session row, so a session that leaves the push scope loses its
+vectors with it. Skip the phase for one run with `--no-vectors`, or disable it
+persistently with `push_vectors = false` under `[clickhouse]`. The push summary
+reports the phase as `Vectors: N session(s) pushed, ...` or
+`Vectors: skipped (<reason>)`. See
+[semantic search: ClickHouse](/docs/semantic-search/#clickhouse) for how serve
+matches a pushed generation.
 
 ### `agentsview clickhouse status`
 
@@ -350,7 +366,9 @@ ______________________________________________________________________
 
 - ClickHouse has no schema name; tables live in a database (`database` key or
   the DSN path).
-- There is no vector / pgvector phase and no hosted raw-sync control plane.
+- Vectors live in shared `Array(Float32)` tables keyed by config fingerprint
+  rather than per-generation pgvector tables, and search is an exact cosine
+  scan. There is no hosted raw-sync control plane.
 - `clickhouse serve` does not run PostgreSQL-style migrations beyond
   `CREATE TABLE IF NOT EXISTS`, `ADD COLUMN IF NOT EXISTS`, and the one-time
   fill of derived usage and terminal-event tables described above.
