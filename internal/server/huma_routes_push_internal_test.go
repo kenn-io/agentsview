@@ -206,7 +206,7 @@ func TestPGPushConfigRequestOverrideSkipsDaemonEnvResolution(t *testing.T) {
 		PG: config.PGConfig{URL: missingEnvRef(t, envName)},
 	})
 	req := daemonPushRequest{
-		Replica: &storage.ReplicaTarget{
+		Replica: &daemonReplicaTarget{
 			URL:         "postgres://user:pass@host/db",
 			Schema:      "mirror",
 			MachineName: "laptop",
@@ -225,7 +225,7 @@ func TestClickHousePushTargetRequestOverride(t *testing.T) {
 		ClickHouse: config.ClickHouseConfig{URL: "clickhouse://from-config"},
 	})
 	got, err := s.replicaPushTarget(clickhouse.Backend{}, daemonPushRequest{
-		Replica: &storage.ReplicaTarget{
+		Replica: &daemonReplicaTarget{
 			URL:         "clickhouse://from-request",
 			Schema:      "mirrordb",
 			MachineName: "laptop",
@@ -964,4 +964,50 @@ func TestValidatePushWatchScopeAcceptsAliasIndexWithoutEngine(t *testing.T) {
 			filepath.Join(base, "profile", parser.CodexSessionIndexFilename),
 		}},
 	}, cfg))
+}
+
+// TestReplicaPushTargetOmittedPushVectorsDefaultsOn pins the wire default:
+// a delegated push that leaves push_vectors out keeps the vector phase on,
+// matching the [pg] config default, while an explicit false still opts out.
+func TestReplicaPushTargetOmittedPushVectorsDefaultsOn(t *testing.T) {
+	s := testServerWithConfig(config.Config{})
+	for _, tt := range []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "omitted", body: `{"url":"postgres://h/db","machine_name":"m"}`, want: true},
+		{name: "explicit true", body: `{"url":"postgres://h/db","machine_name":"m","push_vectors":true}`, want: true},
+		{name: "explicit false", body: `{"url":"postgres://h/db","machine_name":"m","push_vectors":false}`, want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var wire daemonReplicaTarget
+			require.NoError(t, json.Unmarshal([]byte(tt.body), &wire))
+			got, err := s.replicaPushTarget(postgres.Backend{}, daemonPushRequest{Replica: &wire})
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got.PushVectors)
+		})
+	}
+}
+
+// TestClickHousePushRejectsPlaintextTargetBeforeStream pins that a ClickHouse
+// target the backend refuses (plaintext to a non-loopback host without
+// allow_insecure) fails with a 400 from the handler, before the stream opens
+// and before any local sync pass runs.
+func TestClickHousePushRejectsPlaintextTargetBeforeStream(t *testing.T) {
+	s := testServer(t, 30*time.Second)
+	_, err := s.humaReplicaPush(t.Context(), clickhouse.Backend{}, &daemonPushInput{
+		Body: daemonPushRequest{
+			Replica: &daemonReplicaTarget{
+				URL:         "clickhouse://user:pw@ch.example.test:9000/agentsview",
+				Schema:      "agentsview",
+				MachineName: "laptop",
+			},
+		},
+	})
+	require.Error(t, err)
+	var statusErr interface{ GetStatus() int }
+	require.ErrorAs(t, err, &statusErr)
+	assert.Equal(t, http.StatusBadRequest, statusErr.GetStatus())
+	assert.Contains(t, err.Error(), "allow_insecure")
 }

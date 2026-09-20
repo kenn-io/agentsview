@@ -236,6 +236,9 @@ func resolveWatchTarget(
 		return storage.ConfiguredReplica{}, nil, nil,
 			errors.New("url not configured")
 	}
+	if err := backend.ValidateTarget(target.Target); err != nil {
+		return storage.ConfiguredReplica{}, nil, nil, err
+	}
 	projects, exclude, err = resolvePushProjects(target, cfg)
 	if err != nil {
 		return storage.ConfiguredReplica{}, nil, nil, err

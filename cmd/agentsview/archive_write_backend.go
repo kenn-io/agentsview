@@ -509,7 +509,7 @@ func (b daemonArchiveWriteBackend) ReplicaPush(
 			Full:            cfg.Full,
 			Projects:        projects,
 			ExcludeProjects: excludeProjects,
-			Replica: &apiclient.StorageReplicaTarget{
+			Replica: &apiclient.DaemonReplicaTarget{
 				URL:           target.Target.URL,
 				Schema:        new(target.Target.Schema),
 				MachineName:   target.Target.MachineName,

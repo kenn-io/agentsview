@@ -10,19 +10,19 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 )
 
-// ReplicaTarget identifies one remote replica database. It is the wire shape
-// the CLI sends to the daemon for a delegated push, so its JSON names are part
-// of the daemon API.
+// ReplicaTarget identifies one remote replica database. The daemon push
+// request carries its own wire shape for this (internal/server), so field
+// names here are not part of the daemon API.
 type ReplicaTarget struct {
-	URL    string `json:"url"`
-	Schema string `json:"schema,omitempty"`
+	URL    string
+	Schema string
 	// MachineName labels the sessions this archive owns on the replica. It
 	// must not be "local", the SQLite sentinel for sessions that originated
 	// on this machine.
-	MachineName   string `json:"machine_name"`
-	AllowInsecure bool   `json:"allow_insecure,omitzero"`
+	MachineName   string
+	AllowInsecure bool
 	// PushVectors reports whether the target accepts the vector push phase.
-	PushVectors bool `json:"push_vectors,omitzero"`
+	PushVectors bool
 }
 
 // ReplicaTargetRef names one configured replica target before its settings
@@ -143,6 +143,11 @@ type Replica interface {
 	// ResolveTarget applies defaults and environment overrides to one
 	// configured target.
 	ResolveTarget(cfg config.Config, ref ReplicaTargetRef) (ConfiguredReplica, error)
+	// ValidateTarget rejects a target the backend would refuse to connect
+	// to, such as a plaintext URL without allow_insecure. Callers run it
+	// before any local work so a bad target fails fast instead of after a
+	// sync pass.
+	ValidateTarget(target ReplicaTarget) error
 	// NewPusher prepares a push session from local into target. It
 	// validates the target and may connect; EnsureSchema must run before
 	// the first push.

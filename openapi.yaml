@@ -661,7 +661,7 @@ components:
             type: string
           type: array
         replica:
-          $ref: "#/components/schemas/StorageReplicaTarget"
+          $ref: "#/components/schemas/DaemonReplicaTarget"
         scope_vectors_to_changed_sessions:
           type: boolean
         sync_state_target:
@@ -672,6 +672,23 @@ components:
           $ref: "#/components/schemas/SyncWatchRecoveryScope"
       required:
         - full
+      type: object
+    DaemonReplicaTarget:
+      additionalProperties: false
+      properties:
+        allow_insecure:
+          type: boolean
+        machine_name:
+          type: string
+        push_vectors:
+          type: boolean
+        schema:
+          type: string
+        url:
+          type: string
+      required:
+        - url
+        - machine_name
       type: object
     DataCandidatesResponse:
       additionalProperties: false
@@ -6622,23 +6639,6 @@ components:
           type: array
       required:
         - session_ids
-      type: object
-    StorageReplicaTarget:
-      additionalProperties: false
-      properties:
-        allow_insecure:
-          type: boolean
-        machine_name:
-          type: string
-        push_vectors:
-          type: boolean
-        schema:
-          type: string
-        url:
-          type: string
-      required:
-        - url
-        - machine_name
       type: object
     SyncAnomalyStats:
       additionalProperties: false

@@ -83,6 +83,12 @@ func target(t storage.ReplicaTarget) Target {
 	return Target{URL: t.URL, Database: t.Schema}
 }
 
+// ValidateTarget rejects a plaintext or unverified-TLS remote connection
+// unless the target allows it.
+func (Backend) ValidateTarget(t storage.ReplicaTarget) error {
+	return CheckTransportSecurity(t.URL, t.AllowInsecure)
+}
+
 // NewPusher rejects a plaintext remote connection unless the target allows
 // it, then prepares a push. The pusher connects on EnsureSchema.
 func (Backend) NewPusher(

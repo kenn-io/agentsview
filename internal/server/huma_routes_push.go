@@ -164,8 +164,8 @@ type daemonPushRequest struct {
 	ExcludeProjects []string `json:"exclude_projects,omitempty"`
 	// Replica is the remote target a replica push writes to. Omitted, the
 	// daemon pushes to its own default configured target for that backend.
-	Replica *storage.ReplicaTarget `json:"replica,omitempty"`
-	DuckDB  *config.DuckDBConfig   `json:"duckdb,omitempty"`
+	Replica *daemonReplicaTarget `json:"replica,omitempty"`
+	DuckDB  *config.DuckDBConfig `json:"duckdb,omitempty"`
 	// SyncStateTarget and MigrateLegacySyncState scope the archive-side push
 	// watermarks; see storage.ReplicaTargetRef.
 	SyncStateTarget        string `json:"sync_state_target,omitempty"`
@@ -189,6 +189,27 @@ type daemonPushRequest struct {
 	Automatic     bool                        `json:"automatic,omitzero"`
 	WatchBatch    *syncpkg.WatchBatch         `json:"watch_batch,omitempty"`
 	WatchRecovery *syncpkg.WatchRecoveryScope `json:"watch_recovery,omitempty"`
+}
+
+// daemonReplicaTarget is the wire shape of a delegated push's remote target.
+// push_vectors is optional: omitted means the target accepts the vector
+// phase, matching the config default, and an explicit false opts out.
+type daemonReplicaTarget struct {
+	URL           string `json:"url"`
+	Schema        string `json:"schema,omitempty"`
+	MachineName   string `json:"machine_name"`
+	AllowInsecure bool   `json:"allow_insecure,omitzero"`
+	PushVectors   *bool  `json:"push_vectors,omitempty"`
+}
+
+func (t daemonReplicaTarget) target() storage.ReplicaTarget {
+	return storage.ReplicaTarget{
+		URL:           t.URL,
+		Schema:        t.Schema,
+		MachineName:   t.MachineName,
+		AllowInsecure: t.AllowInsecure,
+		PushVectors:   t.PushVectors == nil || *t.PushVectors,
+	}
 }
 
 // WithVectorPushSource wires the local vectors.db push source used by the
@@ -239,7 +260,7 @@ func (s *Server) replicaPushTarget(
 	replica storage.Replica, req daemonPushRequest,
 ) (storage.ReplicaTarget, error) {
 	if req.Replica != nil {
-		return *req.Replica, nil
+		return req.Replica.target(), nil
 	}
 	target, err := storage.DefaultTarget(replica, s.cfg)
 	if err != nil {
@@ -544,6 +565,11 @@ func (s *Server) humaReplicaPush(
 	}
 	if target.URL == "" {
 		return nil, apiError(http.StatusBadRequest, name+" push: url not configured")
+	}
+	// Reject a target the backend would refuse before the stream flushes a
+	// 200 and before the local sync pass runs.
+	if err := replica.ValidateTarget(target); err != nil {
+		return nil, apiError(http.StatusBadRequest, name+" push: "+err.Error())
 	}
 	if err := validatePushWatchScope(ctx, in.Body, s.ingestionConfig()); err != nil {
 		return nil, apiError(http.StatusBadRequest, err.Error())

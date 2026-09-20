@@ -31,6 +31,8 @@ func (stubReplica) ResolveTarget(
 	}, nil
 }
 
+func (stubReplica) ValidateTarget(ReplicaTarget) error { return nil }
+
 func (stubReplica) NewPusher(context.Context, ReplicaTarget, *db.DB, PusherOptions) (Pusher, error) {
 	return nil, nil
 }

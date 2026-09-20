@@ -158,6 +158,9 @@ func runReplicaPushTarget(
 	if target.Target.URL == "" {
 		return errors.New("url not configured")
 	}
+	if err := backend.ValidateTarget(target.Target); err != nil {
+		return err
+	}
 
 	projects, excludeProjects, err := resolvePushProjects(target, cfg)
 	if err != nil {

@@ -154,8 +154,11 @@ replica. Do not model it on DuckDB, and do not add a fourth role.
 1. Create `internal/<name>` with a `Store` that implements `db.Store` with
    `ReadOnly() bool` returning true, a `Sync` (or similar) that implements
    `storage.Pusher`, and a `Backend` struct that implements `storage.Replica`.
-   Use `internal/postgres/backend.go` and `internal/clickhouse/backend.go` as
-   the two worked examples. The push returns `storage.PushResult` and reports
+   `ValidateTarget` runs before any local work; put connection rules the
+   backend enforces up front there (ClickHouse rejects plaintext remote URLs
+   without `allow_insecure`), and return nil when there are none. Use
+   `internal/postgres/backend.go` and `internal/clickhouse/backend.go` as the
+   two worked examples. The push returns `storage.PushResult` and reports
    progress as `storage.PushProgress`; a backend without a vector phase sets
    `Vectors.Skipped`. Write the backend's own SQL; the contract is Go, not a
    shared query string.
@@ -192,7 +195,9 @@ interface; a backend with no extras implements nothing.
 Known limits: `pg vectors`, the CLI direct-read transport that selects
 PostgreSQL, and `clearPGClassifierHash` remain PostgreSQL-specific. The daemon
 push request carries a backend-neutral `replica` target, so a CLI and daemon
-must run the same `server.APIVersion`, which the CLI already enforces.
+must run the same `server.APIVersion`, which the CLI already enforces. In that
+target `push_vectors` is optional: omitted means the vector phase runs, the same
+default as the `[pg]` config key, and an explicit `false` opts out.
 
 ## Backend Parity
 

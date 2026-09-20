@@ -18384,7 +18384,7 @@ type DaemonPushRequest struct {
 	MigrateLegacySyncState         *bool                   `json:"migrate_legacy_sync_state,omitempty"`
 	NoVectors                      *bool                   `json:"no_vectors,omitempty"`
 	Projects                       []string                `json:"projects,omitempty"`
-	Replica                        *StorageReplicaTarget   `json:"replica,omitempty"`
+	Replica                        *DaemonReplicaTarget    `json:"replica,omitempty"`
 	ScopeVectorsToChangedSessions  *bool                   `json:"scope_vectors_to_changed_sessions,omitempty"`
 	SyncStateTarget                *string                 `json:"sync_state_target,omitempty"`
 	WatchBatch                     *SyncWatchBatch         `json:"watch_batch,omitempty"`
@@ -18425,6 +18425,18 @@ func (d DaemonPushRequest) Validate() error {
 		return nil
 	}
 	return errors
+}
+
+type DaemonReplicaTarget struct {
+	AllowInsecure *bool   `json:"allow_insecure,omitempty"`
+	MachineName   string  `json:"machine_name" validate:"required"`
+	PushVectors   *bool   `json:"push_vectors,omitempty"`
+	Schema        *string `json:"schema,omitempty"`
+	URL           string  `json:"url" validate:"required"`
+}
+
+func (d DaemonReplicaTarget) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(d))
 }
 
 type DataCompactRequest struct {
@@ -20300,18 +20312,6 @@ func (s SessionUsageResponse) Validate() error {
 		return nil
 	}
 	return errors
-}
-
-type StorageReplicaTarget struct {
-	AllowInsecure *bool   `json:"allow_insecure,omitempty"`
-	MachineName   string  `json:"machine_name" validate:"required"`
-	PushVectors   *bool   `json:"push_vectors,omitempty"`
-	Schema        *string `json:"schema,omitempty"`
-	URL           string  `json:"url" validate:"required"`
-}
-
-func (s StorageReplicaTarget) Validate() error {
-	return runtime.ConvertValidatorError(typesValidator.Struct(s))
 }
 
 type SyncAnomalyStats struct {

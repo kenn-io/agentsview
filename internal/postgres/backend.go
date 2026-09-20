@@ -77,6 +77,10 @@ func ReplicaTarget(pg config.PGConfig) storage.ReplicaTarget {
 	}
 }
 
+// ValidateTarget accepts every target: PostgreSQL transport security is
+// negotiated by sslmode at connect time, not rejected up front.
+func (Backend) ValidateTarget(storage.ReplicaTarget) error { return nil }
+
 func (Backend) NewPusher(
 	_ context.Context, target storage.ReplicaTarget, local *db.DB,
 	opts storage.PusherOptions,
