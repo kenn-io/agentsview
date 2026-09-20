@@ -625,20 +625,22 @@ func isVirtualSessionPath(path string) bool {
 	return false
 }
 
-// resolveSessionDir determines the project directory for a session.
-// It tries the session file's embedded cwd first, then the cached cwd,
-// then Cursor's transcript-derived workspace path, then falls back to
-// the session's project field. Virtual DB-backed file paths are storage
-// locators only, so they skip source-file cwd reads and use cached cwd.
-// All returned candidates must be absolute paths pointing to existing
-// directories.
+// resolveSessionDir returns an existing directory for launch operations.
 func resolveSessionDir(session *db.Session) string {
+	return resolveSessionPath(session, isDir)
+}
+
+// resolveSessionPath selects the first accepted candidate in metadata order:
+// embedded cwd, cached cwd, Cursor's resolved workspace, then project. Virtual
+// DB-backed file paths skip source-file reads. Cursor reconstruction still
+// returns only an existing resolved workspace.
+func resolveSessionPath(session *db.Session, accept func(string) bool) string {
 	if session.FilePath != nil && !isVirtualSessionPath(*session.FilePath) {
-		if cwd := readSessionCwd(*session.FilePath); isDir(cwd) {
+		if cwd := readSessionCwd(*session.FilePath); accept(cwd) {
 			return cwd
 		}
 	}
-	if isDir(session.Cwd) {
+	if accept(session.Cwd) {
 		return session.Cwd
 	}
 	if session.Agent == "cursor" {
@@ -646,7 +648,7 @@ func resolveSessionDir(session *db.Session) string {
 			return dir
 		}
 	}
-	if isDir(session.Project) {
+	if accept(session.Project) {
 		return session.Project
 	}
 	return ""

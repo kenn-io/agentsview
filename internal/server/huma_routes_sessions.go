@@ -648,7 +648,7 @@ func (s *Server) humaGetSessionDir(
 		return nil, apiError(http.StatusNotFound, "session not found")
 	}
 	return &jsonOutput[sessionDirectoryResponse]{
-		Body: sessionDirectoryResponse{Path: resolveSessionDir(session)},
+		Body: sessionDirectoryResponse{Path: resolveSessionPath(session, filepath.IsAbs)},
 	}, nil
 }
 
