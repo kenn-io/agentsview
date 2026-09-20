@@ -2430,10 +2430,14 @@ schemas keep their existing ordering behavior.
   cache-write, model, and service-tier data. The official analyzer derives
   price from those fields; it does not read a persisted provider USD total.
   Agentsview likewise normalizes the counters and catalog-prices the result.
-- **Agentsview:** `internal/parser/piebald.go`. Reverified 2026-09-10 with
+- **Agentsview:** `internal/parser/piebald.go`. Reverified 2026-09-17 with
   isolated SQLite fixtures: hosted WAL snapshots use immutable reads in
-  read-only materializations; live reads retain uncheckpointed WAL rows.
-  Producer schema and usage semantics are unchanged.
+  read-only materializations; live reads retain uncheckpointed WAL rows. The
+  parser probes `chats` and uses an empty SQL literal when `current_directory`
+  is absent. Issue [#1819](https://github.com/kenn-io/agentsview/issues/1819)
+  reports an older schema, but no database was attached, so that
+  release-specific claim is unverified. The pinned analyzer reads the current
+  store and does not prove the historical schema.
 
 ## Warp (`warp`)
 
@@ -2788,16 +2792,18 @@ schemas keep their existing ordering behavior.
 ## WorkBuddy (`workbuddy`)
 
 - **Format:** Session JSONL with provider-specific raw usage embedded under
-  message provider data. Issue [#1860](https://github.com/kenn-io/agentsview/issues/1860)
-  reports `ai-title` records with an `aiTitle` string. Agentsview selects the
-  last nonblank value after trimming whitespace. Synthetic parser tests cover
-  the reported shape and boundary values; they do not verify a producer.
+  message provider data. Issue
+  [#1860](https://github.com/kenn-io/agentsview/issues/1860) reports
+  `ai-title` records with an `aiTitle` string. Agentsview selects the last
+  nonblank value after trimming whitespace. Synthetic parser tests cover the
+  reported shape and boundary values; they do not verify a producer.
 - **Evidence:** `no-public-source`.
 - **Upstream:** WorkBuddy's first-party product site, documentation, and public
   repositories were searched 2026-07-19; no authoritative persistence producer
-  or versioned schema was found. Issue [#1860](https://github.com/kenn-io/agentsview/issues/1860)
-  is reporter evidence for the `ai-title` shape, without producer-version
-  evidence. For reproducible independent format and accounting evidence, clone
+  or versioned schema was found. Issue
+  [#1860](https://github.com/kenn-io/agentsview/issues/1860) is reporter
+  evidence for the `ai-title` shape, without producer-version evidence. For
+  reproducible independent format and accounting evidence, clone
   `https://github.com/mm7894215/TokenTracker.git` at
   `eaf6048b07729f3ae1224def6011ea22f80cd035` and inspect its pinned
   [WorkBuddy reader](https://github.com/mm7894215/TokenTracker/blob/eaf6048b07729f3ae1224def6011ea22f80cd035/src/lib/rollout.js),

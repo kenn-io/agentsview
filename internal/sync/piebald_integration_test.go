@@ -1,13 +1,17 @@
 package sync_test
 
 import (
+	"bytes"
 	"database/sql"
+	"log"
+	"os"
 	"path/filepath"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/parser"
 	"go.kenn.io/agentsview/internal/sync"
 )
@@ -99,6 +103,15 @@ func createPiebaldDB(t *testing.T, dir string) *piebaldTestDB {
 	return &piebaldTestDB{path: path, db: d}
 }
 
+func createLegacyPiebaldDB(t *testing.T, dir string) *piebaldTestDB {
+	t.Helper()
+	database := createPiebaldDB(t, dir)
+	database.mustExec(t, "remove legacy optional column",
+		`ALTER TABLE chats DROP COLUMN current_directory`,
+	)
+	return database
+}
+
 func (p *piebaldTestDB) mustExec(t *testing.T, msg, query string, args ...any) {
 	t.Helper()
 	_, err := p.db.ExecContext(t.Context(), query, args...)
@@ -134,6 +147,38 @@ func (p *piebaldTestDB) addChat(t *testing.T, id int64, title, prompt, answer, u
 	)
 	p.addTextPart(t, assistantID*10, assistantID, 0, answer, false)
 	p.addToolPart(t, assistantID*10+1, assistantID, 1)
+}
+
+func (p *piebaldTestDB) addLegacyChat(
+	t *testing.T, id int64, title, prompt, answer, updatedAt string,
+) {
+	t.Helper()
+	p.mustExec(t, "insert project",
+		`INSERT OR IGNORE INTO projects (id, directory, name) VALUES (1, '/repo/project', 'project')`,
+	)
+	p.mustExec(t, "insert legacy chat",
+		`INSERT INTO chats
+			(id, title, created_at, updated_at, is_deleted, message_count, worktree_path, branch_name, project_id)
+		 VALUES (?, ?, '2026-05-01T10:00:00Z', ?, 0, 2, '/repo/worktree', 'feature', 1)`,
+		id, title, updatedAt,
+	)
+	userID := id*100 + 1
+	assistantID := id*100 + 2
+	p.mustExec(t, "insert legacy user message",
+		`INSERT INTO messages (id, parent_chat_id, role, model, created_at, updated_at, status)
+		 VALUES (?, ?, 'user', '', '2026-05-01T10:00:01Z', '2026-05-01T10:00:01Z', 'completed')`,
+		userID, id,
+	)
+	p.addTextPart(t, userID*10, userID, 0, prompt, false)
+	p.mustExec(t, "insert legacy assistant message",
+		`INSERT INTO messages
+			(id, parent_chat_id, role, model, created_at, updated_at,
+			 input_tokens, output_tokens, status)
+		 VALUES (?, ?, 'assistant', 'claude-test', '2026-05-01T10:00:02Z', '2026-05-01T10:00:03Z',
+			 10, 20, 'completed')`,
+		assistantID, id,
+	)
+	p.addTextPart(t, assistantID*10, assistantID, 0, answer, false)
 }
 
 func (p *piebaldTestDB) addTextPart(t *testing.T, partID, msgID int64, idx int, text string, thinking bool) {
@@ -262,4 +307,155 @@ func TestSyncPiebaldSingleBulkAndIncremental(t *testing.T) {
 	_, storedMtimeA2, okA2 := env.db.GetSessionFileInfo(t.Context(), "piebald:301")
 	require.True(t, okA2, "session A file info not found after partial sync")
 	assert.Equal(t, storedMtimeA, storedMtimeA2, "A's stored mtime changed")
+}
+
+func TestSyncPiebaldLegacySchema(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
+	piebald := createLegacyPiebaldDB(t, env.piebaldDir)
+	piebald.addLegacyChat(
+		t, 42, "Legacy Piebald", "Read this old chat.",
+		"It imported.", "2026-05-01T10:05:00Z",
+	)
+
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+	})
+	assertSessionProjectAndCwd(
+		t, env.db, "piebald:42", "project", "/repo/worktree",
+	)
+	assertSessionMessageCount(t, env.db, "piebald:42", 2)
+	assertMessageContent(
+		t, env.db, "piebald:42", "Read this old chat.", "It imported.",
+	)
+}
+
+func TestSyncPiebaldFullSyncSuppressesStableParseFailure(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
+	piebald := createPiebaldDB(t, env.piebaldDir)
+	piebald.addChat(
+		t, 42, "Broken Piebald", "A prompt.", "An answer.",
+		"2026-05-01T10:05:00Z",
+	)
+	runSyncAndAssert(t, env.engine, sync.SyncStats{
+		TotalSessions: 1,
+		Synced:        1,
+	})
+	beforeMessages, err := env.db.GetAllMessages(t.Context(), "piebald:42")
+	require.NoError(t, err)
+	require.Len(t, beforeMessages, 2)
+	beforeBaseline, err := env.db.ListActiveSessionSourceOwnershipScopesPage(
+		t.Context(), "local", string(parser.AgentPiebald),
+		[]db.StoredSourcePathHintScope{
+			{Path: env.piebaldDir, IncludeVirtualMembers: true},
+		}, db.SessionSourceCursor{},
+	)
+	require.NoError(t, err)
+	require.Len(t, beforeBaseline, 1)
+	_, storedMtime, ok := env.db.GetSessionFileInfo(t.Context(), "piebald:42")
+	require.True(t, ok, "session file info not found")
+	require.NoError(t, env.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
+			"UPDATE sessions SET file_mtime = file_mtime + 1 WHERE id = ?",
+			"piebald:42",
+		)
+		return err
+	}))
+	piebald.mustExec(t, "drop messages table", `DROP TABLE messages`)
+
+	var logs bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousWriter) })
+
+	first := env.engine.SyncAll(t.Context(), nil)
+	require.Equal(t, 1, first.Failed)
+	require.Contains(t, logs.String(), "sync piebald parse")
+
+	logs.Reset()
+	second := env.engine.SyncAll(t.Context(), nil)
+	require.Equal(t, 1, second.Failed)
+	assert.NotContains(t, logs.String(), "sync piebald parse")
+	afterMessages, err := env.db.GetAllMessages(t.Context(), "piebald:42")
+	require.NoError(t, err)
+	assert.Equal(t, beforeMessages, afterMessages)
+	afterBaseline, err := env.db.ListActiveSessionSourceOwnershipScopesPage(
+		t.Context(), "local", string(parser.AgentPiebald),
+		[]db.StoredSourcePathHintScope{
+			{Path: env.piebaldDir, IncludeVirtualMembers: true},
+		}, db.SessionSourceCursor{},
+	)
+	require.NoError(t, err)
+	assert.Equal(t, beforeBaseline, afterBaseline)
+
+	piebald.mustExec(t, "restore messages table", `
+		CREATE TABLE messages (
+			id INTEGER PRIMARY KEY,
+			parent_chat_id INTEGER NOT NULL,
+			parent_message_id INTEGER,
+			role TEXT NOT NULL,
+			model TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			input_tokens BIGINT,
+			output_tokens BIGINT,
+			reasoning_tokens BIGINT,
+			cache_read_tokens BIGINT,
+			cache_write_tokens BIGINT,
+			status TEXT NOT NULL,
+			finish_reason TEXT,
+			error TEXT,
+			enabled INTEGER NOT NULL DEFAULT 1
+		)`,
+	)
+	piebald.mustExec(t, "restore messages",
+		`INSERT INTO messages
+			(id, parent_chat_id, role, model, created_at, updated_at, status)
+		 VALUES
+			(4201, 42, 'user', '', '2026-05-01T10:00:01Z', '2026-05-01T10:00:01Z', 'completed'),
+			(4202, 42, 'assistant', 'claude-test', '2026-05-01T10:00:02Z', '2026-05-01T10:00:03Z', 'completed')`,
+	)
+	require.NoError(t, env.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
+			"UPDATE sessions SET file_mtime = ? WHERE id = ?",
+			storedMtime, "piebald:42",
+		)
+		return err
+	}))
+
+	logs.Reset()
+	recovered := env.engine.SyncAll(t.Context(), nil)
+	require.Zero(t, recovered.Failed)
+	require.Equal(t, 1, recovered.Synced)
+	assert.Contains(t, logs.String(), "piebald write")
+	assertSessionMessageCount(t, env.db, "piebald:42", 2)
+}
+
+func TestResyncBuildPiebaldFailureBypassesMemo(t *testing.T) {
+	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
+	piebald := createPiebaldDB(t, env.piebaldDir)
+	piebald.addChat(
+		t, 42, "Broken Piebald", "A prompt.", "An answer.",
+		"2026-05-01T10:05:00Z",
+	)
+	piebald.mustExec(t, "drop messages table", `DROP TABLE messages`)
+
+	var logs bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(previousWriter) })
+
+	first := env.engine.SyncAll(t.Context(), nil)
+	require.Equal(t, 1, first.Failed)
+	logs.Reset()
+	second := env.engine.SyncAll(t.Context(), nil)
+	require.Equal(t, 1, second.Failed)
+	assert.NotContains(t, logs.String(), "sync piebald parse")
+
+	logs.Reset()
+	tempPath, rebuild, rebuildErr := env.engine.ResyncBuild(t.Context(), nil)
+	defer os.Remove(tempPath)
+	require.NoError(t, rebuildErr)
+	assert.Equal(t, 1, rebuild.Failed)
+	assert.Contains(t, logs.String(), "sync piebald parse")
 }
