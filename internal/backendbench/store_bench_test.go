@@ -20,6 +20,7 @@ import (
 	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 const (
@@ -224,7 +225,7 @@ func openSQLiteStore(b *testing.B) *db.DB {
 	b.Helper()
 
 	path := filepath.Join(b.TempDir(), "sessions.db")
-	store, err := db.Open(path)
+	store, err := db.Open(b.Context(), path)
 	if err != nil {
 		b.Fatalf("open sqlite store: %v", err)
 	}
@@ -239,22 +240,8 @@ func openSQLiteStore(b *testing.B) *db.DB {
 func openDuckDBStore(ctx context.Context, b *testing.B, local *db.DB) db.Store {
 	b.Helper()
 
-	syncer, err := duckdb.New(
-		filepath.Join(b.TempDir(), "sessions.duckdb"),
-		local,
-		benchmarkMachine,
-		duckdb.SyncOptions{},
-	)
-	if err != nil {
-		b.Fatalf("open duckdb sync: %v", err)
-	}
-	b.Cleanup(func() {
-		if err := syncer.Close(); err != nil {
-			b.Errorf("close duckdb sync: %v", err)
-		}
-	})
-
-	result, err := syncer.Push(ctx, true, nil)
+	path := filepath.Join(b.TempDir(), "sessions.duckdb")
+	result, err := duckdb.Push(ctx, path, local, benchmarkMachine, storage.MirrorPushOptions{}, true, nil)
 	if err != nil {
 		b.Fatalf("push duckdb fixture: %v", err)
 	}
@@ -262,7 +249,17 @@ func openDuckDBStore(ctx context.Context, b *testing.B, local *db.DB) db.Store {
 		b.Fatalf("duckdb fixture push wrote no rows: %+v", result)
 	}
 
-	return duckdb.NewStoreFromDB(syncer.DB())
+	store, err := duckdb.NewStore(ctx, path)
+	if err != nil {
+		b.Fatalf("open duckdb store: %v", err)
+	}
+	b.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			b.Errorf("close duckdb store: %v", err)
+		}
+	})
+
+	return store
 }
 
 func openPostgresStore(ctx context.Context, b *testing.B, local *db.DB) db.Store {
@@ -305,7 +302,7 @@ func openPostgresStore(ctx context.Context, b *testing.B, local *db.DB) db.Store
 		local,
 		benchmarkMachine,
 		true,
-		postgres.SyncOptions{},
+		storage.PusherOptions{},
 	)
 	if err != nil {
 		b.Fatalf("open postgres sync: %v", err)
@@ -420,7 +417,7 @@ func seedBenchmarkFixture(b *testing.B, store *db.DB, fixture benchmarkFixture) 
 			FileMtime:              &fileMtime,
 			CreatedAt:              startedAt.Add(-time.Minute).Format(time.RFC3339),
 		}
-		if err := store.UpsertSession(session); err != nil {
+		if err := store.UpsertSession(b.Context(), session); err != nil {
 			b.Fatalf("seed session %s: %v", id, err)
 		}
 
@@ -470,7 +467,7 @@ func seedBenchmarkFixture(b *testing.B, store *db.DB, fixture benchmarkFixture) 
 				ClaudeRequestID:  fmt.Sprintf("request-%03d-%02d", i, ordinal),
 			})
 		}
-		if err := store.InsertMessages(messages); err != nil {
+		if err := store.InsertMessages(b.Context(), messages); err != nil {
 			b.Fatalf("seed messages for %s: %v", id, err)
 		}
 	}

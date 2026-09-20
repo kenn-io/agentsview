@@ -21,25 +21,27 @@ import (
 
 func writeTraeDB(t *testing.T, path, value string, extraKey string) {
 	t.Helper()
+
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	defer db.Close()
-	_, err = db.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
 	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO ItemTable(key, value) VALUES (?, ?), (?, ?)`, traeStorageKey, value, extraKey, `{"list":[{"sessionId":"ignored","messages":[{"role":"user","content":"wrong"}]}]`)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO ItemTable(key, value) VALUES (?, ?), (?, ?)`, traeStorageKey, value, extraKey, `{"list":[{"sessionId":"ignored","messages":[{"role":"user","content":"wrong"}]}]`)
 	require.NoError(t, err)
 }
 
 func writeTraeDBWithoutStorageKey(t *testing.T, path string, extraKey string) {
 	t.Helper()
+
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	defer db.Close()
-	_, err = db.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
 	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO ItemTable(key, value) VALUES (?, ?)`, extraKey, `{"list":[{"sessionId":"ignored","messages":[{"role":"user","content":"wrong"}]}]}`)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO ItemTable(key, value) VALUES (?, ?)`, extraKey, `{"list":[{"sessionId":"ignored","messages":[{"role":"user","content":"wrong"}]}]}`)
 	require.NoError(t, err)
 }
 
@@ -48,7 +50,7 @@ func setTraeDBValue(t *testing.T, path, value string) {
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	defer db.Close()
-	_, err = db.Exec(`UPDATE ItemTable SET value = ? WHERE key = ?`, value, traeStorageKey)
+	_, err = db.ExecContext(t.Context(), `UPDATE ItemTable SET value = ? WHERE key = ?`, value, traeStorageKey)
 	require.NoError(t, err)
 }
 
@@ -96,7 +98,7 @@ func TestTraeWorkspaceGlobalDiscoveryAndParsing(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentTrae)
 	require.True(t, ok)
 	provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
 
@@ -105,7 +107,7 @@ func TestTraeWorkspaceGlobalDiscoveryAndParsing(t *testing.T) {
 			assert.Equal(t, "project", source.ProjectHint)
 		}
 		assert.NotContains(t, source.Key, "#session-1")
-		outcome, err := provider.Parse(context.Background(), ParseRequest{Source: source})
+		outcome, err := provider.Parse(t.Context(), ParseRequest{Source: source})
 		require.NoError(t, err)
 		require.Len(t, outcome.Results, 1)
 		result := outcome.Results[0].Result
@@ -174,7 +176,7 @@ func TestTraeStreamingDiscoveryBoundsWorkspaceAndStopsEarly(t *testing.T) {
 
 	err = streaming.DiscoverEach(ctx, func(SourceRef) error { return stop })
 
-	assert.ErrorIs(t, err, stop)
+	require.ErrorIs(t, err, stop)
 	assert.Equal(t, 1, visited,
 		"consumer stop must halt the workspace traversal immediately")
 }
@@ -186,26 +188,26 @@ func TestTraeWatchChangedPathAndVirtualLookup(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentTrae)
 	require.True(t, ok)
 	provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 2)
-	sources, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{WatchRoot: filepath.Join(root, "globalStorage"), Path: dbPath})
+	sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{WatchRoot: filepath.Join(root, "globalStorage"), Path: dbPath})
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	_, _, ok = SplitTraeVirtualPath(sources[0].Key)
 	assert.False(t, ok)
 	virtual := traeVirtualPath(dbPath, "session-1")
 	var found SourceRef
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{StoredFilePath: sources[0].Key})
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{StoredFilePath: sources[0].Key})
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, sources[0].Key, found.Key)
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{StoredFilePath: virtual, RawSessionID: "session-1", RequireFreshSource: true})
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{StoredFilePath: virtual, RawSessionID: "session-1", RequireFreshSource: true})
 	require.NoError(t, err)
 	assert.True(t, ok)
 	assert.Equal(t, virtual, found.Key)
 	for _, name := range []string{traeStateDBName + "-wal"} {
-		changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{WatchRoot: filepath.Join(root, "globalStorage"), Path: filepath.Join(root, "globalStorage", name)})
+		changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{WatchRoot: filepath.Join(root, "globalStorage"), Path: filepath.Join(root, "globalStorage", name)})
 		require.NoError(t, err)
 		assert.Len(t, changed, 1)
 	}
@@ -254,11 +256,11 @@ func TestTraeWorkspaceChangedPathAndRawExport(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentTrae)
 	require.True(t, ok)
 	provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
-	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{WatchRoot: filepath.Join(root, "workspaceStorage"), Path: filepath.Join(root, "workspaceStorage", "hash", "workspace.json")})
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{WatchRoot: filepath.Join(root, "workspaceStorage"), Path: filepath.Join(root, "workspaceStorage", "hash", "workspace.json")})
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	var exported bytes.Buffer
-	require.NoError(t, WriteTraeSessionJSON(&exported, path, "session-1"))
+	require.NoError(t, WriteTraeSessionJSON(t.Context(), &exported, path, "session-1"))
 	assert.Contains(t, exported.String(), `"sessionId":"session-1"`)
 }
 
@@ -268,7 +270,7 @@ func TestTraeUnsupportedKeyNegativeSpace(t *testing.T) {
 	writeTraeDB(t, path, traeFixtureValue(t), "memento/unrelated-chat-storage")
 	factory, ok := ProviderFactoryByType(AgentTrae)
 	require.True(t, ok)
-	sources, err := factory.NewProvider(ProviderConfig{Roots: []string{root}}).Discover(context.Background())
+	sources, err := factory.NewProvider(ProviderConfig{Roots: []string{root}}).Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.NotContains(t, sources[0].Key, "ignored")
@@ -302,11 +304,11 @@ func TestTraeMalformedSessionEntryDoesNotBlockSiblingDiscovery(t *testing.T) {
 
 	factory, ok := ProviderFactoryByType(AgentTrae)
 	require.True(t, ok)
-	sources, err := factory.NewProvider(ProviderConfig{Roots: []string{root}}).Discover(context.Background())
+	sources, err := factory.NewProvider(ProviderConfig{Roots: []string{root}}).Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
 	for _, source := range sources {
-		outcome, err := factory.NewProvider(ProviderConfig{Roots: []string{root}}).Parse(context.Background(), ParseRequest{Source: source})
+		outcome, err := factory.NewProvider(ProviderConfig{Roots: []string{root}}).Parse(t.Context(), ParseRequest{Source: source})
 		require.NoError(t, err)
 		require.Len(t, outcome.Results, 1)
 	}
@@ -327,11 +329,11 @@ func TestTraeMalformedStorageDoesNotBlockSiblingDiscovery(t *testing.T) {
 
 	factory, ok := ProviderFactoryByType(AgentTrae)
 	require.True(t, ok)
-	sources, err := factory.NewProvider(ProviderConfig{Roots: []string{root}}).Discover(context.Background())
+	sources, err := factory.NewProvider(ProviderConfig{Roots: []string{root}}).Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
 	for _, source := range sources {
-		outcome, err := factory.NewProvider(ProviderConfig{Roots: []string{root}}).Parse(context.Background(), ParseRequest{Source: source})
+		outcome, err := factory.NewProvider(ProviderConfig{Roots: []string{root}}).Parse(t.Context(), ParseRequest{Source: source})
 		if strings.Contains(source.Key, "globalStorage") {
 			require.NoError(t, err)
 			require.Len(t, outcome.Results, 1)
@@ -349,11 +351,11 @@ func TestTraeValidEmptyStoreReturnsCompleteNoSessionOutcome(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentTrae)
 	require.True(t, ok)
 	provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	assert.Empty(t, outcome.Results)
 	assert.Equal(t, SkipNoSession, outcome.SkipReason)
@@ -398,11 +400,11 @@ func TestTraeUnknownStoragePreservesArchiveUntilExplicitList(t *testing.T) {
 			factory, ok := ProviderFactoryByType(AgentTrae)
 			require.True(t, ok)
 			provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
-			sources, err := provider.Discover(context.Background())
+			sources, err := provider.Discover(t.Context())
 			require.NoError(t, err)
 			require.Len(t, sources, 1)
 
-			outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 			require.NoError(t, err)
 			assert.Empty(t, outcome.Results)
 			assert.Equal(t, SkipNoSession, outcome.SkipReason)
@@ -410,7 +412,7 @@ func TestTraeUnknownStoragePreservesArchiveUntilExplicitList(t *testing.T) {
 			assert.False(t, outcome.ResultSetComplete)
 
 			virtual := traeVirtualPath(path, "session-1")
-			changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+			changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 				WatchRoot:         filepath.Join(root, "globalStorage"),
 				Path:              path,
 				StoredSourcePaths: []string{virtual},
@@ -438,7 +440,7 @@ func TestTraeRequireFreshSourceFallsBackToRawIDAfterStoredVirtualPathRelocates(t
 	factory, ok := ProviderFactoryByType(AgentTrae)
 	require.True(t, ok)
 	provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath:     traeVirtualPath(oldDB, "session-1"),
 		RawSessionID:       "session-1",
 		RequireFreshSource: true,
@@ -462,7 +464,7 @@ func TestTraeRequireFreshSourceFallsBackToRawIDAfterStoredVirtualPathRelocates(t
 		},
 	}))
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath:     traeVirtualPath(oldDB, "session-1"),
 		RawSessionID:       "session-1",
 		RequireFreshSource: true,
@@ -491,17 +493,17 @@ func TestTraeMalformedSessionEntryKeepsContainerIncomplete(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentTrae)
 	require.True(t, ok)
 	provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, "trae:good", outcome.Results[0].Result.Session.ID)
 	assert.False(t, outcome.ResultSetComplete)
 
-	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		WatchRoot:         filepath.Join(root, "globalStorage"),
 		Path:              path,
 		StoredSourcePaths: []string{traeVirtualPath(path, "broken")},
@@ -519,6 +521,8 @@ func TestTraeEncryptedLayoutOutcomeUnsupported(t *testing.T) {
 		{
 			name: "empty stub",
 			setup: func(t *testing.T, path string) {
+				t.Helper()
+
 				writeTraeDB(t, path, traeStoreValue(t, []any{
 					map[string]any{
 						"sessionId": "stub",
@@ -530,6 +534,8 @@ func TestTraeEncryptedLayoutOutcomeUnsupported(t *testing.T) {
 		{
 			name: "missing storage key",
 			setup: func(t *testing.T, path string) {
+				t.Helper()
+
 				writeTraeDBWithoutStorageKey(t, path, "memento/unrelated-chat-storage")
 			},
 		},
@@ -544,11 +550,11 @@ func TestTraeEncryptedLayoutOutcomeUnsupported(t *testing.T) {
 			factory, ok := ProviderFactoryByType(AgentTrae)
 			require.True(t, ok)
 			provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
-			sources, err := provider.Discover(context.Background())
+			sources, err := provider.Discover(t.Context())
 			require.NoError(t, err)
 			require.Len(t, sources, 1)
 
-			outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 			require.NoError(t, err)
 			assert.Equal(t, SkipUnsupportedSource, outcome.SkipReason)
 			assert.True(t, outcome.ResultSetComplete)
@@ -577,10 +583,10 @@ func TestTraeMixedLegacyAndEmptyStubPreservesInlineSession(t *testing.T) {
 	factory, ok := ProviderFactoryByType(AgentTrae)
 	require.True(t, ok)
 	provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, "trae:real", outcome.Results[0].Result.Session.ID)
@@ -633,18 +639,18 @@ func TestTraeUnparseableSessionStatesKeepContainerIncomplete(t *testing.T) {
 			factory, ok := ProviderFactoryByType(AgentTrae)
 			require.True(t, ok)
 			provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
-			sources, err := provider.Discover(context.Background())
+			sources, err := provider.Discover(t.Context())
 			require.NoError(t, err)
 			require.Len(t, sources, 1)
 
-			outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 			require.NoError(t, err)
 			require.Len(t, outcome.Results, 1)
 			assert.Equal(t, "trae:good", outcome.Results[0].Result.Session.ID)
 			assert.False(t, outcome.ResultSetComplete)
 
 			virtual := traeVirtualPath(path, tc.session["sessionId"].(string))
-			changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+			changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 				WatchRoot:         filepath.Join(root, "globalStorage"),
 				Path:              path,
 				StoredSourcePaths: []string{virtual},
@@ -653,14 +659,14 @@ func TestTraeUnparseableSessionStatesKeepContainerIncomplete(t *testing.T) {
 			require.Len(t, changed, 1)
 			assert.Equal(t, path, changed[0].Key)
 
-			found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+			found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 				StoredFilePath:     virtual,
 				RawSessionID:       tc.session["sessionId"].(string),
 				RequireFreshSource: true,
 			})
 			require.NoError(t, err)
 			assert.True(t, ok)
-			_, err = provider.Parse(context.Background(), ParseRequest{Source: found})
+			_, err = provider.Parse(t.Context(), ParseRequest{Source: found})
 			require.Error(t, err)
 		})
 	}
@@ -706,11 +712,11 @@ func TestTraeUnparseableEncryptedSessionsStayIncomplete(t *testing.T) {
 			factory, ok := ProviderFactoryByType(AgentTrae)
 			require.True(t, ok)
 			provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
-			sources, err := provider.Discover(context.Background())
+			sources, err := provider.Discover(t.Context())
 			require.NoError(t, err)
 			require.Len(t, sources, 1)
 
-			outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 			require.NoError(t, err)
 			assert.Equal(t, SkipNoSession, outcome.SkipReason)
 			assert.False(t, outcome.ResultSetComplete)
@@ -734,7 +740,7 @@ func TestTraeChangedPathTombstonesRefreshWarmMemberPresenceCache(t *testing.T) {
 	require.True(t, ok)
 	provider := factory.NewProvider(ProviderConfig{Roots: []string{root}})
 	virtual := traeVirtualPath(dbPath, "session-1")
-	_, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath:     virtual,
 		RawSessionID:       "session-1",
 		RequireFreshSource: true,
@@ -743,7 +749,7 @@ func TestTraeChangedPathTombstonesRefreshWarmMemberPresenceCache(t *testing.T) {
 	require.True(t, ok)
 
 	setTraeDBValue(t, dbPath, `{"list":[]}`)
-	sources, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		WatchRoot:         filepath.Join(root, "globalStorage"),
 		Path:              dbPath,
 		StoredSourcePaths: []string{virtual},
@@ -790,9 +796,9 @@ func TestTraeChangedPathTombstonesDecodeSnapshotOncePerContainer(t *testing.T) {
 	orig := traeLoadSessionSnapshot
 	defer func() { traeLoadSessionSnapshot = orig }()
 	var decodes int
-	traeLoadSessionSnapshot = func(path string) (traeSessionSnapshot, error) {
+	traeLoadSessionSnapshot = func(ctx context.Context, path string) (traeSessionSnapshot, error) {
 		decodes++
-		return orig(path)
+		return orig(ctx, path)
 	}
 
 	factory, ok := ProviderFactoryByType(AgentTrae)
@@ -804,7 +810,7 @@ func TestTraeChangedPathTombstonesDecodeSnapshotOncePerContainer(t *testing.T) {
 		traeVirtualPath(dbPath, "session-3"),
 	}
 
-	sources, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		WatchRoot:         filepath.Join(root, "globalStorage"),
 		Path:              dbPath,
 		StoredSourcePaths: stored,

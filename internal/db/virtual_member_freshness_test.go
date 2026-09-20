@@ -19,8 +19,8 @@ func seedVirtualMemberRow(
 	if hash != "" {
 		session.FileHash = &hash
 	}
-	require.NoError(t, d.UpsertSession(session))
-	require.NoError(t, d.SetSessionDataVersion(id, version))
+	require.NoError(t, d.UpsertSession(t.Context(), session))
+	require.NoError(t, d.SetSessionDataVersion(t.Context(), id, version))
 }
 
 // TestListVirtualContainerMemberFreshnessPagePagesCompleteFolds pins the
@@ -41,7 +41,7 @@ func TestListVirtualContainerMemberFreshnessPagePagesCompleteFolds(
 	seedVirtualMemberRow(t, d, "b", container+"#b", 150, 5, "")
 	seedVirtualMemberRow(t, d, "c", container+"#c", 300, 5, "")
 	seedVirtualMemberRow(t, d, "outside", "/data/other.db#x", 400, 5, "")
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(t.Context(),
 		`UPDATE sessions SET
 			source_missing_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
 		 WHERE id = 'b'`,

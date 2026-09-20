@@ -13,6 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/duckdb"
 	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestMachinesExposeLabelsWithoutChangingFilterKeys(t *testing.T) {
@@ -28,8 +29,8 @@ func TestMachinesExposeLabelsWithoutChangingFilterKeys(t *testing.T) {
 		s.Machine = "old-host"
 		s.UserMessageCount = 3
 	})
-	require.NoError(t, te.db.SetSyncState("machine_label:"+id, "Laptop"))
-	require.NoError(t, te.db.SetSyncState("machine_alias:old-owner", id))
+	require.NoError(t, te.db.SetSyncState(t.Context(), "machine_label:"+id, "Laptop"))
+	require.NoError(t, te.db.SetSyncState(t.Context(), "machine_alias:old-owner", id))
 	w := te.get(t, "/api/v1/machines")
 	assertStatus(t, w, http.StatusOK)
 	resp := decode[struct {
@@ -74,11 +75,11 @@ func TestMachineAliasesOnDuckDB(t *testing.T) {
 		s.Machine = "installation-a"
 		s.UserMessageCount = 3
 	})
-	require.NoError(t, te.db.SetSyncState("machine_alias:old-owner", "installation-a"))
+	require.NoError(t, te.db.SetSyncState(t.Context(), "machine_alias:old-owner", "installation-a"))
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	_, err := duckdb.Push(t.Context(), path, te.db, "installation-a", duckdb.SyncOptions{}, true, nil)
+	_, err := duckdb.Push(t.Context(), path, te.db, "installation-a", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
-	store, err := duckdb.NewStore(path)
+	store, err := duckdb.NewStore(t.Context(), path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	cfg := config.Config{Host: "127.0.0.1", InstallationID: "server-installation"}

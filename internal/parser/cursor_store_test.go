@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -133,7 +132,7 @@ func writeCursorStoreMeta(t *testing.T, db *sql.DB, agentID, rootID string) {
 		"mode":             "default",
 	})
 	require.NoError(t, err)
-	_, err = db.Exec(
+	_, err = db.ExecContext(t.Context(),
 		`INSERT INTO meta(key, value) VALUES(?, ?)`,
 		"0", hex.EncodeToString(payload),
 	)
@@ -142,20 +141,21 @@ func writeCursorStoreMeta(t *testing.T, db *sql.DB, agentID, rootID string) {
 
 func writeCursorStoreBlob(t *testing.T, db *sql.DB, id string, data []byte) {
 	t.Helper()
-	_, err := db.Exec(`INSERT INTO blobs(id, data) VALUES(?, ?)`, id, data)
+	_, err := db.ExecContext(t.Context(), `INSERT INTO blobs(id, data) VALUES(?, ?)`, id, data)
 	require.NoError(t, err)
 }
 
 func openCursorStoreWriter(t *testing.T, storePath string) *sql.DB {
 	t.Helper()
+
 	require.NoError(t, os.MkdirAll(filepath.Dir(storePath), 0o755))
 	db, err := sql.Open("sqlite3", storePath+"?_journal_mode=WAL&_busy_timeout=3000")
 	require.NoError(t, err)
-	_, err = db.Exec(`PRAGMA journal_mode=WAL`)
+	_, err = db.ExecContext(t.Context(), `PRAGMA journal_mode=WAL`)
 	require.NoError(t, err)
-	_, err = db.Exec(`CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)`)
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)`)
 	require.NoError(t, err)
-	_, err = db.Exec(`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)`)
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)`)
 	require.NoError(t, err)
 	return db
 }
@@ -176,6 +176,7 @@ func cursorStoreTranscriptJSONL(user, assistant string) string {
 
 func setupCursorStoreFixture(t *testing.T, keepWriterOpen bool) cursorStoreFixture {
 	t.Helper()
+
 	home := t.TempDir()
 	projects := filepath.Join(home, ".cursor", "projects")
 	chats := filepath.Join(home, ".cursor", "chats")
@@ -243,7 +244,7 @@ func setupCursorStoreFixture(t *testing.T, keepWriterOpen bool) cursorStoreFixtu
 		},
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
@@ -265,7 +266,7 @@ func TestCursorStoreParsesRowsHeldOnlyInWAL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Positive(t, walInfo.Size())
 
-	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	msgs := outcome.Results[0].Result.Messages
@@ -277,7 +278,7 @@ func TestCursorStoreParsesRowsHeldOnlyInWAL(t *testing.T) {
 
 func TestCursorStoreTraversesOnlyLatestRootBlobId(t *testing.T) {
 	fx := setupCursorStoreFixture(t, false)
-	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	raw, err := json.Marshal(outcome.Results[0].Result.Messages)
@@ -288,12 +289,12 @@ func TestCursorStoreTraversesOnlyLatestRootBlobId(t *testing.T) {
 
 func TestCursorStoreEnrichesExistingTranscript(t *testing.T) {
 	fx := setupCursorStoreFixture(t, false)
-	discovered, err := fx.Provider.Discover(context.Background())
+	discovered, err := fx.Provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, fx.Transcript, discovered[0].DisplayPath)
 
-	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0].Result
@@ -302,13 +303,11 @@ func TestCursorStoreEnrichesExistingTranscript(t *testing.T) {
 	assert.Equal(t, RoleUser, result.Messages[0].Role)
 	assert.Equal(t, RoleAssistant, result.Messages[1].Role)
 	assert.True(t, result.Messages[1].HasThinking)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		time.UnixMilli(int64(cursorStoreTestUserMS)).UTC(),
 		result.Messages[0].Timestamp.UTC(),
 	)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		time.UnixMilli(int64(cursorStoreTestAsstMS)).UTC(),
 		result.Messages[1].Timestamp.UTC(),
 	)
@@ -317,7 +316,7 @@ func TestCursorStoreEnrichesExistingTranscript(t *testing.T) {
 
 func TestCursorStoreUsesTurnIndexProjection(t *testing.T) {
 	fx := setupCursorStoreFixture(t, false)
-	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
 	msgs := outcome.Results[0].Result.Messages
 	require.Len(t, msgs, 2)
@@ -353,10 +352,10 @@ func TestCursorStoreSkipsUndecodableBlobWithoutDroppingSiblings(t *testing.T) {
 		{num: 3, wire: pbWireBytes, bytes: []byte("6a670ffe-168a-4a4e-b2e3-bcf1ad472814")},
 		{num: 5, wire: pbWireVarint, varint: 3},
 	})
-	_, err = db.Exec(`UPDATE blobs SET data = ? WHERE id = ?`, turnData, turnID)
+	_, err = db.ExecContext(t.Context(), `UPDATE blobs SET data = ? WHERE id = ?`, turnData, turnID)
 	require.NoError(t, err)
 
-	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results[0].Result.Messages, 2)
 	assert.True(t, outcome.Results[0].Result.Messages[1].HasThinking)
@@ -374,7 +373,7 @@ func TestCursorStoreResolvesInline32ByteMessage(t *testing.T) {
 	payload := encodePB([]pbField{{num: 1, wire: pbWireBytes, bytes: message}})
 	require.Len(t, payload, 32)
 	loader := newCursorStoreBlobLoader(
-		context.Background(), db,
+		t.Context(), db,
 	)
 	resolved, ok := cursorStoreResolveMessage(agProtoField{
 		Wire: pbWireBytes, Bytes: payload,
@@ -386,6 +385,7 @@ func TestCursorStoreResolvesInline32ByteMessage(t *testing.T) {
 
 func assertCursorStoreTranscriptOnly(t *testing.T, outcome ParseOutcome) {
 	t.Helper()
+
 	assert.Empty(t, outcome.SourceErrors)
 	assert.True(t, outcome.ResultSetComplete)
 	require.Len(t, outcome.Results, 1)
@@ -403,10 +403,10 @@ func TestCursorStoreMalformedMetaKeepsTranscript(t *testing.T) {
 	db, err := sql.Open("sqlite3", fx.StorePath)
 	require.NoError(t, err)
 	defer db.Close()
-	_, err = db.Exec(`UPDATE meta SET value = ? WHERE key = '0'`, "not-hex")
+	_, err = db.ExecContext(t.Context(), `UPDATE meta SET value = ? WHERE key = '0'`, "not-hex")
 	require.NoError(t, err)
 
-	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
 	assertCursorStoreTranscriptOnly(t, outcome)
 }
@@ -421,10 +421,10 @@ func TestCursorStoreMissingTableKeepsTranscript(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = store.Close() })
 			if missing == "meta" {
-				_, err = store.Exec(`CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)`)
+				_, err = store.ExecContext(t.Context(), `CREATE TABLE blobs (id TEXT PRIMARY KEY, data BLOB)`)
 				require.NoError(t, err)
 			} else {
-				_, err = store.Exec(`CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)`)
+				_, err = store.ExecContext(t.Context(), `CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)`)
 				require.NoError(t, err)
 				writeCursorStoreMeta(t, store, cursorStoreTestAgentID, fx.RootID)
 			}
@@ -439,10 +439,10 @@ func TestCursorStoreMissingTableKeepsTranscript(t *testing.T) {
 
 func TestCursorStoreMissingMetadataKeepsTranscript(t *testing.T) {
 	fx := setupCursorStoreFixture(t, true)
-	_, err := fx.Writer.Exec(`DELETE FROM meta WHERE key = '0'`)
+	_, err := fx.Writer.ExecContext(t.Context(), `DELETE FROM meta WHERE key = '0'`)
 	require.NoError(t, err)
 
-	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
 	assertCursorStoreTranscriptOnly(t, outcome)
 }
@@ -467,7 +467,7 @@ func TestCursorStoreMissingColumnKeepsTranscript(t *testing.T) {
 			store, err := sql.Open("sqlite3", fx.StorePath)
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = store.Close() })
-			_, err = store.Exec(tt.schema)
+			_, err = store.ExecContext(t.Context(), tt.schema)
 			require.NoError(t, err)
 			if strings.HasPrefix(tt.missing, "blobs.") {
 				writeCursorStoreMeta(t, store, cursorStoreTestAgentID, fx.RootID)
@@ -487,13 +487,13 @@ func TestCursorStoreIncompleteMetadataKeepsTranscript(t *testing.T) {
 		"agentId": cursorStoreTestAgentID,
 	})
 	require.NoError(t, err)
-	_, err = fx.Writer.Exec(
+	_, err = fx.Writer.ExecContext(t.Context(),
 		`UPDATE meta SET value = ? WHERE key = '0'`,
 		hex.EncodeToString(payload),
 	)
 	require.NoError(t, err)
 
-	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
 	assertCursorStoreTranscriptOnly(t, outcome)
 }
@@ -505,13 +505,13 @@ func TestCursorStoreMetadataAgentMismatchKeepsTranscript(t *testing.T) {
 		"latestRootBlobId": fx.RootID,
 	})
 	require.NoError(t, err)
-	_, err = fx.Writer.Exec(
+	_, err = fx.Writer.ExecContext(t.Context(),
 		`UPDATE meta SET value = ? WHERE key = '0'`,
 		hex.EncodeToString(payload),
 	)
 	require.NoError(t, err)
 
-	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
 	assertCursorStoreTranscriptOnly(t, outcome)
 }
@@ -524,13 +524,13 @@ func TestCursorStoreMissingSelectedRootKeepsTranscript(t *testing.T) {
 		"latestRootBlobId": missingRoot,
 	})
 	require.NoError(t, err)
-	_, err = fx.Writer.Exec(
+	_, err = fx.Writer.ExecContext(t.Context(),
 		`UPDATE meta SET value = ? WHERE key = '0'`,
 		hex.EncodeToString(payload),
 	)
 	require.NoError(t, err)
 
-	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
 	assertCursorStoreTranscriptOnly(t, outcome)
 }
@@ -555,7 +555,7 @@ func TestCursorStoreUnsupportedRootKeepsTranscript(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			fx := setupCursorStoreFixture(t, true)
-			_, err := fx.Writer.Exec(`UPDATE blobs SET data = ? WHERE id = ?`, tt.root, fx.RootID)
+			_, err := fx.Writer.ExecContext(t.Context(), `UPDATE blobs SET data = ? WHERE id = ?`, tt.root, fx.RootID)
 			require.NoError(t, err)
 			outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
 			require.NoError(t, err)
@@ -621,7 +621,7 @@ func TestCursorStoreUnreadableMatchingStoreReturnsError(t *testing.T) {
 		_ = os.Remove(fx.StorePath + suffix)
 	}
 
-	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
 	assert.Empty(t, outcome.Results)
 	require.Len(t, outcome.SourceErrors, 1)
@@ -661,7 +661,7 @@ func TestCursorStoreAccessFailureKeepsEnrichmentRetryable(t *testing.T) {
 					require.Len(t, sources, 1)
 				}
 				_, err := fx.Provider.Fingerprint(t.Context(), fx.Source)
-				assert.ErrorIs(t, err, os.ErrPermission, operation)
+				require.ErrorIs(t, err, os.ErrPermission, operation)
 				outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
 				require.NoError(t, err)
 				assert.Empty(t, outcome.Results, operation)
@@ -715,13 +715,13 @@ func TestCursorStoreUncachedEventAccessFailureRemainsRetryable(t *testing.T) {
 			require.NoError(t, err)
 			require.Len(t, sources, 1)
 			_, err = provider.Fingerprint(t.Context(), sources[0])
-			assert.ErrorIs(t, err, os.ErrPermission)
+			require.ErrorIs(t, err, os.ErrPermission)
 			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 			require.NoError(t, err)
 			assert.Empty(t, outcome.Results)
 			require.Len(t, outcome.SourceErrors, 1)
 			assert.True(t, outcome.SourceErrors[0].Retryable)
-			assert.ErrorIs(t, outcome.SourceErrors[0].Err, os.ErrPermission)
+			require.ErrorIs(t, outcome.SourceErrors[0].Err, os.ErrPermission)
 
 			require.NoError(t, os.Chmod(sessionDir, 0o755))
 			fingerprint, err := provider.Fingerprint(t.Context(), sources[0])
@@ -742,7 +742,7 @@ func TestCursorStoreEnrichesSourceWithoutOpaque(t *testing.T) {
 	source := fx.Source
 	source.Opaque = nil
 
-	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: source})
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: source})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Empty(t, outcome.SourceErrors)
@@ -759,14 +759,14 @@ func TestCursorStoreEnrichesTargetedLookupWithoutDiscovery(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: fx.Transcript,
 	})
 	require.NoError(t, err)
 	require.True(t, found)
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      source,
 		Fingerprint: fingerprint,
 	})
@@ -913,7 +913,7 @@ func TestCursorStoreUsesProducerMillisecondTimes(t *testing.T) {
 	old := time.Now().Add(-48 * time.Hour)
 	require.NoError(t, os.Chtimes(fx.Transcript, old, old))
 
-	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
 	sess := outcome.Results[0].Result.Session
 	wantStart := time.UnixMilli(int64(cursorStoreTestUserMS)).UTC()
@@ -939,7 +939,7 @@ func TestCursorStorePartialTurnIndexRetainsTranscriptEndBound(t *testing.T) {
 	transcriptTime := time.UnixMilli(int64(cursorStoreTestAsstMS) + 10_000).UTC()
 	require.NoError(t, os.Chtimes(fx.Transcript, transcriptTime, transcriptTime))
 
-	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	sess := outcome.Results[0].Result.Session
@@ -961,7 +961,7 @@ func TestCursorStoreExtraAssistantRetainsTranscriptEndBound(t *testing.T) {
 	transcriptTime := time.UnixMilli(int64(cursorStoreTestAsstMS) + 30_000).UTC()
 	require.NoError(t, os.Chtimes(fx.Transcript, transcriptTime, transcriptTime))
 
-	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, transcriptTime, outcome.Results[0].Result.Session.EndedAt.UTC())
@@ -975,7 +975,7 @@ func TestCursorStoreIncompleteTurnTimesRetainTranscriptEndBound(t *testing.T) {
 	db, err := sql.Open("sqlite3", fx.StorePath)
 	require.NoError(t, err)
 	defer db.Close()
-	_, err = db.Exec(
+	_, err = db.ExecContext(t.Context(),
 		`UPDATE blobs SET data = ? WHERE id = ?`,
 		cursorStoreEncodeAssistant(
 			"I'm Auto, an agent router designed by Cursor.", 0,
@@ -985,7 +985,7 @@ func TestCursorStoreIncompleteTurnTimesRetainTranscriptEndBound(t *testing.T) {
 	transcriptTime := time.UnixMilli(int64(cursorStoreTestAsstMS) + 20_000).UTC()
 	require.NoError(t, os.Chtimes(fx.Transcript, transcriptTime, transcriptTime))
 
-	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: fx.Source})
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: fx.Source})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Equal(t, transcriptTime, outcome.Results[0].Result.Session.EndedAt.UTC())
@@ -1004,7 +1004,7 @@ func TestCursorStoreDoesNotTreatUntimedFieldThreeAsReasoning(t *testing.T) {
 
 func TestCursorStoreWatchPlanIgnoresSHM(t *testing.T) {
 	fx := setupCursorStoreFixture(t, false)
-	plan, err := fx.Provider.WatchPlan(context.Background())
+	plan, err := fx.Provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 2)
 	var chatsRoot WatchRoot
@@ -1016,7 +1016,7 @@ func TestCursorStoreWatchPlanIgnoresSHM(t *testing.T) {
 		}
 	}
 	require.True(t, found)
-	changed, err := fx.Provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	changed, err := fx.Provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: fx.StorePath + "-shm", EventKind: "write", WatchRoot: chatsRoot.Path,
 	})
 	require.NoError(t, err)
@@ -1026,14 +1026,14 @@ func TestCursorStoreWatchPlanIgnoresSHM(t *testing.T) {
 func TestCursorStoreChangedPathUsesTranscriptSource(t *testing.T) {
 	fx := setupCursorStoreFixture(t, false)
 
-	changed, err := fx.Provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	changed, err := fx.Provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: fx.StorePath, EventKind: "write", WatchRoot: fx.ChatsRoot,
 	})
 	require.NoError(t, err)
 	require.Len(t, changed, 1)
 	assert.Equal(t, fx.Transcript, changed[0].DisplayPath)
 
-	walChanged, err := fx.Provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	walChanged, err := fx.Provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: fx.StorePath + "-wal", EventKind: "write", WatchRoot: fx.ChatsRoot,
 	})
 	require.NoError(t, err)
@@ -1043,7 +1043,7 @@ func TestCursorStoreChangedPathUsesTranscriptSource(t *testing.T) {
 	storeOnly := filepath.Join(fx.ChatsRoot, "deadbeefdeadbeefdeadbeefdeadbeef", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "store.db")
 	require.NoError(t, os.MkdirAll(filepath.Dir(storeOnly), 0o755))
 	require.NoError(t, os.WriteFile(storeOnly, []byte("x"), 0o644))
-	none, err := fx.Provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	none, err := fx.Provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: storeOnly, EventKind: "write", WatchRoot: fx.ChatsRoot,
 	})
 	require.NoError(t, err)
@@ -1060,7 +1060,7 @@ func TestCursorStoreChangedPathFindsTranscriptBeforeDiscovery(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: fx.StorePath, EventKind: "write", WatchRoot: fx.ChatsRoot,
 	})
 	require.NoError(t, err)
@@ -1114,16 +1114,16 @@ func TestCursorStoreRemovalKeepsTranscript(t *testing.T) {
 	_ = os.Remove(fx.StorePath + "-wal")
 	_ = os.Remove(fx.StorePath + "-shm")
 
-	discovered, err := fx.Provider.Discover(context.Background())
+	discovered, err := fx.Provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, fx.Transcript, discovered[0].DisplayPath)
 
-	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{Source: discovered[0]})
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{Source: discovered[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results[0].Result.Messages, 2)
 	assert.False(t, outcome.Results[0].Result.Messages[1].HasThinking)
-	assert.Equal(t, "", outcome.Results[0].Result.Session.SourceVersion)
+	assert.Empty(t, outcome.Results[0].Result.Session.SourceVersion)
 }
 
 func TestCursorStoreOpensReadOnly(t *testing.T) {
@@ -1131,7 +1131,7 @@ func TestCursorStoreOpensReadOnly(t *testing.T) {
 	conn, err := openCursorIDEDB(fx.StorePath)
 	require.NoError(t, err)
 	defer conn.Close()
-	_, err = conn.Exec(`CREATE TABLE should_fail (id INTEGER)`)
+	_, err = conn.ExecContext(t.Context(), `CREATE TABLE should_fail (id INTEGER)`)
 	require.Error(t, err)
 }
 
@@ -1142,7 +1142,7 @@ func TestCursorStoreDoesNotDiscoverStoreOnlySession(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(storeOnly), 0o755))
 	require.NoError(t, os.WriteFile(storeOnly, []byte("not a real store"), 0o644))
 
-	discovered, err := fx.Provider.Discover(context.Background())
+	discovered, err := fx.Provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, fx.Transcript, discovered[0].DisplayPath)
@@ -1209,39 +1209,39 @@ func TestCursorStoreCustomRootKeepsTranscriptOnly(t *testing.T) {
 
 func TestCursorStoreFingerprintTracksWAL(t *testing.T) {
 	fx := setupCursorStoreFixture(t, true)
-	fp1, err := fx.Provider.Fingerprint(context.Background(), fx.Source)
+	fp1, err := fx.Provider.Fingerprint(t.Context(), fx.Source)
 	require.NoError(t, err)
 	require.Contains(t, fp1.Hash, "|store:")
 
-	_, err = fx.Writer.Exec(
+	_, err = fx.Writer.ExecContext(t.Context(),
 		`INSERT INTO blobs(id, data) VALUES(?, ?)`,
 		cursorStoreHashID("extra-wal-row"), []byte("x"),
 	)
 	require.NoError(t, err)
-	fp2, err := fx.Provider.Fingerprint(context.Background(), fx.Source)
+	fp2, err := fx.Provider.Fingerprint(t.Context(), fx.Source)
 	require.NoError(t, err)
 	assert.NotEqual(t, fp1.Hash, fp2.Hash)
 }
 
 func TestCursorStoreFingerprintSurvivesStoreRemoval(t *testing.T) {
 	fx := setupCursorStoreFixture(t, false)
-	_, err := fx.Provider.Fingerprint(context.Background(), fx.Source)
+	_, err := fx.Provider.Fingerprint(t.Context(), fx.Source)
 	require.NoError(t, err)
 	require.NoError(t, os.Remove(fx.StorePath))
 	_ = os.Remove(fx.StorePath + "-wal")
 	_ = os.Remove(fx.StorePath + "-shm")
 
-	fingerprint, err := fx.Provider.Fingerprint(context.Background(), fx.Source)
+	fingerprint, err := fx.Provider.Fingerprint(t.Context(), fx.Source)
 	require.NoError(t, err)
 	assert.NotContains(t, fingerprint.Hash, "|store:")
 }
 
 func TestCursorStoreParseCarriesFingerprintMtime(t *testing.T) {
 	fx := setupCursorStoreFixture(t, true)
-	fingerprint, err := fx.Provider.Fingerprint(context.Background(), fx.Source)
+	fingerprint, err := fx.Provider.Fingerprint(t.Context(), fx.Source)
 	require.NoError(t, err)
 
-	outcome, err := fx.Provider.Parse(context.Background(), ParseRequest{
+	outcome, err := fx.Provider.Parse(t.Context(), ParseRequest{
 		Source:      fx.Source,
 		Fingerprint: fingerprint,
 	})

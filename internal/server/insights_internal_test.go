@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"net/http"
 	"testing"
 	"time"
@@ -47,14 +46,14 @@ func TestGenerateInsightRejectsWriterClosedBeforeStream(t *testing.T) {
 // York request would have wrongly excluded the session.
 func TestActivityRangeSummaryUsesRequestTimezone(t *testing.T) {
 	srv := testServer(t, 0)
-	ctx := context.Background()
+	ctx := t.Context()
 	ts := "2026-06-16T02:00:00Z"
-	require.NoError(t, srv.db.UpsertSession(db.Session{
+	require.NoError(t, srv.db.UpsertSession(ctx, db.Session{
 		ID: "x", Project: "proj", Machine: "test", Agent: "claude",
 		StartedAt: &ts, EndedAt: &ts, MessageCount: 1,
 		RelationshipType: "root", DataVersion: 1,
 	}))
-	require.NoError(t, srv.db.ReplaceSessionMessages("x", []db.Message{{
+	require.NoError(t, srv.db.ReplaceSessionMessages(ctx, "x", []db.Message{{
 		SessionID: "x", Ordinal: 0, Role: "assistant", Content: "x",
 		Timestamp: ts, Model: "m1",
 	}}))
@@ -85,28 +84,28 @@ func TestActivityRangeSummaryUsesRequestTimezone(t *testing.T) {
 // hard-coded ExcludeAutomated, so "all" and "automated" requests undercounted.
 func TestActivityRangeSummaryAppliesAutomatedScope(t *testing.T) {
 	srv := testServer(t, 0)
-	ctx := context.Background()
+	ctx := t.Context()
 	ts := "2026-06-15T12:00:00Z"
 
 	// Interactive session: multi-turn, ordinary prompt.
-	require.NoError(t, srv.db.UpsertSession(db.Session{
+	require.NoError(t, srv.db.UpsertSession(ctx, db.Session{
 		ID: "human", Project: "proj", Machine: "test", Agent: "claude",
 		StartedAt: &ts, EndedAt: &ts, MessageCount: 4, UserMessageCount: 2,
 		RelationshipType: "root", DataVersion: 1,
 	}))
-	require.NoError(t, srv.db.ReplaceSessionMessages("human", []db.Message{{
+	require.NoError(t, srv.db.ReplaceSessionMessages(ctx, "human", []db.Message{{
 		SessionID: "human", Ordinal: 0, Role: "assistant", Content: "x",
 		Timestamp: ts, Model: "m1",
 	}}))
 
 	// Automated session: a single-turn review prompt sets is_automated.
 	reviewPrompt := "You are a code reviewer. Review the code."
-	require.NoError(t, srv.db.UpsertSession(db.Session{
+	require.NoError(t, srv.db.UpsertSession(ctx, db.Session{
 		ID: "auto", Project: "proj", Machine: "test", Agent: "claude",
 		StartedAt: &ts, EndedAt: &ts, MessageCount: 3, UserMessageCount: 1,
 		FirstMessage: &reviewPrompt, RelationshipType: "root", DataVersion: 1,
 	}))
-	require.NoError(t, srv.db.ReplaceSessionMessages("auto", []db.Message{{
+	require.NoError(t, srv.db.ReplaceSessionMessages(ctx, "auto", []db.Message{{
 		SessionID: "auto", Ordinal: 0, Role: "assistant", Content: "x",
 		Timestamp: ts, Model: "m1",
 	}}))

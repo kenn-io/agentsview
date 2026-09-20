@@ -79,8 +79,10 @@ func jointReportingHour(
 		if agent == "" {
 			agent = "unknown"
 		}
-		key := reportingCellKey{bucket.UTC().Format(time.RFC3339),
-			projectKey, agent, model, automation}
+		key := reportingCellKey{
+			bucket.UTC().Format(time.RFC3339),
+			projectKey, agent, model, automation,
+		}
 		state := states[key]
 		label := export.SafeProjectDisplayLabel(project)
 		if state == nil {

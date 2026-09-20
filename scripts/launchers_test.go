@@ -93,6 +93,7 @@ done
 
 func launcherFixture(t *testing.T, launcher string) (string, string, []string) {
 	t.Helper()
+
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "project")
 	recordDir := filepath.Join(root, "records")
@@ -143,7 +144,7 @@ func runLauncher(
 	t *testing.T, projectDir, launcher string, env []string, input string,
 ) (string, error) {
 	t.Helper()
-	cmd := exec.Command("bash", filepath.Join(projectDir, launcher))
+	cmd := exec.CommandContext(t.Context(), "bash", filepath.Join(projectDir, launcher))
 	cmd.Dir = projectDir
 	cmd.Env = env
 	cmd.Stdin = strings.NewReader(input)

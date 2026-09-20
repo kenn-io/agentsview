@@ -330,8 +330,7 @@ func decodeTauMessage(
 			SourceParentUUID: parent,
 		}
 	case "assistant":
-		content, thinking, hasThinking, hasToolUse, toolCalls :=
-			tauExtractContent(message.Get("content"))
+		content, thinking, hasThinking, hasToolUse, toolCalls := tauExtractContent(message.Get("content"))
 		if content == "" && message.Get("errorMessage").Str != "" {
 			content = message.Get("errorMessage").Str
 		}

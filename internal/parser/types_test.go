@@ -278,6 +278,12 @@ func TestAgentByPrefix(t *testing.T) {
 			true,
 		},
 		{
+			"augure-code prefix",
+			"augure-code:some-uuid",
+			AgentAugureCode,
+			true,
+		},
+		{
 			"copilot prefix",
 			"copilot:sess-id",
 			AgentCopilot,
@@ -449,6 +455,7 @@ func TestRegistryCompleteness(t *testing.T) {
 		AgentCowork,
 		AgentCodex,
 		AgentTraeX,
+		AgentAugureCode,
 		AgentCopilot,
 		AgentGemini,
 		AgentGeminiApps,
@@ -546,13 +553,14 @@ func TestInferRelationshipTypes(t *testing.T) {
 		name   string
 		inputs []ParseResult
 		want   []RelationshipType
-	}{{
-		"no parent",
-		[]ParseResult{
-			{Session: ParsedSession{ID: "abc"}},
+	}{
+		{
+			"no parent",
+			[]ParseResult{
+				{Session: ParsedSession{ID: "abc"}},
+			},
+			[]RelationshipType{RelNone},
 		},
-		[]RelationshipType{RelNone},
-	},
 		{
 			"agent prefix gets subagent",
 			[]ParseResult{
@@ -867,7 +875,7 @@ func TestResolveMiMoCodeSourcePrefersStorage(t *testing.T) {
 	require.Len(t, discovered, 1)
 	require.Equal(t, AgentMiMoCode, discovered[0].Agent)
 
-	require.Equal(t, path, findOpenCodeFormatSourceFile(mimoFmt, root, "ses_test"))
+	require.Equal(t, path, findOpenCodeFormatSourceFile(t.Context(), mimoFmt, root, "ses_test"))
 }
 
 func TestResolveOpenCodeSourceFallsBackToSQLiteOnBrokenStoragePath(
@@ -941,7 +949,7 @@ func TestFindOpenCodeSourceFilePrefersStorage(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(`{"id":"ses_123"}`), 0o644), "write session")
 	require.NoError(t, os.WriteFile(filepath.Join(root, "opencode.db"), []byte("x"), 0o644), "write db marker")
 
-	got := findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_123")
+	got := findOpenCodeFormatSourceFile(t.Context(), openCodeFmt, root, "ses_123")
 	require.Equal(t, path, got, "FindOpenCodeSourceFile()")
 }
 
@@ -954,7 +962,7 @@ func TestFindOpenCodeSourceFileFallsBackToSQLiteInHybridRoot(t *testing.T) {
 	dbPath := filepath.Join(root, "opencode.db")
 	seedHybridSQLiteDB(t, dbPath, "ses_456")
 
-	got := findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_456")
+	got := findOpenCodeFormatSourceFile(t.Context(), openCodeFmt, root, "ses_456")
 	want := OpenCodeSQLiteVirtualPath(dbPath, "ses_456")
 	require.Equal(t, want, got, "FindOpenCodeSourceFile()")
 }
@@ -973,7 +981,7 @@ func TestFindOpenCodeSourceFileReturnsEmptyWhenSessionMissing(t *testing.T) {
 	dbPath := filepath.Join(root, "opencode.db")
 	seedHybridSQLiteDB(t, dbPath, "ses_unrelated")
 
-	got := findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_missing")
+	got := findOpenCodeFormatSourceFile(t.Context(), openCodeFmt, root, "ses_missing")
 	assert.Empty(t, got, "FindOpenCodeSourceFile()")
 }
 
@@ -982,11 +990,11 @@ func TestFindOpenCodeSourceFilePureSQLiteOnlyForExistingSession(t *testing.T) {
 	dbPath := filepath.Join(root, "opencode.db")
 	seedHybridSQLiteDB(t, dbPath, "ses_present")
 
-	got := findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_present")
+	got := findOpenCodeFormatSourceFile(t.Context(), openCodeFmt, root, "ses_present")
 	assert.Equal(t,
 		OpenCodeSQLiteVirtualPath(dbPath, "ses_present"),
 		got, "FindOpenCodeSourceFile(present)")
-	got = findOpenCodeFormatSourceFile(openCodeFmt, root, "ses_absent")
+	got = findOpenCodeFormatSourceFile(t.Context(), openCodeFmt, root, "ses_absent")
 	assert.Empty(t, got, "FindOpenCodeSourceFile(absent)")
 }
 
@@ -1380,7 +1388,7 @@ func TestReasonixRegistryEntry(t *testing.T) {
 	assert.Contains(t, reasonixDef.WatchSubdirs, "archive")
 
 	// Verify default dirs contain .reasonix and Windows path
-	assert.True(t, len(reasonixDef.DefaultDirs) > 0)
+	assert.NotEmpty(t, reasonixDef.DefaultDirs)
 	hasUnix := false
 	hasWindows := false
 	for _, dir := range reasonixDef.DefaultDirs {

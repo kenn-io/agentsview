@@ -223,7 +223,7 @@ func (ix *Index) ActiveExport(ctx context.Context) (ActiveExport, bool, error) {
 		`SELECT ordinal, gen_key, dimension FROM `+ix.spec.generationsTable()+
 			` WHERE state = 'active' ORDER BY ordinal LIMIT 1`,
 	).Scan(&exp.Ordinal, &exp.Fingerprint, &exp.Dimension)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return ActiveExport{}, false, nil
 	}
 	if err != nil {

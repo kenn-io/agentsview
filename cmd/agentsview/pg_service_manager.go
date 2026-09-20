@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -15,8 +16,45 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
+// serviceKind names one background auto-push service: PostgreSQL or
+// ClickHouse. Launchd labels, systemd unit names, argv, and log files
+// come from the kind so the two services can coexist.
+type serviceKind struct {
+	Name        string
+	Label       string
+	UnitName    string
+	Args        []string
+	LogName     string
+	Description string
+	RuntimeEnv  []string
+	Product     string
+}
+
+var pgServiceKind = serviceKind{
+	Name:        "pg",
+	Label:       "agentsview.pg-watch",
+	UnitName:    "agentsview-pg-watch.service",
+	Args:        []string{"pg", "push", "--watch"},
+	LogName:     "pg-watch.log",
+	Description: "agentsview PostgreSQL auto-push",
+	RuntimeEnv:  []string{"AGENTSVIEW_PG_SCHEMA", "AGENTSVIEW_PG_MACHINE"},
+	Product:     "PostgreSQL",
+}
+
+var clickHouseServiceKind = serviceKind{
+	Name:        "clickhouse",
+	Label:       "agentsview.clickhouse-watch",
+	UnitName:    "agentsview-clickhouse-watch.service",
+	Args:        []string{"clickhouse", "push", "--watch"},
+	LogName:     "clickhouse-watch.log",
+	Description: "agentsview ClickHouse auto-push",
+	RuntimeEnv:  []string{"AGENTSVIEW_CLICKHOUSE_DATABASE", "AGENTSVIEW_CLICKHOUSE_MACHINE"},
+	Product:     "ClickHouse",
+}
+
 // serviceSpec is the resolved input for rendering a unit file.
 type serviceSpec struct {
+	Kind    serviceKind
 	BinPath string
 	DataDir string
 	LogPath string
@@ -24,21 +62,19 @@ type serviceSpec struct {
 
 func rejectEnvDependentServicePGURL(rawURL string) error {
 	if os.Getenv("AGENTSVIEW_PG_URL") != "" {
-		return fmt.Errorf(
-			"AGENTSVIEW_PG_URL is set; pg service install requires a " +
-				"literal PostgreSQL URL in config.toml, either " +
-				"legacy [pg].url or the default_pg-selected [pg.NAME].url, because background " +
-				"services do not inherit your shell environment",
+		return errors.New("AGENTSVIEW_PG_URL is set; pg service install requires a " +
+			"literal PostgreSQL URL in config.toml, either " +
+			"legacy [pg].url or the default_pg-selected [pg.NAME].url, because background " +
+			"services do not inherit your shell environment",
 		)
 	}
 	// Reuse config's expansion check so the rejection rule cannot drift
 	// from how config.ResolvePG actually expands the URL at runtime.
 	if config.IsEnvDependentURL(rawURL) {
-		return fmt.Errorf(
-			"pg.url uses environment variable expansion; pg service " +
-				"install requires a literal PostgreSQL URL in config.toml, either " +
-				"legacy [pg].url or the default_pg-selected [pg.NAME].url, because " +
-				"background services do not inherit your shell environment",
+		return errors.New("pg.url uses environment variable expansion; pg service " +
+			"install requires a literal PostgreSQL URL in config.toml, either " +
+			"legacy [pg].url or the default_pg-selected [pg.NAME].url, because " +
+			"background services do not inherit your shell environment",
 		)
 	}
 	return nil
@@ -53,8 +89,8 @@ func rejectEnvDependentServicePGURL(rawURL string) error {
 // service that cannot resolve a URL is broken rather than merely
 // divergent, so it is a hard error (rejectEnvDependentServicePGURL), not
 // a warning.
-func serviceRuntimeEnvVars() []string {
-	vars := []string{"AGENTSVIEW_PG_SCHEMA", "AGENTSVIEW_PG_MACHINE"}
+func serviceRuntimeEnvVars(kind serviceKind) []string {
+	vars := append([]string(nil), kind.RuntimeEnv...)
 	for _, def := range parser.Registry {
 		if def.EnvVar != "" {
 			vars = append(vars, def.EnvVar)
@@ -72,9 +108,9 @@ func serviceRuntimeEnvVars() []string {
 // setEnvVarsAffectingService returns, in declaration order, the names of
 // serviceRuntimeEnvVars currently set to a non-empty value. lookup is
 // injectable for testing; production callers pass os.LookupEnv.
-func setEnvVarsAffectingService(lookup func(string) (string, bool)) []string {
+func setEnvVarsAffectingService(kind serviceKind, lookup func(string) (string, bool)) []string {
 	var set []string
-	for _, name := range serviceRuntimeEnvVars() {
+	for _, name := range serviceRuntimeEnvVars(kind) {
 		if v, ok := lookup(name); ok && v != "" {
 			set = append(set, name)
 		}
@@ -120,22 +156,9 @@ func isUnsafeServiceRune(r rune) bool {
 // data dir, and log path for the installed service. It refuses to
 // build a spec when the PG URL is not resolvable so the service is
 // only ever created in a working state.
-func buildServiceSpec(appCfg config.Config) (serviceSpec, error) {
-	rawPG, err := appCfg.RawPGTarget("")
-	if err != nil {
+func buildServiceSpec(appCfg config.Config, kind serviceKind) (serviceSpec, error) {
+	if err := validateServiceKindURL(appCfg, kind); err != nil {
 		return serviceSpec{}, err
-	}
-	if err := rejectEnvDependentServicePGURL(rawPG.URL); err != nil {
-		return serviceSpec{}, err
-	}
-	pgCfg, err := appCfg.ResolvePG()
-	if err != nil {
-		return serviceSpec{}, err
-	}
-	if pgCfg.URL == "" {
-		return serviceSpec{}, fmt.Errorf(
-			"pg url not configured; configure a legacy [pg].url or the default_pg-selected [pg.NAME].url before installing the service",
-		)
 	}
 	exe, err := os.Executable()
 	if err != nil {
@@ -145,14 +168,68 @@ func buildServiceSpec(appCfg config.Config) (serviceSpec, error) {
 		exe = resolved
 	}
 	spec := serviceSpec{
+		Kind:    kind,
 		BinPath: exe,
 		DataDir: appCfg.DataDir,
-		LogPath: filepath.Join(appCfg.DataDir, "pg-watch.log"),
+		LogPath: filepath.Join(appCfg.DataDir, kind.LogName),
 	}
 	if err := validateServiceSpec(spec); err != nil {
 		return serviceSpec{}, err
 	}
 	return spec, nil
+}
+
+func validateServiceKindURL(appCfg config.Config, kind serviceKind) error {
+	if kind.Name == "clickhouse" {
+		raw, err := appCfg.RawClickHouseTarget("")
+		if err != nil {
+			return err
+		}
+		if err := rejectEnvDependentServiceClickHouseURL(raw.URL); err != nil {
+			return err
+		}
+		chCfg, err := appCfg.ResolveClickHouse()
+		if err != nil {
+			return err
+		}
+		if chCfg.URL == "" {
+			return errors.New("clickhouse url not configured; configure a legacy [clickhouse].url or the default_clickhouse-selected [clickhouse.NAME].url before installing the service")
+		}
+		return nil
+	}
+	rawPG, err := appCfg.RawPGTarget("")
+	if err != nil {
+		return err
+	}
+	if err := rejectEnvDependentServicePGURL(rawPG.URL); err != nil {
+		return err
+	}
+	pgCfg, err := appCfg.ResolvePG()
+	if err != nil {
+		return err
+	}
+	if pgCfg.URL == "" {
+		return errors.New("pg url not configured; configure a legacy [pg].url or the default_pg-selected [pg.NAME].url before installing the service")
+	}
+	return nil
+}
+
+func rejectEnvDependentServiceClickHouseURL(rawURL string) error {
+	if os.Getenv("AGENTSVIEW_CLICKHOUSE_URL") != "" {
+		return errors.New("AGENTSVIEW_CLICKHOUSE_URL is set; clickhouse service install requires a " +
+			"literal ClickHouse URL in config.toml, either " +
+			"legacy [clickhouse].url or the default_clickhouse-selected [clickhouse.NAME].url, because background " +
+			"services do not inherit your shell environment",
+		)
+	}
+	if config.IsEnvDependentURL(rawURL) {
+		return errors.New("clickhouse.url uses environment variable expansion; clickhouse service " +
+			"install requires a literal ClickHouse URL in config.toml, either " +
+			"legacy [clickhouse].url or the default_clickhouse-selected [clickhouse.NAME].url, because " +
+			"background services do not inherit your shell environment",
+		)
+	}
+	return nil
 }
 
 // cmdRunner runs an external command and returns combined output.
@@ -186,7 +263,7 @@ type lingerChecker interface {
 }
 
 // newServiceManager returns the manager for the current platform.
-func newServiceManager() (serviceManager, error) {
+func newServiceManager(kind serviceKind) (serviceManager, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, fmt.Errorf("resolving home dir: %w", err)
@@ -194,7 +271,7 @@ func newServiceManager() (serviceManager, error) {
 	switch runtime.GOOS {
 	case "darwin":
 		return &launchdManager{
-			uid: os.Getuid(), home: home, run: defaultRunner,
+			kind: kind, uid: os.Getuid(), home: home, run: defaultRunner,
 		}, nil
 	case "linux":
 		u, uerr := user.Current()
@@ -202,12 +279,12 @@ func newServiceManager() (serviceManager, error) {
 			return nil, fmt.Errorf("resolving current user: %w", uerr)
 		}
 		return &systemdManager{
-			user: u.Username, home: home, run: defaultRunner,
+			kind: kind, user: u.Username, home: home, run: defaultRunner,
 		}, nil
 	default:
 		return nil, fmt.Errorf(
-			"pg service: unsupported platform %q (supported: macOS, Linux)",
-			runtime.GOOS,
+			"%s service: unsupported platform %q (supported: macOS, Linux)",
+			kind.Name, runtime.GOOS,
 		)
 	}
 }

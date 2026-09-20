@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,7 +21,7 @@ func TestSyncAllSinceCortexHistoryUpdateTriggersResync(t *testing.T) {
 
 	cortexDir := t.TempDir()
 	testDB := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), testDB, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCortex: {cortexDir},
 		},
@@ -47,7 +46,7 @@ func TestSyncAllSinceCortexHistoryUpdateTriggersResync(t *testing.T) {
 	require.NoError(t, os.WriteFile(historyPath, []byte(cortexSyncHistory("After cutoff")), 0o644))
 	require.NoError(t, os.Chtimes(historyPath, historyTime, historyTime))
 
-	stats := engine.SyncAllSince(context.Background(), cutoff, nil)
+	stats := engine.SyncAllSince(t.Context(), cutoff, nil)
 	require.Equal(t, 1, stats.Synced, "synced = %d, want 1", stats.Synced)
 	assertMessageContent(t, testDB, "cortex:"+uuid, "After cutoff", "ack")
 }

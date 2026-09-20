@@ -232,6 +232,8 @@ func TestSaveSettingsPersistsAgentHomes(t *testing.T) {
 		reloaded.ConfiguredAgentHomes(parser.AgentClaude))
 }
 
+const aliasedProviderKey = " CODEX "
+
 func TestNormalizeAgentHomesRejectsUnsupportedInput(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -260,7 +262,7 @@ func TestNormalizeAgentHomesRejectsUnsupportedInput(t *testing.T) {
 		},
 		{
 			name:    "aliased provider keys",
-			input:   map[string][]string{"codex": {"/a"}, " CODEX ": {"/b"}},
+			input:   map[string][]string{"codex": {"/a"}, aliasedProviderKey: {"/b"}},
 			wantErr: `session provider "codex" is listed more than once`,
 		},
 	}

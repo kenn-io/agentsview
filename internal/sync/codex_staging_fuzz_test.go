@@ -3,7 +3,7 @@ package sync
 import (
 	"context"
 	"database/sql"
-	"fmt"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -88,7 +88,7 @@ func (f *failingStagedResults) ResolveSummary(
 ) (string, int, error) {
 	f.resolveCalls++
 	if f.failResolve {
-		return "", 0, fmt.Errorf("injected summary resolution failure")
+		return "", 0, errors.New("injected summary resolution failure")
 	}
 	return f.codexStagingSink.ResolveSummary(ctx, toolUseID)
 }
@@ -99,7 +99,7 @@ func (f *failingStagedResults) InsertEventsTx(
 ) error {
 	f.eventsCalls++
 	if f.failEvents {
-		return fmt.Errorf("injected event insert failure")
+		return errors.New("injected event insert failure")
 	}
 	return f.codexStagingSink.InsertEventsTx(
 		ctx, tx, sessionID, positions,
@@ -125,7 +125,7 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 	provider, ok := parser.NewProvider(parser.AgentCodex, cfg)
 	require.True(t, ok)
 	source, found, err := provider.FindSource(
-		context.Background(), parser.FindSourceRequest{
+		t.Context(), parser.FindSourceRequest{
 			FullSessionID: "codex:" + uuid,
 		},
 	)
@@ -135,8 +135,7 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 	// Prior content via the collecting path (the complete old version).
 	database := openTestDB(t)
 	legacySink := parser.NewCodexCollectingSink(0)
-	legacySess, legacyMsgs, _, _, _, _, err :=
-		parser.ParseCodexSessionStreaming(context.Background(), cfg, source, legacySink)
+	legacySess, legacyMsgs, _, _, _, _, err := parser.ParseCodexSessionStreaming(t.Context(), cfg, source, legacySink)
 	require.NoError(t, err)
 	require.NotNil(t, legacySess)
 	row := db.Session{
@@ -147,15 +146,15 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 		MessageCount:     legacySess.MessageCount,
 		UserMessageCount: legacySess.UserMessageCount,
 	}
-	require.NoError(t, database.UpsertSession(row))
+	require.NoError(t, database.UpsertSession(t.Context(), row))
 	dbMsgs := toDBMessages(pendingWrite{
 		sess: *legacySess, msgs: legacyMsgs,
 	}, nil)
 	update, findings := computeSignalsAndSecrets(row, dbMsgs)
-	require.NoError(t, database.ReplaceSessionContent(
+	require.NoError(t, database.ReplaceSessionContent(t.Context(),
 		row.ID, dbMsgs, update, findings,
 	))
-	before, err := database.GetAllMessages(context.Background(), row.ID)
+	before, err := database.GetAllMessages(t.Context(), row.ID)
 	require.NoError(t, err)
 	require.NotEmpty(t, before)
 
@@ -173,7 +172,7 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 		{name: "event insert failure", events: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			staged, err := newCodexStagingSink("", map[string]bool{})
+			staged, err := newCodexStagingSink(t.Context(), "", map[string]bool{})
 			require.NoError(t, err)
 			failing := &failingStagedResults{
 				codexStagingSink: staged,
@@ -181,8 +180,7 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 				failEvents:       tc.events,
 			}
 			t.Cleanup(func() { require.NoError(t, failing.Close()) })
-			stagedSess, stagedMsgs, _, _, _, _, err :=
-				parser.ParseCodexSessionStreaming(context.Background(), cfg, source, failing)
+			stagedSess, stagedMsgs, _, _, _, _, err := parser.ParseCodexSessionStreaming(t.Context(), cfg, source, failing)
 			require.NoError(t, err)
 			require.NotNil(t, stagedSess)
 			stagedDBMsgs := toDBMessages(pendingWrite{
@@ -190,28 +188,26 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 			}, nil)
 			positions := stagedToolCallPositions(stagedDBMsgs)
 			err = database.ReplaceSessionContentStaged(
-				context.Background(), row.ID, stagedDBMsgs, failing,
+				t.Context(), row.ID, stagedDBMsgs, failing,
 				map[string]bool{},
 				func(verdicts map[string]bool) (
 					db.SessionSignalUpdate, []db.SecretFinding, error,
 				) {
-					update, findings :=
-						computeSignalsAndSecretsWithContentFailures(
-							row, stagedDBMsgs, verdicts,
-						)
+					update, findings := computeSignalsAndSecretsWithContentFailures(
+						row, stagedDBMsgs, verdicts,
+					)
 					combined := append(
 						append([]db.SecretFinding(nil), findings...),
 						failing.Findings(row.ID, positions)...,
 					)
-					update.SecretLeakCount =
-						definiteFindingCount(combined)
+					update.SecretLeakCount = definiteFindingCount(combined)
 					return update, combined, nil
 				},
 			)
 			require.Error(t, err,
 				"the injected failure must abort the publish")
 			after, err := database.GetAllMessages(
-				context.Background(), row.ID,
+				t.Context(), row.ID,
 			)
 			require.NoError(t, err)
 			require.Equal(t, before, after,
@@ -223,11 +219,10 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 	// pool, a successful staged publish must still work: the ATTACH is
 	// torn down after every transaction, so no stale codex_staging schema
 	// can collide with the next publish.
-	staged, err := newCodexStagingSink("", map[string]bool{})
+	staged, err := newCodexStagingSink(t.Context(), "", map[string]bool{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, staged.Close()) })
-	stagedSess, stagedMsgs, _, _, _, _, err :=
-		parser.ParseCodexSessionStreaming(context.Background(), cfg, source, staged)
+	stagedSess, stagedMsgs, _, _, _, _, err := parser.ParseCodexSessionStreaming(t.Context(), cfg, source, staged)
 	require.NoError(t, err)
 	require.NotNil(t, stagedSess)
 	stagedDBMsgs := toDBMessages(pendingWrite{
@@ -235,15 +230,14 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 	}, nil)
 	positions := stagedToolCallPositions(stagedDBMsgs)
 	require.NoError(t, database.ReplaceSessionContentStaged(
-		context.Background(), row.ID, stagedDBMsgs, staged,
+		t.Context(), row.ID, stagedDBMsgs, staged,
 		map[string]bool{},
 		func(verdicts map[string]bool) (
 			db.SessionSignalUpdate, []db.SecretFinding, error,
 		) {
-			update, findings :=
-				computeSignalsAndSecretsWithContentFailures(
-					row, stagedDBMsgs, verdicts,
-				)
+			update, findings := computeSignalsAndSecretsWithContentFailures(
+				row, stagedDBMsgs, verdicts,
+			)
 			combined := append(
 				append([]db.SecretFinding(nil), findings...),
 				staged.Findings(row.ID, positions)...,
@@ -252,7 +246,7 @@ func TestCodexStagedPublishFailureKeepsPriorContent(t *testing.T) {
 			return update, combined, nil
 		},
 	))
-	after, err := database.GetAllMessages(context.Background(), row.ID)
+	after, err := database.GetAllMessages(t.Context(), row.ID)
 	require.NoError(t, err)
 	require.Equal(t, before, after,
 		"successful staged publish after aborts must match the legacy projection")
@@ -282,28 +276,28 @@ func TestCodexStagedScratchFailureIsSticky(t *testing.T) {
 	provider, ok := parser.NewProvider(parser.AgentCodex, cfg)
 	require.True(t, ok)
 	source, found, err := provider.FindSource(
-		context.Background(), parser.FindSourceRequest{
+		t.Context(), parser.FindSourceRequest{
 			FullSessionID: "codex:" + uuid,
 		},
 	)
 	require.NoError(t, err)
 	require.True(t, found)
 
-	staged, err := newCodexStagingSink("", map[string]bool{})
+	staged, err := newCodexStagingSink(t.Context(), "", map[string]bool{})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = staged.Close() })
 	// Poison the scratch so every staged write fails.
 	require.NoError(t, staged.scratch.Close())
 
 	_, _, _, _, _, _, err = parser.ParseCodexSessionStreaming(
-		context.Background(), cfg, source, staged,
+		t.Context(), cfg, source, staged,
 	)
 	require.NoError(t, err, "the parser itself completes; the sink fails")
 	require.Error(t, staged.Err())
 
 	// The outcome wrapper must surface the sticky error so the engine
 	// treats the parse as failed and keeps prior archive content.
-	_, err = stagedCodexParseOutcome(context.Background(), cfg, source, parser.SourceFingerprint{}, staged)
+	_, err = stagedCodexParseOutcome(t.Context(), cfg, source, parser.SourceFingerprint{}, staged)
 	require.Error(t, err)
 	require.ErrorContains(t, err, "codex staging")
 }
@@ -352,7 +346,7 @@ func FuzzCodexStagedParityWithCollecting(f *testing.F) {
 			t.Skip()
 		}
 		source, found, err := provider.FindSource(
-			context.Background(), parser.FindSourceRequest{
+			t.Context(), parser.FindSourceRequest{
 				FullSessionID: "codex:" + uuid,
 			},
 		)
@@ -361,16 +355,14 @@ func FuzzCodexStagedParityWithCollecting(f *testing.F) {
 		}
 
 		legacy := parser.NewCodexCollectingSink(0)
-		sessL, msgsL, curL, hashL, anchorL, retryL, errL :=
-			parser.ParseCodexSessionStreaming(context.Background(), cfg, source, legacy)
-		staged, err := newCodexStagingSink("", map[string]bool{})
+		sessL, msgsL, curL, hashL, anchorL, retryL, errL := parser.ParseCodexSessionStreaming(t.Context(), cfg, source, legacy)
+		staged, err := newCodexStagingSink(t.Context(), "", map[string]bool{})
 		require.NoError(t, err)
-		sessS, msgsS, curS, hashS, anchorS, retryS, errS :=
-			parser.ParseCodexSessionStreaming(context.Background(), cfg, source, staged)
+		sessS, msgsS, curS, hashS, anchorS, retryS, errS := parser.ParseCodexSessionStreaming(t.Context(), cfg, source, staged)
 		require.NoError(t, staged.Close())
 
 		if (errL == nil) != (errS == nil) {
-			t.Fatalf("error parity: legacy=%v staged=%v", errL, errS)
+			require.FailNowf(t, "test failed", "error parity: legacy=%v staged=%v", errL, errS)
 		}
 		if errL != nil {
 			return

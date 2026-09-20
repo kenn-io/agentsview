@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -31,7 +32,7 @@ func daemonRuntimeDir(t *testing.T) string {
 // listener (caller closes) and the port number.
 func freeTCPListener(t *testing.T) (net.Listener, int) {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
+	l, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { l.Close() })
 	port := l.Addr().(*net.TCPAddr).Port
@@ -77,7 +78,7 @@ func TestDetectTransport_UsesStartupStateFallbackWithoutRuntimeRecord(t *testing
 	require.True(t, ok)
 	writeStartupFallbackFixture(t, dir, host, port, os.Getpid(), strconv.FormatInt(createTime, 10))
 
-	tr, err := detectTransportContext(context.Background(), dir, "", time.Second)
+	tr, err := detectTransportContext(t.Context(), dir, "", time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, transportHTTP, tr.Mode)
 	assert.Equal(t, fmt.Sprintf("http://%s:%d", host, port), tr.URL)
@@ -105,7 +106,7 @@ func TestDetectTransport_UsesStartupStateFallbackWhileExternalLockRemainsHeld(t 
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(startupStatePath(dir), data, 0o600))
 
-	tr, err := detectTransportContext(context.Background(), dir, "", time.Second)
+	tr, err := detectTransportContext(t.Context(), dir, "", time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, transportHTTP, tr.Mode)
 	assert.Equal(t, fmt.Sprintf("http://%s:%d", host, port), tr.URL)
@@ -229,8 +230,7 @@ func forbidStartBackgroundServeForTransport(t *testing.T, msg string) {
 		context.Context, *config.Config, time.Duration,
 	) (*DaemonRuntime, error) {
 		t.Helper()
-		t.Fatal(msg)
-		return nil, nil
+		return nil, errors.New(msg)
 	})
 }
 
@@ -238,7 +238,7 @@ func forbidStartBackgroundServeForTransport(t *testing.T, msg string) {
 // test and restores the original on cleanup.
 func stubStopDaemonRuntimeForUpgrade(
 	t *testing.T,
-	fn func(config.Config, *DaemonRuntime) error,
+	fn func(context.Context, config.Config, *DaemonRuntime) error,
 ) {
 	t.Helper()
 	old := stopDaemonRuntimeForUpgrade
@@ -250,12 +250,11 @@ func stubStopDaemonRuntimeForUpgrade(
 // hook is invoked, with msg describing the violation.
 func forbidStopDaemonRuntimeForUpgrade(t *testing.T, msg string) {
 	t.Helper()
-	stubStopDaemonRuntimeForUpgrade(t, func(
+	stubStopDaemonRuntimeForUpgrade(t, func(context.Context,
 		config.Config, *DaemonRuntime,
 	) error {
 		t.Helper()
-		t.Fatal(msg)
-		return nil
+		return errors.New(msg)
 	})
 }
 
@@ -637,7 +636,7 @@ func TestEnsureTransport_ArchiveWriteStopsOlderDaemonUnderLaunchLock(
 
 	setTestVersion(t, "1.1.0")
 	stopErr := errors.New("stop after launch lock")
-	stubStopDaemonRuntimeForUpgrade(t, func(
+	stubStopDaemonRuntimeForUpgrade(t, func(context.Context,
 		config.Config, *DaemonRuntime,
 	) error {
 		launchLock, ok := acquireBackgroundLaunchLock(dir)
@@ -769,11 +768,10 @@ func TestEnsureTransport_ArchiveWriteRestartsIncompatibleDaemonAfterExternalStar
 	})
 
 	released := make(chan struct{})
-	go func() {
-		time.Sleep(2 * startProbeTick())
+	runAfterBackgroundProbe(t, func() {
 		unlockStart()
 		close(released)
-	}()
+	})
 
 	cfg := config.Config{DataDir: dir}
 	tr, err := ensureTransport(
@@ -989,16 +987,15 @@ func TestDetectTransportWaitsForExternalStartLockBeforeReturningRuntime(
 
 	newHost, newPort := testPingServer(t)
 	published := make(chan error, 1)
-	go func() {
-		time.Sleep(2 * startProbeTick())
+	runAfterBackgroundProbe(t, func() {
 		RemoveDaemonRuntime(dir)
 		_, err := WriteDaemonRuntime(dir, newHost, newPort, "1.1.0", false)
 		unlockStart()
 		published <- err
-	}()
+	})
 
 	tr, err := detectTransportContext(
-		context.Background(), dir, "", time.Second,
+		t.Context(), dir, "", time.Second,
 	)
 
 	require.NoError(t, <-published)
@@ -1023,15 +1020,14 @@ func TestEnsureTransportArchiveWriteWaitsForBackgroundReplacementLock(
 
 	newHost, newPort := testPingServer(t)
 	published := make(chan error, 1)
-	go func() {
-		time.Sleep(2 * startProbeTick())
+	runAfterBackgroundProbe(t, func() {
 		RemoveDaemonRuntime(dir)
 		_, err := WriteDaemonRuntime(dir, newHost, newPort, version, false)
 		if err == nil {
 			err = launchLock.Unlock()
 		}
 		published <- err
-	}()
+	})
 
 	cfg := config.Config{DataDir: dir}
 	tr, err := ensureTransport(
@@ -1047,34 +1043,42 @@ func TestEnsureTransportArchiveWriteWaitsForBackgroundReplacementLock(
 }
 
 func TestBackgroundLaunchWaitReportsProgressAndExtendsWhileWorking(t *testing.T) {
-	setStartProbeTickForTest(t, 10*time.Millisecond)
-	dir := daemonRuntimeDir(t)
-	require.NoError(t, os.MkdirAll(dir, 0o700))
-	launchLock, ok := acquireBackgroundLaunchLock(dir)
-	require.True(t, ok)
-	t.Cleanup(func() { _ = launchLock.Unlock() })
-	MarkDaemonStarting(dir)
-	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
-	state := newStartupStateWriter(dir, time.Now)
-	state.SetPhase("Opening archive")
-	released := make(chan error, 1)
-	go func() {
-		for i := range 5 {
-			time.Sleep(50 * time.Millisecond)
-			state.SetPhase(fmt.Sprintf("Preparing archive batch %d", i+1))
-		}
-		released <- launchLock.Unlock()
-	}()
-	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancel()
-	output := captureStderr(t, func() {
+	synctest.Test(t, func(t *testing.T) {
+		setStartProbeTickForTest(t, 10*time.Millisecond)
+		dir := daemonRuntimeDir(t)
+		require.NoError(t, os.MkdirAll(dir, 0o700))
+		launchLock, ok := acquireBackgroundLaunchLock(dir)
+		require.True(t, ok)
+		t.Cleanup(func() { _ = launchLock.Unlock() })
+		MarkDaemonStarting(dir)
+		t.Cleanup(func() { UnmarkDaemonStarting(dir) })
+		state := newStartupStateWriter(dir, time.Now)
+		state.SetPhase("Opening archive")
+		released := make(chan error, 1)
+		go func() {
+			for i := range 5 {
+				time.Sleep(50 * time.Millisecond)
+				state.SetPhase(fmt.Sprintf("Preparing archive batch %d", i+1))
+			}
+			released <- launchLock.Unlock()
+		}()
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+		defer cancel()
+		stderr, err := os.Create(filepath.Join(t.TempDir(), "stderr"))
+		require.NoError(t, err)
+		originalStderr := os.Stderr
+		os.Stderr = stderr
+		defer func() { os.Stderr = originalStderr; _ = stderr.Close() }()
+
 		waited, err := waitForBackgroundLaunchBeforeArchiveWrite(ctx, dir, 150*time.Millisecond)
 		require.True(t, waited)
 		require.NoError(t, err, "advancing startup must extend the wait")
+		require.NoError(t, <-released)
+		output, err := os.ReadFile(stderr.Name())
+		require.NoError(t, err)
+		assert.Contains(t, string(output), "Opening archive")
+		assert.Contains(t, string(output), "Preparing archive batch")
 	})
-	require.NoError(t, <-released)
-	assert.Contains(t, output, "Opening archive")
-	assert.Contains(t, output, "Preparing archive batch")
 }
 
 func TestEnsureTransportArchiveWriteAdoptsAuthAfterBackgroundLaunchWait(
@@ -1093,11 +1097,13 @@ func TestEnsureTransportArchiveWriteAdoptsAuthAfterBackgroundLaunchWait(
 	const token = "generated-token"
 	newHost, newPort := testAuthenticatedPingServer(t, token)
 	published := make(chan error, 1)
-	go func() {
-		time.Sleep(2 * startProbeTick())
-		writeTestConfig(t, dir, `require_auth = true
+	runAfterBackgroundProbe(t, func() {
+		if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(`require_auth = true
 auth_token = "generated-token"
-`)
+`), 0o600); err != nil {
+			published <- err
+			return
+		}
 		RemoveDaemonRuntime(dir)
 		_, err := WriteDaemonRuntimeWithAuth(
 			dir, newHost, newPort, version, "", false, true,
@@ -1106,7 +1112,7 @@ auth_token = "generated-token"
 			err = launchLock.Unlock()
 		}
 		published <- err
-	}()
+	})
 
 	cfg := config.Config{DataDir: dir}
 	tr, err := ensureTransport(
@@ -1133,17 +1139,19 @@ func TestEnsureTransportReadAdoptsAuthAfterDaemonStartupWait(t *testing.T) {
 	const token = "generated-token"
 	newHost, newPort := testAuthenticatedPingServer(t, token)
 	published := make(chan error, 1)
-	go func() {
-		time.Sleep(2 * startProbeTick())
-		writeTestConfig(t, dir, `require_auth = true
+	runAfterBackgroundProbe(t, func() {
+		if err := os.WriteFile(filepath.Join(dir, "config.toml"), []byte(`require_auth = true
 auth_token = "generated-token"
-`)
+`), 0o600); err != nil {
+			published <- err
+			return
+		}
 		_, err := WriteDaemonRuntimeWithAuth(
 			dir, newHost, newPort, version, "", false, true,
 		)
 		unlockStart()
 		published <- err
-	}()
+	})
 
 	cfg := config.Config{DataDir: dir}
 	tr, err := ensureTransport(
@@ -1167,7 +1175,7 @@ func TestWaitForBackgroundLaunchBeforeArchiveWriteRejectsFileDataDir(
 	require.NoError(t, os.WriteFile(dataDir, []byte("not a dir"), 0o600))
 
 	waited, err := waitForBackgroundLaunchBeforeArchiveWrite(
-		context.Background(), dataDir, 10*time.Millisecond,
+		t.Context(), dataDir, 10*time.Millisecond,
 	)
 
 	require.Error(t, err)
@@ -1180,7 +1188,7 @@ func TestEnsureTransportContextCancelDuringStartupWait(t *testing.T) {
 	MarkDaemonStarting(dir)
 	t.Cleanup(func() { UnmarkDaemonStarting(dir) })
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	stubWaitForDaemonStartupForTransport(t, func(
 		gotCtx context.Context,
 		dataDir string,
@@ -1283,7 +1291,7 @@ func TestNewService_HTTPMode(t *testing.T) {
 		Mode: transportHTTP,
 		URL:  "http://127.0.0.1:8080",
 	}
-	svc, cleanup, err := newService(config.Config{}, tr)
+	svc, cleanup, err := newService(t.Context(), config.Config{}, tr)
 	require.NoError(t, err)
 	require.NotNil(t, svc)
 	require.NotNil(t, cleanup)
@@ -1298,12 +1306,12 @@ func TestNewService_DirectMode(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "sessions.db")
-	seed, err := db.Open(dbPath)
+	seed, err := db.Open(t.Context(), dbPath)
 	require.NoError(t, err)
 	seed.Close()
 	cfg := config.Config{DBPath: dbPath}
 
-	svc, cleanup, err := newService(cfg, transport{Mode: transportDirect})
+	svc, cleanup, err := newService(t.Context(), cfg, transport{Mode: transportDirect})
 	require.NoError(t, err)
 	require.NotNil(t, svc)
 	require.NotNil(t, cleanup)
@@ -1316,12 +1324,12 @@ func TestNewService_DirectReadOnly(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "sessions.db")
-	seed, err := db.Open(dbPath)
+	seed, err := db.Open(t.Context(), dbPath)
 	require.NoError(t, err)
 	seed.Close()
 	cfg := config.Config{DBPath: dbPath}
 
-	svc, cleanup, err := newService(cfg, transport{
+	svc, cleanup, err := newService(t.Context(), cfg, transport{
 		Mode:           transportDirect,
 		DirectReadOnly: true,
 	})
@@ -1336,7 +1344,7 @@ func TestNewService_DirectIncompatibleRefusesWithoutOpeningDB(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "missing.db")
 	cfg := config.Config{DBPath: dbPath}
 
-	svc, cleanup, err := newService(cfg, transport{
+	svc, cleanup, err := newService(t.Context(), cfg, transport{
 		Mode:               transportDirect,
 		DirectReadOnly:     true,
 		DirectIncompatible: true,
@@ -1357,7 +1365,7 @@ func TestNewService_DirectModeMissingDBDoesNotCreate(t *testing.T) {
 	dbPath := filepath.Join(dir, "sessions.db")
 	cfg := config.Config{DBPath: dbPath}
 
-	svc, cleanup, err := newService(cfg, transport{Mode: transportDirect})
+	svc, cleanup, err := newService(t.Context(), cfg, transport{Mode: transportDirect})
 	require.Error(t, err)
 	assert.Nil(t, svc)
 	assert.Nil(t, cleanup)
@@ -1376,6 +1384,7 @@ func TestUrlFromDaemonRuntime_BindAllMapsToLoopback(t *testing.T) {
 		{"192.168.1.10", "http://192.168.1.10:8080"},
 	} {
 		t.Run(tc.host, func(t *testing.T) {
+			t.Parallel()
 			got := urlFromDaemonRuntime(&DaemonRuntime{
 				Host: tc.host,
 				Port: 8080,
@@ -1407,16 +1416,16 @@ func TestServicesUseRunningDaemonBrowserURL(t *testing.T) {
 	stubStartBackgroundServeForTransport(t, func(context.Context, *config.Config, time.Duration) (*DaemonRuntime, error) { return rt, nil })
 	for _, tc := range []struct {
 		name  string
-		build func(config.Config, transport) (service.SessionService, func(), error)
+		build func(context.Context, config.Config, transport) (service.SessionService, func(), error)
 	}{
 		{"CLI", newService},
 		{"sync", syncService},
-		{"MCP", func(cfg config.Config, _ transport) (service.SessionService, func(), error) {
+		{"MCP", func(ctx context.Context, cfg config.Config, _ transport) (service.SessionService, func(), error) {
 			return newMCPDaemonService(cfg), func() {}, nil
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			svc, cleanup, err := tc.build(cfg, tr)
+			svc, cleanup, err := tc.build(t.Context(), cfg, tr)
 			require.NoError(t, err)
 			defer cleanup()
 			detail, err := svc.Get(t.Context(), "codex:session:42")
@@ -1433,7 +1442,7 @@ func TestServicePreservesIPv6BrowserURL(t *testing.T) {
 	}))
 	defer server.Close()
 	browser := browserURLWithPlatform(config.Config{Host: "::1", Port: 8080}, nil, nil)
-	svc, cleanup, err := newService(config.Config{}, transport{
+	svc, cleanup, err := newService(t.Context(), config.Config{}, transport{
 		Mode: transportHTTP, URL: server.URL, BrowserURL: browser,
 	})
 	require.NoError(t, err)

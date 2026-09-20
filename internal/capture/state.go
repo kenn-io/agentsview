@@ -32,6 +32,7 @@ const (
 
 var errAttemptExists = errors.New("capture failure result already exists")
 
+//nolint:recvcheck // Value encoding and pointer decoding intentionally implement distinct interfaces.
 type Limits struct {
 	MaxOccurrenceBytes int           `json:"max_occurrence_bytes"`
 	MaxSources         int           `json:"max_sources"`
@@ -460,9 +461,11 @@ func (s *captureState) sealedPath() string   { return filepath.Join(s.dir, seale
 func (s *captureState) sourcesPath(parts ...string) string {
 	return filepath.Join(append([]string{s.dir, sourcesDirName}, parts...)...)
 }
+
 func (s *captureState) bundlePath() string {
 	return s.sourcesPath(bundleFileName)
 }
+
 func (s *captureState) stagingPath() string {
 	return filepath.Join(s.dir, stagingDirName)
 }

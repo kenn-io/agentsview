@@ -9,11 +9,13 @@ import (
 	"strings"
 )
 
-var _ Provider = (*claudeProvider)(nil)
-var _ S3Provider = (*claudeProvider)(nil)
-var _ RawCaptureProvider = (*claudeProvider)(nil)
-var _ RawCaptureSourceProvider = (*claudeProvider)(nil)
-var _ StreamingRawCaptureSourceProvider = (*claudeProvider)(nil)
+var (
+	_ Provider                          = (*claudeProvider)(nil)
+	_ S3Provider                        = (*claudeProvider)(nil)
+	_ RawCaptureProvider                = (*claudeProvider)(nil)
+	_ RawCaptureSourceProvider          = (*claudeProvider)(nil)
+	_ StreamingRawCaptureSourceProvider = (*claudeProvider)(nil)
+)
 
 type claudeProviderFactory struct {
 	def AgentDef
@@ -215,7 +217,7 @@ func (p *claudeProvider) Parse(
 	}
 	path, ok := p.sources.pathFromSource(req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("claude source path unavailable")
+		return ParseOutcome{}, errors.New("claude source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	project := claudeProviderProject(ctx, req.Source.ProjectHint, path)
@@ -301,7 +303,7 @@ func (p *claudeProvider) ParseIncremental(
 	path, ok := p.sources.pathFromSource(req.Source)
 	if !ok {
 		return IncrementalOutcome{}, IncrementalUnsupported,
-			fmt.Errorf("claude source path unavailable")
+			errors.New("claude source path unavailable")
 	}
 	if req.Offset > 0 && req.Fingerprint.Size < req.Offset {
 		return IncrementalOutcome{ForceReplace: true},
@@ -836,7 +838,7 @@ func claudeProviderProject(ctx context.Context, projectHint, path string) string
 }
 
 func errorsIsClaudeDAG(err error) bool {
-	return err == ErrDAGDetected
+	return errors.Is(err, ErrDAGDetected)
 }
 
 func claudeProviderUserMessageCount(msgs []ParsedMessage) int {

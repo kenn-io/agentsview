@@ -53,6 +53,7 @@ func TestHumanizeSessionAge(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, humanizeSessionAge(tc.sess, renderNow))
 		})
 	}
@@ -76,6 +77,7 @@ func TestHumanizeAgeRelative(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, ok := humanizeAgeRelative(tc.t, renderNow)
 			assert.Equal(t, tc.wantOK, ok)
 			assert.Equal(t, tc.wantStr, got)
@@ -109,6 +111,7 @@ func TestIsSessionRecentlyActive(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, isSessionRecentlyActive(tc.sess, renderNow))
 		})
 	}
@@ -150,6 +153,7 @@ func TestCollapseHome(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, collapseHome(tc.cwd, tc.home))
 		})
 	}
@@ -169,6 +173,7 @@ func TestTruncName(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, truncName(tc.in, tc.max))
 		})
 	}
@@ -182,7 +187,7 @@ func TestSessionDisplayName(t *testing.T) {
 	assert.Equal(t, "first", sessionDisplayName(db.Session{
 		FirstMessage: new("first"),
 	}))
-	assert.Equal(t, "", sessionDisplayName(db.Session{}))
+	assert.Empty(t, sessionDisplayName(db.Session{}))
 	// An empty display name falls through to the first message.
 	assert.Equal(t, "first", sessionDisplayName(db.Session{
 		DisplayName: new(""), FirstMessage: new("first"),

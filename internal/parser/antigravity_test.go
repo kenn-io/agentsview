@@ -2,7 +2,6 @@ package parser
 
 import (
 	"bytes"
-	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"database/sql"
@@ -69,7 +68,7 @@ func parseAntigravityTestSession(
 	t *testing.T, path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
 	t.Helper()
-	return newAntigravityTestProvider(t).parseSession(path, project, machine)
+	return newAntigravityTestProvider(t).parseSession(t.Context(), path, project, machine)
 }
 
 // discoverAntigravityCLITestSessions discovers CLI sessions under root through
@@ -233,7 +232,7 @@ func TestAgProtoLengthOverflow(t *testing.T) {
 	// bogus slice.
 	defer func() {
 		if r := recover(); r != nil {
-			t.Fatalf("agProtoParse panicked: %v", r)
+			require.FailNowf(t, "test failed", "agProtoParse panicked: %v", r)
 		}
 	}()
 	_, err := agProtoParse(payload)
@@ -247,7 +246,6 @@ func TestAgProtoLengthOverflow(t *testing.T) {
 // truncates instead of failing, so a payload past the budget keeps
 // its decoded prefix rather than losing all content.
 func TestAgProtoFieldBudget(t *testing.T) {
-
 	// One field per two bytes: tag 0x08 (field 1, varint), value 0.
 	dense := func(fields int) []byte {
 		return bytes.Repeat([]byte{0x08, 0x00}, fields)
@@ -360,7 +358,7 @@ func TestAntigravityCLIDiscoverAndParse(t *testing.T) {
 	assert.Equal(t, "/tmp/proj", files[0].Project, "project")
 
 	provider := newAntigravityCLITestProvider(t, root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, SourceCwdResolved, sources[0].CwdResolution.State)
@@ -445,11 +443,11 @@ func TestAntigravityCLIProjectFallbackPromptAndProximity(t *testing.T) {
 		[]byte(`{"display":"  user prompt text goes here  ","timestamp":1779000010000,"workspace":"/tmp/fallback-proj"}`))
 
 	provider := newAntigravityCLITestProvider(t, root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, SourceCwdUnspecified, sources[0].CwdResolution.State)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  sources[0],
 		Machine: "m",
 	})
@@ -636,13 +634,13 @@ func TestAntigravityCLIRejectsRelativeWorkspaceAsCwd(t *testing.T) {
 			`"workspace":"relative/project","conversationId":"`+id+`"}`))
 
 	provider := newAntigravityCLITestProvider(t, root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, SourceCwdAmbiguous, sources[0].CwdResolution.State)
 	assert.Empty(t, sources[0].CwdResolution.Path)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	assert.Empty(t, outcome.Results[0].Result.Session.Cwd)
@@ -1515,7 +1513,7 @@ func mustExec(
 	t *testing.T, db *sql.DB, q string, args ...any,
 ) {
 	t.Helper()
-	_, err := db.Exec(q, args...)
+	_, err := db.ExecContext(t.Context(), q, args...)
 	require.NoError(t, err, "exec %q", q)
 }
 
@@ -1831,7 +1829,7 @@ func TestAntigravityCLITrajectoryParse(t *testing.T) {
 	assert.Equal(t, "Bash", msgs[1].ToolCalls[0].Category)
 
 	assert.Equal(t, RoleUser, msgs[2].Role)
-	assert.Equal(t, "", msgs[2].Content)
+	assert.Empty(t, msgs[2].Content)
 	require.Len(t, msgs[2].ToolResults, 1)
 	assert.Equal(t, "tc-1", msgs[2].ToolResults[0].ToolUseID)
 	assert.Contains(t, msgs[2].ToolResults[0].ContentRaw, "file1.txt")
@@ -2619,10 +2617,9 @@ func TestAntigravityCLISidecarModelUsesCoveringExecutorEffort(t *testing.T) {
 				t, root, id, 2, genJSON,
 			)
 
-			_, msgs, usageEvents, status, err :=
-				parseAntigravityCLITestSessionWithStatus(
-					t, dbPath, "", "test-machine",
-				)
+			_, msgs, usageEvents, status, err := parseAntigravityCLITestSessionWithStatus(
+				t, dbPath, "", "test-machine",
+			)
 			require.NoError(t, err)
 			assert.False(t, status.NeedsRetry)
 			require.Len(t, msgs, 2)
@@ -3071,10 +3068,9 @@ func TestAntigravityCLIGenerationMetadataMapsToPlannerStepAndExecutorModel(t *te
 				`INSERT INTO executor_metadata (idx, data, size) VALUES (0, ?, ?)`,
 				executorData, len(executorData))
 
-			_, msgs, usageEvents, _, err :=
-				parseAntigravityCLITestSessionWithStatus(
-					t, dbPath, "test-project", "test-machine",
-				)
+			_, msgs, usageEvents, _, err := parseAntigravityCLITestSessionWithStatus(
+				t, dbPath, "test-project", "test-machine",
+			)
 			require.NoError(t, err)
 			require.Len(t, msgs, 2)
 			assert.Equal(t, tt.wantModel, msgs[1].Model)
@@ -3137,8 +3133,7 @@ func TestExtractAntigravityStepIndicesDistinguishesAbsentAndMalformed(t *testing
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			indices, present, valid :=
-				extractAntigravityStepIndices(tt.data)
+			indices, present, valid := extractAntigravityStepIndices(tt.data)
 			assert.Equal(t, tt.wantIndices, indices)
 			assert.Equal(t, tt.wantPresent, present)
 			assert.Equal(t, tt.wantValid, valid)
@@ -3444,6 +3439,8 @@ func TestAntigravityGenMetadataWithoutUsageFlag(t *testing.T) {
 		{
 			name: "no gen_metadata table",
 			setupDB: func(t *testing.T, db *sql.DB) {
+				t.Helper()
+
 				createAntigravityStepTables(t, db)
 				decodableStep(t, db)
 			},
@@ -3452,6 +3449,8 @@ func TestAntigravityGenMetadataWithoutUsageFlag(t *testing.T) {
 		{
 			name: "empty gen_metadata table",
 			setupDB: func(t *testing.T, db *sql.DB) {
+				t.Helper()
+
 				createAntigravityStepTables(t, db)
 				mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
 				decodableStep(t, db)
@@ -3461,6 +3460,8 @@ func TestAntigravityGenMetadataWithoutUsageFlag(t *testing.T) {
 		{
 			name: "gen_metadata rows decode to usage",
 			setupDB: func(t *testing.T, db *sql.DB) {
+				t.Helper()
+
 				createAntigravityStepTables(t, db)
 				mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
 				decodableStep(t, db)
@@ -3472,6 +3473,8 @@ func TestAntigravityGenMetadataWithoutUsageFlag(t *testing.T) {
 		{
 			name: "gen_metadata rows all undecodable",
 			setupDB: func(t *testing.T, db *sql.DB) {
+				t.Helper()
+
 				createAntigravityStepTables(t, db)
 				mustExec(t, db, `CREATE TABLE gen_metadata (idx integer, data blob, size integer, PRIMARY KEY (idx))`)
 				decodableStep(t, db)
@@ -3519,6 +3522,8 @@ func TestAntigravityCLIGenMetadataWithoutUsageFlag(t *testing.T) {
 		{
 			name: "undecodable gen_metadata rescued by sidecar usage",
 			setup: func(t *testing.T, root, id, dbPath string) {
+				t.Helper()
+
 				db, err := sql.Open("sqlite3", dbPath)
 				require.NoError(t, err)
 				createAntigravityStepTables(t, db)
@@ -3548,6 +3553,8 @@ func TestAntigravityCLIGenMetadataWithoutUsageFlag(t *testing.T) {
 		{
 			name: "undecodable gen_metadata and no sidecar usage",
 			setup: func(t *testing.T, root, id, dbPath string) {
+				t.Helper()
+
 				db, err := sql.Open("sqlite3", dbPath)
 				require.NoError(t, err)
 				createAntigravityStepTables(t, db)
@@ -3641,10 +3648,14 @@ func TestAntigravityTokenUsageDynamicField(t *testing.T) {
 }
 
 func createAntigravityMockGenMetadata(t *testing.T, uncachedInput, totalOutput, cacheRead int, model string) []byte {
+	t.Helper()
+
 	return createAntigravityMockGenMetadataWithField(t, 1020, uncachedInput, totalOutput, cacheRead, model)
 }
 
 func createAntigravityMockGenMetadataWithField(t *testing.T, fieldNum int, uncachedInput, totalOutput, cacheRead int, model string) []byte {
+	t.Helper()
+
 	return createAntigravityMockGenMetadataData(
 		t, fieldNum, uncachedInput, totalOutput, cacheRead,
 		model, agChatModelMetadataModelDisplayNameField,
@@ -3894,6 +3905,7 @@ func TestExtractTokenUsageFalsePositiveGuards(t *testing.T) {
 // sessions, which leaked into messages.model with an embedded NUL byte
 // and broke `pg push` (PG rejects NUL with SQLSTATE 22021).
 func TestExtractModelNameRejectsNonPrintable(t *testing.T) {
+	t.Parallel()
 	// hex 080020022A0201024001: a nested message (field 1 varint,
 	// field 4 varint, field 5 bytes, field 8 varint), all bytes
 	// < 0x80 so utf8.Valid accepts it.
@@ -3948,6 +3960,7 @@ func TestExtractModelNameRejectsNonPrintable(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tt.want, extractModelName(tt.data))
 		})
 	}
@@ -4181,6 +4194,7 @@ func TestAntigravityToolCallsRejectsGenericStrings(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			calls := extractAntigravityToolCalls(0, tc.fields)
 			assert.Len(t, calls, tc.wantLen)
 		})
@@ -4369,7 +4383,7 @@ func TestAntigravityIDEHeuristicFallbackWhenSidecarMissing(t *testing.T) {
 	assert.Equal(t, "user prompt text goes here", msgs[0].Content)
 	assert.Contains(t, msgs[1].Content, "assistant reply content body")
 	// Fidelity unchanged from prior IDE behavior: empty (treated as full).
-	assert.Equal(t, "", sess.TranscriptFidelity)
+	assert.Empty(t, sess.TranscriptFidelity)
 }
 
 func TestAntigravityIDEKeepsDBDecodeWhenSidecarLags(t *testing.T) {
@@ -4389,7 +4403,7 @@ func TestAntigravityIDEKeepsDBDecodeWhenSidecarLags(t *testing.T) {
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "user prompt text goes here", msgs[0].Content)
 	assert.Contains(t, msgs[1].Content, "assistant reply content body")
-	assert.Equal(t, "", sess.TranscriptFidelity)
+	assert.Empty(t, sess.TranscriptFidelity)
 }
 
 func TestAntigravityIDEMalformedSidecarFallsBack(t *testing.T) {
@@ -4409,7 +4423,7 @@ func TestAntigravityIDEMalformedSidecarFallsBack(t *testing.T) {
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "user prompt text goes here", msgs[0].Content)
 	assert.Contains(t, msgs[1].Content, "assistant reply content body")
-	assert.Equal(t, "", sess.TranscriptFidelity)
+	assert.Empty(t, sess.TranscriptFidelity)
 }
 
 // TestAntigravityIDESidecarWinsKeepsGenMetadataUsage verifies the
@@ -4537,7 +4551,7 @@ func TestAntigravityIDENonCoveringSidecarUsageRejected(t *testing.T) {
 	// Heuristic decode wins; sidecar usage rejected like its transcript.
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "user prompt text goes here", msgs[0].Content)
-	assert.Equal(t, "", sess.TranscriptFidelity)
+	assert.Empty(t, sess.TranscriptFidelity)
 	assert.Empty(t, usageEvents,
 		"non-covering sidecar usage must be rejected like its transcript")
 }

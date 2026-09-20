@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -44,12 +45,12 @@ type ParserCheckpointBlobs struct {
 // GetParserCheckpoint loads the checkpoint metadata for a session. ok=false
 // means no row exists (legacy session or never checkpointed), which is not
 // an error. The blob payload is deliberately not loaded here.
-func (db *DB) GetParserCheckpoint(
+func (db *DB) GetParserCheckpoint(ctx context.Context,
 	sessionID string,
 ) (*ParserCheckpoint, bool, error) {
 	var cp ParserCheckpoint
 	var inode, device, nextOrdinal int64
-	err := db.getReader().QueryRow(
+	err := db.getReader().QueryRow(ctx,
 		`SELECT agent, file_path, file_inode, file_device, file_mtime,
 		        file_change_time,
 		        offset, tail_anchor_digest, hash,
@@ -80,11 +81,11 @@ func (db *DB) GetParserCheckpoint(
 
 // GetParserCheckpointBlobs loads the lazy checkpoint payload. ok=false when
 // no blobs row exists.
-func (db *DB) GetParserCheckpointBlobs(
+func (db *DB) GetParserCheckpointBlobs(ctx context.Context,
 	sessionID string,
 ) (ParserCheckpointBlobs, bool, error) {
 	var b ParserCheckpointBlobs
-	err := db.getReader().QueryRow(
+	err := db.getReader().QueryRow(ctx,
 		`SELECT cursor, hash_state
 		 FROM parser_checkpoint_blobs
 		 WHERE session_id = ?`,
@@ -104,28 +105,28 @@ func (db *DB) GetParserCheckpointBlobs(
 
 // DeleteParserCheckpoint removes a session's checkpoint rows. Used when a
 // source is replaced or deleted so a stale checkpoint can never be resumed.
-func (db *DB) DeleteParserCheckpoint(sessionID string) error {
+func (db *DB) DeleteParserCheckpoint(ctx context.Context, sessionID string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning checkpoint delete tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := deleteParserCheckpointTx(tx, sessionID); err != nil {
+	if err := deleteParserCheckpointTx(ctx, tx, sessionID); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
-func deleteParserCheckpointTx(tx *sql.Tx, sessionID string) error {
-	if _, err := tx.Exec(
+func deleteParserCheckpointTx(ctx context.Context, tx *sql.Tx, sessionID string) error {
+	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM parser_checkpoints WHERE session_id = ?`,
 		sessionID,
 	); err != nil {
 		return fmt.Errorf("deleting parser checkpoint %s: %w", sessionID, err)
 	}
-	if _, err := tx.Exec(
+	if _, err := tx.ExecContext(ctx,
 		`DELETE FROM parser_checkpoint_blobs WHERE session_id = ?`,
 		sessionID,
 	); err != nil {
@@ -140,11 +141,11 @@ func deleteParserCheckpointTx(tx *sql.Tx, sessionID string) error {
 // plus blobs) atomically. The full parse path calls this after its session
 // rows commit; the incremental path writes the checkpoint inside the same
 // transaction as the delta (see WriteSessionIncremental).
-func (db *DB) UpsertParserCheckpoint(
+func (db *DB) UpsertParserCheckpoint(ctx context.Context,
 	cp ParserCheckpoint, blobs ParserCheckpointBlobs,
 ) error {
 	if db.ArchiveContent().OmitsToolContent() {
-		return db.DeleteParserCheckpoint(cp.SessionID)
+		return db.DeleteParserCheckpoint(ctx, cp.SessionID)
 	}
 	if cp.Version == 0 {
 		cp.Version = ParserCheckpointVersion
@@ -155,7 +156,7 @@ func (db *DB) UpsertParserCheckpoint(
 	blobs.SessionID = cp.SessionID
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning checkpoint upsert tx: %w", err)
 	}

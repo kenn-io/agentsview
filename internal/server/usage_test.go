@@ -3,9 +3,9 @@ package server_test
 import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -273,7 +273,7 @@ func TestHandleUsageSummarySkipsUnsupportedCopilotSignalForMixedFilters(t *testi
 func TestHandleUsageSummaryIncludesCursorUsageEvents(t *testing.T) {
 	te := setup(t)
 
-	require.NoError(t, te.db.InsertCursorUsageEvents([]db.CursorUsageEvent{{
+	require.NoError(t, te.db.InsertCursorUsageEvents(t.Context(), []db.CursorUsageEvent{{
 		OccurredAt:       "2026-05-14T10:05:00Z",
 		Model:            "claude-4.6-opus-high-thinking",
 		Kind:             "USAGE_EVENT_KIND_USAGE_BASED",
@@ -341,7 +341,7 @@ func TestHandleUsageTopSessionsLimit(t *testing.T) {
 
 func TestHandleUsageTopSessionsRanksBySelectedTokenTypes(t *testing.T) {
 	te := setup(t)
-	require.NoError(t, te.db.SetSyncState(db.MachineAliasKeyPrefix+"old-owner", "test"))
+	require.NoError(t, te.db.SetSyncState(t.Context(), db.MachineAliasKeyPrefix+"old-owner", "test"))
 	for _, fixture := range []struct {
 		id        string
 		input     int
@@ -366,8 +366,8 @@ func TestHandleUsageTopSessionsRanksBySelectedTokenTypes(t *testing.T) {
 			msg.Timestamp = fixture.startedAt
 			msg.Model = "gpt-5.4"
 			msg.TokenUsage = jsontext.Value(
-				`{"input_tokens":` + fmt.Sprint(fixture.input) +
-					`,"output_tokens":` + fmt.Sprint(fixture.output) + `}`,
+				`{"input_tokens":` + strconv.Itoa(fixture.input) +
+					`,"output_tokens":` + strconv.Itoa(fixture.output) + `}`,
 			)
 		})
 	}
@@ -495,7 +495,7 @@ func TestUsageRoutesRegistered(t *testing.T) {
 	}
 	for _, ep := range endpoints {
 		t.Run(ep, func(t *testing.T) {
-			req := httptest.NewRequest(
+			req := httptest.NewRequestWithContext(t.Context(),
 				http.MethodGet, ep, nil,
 			)
 			w := httptest.NewRecorder()

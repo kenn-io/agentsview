@@ -275,8 +275,7 @@ func parseOpenHandsMessageEvent(
 		return ParsedMessage{}, false, ""
 	}
 
-	content, _, _, _, toolCalls, toolResults :=
-		ExtractTextContent(context.Background(), llmMessage.Get("content"))
+	content, _, _, _, toolCalls, toolResults := ExtractTextContent(context.Background(), llmMessage.Get("content"))
 	content, hasThinking := openHandsAppendThinking(
 		content, ev,
 	)
@@ -503,7 +502,7 @@ func formatOpenHandsAction(
 				"[Bash: %s]\n$ %s", summary, cmd,
 			)
 		}
-		return fmt.Sprintf("[Bash]\n$ %s", cmd)
+		return "[Bash]\n$ " + cmd
 	case "file_editor":
 		path := action.Get("path").Str
 		switch action.Get("command").Str {

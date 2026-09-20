@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -113,12 +112,12 @@ func TestDBStripCommandRefreshesSecretFindings(t *testing.T) {
 	testDataDir(t)
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	insertSessionForStripTest(t, database, "command")
 	message := commandImageMessage("command")
 	message.Content = "AKIA" + "7QHWN2DKR4FYPLJA"
-	require.NoError(t, database.InsertMessages([]db.Message{message}))
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{message}))
 	require.NoError(t, database.Close())
 
 	cmd := newDBStripCommand()
@@ -126,7 +125,7 @@ func TestDBStripCommandRefreshesSecretFindings(t *testing.T) {
 	cmd.SetOut(&bytes.Buffer{})
 	require.NoError(t, cmd.Execute())
 
-	database, err = db.Open(cfg.DBPath)
+	database, err = db.Open(cmd.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, database.Close()) }()
 	findings, err := database.SessionSecretFindings(t.Context(), "command")
@@ -148,12 +147,12 @@ func TestDBStripLeavesSourceFiles(t *testing.T) {
 	insertSessionForStripTest(t, database, "source", func(s *db.Session) {
 		s.FilePath = &sourcePath
 	})
-	require.NoError(t, database.InsertMessages([]db.Message{commandImageMessage("source")}))
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{commandImageMessage("source")}))
 	database.SetToolResultImages(config.ToolResultImagesKeep)
 
 	before := "provider transcript remains byte-for-byte unchanged"
 	require.NoError(t, os.WriteFile(path, []byte(before), 0o600))
-	report, err := database.StripToolImages(context.Background(), db.StripImagesFilter{})
+	report, err := database.StripToolImages(t.Context(), db.StripImagesFilter{})
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.Changed)
 	after, err := os.ReadFile(path)
@@ -164,10 +163,10 @@ func TestDBStripLeavesSourceFiles(t *testing.T) {
 func TestStripThenCompactAccounting(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	insertSessionForStripTest(t, database, "accounting")
-	require.NoError(t, database.InsertMessages([]db.Message{
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{
 		largeCommandImageMessage("accounting"),
 	}))
-	report, err := database.StripToolImages(context.Background(), db.StripImagesFilter{})
+	report, err := database.StripToolImages(t.Context(), db.StripImagesFilter{})
 	require.NoError(t, err)
 	var output strings.Builder
 	require.NoError(t, writeDBImageReport(&output, report, false, "Image strip completed."))
@@ -176,11 +175,11 @@ func TestStripThenCompactAccounting(t *testing.T) {
 	assert.NotContains(t, output.String(), "Reclaimed:")
 	t.Logf("strip report:\n%s", output.String())
 
-	before, err := database.EstimateCompact(context.Background())
+	before, err := database.EstimateCompact(t.Context())
 	require.NoError(t, err)
 	assert.Positive(t, before.FreeListBytes)
 
-	result, err := database.Compact(context.Background(), db.CompactOptions{
+	result, err := database.Compact(t.Context(), db.CompactOptions{
 		StagingDir: t.TempDir(),
 	})
 	require.NoError(t, err)
@@ -189,8 +188,7 @@ func TestStripThenCompactAccounting(t *testing.T) {
 	assert.Positive(t, result.ReclaimedBytes)
 	assert.Greater(t, result.Before.TotalBytes, result.After.TotalBytes)
 	assert.Zero(t, result.After.FreeListCount)
-	assert.Equal(t,
-		result.Before.TotalBytes-result.After.TotalBytes,
+	assert.Equal(t, result.Before.TotalBytes-result.After.TotalBytes,
 		result.ReclaimedBytes,
 	)
 	compactStat, err := os.Stat(database.Path())
@@ -218,23 +216,25 @@ func largeCommandImageMessage(sessionID string) db.Message {
 
 func seedCommandArchive(t *testing.T) {
 	t.Helper()
+
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, database.Close()) }()
 	insertSessionForStripTest(t, database, "command")
-	require.NoError(t, database.InsertMessages([]db.Message{commandImageMessage("command")}))
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{commandImageMessage("command")}))
 }
 
 func assertCommandArchiveStillContainsImage(t *testing.T) {
 	t.Helper()
+
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, database.Close()) }()
-	messages, err := database.GetAllMessages(context.Background(), "command")
+	messages, err := database.GetAllMessages(t.Context(), "command")
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Contains(t, messages[0].ToolCalls[0].ResultContent, "input_image")
@@ -242,12 +242,13 @@ func assertCommandArchiveStillContainsImage(t *testing.T) {
 
 func assertCommandArchiveHasNoImage(t *testing.T) {
 	t.Helper()
+
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, database.Close()) }()
-	messages, err := database.GetAllMessages(context.Background(), "command")
+	messages, err := database.GetAllMessages(t.Context(), "command")
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.NotContains(t, messages[0].ToolCalls[0].ResultContent, "input_image")
@@ -263,5 +264,5 @@ func insertSessionForStripTest(
 	for _, opt := range opts {
 		opt(&session)
 	}
-	require.NoError(t, database.UpsertSession(session))
+	require.NoError(t, database.UpsertSession(t.Context(), session))
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -20,20 +21,26 @@ type ImportConfig struct {
 }
 
 func runImport(cfg ImportConfig) {
+	if err := importSessions(cfg); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func importSessions(cfg ImportConfig) error {
 	expandedPath, err := pathutil.ExpandHome(cfg.Path)
 	if err != nil {
-		log.Fatalf("expanding import path: %v", err)
+		return fmt.Errorf("expanding import path: %w", err)
 	}
 	cfg.Path = expandedPath
 
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
-		log.Fatalf("loading config: %v", err)
+		return fmt.Errorf("loading config: %w", err)
 	}
 
 	database, writeLock, err := openWriteDB(context.Background(), appCfg)
 	if err != nil {
-		log.Fatalf("Error opening database: %v", err)
+		return fmt.Errorf("opening database: %w", err)
 	}
 	defer closeWriteDB(database, writeLock)
 
@@ -42,7 +49,7 @@ func runImport(cfg ImportConfig) {
 	// Handle zip files.
 	dir, cleanup, err := resolveImportSource(cfg.Path)
 	if err != nil {
-		log.Fatalf("Error: %v", err)
+		return fmt.Errorf("import source: %w", err)
 	}
 	if cleanup != nil {
 		defer cleanup()
@@ -52,8 +59,8 @@ func runImport(cfg ImportConfig) {
 	stats, err := runImportDispatch(
 		ctx, database, cfg.Type, dir, assetsDir, appCfg.InstallationID,
 	)
-	if err != nil && strings.HasPrefix(err.Error(), "unknown import type:") {
-		log.Fatalf("%v", err)
+	if errors.Is(err, errUnknownImportType) {
+		return fmt.Errorf("%w", err)
 	}
 
 	if err != nil {
@@ -62,15 +69,18 @@ func runImport(cfg ImportConfig) {
 		} else {
 			fmt.Fprintln(os.Stderr)
 		}
-		log.Fatalf("Import failed: %v", err)
+		return fmt.Errorf("import failed: %w", err)
 	}
 
 	printImportSummary(stats)
 
 	if stats.Errors > 0 {
-		os.Exit(1)
+		return fmt.Errorf("import completed with %d errors", stats.Errors)
 	}
+	return nil
 }
+
+var errUnknownImportType = errors.New("unknown import type")
 
 func runImportDispatch(
 	ctx context.Context,
@@ -86,8 +96,8 @@ func runImportDispatch(
 		return runGeminiAppsImport(ctx, database, path, machine)
 	default:
 		return importer.ImportStats{}, fmt.Errorf(
-			"unknown import type: %s (use claude-ai, chatgpt, or gemini-apps)",
-			importType,
+			"%w: %s (use claude-ai, chatgpt, or gemini-apps)",
+			errUnknownImportType, importType,
 		)
 	}
 }

@@ -76,7 +76,7 @@ func TestMergeCandidateSlicePreservesCandidateOrder(t *testing.T) {
 
 	var got []IntervalCandidate
 	err := MergeCandidateSlice(extra, baseSource)(
-		context.Background(), func(candidate IntervalCandidate) error {
+		t.Context(), func(candidate IntervalCandidate) error {
 			got = append(got, candidate)
 			return nil
 		},
@@ -103,7 +103,7 @@ func TestAggregateCandidatesDifferential(t *testing.T) {
 	require.NoError(t, err)
 	candidates := PairActivityEvents(events, p.RangeStart, p.EffectiveEnd, 5*time.Minute)
 	got, err := AggregateCandidates(
-		context.Background(), p, append([]SessionMeta(nil), sessions...), candidates, nil,
+		t.Context(), p, append([]SessionMeta(nil), sessions...), candidates, nil,
 	)
 	require.NoError(t, err)
 
@@ -127,7 +127,7 @@ func TestBuildCandidateArtifactsUsesSecondPrecisionMembership(t *testing.T) {
 	candidates := PairActivityEvents(events, p.RangeStart, p.EffectiveEnd, 5*time.Minute)
 
 	artifacts, err := BuildCandidateArtifacts(
-		context.Background(), p, sessions, candidates, nil,
+		t.Context(), p, sessions, candidates, nil,
 	)
 	require.NoError(t, err)
 
@@ -158,7 +158,7 @@ func TestBuildCandidateArtifactsNormalizesFractionalCustomBucketBoundsForMembers
 	)
 
 	artifacts, err := BuildCandidateArtifacts(
-		context.Background(), p, nil, candidates, nil,
+		t.Context(), p, nil, candidates, nil,
 	)
 	require.NoError(t, err)
 	require.Len(t, artifacts.Report.Buckets, 2)
@@ -182,7 +182,7 @@ func TestAggregateCandidatesCarriesConcurrencyAcrossBucketBoundary(t *testing.T)
 	}
 	candidates := PairActivityEvents(events, p.RangeStart, p.EffectiveEnd, 5*time.Minute)
 
-	got, err := AggregateCandidates(context.Background(), p, nil, candidates, nil)
+	got, err := AggregateCandidates(t.Context(), p, nil, candidates, nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, got.Buckets[1].MaxAgents)
@@ -207,7 +207,7 @@ func TestAggregateCandidatesKeepsTrimmedOverlapInStartOrder(t *testing.T) {
 		},
 	}
 
-	got, err := AggregateCandidates(context.Background(), p, nil, candidates, nil)
+	got, err := AggregateCandidates(t.Context(), p, nil, candidates, nil)
 	require.NoError(t, err)
 	require.Len(t, got.Buckets, 288)
 	assert.Equal(t, 2, got.Buckets[0].MaxAgents,
@@ -256,7 +256,7 @@ func TestAggregateCandidatesRandomizedDifferential(t *testing.T) {
 			events, p.RangeStart, p.EffectiveEnd, 5*time.Minute,
 		)
 		got, err := AggregateCandidates(
-			context.Background(), p,
+			t.Context(), p,
 			append([]SessionMeta(nil), sessions...), candidates, nil,
 		)
 		require.NoError(t, err)

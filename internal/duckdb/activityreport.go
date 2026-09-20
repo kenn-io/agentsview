@@ -293,21 +293,18 @@ func (s *Store) GetSessionUsageRows(
 			o.scan.webSearchRequests)
 		rawOutputTokensBySession[o.scan.sessionID] += o.scan.outputTok
 	}
-	canonicalTokenCoverageBySession, err :=
-		activity.CanonicalSessionTokenCoverageContext(ctx, snapshotRows)
+	canonicalTokenCoverageBySession, err := activity.CanonicalSessionTokenCoverageContext(ctx, snapshotRows)
 	if err != nil {
 		return nil, err
 	}
-	snapshotMask, snapshotAttribution, snapshotWebSearchRequests :=
-		activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
+	snapshotMask, snapshotAttribution, snapshotWebSearchRequests := activity.ClaudeSnapshotSurvivorSelection(snapshotRows)
 	seen := make(map[string]struct{})
 	deduplicatedOutputTokens := make(map[string]int)
 	discardedContributingSessions := make(map[string]struct{})
 	out := make([]activity.UsageRow, 0, len(rowsAcc))
 	for i, o := range rowsAcc {
 		if !snapshotMask[i] {
-			deduplicatedOutputTokens[o.scan.sessionID] +=
-				snapshotRows[i].OutputTokens
+			deduplicatedOutputTokens[o.scan.sessionID] += snapshotRows[i].OutputTokens
 			if rowContributes[i] {
 				discardedContributingSessions[o.scan.sessionID] = struct{}{}
 			}
@@ -332,8 +329,7 @@ func (s *Store) GetSessionUsageRows(
 			}
 			seen[key] = struct{}{}
 		}
-		cost, costSource, priced, contributes, sessionCost, priceErr :=
-			duckActivityUsageCost(r, rateResolver)
+		cost, costSource, priced, contributes, sessionCost, priceErr := duckActivityUsageCost(r, rateResolver)
 		if priceErr != nil {
 			return nil, priceErr
 		}
@@ -690,6 +686,7 @@ func (s *Store) activityReportCandidateSource(
 		if err != nil {
 			return fmt.Errorf("querying duckdb activity report terminal candidates: %w", err)
 		}
+		defer terminalRows.Close()
 		var terminal []activity.IntervalCandidate
 		for terminalRows.Next() {
 			candidate, scanErr := scanCandidate(terminalRows)
@@ -922,10 +919,9 @@ func (s *Store) activityReportUsage(
 	for i, o := range rowsAcc {
 		baseRows[i] = o.row
 	}
-	mask, attribution, webSearchRequests :=
-		activity.UsageSurvivorSelectionForSessions(
-			q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
-		)
+	mask, attribution, webSearchRequests := activity.UsageSurvivorSelectionForSessions(
+		q.RangeStart, q.RangeEnd, q.EffectiveEnd, baseRows, ids,
+	)
 	out = make([]activity.UsageRow, 0, len(rowsAcc))
 	for i, o := range rowsAcc {
 		if !mask[i] {
@@ -933,8 +929,7 @@ func (s *Store) activityReportUsage(
 		}
 		costRow := o.scan
 		costRow.webSearchRequests = webSearchRequests[i]
-		cost, costSource, priced, contributes, sessionCost, priceErr :=
-			duckActivityUsageCost(costRow, rateResolver)
+		cost, costSource, priced, contributes, sessionCost, priceErr := duckActivityUsageCost(costRow, rateResolver)
 		if priceErr != nil {
 			return nil, nil, priceErr
 		}
@@ -1183,7 +1178,8 @@ func duckActivityUsageHasOrdinal(v any) bool {
 func duckActivityUsageCost(
 	r duckActivityReportUsageRow, pricing *export.PricingResolver,
 ) (cost money.Money, costSource export.CostSource, priced, contributes bool,
-	sessionCost *money.Money, err error) {
+	sessionCost *money.Money, err error,
+) {
 	costRow := r
 	if r.costSource == db.CopilotReportedCostSource && r.cost != nil {
 		v := money.Money{Microdollars: *r.cost}
@@ -1191,8 +1187,7 @@ func duckActivityUsageCost(
 		costRow.cost = nil
 		pricing.RecordUnattributedReported()
 	}
-	_, cost, priced, contributes, err =
-		duckActivityReportRowStatus(costRow, pricing)
+	_, cost, priced, contributes, err = duckActivityReportRowStatus(costRow, pricing)
 	costSource = export.CostSourceComputed
 	if costRow.cost != nil {
 		costSource = export.CostSourceReported

@@ -2,8 +2,10 @@ package server
 
 import (
 	"bufio"
+	"context"
 	"encoding/base64"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -40,18 +42,20 @@ type resumeResponse struct {
 
 // resumeAgents maps agent type strings to their resume command templates.
 // The %s placeholder is replaced with the (quoted) session ID. TraeX ships the
-// traex, traecli, and trae-cli aliases; the shortest is used.
+// traex, traecli, and trae-cli aliases; the shortest is used. The Augure Code
+// agent's command is the vendor's own `augure resume` CLI, not the agent id.
 var resumeAgents = map[string]string{
-	"claude":   "claude --resume %s",
-	"codex":    "codex resume %s",
-	"traex":    "traex resume %s",
-	"copilot":  "copilot --resume=%s",
-	"cursor":   "cursor agent --resume %s",
-	"gemini":   "gemini --resume %s",
-	"opencode": "opencode --session %s",
-	"amp":      "amp --resume %s",
-	"kiro":     "kiro-cli chat --resume-id %s",
-	"pi":       "pi --session %s",
+	"claude":      "claude --resume %s",
+	"codex":       "codex resume %s",
+	"traex":       "traex resume %s",
+	"augure-code": "augure resume %s",
+	"copilot":     "copilot --resume=%s",
+	"cursor":      "cursor agent --resume %s",
+	"gemini":      "gemini --resume %s",
+	"opencode":    "opencode --session %s",
+	"amp":         "amp --resume %s",
+	"kiro":        "kiro-cli chat --resume-id %s",
+	"pi":          "pi --session %s",
 }
 
 const syntheticModel = "<synthetic>"
@@ -67,14 +71,15 @@ func resumeCommand(agent, tmpl, rawID, model string) string {
 	switch agent {
 	case "claude":
 		cmd += " --model " + shellQuote(model)
-	case "codex", "traex":
+	case "codex", "traex", "augure-code":
 		cmd += " -m " + shellQuote(model)
 	}
 	return cmd
 }
 
 func resumeAgentNeedsModel(agent string) bool {
-	return agent == "claude" || agent == "codex" || agent == "traex"
+	return agent == "claude" || agent == "codex" || agent == "traex" ||
+		agent == "augure-code"
 }
 
 func primaryResumeModel(counts []db.ModelCount) string {
@@ -445,7 +450,7 @@ func detectTerminalDarwin(
 		)
 		return "osascript", []string{"-e", appleScript}, "Terminal", nil
 	}
-	return "", nil, "", fmt.Errorf("osascript not found on macOS")
+	return "", nil, "", errors.New("osascript not found on macOS")
 }
 
 // readSessionCwd reads the first few lines of a session JSONL file
@@ -721,9 +726,8 @@ func detectTerminalLinux(cmd string) (string, []string, string, error) {
 		return path, buildTerminalArgs(c.bin, cmd), c.bin, nil
 	}
 
-	return "", nil, "", fmt.Errorf(
-		"no terminal emulator found; install kitty, alacritty, " +
-			"gnome-terminal, or set $TERMINAL",
+	return "", nil, "", errors.New("no terminal emulator found; install kitty, alacritty, " +
+		"gnome-terminal, or set $TERMINAL",
 	)
 }
 
@@ -758,7 +762,7 @@ func buildTerminalArgs(bin, cmd string) []string {
 // inside the terminal identified by the opener. Returns nil if the
 // opener kind is not "terminal" (or "action" for special openers like
 // Claude Desktop) or the terminal is not supported.
-func launchResumeInOpener(
+func launchResumeInOpener(ctx context.Context,
 	o Opener, cmd string, cwd string,
 ) *exec.Cmd {
 	if o.ID == "claude-desktop" {
@@ -769,13 +773,13 @@ func launchResumeInOpener(
 	}
 
 	if runtime.GOOS == "darwin" {
-		return launchResumeDarwin(o, cmd, cwd)
+		return launchResumeDarwin(ctx, o, cmd, cwd)
 	}
 
 	// Linux: launch via CLI binary with per-terminal arg patterns.
 	// Wrap the resume command so the shell stays open after it exits.
 	args := buildTerminalArgs(o.ID, cmd+"; exec bash")
-	proc := exec.Command(o.Bin, args...)
+	proc := exec.CommandContext(ctx, o.Bin, args...)
 	if cwd != "" {
 		proc.Dir = cwd
 	}
@@ -788,7 +792,7 @@ func launchResumeInOpener(
 // launchResumeDarwin launches a resume command in a macOS terminal
 // app. Uses AppleScript for iTerm2/Terminal.app and `open -na` with
 // appropriate flags for others.
-func launchResumeDarwin(
+func launchResumeDarwin(ctx context.Context,
 	o Opener, cmd string, cwd string,
 ) *exec.Cmd {
 	// For AppleScript-based terminals, build a single shell command
@@ -820,7 +824,7 @@ func launchResumeDarwin(
 				end tell
 			end tell`, safe,
 		)
-		return exec.Command("osascript", "-e", script)
+		return exec.CommandContext(ctx, "osascript", "-e", script)
 	case "terminal":
 		script := fmt.Sprintf(
 			`tell application "Terminal"
@@ -828,7 +832,7 @@ func launchResumeDarwin(
 				do script "%s"
 			end tell`, safe,
 		)
-		return exec.Command("osascript", "-e", script)
+		return exec.CommandContext(ctx, "osascript", "-e", script)
 	case "ghostty":
 		var args []string
 		if cwd != "" {
@@ -836,14 +840,14 @@ func launchResumeDarwin(
 		}
 		args = append(args, "-e", "bash", "-c",
 			cmd+"; exec bash")
-		return macExecCommand(o.Bin, args...)
+		return macExecCommand(ctx, o.Bin, args...)
 	case "kitty":
 		var args []string
 		if cwd != "" {
 			args = append(args, "-d", cwd)
 		}
 		args = append(args, "bash", "-c", cmd+"; exec bash")
-		return macExecCommand(o.Bin, args...)
+		return macExecCommand(ctx, o.Bin, args...)
 	case "alacritty":
 		var args []string
 		if cwd != "" {
@@ -851,7 +855,7 @@ func launchResumeDarwin(
 		}
 		args = append(args, "-e", "bash", "-c",
 			cmd+"; exec bash")
-		return macExecCommand(o.Bin, args...)
+		return macExecCommand(ctx, o.Bin, args...)
 	case "wezterm":
 		args := []string{"start"}
 		if cwd != "" {
@@ -859,7 +863,7 @@ func launchResumeDarwin(
 		}
 		args = append(args, "--", "bash", "-c",
 			cmd+"; exec bash")
-		return macExecCommand(o.Bin, args...)
+		return macExecCommand(ctx, o.Bin, args...)
 	default:
 		return nil
 	}
@@ -868,10 +872,10 @@ func launchResumeDarwin(
 // launchClaudeDesktop builds an exec.Cmd that opens a Claude Code
 // session in Claude Desktop via the claude:// URL scheme. The URL
 // format is claude://resume?session={id}&cwd={path}.
-func launchClaudeDesktop(sessionID string, cwd string) *exec.Cmd {
+func launchClaudeDesktop(ctx context.Context, sessionID string, cwd string) *exec.Cmd {
 	u := "claude://resume?session=" + url.QueryEscape(sessionID)
 	if cwd != "" {
 		u += "&cwd=" + url.QueryEscape(cwd)
 	}
-	return exec.Command("open", u)
+	return exec.CommandContext(ctx, "open", u)
 }

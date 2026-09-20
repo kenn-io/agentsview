@@ -303,7 +303,10 @@ func (m *Manager) TryBuild(ctx context.Context, req BuildRequest) (bool, error) 
 		return false, err
 	}
 	if err := m.begin(); err != nil {
-		return false, nil
+		if errors.Is(err, ErrBuildRunning) {
+			return false, nil
+		}
+		return false, err
 	}
 	result, err := m.runBuild(ctx, req, me)
 	m.finish(result, err)

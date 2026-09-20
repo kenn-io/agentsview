@@ -1,5 +1,5 @@
-// ABOUTME: pg push adapter exposing the local vectors.db active generation
-// ABOUTME: to internal/postgres as a lazily-opened read-only VectorPushSource.
+// ABOUTME: replica push adapter exposing the local vectors.db active generation
+// ABOUTME: to replica pushes as a lazily-opened read-only storage.VectorPushSource.
 package main
 
 import (
@@ -12,12 +12,12 @@ import (
 	"sync"
 
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/vector"
 )
 
 // vectorPushSource adapts a read-only vector.Index to
-// postgres.VectorPushSource, opening vectors.db lazily so a pg push whose
+// storage.VectorPushSource, opening vectors.db lazily so a pg push whose
 // target has vectors disabled never touches the file. Only a successful open is
 // memoized; a missing file or open failure is never cached, so a daemon push
 // that starts before embeddings exist picks up a build that lands afterward.
@@ -25,7 +25,7 @@ import (
 // read-only handle stays open for the adapter's lifetime; the creator owns
 // that lifetime and must release it via closeVectorPushSource — per push in
 // PGPush, at loop exit in the watch path (which reuses one adapter across
-// reconnects) — since postgres.Sync never closes its source.
+// reconnects) — since the pusher never closes its source.
 type vectorPushSource struct {
 	cfg config.Config
 
@@ -35,8 +35,8 @@ type vectorPushSource struct {
 
 // newVectorPushSource returns a lazy vectors.db push adapter, or nil when
 // [vector] is disabled: there is then no vectors.db to open and nothing to
-// push, and a nil source leaves postgres.Sync's vector phase skipped.
-func newVectorPushSource(appCfg config.Config) postgres.VectorPushSource {
+// push, and a nil source leaves the pusher's vector phase skipped.
+func newVectorPushSource(appCfg config.Config) storage.VectorPushSource {
 	if appCfg.ArchiveContent.UsageOnly() || !appCfg.Vector.Enabled {
 		return nil
 	}
@@ -44,12 +44,12 @@ func newVectorPushSource(appCfg config.Config) postgres.VectorPushSource {
 }
 
 // closeVectorPushSource releases a push source's memoized read-only
-// vectors.db handle. postgres.Sync never closes its source — the creator
+// vectors.db handle. the pusher never closes its source — the creator
 // owns the handle's lifetime — so every call site that builds a source must
 // close it when the push (or watch loop) is done, or repeated pushes leak
 // one SQLite handle each. Safe on a nil source and on sources holding no
 // handle.
-func closeVectorPushSource(src postgres.VectorPushSource) {
+func closeVectorPushSource(src storage.VectorPushSource) {
 	c, ok := src.(io.Closer)
 	if !ok {
 		return
@@ -102,7 +102,7 @@ func (s *vectorPushSource) Close() error {
 
 func (s *vectorPushSource) BeginExport(
 	ctx context.Context, sessionIDs []string,
-) (postgres.VectorExport, bool, error) {
+) (storage.VectorExport, bool, error) {
 	ix, err := s.openIndex(ctx)
 	if err != nil || ix == nil {
 		return nil, false, err
@@ -110,7 +110,7 @@ func (s *vectorPushSource) BeginExport(
 	exp, ok, err := ix.BeginExport(ctx, sessionIDs)
 	if err != nil {
 		if errors.Is(err, vector.ErrExportNotReady) {
-			return nil, false, fmt.Errorf("%w: %v", postgres.ErrVectorSourceNotReady, err)
+			return nil, false, fmt.Errorf("%w: %w", storage.ErrVectorSourceNotReady, err)
 		}
 		return nil, false, fmt.Errorf("beginning vector export: %w", err)
 	}
@@ -122,16 +122,16 @@ func (s *vectorPushSource) BeginExport(
 
 type vectorPushExport struct{ export *vector.Export }
 
-func (e *vectorPushExport) Generation() postgres.VectorGenerationInfo {
+func (e *vectorPushExport) Generation() storage.VectorGenerationInfo {
 	exp := e.export.Generation()
-	return postgres.VectorGenerationInfo{Fingerprint: exp.Fingerprint, Model: exp.Model, Dimension: exp.Dimension}
+	return storage.VectorGenerationInfo{Fingerprint: exp.Fingerprint, Model: exp.Model, Dimension: exp.Dimension}
 }
 
 func (e *vectorPushExport) SessionDocHashes(ctx context.Context, ids []string) (map[string]string, error) {
 	return e.export.SessionDocHashes(ctx, ids)
 }
 
-func (e *vectorPushExport) SessionDocs(ctx context.Context, id string) ([]postgres.VectorPushDoc, string, error) {
+func (e *vectorPushExport) SessionDocs(ctx context.Context, id string) ([]storage.VectorPushDoc, string, error) {
 	docs, hash, err := e.export.SessionDocs(ctx, id)
 	if err != nil {
 		return nil, "", err
@@ -144,17 +144,17 @@ func (e *vectorPushExport) Close() error { return e.export.Close() }
 // convertVectorPushDocs copies exported mirror docs onto the backend-agnostic
 // push types. It is a mechanical field-by-field copy, isolated here so the
 // mapping is testable against the raw export API.
-func convertVectorPushDocs(docs []vector.ExportDoc) []postgres.VectorPushDoc {
-	out := make([]postgres.VectorPushDoc, len(docs))
+func convertVectorPushDocs(docs []vector.ExportDoc) []storage.VectorPushDoc {
+	out := make([]storage.VectorPushDoc, len(docs))
 	for i, d := range docs {
-		chunks := make([]postgres.VectorPushChunk, len(d.Chunks))
+		chunks := make([]storage.VectorPushChunk, len(d.Chunks))
 		for j, c := range d.Chunks {
-			chunks[j] = postgres.VectorPushChunk{
+			chunks[j] = storage.VectorPushChunk{
 				ChunkIndex: c.ChunkIndex,
 				Embedding:  c.Embedding,
 			}
 		}
-		out[i] = postgres.VectorPushDoc{
+		out[i] = storage.VectorPushDoc{
 			DocKey:      d.DocKey,
 			SessionID:   d.SessionID,
 			SourceUUID:  d.SourceUUID,

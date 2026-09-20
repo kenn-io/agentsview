@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
@@ -326,7 +327,7 @@ func forEachVisualStudioCopilotTraceSpan(
 			}
 			encoded, marshalErr := json.Marshal(SourceFingerprint{
 				Size: info.Size(), MTimeNS: info.ModTime().UnixNano(),
-				Hash: fmt.Sprintf("%x", hasher.Sum(nil)),
+				Hash: hex.EncodeToString(hasher.Sum(nil)),
 			})
 			if marshalErr != nil {
 				return marshalErr
@@ -385,7 +386,7 @@ func decodeVisualStudioCopilotSpanArray(
 		return err
 	}
 	if open.Kind() != jsontext.KindBeginArray {
-		return fmt.Errorf("spans: expected array")
+		return errors.New("spans: expected array")
 	}
 	var decoderRetained int64
 	defer func() { observeStreamingRetainedBytes(ctx, -decoderRetained) }()
@@ -1274,8 +1275,7 @@ func visualStudioCopilotApplyUsage(
 	if model := visualStudioCopilotTraceModel(span); model != "" {
 		msg.Model = model
 	}
-	usage, contextTokens, outputTokens, hasContext, hasOutput :=
-		visualStudioCopilotTraceUsage(span)
+	usage, contextTokens, outputTokens, hasContext, hasOutput := visualStudioCopilotTraceUsage(span)
 	if len(usage) == 0 {
 		return
 	}

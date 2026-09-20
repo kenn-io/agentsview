@@ -223,8 +223,7 @@ func TestFallbackPricing_SupplementalsDoNotCollideWithSnapshot(t *testing.T) {
 func TestSeedVersion_FoldsInSupplementalVersion(t *testing.T) {
 	snapshot := requireEmbeddedFallbackSnapshot(t)
 	assert.Equal(t, snapshot.Version, FallbackVersion)
-	assert.True(t,
-		strings.HasPrefix(SeedVersion, FallbackVersion+"+supplemental-"),
+	assert.True(t, strings.HasPrefix(SeedVersion, FallbackVersion+"+supplemental-"),
 		"SeedVersion %q must be FallbackVersion plus a supplemental suffix",
 		SeedVersion)
 	assert.NotEqual(t, FallbackVersion, SeedVersion,

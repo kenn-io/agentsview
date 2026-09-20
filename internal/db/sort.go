@@ -3,6 +3,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -119,7 +120,7 @@ func ParseSortSpec(spec string) ([]SortKey, error) {
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
-			return nil, fmt.Errorf("empty sort term")
+			return nil, errors.New("empty sort term")
 		}
 		key := part
 		var dir *bool
@@ -284,7 +285,7 @@ func CursorPredicateValues(cur SessionCursor, rs []ResolvedSort) ([]any, error) 
 		}
 		v, err := typedCursorValue(keys[i].Value, r.Sort.kind)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %v", ErrInvalidCursor, err)
+			return nil, fmt.Errorf("%w: %w", ErrInvalidCursor, err)
 		}
 		vals[i] = v
 	}

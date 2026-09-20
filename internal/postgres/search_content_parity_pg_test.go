@@ -39,7 +39,7 @@ func classifySearchErr(t *testing.T, err error) string {
 // calls use setupContentSearch, so this parity proof executes against the
 // actual backend whenever TEST_PG_URL is available.
 func TestSearchContentSemanticErrorParity(t *testing.T) {
-	sqlite, err := db.Open(filepath.Join(t.TempDir(), "parity.db"))
+	sqlite, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "parity.db"))
 	require.NoError(t, err, "open sqlite")
 	t.Cleanup(func() { sqlite.Close() })
 

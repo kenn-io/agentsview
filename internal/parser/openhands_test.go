@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"encoding/json/v2"
 	"os"
 	"path/filepath"
@@ -33,20 +32,20 @@ func TestDiscoverAndFindOpenHandsSessions(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, sessionDir, sources[0].DisplayPath)
 	assert.Equal(t, AgentOpenHands, sources[0].Provider)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: sessionID,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, sessionDir, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: dirName,
 	})
 	require.NoError(t, err)
@@ -55,7 +54,6 @@ func TestDiscoverAndFindOpenHandsSessions(t *testing.T) {
 }
 
 func TestParseOpenHandsSession(t *testing.T) {
-
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "demo-repo")
 	require.NoError(t, os.MkdirAll(projectDir, 0o755))
@@ -136,14 +134,14 @@ func TestParseOpenHandsSession(t *testing.T) {
 		Machine: "local",
 	})
 	require.True(t, ok)
-	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: sessionDir,
 	})
 	require.NoError(t, err)
 	require.True(t, found)
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      source,
 		Fingerprint: fingerprint,
 	})
@@ -165,7 +163,7 @@ func TestParseOpenHandsSession(t *testing.T) {
 	assert.Equal(t, sessionDir, sess.File.Path)
 	assert.NotEmpty(t, sess.File.Hash)
 	assert.NotZero(t, sess.File.Mtime)
-	assert.Greater(t, sess.File.Size, int64(0))
+	assert.Positive(t, sess.File.Size)
 
 	assert.Equal(t, RoleUser, msgs[0].Role)
 	assert.Equal(t, "Help me debug the server", msgs[0].Content)
@@ -183,8 +181,8 @@ func TestParseOpenHandsSession(t *testing.T) {
 	assert.Equal(t, RoleUser, msgs[2].Role)
 	require.Len(t, msgs[2].ToolResults, 1)
 	assert.Equal(t, "toolu_123", msgs[2].ToolResults[0].ToolUseID)
-	assert.Equal(
-		t, "panic: boom",
+	assert.Equal(t,
+		"panic: boom",
 		DecodeContent(msgs[2].ToolResults[0].ContentRaw),
 	)
 

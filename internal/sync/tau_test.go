@@ -1,9 +1,9 @@
 package sync
 
 import (
-	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,9 +34,11 @@ func tauSyncTranscript(leaf string) string {
 
 func tauTestLines(lines ...string) string {
 	result := ""
+	var resultSb37 strings.Builder
 	for _, line := range lines {
-		result += line + "\n"
+		resultSb37.WriteString(line + "\n")
 	}
+	result += resultSb37.String()
 	return result
 }
 
@@ -47,13 +49,13 @@ func TestTauSyncReplacesSelectedHistoryAndRetainsParseErrors(t *testing.T) {
 	path := filepath.Join(project, "sync-session.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte(tauSyncTranscript("tr1")), 0o644))
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentTau: {root}},
 		Machine:   "local", DisableSignalRecomputation: true,
 	})
 	t.Cleanup(engine.Close)
 
-	stats := engine.SyncAllForceParse(context.Background(), nil)
+	stats := engine.SyncAllForceParse(t.Context(), nil)
 	assert.GreaterOrEqual(t, stats.Synced, 1)
 	session, err := database.GetSessionFull(t.Context(), "tau:sync-session")
 	require.NoError(t, err)
@@ -69,7 +71,7 @@ func TestTauSyncReplacesSelectedHistoryAndRetainsParseErrors(t *testing.T) {
 	assert.Equal(t, "done", messages[1].ToolCalls[0].ResultContent)
 
 	require.NoError(t, os.WriteFile(path, []byte(tauSyncTranscript("a2")), 0o644))
-	stats = engine.SyncAllForceParse(context.Background(), nil)
+	stats = engine.SyncAllForceParse(t.Context(), nil)
 	assert.GreaterOrEqual(t, stats.Synced, 1)
 	session, err = database.GetSessionFull(t.Context(), "tau:sync-session")
 	require.NoError(t, err)
@@ -83,14 +85,14 @@ func TestTauSyncReplacesSelectedHistoryAndRetainsParseErrors(t *testing.T) {
 
 	beforeMessages := append([]string(nil), messages[0].Content, messages[1].Content, messages[2].Content)
 	require.NoError(t, os.WriteFile(path, []byte("{malformed\n"), 0o644))
-	engine.SyncAllForceParse(context.Background(), nil)
+	engine.SyncAllForceParse(t.Context(), nil)
 	messages, err = database.GetAllMessages(t.Context(), "tau:sync-session")
 	require.NoError(t, err)
 	require.Len(t, messages, 3)
-	assert.Equal(t, beforeMessages, []string{messages[0].Content, messages[1].Content, messages[2].Content})
+	assert.Equal(t, []string{messages[0].Content, messages[1].Content, messages[2].Content}, beforeMessages)
 
 	require.NoError(t, os.WriteFile(path, []byte(tauSyncTranscript("empty")), 0o644))
-	stats = engine.SyncAllForceParse(context.Background(), nil)
+	stats = engine.SyncAllForceParse(t.Context(), nil)
 	assert.GreaterOrEqual(t, stats.Synced, 1)
 	messages, err = database.GetAllMessages(t.Context(), "tau:sync-session")
 	require.NoError(t, err)

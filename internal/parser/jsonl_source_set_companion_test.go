@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -24,7 +23,7 @@ func writeFile(t *testing.T, path, contents string) {
 }
 
 func TestJSONLSourceSetCompanionFingerprintReflectsCompanionChange(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	transcript := filepath.Join(root, "session.jsonl")
 	companion := transcript + ".meta"
@@ -58,7 +57,7 @@ func TestJSONLSourceSetCompanionFingerprintReflectsCompanionChange(t *testing.T)
 }
 
 func TestJSONLSourceSetCompanionFingerprintHashChanges(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	transcript := filepath.Join(root, "session.jsonl")
 	companion := transcript + ".meta"
@@ -105,7 +104,7 @@ func TestJSONLSourceSetCompanionSymlinkPolicy(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
+			ctx := t.Context()
 			root := t.TempDir()
 			transcript := filepath.Join(root, "session.jsonl")
 			target := filepath.Join(t.TempDir(), "session.meta")
@@ -144,7 +143,7 @@ func TestJSONLSourceSetCompanionSymlinkPolicy(t *testing.T) {
 }
 
 func TestJSONLSourceSetCompanionChangedPathMapsToTranscript(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	transcript := filepath.Join(root, "session.jsonl")
 	companion := transcript + ".meta"
@@ -189,7 +188,7 @@ func TestJSONLSourceSetCompanionWatchRootsStayBoundedByConfiguredRoots(t *testin
 		var roots []WatchRoot
 		allocs := testing.AllocsPerRun(20, func() {
 			var err error
-			roots, err = set.WatchRoots(context.Background())
+			roots, err = set.WatchRoots(t.Context())
 			require.NoError(t, err)
 		})
 		return len(roots), allocs
@@ -199,12 +198,12 @@ func TestJSONLSourceSetCompanionWatchRootsStayBoundedByConfiguredRoots(t *testin
 	largeRoots, largeAllocs := measure(t, 500)
 	assert.Equal(t, smallRoots, largeRoots,
 		"root-plan cardinality must depend on configured roots, not transcripts")
-	assert.Equal(t, smallAllocs, largeAllocs,
+	assert.InDelta(t, smallAllocs, largeAllocs, 0,
 		"root planning allocations must not scale with transcript companions")
 }
 
 func TestJSONLSourceSetCompanionWatchPlanIncludesCompanionGlob(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	transcript := filepath.Join(root, "session.jsonl")
 	writeFile(t, transcript, `{"line":1}`+"\n")
@@ -224,7 +223,7 @@ func TestJSONLSourceSetCompanionWatchPlanIncludesCompanionGlob(t *testing.T) {
 }
 
 func TestJSONLSourceSetWithoutCompanionsUnaffected(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	transcript := filepath.Join(root, "session.jsonl")
 	writeFile(t, transcript, `{"line":1}`+"\n")
@@ -250,6 +249,7 @@ func TestJSONLSourceSetWithoutCompanionsUnaffected(t *testing.T) {
 func TestJSONLSourceSetCompanionChangedPathSkipsForwardScan(t *testing.T) {
 	measure := func(t *testing.T, transcriptCount int) int {
 		t.Helper()
+
 		root := t.TempDir()
 		for i := range transcriptCount {
 			transcript := filepath.Join(root, fmt.Sprintf("session-%04d.jsonl", i))
@@ -271,7 +271,7 @@ func TestJSONLSourceSetCompanionChangedPathSkipsForwardScan(t *testing.T) {
 		)
 
 		companion := filepath.Join(root, "session-0000.jsonl.meta")
-		changed, err := set.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+		changed, err := set.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 			Path:      companion,
 			EventKind: "write",
 			WatchRoot: root,
@@ -322,7 +322,7 @@ func TestJSONLSourceSetChangedPathSkipsArchiveDiscovery(t *testing.T) {
 
 		resolve := func(path string) {
 			changed, err := set.SourcesForChangedPath(
-				context.Background(),
+				t.Context(),
 				ChangedPathRequest{Path: path, EventKind: "write", WatchRoot: root},
 			)
 			require.NoError(t, err)

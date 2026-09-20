@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,33 +27,33 @@ func TestQwenProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 2)
 	assert.Equal(t, []string{nonIDPath, sourcePath}, sourceDisplayPaths(discovered))
 	assert.Equal(t, []string{"sample_project", "sample_project"}, sourceProjects(discovered))
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{"*.jsonl"}, plan.Roots[0].IncludeGlobs)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~qwen:session-123",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, sourcePath, found.DisplayPath)
 
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "2025.01.01",
 	})
 	require.NoError(t, err)
 	assert.False(t, ok)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: nonIDPath,
 	})
 	require.NoError(t, err)
@@ -63,7 +62,7 @@ func TestQwenProviderSourceMethods(t *testing.T) {
 
 	require.NoError(t, os.Remove(sourcePath))
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -87,12 +86,12 @@ func TestQwenProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~qwen:session-123",
 	})
 	require.NoError(t, err)
@@ -110,11 +109,11 @@ func TestQwenProviderParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: SourceFingerprint{Key: sourcePath, Hash: "abc123"},
 	})
@@ -136,17 +135,17 @@ func TestQwenProviderFingerprintIncludesContentHash(t *testing.T) {
 
 	provider, ok := NewProvider(AgentQwen, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	fp, err := provider.Fingerprint(context.Background(), sources[0])
+	fp, err := provider.Fingerprint(t.Context(), sources[0])
 	require.NoError(t, err)
 	// The legacy processQwen path persisted a full-file content hash; the
 	// migrated provider must too, or a resync clears the stored file_hash.
 	require.NotEmpty(t, fp.Hash)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: fp,
 	})
@@ -176,7 +175,7 @@ func TestQwenProviderFindSourceResolvesStoredPathOutsideRoots(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: sourcePath,
 	})
 	require.NoError(t, err)
@@ -184,7 +183,7 @@ func TestQwenProviderFindSourceResolvesStoredPathOutsideRoots(t *testing.T) {
 	assert.Equal(t, sourcePath, found.DisplayPath)
 	assert.Equal(t, "sample_project", found.ProjectHint)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  found,
 		Machine: "devbox",
 	})
@@ -194,7 +193,7 @@ func TestQwenProviderFindSourceResolvesStoredPathOutsideRoots(t *testing.T) {
 	assert.Equal(t, "sample_project", outcome.Results[0].Result.Session.Project)
 
 	// A stored path that is not a valid Qwen source shape stays unresolved.
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: filepath.Join(storedRoot, "loose.jsonl"),
 	})
 	require.NoError(t, err)

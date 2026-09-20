@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,12 +24,12 @@ func parseGrokSubagentFixture(t *testing.T) map[string]ParseResult {
 	fixtureRoot := filepath.Join("testdata", "grok-build", "subagents")
 	require.NoError(t, os.CopyFS(root, os.DirFS(fixtureRoot)))
 	provider := newGrokTestProvider(t, root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 6)
 	results := make(map[string]ParseResult, len(sources))
 	for _, source := range sources {
-		outcome, err := provider.Parse(context.Background(), ParseRequest{
+		outcome, err := provider.Parse(t.Context(), ParseRequest{
 			Source: source,
 		})
 		require.NoError(t, err)
@@ -200,7 +199,7 @@ func TestGrokChangedPathReparentsFromSubagentMeta(t *testing.T) {
 		"status":"running"
 	}`)
 
-	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: metaPath,
 	})
 	require.NoError(t, err)
@@ -227,13 +226,13 @@ func TestGrokFingerprintIncludesParentSubagentMeta(t *testing.T) {
 		"session_summary":"child"
 	}`)
 	provider := newGrokTestProvider(t, root)
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: childID,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	before, err := provider.Fingerprint(context.Background(), source)
+	before, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 
 	writeGrokFixtureFile(
@@ -241,7 +240,7 @@ func TestGrokFingerprintIncludesParentSubagentMeta(t *testing.T) {
 		filepath.Join(root, "cwd-key", parentID, "subagents", childID, "meta.json"),
 		`{"subagent_id":"child-session","parent_session_id":"parent-session","child_session_id":"child-session","status":"running"}`,
 	)
-	after, err := provider.Fingerprint(context.Background(), source)
+	after, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	assert.NotEqual(t, before.Hash, after.Hash)
 }
@@ -273,7 +272,7 @@ func TestGrokChangedPathFindsWorktreeChildFromParentMeta(t *testing.T) {
 	}`)
 	provider := newGrokTestProvider(t, root)
 
-	changed, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	changed, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path: metaPath,
 	})
 	require.NoError(t, err)

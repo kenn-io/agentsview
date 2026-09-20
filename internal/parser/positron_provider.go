@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -84,7 +85,7 @@ func (p *positronProvider) Parse(
 	}
 	path, project, ok := p.sources.pathFromSource(req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("positron source path unavailable")
+		return ParseOutcome{}, errors.New("positron source path unavailable")
 	}
 	if req.Source.ProjectHint != "" {
 		project = req.Source.ProjectHint
@@ -382,7 +383,7 @@ func (s positronSourceSet) Fingerprint(
 	}
 	path, _, ok := s.pathFromSource(source)
 	if !ok {
-		return SourceFingerprint{}, fmt.Errorf("positron source path unavailable")
+		return SourceFingerprint{}, errors.New("positron source path unavailable")
 	}
 	info, err := os.Stat(path)
 	if err != nil {

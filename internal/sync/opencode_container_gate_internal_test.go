@@ -35,7 +35,7 @@ func (p *reconciliationSourceStateTestProvider) SourceForReconciliation(
 }
 
 func (p *reconciliationSourceStateTestProvider) ReconciliationSourceState(
-	parser.SourceRef,
+	context.Context, parser.SourceRef,
 ) (parser.ReconciliationSourceState, bool) {
 	return p.state, true
 }
@@ -47,7 +47,7 @@ func (p *reconciliationSourceStateTestProvider) SourcesForChangedPath(
 }
 
 func (p *reconciliationSourceStateTestProvider) ApplyReconciliationSourceState(
-	_ *parser.SourceRef, state parser.ReconciliationSourceState,
+	_ context.Context, _ *parser.SourceRef, state parser.ReconciliationSourceState,
 ) error {
 	if p.applyErr != nil {
 		return p.applyErr
@@ -60,7 +60,7 @@ func TestReconciliationCandidateCarriesStateAcrossSpool(t *testing.T) {
 	container, _ := newContainerTestDB(t)
 	root := filepath.Dir(container)
 	archive := openTestDB(t)
-	engine := NewEngine(archive, EngineConfig{
+	engine := NewEngine(t.Context(), archive, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOpenCode: {root},
 		},
@@ -81,14 +81,14 @@ func TestReconciliationCandidateCarriesStateAcrossSpool(t *testing.T) {
 		source: source,
 		state:  state,
 	}
-	candidate, ok := engine.reconciliationCandidate(
+	candidate, ok := engine.reconciliationCandidate(t.Context(),
 		discoveryProvider, source, []string{root}, nil,
 	)
 	require.True(t, ok)
 
-	spool, err := newReconciliationSpool(archive.Path())
+	spool, err := newReconciliationSpool(t.Context(), archive.Path())
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, spool.CloseAndRemove()) })
+	t.Cleanup(func() { require.NoError(t, spool.CloseAndRemove(t.Context())) })
 	require.NoError(t, spool.Add(t.Context(), candidate))
 	page, err := spool.Page(t.Context(), reconciliationCursor{}, 1)
 	require.NoError(t, err)
@@ -175,7 +175,7 @@ func TestReconciliationStateFallsBackAfterContainerChanges(t *testing.T) {
 		state, ok := origStat(path)
 		statCalls++
 		if statCalls == 1 {
-			_, err := conn.Exec("INSERT INTO session (id) VALUES ('ses_a')")
+			_, err := conn.ExecContext(t.Context(), "INSERT INTO session (id) VALUES ('ses_a')")
 			require.NoError(t, err, "change container after page refresh")
 		}
 		return state, ok
@@ -228,7 +228,7 @@ func TestReconciliationShadowPromotionSurvivesContainerChange(t *testing.T) {
 	engine.beginStreamingSQLiteContainerPass(
 		map[string]parser.SQLiteContainerState{container: before},
 	)
-	_, err := conn.Exec("INSERT INTO session (id) VALUES ('ses_a')")
+	_, err := conn.ExecContext(t.Context(), "INSERT INTO session (id) VALUES ('ses_a')")
 	require.NoError(t, err, "change container before rehydration")
 
 	files, err := engine.rehydrateReconciliationPage(
@@ -259,7 +259,7 @@ func newContainerTestDB(t *testing.T) (string, *sql.DB) {
 	conn, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "open container db")
 	t.Cleanup(func() { _ = conn.Close() })
-	_, err = conn.Exec("CREATE TABLE session (id TEXT PRIMARY KEY)")
+	_, err = conn.ExecContext(t.Context(), "CREATE TABLE session (id TEXT PRIMARY KEY)")
 	require.NoError(t, err, "create session table")
 	return path, conn
 }
@@ -273,7 +273,7 @@ func newCompositeContainerTestDB(t *testing.T) (string, *sql.DB) {
 	conn, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "open container db")
 	t.Cleanup(func() { _ = conn.Close() })
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		CREATE TABLE project (
 			id TEXT PRIMARY KEY,
 			worktree TEXT NOT NULL,
@@ -318,11 +318,11 @@ func seedCoveredVirtualMember(
 ) {
 	t.Helper()
 	storedMtime := watermarkMS * 1_000_000
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: sessionID, Agent: "opencode", Project: "project",
 		Machine: "local", FilePath: &virtualPath, FileMtime: &storedMtime,
 	}))
-	require.NoError(t, database.SetSessionDataVersion(
+	require.NoError(t, database.SetSessionDataVersion(t.Context(),
 		sessionID, db.CurrentDataVersion(),
 	))
 }
@@ -340,18 +340,18 @@ func TestStoredMemberFreshnessPagerEmitsOnlyVouchableRows(t *testing.T) {
 	digest := "opencode-child:v1:900:20:30:1:2:abcd"
 	digestPath := container + "#b"
 	digestMtime := int64(900) * 1_000_000
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "opencode:b", Agent: "opencode", Project: "project",
 		Machine: "local", FilePath: &digestPath, FileMtime: &digestMtime,
 		FileHash: &digest,
 	}))
-	require.NoError(t, database.SetSessionDataVersion(
+	require.NoError(t, database.SetSessionDataVersion(t.Context(),
 		"opencode:b", db.CurrentDataVersion(),
 	))
 
 	stalePath := container + "#c"
 	staleMtime := int64(100) * 1_000_000
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "opencode:c", Agent: "opencode", Project: "project",
 		Machine: "local", FilePath: &stalePath, FileMtime: &staleMtime,
 	}))
@@ -387,7 +387,7 @@ func TestStoredMemberFreshnessPagerAdvancesPastAllStalePages(t *testing.T) {
 	for _, id := range []string{"a", "b"} {
 		path := container + "#" + id
 		mtime := int64(100) * 1_000_000
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 			ID: "opencode:" + id, Agent: "opencode", Project: "project",
 			Machine: "local", FilePath: &path, FileMtime: &mtime,
 		}))
@@ -417,7 +417,7 @@ func TestClassifyChangedPathWatermarkMergeRelistsOnStaleCapture(t *testing.T) {
 	dbPath, conn := newCompositeContainerTestDB(t)
 	const base = int64(1779012000000)
 	for _, id := range []string{"ses-1", "ses-2"} {
-		_, err := conn.Exec(
+		_, err := conn.ExecContext(t.Context(),
 			"INSERT INTO session (id, project_id, time_created, time_updated)"+
 				" VALUES (?, 'proj', ?, ?)",
 			id, base, base,
@@ -426,7 +426,7 @@ func TestClassifyChangedPathWatermarkMergeRelistsOnStaleCapture(t *testing.T) {
 	}
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOpenCode: {filepath.Dir(dbPath)},
 		},
@@ -475,13 +475,13 @@ func TestDiscoveredFileWatermarkCutoffRequiresLiveCapture(t *testing.T) {
 	dbPath, conn := newCompositeContainerTestDB(t)
 	const sessionRow = int64(1779012000000)
 	const childWrite = int64(1779012500000)
-	_, err := conn.Exec(
+	_, err := conn.ExecContext(t.Context(),
 		"INSERT INTO session (id, project_id, time_created, time_updated)"+
 			" VALUES ('ses-1', 'proj', ?, ?)",
 		sessionRow, sessionRow,
 	)
 	require.NoError(t, err, "insert session row")
-	_, err = conn.Exec(
+	_, err = conn.ExecContext(t.Context(),
 		"INSERT INTO message (id, session_id, data, time_created, time_updated)"+
 			" VALUES ('msg-1', 'ses-1', '{}', ?, ?)",
 		childWrite, childWrite,
@@ -506,7 +506,7 @@ func TestDiscoveredFileWatermarkCutoffRequiresLiveCapture(t *testing.T) {
 	require.Equal(t, sessionRow*1_000_000, carried,
 		"the carried watermark must be the session row alone")
 
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOpenCode: {root},
 		},
@@ -772,7 +772,7 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 			capture, ok := parser.StatSQLiteContainerState(dbPath)
 			require.True(t, ok, "container state must be readable")
 			if tc.capture == captureStale {
-				_, err := conn.Exec("INSERT INTO session (id) VALUES ('w1')")
+				_, err := conn.ExecContext(t.Context(), "INSERT INTO session (id) VALUES ('w1')")
 				require.NoError(t, err,
 					"write inside the capture-discovery window")
 			}
@@ -827,11 +827,11 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 				e.containerPass.fullDigestListed[siblingPath] = true
 			}
 			if tc.probeMemberStale {
-				assert.False(t, e.sqliteContainerSourceFresh(fileA),
+				assert.False(t, e.sqliteContainerSourceFresh(t.Context(), fileA),
 					"an unobserved container must not gate-skip its sessions")
 			}
 			if tc.lateWrite {
-				_, err := conn.Exec("INSERT INTO session (id) VALUES ('w2')")
+				_, err := conn.ExecContext(t.Context(), "INSERT INTO session (id) VALUES ('w2')")
 				require.NoError(t, err, "write after discovery")
 			}
 			switch tc.result {
@@ -857,6 +857,7 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 
 			assertTrust := func(path string, want stateWant, label string) {
 				t.Helper()
+
 				got, ok := e.trustedSQLiteContainers[path]
 				switch want {
 				case wantAbsent:
@@ -874,6 +875,7 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 			}
 			assertStamp := func(path string, want stateWant, label string) {
 				t.Helper()
+
 				got, ok := e.digestVerifiedAt[path]
 				switch want {
 				case wantAbsent:
@@ -963,7 +965,7 @@ func TestSQLiteContainerTrustLifecycle(t *testing.T) {
 		require.NotNil(t, file.ProviderSource,
 			"an unchanged capture keeps the carried source")
 
-		_, err := conn.Exec("INSERT INTO session (id) VALUES ('ses_a')")
+		_, err := conn.ExecContext(t.Context(), "INSERT INTO session (id) VALUES ('ses_a')")
 		require.NoError(t, err, "write container after recapture")
 		e.discardStaleSQLiteProviderSource(&file)
 		assert.Nil(t, file.ProviderSource,
@@ -1035,8 +1037,8 @@ func TestSQLiteContainerGateParsesNewlyUnshadowedSession(t *testing.T) {
 		{ID: "opencode:ses-1", Agent: "opencode", Project: "project", Machine: "local", FilePath: &verifiedPath},
 		{ID: "opencode:ses-2", Agent: "opencode", Project: "project", Machine: "local", FilePath: &replacementPath},
 	} {
-		require.NoError(t, archive.UpsertSession(session))
-		require.NoError(t, archive.SetSessionDataVersion(session.ID, db.CurrentDataVersion()))
+		require.NoError(t, archive.UpsertSession(t.Context(), session))
+		require.NoError(t, archive.SetSessionDataVersion(t.Context(), session.ID, db.CurrentDataVersion()))
 	}
 	e.beginSQLiteContainerPass(
 		[]parser.DiscoveredFile{verified},
@@ -1055,9 +1057,9 @@ func TestSQLiteContainerGateParsesNewlyUnshadowedSession(t *testing.T) {
 		[]parser.DiscoveredFile{verified, exposed},
 		map[string]parser.SQLiteContainerState{dbPath: state},
 	)
-	assert.True(t, e.sqliteContainerSourceFresh(verified),
+	assert.True(t, e.sqliteContainerSourceFresh(t.Context(), verified),
 		"the verified session must still gate-skip")
-	assert.False(t, e.sqliteContainerSourceFresh(exposed),
+	assert.False(t, e.sqliteContainerSourceFresh(t.Context(), exposed),
 		"a newly exposed row must parse despite the unchanged container")
 }
 
@@ -1081,8 +1083,8 @@ func TestSQLiteContainerGateUsesCarriedSourcePath(t *testing.T) {
 		ID: "opencode:ses-1", Agent: string(parser.AgentOpenCode),
 		Project: "project", Machine: "local", FilePath: &filePath,
 	}
-	require.NoError(t, archive.UpsertSession(session))
-	require.NoError(t, archive.SetSessionDataVersion(
+	require.NoError(t, archive.UpsertSession(t.Context(), session))
+	require.NoError(t, archive.SetSessionDataVersion(t.Context(),
 		session.ID, db.CurrentDataVersion(),
 	))
 
@@ -1105,7 +1107,7 @@ func TestSQLiteContainerGateUsesCarriedSourcePath(t *testing.T) {
 		Path:           virtualPath,
 		ProviderSource: &virtualSource,
 	}
-	require.True(t, e.sqliteContainerSourceFresh(gateFile), "the carried virtual source must be fresh")
+	require.True(t, e.sqliteContainerSourceFresh(t.Context(), gateFile), "the carried virtual source must be fresh")
 
 	result, used := e.processProviderFile(t.Context(), parser.DiscoveredFile{
 		Agent:           parser.AgentOpenCode,
@@ -1127,7 +1129,7 @@ func TestSQLiteContainerGateUsesCarriedSourcePath(t *testing.T) {
 		Agent: parser.AgentOpenCode, Path: virtualPath,
 		ProviderSource: &shadowSource,
 	}
-	assert.False(t, e.sqliteContainerSourceFresh(shadow),
+	assert.False(t, e.sqliteContainerSourceFresh(t.Context(), shadow),
 		"a resolved storage shadow must not use the SQLite container gate")
 }
 
@@ -1155,8 +1157,8 @@ func TestSQLiteContainerScopedPassDoesNotPromoteUndiscoveredContainer(t *testing
 		ID: "opencode:ses-1", Agent: "opencode", Project: "project",
 		Machine: "local", FilePath: &filePath,
 	}
-	require.NoError(t, archive.UpsertSession(session))
-	require.NoError(t, archive.SetSessionDataVersion(
+	require.NoError(t, archive.UpsertSession(t.Context(), session))
+	require.NoError(t, archive.SetSessionDataVersion(t.Context(),
 		session.ID, db.CurrentDataVersion(),
 	))
 
@@ -1170,7 +1172,7 @@ func TestSQLiteContainerScopedPassDoesNotPromoteUndiscoveredContainer(t *testing
 	require.Contains(t, e.trustedSQLiteContainers, dbPath)
 
 	// The container changes after the verified pass.
-	_, err := conn.Exec("INSERT INTO session (id) VALUES ('ses-1')")
+	_, err := conn.ExecContext(t.Context(), "INSERT INTO session (id) VALUES ('ses-1')")
 	require.NoError(t, err, "write session after the verified pass")
 	changed, ok := parser.StatSQLiteContainerState(dbPath)
 	require.True(t, ok, "changed container state must be readable")
@@ -1190,7 +1192,7 @@ func TestSQLiteContainerScopedPassDoesNotPromoteUndiscoveredContainer(t *testing
 		[]parser.DiscoveredFile{file},
 		map[string]parser.SQLiteContainerState{dbPath: changed},
 	)
-	assert.False(t, e.sqliteContainerSourceFresh(file),
+	assert.False(t, e.sqliteContainerSourceFresh(t.Context(), file),
 		"a container changed while out of scope must not gate-skip after a scoped pass")
 }
 
@@ -1278,7 +1280,7 @@ func TestOpenCodeChildOnlyEditReconcilesAtVerificationInterval(t *testing.T) {
 		}
 		return state, ok
 	}
-	_, err := conn.Exec(`
+	_, err := conn.ExecContext(t.Context(), `
 		INSERT INTO project (id, worktree, time_updated)
 		VALUES ('proj', '/home/user/code/app', 1779012000000);
 		INSERT INTO session
@@ -1302,7 +1304,7 @@ func TestOpenCodeChildOnlyEditReconcilesAtVerificationInterval(t *testing.T) {
 	require.NoError(t, err, "seed composite container")
 
 	archive := openTestDB(t)
-	e := NewEngine(archive, EngineConfig{
+	e := NewEngine(t.Context(), archive, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOpenCode: {filepath.Dir(dbPath)},
 		},
@@ -1327,7 +1329,7 @@ func TestOpenCodeChildOnlyEditReconcilesAtVerificationInterval(t *testing.T) {
 	assert.Equal(t, 1, initial.Synced)
 	assertContent("original prompt", "original answer")
 
-	_, err = conn.Exec(`
+	_, err = conn.ExecContext(t.Context(), `
 		UPDATE message SET id = CASE id
 			WHEN 'msg-user' THEN 'msg-user-v2'
 			WHEN 'msg-assistant' THEN 'msg-assistant-v2'
@@ -1513,7 +1515,7 @@ func TestOpenCodeDigestListingForm(t *testing.T) {
 					}
 					return state, ok
 				}
-				_, err := conn.Exec(`
+				_, err := conn.ExecContext(t.Context(), `
 					INSERT INTO project (id, worktree, time_updated)
 					VALUES ('proj', '/home/user/code/app', 1779012000000);
 					INSERT INTO session
@@ -1535,7 +1537,7 @@ func TestOpenCodeDigestListingForm(t *testing.T) {
 				cutoff := time.UnixMilli(1_779_100_000_000)
 
 				archive := openTestDB(t)
-				e := NewEngine(archive, EngineConfig{
+				e := NewEngine(t.Context(), archive, EngineConfig{
 					AgentDirs: map[parser.AgentType][]string{
 						parser.AgentOpenCode: {filepath.Dir(dbPath)},
 					},
@@ -1557,7 +1559,7 @@ func TestOpenCodeDigestListingForm(t *testing.T) {
 				// Backdated child-only edit: content and identity change,
 				// every timestamp stays put, so the composite mtime stays
 				// below the cutoff.
-				_, err = conn.Exec(`
+				_, err = conn.ExecContext(t.Context(), `
 					UPDATE part SET
 						id = 'part-1-v2',
 						data = '{"type":"text","text":"changed prompt"}'

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 
 func writeCodeBuddyFixture(t *testing.T, root, workspace, id string) string {
 	t.Helper()
+
 	dir := filepath.Join(root, "history", workspace, id)
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "messages"), 0o755))
 	index := filepath.Join(dir, "index.json")
@@ -73,7 +75,7 @@ func TestCodeBuddyDiscoveryParseFingerprint(t *testing.T) {
 
 func TestCodeBuddyChangedPaths(t *testing.T) {
 	for _, unrelated := range []int{1, 100} {
-		t.Run(fmt.Sprint(unrelated), func(t *testing.T) {
+		t.Run(strconv.Itoa(unrelated), func(t *testing.T) {
 			root := t.TempDir()
 			index := writeCodeBuddyFixture(t, root, "ws_target", "conv_1")
 			index2 := writeCodeBuddyFixture(t, root, "ws_target", "conv_2")

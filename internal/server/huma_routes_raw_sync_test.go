@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -181,6 +182,7 @@ func TestRawSyncStatusRejectsUnauthorizedBeforeReader(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			auth := &rawSyncAuthStub{
 				authenticateToken: func(
 					_ context.Context,
@@ -324,7 +326,7 @@ func TestRawSyncStatusErrorDoesNotLeakBackendDetail(t *testing.T) {
 			context.Context,
 			rawsync.AuthIdentity,
 		) (rawsync.Status, error) {
-			return rawsync.Status{}, fmt.Errorf("password=secret: database unavailable")
+			return rawsync.Status{}, errors.New("password=secret: database unavailable")
 		},
 	}
 	srv := newRawSyncHTTPTestServer(
@@ -598,7 +600,7 @@ func TestRawSyncHeadConflictReturnsReconciliationState(t *testing.T) {
 	)
 
 	require.Equal(t, http.StatusConflict, recorder.Code, recorder.Body.String())
-	var response apiErrorResponse
+	var response apiResponseError
 	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
 	assert.Equal(t, "head_conflict", response.Code)
 	assert.Equal(t, currentManifest, response.CurrentManifestID)
@@ -648,15 +650,6 @@ func TestRawSyncCustodyDeadlineReturnsGatewayTimeout(t *testing.T) {
 	t.Parallel()
 
 	identity := rawsync.AuthIdentity{TenantID: "tenant-a", DeviceID: "dev-a"}
-	auth := &rawSyncAuthStub{
-		authenticateToken: func(
-			context.Context,
-			string,
-			rawsync.DeviceTokenScope,
-		) (rawsync.AuthIdentity, error) {
-			return identity, nil
-		},
-	}
 
 	tests := []struct {
 		name    string
@@ -704,6 +697,17 @@ func TestRawSyncCustodyDeadlineReturnsGatewayTimeout(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			auth := &rawSyncAuthStub{
+				authenticateToken: func(
+					context.Context,
+					string,
+					rawsync.DeviceTokenScope,
+				) (rawsync.AuthIdentity, error) {
+					return identity, nil
+				},
+			}
 			srv := newRawSyncHTTPTestServer(t, auth, tt.custody)
 			recorder := serveRawSyncJSON(
 				t, srv, http.MethodPost, tt.path, tt.body, tt.bearer, "",
@@ -828,7 +832,7 @@ func TestRawSyncTokenPreflightAllowsDeviceIDHeader(t *testing.T) {
 	srv := newRawSyncHTTPTestServer(
 		t, new(rawSyncAuthStub), new(rawSyncCustodyStub),
 	)
-	req := httptest.NewRequest(http.MethodOptions, "/api/v1/raw-sync/tokens", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodOptions, "/api/v1/raw-sync/tokens", nil)
 	req.Host = "127.0.0.1:8080"
 	req.RemoteAddr = "192.0.2.10:54321"
 	req.Header.Set("Origin", "https://client.example")
@@ -977,6 +981,7 @@ func serveRawSyncStatusRequest(
 	srv *Server,
 	authorization string,
 ) *httptest.ResponseRecorder {
+	t.Helper()
 	return serveRawSyncStatusRequestPath(
 		t, srv, "/api/v1/raw-sync/status", authorization,
 	)
@@ -989,7 +994,7 @@ func serveRawSyncStatusRequestPath(
 	authorization string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil)
 	req.Host = "127.0.0.1:8080"
 	req.RemoteAddr = "192.0.2.10:54321"
 	if authorization != "" {
@@ -1010,7 +1015,7 @@ func serveRawSyncJSON(
 	deviceID string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
 	req.Host = "127.0.0.1:8080"
 	req.RemoteAddr = "192.0.2.10:54321"
 	req.Header.Set("Content-Type", "application/json")
@@ -1147,6 +1152,8 @@ func (s *rawSyncCustodyStub) CommitManifest(
 	return s.commitManifest(ctx, identity, manifest)
 }
 
-var _ RawSyncDeviceAuth = (*rawSyncAuthStub)(nil)
-var _ RawSyncCustody = (*rawSyncCustodyStub)(nil)
-var _ RawSyncStatusReader = (*rawSyncStatusStub)(nil)
+var (
+	_ RawSyncDeviceAuth   = (*rawSyncAuthStub)(nil)
+	_ RawSyncCustody      = (*rawSyncCustodyStub)(nil)
+	_ RawSyncStatusReader = (*rawSyncStatusStub)(nil)
+)

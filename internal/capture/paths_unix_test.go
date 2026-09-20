@@ -3,7 +3,6 @@
 package capture
 
 import (
-	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -45,7 +44,7 @@ func TestRunRollsBackNewStateWhenResultCannotBeRemoved(t *testing.T) {
 	captureDir := filepath.Join(t.TempDir(), "capture")
 	producer := copyCaptureHelper(t, "claude")
 
-	_, err := Run(context.Background(), RunOptions{
+	_, err := Run(t.Context(), RunOptions{
 		Provider: ProviderClaude, OccurrenceID: "unlink-failed",
 		CaptureDir: captureDir, ResultPath: resultPath,
 		ProviderRoot: root, WorkDir: t.TempDir(),

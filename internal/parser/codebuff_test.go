@@ -438,7 +438,7 @@ func TestParseCodebuffSession_EmptyMessages(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
-	assert.Equal(t, 0, len(msgs))
+	assert.Empty(t, msgs)
 	assert.Equal(t, 0, sess.MessageCount)
 }
 
@@ -659,7 +659,7 @@ func TestParseCodebuffSession_FileInfo(t *testing.T) {
 	require.NotNil(t, sess)
 
 	assert.NotEmpty(t, sess.File.Path)
-	assert.True(t, sess.File.Size > 0)
+	assert.Positive(t, sess.File.Size)
 	assert.NotZero(t, sess.File.Mtime)
 }
 
@@ -715,7 +715,7 @@ func TestParseCodebuffSession_TimestampVariants(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			sessionDate := time.Date(2026, 7, 15, 0, 0, 0, 0, time.Local)
+			sessionDate := time.Date(2026, 7, 15, 0, 0, 0, 0, time.Local) //nolint:forbidigo // Exercise parsing of source timestamps recorded in local wall-clock time.
 			ts := parseCodebuffTimestamp(tc.ts, sessionDate)
 			if tc.wantZero {
 				assert.True(t, ts.IsZero(), "expected zero time for %q", tc.ts)
@@ -1491,9 +1491,9 @@ func TestParseCodebuffMixedFormatMidnightRollover(t *testing.T) {
 	// the location before this runs; assigning time.Local directly
 	// and restoring it on cleanup is the only reliable way to pin
 	// the state for this single test without touching package init.
-	origLocal := time.Local
-	t.Cleanup(func() { time.Local = origLocal })
-	time.Local = time.UTC
+	origLocal := time.Local                      //nolint:forbidigo // Exercise parsing of source timestamps recorded in local wall-clock time.
+	t.Cleanup(func() { time.Local = origLocal }) //nolint:forbidigo // Exercise parsing of source timestamps recorded in local wall-clock time.
+	time.Local = time.UTC                        //nolint:forbidigo // Exercise parsing of source timestamps recorded in local wall-clock time.
 
 	sessionID := "2026-07-15T22-00-00.000Z"
 	sessionDate := parseCodebuffSessionDate(sessionID)
@@ -1556,9 +1556,9 @@ func TestParseCodebuffMessages_FirstMessageMidnightRollover(t *testing.T) {
 	// and the time-only reconstruction are deterministic regardless of
 	// the host TZ (same pinning approach as the mixed-format rollover
 	// test above).
-	origLocal := time.Local
-	t.Cleanup(func() { time.Local = origLocal })
-	time.Local = time.FixedZone("UTC-7", -7*3600)
+	origLocal := time.Local                       //nolint:forbidigo // Exercise parsing of source timestamps recorded in local wall-clock time.
+	t.Cleanup(func() { time.Local = origLocal })  //nolint:forbidigo // Exercise parsing of source timestamps recorded in local wall-clock time.
+	time.Local = time.FixedZone("UTC-7", -7*3600) //nolint:forbidigo // Exercise parsing of source timestamps recorded in local wall-clock time.
 
 	sessionDate := parseCodebuffSessionDate("2026-07-17T06-58-00.000Z")
 	require.Equal(t, 16, sessionDate.Day(), "06:58 UTC is 23:58 on July 16 in UTC-7")

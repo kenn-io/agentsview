@@ -3,7 +3,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
@@ -102,6 +101,7 @@ func TestUsageRowWebSearchRequestsIgnoresUsageEvents(t *testing.T) {
 // Pricing is $1/MTok in and $2/MTok out, so each message's token cost is
 // exactly $0.30 (100_000 in, 100_000 out).
 func webSearchUsageDB(t *testing.T, model string, searches int) *DB {
+	t.Helper()
 	return webSearchUsageDBForAgent(t, model, searches, "claude")
 }
 
@@ -165,7 +165,7 @@ func webSearchUsageDBForAgent(
 }
 
 func TestSessionUsageBillsWebSearchRequests(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d := webSearchUsageDB(t, "claude-websearch-test", 2)
 
 	usage, err := d.GetSessionUsage(ctx, "sess-ws", true)
@@ -185,7 +185,7 @@ func TestSessionUsageBillsWebSearchRequests(t *testing.T) {
 }
 
 func TestSessionUsageBreakdownOmitsAbsentWebSearchRequests(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d := webSearchUsageDB(t, "claude-websearch-test", 0)
 
 	usage, err := d.GetSessionUsage(ctx, "sess-ws", true)
@@ -200,7 +200,7 @@ func TestSessionUsageBreakdownOmitsAbsentWebSearchRequests(t *testing.T) {
 }
 
 func TestDailyUsageBillsWebSearchRequestsOnce(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d := webSearchUsageDB(t, "claude-websearch-test", 2)
 
 	result, err := d.GetDailyUsage(ctx, UsageFilter{
@@ -213,7 +213,7 @@ func TestDailyUsageBillsWebSearchRequestsOnce(t *testing.T) {
 }
 
 func TestPositUsagePremiumLeavesWebSearchFeeUnadjusted(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d := webSearchUsageDBForAgent(
 		t, "claude-websearch-test", 2, "posit-assistant")
 
@@ -242,7 +242,7 @@ func TestPositUsagePremiumLeavesWebSearchFeeUnadjusted(t *testing.T) {
 // A duplicate of the same Claude message must not double the fee, the same
 // way it must not double the tokens.
 func TestDailyUsageWebSearchFeeSurvivesDedup(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d := webSearchUsageDB(t, "claude-websearch-test", 2)
 
 	insertSession(t, d, "sess-ws-fork", "proj1", func(s *Session) {
@@ -275,7 +275,7 @@ func TestDailyUsageWebSearchFeeSurvivesDedup(t *testing.T) {
 }
 
 func TestAsymmetricClaudeSnapshotsPreserveWebSearchFee(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d := webSearchUsageDB(t, "claude-websearch-test", 2)
 	insertMessages(t, d, Message{
 		SessionID: "sess-ws", Ordinal: 2,
@@ -324,7 +324,7 @@ func TestAsymmetricClaudeSnapshotsPreserveWebSearchFee(t *testing.T) {
 // spend that does not depend on token rates. The row stays unpriced so the
 // session is still reported as an incomplete estimate.
 func TestSessionUsageBillsWebSearchOnUnpricedModel(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d := webSearchUsageDB(t, "some-unlisted-model", 2)
 
 	usage, err := d.GetSessionUsage(ctx, "sess-ws", true)
@@ -349,7 +349,7 @@ func TestSessionUsageBillsWebSearchOnUnpricedModel(t *testing.T) {
 }
 
 func TestActivityReportBillsWebSearchRequests(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d := webSearchUsageDB(t, "claude-websearch-test", 2)
 
 	report, err := d.GetActivityReport(ctx,
@@ -361,7 +361,7 @@ func TestActivityReportBillsWebSearchRequests(t *testing.T) {
 }
 
 func TestSessionUsageRowsCarryWebSearchRequests(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d := webSearchUsageDB(t, "claude-websearch-test", 2)
 
 	rowSet, err := d.GetSessionUsageRows(ctx, []string{"sess-ws"})

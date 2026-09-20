@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -47,17 +46,17 @@ func TestSyncPersistsSecretFindings(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
-	stats := fx.engine.SyncAll(context.Background(), nil)
+	stats := fx.engine.SyncAll(t.Context(), nil)
 	require.NotZero(t, stats.Synced, "expected Synced > 0, got %+v", stats)
 
 	sessionID := fx.sessionIDFor(t, path)
 
-	sess, err := fx.db.GetSession(context.Background(), sessionID)
+	sess, err := fx.db.GetSession(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, sess, "session %q not found after SyncAll", sessionID)
 	assert.GreaterOrEqual(t, sess.SecretLeakCount, 1, "SecretLeakCount = %d, want >= 1", sess.SecretLeakCount)
 
-	findings, err := fx.db.SessionSecretFindings(context.Background(), sessionID)
+	findings, err := fx.db.SessionSecretFindings(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.NotEmpty(t, findings, "expected non-empty findings slice, got 0")
 
@@ -90,14 +89,14 @@ func TestSyncNoSecretsLeavesZero(t *testing.T) {
 	path := filepath.Join(fx.claudeDir, "proj", "clean-session.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
-	stats := fx.engine.SyncAll(context.Background(), nil)
+	stats := fx.engine.SyncAll(t.Context(), nil)
 	require.NotZero(t, stats.Synced, "expected Synced > 0, got %+v", stats)
 	sessionID := fx.sessionIDFor(t, path)
-	sess, err := fx.db.GetSession(context.Background(), sessionID)
+	sess, err := fx.db.GetSession(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, sess, "session %q not found after SyncAll", sessionID)
 	assert.Equal(t, 0, sess.SecretLeakCount)
-	findings, err := fx.db.SessionSecretFindings(context.Background(), sessionID)
+	findings, err := fx.db.SessionSecretFindings(t.Context(), sessionID)
 	require.NoError(t, err)
 	assert.Empty(t, findings, "expected 0 findings, got %d: %+v", len(findings), findings)
 }

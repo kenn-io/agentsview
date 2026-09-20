@@ -11,6 +11,8 @@ import (
 	"testing"
 	"testing/synctest"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -344,14 +346,14 @@ func TestLoadPricingMapSharesConcurrentDBRows(t *testing.T) {
 		}
 		results := make(chan result, 2)
 		go func() {
-			prices, err := store.loadPricingMap(context.Background())
+			prices, err := store.loadPricingMap(t.Context())
 			results <- result{prices: prices, err: err}
 		}()
 		synctest.Wait()
 		require.Equal(t, 1, state.queryCount(), "pricing queries")
 
 		go func() {
-			prices, err := store.loadPricingMap(context.Background())
+			prices, err := store.loadPricingMap(t.Context())
 			results <- result{prices: prices, err: err}
 		}()
 		synctest.Wait()
@@ -376,7 +378,7 @@ func TestLoadPricingMapUsesFallbackForSentinelOnlyCatalog(t *testing.T) {
 	}}}
 	store := &Store{pg: newPricingProbeDB(t, state)}
 
-	rows, err := store.loadPricingMap(context.Background())
+	rows, err := store.loadPricingMap(t.Context())
 	require.NoError(t, err)
 	byPattern := pricingRowsByPattern(rows)
 
@@ -386,13 +388,11 @@ func TestLoadPricingMapUsesFallbackForSentinelOnlyCatalog(t *testing.T) {
 
 func TestLoadPricingMapUsesEmbeddedGenAIWhenTableMissing(t *testing.T) {
 	state := &pricingProbeState{
-		genAIErr: errors.New(
-			`relation "genai_pricing" does not exist (SQLSTATE 42P01)`,
-		),
+		genAIErr: &pgconn.PgError{Code: "42P01", Message: `relation "genai_pricing" does not exist`},
 	}
 	store := &Store{pg: newPricingProbeDB(t, state)}
 
-	rows, err := store.loadPricingMap(context.Background())
+	rows, err := store.loadPricingMap(t.Context())
 	require.NoError(t, err)
 
 	var genAIRow *export.EffectivePricingRow
@@ -415,7 +415,7 @@ func TestLoadPricingMapUsesDBRowsAsEffectiveTable(t *testing.T) {
 	pg := newPricingProbeDB(t, state)
 	store := &Store{pg: pg}
 
-	prices, err := store.loadPricingMap(context.Background())
+	prices, err := store.loadPricingMap(t.Context())
 	require.NoError(t, err, "loadPricingMap")
 
 	byPattern := pricingRowsByPattern(prices)
@@ -443,7 +443,7 @@ func TestLoadPricingMapKeepsSharedDBRowsForActiveCaller(t *testing.T) {
 			prices []export.EffectivePricingRow
 			err    error
 		}
-		firstCtx, cancelFirst := context.WithCancel(context.Background())
+		firstCtx, cancelFirst := context.WithCancel(t.Context())
 		firstResult := make(chan result, 1)
 		go func() {
 			prices, err := store.loadPricingMap(firstCtx)
@@ -454,7 +454,7 @@ func TestLoadPricingMapKeepsSharedDBRowsForActiveCaller(t *testing.T) {
 
 		secondResult := make(chan result, 1)
 		go func() {
-			prices, err := store.loadPricingMap(context.Background())
+			prices, err := store.loadPricingMap(t.Context())
 			secondResult <- result{prices: prices, err: err}
 		}()
 		synctest.Wait()
@@ -488,7 +488,7 @@ func TestLoadPricingMapCancelsDBRowsWithCaller(t *testing.T) {
 		pg := newPricingProbeDB(t, state)
 		store := &Store{pg: pg}
 
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		result := make(chan error, 1)
 		go func() {
 			_, err := store.loadPricingMap(ctx)
@@ -524,7 +524,7 @@ func TestLoadPricingMapStartsFreshLoadAfterAllWaitersCancel(t *testing.T) {
 		pg := newPricingProbeDB(t, state)
 		store := &Store{pg: pg}
 
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(t.Context())
 		firstResult := make(chan error, 1)
 		go func() {
 			_, err := store.loadPricingMap(ctx)
@@ -539,7 +539,7 @@ func TestLoadPricingMapStartsFreshLoadAfterAllWaitersCancel(t *testing.T) {
 
 		secondResult := make(chan error, 1)
 		go func() {
-			_, err := store.loadPricingMap(context.Background())
+			_, err := store.loadPricingMap(t.Context())
 			secondResult <- err
 		}()
 
@@ -568,7 +568,7 @@ func TestSetCustomPricingForgetsInFlightPricingLoad(t *testing.T) {
 		}
 		results := make(chan result, 2)
 		go func() {
-			prices, err := store.loadPricingMap(context.Background())
+			prices, err := store.loadPricingMap(t.Context())
 			results <- result{prices: prices, err: err}
 		}()
 		synctest.Wait()
@@ -578,7 +578,7 @@ func TestSetCustomPricingForgetsInFlightPricingLoad(t *testing.T) {
 			"custom-model": {InputMicrodollarsPerMTok: money.MustParseDollars("9.0").Microdollars},
 		})
 		go func() {
-			prices, err := store.loadPricingMap(context.Background())
+			prices, err := store.loadPricingMap(t.Context())
 			results <- result{prices: prices, err: err}
 		}()
 
@@ -596,12 +596,12 @@ func TestLoadPricingMapReloadsAfterCompletedDBRows(t *testing.T) {
 	pg := newPricingProbeDB(t, state)
 	store := &Store{pg: pg}
 
-	first, err := store.loadPricingMap(context.Background())
+	first, err := store.loadPricingMap(t.Context())
 	require.NoError(t, err, "first loadPricingMap")
 	state.setRows([][]driver.Value{{
 		"db-model", int64(7000000), int64(2000000), int64(3000000), int64(0), int64(4000000), "2026-06-08",
 	}})
-	second, err := store.loadPricingMap(context.Background())
+	second, err := store.loadPricingMap(t.Context())
 	require.NoError(t, err, "second loadPricingMap")
 
 	require.Equal(t, 2, state.queryCount(), "pricing queries")
@@ -626,14 +626,14 @@ func pricingRowsByPattern(
 
 func TestLoadPricingMapDoesNotCacheMissingTableFallback(t *testing.T) {
 	state := &pricingProbeState{
-		err: errors.New(`relation "model_pricing" does not exist (SQLSTATE 42P01)`),
+		err: &pgconn.PgError{Code: "42P01", Message: `relation "model_pricing" does not exist`},
 	}
 	pg := newPricingProbeDB(t, state)
 	store := &Store{pg: pg}
 
-	_, err := store.loadPricingMap(context.Background())
+	_, err := store.loadPricingMap(t.Context())
 	require.NoError(t, err, "first loadPricingMap")
-	_, err = store.loadPricingMap(context.Background())
+	_, err = store.loadPricingMap(t.Context())
 	require.NoError(t, err, "second loadPricingMap")
 
 	assert.Equal(t, 2, state.queryCount(), "pricing queries")
@@ -777,8 +777,8 @@ func TestPGPricingDeleteStatement(t *testing.T) {
 }
 
 func TestSyncModelPricingSkipsWriteWhenRemoteRowsUnchanged(t *testing.T) {
-	ctx := context.Background()
-	local, err := db.Open(t.TempDir() + "/local.db")
+	ctx := t.Context()
+	local, err := db.Open(ctx, t.TempDir()+"/local.db")
 	require.NoError(t, err, "open local db")
 	t.Cleanup(func() { local.Close() })
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{

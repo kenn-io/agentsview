@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"go.kenn.io/agentsview/internal/storage"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -42,10 +43,10 @@ func TestListAndDropVectorGenerations(t *testing.T) {
 	seedVectorSession(t, localDB, "Y")
 
 	fake := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-a", Model: "model-a", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-a", Model: "model-a", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"X": "hx", "Y": "hy"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"X": {vdoc("X", "X#0", 0, "cx", "hx1", []float32{1, 0, 0, 0})},
 			"Y": {vdoc("Y", "Y#0", 0, "cy", "hy1", []float32{0, 1, 0, 0})},
 		},
@@ -57,7 +58,7 @@ func TestListAndDropVectorGenerations(t *testing.T) {
 	fake.gen.Fingerprint = "fp-b"
 	fake.gen.Model = "model-b"
 	fake.hashes = map[string]string{"X": "hx"}
-	fake.docs = map[string][]VectorPushDoc{
+	fake.docs = map[string][]storage.VectorPushDoc{
 		"X": {vdoc("X", "X#0", 0, "cx", "hx1", []float32{1, 0, 0, 0})},
 	}
 	genB := pushAdminGeneration(t, sync, fake, "fp-b")
@@ -117,7 +118,7 @@ func TestListAndDropVectorGenerations(t *testing.T) {
 
 	// A subsequent push against genB must not abort after genA was dropped.
 	fake.hashes["X"] = "hx2"
-	fake.docs["X"] = []VectorPushDoc{
+	fake.docs["X"] = []storage.VectorPushDoc{
 		vdoc("X", "X#0", 0, "cx-updated", "hx2", []float32{0, 0, 1, 0}),
 	}
 	res, err := sync.Push(ctx, false, nil)
@@ -163,10 +164,10 @@ func TestVectorPushToleratesMissingChunkTable(t *testing.T) {
 	seedVectorSession(t, localDB, "S")
 
 	fake := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-x", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-x", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"S": "h1"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"S": {
 				vdoc("S", "S#0", 0, "c0", "hc0", []float32{1, 0, 0, 0}),
 				vdoc("S", "S#1", 1, "c1", "hc1", []float32{0, 1, 0, 0}),
@@ -189,7 +190,7 @@ func TestVectorPushToleratesMissingChunkTable(t *testing.T) {
 	// Shrink genY's session so the prune path runs; it must reference only the
 	// surviving chunk table and not abort on genX's missing one.
 	fake.hashes["S"] = "h2"
-	fake.docs["S"] = []VectorPushDoc{
+	fake.docs["S"] = []storage.VectorPushDoc{
 		vdoc("S", "S#0", 0, "c0", "hc0", []float32{1, 0, 0, 0}),
 	}
 	res, err := sync.pushVectors(ctx, false, nil, 0, nil, nil)

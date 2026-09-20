@@ -36,6 +36,7 @@ func TestOpenRepositorySupportsDocbankSQLiteDrivers(t *testing.T) {
 
 	for _, driver := range []docsqlite.Driver{mattn.Driver{}, modernc.Driver{}} {
 		t.Run(driver.Name(), func(t *testing.T) {
+			t.Parallel()
 			repository, err := openRepository(t.Context(), t.TempDir(), driver)
 			require.NoError(t, err)
 			result := createCheckpointBody(t, repository.Content(), 1, []byte("driver parity"))
@@ -57,7 +58,7 @@ func TestOpenRepositoryRejectsLegacyLooseLayoutWithoutMutation(t *testing.T) {
 
 	repository, err := OpenRepository(t.Context(), dataDir)
 	assert.Nil(t, repository)
-	assert.ErrorContains(t, err, "old loose artifact layout")
+	require.ErrorContains(t, err, "old loose artifact layout")
 	got, readErr := os.ReadFile(legacy)
 	require.NoError(t, readErr)
 	assert.Equal(t, original, got)
@@ -74,7 +75,7 @@ func TestOpenRepositoryUsesDocbankHierarchyLock(t *testing.T) {
 
 	second, err := OpenRepository(t.Context(), dataDir)
 	assert.Nil(t, second)
-	assert.ErrorContains(t, err, "vault is locked")
+	require.ErrorContains(t, err, "vault is locked")
 
 	overlapping, err := OpenRepository(t.Context(), filepath.Join(dataDir, "artifacts"))
 	assert.Nil(t, overlapping)

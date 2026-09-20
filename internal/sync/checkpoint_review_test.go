@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding"
 	"os"
@@ -42,16 +41,16 @@ func TestCodexCheckpointHashStateBoundedToCommittedOffset(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
 		Machine: "local",
 	})
 	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 
-	before, ok, err := database.GetParserCheckpoint("codex:" + uuid)
+	before, ok, err := database.GetParserCheckpoint(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, int64(len(initial)), before.Offset)
@@ -69,12 +68,12 @@ func TestCodexCheckpointHashStateBoundedToCommittedOffset(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	afterAppend, ok, err := database.GetParserCheckpoint("codex:" + uuid)
+	afterAppend, ok, err := database.GetParserCheckpoint(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, int64(len(initial)), afterAppend.Offset)
 
-	beforeBlobs, ok, err := database.GetParserCheckpointBlobs("codex:" + uuid)
+	beforeBlobs, ok, err := database.GetParserCheckpointBlobs(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.True(t, ok)
 	info, err := os.Stat(path)
@@ -88,9 +87,9 @@ func TestCodexCheckpointHashStateBoundedToCommittedOffset(t *testing.T) {
 	require.Equal(t, actualHash, resumedHash,
 		"resuming the persisted state must reproduce the real source hash")
 
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 	stored, err := database.GetSessionFull(
-		context.Background(), "codex:"+uuid,
+		t.Context(), "codex:"+uuid,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
@@ -101,7 +100,7 @@ func TestCodexCheckpointHashStateBoundedToCommittedOffset(t *testing.T) {
 
 func TestBuildCodexFullParseCheckpointUsesParseSnapshotIdentity(t *testing.T) {
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{Machine: "local"})
+	engine := NewEngine(t.Context(), database, EngineConfig{Machine: "local"})
 	t.Cleanup(engine.Close)
 
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")
@@ -158,15 +157,15 @@ func TestCodexCheckpointTraeXLoadsPersistedCheckpoint(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentTraeX: {root},
 		},
 		Machine: "local",
 	})
 	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
-	_, ok, err := database.GetParserCheckpoint("traex:" + uuid)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	_, ok, err := database.GetParserCheckpoint(t.Context(), "traex:"+uuid)
 	require.NoError(t, err)
 	require.True(t, ok, "full TraeX parse persists a traex checkpoint")
 
@@ -174,11 +173,11 @@ func TestCodexCheckpointTraeXLoadsPersistedCheckpoint(t *testing.T) {
 		Roots: []string{root}, Machine: "local",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	result, err := engine.codexCheckpointFingerprint(
-		context.Background(), sources[0], parser.DiscoveredFile{
+		t.Context(), sources[0], parser.DiscoveredFile{
 			Agent:          parser.AgentTraeX,
 			Path:           path,
 			ProviderSource: &sources[0],
@@ -205,18 +204,18 @@ func TestCodexCheckpointStaleCannotResumeFromNewerDBOffset(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
 		Machine: "local",
 	})
 	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
-	oldCheckpoint, ok, err := database.GetParserCheckpoint("codex:" + uuid)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	oldCheckpoint, ok, err := database.GetParserCheckpoint(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.True(t, ok)
-	oldBlobs, ok, err := database.GetParserCheckpointBlobs("codex:" + uuid)
+	oldBlobs, ok, err := database.GetParserCheckpointBlobs(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.True(t, ok)
 
@@ -231,9 +230,9 @@ func TestCodexCheckpointStaleCannotResumeFromNewerDBOffset(t *testing.T) {
 	appendLine(testjsonl.CodexTurnContextJSON(
 		"gpt-5.5", "2024-01-01T10:00:02Z",
 	))
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 	engine.Close()
-	engine = NewEngine(database, EngineConfig{
+	engine = NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -244,14 +243,14 @@ func TestCodexCheckpointStaleCannotResumeFromNewerDBOffset(t *testing.T) {
 	// Recreate the state left by a crash after a full replacement commits its
 	// newer file_size/next_ordinal but before its out-of-transaction checkpoint
 	// upsert: the DB prefix is newer than the surviving checkpoint seed.
-	require.NoError(t, database.UpsertParserCheckpoint(*oldCheckpoint, oldBlobs))
+	require.NoError(t, database.UpsertParserCheckpoint(t.Context(), *oldCheckpoint, oldBlobs))
 	appendLine(testjsonl.CodexMsgJSON(
 		"assistant", "new reply", "2024-01-01T10:00:03Z",
 	))
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 
 	messages, err := database.GetAllMessages(
-		context.Background(), "codex:"+uuid,
+		t.Context(), "codex:"+uuid,
 	)
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
@@ -278,18 +277,18 @@ func TestCodexCheckpointColdRestartResumeParity(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
 		Machine: "local",
 	})
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 	engine.Close()
 
 	// Cold restart: a fresh engine has an empty cursor cache and must resume
 	// entirely from the persisted checkpoint.
-	engine = NewEngine(database, EngineConfig{
+	engine = NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -305,13 +304,13 @@ func TestCodexCheckpointColdRestartResumeParity(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
-	sess, err := database.GetSessionFull(context.Background(), "codex:"+uuid)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
+	sess, err := database.GetSessionFull(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.True(t, sess.LastWriteIncremental,
 		"a cold restart must resume incrementally from the checkpoint")
-	msgs, err := database.GetAllMessages(context.Background(), "codex:"+uuid)
+	msgs, err := database.GetAllMessages(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	require.Len(t, msgs[1].ToolCalls, 1)
@@ -342,14 +341,14 @@ func TestCodexCheckpointAuditRepairsSameStatRewrite(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(original), 0o644))
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
 		Machine: "local",
 	})
 	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 	before, err := os.Stat(path)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(path, []byte(rewritten), 0o644))
@@ -357,7 +356,7 @@ func TestCodexCheckpointAuditRepairsSameStatRewrite(t *testing.T) {
 
 	engine.SetCheckpointAudit(true)
 	stats, tombstoned, err := engine.ReconcileWatchRootsWithStats(
-		context.Background(), []string{root}, false, nil,
+		t.Context(), []string{root}, false, nil,
 	)
 	require.NoError(t, err)
 	require.Zero(t, tombstoned)
@@ -365,7 +364,7 @@ func TestCodexCheckpointAuditRepairsSameStatRewrite(t *testing.T) {
 		"the audit must detect and repair the same-stat rewrite")
 	engine.SetCheckpointAudit(false)
 
-	msgs, err := database.GetAllMessages(context.Background(), "codex:"+uuid)
+	msgs, err := database.GetAllMessages(t.Context(), "codex:"+uuid)
 	require.NoError(t, err)
 	require.Len(t, msgs, 1)
 	require.Equal(t, "bravo request", msgs[0].Content)
@@ -409,7 +408,7 @@ func TestCodexIncrementalDuplicateCallIDTargetsExactOccurrence(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},

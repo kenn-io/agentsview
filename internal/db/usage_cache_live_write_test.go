@@ -3,7 +3,6 @@
 package db
 
 import (
-	"context"
 	"encoding/json"
 	"strconv"
 	"sync/atomic"
@@ -33,7 +32,7 @@ func appendLiveWriteMessage(
 ) {
 	t.Helper()
 	suffix := id + "-" + strconv.Itoa(ordinal)
-	require.NoError(t, database.InsertMessages([]Message{{
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
 		SessionID: id, Ordinal: ordinal, Role: "assistant",
 		Timestamp: timestamp, Model: "model-a",
 		TokenUsage: json.RawMessage(
@@ -45,7 +44,7 @@ func appendLiveWriteMessage(
 
 func liveWriteDailyInput(t *testing.T, database *DB, project string) int {
 	t.Helper()
-	daily, err := database.GetDailyUsage(context.Background(), UsageFilter{
+	daily, err := database.GetDailyUsage(t.Context(), UsageFilter{
 		From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
 		Project: project, SkipSessionCounts: true,
 	})
@@ -86,10 +85,10 @@ func TestUsageSummarySurvivesArchiveWriteDuringRollupBuild(t *testing.T) {
 			require.Equal(t, 10, liveWriteDailyInput(t, database, "keep"))
 
 			snapshot, err := database.captureUsageQuery(
-				context.Background(), UsageFilter{}, usageQueryKindToken)
+				t.Context(), UsageFilter{}, usageQueryKindToken)
 			require.NoError(t, err)
 			cache, err := database.usageCache.Generation(
-				context.Background(), snapshot.DatabaseID)
+				t.Context(), snapshot.DatabaseID)
 			require.NoError(t, err)
 			var written atomic.Bool
 			cache.rollup.observer.beforeEnsure = func() {
@@ -121,10 +120,10 @@ func TestUsageCacheBackfillCompletesUnderConcurrentArchiveWrites(t *testing.T) {
 			"2026-08-10T09:00:00Z", 0, 1)
 	}
 	snapshot, err := database.captureUsageQuery(
-		context.Background(), UsageFilter{}, usageQueryKindToken)
+		t.Context(), UsageFilter{}, usageQueryKindToken)
 	require.NoError(t, err)
 	cache, err := database.usageCache.Generation(
-		context.Background(), snapshot.DatabaseID)
+		t.Context(), snapshot.DatabaseID)
 	require.NoError(t, err)
 	// Write into the archive from both phases of the pass: while facts are
 	// being extracted, and while the rollups are being aggregated.
@@ -137,8 +136,8 @@ func TestUsageCacheBackfillCompletesUnderConcurrentArchiveWrites(t *testing.T) {
 	cache.fill.observer.afterExtract = func([]usageSourceVersion) { churn() }
 	cache.rollup.observer.beforeEnsure = churn
 
-	require.NoError(t, database.StartUsageCacheBackfill(context.Background()))
-	require.NoError(t, database.WaitUsageCacheBackfill(context.Background()))
+	require.NoError(t, database.StartUsageCacheBackfill(t.Context()))
+	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
 	written := int(appends.Load())
 	require.Positive(t, written)
 	assert.Equal(t, 4, usageCacheCount(t, cache, "usage_cached_sessions"))

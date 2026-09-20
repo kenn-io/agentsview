@@ -446,8 +446,10 @@ func TestAvailableUnwatchedPollRootsBlocksScopesUnderFilesystemRoot(t *testing.T
 	candidate := t.TempDir()
 	fsRoot := filepath.VolumeName(candidate) + string(filepath.Separator)
 	obligations := []pollingObligation{
-		{Key: "blocked", Scopes: []pollingScope{{Root: fsRoot}},
-			Probe: filepath.Join(candidate, "missing-probe")},
+		{
+			Key: "blocked", Scopes: []pollingScope{{Root: fsRoot}},
+			Probe: filepath.Join(candidate, "missing-probe"),
+		},
 		{Key: "poll", Scopes: []pollingScope{{Root: candidate}}},
 	}
 	assert.Empty(t, availableUnwatchedPollRootsFlat(obligations),
@@ -470,14 +472,13 @@ func TestUnwatchedPollPreservesSessionsUnderBlockedOverlappingScope(t *testing.T
 			session.Agent = string(parser.AgentClaude)
 			session.FilePath = &sourcePath
 		})
-	require.NoError(t,
-		database.SetSessionDataVersion(sessionID, db.CurrentDataVersion()))
+	require.NoError(t, database.SetSessionDataVersion(t.Context(), sessionID, db.CurrentDataVersion()))
 	require.NoError(t, database.BaselineActiveSessionSourcePaths(
 		t.Context(), "local", []db.SessionSourcePath{{
 			Agent: string(parser.AgentClaude), FilePath: sourcePath,
 		}},
 	))
-	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOpenHands: {base},
 			parser.AgentClaude:    {nested},
@@ -488,8 +489,10 @@ func TestUnwatchedPollPreservesSessionsUnderBlockedOverlappingScope(t *testing.T
 
 	obligations := []pollingObligation{
 		{Key: "persistent:" + base, Scopes: []pollingScope{{Root: base}}, Probe: base},
-		{Key: "nested-gate", Scopes: []pollingScope{{Root: nested}},
-			Probe: filepath.Join(nested, "missing-subtree")},
+		{
+			Key: "nested-gate", Scopes: []pollingScope{{Root: nested}},
+			Probe: filepath.Join(nested, "missing-subtree"),
+		},
 	}
 	groups := availableUnwatchedPollScopes(obligations)
 	if err := pollUnwatchedScopesOnce(t.Context(), engine, groups); err != nil {
@@ -514,7 +517,7 @@ func TestUnwatchedPollObligationUpdatesRemainResponsiveDuringReconciliation(
 		release: make(chan struct{}),
 	}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		context.Background(), syncer, ticks, func() {}, func(run func()) { run() }, nil, time.Now,
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, time.Now,
 		func(d time.Duration) <-chan time.Time {
 			ch := make(chan time.Time, 1)
 			ch <- time.Time{}
@@ -567,7 +570,7 @@ func TestUnwatchedPollObligationUpdatesRemainResponsiveDuringReconciliation(
 
 func TestUnwatchedPollStopCancelsAndJoinsActiveReconciliation(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		parentCtx, cancelParent := context.WithCancel(context.Background())
+		parentCtx, cancelParent := context.WithCancel(t.Context())
 		syncer := &cancelBlockingUnwatchedPollSyncer{
 			started:  make(chan struct{}, 2),
 			canceled: make(chan struct{}, 2),
@@ -612,7 +615,7 @@ func TestUnwatchedPollStopCancelsAndJoinsActiveReconciliation(t *testing.T) {
 func TestUnwatchedPollParentCancellationCancelsJoinsAndRejectsUpdates(
 	t *testing.T,
 ) {
-	parentCtx, cancelParent := context.WithCancel(context.Background())
+	parentCtx, cancelParent := context.WithCancel(t.Context())
 	syncer := &cancelBlockingUnwatchedPollSyncer{
 		started:  make(chan struct{}, 1),
 		canceled: make(chan struct{}, 1),
@@ -646,7 +649,7 @@ func TestUnwatchedPollParentCancellationCancelsJoinsAndRejectsUpdates(
 			Key: "late", Scopes: []pollingScope{{Root: "/late"}},
 		})
 	}()
-	assert.ErrorIs(t, requireReceivePollResult(t, lateUpdate, time.Second),
+	require.ErrorIs(t, requireReceivePollResult(t, lateUpdate, time.Second),
 		errUnwatchedPollStopped)
 	assert.Equal(t, 1, syncer.callCount())
 }
@@ -721,7 +724,7 @@ func TestUnwatchedPollStopIsConcurrentAndRejectsLaterRoots(t *testing.T) {
 	ticks := make(chan time.Time)
 	syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 1)}
 	coordinator := newUnwatchedPollCoordinatorWithTicks(
-		context.Background(), syncer, ticks, func() {}, func(run func()) { run() }, nil, time.Now, time.After,
+		t.Context(), syncer, ticks, func() {}, func(run func()) { run() }, nil, time.Now, time.After,
 	)
 	require.NoError(t, coordinator.AddObligation(pollingObligation{
 		Key: "owned", Scopes: []pollingScope{{Root: "/owned"}},
@@ -735,7 +738,7 @@ func TestUnwatchedPollStopIsConcurrentAndRejectsLaterRoots(t *testing.T) {
 	}
 	wg.Wait()
 
-	assert.ErrorIs(t, coordinator.AddObligation(pollingObligation{
+	require.ErrorIs(t, coordinator.AddObligation(pollingObligation{
 		Key: "late", Scopes: []pollingScope{{Root: "/late"}},
 	}), errUnwatchedPollStopped)
 	coordinator.requestPoll()
@@ -749,7 +752,7 @@ func TestUnwatchedPollAddObligationRacingStopReturnsOwnershipOrStopped(t *testin
 		syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 1)}
 		ownedSnapshots := make(chan []string, 1)
 		coordinator := newUnwatchedPollCoordinatorWithTicks(
-			context.Background(), syncer, ticks, func() {}, func(run func()) { run() },
+			t.Context(), syncer, ticks, func() {}, func(run func()) { run() },
 			func(roots []string) {
 				ownedSnapshots <- append([]string(nil), roots...)
 			}, time.Now, time.After,
@@ -774,7 +777,7 @@ func TestUnwatchedPollAddObligationRacingStopReturnsOwnershipOrStopped(t *testin
 		err := requireReceivePollResult(t, addResult, time.Second)
 		requirePollWithin(t, stopDone, time.Second)
 		if err != nil {
-			assert.ErrorIs(t, err, errUnwatchedPollStopped)
+			require.ErrorIs(t, err, errUnwatchedPollStopped)
 		} else {
 			owned := requireReceivePollRoots(t, ownedSnapshots, time.Second)
 			assert.Contains(t, owned, root)

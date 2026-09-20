@@ -48,8 +48,10 @@ func TestWriteSessionBatchContextStopsDuringMessagePreparation(t *testing.T) {
 
 	result, err := database.WriteSessionBatchContext(
 		newCancelAfterChecksContext(10), []SessionBatchWrite{{
-			Session: Session{ID: "message-cancel", Project: "project-a",
-				Machine: defaultMachine, Agent: defaultAgent},
+			Session: Session{
+				ID: "message-cancel", Project: "project-a",
+				Machine: defaultMachine, Agent: defaultAgent,
+			},
 			Messages: messages, DataVersion: CurrentDataVersion(),
 		}},
 	)
@@ -65,14 +67,18 @@ func TestWriteSessionBatchContextStopsDuringUsagePreparation(t *testing.T) {
 	database := testDB(t)
 	events := make([]UsageEvent, 100)
 	for i := range events {
-		events[i] = UsageEvent{SessionID: "usage-cancel", Source: "message",
-			OutputTokens: 1}
+		events[i] = UsageEvent{
+			SessionID: "usage-cancel", Source: "message",
+			OutputTokens: 1,
+		}
 	}
 
 	result, err := database.WriteSessionBatchContext(
 		newCancelAfterChecksContext(10), []SessionBatchWrite{{
-			Session: Session{ID: "usage-cancel", Project: "project-a",
-				Machine: defaultMachine, Agent: defaultAgent},
+			Session: Session{
+				ID: "usage-cancel", Project: "project-a",
+				Machine: defaultMachine, Agent: defaultAgent,
+			},
 			UsageEvents: events, DataVersion: CurrentDataVersion(),
 		}},
 	)
@@ -106,12 +112,16 @@ func TestWriteSessionBatchKeepsMessageAggregatePrecedenceAfterSanitization(
 			},
 			Messages: []Message{message},
 			UsageEvents: []UsageEvent{
-				{SessionID: sessionID, Source: "message",
+				{
+					SessionID: sessionID, Source: "message",
 					InputTokens:          MaxPlausibleTokens,
 					CacheReadInputTokens: 1,
-					OutputTokens:         1_000_000},
-				{SessionID: sessionID, Source: "message",
-					OutputTokens: 1_000_001},
+					OutputTokens:         1_000_000,
+				},
+				{
+					SessionID: sessionID, Source: "message",
+					OutputTokens: 1_000_001,
+				},
 			},
 			DataVersion: CurrentDataVersion(),
 		}},

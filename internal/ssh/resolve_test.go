@@ -9,7 +9,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -109,8 +108,7 @@ func TestResolveScriptExitsZero(t *testing.T) {
 	// dirs exist. Verify by running it against an empty
 	// HOME so no default dirs are found.
 	out := runResolveScriptForTest(t, "HOME=/nonexistent")
-	dirs, files, extraFiles, forbiddenRoots, _ :=
-		parseResolvedTargets(string(out))
+	dirs, files, extraFiles, forbiddenRoots, _ := parseResolvedTargets(string(out))
 	assert.Empty(t, dirs)
 	assert.Empty(t, files)
 	assert.Empty(t, extraFiles)
@@ -202,8 +200,7 @@ func TestResolveScriptExcludesRemoteSyncExcludedAgentState(t *testing.T) {
 		"chat.db-shm",
 		"chat.db-journal",
 	} {
-		require.NoError(t,
-			os.WriteFile(filepath.Join(root, name), []byte("sqlite"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte("sqlite"), 0o644))
 	}
 	require.NoError(t, os.WriteFile(
 		filepath.Join(root, "credentials.json"), []byte("secret"), 0o600,
@@ -599,7 +596,7 @@ func runResolveScriptForTest(t *testing.T, env ...string) []byte {
 	var out []byte
 	var err error
 	for range 3 {
-		cmd := exec.Command("sh")
+		cmd := exec.CommandContext(t.Context(), "sh")
 		cmd.Stdin = strings.NewReader(buildResolveScript())
 		cmd.Env = env
 		out, err = cmd.CombinedOutput()
@@ -610,7 +607,6 @@ func runResolveScriptForTest(t *testing.T, env ...string) []byte {
 		// initialization, before the script runs, with errors such as
 		// "fatal error - add_item (...) failed, errno 1". Retry the
 		// transient launch failure.
-		time.Sleep(time.Second)
 	}
 	require.NoError(t, err, "resolve script failed: output: %s", out)
 	return out
@@ -637,8 +633,7 @@ func TestParseResolvedDirs(t *testing.T) {
 	assert.Len(t, dirs, 3)
 
 	// The duplicate index file line is deduplicated.
-	assert.Equal(t,
-		[]string{"/home/wes/.codex/session_index.jsonl"}, extraFiles)
+	assert.Equal(t, []string{"/home/wes/.codex/session_index.jsonl"}, extraFiles)
 }
 
 func TestParseResolvedDirsNULRecords(t *testing.T) {
@@ -649,11 +644,9 @@ func TestParseResolvedDirsNULRecords(t *testing.T) {
 	dirs, extraFiles, _ := parseResolvedDirs(input)
 
 	assert.Equal(t, []string{"/home/wes/.claude/projects"}, dirs[parser.AgentClaude])
-	assert.Equal(t,
-		[]string{"/home/wes/code/repo/.aider.chat.history.md"},
+	assert.Equal(t, []string{"/home/wes/code/repo/.aider.chat.history.md"},
 		dirs[parser.AgentAider])
-	assert.Equal(t,
-		[]string{"/home/wes/.codex/session_index.jsonl"}, extraFiles)
+	assert.Equal(t, []string{"/home/wes/.codex/session_index.jsonl"}, extraFiles)
 }
 
 func TestParseResolvedTargetsIncludesAgentFiles(t *testing.T) {
@@ -670,8 +663,7 @@ func TestParseResolvedTargetsIncludesAgentFiles(t *testing.T) {
 		"/home/wes/Windsurf/User/workspaceStorage/a/state.vscdb",
 		"/home/wes/Windsurf/User/workspaceStorage/a/workspace.json",
 	}, files[parser.AgentWindsurf])
-	assert.Equal(t,
-		[]string{"/home/wes/.codex/session_index.jsonl"}, extraFiles)
+	assert.Equal(t, []string{"/home/wes/.codex/session_index.jsonl"}, extraFiles)
 }
 
 func TestResolveScriptRooCodeTargetsOnlySessionFiles(t *testing.T) {
@@ -1287,17 +1279,21 @@ func TestAvPhysFileEdgeCases(t *testing.T) {
 		want  string
 	}{
 		{"root_level_file_keeps_root_parent", "/no-such-file", "/no-such-file"},
-		{"bare_filename_resolves_against_cwd", "bare.md",
-			filepath.Join(base, "bare.md")},
-		{"symlinked_parent_resolves_physically",
+		{
+			"bare_filename_resolves_against_cwd", "bare.md",
+			filepath.Join(base, "bare.md"),
+		},
+		{
+			"symlinked_parent_resolves_physically",
 			filepath.Join(alias, "history.md"),
-			filepath.Join(physicalDir, "history.md")},
+			filepath.Join(physicalDir, "history.md"),
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			script := resolveScriptPhysHelpers +
 				"av_phys_file \"$AV_TEST_INPUT\"\n"
-			cmd := exec.Command("sh")
+			cmd := exec.CommandContext(t.Context(), "sh")
 			cmd.Stdin = strings.NewReader(script)
 			cmd.Dir = base
 			cmd.Env = []string{"AV_TEST_INPUT=" + tc.input}
@@ -1354,7 +1350,7 @@ func TestAvPhysHelpersRefuseNewlinePaths(t *testing.T) {
 		"if av_phys_dir \"$AV_TEST_INPUT\"; then echo ACCEPTED; else echo REFUSED; fi\n" +
 		"if av_phys_file \"$AV_TEST_INPUT/file\"; then echo ACCEPTED; else echo REFUSED; fi\n" +
 		"if av_phys_missing \"$AV_TEST_INPUT/missing\"; then echo ACCEPTED; else echo REFUSED; fi\n"
-	cmd := exec.Command("sh")
+	cmd := exec.CommandContext(t.Context(), "sh")
 	cmd.Stdin = strings.NewReader(script)
 	cmd.Env = []string{"AV_TEST_INPUT=" + newlineDir}
 	out, err := cmd.CombinedOutput()
@@ -1374,7 +1370,7 @@ func TestResolveScriptAbortsOnUnrepresentableForbiddenRoot(t *testing.T) {
 	traeRoot := filepath.Join(home, "trae\nroot")
 	require.NoError(t, os.MkdirAll(traeRoot, 0o755))
 
-	cmd := exec.Command("sh")
+	cmd := exec.CommandContext(t.Context(), "sh")
 	cmd.Stdin = strings.NewReader(buildResolveScript())
 	cmd.Env = []string{"HOME=" + home, "TRAE_DIR=" + traeRoot}
 	out, err := cmd.CombinedOutput()
@@ -1450,21 +1446,29 @@ func TestAvPhysMissingResolvesLongestExistingAncestor(t *testing.T) {
 		want  string
 	}{
 		{"existing_dir_resolves_physically", alias, physicalDir},
-		{"missing_leaf_under_existing_parent",
-			filepath.Join(base, "missing"), filepath.Join(base, "missing")},
-		{"missing_tail_under_symlinked_ancestor",
+		{
+			"missing_leaf_under_existing_parent",
+			filepath.Join(base, "missing"), filepath.Join(base, "missing"),
+		},
+		{
+			"missing_tail_under_symlinked_ancestor",
 			filepath.Join(alias, "missing", "leaf"),
-			filepath.Join(physicalDir, "missing", "leaf")},
-		{"relative_spelling_anchors_to_cwd", "missing-rel/leaf",
-			filepath.Join(base, "missing-rel", "leaf")},
-		{"fully_missing_absolute_path_keeps_spelling",
-			"/nonexistent-av-test/a/b", "/nonexistent-av-test/a/b"},
+			filepath.Join(physicalDir, "missing", "leaf"),
+		},
+		{
+			"relative_spelling_anchors_to_cwd", "missing-rel/leaf",
+			filepath.Join(base, "missing-rel", "leaf"),
+		},
+		{
+			"fully_missing_absolute_path_keeps_spelling",
+			"/nonexistent-av-test/a/b", "/nonexistent-av-test/a/b",
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			script := resolveScriptPhysHelpers +
 				"av_phys_missing \"$AV_TEST_INPUT\"\n"
-			cmd := exec.Command("sh")
+			cmd := exec.CommandContext(t.Context(), "sh")
 			cmd.Stdin = strings.NewReader(script)
 			cmd.Dir = base
 			cmd.Env = []string{"AV_TEST_INPUT=" + tc.input}
@@ -1564,7 +1568,7 @@ func TestResolveEvenerArchivesOnlySessionFiles(t *testing.T) {
 			dirs, files, extras, forbidden, _ := parseResolvedTargets(string(out))
 			assert.Equal(t, []string{target}, dirs[parser.AgentEvener])
 			assert.ElementsMatch(t, []string{transcript, meta}, files[parser.AgentEvener])
-			cmd := exec.Command("sh")
+			cmd := exec.CommandContext(t.Context(), "sh")
 			cmd.Env = append(os.Environ(), "COPYFILE_DISABLE=1")
 			cmd.Stdin = strings.NewReader(buildTarCommand(dirs, files, extras, forbidden))
 			archive, err := cmd.Output()
@@ -1602,7 +1606,8 @@ func TestResolveEvenerSkipsBackslashPaths(t *testing.T) {
 			out := runResolveScriptForTest(t, "HOME="+home, "EVENER_DIR="+root)
 			dirs, selected, extras, forbidden, err := parseResolvedTargets(string(out))
 			require.NoError(t, err)
-			cmd := exec.Command("sh")
+			cmd := exec.CommandContext(t.Context(), "sh")
+			cmd.Env = append(os.Environ(), "COPYFILE_DISABLE=1")
 			cmd.Stdin = strings.NewReader(buildTarCommand(dirs, selected, extras, forbidden))
 			archive, err := cmd.Output()
 			require.NoError(t, err)
@@ -1621,7 +1626,7 @@ func TestResolveEvenerInvalidUTF8KeepsFileScope(t *testing.T) {
 			root := filepath.Join(home, "evener")
 			sessions := filepath.Join(root, "sessions")
 			require.NoError(t, os.MkdirAll(sessions, 0o755))
-			files := []string{filepath.Join(sessions, "bad\xff.transcript.jsonl"), filepath.Join(root, "credentials.json")}
+			files := []string{filepath.Join(root, "credentials.json")}
 			var expected []string
 			if name == "mixed" {
 				valid := filepath.Join(sessions, "demo.transcript.jsonl")
@@ -1631,10 +1636,16 @@ func TestResolveEvenerInvalidUTF8KeepsFileScope(t *testing.T) {
 			for _, file := range files {
 				require.NoError(t, os.WriteFile(file, []byte("{}\n"), 0o600))
 			}
-			out := runResolveScriptForTest(t, "HOME="+home, "EVENER_DIR="+root)
-			dirs, selected, extras, forbidden, err := parseResolvedTargets(string(out))
+			// Model the byte-valued listing from a remote POSIX filesystem.
+			// The local filesystem may require filenames to be valid UTF-8.
+			out := "evener:" + root + "\x00@agentfile:evener:" + filepath.Join(sessions, "bad\xff.transcript.jsonl") + "\x00"
+			if name == "mixed" {
+				out += "@agentfile:evener:" + filepath.Join(sessions, "demo.transcript.jsonl") + "\x00"
+			}
+			dirs, selected, extras, forbidden, err := parseResolvedTargets(out)
 			require.NoError(t, err)
-			cmd := exec.Command("sh")
+			cmd := exec.CommandContext(t.Context(), "sh")
+			cmd.Env = append(os.Environ(), "COPYFILE_DISABLE=1")
 			cmd.Stdin = strings.NewReader(buildTarCommand(dirs, selected, extras, forbidden))
 			archive, err := cmd.Output()
 			require.NoError(t, err)

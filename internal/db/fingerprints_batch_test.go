@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -14,6 +13,7 @@ import (
 // per-session methods.
 func fingerprintBatchFixture(t *testing.T) (*DB, []string) {
 	t.Helper()
+
 	d := testDB(t)
 
 	insertSession(t, d, "fp-a", "alpha")
@@ -74,13 +74,13 @@ func fingerprintBatchFixture(t *testing.T) (*DB, []string) {
 	insertMessages(t, d, other, userMsg("fp-b", 1, "longer message body"))
 
 	// A NULL timestamp exercises the COALESCE both paths must share.
-	_, err := d.getWriter().Exec(
-		"UPDATE messages SET timestamp = NULL" +
+	_, err := d.getWriter().Exec(t.Context(),
+		"UPDATE messages SET timestamp = NULL"+
 			" WHERE session_id = 'fp-b' AND ordinal = 1",
 	)
 	require.NoError(t, err)
 
-	require.NoError(t, d.ReplaceSessionSecretFindings(
+	require.NoError(t, d.ReplaceSessionSecretFindings(t.Context(),
 		"fp-a",
 		[]SecretFinding{
 			{
@@ -101,10 +101,10 @@ func fingerprintBatchFixture(t *testing.T) (*DB, []string) {
 	))
 
 	var msgID int64
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT id FROM messages WHERE session_id = 'fp-a' AND ordinal = 1",
 	).Scan(&msgID))
-	pinID, err := d.PinMessage("fp-a", msgID, Ptr("note"))
+	pinID, err := d.PinMessage(t.Context(), "fp-a", msgID, Ptr("note"))
 	require.NoError(t, err)
 	require.NotZero(t, pinID)
 
@@ -124,73 +124,72 @@ func TestBatchedFingerprintsMatchPerSession(t *testing.T) {
 		return "norm:" + ts
 	}
 
-	content, err := d.MessageContentFingerprints(ids)
+	content, err := d.MessageContentFingerprints(t.Context(), ids)
 	require.NoError(t, err)
-	tokens, err := d.MessageTokenFingerprints(ids)
+	tokens, err := d.MessageTokenFingerprints(t.Context(), ids)
 	require.NoError(t, err)
-	contentHash, err := d.MessageContentHashFingerprints(ids)
+	contentHash, err := d.MessageContentHashFingerprints(t.Context(), ids)
 	require.NoError(t, err)
-	roleTime, err := d.MessageRoleTimeFingerprintsWithTimestampNormalizer(
+	roleTime, err := d.MessageRoleTimeFingerprintsWithTimestampNormalizer(t.Context(),
 		ids, normalize,
 	)
 	require.NoError(t, err)
-	flags, err := d.MessageFlagsFingerprints(ids)
+	flags, err := d.MessageFlagsFingerprints(t.Context(), ids)
 	require.NoError(t, err)
-	system, err := d.SystemMessageFingerprints(ids)
+	system, err := d.SystemMessageFingerprints(t.Context(), ids)
 	require.NoError(t, err)
-	callCounts, err := d.ToolCallCounts(ids)
+	callCounts, err := d.ToolCallCounts(t.Context(), ids)
 	require.NoError(t, err)
-	callSums, err := d.ToolCallContentFingerprints(ids)
+	callSums, err := d.ToolCallContentFingerprints(t.Context(), ids)
 	require.NoError(t, err)
-	callFPs, err := d.ToolCallFingerprints(ids)
+	callFPs, err := d.ToolCallFingerprints(t.Context(), ids)
 	require.NoError(t, err)
-	resultFPs, err := d.ToolResultEventFingerprintsWithTimestampNormalizer(
+	resultFPs, err := d.ToolResultEventFingerprintsWithTimestampNormalizer(t.Context(),
 		ids, normalize,
 	)
 	require.NoError(t, err)
 
 	for _, id := range ids {
-		sum, maxLen, minLen, err := d.MessageContentFingerprint(id)
+		sum, maxLen, minLen, err := d.MessageContentFingerprint(t.Context(), id)
 		require.NoError(t, err, id)
-		assert.Equal(t,
-			MessageContentAggregate{Sum: sum, Max: maxLen, Min: minLen},
+		assert.Equal(t, MessageContentAggregate{Sum: sum, Max: maxLen, Min: minLen},
 			content[id], "content aggregate %s", id)
 
-		wantToken, err := d.MessageTokenFingerprint(id)
+		wantToken, err := d.MessageTokenFingerprint(t.Context(), id)
 		require.NoError(t, err, id)
 		assert.Equal(t, wantToken, tokens[id], "token fp %s", id)
 
-		wantHash, err := d.MessageContentHashFingerprint(id)
+		wantHash, err := d.MessageContentHashFingerprint(t.Context(), id)
 		require.NoError(t, err, id)
 		assert.Equal(t, wantHash, contentHash[id], "content hash fp %s", id)
 
-		wantRoleTime, err := d.MessageRoleTimeFingerprintWithTimestampNormalizer(
+		wantRoleTime, err := d.MessageRoleTimeFingerprintWithTimestampNormalizer(t.Context(),
 			id, normalize,
 		)
 		require.NoError(t, err, id)
 		assert.Equal(t, wantRoleTime, roleTime[id], "role/time fp %s", id)
 
-		wantFlags, err := d.MessageFlagsFingerprint(id)
+		wantFlags, err := d.MessageFlagsFingerprint(t.Context(), id)
 		require.NoError(t, err, id)
 		assert.Equal(t, wantFlags, flags[id], "flags fp %s", id)
 
-		wantSystem, err := d.SystemMessageFingerprint(id)
+		wantSystem, err := d.SystemMessageFingerprint(t.Context(), id)
 		require.NoError(t, err, id)
 		assert.Equal(t, wantSystem, system[id], "system fp %s", id)
 
-		wantCount, err := d.ToolCallCount(id)
+		wantCount, err := d.ToolCallCount(t.Context(), id)
 		require.NoError(t, err, id)
 		assert.Equal(t, wantCount, callCounts[id], "tool call count %s", id)
 
-		wantSum, err := d.ToolCallContentFingerprint(id)
+		wantSum, err := d.ToolCallContentFingerprint(t.Context(), id)
 		require.NoError(t, err, id)
 		assert.Equal(t, wantSum, callSums[id], "tool call sum %s", id)
 
-		wantCallFP, err := d.ToolCallFingerprint(id)
+		wantCallFP, err := d.ToolCallFingerprint(t.Context(), id)
 		require.NoError(t, err, id)
 		assert.Equal(t, wantCallFP, callFPs[id], "tool call fp %s", id)
 
-		wantResultFP, err := d.ToolResultEventFingerprintWithTimestampNormalizer(
+		wantResultFP, err := d.ToolResultEventFingerprintWithTimestampNormalizer(t.Context(),
 			id, normalize,
 		)
 		require.NoError(t, err, id)
@@ -208,7 +207,7 @@ func TestBatchedFingerprintsMatchPerSession(t *testing.T) {
 // stay null, exactly as the per-session methods return them.
 func TestBatchedFindingsAndPinsMatchPerSession(t *testing.T) {
 	d, ids := fingerprintBatchFixture(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	findings, err := d.SessionSecretFindingsBySession(ctx, ids)
 	require.NoError(t, err)

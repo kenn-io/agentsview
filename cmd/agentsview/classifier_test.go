@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"database/sql"
 	"errors"
 	"os"
@@ -89,7 +88,7 @@ func writeAutomatedPrefixesConfig(t *testing.T, dir string, prefixes []string) {
 // backfill so a classifier hash gets stored, then closes.
 func seedClassifierHash(t *testing.T, cfg config.Config) {
 	t.Helper()
-	d, err := db.Open(cfg.DBPath)
+	d, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err, "open db")
 	require.NoError(t, d.Close(), "close db")
 }
@@ -105,7 +104,7 @@ func classifierHashInSQLite(t *testing.T, dbPath string) string {
 	require.NoError(t, err, "open raw sqlite")
 	defer conn.Close()
 	var v string
-	err = conn.QueryRow(
+	err = conn.QueryRowContext(t.Context(),
 		`SELECT value FROM stats WHERE key = ?`,
 		db.ClassifierHashKey,
 	).Scan(&v)
@@ -123,7 +122,7 @@ func runClassifierRebuildTest(
 ) (string, error) {
 	t.Helper()
 	out := &bytes.Buffer{}
-	err := runClassifierRebuild(context.Background(), cfg, out, includePG)
+	err := runClassifierRebuild(t.Context(), cfg, out, includePG)
 	return out.String(), err
 }
 

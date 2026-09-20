@@ -2,7 +2,7 @@ package export
 
 import (
 	"crypto/sha256"
-	"fmt"
+	"encoding/hex"
 	"math"
 	"testing"
 	"time"
@@ -197,7 +197,7 @@ func TestEffectivePricingDigestFixture(t *testing.T) {
 	digest, err := EffectivePricingDigest(rows)
 	require.NoError(t, err)
 
-	require.Equal(t, "sha256:"+fmt.Sprintf("%x", sum), digest)
+	require.Equal(t, "sha256:"+hex.EncodeToString(sum[:]), digest)
 	assert.Equal(t,
 		"sha256:247836888d2c78a5fda3d0e391bbc28a7fd58b4fb3af9b0d5a0e037a9f3faf0b",
 		digest,

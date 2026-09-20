@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"fmt"
 	"testing"
@@ -13,6 +12,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // TestSessionUsageWithSubagentsMatchesSQLite pins DuckDB store-contract
@@ -21,7 +21,7 @@ import (
 // parent and a subagent transcript, and the same tagged breakdown as the
 // SQLite archive it mirrors.
 func TestSessionUsageWithSubagentsMatchesSQLite(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
@@ -76,7 +76,7 @@ func TestSessionUsageWithSubagentsMatchesSQLite(t *testing.T) {
 
 	parentRef := parentID
 	parentSession := session(parentID, nil, "", 700)
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
 		{
 			Session: parentSession,
 			Messages: []db.Message{
@@ -121,7 +121,7 @@ func TestSessionUsageWithSubagentsMatchesSQLite(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err, "push to DuckDB")

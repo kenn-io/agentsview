@@ -21,7 +21,7 @@ func TestSyncKimiConfigUpdateCwdPrefix(t *testing.T) {
 
 	kimiDir := t.TempDir()
 	testDB := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), testDB, sync.EngineConfig{
 		AgentDirs:          map[parser.AgentType][]string{parser.AgentKimi: {kimiDir}},
 		IncludeCwdPrefixes: []string{"/Users/helix/Code"},
 		Machine:            "local",
@@ -35,9 +35,9 @@ func TestSyncKimiConfigUpdateCwdPrefix(t *testing.T) {
 		"..", "parser", "testdata", "kimi-config-update-cwd.jsonl",
 	))
 	require.NoError(t, err)
-	content := append(fixture,
+	fixture = append(fixture,
 		[]byte(`{"type":"turn.prompt","input":[{"type":"text","text":"cwd"}]}`+"\n")...)
-	require.NoError(t, os.WriteFile(wirePath, content, 0o644))
+	require.NoError(t, os.WriteFile(wirePath, fixture, 0o644))
 
 	sessionID := "kimi:" + workdirDir + ":" + sessionDir
 	engine.SyncPaths([]string{wirePath})
@@ -63,7 +63,7 @@ func TestSyncPathsAndSingleSession_KimiNewLayout(t *testing.T) {
 
 	kimiDir := t.TempDir()
 	testDB := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), testDB, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentKimi: {kimiDir},
 		},
@@ -91,8 +91,8 @@ func TestSyncPathsAndSingleSession_KimiNewLayout(t *testing.T) {
 
 	// Force a single-session resync by clearing file_mtime; the
 	// project must remain the decoded workdir, not "agents".
-	require.NoError(t, testDB.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	require.NoError(t, testDB.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET file_mtime = NULL WHERE id = ?",
 			sessionID,
 		)

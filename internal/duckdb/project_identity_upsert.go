@@ -101,8 +101,10 @@ func deleteSessionProjectIdentitySnapshotsBySessionID(
 	return nil
 }
 
-type duckProjectIdentityExec func(string, ...any) error
-type duckProjectIdentityQueryRow func(string, ...any) *sql.Row
+type (
+	duckProjectIdentityExec     func(string, ...any) error
+	duckProjectIdentityQueryRow func(string, ...any) *sql.Row
+)
 
 const projectIdentitySnapshotInsertBatchSize = 500
 

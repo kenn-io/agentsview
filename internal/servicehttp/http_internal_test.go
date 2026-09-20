@@ -1,10 +1,10 @@
 package servicehttp
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -25,6 +25,7 @@ func TestNewHTTPBackendUsesLongRunningClient(t *testing.T) {
 }
 
 func TestHTTPBackendRecallCapabilityRespectsReadOnlyMode(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		readOnly bool
@@ -57,59 +58,67 @@ func TestListForwardsListOptions(t *testing.T) {
 }
 
 func TestSearchContentUsesLongRunningClient(t *testing.T) {
-	t.Parallel()
+	synctest.Test(t, func(t *testing.T) {
+		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			time.Sleep(50 * time.Millisecond)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"matches":[]}`))
+		}))
+		transport := srv.Client().Transport
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		time.Sleep(50 * time.Millisecond)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"matches":[]}`))
-	}))
-	t.Cleanup(srv.Close)
+		svc := NewHTTPBackend(srv.URL, "", false, "")
+		backend, ok := svc.(*httpBackend)
+		require.True(t, ok)
+		backend.client.Transport = transport
+		backend.longRunningClient.Transport = transport
+		backend.client.Timeout = 10 * time.Millisecond
 
-	svc := NewHTTPBackend(srv.URL, "", false, "")
-	backend, ok := svc.(*httpBackend)
-	require.True(t, ok)
-	backend.client.Timeout = 10 * time.Millisecond
-
-	result, err := svc.SearchContent(context.Background(), service.ContentSearchRequest{
-		Pattern: "slow first query",
-		Mode:    "semantic",
+		result, err := svc.SearchContent(t.Context(), service.ContentSearchRequest{
+			Pattern: "slow first query",
+			Mode:    "semantic",
+		})
+		require.NoError(t, err)
+		assert.Empty(t, result.Matches)
 	})
-	require.NoError(t, err)
-	assert.Empty(t, result.Matches)
 }
 
 func TestUsageSummaryUsesLongRunningClient(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/v1/usage/summary", r.URL.Path)
-		time.Sleep(50 * time.Millisecond)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"daily":[{"date":"2026-09-01"}]}`))
-	}))
-	t.Cleanup(srv.Close)
-	backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
-	backend.client.Timeout = 10 * time.Millisecond
-	result, err := backend.UsageSummary(t.Context(), service.UsageRequest{})
-	require.NoError(t, err)
-	require.Len(t, result.Daily, 1)
-	assert.Equal(t, "2026-09-01", result.Daily[0].Date)
+	synctest.Test(t, func(t *testing.T) {
+		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "/api/v1/usage/summary", r.URL.Path)
+			time.Sleep(50 * time.Millisecond)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"daily":[{"date":"2026-09-01"}]}`))
+		}))
+		transport := srv.Client().Transport
+		backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
+		backend.client.Transport = transport
+		backend.longRunningClient.Transport = transport
+		backend.client.Timeout = 10 * time.Millisecond
+		result, err := backend.UsageSummary(t.Context(), service.UsageRequest{})
+		require.NoError(t, err)
+		require.Len(t, result.Daily, 1)
+		assert.Equal(t, "2026-09-01", result.Daily[0].Date)
+	})
 }
 
 func TestUsagePairwiseComparisonUsesLongRunningClient(t *testing.T) {
-	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assert.Equal(t, "/api/v1/usage/pairwise-comparison", r.URL.Path)
-		time.Sleep(50 * time.Millisecond)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"left":{"totalTokens":42}}`))
-	}))
-	t.Cleanup(srv.Close)
-	backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
-	backend.client.Timeout = 10 * time.Millisecond
-	result, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{})
-	require.NoError(t, err)
-	assert.Equal(t, 42, result.Left.TotalTokens)
+	synctest.Test(t, func(t *testing.T) {
+		srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, "/api/v1/usage/pairwise-comparison", r.URL.Path)
+			time.Sleep(50 * time.Millisecond)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"left":{"totalTokens":42}}`))
+		}))
+		transport := srv.Client().Transport
+		backend := NewHTTPBackend(srv.URL, "", false, "").(*httpBackend)
+		backend.client.Transport = transport
+		backend.longRunningClient.Transport = transport
+		backend.client.Timeout = 10 * time.Millisecond
+		result, err := backend.UsagePairwiseComparison(t.Context(), service.UsagePairwiseComparisonRequest{})
+		require.NoError(t, err)
+		assert.Equal(t, 42, result.Left.TotalTokens)
+	})
 }
 
 func TestQueryRecallSemanticModesUseLongRunningClient(t *testing.T) {
@@ -123,25 +132,28 @@ func TestQueryRecallSemanticModesUseLongRunningClient(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				time.Sleep(50 * time.Millisecond)
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write([]byte(`{"mode":"` + tt.wantMode + `","recall_entries":[]}`))
-			}))
-			t.Cleanup(srv.Close)
+			synctest.Test(t, func(t *testing.T) {
+				srv := httptest.NewTestServer(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					time.Sleep(50 * time.Millisecond)
+					w.Header().Set("Content-Type", "application/json")
+					_, _ = w.Write([]byte(`{"mode":"` + tt.wantMode + `","recall_entries":[]}`))
+				}))
+				transport := srv.Client().Transport
 
-			svc := NewHTTPBackend(srv.URL, "", false, "")
-			backend, ok := svc.(*httpBackend)
-			require.True(t, ok)
-			backend.client.Timeout = 10 * time.Millisecond
+				svc := NewHTTPBackend(srv.URL, "", false, "")
+				backend, ok := svc.(*httpBackend)
+				require.True(t, ok)
+				backend.client.Transport = transport
+				backend.longRunningClient.Transport = transport
+				backend.client.Timeout = 10 * time.Millisecond
 
-			result, err := svc.QueryRecallEntries(context.Background(), service.RecallQuery{
-				Query: "connection storm", Mode: tt.inputMode,
+				result, err := svc.QueryRecallEntries(t.Context(), service.RecallQuery{
+					Query: "connection storm", Mode: tt.inputMode,
+				})
+				require.NoError(t, err)
+				assert.Equal(t, tt.wantMode, result.Mode)
+				assert.Empty(t, result.RecallEntries)
 			})
-			require.NoError(t, err)
-			assert.Equal(t, tt.wantMode, result.Mode)
-			assert.Empty(t, result.RecallEntries)
 		})
 	}
 }

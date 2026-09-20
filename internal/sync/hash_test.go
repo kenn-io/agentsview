@@ -56,6 +56,8 @@ func TestComputeFileHash(t *testing.T) {
 		{
 			name: "hello world",
 			setup: func(t *testing.T) string {
+				t.Helper()
+
 				return createTempFile(t, []byte("hello world\n"))
 			},
 			want: helloWorldHash,
@@ -63,6 +65,8 @@ func TestComputeFileHash(t *testing.T) {
 		{
 			name: "empty file",
 			setup: func(t *testing.T) string {
+				t.Helper()
+
 				return createTempFile(t, []byte(""))
 			},
 			want: emptyInputHash,
@@ -70,6 +74,8 @@ func TestComputeFileHash(t *testing.T) {
 		{
 			name: "missing file",
 			setup: func(t *testing.T) string {
+				t.Helper()
+
 				return filepath.Join(t.TempDir(), "nonexistent.txt")
 			},
 			wantErr: true,

@@ -3,13 +3,13 @@
 package duckdb
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // projectRulesByPrefix indexes rules by path prefix for pairwise comparison
@@ -33,7 +33,7 @@ func projectRulesByPrefix(rules []db.ProjectRule) map[string]db.ProjectRule {
 // governed count, and a rule for a different machine is excluded from the
 // rules list but its machine still appears in the typeahead list.
 func TestDuckProjectRulesMatchesSQLite(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	seedInventorySession(t, local, "alpha-1", "alpha", func(s *db.Session) {
@@ -66,7 +66,7 @@ func TestDuckProjectRulesMatchesSQLite(t *testing.T) {
 	})
 	require.NoError(t, err, "CreateWorktreeProjectMapping gamma")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
 	localRules, err := local.ListProjectRules(ctx, duckPushMachine)
@@ -119,7 +119,7 @@ func TestDuckProjectRulesMatchesSQLite(t *testing.T) {
 // for every machine into an empty-machine request. The machine typeahead
 // list is unaffected either way, per ListProjectRules's contract.
 func TestDuckProjectRulesEmptyMachineMatchesSQLite(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	seedInventorySession(t, local, "alpha-1", "alpha", func(s *db.Session) {
@@ -132,7 +132,7 @@ func TestDuckProjectRulesEmptyMachineMatchesSQLite(t *testing.T) {
 	})
 	require.NoError(t, err, "CreateWorktreeProjectMapping alpha")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
 	localRules, err := local.ListProjectRules(ctx, "")
@@ -173,7 +173,7 @@ func TestDuckProjectRulesEmptyMachineMatchesSQLite(t *testing.T) {
 // governed session leak into archive A's count too, producing 1/1 instead
 // of the expected 0/1.
 func TestDuckProjectRulesCrossArchiveIsolation(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	seedInventorySession(t, local, "a-session", "proja", func(s *db.Session) {
@@ -185,7 +185,7 @@ func TestDuckProjectRulesCrossArchiveIsolation(t *testing.T) {
 	})
 	require.NoError(t, err, "CreateWorktreeProjectMapping proja")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 
 	const archiveB = "archive-b"

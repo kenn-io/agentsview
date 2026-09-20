@@ -118,11 +118,13 @@ func TestJitterAndIndependentJobs(t *testing.T) {
 		base := time.Now()
 		var scheduledCalls atomic.Int32
 		s := startTestScheduler(t,
-			Job{Name: "scheduled", Interval: time.Hour, Jitter: 30 * time.Second,
+			Job{
+				Name: "scheduled", Interval: time.Hour, Jitter: 30 * time.Second,
 				Run: func(context.Context) error {
 					scheduledCalls.Add(1)
 					return nil
-				}},
+				},
+			},
 			Job{Name: "manual", Interval: time.Hour, Run: func(context.Context) error { return nil }},
 		)
 		synctest.Wait()

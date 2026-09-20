@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json/jsontext"
 	"os"
@@ -50,7 +49,7 @@ func newShelleyTestDB(t *testing.T) (string, string, *sql.DB) {
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "open shelley test db")
 	t.Cleanup(func() { db.Close() })
-	_, err = db.Exec(shelleySchema)
+	_, err = db.ExecContext(t.Context(), shelleySchema)
 	require.NoError(t, err, "create shelley schema")
 	return dir, path, db
 }
@@ -64,7 +63,7 @@ func newShelleyTestDBWithSchema(
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "open shelley test db")
 	t.Cleanup(func() { db.Close() })
-	_, err = db.Exec(schema)
+	_, err = db.ExecContext(t.Context(), schema)
 	require.NoError(t, err, "create shelley schema")
 	return dir, path, db
 }
@@ -75,7 +74,7 @@ func seedShelleyConversation(
 	createdAt, updatedAt string,
 ) {
 	t.Helper()
-	_, err := db.Exec(
+	_, err := db.ExecContext(t.Context(),
 		`INSERT INTO conversations
 			(conversation_id, slug, user_initiated, created_at,
 			 updated_at, cwd, parent_conversation_id, model)
@@ -92,7 +91,7 @@ func seedShelleyMessage(
 	llmData, userData, usageData, createdAt string,
 ) {
 	t.Helper()
-	_, err := db.Exec(
+	_, err := db.ExecContext(t.Context(),
 		`INSERT INTO messages
 			(message_id, conversation_id, sequence_id, generation,
 			 type, llm_data, user_data, usage_data, created_at)
@@ -167,7 +166,7 @@ func parseShelleyConversationDirectForTest(
 	t *testing.T, dbPath, rawID, machine string, _ os.FileInfo,
 ) (*ParseResult, error) {
 	t.Helper()
-	return shelleyParseMember(
+	return shelleyParseMember(t.Context(),
 		multiSessionSource{Container: dbPath, MemberID: rawID},
 		ParseRequest{Machine: machine},
 	)
@@ -291,38 +290,38 @@ func TestDiscoverAndFindShelley(t *testing.T) {
 	provider, ok := NewProvider(AgentShelley, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1, "discovered sources")
 	assert.Equal(t, dbPath, sources[0].DisplayPath, "discovered db path")
 	assert.Equal(t, AgentShelley, sources[0].Provider, "discovered provider")
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "cMAIN1",
 	})
 	require.NoError(t, err)
 	require.True(t, ok, "find existing")
 	assert.Equal(t, dbPath+"#cMAIN1", found.DisplayPath, "find existing path")
 
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "cNOPE0",
 	})
 	require.NoError(t, err)
 	assert.False(t, ok, "find missing")
 
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "../escape",
 	})
 	require.NoError(t, err)
 	assert.False(t, ok, "reject path-like id")
 
-	assert.True(t, ShelleyConversationExists(dbPath, "cMAIN1"), "exists")
-	assert.False(t, ShelleyConversationExists(dbPath, "cNOPE0"), "not exists")
+	assert.True(t, ShelleyConversationExists(t.Context(), dbPath, "cMAIN1"), "exists")
+	assert.False(t, ShelleyConversationExists(t.Context(), dbPath, "cNOPE0"), "not exists")
 
 	// Empty root yields no discovery.
 	emptyProvider, ok := NewProvider(AgentShelley, ProviderConfig{Roots: []string{t.TempDir()}})
 	require.True(t, ok)
-	emptySources, err := emptyProvider.Discover(context.Background())
+	emptySources, err := emptyProvider.Discover(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, emptySources, "empty dir discovery")
 }
@@ -532,9 +531,8 @@ func TestParseShelleyWebSearchToolResult(t *testing.T) {
 	assert.Equal(t, "srvtoolu_1",
 		agent.ToolResults[0].ToolUseID, "result tool use id")
 	decoded := DecodeContent(agent.ToolResults[0].ContentRaw)
-	assert.Equal(t,
-		"Go iota explained https://go.dev/iota\n"+
-			"Effective Go https://go.dev/doc/effective_go",
+	assert.Equal(t, "Go iota explained https://go.dev/iota\n"+
+		"Effective Go https://go.dev/doc/effective_go",
 		decoded, "web search result title/url preserved")
 	assert.Positive(t, agent.ToolResults[0].ContentLength,
 		"content length nonzero")
@@ -586,7 +584,7 @@ func TestShelleySameSecondChangeSignal(t *testing.T) {
 	assert.Equal(t, hash1, metas1[0].Fingerprint,
 		"stored file_hash must match the meta skip fingerprint")
 
-	srcMtime1, err := ShelleySourceMtime(dbPath + "#cSEC1")
+	srcMtime1, err := ShelleySourceMtime(t.Context(), dbPath+"#cSEC1")
 	require.NoError(t, err)
 	assert.Positive(t, srcMtime1, "SourceMtime resolves the conversation")
 
@@ -611,7 +609,7 @@ func TestShelleySameSecondChangeSignal(t *testing.T) {
 	assert.Equal(t, second.Session.File.Hash, metas2[0].Fingerprint,
 		"meta fingerprint tracks the same-second append")
 
-	srcMtime2, err := ShelleySourceMtime(dbPath + "#cSEC1")
+	srcMtime2, err := ShelleySourceMtime(t.Context(), dbPath+"#cSEC1")
 	require.NoError(t, err)
 	assert.NotEqual(t, srcMtime1, srcMtime2,
 		"watcher SourceMtime tracks the same-second append")

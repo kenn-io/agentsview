@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,7 +33,7 @@ func TestTauProviderDefinitionAndLifecycle(t *testing.T) {
 	assert.True(t, def.FileBased)
 	assert.False(t, def.RemoteSyncExcluded)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
 	assert.ElementsMatch(t, []string{valid, filepath.Join(project, "session_index.jsonl")}, sourceDisplayPaths(sources))
@@ -43,25 +42,25 @@ func TestTauProviderDefinitionAndLifecycle(t *testing.T) {
 	assert.NotContains(t, sourceDisplayPaths(sources), filepath.Join(project, "nested", "deep.jsonl"))
 	assert.Empty(t, sources[0].ProjectHint)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{"*.jsonl"}, plan.Roots[0].IncludeGlobs)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "abc.def-ghi_jkl",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, valid, found.DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	info, err := os.Stat(valid)
 	require.NoError(t, err)
-	assert.Equal(t, int64(info.Size()), fingerprint.Size)
+	assert.Equal(t, info.Size(), fingerprint.Size)
 	assert.Equal(t, info.ModTime().UnixNano(), fingerprint.MTimeNS)
 	assert.Empty(t, fingerprint.Hash)
 }
@@ -75,12 +74,12 @@ func TestTauProviderDefaultIDsStayProjectSpecific(t *testing.T) {
 	}
 	provider, ok := NewProvider(AgentTau, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
 	foundIDs := make([]string, 0, len(sources))
 	for _, source := range sources {
-		found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 			RawSessionID: tauSessionIDFromPath(root, source.DisplayPath),
 		})
 		require.NoError(t, err)
@@ -105,14 +104,14 @@ func TestTauProviderDefaultIDsStayRootSpecific(t *testing.T) {
 
 	provider, ok := NewProvider(AgentTau, ProviderConfig{Roots: roots})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
 
 	foundIDs := make([]string, 0, len(sources))
 	for _, source := range sources {
 		id := tauSessionIDFromPath(source.Opaque.(JSONLSource).Root, source.DisplayPath)
-		found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 			RawSessionID: id,
 		})
 		require.NoError(t, err)
@@ -150,10 +149,10 @@ func TestTauProviderDefaultIDsUseCanonicalRoot(t *testing.T) {
 			Roots: []string{root}, PathRewriter: rewriter,
 		})
 		require.True(t, ok)
-		sources, err := provider.Discover(context.Background())
+		sources, err := provider.Discover(t.Context())
 		require.NoError(t, err)
 		require.Len(t, sources, 1)
-		outcome, err := provider.Parse(context.Background(), ParseRequest{
+		outcome, err := provider.Parse(t.Context(), ParseRequest{
 			Source: sources[0],
 		})
 		require.NoError(t, err)
@@ -172,16 +171,16 @@ func TestTauProviderKeepsPiTranscriptWithPi(t *testing.T) {
 
 	tauProvider, ok := NewProvider(AgentTau, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	tauSources, err := tauProvider.Discover(context.Background())
+	tauSources, err := tauProvider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, tauSources, 1)
-	tauOutcome, err := tauProvider.Parse(context.Background(), ParseRequest{Source: tauSources[0]})
+	tauOutcome, err := tauProvider.Parse(t.Context(), ParseRequest{Source: tauSources[0]})
 	require.NoError(t, err)
 	assert.Equal(t, SkipNoSession, tauOutcome.SkipReason)
 
 	piProvider, ok := NewProvider(AgentPi, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	piSources, err := piProvider.Discover(context.Background())
+	piSources, err := piProvider.Discover(t.Context())
 	require.NoError(t, err)
 	assert.Len(t, piSources, 1)
 }
@@ -197,10 +196,10 @@ func TestTauProviderRejectsForeignMessageTranscript(t *testing.T) {
 
 	provider, ok := NewProvider(AgentTau, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	assert.Equal(t, SkipNoSession, outcome.SkipReason)
 }

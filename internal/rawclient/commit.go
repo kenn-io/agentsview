@@ -2,6 +2,7 @@ package rawclient
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"go.kenn.io/agentsview/internal/apiclient"
@@ -24,7 +25,7 @@ func (c *Client) CommitManifest(
 	}
 	wire := response.JSON200
 	if wire.Receipt == "" {
-		return rawsync.CommitResult{}, fmt.Errorf("rawclient: commit response missing receipt")
+		return rawsync.CommitResult{}, errors.New("rawclient: commit response missing receipt")
 	}
 	result := rawsync.CommitResult{
 		ManifestID: wire.ManifestID,

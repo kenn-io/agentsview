@@ -114,7 +114,7 @@ func TestGetTrendsTermsModelFilterTargetsOuterMessages(t *testing.T) {
 	require.NoError(t, err, "ParseTrendTerms")
 
 	_, err = store.GetTrendsTerms(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{
 			From: "2024-06-01", To: "2024-06-02",
 			Timezone: "UTC",

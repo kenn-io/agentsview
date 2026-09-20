@@ -1,0 +1,10 @@
+run:
+  go: "1.27"
+  build-tags:
+    - fts5
+linters:
+  exclusions:
+    rules:
+      - linters:
+          - modernize
+        text: "omitzero:"

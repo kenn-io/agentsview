@@ -12,8 +12,7 @@ func TestRemoteArgs(t *testing.T) {
 	assert.Empty(t, Remote{}.Args())
 	assert.Equal(t, " --server https://example.invalid",
 		Remote{Server: "https://example.invalid"}.Args())
-	assert.Equal(t,
-		" --server https://example.invalid --server-token-file token",
+	assert.Equal(t, " --server https://example.invalid --server-token-file token",
 		Remote{Server: "https://example.invalid", TokenFile: "token"}.Args())
 }
 
@@ -87,9 +86,9 @@ func TestRemoteArgsQuotesUnsafeValues(t *testing.T) {
 }
 
 func TestRemoteValidateRejectsControlCharacters(t *testing.T) {
-	assert.NoError(t, Remote{Server: "https://example.invalid"}.Validate())
-	assert.Error(t, Remote{Server: "https://example.invalid\nname: evil"}.Validate())
-	assert.Error(t, Remote{Server: "ok", TokenFile: "tok\ttab"}.Validate())
+	require.NoError(t, Remote{Server: "https://example.invalid"}.Validate())
+	require.Error(t, Remote{Server: "https://example.invalid\nname: evil"}.Validate())
+	require.Error(t, Remote{Server: "ok", TokenFile: "tok\ttab"}.Validate())
 
 	_, err := Render(HarnessClaude, "dev", Remote{Server: "a\nb"})
 	assert.Error(t, err, "Render must refuse a remote that would break the file")

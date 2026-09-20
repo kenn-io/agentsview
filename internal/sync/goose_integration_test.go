@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -69,7 +68,7 @@ const gooseSyncTestSchema = `
 func TestSyncGooseTranscriptAndChangedDatabase(t *testing.T) {
 	pathRoot, dbPath, sourceDB := writeSyncGooseDB(t)
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentGoose: {pathRoot},
 		},
@@ -79,21 +78,21 @@ func TestSyncGooseTranscriptAndChangedDatabase(t *testing.T) {
 
 	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
 
-	session, err := database.GetSession(context.Background(), "goose:session-001")
+	session, err := database.GetSession(t.Context(), "goose:session-001")
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, 2, session.MessageCount)
 	assert.Equal(t, "acme_app", session.Project)
-	assert.Equal(t, dbPath+"#session-001", database.GetSessionFilePath("goose:session-001"))
+	assert.Equal(t, dbPath+"#session-001", database.GetSessionFilePath(t.Context(), "goose:session-001"))
 
-	messages, err := database.GetMessages(context.Background(), "goose:session-001", 0, 100, true)
+	messages, err := database.GetMessages(t.Context(), "goose:session-001", 0, 100, true)
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
 	assert.Equal(t, "Inspect the auth flow.", messages[0].Content)
 	require.Len(t, messages[1].ToolCalls, 1)
 	assert.Equal(t, "Read", messages[1].ToolCalls[0].ToolName)
 
-	usage, err := database.GetUsageEvents(context.Background(), "goose:session-001")
+	usage, err := database.GetUsageEvents(t.Context(), "goose:session-001")
 	require.NoError(t, err)
 	require.Len(t, usage, 2)
 	assert.Equal(t, "goose-request", usage[0].Source)
@@ -105,7 +104,7 @@ func TestSyncGooseTranscriptAndChangedDatabase(t *testing.T) {
 	assert.Equal(t, 25, usage[1].InputTokens)
 	assert.Nil(t, usage[1].Cost)
 
-	daily, err := database.GetDailyUsage(context.Background(), db.UsageFilter{
+	daily, err := database.GetDailyUsage(t.Context(), db.UsageFilter{
 		From: "2023-11-14", To: "2023-11-14", Agent: "goose", Timezone: "UTC",
 	})
 	require.NoError(t, err)
@@ -119,58 +118,58 @@ func TestSyncGooseTranscriptAndChangedDatabase(t *testing.T) {
 	}, time.Date(2030, time.January, 1, 0, 0, 0, 0, time.UTC))
 	require.NoError(t, err)
 	report, err := database.GetActivityReport(
-		context.Background(), db.AnalyticsFilter{Timezone: "UTC"}, reportQuery,
+		t.Context(), db.AnalyticsFilter{Timezone: "UTC"}, reportQuery,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 25, report.Totals.OutputTokens)
 
 	runSyncAndAssert(t, engine, SyncStats{})
 
-	_, err = sourceDB.Exec(`UPDATE sessions SET name = 'Renamed review' WHERE id = 'session-001'`)
+	_, err = sourceDB.ExecContext(t.Context(), `UPDATE sessions SET name = 'Renamed review' WHERE id = 'session-001'`)
 	require.NoError(t, err)
 	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
 	storedName, found, err := database.GetSessionName(
-		context.Background(), "goose:session-001",
+		t.Context(), "goose:session-001",
 	)
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, "Renamed review", storedName)
 
 	insertSyncGooseMessage(t, sourceDB, "assistant", `[{"type":"text","text":"Review complete."}]`, 1_700_000_002)
-	require.NoError(t, engine.SyncPathsContext(context.Background(), []string{dbPath}))
-	messages, err = database.GetMessages(context.Background(), "goose:session-001", 0, 100, true)
+	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{dbPath}))
+	messages, err = database.GetMessages(t.Context(), "goose:session-001", 0, 100, true)
 	require.NoError(t, err)
 	require.Len(t, messages, 3)
 	assert.Equal(t, "Review complete.", messages[2].Content)
 
-	_, err = sourceDB.Exec(`DELETE FROM messages WHERE id = 1`)
+	_, err = sourceDB.ExecContext(t.Context(), `DELETE FROM messages WHERE id = 1`)
 	require.NoError(t, err)
 	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
-	messages, err = database.GetMessages(context.Background(), "goose:session-001", 0, 100, true)
+	messages, err = database.GetMessages(t.Context(), "goose:session-001", 0, 100, true)
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
 	assert.Equal(t, "I will inspect the file.", messages[0].Content)
 
-	_, err = sourceDB.Exec(`
+	_, err = sourceDB.ExecContext(t.Context(), `
 		DELETE FROM usage_ledger WHERE session_id = 'session-001';
 		DELETE FROM messages WHERE session_id = 'session-001';
 		DELETE FROM sessions WHERE id = 'session-001';
 	`)
 	require.NoError(t, err)
 	require.NoError(t, engine.ReconcileProviderRoots(
-		context.Background(), parser.AgentGoose, []string{pathRoot},
+		t.Context(), parser.AgentGoose, []string{pathRoot},
 	))
-	active, err := database.GetSession(context.Background(), "goose:session-001")
+	active, err := database.GetSession(t.Context(), "goose:session-001")
 	require.NoError(t, err)
 	assert.NotNil(t, active)
-	archived, err := database.GetSessionFull(context.Background(), "goose:session-001")
+	archived, err := database.GetSessionFull(t.Context(), "goose:session-001")
 	require.NoError(t, err)
 	assertSourceMissingState(t, archived)
 }
 
 func TestReconcileProviderRootsGooseSkipsUnchangedSession(t *testing.T) {
 	pathRoot, _, _ := writeSyncGooseDB(t)
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentGoose: {pathRoot},
 		},
@@ -188,7 +187,7 @@ func TestReconcileProviderRootsGooseSkipsUnchangedSession(t *testing.T) {
 	}
 
 	require.NoError(t, engine.ReconcileProviderRoots(
-		context.Background(), parser.AgentGoose, []string{pathRoot},
+		t.Context(), parser.AgentGoose, []string{pathRoot},
 	))
 	assert.Zero(t, writtenSessions,
 		"unchanged Goose sessions must not be rewritten during reconciliation")
@@ -201,7 +200,7 @@ func TestSyncGoosePreservesHumanUserMessageCount(t *testing.T) {
 		{"type":"actionRequired","message":"Approve the proposed edit."}
 	]`, 1_700_000_002)
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentGoose: {pathRoot},
 		},
@@ -210,7 +209,7 @@ func TestSyncGoosePreservesHumanUserMessageCount(t *testing.T) {
 	t.Cleanup(engine.Close)
 
 	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
-	session, err := database.GetSession(context.Background(), "goose:session-001")
+	session, err := database.GetSession(t.Context(), "goose:session-001")
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, 1, session.UserMessageCount,
@@ -221,7 +220,7 @@ func TestProcessFileGooseChangedDatabaseUsesOneVirtualSource(t *testing.T) {
 	pathRoot, dbPath, sourceDB := writeSyncGooseDB(t)
 	// A second, never-changed session proves the classification is bounded to
 	// the changed rows instead of fanning out to every stored session.
-	_, err := sourceDB.Exec(`
+	_, err := sourceDB.ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, name, session_type, working_dir, created_at, updated_at,
 			provider_name, model_config_json, project_id,
@@ -236,7 +235,7 @@ func TestProcessFileGooseChangedDatabaseUsesOneVirtualSource(t *testing.T) {
 		)
 	`)
 	require.NoError(t, err)
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentGoose: {pathRoot},
 		},
@@ -254,7 +253,7 @@ func TestProcessFileGooseChangedDatabaseUsesOneVirtualSource(t *testing.T) {
 	assert.False(t, files[0].ForceParse,
 		"goose relies on the fingerprint hash gate instead of forced parses")
 
-	result := engine.processFile(context.Background(), files[0])
+	result := engine.processFile(t.Context(), files[0])
 	require.NoError(t, result.err)
 	require.Len(t, result.results, 1)
 	require.Len(t, result.results[0].Messages, 3)
@@ -264,7 +263,7 @@ func TestProcessFileGooseChangedDatabaseUsesOneVirtualSource(t *testing.T) {
 func TestSyncAllGooseMissingDBPreservesArchive(t *testing.T) {
 	pathRoot, dbPath, sourceDB := writeSyncGooseDB(t)
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentGoose: {pathRoot},
 		},
@@ -277,14 +276,14 @@ func TestSyncAllGooseMissingDBPreservesArchive(t *testing.T) {
 	require.NoError(t, os.Remove(dbPath))
 	runSyncAndAssert(t, engine, SyncStats{})
 	require.NoError(t, engine.ReconcileProviderRoots(
-		context.Background(), parser.AgentGoose, []string{pathRoot},
+		t.Context(), parser.AgentGoose, []string{pathRoot},
 	))
 
-	session, err := database.GetSession(context.Background(), "goose:session-001")
+	session, err := database.GetSession(t.Context(), "goose:session-001")
 	require.NoError(t, err)
 	require.NotNil(t, session,
 		"a vanished sessions.db must not tombstone archived Goose sessions")
-	messages, err := database.GetMessages(context.Background(), "goose:session-001", 0, 100, true)
+	messages, err := database.GetMessages(t.Context(), "goose:session-001", 0, 100, true)
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
 	assert.Equal(t, "Inspect the auth flow.", messages[0].Content)
@@ -292,6 +291,7 @@ func TestSyncAllGooseMissingDBPreservesArchive(t *testing.T) {
 
 func writeSyncGooseDB(t *testing.T) (string, string, *sql.DB) {
 	t.Helper()
+
 	pathRoot := t.TempDir()
 	sessionsDir := filepath.Join(pathRoot, "data", "sessions")
 	require.NoError(t, os.MkdirAll(sessionsDir, 0o755))
@@ -299,9 +299,9 @@ func writeSyncGooseDB(t *testing.T) (string, string, *sql.DB) {
 	database, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	_, err = database.Exec(gooseSyncTestSchema)
+	_, err = database.ExecContext(t.Context(), gooseSyncTestSchema)
 	require.NoError(t, err)
-	_, err = database.Exec(`
+	_, err = database.ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, name, session_type, working_dir, created_at, updated_at,
 			provider_name, model_config_json, project_id,
@@ -321,7 +321,7 @@ func writeSyncGooseDB(t *testing.T) (string, string, *sql.DB) {
 		{"type":"text","text":"I will inspect the file."},
 		{"type":"toolRequest","id":"call-read","toolCall":{"status":"success","value":{"name":"Read","arguments":{"file_path":"auth.go"}}}}
 	]`, 1_700_000_001)
-	_, err = database.Exec(`
+	_, err = database.ExecContext(t.Context(), `
 		INSERT INTO usage_ledger (
 			session_id, created_timestamp, model, input_tokens,
 			output_tokens, total_tokens, cache_read_tokens,
@@ -342,7 +342,7 @@ func insertSyncGooseMessage(
 	t *testing.T, database *sql.DB, role, content string, created int64,
 ) {
 	t.Helper()
-	_, err := database.Exec(`
+	_, err := database.ExecContext(t.Context(), `
 		INSERT INTO messages (
 			message_id, session_id, role, content_json,
 			created_timestamp, timestamp, metadata_json

@@ -783,8 +783,8 @@ func mergeOllamaVectors(
 // generic 4xx bodies must keep flowing through the normal retry/permanence
 // classification.
 func isEncodingFormatRejection(err error) bool {
-	var statusErr *HTTPStatusError
-	if !errors.As(err, &statusErr) {
+	statusErr, hasStatusErr := errors.AsType[*HTTPStatusError](err)
+	if !hasStatusErr {
 		return false
 	}
 	if statusErr.Status < 400 || statusErr.Status >= 500 {
@@ -799,8 +799,8 @@ func isEncodingFormatRejection(err error) bool {
 // request actually carried the field; the match is body-text based and a
 // request without the field cannot be rejected for it.
 func isDimensionsRejection(err error) bool {
-	var statusErr *HTTPStatusError
-	if !errors.As(err, &statusErr) {
+	statusErr, hasStatusErr := errors.AsType[*HTTPStatusError](err)
+	if !hasStatusErr {
 		return false
 	}
 	if statusErr.Status < 400 || statusErr.Status >= 500 {
@@ -864,8 +864,8 @@ func (ec *encoderClient) attemptEncode(
 		return nil, false, err
 	}
 	if err := validateEmbeddings(vectors); err != nil {
-		var invalidErr *InvalidEmbeddingError
-		return vectors, errors.As(err, &invalidErr), err
+		_, hasInvalidErr := errors.AsType[*InvalidEmbeddingError](err)
+		return vectors, hasInvalidErr, err
 	}
 	return vectors, false, nil
 }
@@ -937,8 +937,8 @@ func sleepBackoff(ctx context.Context, attempt int, lastErr error) error {
 // Retry-After delay when present, otherwise capped exponential backoff
 // from attempt.
 func backoffDelay(attempt int, lastErr error) time.Duration {
-	var statusErr *HTTPStatusError
-	if errors.As(lastErr, &statusErr) && statusErr.RetryAfter != nil {
+	statusErr, hasStatusErr := errors.AsType[*HTTPStatusError](lastErr)
+	if hasStatusErr && statusErr.RetryAfter != nil {
 		return *statusErr.RetryAfter
 	}
 	delay := backoffBase << (attempt - 1)

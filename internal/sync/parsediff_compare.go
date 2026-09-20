@@ -63,21 +63,21 @@ func (e *Engine) compareStoredSession(
 	// body hash. Equal fingerprints prove the messages match on the
 	// compared fields without materializing full rows; only a
 	// mismatch loads them for attribution.
-	storedTokenFP, err := e.db.MessageTokenFingerprint(stored.ID)
+	storedTokenFP, err := e.db.MessageTokenFingerprint(ctx, stored.ID)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"parse-diff: message fingerprint for %s: %w",
 			stored.ID, err,
 		)
 	}
-	storedRoleTimeFP, err := e.db.MessageRoleTimeFingerprint(stored.ID)
+	storedRoleTimeFP, err := e.db.MessageRoleTimeFingerprint(ctx, stored.ID)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"parse-diff: role/time fingerprint for %s: %w",
 			stored.ID, err,
 		)
 	}
-	storedContentFP, err := e.db.MessageContentHashFingerprint(stored.ID)
+	storedContentFP, err := e.db.MessageContentHashFingerprint(ctx, stored.ID)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"parse-diff: content fingerprint for %s: %w",
@@ -89,14 +89,14 @@ func (e *Engine) compareStoredSession(
 	// tool_calls rows. Neither is reachable through the token, role/time,
 	// or content fingerprints, so without them a change confined to those
 	// columns would never load the rows and would report identical.
-	storedFlagsFP, err := e.db.MessageFlagsFingerprint(stored.ID)
+	storedFlagsFP, err := e.db.MessageFlagsFingerprint(ctx, stored.ID)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"parse-diff: flags fingerprint for %s: %w",
 			stored.ID, err,
 		)
 	}
-	storedToolFP, err := e.db.ToolCallParseDiffFingerprint(stored.ID)
+	storedToolFP, err := e.db.ToolCallParseDiffFingerprint(ctx, stored.ID)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"parse-diff: tool-call fingerprint for %s: %w",

@@ -33,8 +33,8 @@ func seedInventorySession(
 	if configure != nil {
 		configure(&sess)
 	}
-	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     id,
 		Ordinal:       0,
 		Role:          "assistant",
@@ -88,7 +88,7 @@ func buildInventoryFixture(t *testing.T, localDB *db.DB, ctx context.Context) {
 		s.StartedAt = strPtr("2020-01-01T00:00:00Z")
 		s.EndedAt = strPtr("2020-01-02T00:00:00Z")
 	})
-	require.NoError(t, localDB.SoftDeleteSession("alpha-trashed"))
+	require.NoError(t, localDB.SoftDeleteSession(t.Context(), "alpha-trashed"))
 
 	seedInventorySession(t, localDB, "beta-1", "beta", func(s *db.Session) {
 		s.Machine = "m3"

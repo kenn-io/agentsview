@@ -65,7 +65,7 @@ func settleUsageOnlySignalsTx(
 // SettleUsageOnlySignals atomically clears transcript-derived signal state and
 // records the current signal version. It also heals compact archives created
 // before usage-only writes persisted that terminal state.
-func (db *DB) SettleUsageOnlySignals(sessionID string) error {
+func (db *DB) SettleUsageOnlySignals(ctx context.Context, sessionID string) error {
 	if !db.usageOnlyStorage() {
 		return fmt.Errorf(
 			"settling usage-only signals for %s on a full-content database",
@@ -76,7 +76,7 @@ func (db *DB) SettleUsageOnlySignals(sessionID string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning usage-only signal tx: %w", err)
 	}
@@ -93,13 +93,13 @@ func (db *DB) SettleUsageOnlySignals(sessionID string) error {
 // is a change to the row from PG's perspective, even when the
 // inline write path didn't touch anything else (e.g. a one-time
 // BackfillSignals run after a schema migration).
-func (db *DB) UpdateSessionSignals(
+func (db *DB) UpdateSessionSignals(ctx context.Context,
 	sessionID string, u SessionSignalUpdate,
 ) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning tx: %w", err)
 	}
@@ -252,7 +252,7 @@ func (db *DB) BackfillSignals(
 ) error {
 	db.mu.Lock()
 	var done int
-	if err := db.getWriter().QueryRow(
+	if err := db.getWriter().QueryRow(ctx,
 		`SELECT count(*)
 		 FROM stats
 		 WHERE key = ? AND value != 0`,
@@ -311,7 +311,7 @@ func (db *DB) BackfillSignals(
 	}
 	if len(ids) == 0 {
 		if done == 0 {
-			return db.MarkSignalsBackfillDone()
+			return db.MarkSignalsBackfillDone(ctx)
 		}
 		return nil
 	}
@@ -358,17 +358,17 @@ func (db *DB) BackfillSignals(
 		"backfill: completed %d sessions", len(ids),
 	)
 
-	return db.MarkSignalsBackfillDone()
+	return db.MarkSignalsBackfillDone(ctx)
 }
 
 // MarkSignalsBackfillDone records that legacy signal backfill is
 // no longer needed for this database. Set after a fresh resync,
 // where every session is rewritten through the inline signal
 // path, so the post-resync BackfillSignals call is a no-op.
-func (db *DB) MarkSignalsBackfillDone() error {
+func (db *DB) MarkSignalsBackfillDone(ctx context.Context) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	_, err := db.getWriter().Exec(
+	_, err := db.getWriter().Exec(ctx,
 		`INSERT INTO stats (key, value) VALUES (?, 1)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 		signalsBackfillMarker,

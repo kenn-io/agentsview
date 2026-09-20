@@ -494,8 +494,8 @@ var benignRemoteTarFallout = []string{
 // SSH-level failures are never benign, so they can never be persisted
 // to the skip cache as a successful sync.
 func remoteTarStderrBenign(err error) bool {
-	var ce *commandError
-	if !errors.As(err, &ce) {
+	ce, hasCe := errors.AsType[*commandError](err)
+	if !hasCe {
 		return false
 	}
 	sawPrimary := false

@@ -54,6 +54,7 @@ func geminiAppsProductCellHTML(
 
 func parseGeminiAppsIDs(t *testing.T, fixture string) map[string]string {
 	t.Helper()
+
 	path := filepath.Join(t.TempDir(), "activity.html")
 	require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
 
@@ -89,7 +90,7 @@ func TestParseGeminiAppsExportRealOuterCellHeaderShape(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, err)
-	assert.Equal(t, 2, len(results))
+	assert.Len(t, results, 2)
 	assert.Equal(t, 3, summary.Skipped)
 	assert.Zero(t, summary.Errors)
 
@@ -310,7 +311,7 @@ func TestParseGeminiAppsOnlyOtherProductIsNotGeminiDocument(t *testing.T) {
 		callbacks++
 		return nil
 	})
-	assert.ErrorContains(t, err, "does not contain a Gemini Apps")
+	require.ErrorContains(t, err, "does not contain a Gemini Apps")
 	assert.Zero(t, callbacks)
 }
 
@@ -458,7 +459,7 @@ func TestParseGeminiAppsEmptyFormattingNodeAlongsideTextIsError(t *testing.T) {
 		callbacks++
 		return nil
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 1, callbacks)
 }
 
@@ -478,7 +479,7 @@ func TestParseGeminiAppsEmptyFormattingRunBetweenBlocksIsError(t *testing.T) {
 		callbacks++
 		return nil
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 1, callbacks)
 }
 
@@ -496,7 +497,7 @@ func TestParseGeminiAppsIgnoresHiddenActivityLabels(t *testing.T) {
 		callbacks++
 		return nil
 	})
-	assert.ErrorContains(t, err, "no admissible Prompted records")
+	require.ErrorContains(t, err, "no admissible Prompted records")
 	assert.Zero(t, callbacks)
 	assert.Equal(t, 1, summary.Skipped)
 	assert.Zero(t, summary.Errors)
@@ -645,7 +646,7 @@ func TestParseGeminiAppsEmptyFirstContentBlockIsError(t *testing.T) {
 		results = append(results, result)
 		return nil
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Len(t, results, 1)
 	assert.Equal(t, 0, summary.Errors)
 }
@@ -666,7 +667,7 @@ func TestParseGeminiAppsEmptySemanticBlockAfterPromptIsError(t *testing.T) {
 		callbacks++
 		return nil
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 1, callbacks)
 }
 
@@ -686,7 +687,7 @@ func TestParseGeminiAppsEmptyCodeBlockAfterPromptIsError(t *testing.T) {
 		callbacks++
 		return nil
 	})
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.Equal(t, 1, callbacks)
 }
 
@@ -772,7 +773,7 @@ func TestParseGeminiAppsEmptyRecordPayloadIsError(t *testing.T) {
 		results = append(results, result)
 		return nil
 	})
-	assert.ErrorContains(t, err, "no admissible Prompted records")
+	require.ErrorContains(t, err, "no admissible Prompted records")
 	assert.Empty(t, results)
 	assert.Equal(t, 1, summary.Errors)
 }
@@ -928,7 +929,7 @@ func TestParseGeminiAppsRejectsDeclaredNonEnglishLocale(t *testing.T) {
 		callbacks++
 		return nil
 	})
-	assert.ErrorContains(t, err, "unsupported Gemini Apps Takeout locale")
+	require.ErrorContains(t, err, "unsupported Gemini Apps Takeout locale")
 	assert.Zero(t, callbacks)
 }
 
@@ -948,7 +949,7 @@ func TestParseGeminiAppsRejectsUnsupportedVocabularyWithoutLang(t *testing.T) {
 		callbacks++
 		return nil
 	})
-	assert.ErrorContains(t, err, "unsupported localized or changed Gemini Apps Takeout format")
+	require.ErrorContains(t, err, "unsupported localized or changed Gemini Apps Takeout format")
 	assert.Zero(t, callbacks)
 }
 
@@ -968,7 +969,7 @@ func TestParseGeminiAppsSkipsUnknownCompatibleActivityWithoutLang(t *testing.T) 
 		callbacks++
 		return nil
 	})
-	assert.ErrorContains(t, err, "no admissible Prompted records")
+	require.ErrorContains(t, err, "no admissible Prompted records")
 	assert.Zero(t, callbacks)
 }
 
@@ -993,7 +994,7 @@ func TestParseGeminiAppsPreflightsUnsupportedCandidateBeforeCallback(t *testing.
 		callbacks++
 		return nil
 	})
-	assert.ErrorContains(t, err, "unsupported Gemini Apps Takeout locale")
+	require.ErrorContains(t, err, "unsupported Gemini Apps Takeout locale")
 	assert.Zero(t, callbacks)
 }
 
@@ -1015,7 +1016,7 @@ func TestParseGeminiAppsPreflightsUnsupportedCellBeforeCallback(t *testing.T) {
 		callbacks++
 		return nil
 	})
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Zero(t, callbacks)
 }
 
@@ -1037,7 +1038,7 @@ func TestParseGeminiAppsPreflightsUnknownZoneBeforeCallback(t *testing.T) {
 		callbacks++
 		return nil
 	})
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Zero(t, callbacks)
 }
 
@@ -1062,7 +1063,7 @@ func TestParseGeminiAppsPreflightsUnknownZoneFileBeforeCallback(t *testing.T) {
 		callbacks++
 		return nil
 	})
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Zero(t, callbacks)
 }
 
@@ -1090,7 +1091,7 @@ func TestParseGeminiAppsPreflightsMalformedZoneBeforeCallback(t *testing.T) {
 				callbacks++
 				return nil
 			})
-			assert.Error(t, err)
+			require.Error(t, err)
 			assert.Zero(t, callbacks)
 		})
 	}
@@ -1114,7 +1115,7 @@ func TestParseGeminiAppsSkipsUnknownCompatibleActivityLabels(t *testing.T) {
 				callbacks++
 				return nil
 			})
-			assert.ErrorContains(t, err, "no admissible Prompted records")
+			require.ErrorContains(t, err, "no admissible Prompted records")
 			assert.Zero(t, callbacks)
 		})
 	}
@@ -1229,7 +1230,7 @@ func TestParseGeminiAppsTimestampUsesExplicitZones(t *testing.T) {
 			)
 			require.Len(t, match, 2)
 			_, err := parseGeminiAppsTimestamp(match[0], match[1])
-			assert.ErrorContains(t, err, "unsupported")
+			require.ErrorContains(t, err, "unsupported")
 			assert.ErrorContains(t, err, strings.ToUpper(zone))
 		})
 	}
@@ -1291,7 +1292,7 @@ func TestParseGeminiAppsZeroRecordsAndUnknownLabel(t *testing.T) {
 		`<html><head><title>My Activity History</title></head><body></body></html>`,
 	), 0o644))
 	_, err := exporter.ParseGeminiAppsExport(path, func(ParseResult) error { return nil })
-	assert.ErrorContains(t, err, "does not contain a Gemini Apps")
+	require.ErrorContains(t, err, "does not contain a Gemini Apps")
 
 	unknown := strings.ReplaceAll(
 		sanitizedGeminiAppsHTML,

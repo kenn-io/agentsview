@@ -16,6 +16,7 @@ import (
 	"go.kenn.io/agentsview/internal/dbtest"
 	"go.kenn.io/agentsview/internal/postgres"
 	"go.kenn.io/agentsview/internal/server"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestMachineAliasesOnPostgresHTTP(t *testing.T) {
@@ -30,12 +31,12 @@ func TestMachineAliasesOnPostgresHTTP(t *testing.T) {
 		s.UserMessageCount = 3
 		s.MessageCount = 5
 	})
-	require.NoError(t, local.SetSyncState("artifact_local_machine_name", "old-owner"))
+	require.NoError(t, local.SetSyncState(t.Context(), "artifact_local_machine_name", "old-owner"))
 	const schema = pgE2ESchema
 	store, err := postgres.NewStore(pgURL, schema, true)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	syncer, err := postgres.New(pgURL, schema, local, "old-owner", true, postgres.SyncOptions{})
+	syncer, err := postgres.New(pgURL, schema, local, "old-owner", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	require.NoError(t, syncer.EnsureSchema(t.Context()))
@@ -43,7 +44,7 @@ func TestMachineAliasesOnPostgresHTTP(t *testing.T) {
 	require.NoError(t, err)
 	_, err = local.EnsureInstallationIdentity(t.Context(), "installation-a")
 	require.NoError(t, err)
-	upgraded, err := postgres.New(pgURL, schema, local, "installation-a", true, postgres.SyncOptions{})
+	upgraded, err := postgres.New(pgURL, schema, local, "installation-a", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, upgraded.Close()) })
 	result, err := upgraded.Push(t.Context(), false, nil)

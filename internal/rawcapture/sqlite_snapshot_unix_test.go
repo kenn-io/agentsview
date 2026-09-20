@@ -21,7 +21,7 @@ func TestSQLiteSnapshotConnectionIdentityIsIndependentOfPath(t *testing.T) {
 	writeSQLiteCaptureTestDB(t, path, "connected")
 	expected, err := os.Stat(path)
 	require.NoError(t, err)
-	source, err := openSQLiteSnapshotSource(context.Background(), path, expected)
+	source, err := openSQLiteSnapshotSource(t.Context(), path, expected)
 	require.NoError(t, err)
 	defer source.Close()
 	replacement := filepath.Join(dir, "replacement.db")

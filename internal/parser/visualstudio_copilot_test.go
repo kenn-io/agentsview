@@ -78,8 +78,7 @@ func TestDiscoverVisualStudioCopilot2026Sessions_SupportedRootLayouts(t *testing
 			files := discoverVisualStudioCopilotTestSessions(t, tc.root)
 
 			require.Len(t, files, 1)
-			assert.Equal(
-				t,
+			assert.Equal(t,
 				VisualStudioCopilotVirtualPath(sessionPath, conversationID),
 				files[0].Path,
 			)
@@ -504,7 +503,7 @@ func TestResolveSourceFilePath(t *testing.T) {
 	assert.Equal(t, "/logs/session.jsonl",
 		ResolveSourceFilePath("/logs/session.jsonl"),
 		"a plain source path should be returned unchanged")
-	assert.Equal(t, "", ResolveSourceFilePath(""))
+	assert.Empty(t, ResolveSourceFilePath(""))
 }
 
 // vsConversationIDFromPath extracts the conversation ID from a
@@ -512,7 +511,7 @@ func TestResolveSourceFilePath(t *testing.T) {
 func vsConversationIDFromPath(t *testing.T, path string) string {
 	t.Helper()
 	idx := strings.LastIndex(path, "#")
-	require.Greater(t, idx, 0,
+	require.Positive(t, idx,
 		"expected virtual path with #conversationID, got %q", path)
 	return path[idx+1:]
 }
@@ -668,8 +667,7 @@ func TestParseVisualStudioCopilotTraceSession_InvokeOnlyFirstMessage(t *testing.
 
 	require.NoError(t, err)
 	require.NotNil(t, sess)
-	assert.Equal(t,
-		"Visual Studio Copilot Agent | HelpWindow | gpt-5.5 | de788686",
+	assert.Equal(t, "Visual Studio Copilot Agent | HelpWindow | gpt-5.5 | de788686",
 		sess.FirstMessage)
 	require.Len(t, msgs, 1)
 	assert.Contains(t, msgs[0].Content, "model: gpt-5.5")
@@ -700,14 +698,12 @@ func TestParseVisualStudioCopilotTraceSession_ChatPromptFirstMessage(t *testing.
 
 	require.NoError(t, err)
 	require.NotNil(t, sess)
-	assert.Equal(t,
-		"Remove the Details button and replace the expander with tabs.",
+	assert.Equal(t, "Remove the Details button and replace the expander with tabs.",
 		sess.FirstMessage)
 	assert.Equal(t, 1, sess.UserMessageCount)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t,
-		"Remove the Details button and replace the expander with tabs.",
+	assert.Equal(t, "Remove the Details button and replace the expander with tabs.",
 		msgs[0].Content)
 }
 
@@ -740,8 +736,7 @@ func TestParseVisualStudioCopilotTraceSession_PreservesPromptMarkdown(t *testing
 
 	require.NoError(t, err)
 	require.NotNil(t, sess)
-	assert.Equal(t,
-		"Use this safer version: ```powershell git branch saved/real-self-service-v2-local-work git reset --hard origin/real-self-service-v2 ``` That does two things.",
+	assert.Equal(t, "Use this safer version: ```powershell git branch saved/real-self-service-v2-local-work git reset --hard origin/real-self-service-v2 ``` That does two things.",
 		sess.FirstMessage)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, prompt, msgs[0].Content)
@@ -1363,8 +1358,7 @@ func TestParseVisualStudioCopilotTraceSession_ChatUsage(t *testing.T) {
 	require.NotNil(t, sess)
 	require.Len(t, msgs, 2)
 	assert.Equal(t, "gpt-5.4-2026-03-05", msgs[1].Model)
-	assert.JSONEq(t,
-		`{"input_tokens":11294,"output_tokens":241}`,
+	assert.JSONEq(t, `{"input_tokens":11294,"output_tokens":241}`,
 		string(msgs[1].TokenUsage),
 	)
 	assert.Equal(t, 11294, msgs[1].ContextTokens)
@@ -1461,13 +1455,11 @@ func TestParseVisualStudioCopilotTraceSession_UsesSiblingPromptSpan(t *testing.T
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, "visualstudio-copilot:"+conversationID, sess.ID)
-	assert.Equal(t,
-		"Remove the Details button and replace the expander with tabs.",
+	assert.Equal(t, "Remove the Details button and replace the expander with tabs.",
 		sess.FirstMessage)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, RoleUser, msgs[0].Role)
-	assert.Equal(t,
-		"Remove the Details button and replace the expander with tabs.",
+	assert.Equal(t, "Remove the Details button and replace the expander with tabs.",
 		msgs[0].Content)
 	assert.Equal(t, path+"#"+conversationID, sess.File.Path)
 }
@@ -1577,8 +1569,7 @@ func TestParseVisualStudioCopilotTraceSession_ChatSummaryFallback(t *testing.T) 
 
 	require.NoError(t, err)
 	require.NotNil(t, sess)
-	assert.Equal(t,
-		"Visual Studio Copilot chat | Agent | gpt-5.5 | 398c5816",
+	assert.Equal(t, "Visual Studio Copilot chat | Agent | gpt-5.5 | 398c5816",
 		sess.FirstMessage)
 	require.Len(t, msgs, 1)
 	assert.Equal(t, sess.FirstMessage, msgs[0].Content)
@@ -1621,8 +1612,7 @@ func TestParseVisualStudioCopilotConversation_ParsesEachConversationIndependentl
 	require.NotNil(t, promptSess)
 	assert.Equal(t, "visualstudio-copilot:"+promptID, promptSess.ID)
 	assert.Equal(t, path+"#"+promptID, promptSess.File.Path)
-	assert.Equal(t,
-		"Make the update screen calmer and easier to scan.",
+	assert.Equal(t, "Make the update screen calmer and easier to scan.",
 		promptSess.FirstMessage)
 
 	// The ambient conversation in the same file is not dropped; it
@@ -1661,10 +1651,8 @@ func TestFindVisualStudioCopilotSourceFile(t *testing.T) {
 		findVisualStudioCopilotTestSourceFile(t, tracesDir, uuid),
 		"source lookup must return a conversation-scoped virtual path so a "+
 			"single-session resync does not reparse the whole trace file")
-	assert.Equal(t, "",
-		findVisualStudioCopilotTestSourceFile(t, dir, uuid))
-	assert.Equal(t, "",
-		findVisualStudioCopilotTestSourceFile(t, tracesDir, "../etc/passwd"))
+	assert.Empty(t, findVisualStudioCopilotTestSourceFile(t, dir, uuid))
+	assert.Empty(t, findVisualStudioCopilotTestSourceFile(t, tracesDir, "../etc/passwd"))
 }
 
 // TestWriteVisualStudioCopilotConversationJSONL verifies that exporting one
@@ -1693,8 +1681,8 @@ func TestWriteVisualStudioCopilotConversationJSONL(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(data), 0o644))
 
 	var buf bytes.Buffer
-	require.NoError(
-		t, WriteVisualStudioCopilotConversationJSONL(&buf, path, convA),
+	require.NoError(t,
+		WriteVisualStudioCopilotConversationJSONL(&buf, path, convA),
 	)
 
 	out := buf.String()
@@ -1780,8 +1768,8 @@ func TestWriteVisualStudioCopilotConversationJSONLFiltersSpansWithinLine(
 	require.NoError(t, os.WriteFile(path, []byte(line+"\n"), 0o644))
 
 	var buf bytes.Buffer
-	require.NoError(
-		t, WriteVisualStudioCopilotConversationJSONL(&buf, path, convA),
+	require.NoError(t,
+		WriteVisualStudioCopilotConversationJSONL(&buf, path, convA),
 	)
 	out := strings.TrimSpace(buf.String())
 
@@ -1836,8 +1824,8 @@ func TestWriteVisualStudioCopilotConversationJSONLTraversesSiblings(
 	}, "\n")+"\n"), 0o644))
 
 	var buf bytes.Buffer
-	require.NoError(
-		t, WriteVisualStudioCopilotConversationJSONL(&buf, primary, conv),
+	require.NoError(t,
+		WriteVisualStudioCopilotConversationJSONL(&buf, primary, conv),
 	)
 	out := buf.String()
 
@@ -1873,8 +1861,8 @@ func TestWriteVisualStudioCopilotConversationJSONLReadsVS2026SessionFile(
 	require.NoError(t, os.WriteFile(path, []byte(lineA+"\n"+lineB+"\n"), 0o644))
 
 	var buf bytes.Buffer
-	require.NoError(
-		t, WriteVisualStudioCopilotConversationJSONL(&buf, path, convA),
+	require.NoError(t,
+		WriteVisualStudioCopilotConversationJSONL(&buf, path, convA),
 	)
 
 	out := buf.String()

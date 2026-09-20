@@ -37,9 +37,9 @@ func TestStagedSessionHasStoredMessagesTx(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "proj")
 
-	tx, err := d.getWriter().BeginTx(context.Background(), nil)
+	tx, err := d.getWriter().BeginTx(t.Context(), nil)
 	require.NoError(t, err)
-	has, err := stagedSessionHasStoredMessagesTx(tx, "s1")
+	has, err := stagedSessionHasStoredMessagesTx(t.Context(), tx, "s1")
 	require.NoError(t, err)
 	require.False(t, has, "a session with no stored messages must report false")
 	require.NoError(t, tx.Rollback())
@@ -48,13 +48,13 @@ func TestStagedSessionHasStoredMessagesTx(t *testing.T) {
 		SessionID: "s1", Ordinal: 0, Role: "user", Content: "hi",
 	})
 
-	tx, err = d.getWriter().BeginTx(context.Background(), nil)
+	tx, err = d.getWriter().BeginTx(t.Context(), nil)
 	require.NoError(t, err)
-	has, err = stagedSessionHasStoredMessagesTx(tx, "s1")
+	has, err = stagedSessionHasStoredMessagesTx(t.Context(), tx, "s1")
 	require.NoError(t, err)
 	require.True(t, has, "a session with a stored message must report true")
 
-	has, err = stagedSessionHasStoredMessagesTx(tx, "codex:never-synced")
+	has, err = stagedSessionHasStoredMessagesTx(t.Context(), tx, "codex:never-synced")
 	require.NoError(t, err)
 	require.False(t, has, "an unrelated session id must not report true")
 	require.NoError(t, tx.Rollback())
@@ -68,17 +68,17 @@ func TestStagedSessionContentDigestIncludesReasoningEffort(t *testing.T) {
 		Model: "model", ReasoningEffort: "high",
 	})
 
-	tx, err := d.getWriter().BeginTx(context.Background(), nil)
+	tx, err := d.getWriter().BeginTx(t.Context(), nil)
 	require.NoError(t, err)
 	defer tx.Rollback()
 
-	before, err := stagedSessionContentDigestTx(tx, "s-effort")
+	before, err := stagedSessionContentDigestTx(t.Context(), tx, "s-effort")
 	require.NoError(t, err)
-	_, err = tx.Exec(`
+	_, err = tx.ExecContext(t.Context(), `
 		UPDATE messages SET reasoning_effort = 'medium'
 		WHERE session_id = 's-effort' AND ordinal = 0`)
 	require.NoError(t, err)
-	after, err := stagedSessionContentDigestTx(tx, "s-effort")
+	after, err := stagedSessionContentDigestTx(t.Context(), tx, "s-effort")
 	require.NoError(t, err)
 	require.NotEqual(t, before, after,
 		"effort-only staged changes must invalidate the content digest")
@@ -96,6 +96,7 @@ type scratchStagedResults struct {
 
 func newScratchStagedResults(t *testing.T) *scratchStagedResults {
 	t.Helper()
+
 	f, err := os.CreateTemp(t.TempDir(), "staged-*.sqlite")
 	require.NoError(t, err)
 	path := f.Name()
@@ -103,7 +104,7 @@ func newScratchStagedResults(t *testing.T) *scratchStagedResults {
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	_, err = db.Exec(`
+	_, err = db.ExecContext(t.Context(), `
 		CREATE TABLE stage_events (
 		    seq INTEGER PRIMARY KEY,
 		    tool_use_id TEXT NOT NULL,
@@ -125,7 +126,7 @@ func (s *scratchStagedResults) AddEvent(
 ) {
 	t.Helper()
 	s.seq++
-	_, err := s.db.Exec(
+	_, err := s.db.ExecContext(t.Context(),
 		`INSERT INTO stage_events (
 		     seq, tool_use_id, agent_id, subagent_session_id,
 		     source, status, content, content_length, timestamp, blanked
@@ -184,12 +185,12 @@ func (s *scratchStagedResults) Close() error {
 // writer pool must both succeed, and after each one the writer connection
 // must be free of the codex_staging schema.
 func TestReplaceSessionContentStagedAttachLifecycle(t *testing.T) {
-	database, err := Open(filepath.Join(t.TempDir(), "staged.db"))
+	database, err := Open(t.Context(), filepath.Join(t.TempDir(), "staged.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = database.Close() })
 
 	sessionID := "codex:test-session"
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(t, database.UpsertSession(t.Context(), Session{
 		ID:               sessionID,
 		Agent:            "codex",
 		Project:          "project",
@@ -216,7 +217,7 @@ func TestReplaceSessionContentStagedAttachLifecycle(t *testing.T) {
 			}},
 		}}
 		require.NoError(t, database.ReplaceSessionContentStaged(
-			context.Background(), sessionID, msgs, staged,
+			t.Context(), sessionID, msgs, staged,
 			map[string]bool{},
 			func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) {
 				return SessionSignalUpdate{}, nil, nil
@@ -230,7 +231,7 @@ func TestReplaceSessionContentStagedAttachLifecycle(t *testing.T) {
 
 	// The writer connection must be clean after each publish: a leftover
 	// codex_staging attachment is what made the second publish fail.
-	rows, err := database.getWriter().Query("PRAGMA database_list")
+	rows, err := database.getWriter().Query(t.Context(), "PRAGMA database_list")
 	require.NoError(t, err)
 	defer rows.Close()
 	for rows.Next() {
@@ -242,7 +243,7 @@ func TestReplaceSessionContentStagedAttachLifecycle(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 
-	msgs, err := database.GetAllMessages(context.Background(), sessionID)
+	msgs, err := database.GetAllMessages(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.Len(t, msgs, 1)
 	require.Equal(t, "call_b", msgs[0].ToolCalls[0].ToolUseID)
@@ -252,12 +253,12 @@ func TestReplaceSessionContentStagedAttachLifecycle(t *testing.T) {
 }
 
 func TestReplaceSessionContentStagedIdenticalPublishKeepsRevision(t *testing.T) {
-	database, err := Open(filepath.Join(t.TempDir(), "staged-idempotent.db"))
+	database, err := Open(t.Context(), filepath.Join(t.TempDir(), "staged-idempotent.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = database.Close() })
 
 	const sessionID = "codex:idempotent"
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(t, database.UpsertSession(t.Context(), Session{
 		ID: sessionID, Agent: "codex", Project: "project", Machine: "local",
 		MessageCount: 1,
 	}))
@@ -266,7 +267,7 @@ func TestReplaceSessionContentStagedIdenticalPublishKeepsRevision(t *testing.T) 
 		staged := newScratchStagedResults(t)
 		staged.AddEvent(t, "call_1", "same output")
 		require.NoError(t, database.ReplaceSessionContentStaged(
-			context.Background(), sessionID, []Message{{
+			t.Context(), sessionID, []Message{{
 				SessionID: sessionID, Ordinal: 0, Role: "assistant",
 				Content: "running", HasToolUse: true,
 				ToolCalls: []ToolCall{{
@@ -281,14 +282,14 @@ func TestReplaceSessionContentStagedIdenticalPublishKeepsRevision(t *testing.T) 
 	}
 
 	publish()
-	first, err := database.GetSession(context.Background(), sessionID)
+	first, err := database.GetSession(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, first)
 	require.NotNil(t, first.TranscriptRevision)
 	firstRevision := *first.TranscriptRevision
 
 	publish()
-	second, err := database.GetSession(context.Background(), sessionID)
+	second, err := database.GetSession(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, second)
 	require.NotNil(t, second.TranscriptRevision)
@@ -299,13 +300,13 @@ func TestReplaceSessionContentStagedIdenticalPublishKeepsRevision(t *testing.T) 
 func TestReplaceSessionContentStagedIdenticalPublishRefreshesDerivedState(
 	t *testing.T,
 ) {
-	database, err := Open(filepath.Join(t.TempDir(), "staged-derived.db"))
+	database, err := Open(t.Context(), filepath.Join(t.TempDir(), "staged-derived.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = database.Close() })
 
 	const sessionID = "codex:derived"
 	firstMessage := "Warmup"
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(t, database.UpsertSession(t.Context(), Session{
 		ID: sessionID, Agent: "codex", Project: "project", Machine: "local",
 		FirstMessage: &firstMessage, MessageCount: 1, UserMessageCount: 1,
 	}))
@@ -315,7 +316,7 @@ func TestReplaceSessionContentStagedIdenticalPublishRefreshesDerivedState(
 		staged := newScratchStagedResults(t)
 		staged.AddEvent(t, "call_1", "same output")
 		require.NoError(t, database.ReplaceSessionContentStaged(
-			context.Background(), sessionID, []Message{{
+			t.Context(), sessionID, []Message{{
 				SessionID: sessionID, Ordinal: 0, Role: "assistant",
 				Content: "running", HasToolUse: true,
 				ToolCalls: []ToolCall{{
@@ -344,14 +345,14 @@ func TestReplaceSessionContentStagedIdenticalPublishRefreshesDerivedState(
 	}
 
 	publish("old", "old-rules", false)
-	first, err := database.GetSessionFull(context.Background(), sessionID)
+	first, err := database.GetSessionFull(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, first)
 	require.NotNil(t, first.TranscriptRevision)
 	firstRevision := *first.TranscriptRevision
 
 	var firstMessageID, firstCallID, firstEventID int64
-	require.NoError(t, database.getReader().QueryRow(`
+	require.NoError(t, database.getReader().QueryRow(t.Context(), `
 		SELECT m.id, tc.id, tre.id
 		FROM messages m
 		JOIN tool_calls tc ON tc.message_id = m.id
@@ -364,14 +365,14 @@ func TestReplaceSessionContentStagedIdenticalPublishRefreshesDerivedState(
 
 	// Simulate metadata-only drift and stale post-processing while preserving
 	// the normalized transcript and its revision.
-	_, err = database.getWriter().Exec(`
+	_, err = database.getWriter().Exec(t.Context(), `
 		UPDATE sessions
 		SET outcome = 'stale', quality_signal_version = 0,
 		    secrets_rules_version = 'stale-rules',
 		    last_write_incremental = 1, is_automated = 0
 		WHERE id = ?`, sessionID)
 	require.NoError(t, err)
-	_, err = database.getWriter().Exec(`
+	_, err = database.getWriter().Exec(t.Context(), `
 		INSERT INTO secret_findings (
 			session_id, rule_name, confidence, location_kind,
 			message_ordinal, match_start, match_end, match_index,
@@ -382,7 +383,7 @@ func TestReplaceSessionContentStagedIdenticalPublishRefreshesDerivedState(
 
 	publish("completed", "fresh-rules", true)
 
-	after, err := database.GetSessionFull(context.Background(), sessionID)
+	after, err := database.GetSessionFull(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, after)
 	require.NotNil(t, after.TranscriptRevision)
@@ -398,7 +399,7 @@ func TestReplaceSessionContentStagedIdenticalPublishRefreshesDerivedState(
 		"unchanged staged publish must clear the incremental marker")
 
 	var messageID, callID, eventID int64
-	require.NoError(t, database.getReader().QueryRow(`
+	require.NoError(t, database.getReader().QueryRow(t.Context(), `
 		SELECT m.id, tc.id, tre.id
 		FROM messages m
 		JOIN tool_calls tc ON tc.message_id = m.id
@@ -413,7 +414,7 @@ func TestReplaceSessionContentStagedIdenticalPublishRefreshesDerivedState(
 	require.Equal(t, firstEventID, eventID)
 
 	var findingName, findingRules string
-	require.NoError(t, database.getReader().QueryRow(`
+	require.NoError(t, database.getReader().QueryRow(t.Context(), `
 		SELECT rule_name, rules_version FROM secret_findings
 		WHERE session_id = ?`, sessionID,
 	).Scan(&findingName, &findingRules))
@@ -422,12 +423,12 @@ func TestReplaceSessionContentStagedIdenticalPublishRefreshesDerivedState(
 }
 
 func TestReplaceSessionContentStagedWithCheckpointUsesPrefixedSessionID(t *testing.T) {
-	database, err := Open(filepath.Join(t.TempDir(), "staged-prefix.db"))
+	database, err := Open(t.Context(), filepath.Join(t.TempDir(), "staged-prefix.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = database.Close() })
 
 	const storedID = "host:codex:native"
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(t, database.UpsertSession(t.Context(), Session{
 		ID:               storedID,
 		Agent:            "codex",
 		Project:          "project",
@@ -473,7 +474,7 @@ func TestReplaceSessionContentStagedWithCheckpointUsesPrefixedSessionID(t *testi
 	}
 
 	err = database.ReplaceSessionContentStagedWithCheckpoint(
-		context.Background(), storedID, msgs, staged,
+		t.Context(), storedID, msgs, staged,
 		map[string]bool{},
 		func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) {
 			return SessionSignalUpdate{}, nil, nil
@@ -483,11 +484,11 @@ func TestReplaceSessionContentStagedWithCheckpointUsesPrefixedSessionID(t *testi
 	require.NoError(t, err)
 
 	var nativeCount, prefixedCount int
-	require.NoError(t, database.Reader().QueryRow(
+	require.NoError(t, database.Reader().QueryRow(t.Context(),
 		`SELECT COUNT(*) FROM parser_checkpoints WHERE session_id = ?`,
 		"codex:native",
 	).Scan(&nativeCount))
-	require.NoError(t, database.Reader().QueryRow(
+	require.NoError(t, database.Reader().QueryRow(t.Context(),
 		`SELECT COUNT(*) FROM parser_checkpoints WHERE session_id = ?`,
 		storedID,
 	).Scan(&prefixedCount))
@@ -501,12 +502,12 @@ func TestReplaceSessionContentStagedWithCheckpointUsesPrefixedSessionID(t *testi
 // an aborted publish must still detach the scratch schema so the next
 // publish on the same writer connection can attach again.
 func TestReplaceSessionContentStagedRollbackDetaches(t *testing.T) {
-	database, err := Open(filepath.Join(t.TempDir(), "staged.db"))
+	database, err := Open(t.Context(), filepath.Join(t.TempDir(), "staged.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = database.Close() })
 
 	sessionID := "codex:test-session"
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(t, database.UpsertSession(t.Context(), Session{
 		ID:               sessionID,
 		Agent:            "codex",
 		Project:          "project",
@@ -531,7 +532,7 @@ func TestReplaceSessionContentStagedRollbackDetaches(t *testing.T) {
 		}},
 	}}
 	err = database.ReplaceSessionContentStaged(
-		context.Background(), sessionID, msgs, failing,
+		t.Context(), sessionID, msgs, failing,
 		map[string]bool{},
 		func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) {
 			return SessionSignalUpdate{}, nil, nil
@@ -540,7 +541,7 @@ func TestReplaceSessionContentStagedRollbackDetaches(t *testing.T) {
 	require.Error(t, err)
 
 	// The aborted publish must have detached the staging schema.
-	rows, err := database.getWriter().Query("PRAGMA database_list")
+	rows, err := database.getWriter().Query(t.Context(), "PRAGMA database_list")
 	require.NoError(t, err)
 	defer rows.Close()
 	for rows.Next() {
@@ -555,7 +556,7 @@ func TestReplaceSessionContentStagedRollbackDetaches(t *testing.T) {
 	staged := newScratchStagedResults(t)
 	staged.AddEvent(t, "call_b", "second")
 	require.NoError(t, database.ReplaceSessionContentStaged(
-		context.Background(), sessionID, msgs, staged,
+		t.Context(), sessionID, msgs, staged,
 		map[string]bool{},
 		func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) {
 			return SessionSignalUpdate{}, nil, nil

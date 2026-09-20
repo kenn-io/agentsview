@@ -177,6 +177,7 @@ func checkAgProtoFieldTree(
 	t *testing.T, fields []agProtoField, buf []byte, depth int,
 ) int {
 	t.Helper()
+
 	require.LessOrEqual(t, depth, agProtoMaxDepth,
 		"nested past the recursion cap")
 	total := len(fields)
@@ -268,7 +269,7 @@ func FuzzDecodeAntigravityStep(f *testing.F) {
 		if !msg.Timestamp.IsZero() {
 			assert.False(t, msg.Timestamp.Before(windowMin),
 				"timestamp %v before plausibility window", msg.Timestamp)
-			assert.False(t, !msg.Timestamp.Before(windowMax),
+			assert.True(t, msg.Timestamp.Before(windowMax),
 				"timestamp %v after plausibility window", msg.Timestamp)
 		}
 	})

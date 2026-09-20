@@ -34,7 +34,7 @@ func TestWaitForReplacementOrShutdownDetectsReplacement(t *testing.T) {
 	// the rename beats the first poll tick.
 	duckdbsync.PrimeFileIdentity(info)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	done := make(chan bool, 1)
 	go func() {
 		done <- waitForReplacementOrShutdown(ctx, path, info, 10*time.Millisecond)
@@ -48,7 +48,7 @@ func TestWaitForReplacementOrShutdownDetectsReplacement(t *testing.T) {
 	case replaced := <-done:
 		assert.True(t, replaced, "a file-identity change must report replaced=true")
 	case <-time.After(30 * time.Second):
-		t.Fatal("waitForReplacementOrShutdown did not observe the replacement")
+		require.FailNow(t, "waitForReplacementOrShutdown did not observe the replacement")
 	}
 }
 
@@ -59,7 +59,7 @@ func TestWaitForReplacementOrShutdownReturnsFalseOnShutdown(t *testing.T) {
 	info, err := os.Stat(path)
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan bool, 1)
 	go func() {
 		done <- waitForReplacementOrShutdown(ctx, path, info, 10*time.Millisecond)
@@ -70,7 +70,7 @@ func TestWaitForReplacementOrShutdownReturnsFalseOnShutdown(t *testing.T) {
 	case replaced := <-done:
 		assert.False(t, replaced, "ctx cancellation must report replaced=false")
 	case <-time.After(30 * time.Second):
-		t.Fatal("waitForReplacementOrShutdown did not observe ctx cancellation")
+		require.FailNow(t, "waitForReplacementOrShutdown did not observe ctx cancellation")
 	}
 }
 
@@ -82,7 +82,7 @@ func TestWaitForReplacementOrShutdownTreatsMissingFileAsNoChangeYet(t *testing.T
 	require.NoError(t, err)
 	require.NoError(t, os.Remove(path))
 
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 
 	replaced := waitForReplacementOrShutdown(ctx, path, info, 10*time.Millisecond)
@@ -91,7 +91,7 @@ func TestWaitForReplacementOrShutdownTreatsMissingFileAsNoChangeYet(t *testing.T
 }
 
 func TestSleepOrShutdownReturnsFalseWhenCancelled(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	start := time.Now()
@@ -102,7 +102,7 @@ func TestSleepOrShutdownReturnsFalseWhenCancelled(t *testing.T) {
 }
 
 func TestSleepOrShutdownReturnsTrueAfterDuration(t *testing.T) {
-	ok := sleepOrShutdown(context.Background(), 10*time.Millisecond)
+	ok := sleepOrShutdown(t.Context(), 10*time.Millisecond)
 	assert.True(t, ok)
 }
 
@@ -191,7 +191,7 @@ func TestDuckDBMirrorProbeFailureReason(t *testing.T) {
 
 func TestProbeDuckDBMirrorForServeMissingFileIsActionable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "missing.duckdb")
-	err := probeDuckDBMirrorForServe(context.Background(), path)
+	err := probeDuckDBMirrorForServe(t.Context(), path)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "does not exist")
 	assert.Contains(t, err.Error(), "agentsview duckdb push --full")
@@ -199,10 +199,10 @@ func TestProbeDuckDBMirrorForServeMissingFileIsActionable(t *testing.T) {
 
 func TestProbeDuckDBMirrorForServeAcceptsCompatibleMirror(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mirror.duckdb")
-	conn, err := duckdbsync.Open(path)
+	conn, err := duckdbsync.Open(t.Context(), path)
 	require.NoError(t, err)
-	require.NoError(t, duckdbsync.EnsureSchema(context.Background(), conn))
+	require.NoError(t, duckdbsync.EnsureSchema(t.Context(), conn))
 	require.NoError(t, conn.Close())
 
-	assert.NoError(t, probeDuckDBMirrorForServe(context.Background(), path))
+	assert.NoError(t, probeDuckDBMirrorForServe(t.Context(), path))
 }

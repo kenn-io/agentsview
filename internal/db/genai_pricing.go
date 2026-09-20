@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -35,10 +36,6 @@ func GenAIPricingDocumentsEqual(a, b *GenAIPricingDocument) bool {
 		bytes.Equal(a.Data, b.Data)
 }
 
-type genAIPricingQuerier interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}
-
 // GetGenAIPricing returns the stored GenAI Prices document, or nil when the
 // archive has not been seeded yet.
 func (db *DB) GetGenAIPricing(
@@ -48,7 +45,7 @@ func (db *DB) GetGenAIPricing(
 }
 
 func getGenAIPricingFrom(
-	ctx context.Context, q genAIPricingQuerier,
+	ctx context.Context, q recallQueryRower,
 ) (*GenAIPricingDocument, error) {
 	var document GenAIPricingDocument
 	err := q.QueryRowContext(ctx, `
@@ -92,7 +89,7 @@ func (db *DB) writeGenAIPricing(
 		return err
 	}
 	if document.Version == "" || len(document.Data) == 0 {
-		return fmt.Errorf("writing GenAI pricing document: missing version or data")
+		return errors.New("writing GenAI pricing document: missing version or data")
 	}
 	if document.Source != GenAIPricingSourceEmbedded &&
 		document.Source != GenAIPricingSourceFetched {

@@ -18,6 +18,7 @@ import (
 // <root>/<repo> and returns the derived session ID.
 func writeAiderRepoSession(t *testing.T, root, repo, prompt string) (path, id string) {
 	t.Helper()
+
 	repoDir := filepath.Join(root, repo)
 	require.NoError(t, os.MkdirAll(repoDir, 0o755))
 	path = filepath.Join(repoDir, parser.AiderHistoryFileName())
@@ -97,7 +98,7 @@ func TestReconcileProviderRootsDoesNotExpandAcrossProviders(t *testing.T) {
 	claudeIDs := writeClaudeCorpus(t, claudeDir, 100)
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentAider:  {aiderRoot},
 			parser.AgentClaude: {claudeDir},

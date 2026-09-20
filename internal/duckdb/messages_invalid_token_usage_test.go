@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	json "encoding/json/v2"
 	"testing"
 
@@ -24,7 +23,7 @@ import (
 // The mirror is corrupted directly rather than through a push so the read
 // path is exercised on its own, independent of what any parser emits.
 func TestDuckGetMessagesDropsInvalidStoredTokenUsage(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newDuckWindowStore(t, func(local *db.DB) {
 		seedDuckWindowMessages(t, local, "sInvalidUsage")
 	})
@@ -55,7 +54,7 @@ func TestDuckGetMessagesDropsInvalidStoredTokenUsage(t *testing.T) {
 
 // Valid usage must still round-trip through the mirror untouched.
 func TestDuckGetMessagesPreservesValidStoredTokenUsage(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newDuckWindowStore(t, func(local *db.DB) {
 		seedDuckWindowMessages(t, local, "sValidUsage")
 	})
@@ -91,7 +90,7 @@ func TestDuckGetMessagesPreservesValidStoredTokenUsage(t *testing.T) {
 // slice, v2's does not. Asserting on a pristine mirror is the point -- a
 // test that plants corruption cannot catch this.
 func TestDuckCleanMirrorMessagesMarshal(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newDuckWindowStore(t, func(local *db.DB) {
 		seedDuckWindowMessages(t, local, "sCleanMirror")
 	})

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -131,7 +132,7 @@ func rewriteConfiguredPublicURLPort(
 		)
 	}
 
-	shouldRewrite := false
+	var shouldRewrite bool
 	if port := u.Port(); port != "" {
 		explicitPort, err := strconv.Atoi(port)
 		if err != nil {
@@ -184,7 +185,7 @@ func validateServeConfig(cfg config.Config) error {
 		return fmt.Errorf("unsupported proxy mode %q", cfg.Proxy.Mode)
 	}
 	if cfg.PublicURL == "" {
-		return fmt.Errorf("managed caddy requires public_url")
+		return errors.New("managed caddy requires public_url")
 	}
 	if !isLoopbackHost(cfg.Host) {
 		return fmt.Errorf(
@@ -198,9 +199,7 @@ func validateServeConfig(cfg config.Config) error {
 	}
 	if !isLoopbackHost(bindHost) &&
 		len(cfg.Proxy.AllowedSubnets) == 0 {
-		return fmt.Errorf(
-			"managed caddy non-loopback binds require at least one allowed_subnet",
-		)
+		return errors.New("managed caddy non-loopback binds require at least one allowed_subnet")
 	}
 	if _, err := exec.LookPath(cfg.Proxy.Bin); err != nil {
 		return fmt.Errorf(
@@ -214,14 +213,12 @@ func validateServeConfig(cfg config.Config) error {
 		return fmt.Errorf("parsing public url: %w", err)
 	}
 	if u == nil {
-		return fmt.Errorf("parsing public url: invalid URL")
+		return errors.New("parsing public url: invalid URL")
 	}
 	switch u.Scheme {
 	case "https":
 		if cfg.Proxy.TLSCert == "" || cfg.Proxy.TLSKey == "" {
-			return fmt.Errorf(
-				"managed caddy HTTPS mode requires both tls_cert and tls_key",
-			)
+			return errors.New("managed caddy HTTPS mode requires both tls_cert and tls_key")
 		}
 		if err := requireReadableFile(cfg.Proxy.TLSCert); err != nil {
 			return fmt.Errorf("tls_cert: %w", err)
@@ -231,14 +228,10 @@ func validateServeConfig(cfg config.Config) error {
 		}
 	case "http":
 		if cfg.Proxy.TLSCert != "" || cfg.Proxy.TLSKey != "" {
-			return fmt.Errorf(
-				"managed caddy HTTP mode must not set tls_cert or tls_key",
-			)
+			return errors.New("managed caddy HTTP mode must not set tls_cert or tls_key")
 		}
 	default:
-		return fmt.Errorf(
-			"managed caddy requires public_url to use http or https",
-		)
+		return errors.New("managed caddy requires public_url to use http or https")
 	}
 
 	return nil
@@ -279,7 +272,7 @@ func prepareManagedCaddyConfig(
 ) (path string, content string, err error) {
 	mode = strings.TrimSpace(mode)
 	if mode == "" {
-		return "", "", fmt.Errorf("managed caddy mode must not be empty")
+		return "", "", errors.New("managed caddy mode must not be empty")
 	}
 
 	path = managedCaddyConfigPath(cfg.DataDir, mode)
@@ -372,7 +365,7 @@ func startManagedCaddy(
 		cancel()
 		_ = guard.Close()
 		if err == nil {
-			return nil, fmt.Errorf("managed caddy exited immediately")
+			return nil, errors.New("managed caddy exited immediately")
 		}
 		return nil, fmt.Errorf("managed caddy exited immediately: %w", err)
 	case <-time.After(managedCaddyStartGrace):
@@ -479,7 +472,7 @@ func waitForLocalPort(
 			return err
 		default:
 		}
-		conn, err := net.DialTimeout("tcp", address, 200*time.Millisecond)
+		conn, err := (&net.Dialer{Timeout: 200 * time.Millisecond}).DialContext(ctx, "tcp", address)
 		if err == nil {
 			conn.Close()
 			return nil
@@ -555,7 +548,7 @@ func publicURLPort(publicURL string) (int, error) {
 		return 0, err
 	}
 	if u == nil {
-		return 0, fmt.Errorf("invalid public URL")
+		return 0, errors.New("invalid public URL")
 	}
 	if port := u.Port(); port != "" {
 		return strconv.Atoi(port)

@@ -156,16 +156,16 @@ type forbiddenRootMatcher struct {
 }
 
 func newForbiddenRootMatcher(roots []string) forbiddenRootMatcher {
-	var comparable []string
+	var comparablePath []string
 	for _, root := range roots {
 		// filepath.Abs("") would resolve to the working directory,
 		// silently turning a blank root into a cwd-wide exclusion.
 		if root == "" {
 			continue
 		}
-		comparable = append(comparable, localComparablePath(root))
+		comparablePath = append(comparablePath, localComparablePath(root))
 	}
-	return forbiddenRootMatcher{comparable: comparable}
+	return forbiddenRootMatcher{comparable: comparablePath}
 }
 
 // within reports whether path is a forbidden root or lies beneath one.

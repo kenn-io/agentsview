@@ -63,6 +63,7 @@ func (s *Store) recoverObjectSpool(ctx context.Context) (RecoveryReport, error) 
 		s.objectMu.Unlock()
 		return report, fmt.Errorf("rawcheckpoint: list recovery objects: %w", err)
 	}
+	defer rows.Close()
 	var broken []rawsync.ObjectRef
 	for rows.Next() {
 		var ref rawsync.ObjectRef
@@ -119,6 +120,7 @@ func (s *Store) recoverObjectSpool(ctx context.Context) (RecoveryReport, error) 
 		if err != nil {
 			return fmt.Errorf("rawcheckpoint: recover: list stale reservations: %w", err)
 		}
+		defer rows.Close()
 		var interrupted []SourceIdentity
 		for rows.Next() {
 			var source SourceIdentity
@@ -224,7 +226,8 @@ func invalidGenerationSuffixConn(
 ) ([]string, error) {
 	invalid := make(map[string]struct{})
 	for _, ref := range broken {
-		rows, err := conn.QueryContext(ctx, `WITH RECURSIVE suffix(capture_id) AS (
+		if err := func() error {
+			rows, err := conn.QueryContext(ctx, `WITH RECURSIVE suffix(capture_id) AS (
 			SELECT entry_object.capture_id FROM outbox_entry_objects AS entry_object
 			JOIN outbox_generations AS generation
 				ON generation.capture_id = entry_object.capture_id
@@ -236,23 +239,29 @@ func invalidGenerationSuffixConn(
 			WHERE generation.state != 'acknowledged'
 		)
 		SELECT capture_id FROM suffix`, ref.SHA256, ref.Length)
-		if err != nil {
-			return nil, fmt.Errorf("rawcheckpoint: find broken generation suffix: %w", err)
-		}
-		for rows.Next() {
-			var captureID string
-			if err := rows.Scan(&captureID); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("rawcheckpoint: find broken generation suffix: %w", err)
+			if err != nil {
+				return fmt.Errorf("rawcheckpoint: find broken generation suffix: %w", err)
 			}
-			invalid[captureID] = struct{}{}
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return nil, fmt.Errorf("rawcheckpoint: find broken generation suffix: %w", err)
-		}
-		if err := rows.Close(); err != nil {
-			return nil, fmt.Errorf("rawcheckpoint: find broken generation suffix: %w", err)
+			defer rows.Close()
+			for rows.Next() {
+				var captureID string
+				if err := rows.Scan(&captureID); err != nil {
+					rows.Close()
+					return fmt.Errorf("rawcheckpoint: find broken generation suffix: %w", err)
+				}
+				invalid[captureID] = struct{}{}
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return fmt.Errorf("rawcheckpoint: find broken generation suffix: %w", err)
+			}
+			if err := rows.Close(); err != nil {
+				return fmt.Errorf("rawcheckpoint: find broken generation suffix: %w", err)
+			}
+
+			return nil
+		}(); err != nil {
+			return nil, err
 		}
 	}
 	result := make([]string, 0, len(invalid))

@@ -171,7 +171,7 @@ func TestClientRefusesCredentialRedirects(t *testing.T) {
 			})
 			require.NoError(t, err)
 			_, err = client.tokens.token(t.Context())
-			assert.Error(t, err)
+			require.Error(t, err)
 			assert.EqualValues(t, 0, redirected.Load(),
 				"redirect target must not receive the device credential")
 		})

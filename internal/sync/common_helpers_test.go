@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"errors"
 	"io/fs"
 	"testing"
 
@@ -18,7 +17,7 @@ func requirePathError(t *testing.T, err error) {
 	t.Helper()
 	require.Error(t, err)
 	var pathErr *fs.PathError
-	require.True(t, errors.As(err, &pathErr), "expected *fs.PathError, got %T: %v", err, err)
+	require.ErrorAs(t, err, &pathErr, "expected *fs.PathError, got %T: %v", err, err)
 }
 
 // failingReader is an io.Reader that always returns an error.

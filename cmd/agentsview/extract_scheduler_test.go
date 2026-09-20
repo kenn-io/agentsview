@@ -169,7 +169,7 @@ func TestExtractSchedulerStopTerminatesRun(t *testing.T) {
 		select {
 		case <-done:
 		default:
-			t.Fatal("Stop did not terminate Run")
+			require.FailNow(t, "Stop did not terminate Run")
 		}
 	})
 }
@@ -188,7 +188,7 @@ func TestExtractSchedulerNotifyNeverBlocksWithoutAReader(t *testing.T) {
 		select {
 		case <-done:
 		default:
-			t.Fatal("Notify blocked without a running scheduler")
+			require.FailNow(t, "Notify blocked without a running scheduler")
 		}
 	})
 }
@@ -294,14 +294,14 @@ func TestExtractSchedulerPassHoldsIdleWorkLease(t *testing.T) {
 	<-mgr.started
 	select {
 	case <-idled:
-		t.Fatal("daemon idled out while an extraction pass was in flight")
+		require.FailNow(t, "daemon idled out while an extraction pass was in flight")
 	case <-time.After(200 * time.Millisecond):
 	}
 	mgr.releaseOnce()
 	select {
 	case <-idled:
 	case <-time.After(2 * time.Second):
-		t.Fatal("daemon never idled once the pass completed")
+		require.FailNow(t, "daemon never idled once the pass completed")
 	}
 }
 
@@ -319,7 +319,7 @@ func TestExtractSchedulerStartsNoPassAfterDraining(t *testing.T) {
 		select {
 		case <-idled:
 		default:
-			t.Fatal("tracker never went idle")
+			require.FailNow(t, "tracker never went idle")
 		}
 		go s.Run(t.Context())
 		defer s.Stop()
@@ -351,7 +351,7 @@ func TestExtractSchedulerStartupPassSurvivesShortIdleTimeout(t *testing.T) {
 	select {
 	case <-idled:
 	case <-time.After(2 * time.Second):
-		t.Fatal("daemon never idled once the startup pass completed")
+		require.FailNow(t, "daemon never idled once the startup pass completed")
 	}
 }
 

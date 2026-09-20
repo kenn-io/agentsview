@@ -10,8 +10,10 @@ import (
 
 const streamingDirectoryBatchSize = 64
 
-var errStopStreamingDiscovery = errors.New("stop streaming discovery")
-var errStreamingDirectoryChanged = errors.New("streaming directory changed during discovery")
+var (
+	errStopStreamingDiscovery    = errors.New("stop streaming discovery")
+	errStreamingDirectoryChanged = errors.New("streaming directory changed during discovery")
+)
 
 // DiscoveryIncompleteError reports a bounded traversal that stopped before it
 // could authoritatively enumerate its configured scope. Callers must retain the
@@ -29,13 +31,13 @@ func (err DiscoveryIncompleteError) Error() string {
 	return string(err.Provider) + " discovery incomplete: " + err.Reason
 }
 
-type discoveryIncompleteCause struct {
+type discoveryIncompleteError struct {
 	incomplete DiscoveryIncompleteError
 	cause      error
 }
 
-func (err discoveryIncompleteCause) Error() string { return err.incomplete.Error() }
-func (err discoveryIncompleteCause) Unwrap() []error {
+func (err discoveryIncompleteError) Error() string { return err.incomplete.Error() }
+func (err discoveryIncompleteError) Unwrap() []error {
 	return []error{err.incomplete, err.cause}
 }
 
@@ -50,7 +52,7 @@ func incompleteDiscoveryError(
 	if _, ok := errors.AsType[DiscoveryIncompleteError](cause); ok {
 		return cause
 	}
-	return discoveryIncompleteCause{
+	return discoveryIncompleteError{
 		incomplete: DiscoveryIncompleteError{
 			Provider: provider,
 			Reason:   reason + ": " + cause.Error(),
@@ -60,8 +62,8 @@ func incompleteDiscoveryError(
 }
 
 func discoveryYieldCause(err error) (error, bool) {
-	var yieldErr discoveryYieldError
-	if !errors.As(err, &yieldErr) {
+	yieldErr, hasYieldErr := errors.AsType[discoveryYieldError](err)
+	if !hasYieldErr {
 		return nil, false
 	}
 	return yieldErr.cause, true
@@ -98,10 +100,12 @@ func withStreamingDirectoryReader(
 	return context.WithValue(ctx, streamingDirectoryReaderContextKey{}, reader)
 }
 
-type streamingDiscoveryBufferObserverKey struct{}
-type streamingRetainedBytesObserverKey struct{}
-type sharedContainerScanObserverKey struct{}
-type reconciliationRetainedMemberObserverKey struct{}
+type (
+	streamingDiscoveryBufferObserverKey     struct{}
+	streamingRetainedBytesObserverKey       struct{}
+	sharedContainerScanObserverKey          struct{}
+	reconciliationRetainedMemberObserverKey struct{}
+)
 
 // WithStreamingDiscoveryBufferObserver attaches instrumentation to direct
 // provider discovery. Providers report actual bounded read/source batches at

@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -87,9 +88,7 @@ func messagesFilterFromFlags(cmd *cobra.Command) (service.MessageFilter, error) 
 	}
 	aroundSet := flags.Changed("around")
 	if !aroundSet && (flags.Changed("before") || flags.Changed("after")) {
-		return service.MessageFilter{}, fmt.Errorf(
-			"--before/--after require --around",
-		)
+		return service.MessageFilter{}, errors.New("--before/--after require --around")
 	}
 
 	limit, err := flags.GetInt("limit")

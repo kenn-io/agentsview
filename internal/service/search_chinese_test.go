@@ -1,7 +1,6 @@
 package service_test
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -25,7 +24,7 @@ func TestDirectSearchSegmentsChineseQuery(t *testing.T) {
 		dbtest.UserMsg(id, 0, "这是全文的搜索实现说明。"),
 		dbtest.AsstMsg(id, 1, "understood"),
 	}, dbtest.WithMessageCounts(3, 2))
-	if !d.HasCJKFTS() {
+	if !d.HasCJKFTS(t.Context()) {
 		t.Skip("simple FTS5 runtime is not installed for this test process")
 	}
 	be := service.NewDirectBackend(d, nil)
@@ -33,7 +32,7 @@ func TestDirectSearchSegmentsChineseQuery(t *testing.T) {
 	// jieba segments 全文搜索 into 全文 AND 搜索, both of which the message
 	// contains. As the literal phrase it never matches, because the message
 	// separates the two words.
-	res, err := be.Search(context.Background(), service.SearchRequest{
+	res, err := be.Search(t.Context(), service.SearchRequest{
 		Query: "全文搜索",
 		Limit: 20,
 	})

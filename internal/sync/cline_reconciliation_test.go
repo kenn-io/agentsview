@@ -37,7 +37,7 @@ func TestClineReconciliation_DeletedTeammateLifecycle(t *testing.T) {
 	require.NoError(t, os.WriteFile(tmPath, []byte(tmJSON), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCline: {root},
 		},
@@ -105,7 +105,7 @@ func TestClineReconciliation_DeletedMetadataLifecycle(t *testing.T) {
 	require.NoError(t, os.WriteFile(tmPath, []byte(tmJSON), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCline: {root},
 		},
@@ -147,6 +147,7 @@ func TestClineReconciliation_DeletedMetadataLifecycle(t *testing.T) {
 		assert.Nil(t, session.DeletedAt)
 	}
 }
+
 func TestClineRemoteIdentityStableAcrossResyncs(t *testing.T) {
 	root := t.TempDir()
 	sessDir := filepath.Join(root, "data", "sessions", "sess-remote")
@@ -186,7 +187,7 @@ func TestClineRemoteIdentityStableAcrossResyncs(t *testing.T) {
 	}
 
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCline: {root}},
 		Machine:   "remote-host", IDPrefix: "remote-host~",
 		PathRewriter: rewrite, StoredPathResolver: resolve,
@@ -217,17 +218,17 @@ func TestClineRemoteIdentityStableAcrossResyncs(t *testing.T) {
 	}
 
 	first := engine.SyncAll(t.Context(), nil)
-	require.Greater(t, first.Synced, 0)
+	require.Positive(t, first.Synced)
 	wantParent, wantChild, wantLink, wantResultLink := readIdentity()
-	assert.Equal(t, parentID, wantParent)
-	assert.Equal(t, childID, wantChild)
-	assert.Equal(t, childID, wantLink)
-	assert.Equal(t, childID, wantResultLink)
+	assert.Equal(t, wantParent, parentID)
+	assert.Equal(t, wantChild, childID)
+	assert.Equal(t, wantLink, childID)
+	assert.Equal(t, wantResultLink, childID)
 
 	for _, text := range []string{"second", "third"} {
 		require.NoError(t, os.WriteFile(teammatePath, []byte(teammateJSON(text)), 0o644))
 		res := engine.SyncAll(t.Context(), nil)
-		require.Greater(t, res.Synced, 0)
+		require.Positive(t, res.Synced)
 		gotParent, gotChild, gotLink, gotResultLink := readIdentity()
 		assert.Equal(t, wantParent, gotParent)
 		assert.Equal(t, wantChild, gotChild)
@@ -236,7 +237,7 @@ func TestClineRemoteIdentityStableAcrossResyncs(t *testing.T) {
 	}
 
 	storedPath := rewrite(teammatePath)
-	ids, err := database.ListSessionIDsByFilePath(storedPath, string(parser.AgentCline))
+	ids, err := database.ListSessionIDsByFilePath(t.Context(), storedPath, string(parser.AgentCline))
 	require.NoError(t, err)
 	assert.Equal(t, []string{childID}, ids)
 }

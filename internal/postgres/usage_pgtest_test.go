@@ -17,6 +17,7 @@ import (
 	"go.kenn.io/agentsview/internal/money"
 	"go.kenn.io/agentsview/internal/pricing"
 	"go.kenn.io/agentsview/internal/service"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func prepareUsageSchema(
@@ -1621,7 +1622,7 @@ func TestPushSyncsModelPricingToPostgres(t *testing.T) {
 		}},
 	}}), "UpsertModelPricing")
 
-	ps, err := New(pgURL, "agentsview", local, "test-machine", true, SyncOptions{})
+	ps, err := New(pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err, "New")
 	defer ps.Close()
 
@@ -1731,7 +1732,7 @@ func TestPushRetiresOpenRouterPricingRows(t *testing.T) {
 			Value: `["minimax/minimax-m3"]`,
 		},
 	))
-	ps, err := New(pgURL, "agentsview", local, "test-machine", true, SyncOptions{})
+	ps, err := New(pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err, "New")
 	defer ps.Close()
 	_, err = ps.Push(context.Background(), false, nil)
@@ -1788,7 +1789,7 @@ func TestPushFallsBackToBuiltinPricingWhenLocalTableEmpty(t *testing.T) {
 	t.Cleanup(func() { cleanPGSchema(t, pgURL) })
 
 	local := testDB(t)
-	ps, err := New(pgURL, "agentsview", local, "test-machine", true, SyncOptions{})
+	ps, err := New(pgURL, "agentsview", local, "test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err, "New")
 	defer ps.Close()
 

@@ -313,7 +313,7 @@ func (s *Store) SearchSession(
 }
 
 // HasFTS returns true because ILIKE search is available.
-func (s *Store) HasFTS() bool { return true }
+func (s *Store) HasFTS(ctx context.Context) bool { return true }
 
 // HasSemantic reports whether a PG vector searcher was wired at startup
 // (pg serve found a generation matching its embeddings fingerprint). When
@@ -399,10 +399,14 @@ func (s *Store) Search(
 	}
 
 	dateBuilder := db.NewQueryBuilder(db.PostgresQueryDialect(), argIdx-1)
+	var msgProjectClauseSb402 strings.Builder
+	var nameProjectClauseSb402 strings.Builder
 	for _, pred := range dateBuilder.SessionDateRangePredicates(f.DateFrom, f.DateTo, "", func(col string) string { return "s." + col }) {
-		msgProjectClause += " AND " + pred
-		nameProjectClause += " AND " + pred
+		msgProjectClauseSb402.WriteString(" AND " + pred)
+		nameProjectClauseSb402.WriteString(" AND " + pred)
 	}
+	msgProjectClause += msgProjectClauseSb402.String()
+	nameProjectClause += nameProjectClauseSb402.String()
 	args = append(args, dateBuilder.Args()...)
 	argIdx += len(dateBuilder.Args())
 

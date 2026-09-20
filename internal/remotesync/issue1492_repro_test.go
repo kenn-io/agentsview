@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,7 +28,7 @@ func archiveEntries(t *testing.T, data []byte) map[string][]byte {
 	tr := tar.NewReader(bytes.NewReader(data))
 	for {
 		hdr, err := tr.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return entries
 		}
 		require.NoError(t, err)
@@ -84,10 +85,10 @@ func TestIssue1492CuratesCursorAndVSCodeTargets(t *testing.T) {
 	assert.Contains(t, targets.Files[parser.AgentVSCodeCopilot], workspaceManifest)
 	assert.NotContains(t, strings.Join(targets.Files[parser.AgentCursor], "\n"), "mcp_auth")
 
-	manifest, err := BuildManifest(targets)
+	manifest, err := BuildManifest(t.Context(), targets)
 	require.NoError(t, err)
 	var archive bytes.Buffer
-	require.NoError(t, WriteArchive(&archive, targets))
+	require.NoError(t, WriteArchive(t.Context(), &archive, targets))
 	paths := strings.Join(manifestPaths(manifest), "\n")
 	entries := archiveEntries(t, archive.Bytes())
 	assert.NotContains(t, paths, "mcp_auth.json")
@@ -105,7 +106,7 @@ func TestIssue1492ZedActiveWALIsOneStableStandaloneDatabase(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, writer.Close()) })
 	defer writer.Close()
-	_, err = writer.Exec(`PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE threads (id TEXT PRIMARY KEY); INSERT INTO threads VALUES ('wal-thread');`)
+	_, err = writer.ExecContext(t.Context(), `PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE threads (id TEXT PRIMARY KEY); INSERT INTO threads VALUES ('wal-thread');`)
 	require.NoError(t, err)
 	walInfo, err := os.Stat(dbPath + "-wal")
 	require.NoError(t, err)
@@ -115,12 +116,12 @@ func TestIssue1492ZedActiveWALIsOneStableStandaloneDatabase(t *testing.T) {
 		parser.AgentZed: {root},
 	}})
 	require.Equal(t, []string{dbPath}, targets.Files[parser.AgentZed])
-	manifest, err := BuildManifest(targets)
+	manifest, err := BuildManifest(t.Context(), targets)
 	require.NoError(t, err)
 	require.Len(t, manifest.Files, 1)
 	manifestEntry := manifest.Files[0]
 	var archive bytes.Buffer
-	require.NoError(t, WriteArchive(&archive, targets))
+	require.NoError(t, WriteArchive(t.Context(), &archive, targets))
 	entries := archiveEntries(t, archive.Bytes())
 	require.Len(t, entries, 1)
 	archiveBody, ok := entries[filepath.ToSlash(dbPath)]
@@ -139,7 +140,7 @@ func TestIssue1492ZedActiveWALIsOneStableStandaloneDatabase(t *testing.T) {
 	reader, err := sql.Open("sqlite3", snapshot)
 	require.NoError(t, err)
 	var id string
-	require.NoError(t, reader.QueryRow("SELECT id FROM threads").Scan(&id))
+	require.NoError(t, reader.QueryRowContext(t.Context(), "SELECT id FROM threads").Scan(&id))
 	assert.Equal(t, "wal-thread", id)
 	require.NoError(t, reader.Close())
 	require.NoError(t, writer.Close())
@@ -160,11 +161,11 @@ func TestIssue1492VanishedCuratedFileIsOmittedAndDeltaIsConfined(t *testing.T) {
 		parser.AgentCursor: {root},
 	}})
 	require.NoError(t, os.Remove(selected))
-	manifest, err := BuildManifest(targets)
+	manifest, err := BuildManifest(t.Context(), targets)
 	require.NoError(t, err)
 	assert.Empty(t, manifest.Files)
 	var archive bytes.Buffer
-	require.NoError(t, WriteArchive(&archive, targets))
+	require.NoError(t, WriteArchive(t.Context(), &archive, targets))
 	assert.Empty(t, archiveEntries(t, archive.Bytes()))
 
 	_, ok := SelectAllowedFiles(targets, []string{filepath.Join(root, "project", "mcp_auth.json")})
@@ -209,7 +210,7 @@ func TestIssue1492VanishedCursorAndVSCodeFilesRemainAuthorized(t *testing.T) {
 			files, ok := SelectAllowedFiles(fresh, []string{path})
 			require.True(t, ok, "vanished %s file must remain authorized", tt.name)
 			var delta bytes.Buffer
-			require.NoError(t, WriteArchiveFiles(&delta, fresh, files))
+			require.NoError(t, WriteArchiveFiles(t.Context(), &delta, fresh, files))
 			assert.Empty(t, archiveEntries(t, delta.Bytes()))
 		})
 	}
@@ -237,13 +238,13 @@ func TestIssue1492AllCuratedEditorFilesVanishedRemainAuthorized(t *testing.T) {
 			fresh := resolveTargetsForTest(t, cfg)
 			selected, ok := SelectAllowedTargets(fresh, stale)
 			require.True(t, ok, "vanished %s target must remain authorized", tt.name)
-			manifest, err := BuildManifest(selected)
+			manifest, err := BuildManifest(t.Context(), selected)
 			require.NoError(t, err)
 			assert.Empty(t, manifest.Files)
 			files, ok := SelectAllowedFiles(fresh, []string{path})
 			require.True(t, ok, "vanished %s delta must remain authorized", tt.name)
 			var delta bytes.Buffer
-			require.NoError(t, WriteArchiveFiles(&delta, fresh, files))
+			require.NoError(t, WriteArchiveFiles(t.Context(), &delta, fresh, files))
 			assert.Empty(t, archiveEntries(t, delta.Bytes()))
 		})
 	}
@@ -273,10 +274,10 @@ func TestIssue1492VanishedVSCodeWorkspaceIsEvictedFromMirror(t *testing.T) {
 	selected, ok := SelectAllowedFiles(fresh, []string{workspace})
 	require.True(t, ok, "vanished workspace.json must remain authorized")
 	var delta bytes.Buffer
-	require.NoError(t, WriteArchiveFiles(&delta, fresh, selected))
+	require.NoError(t, WriteArchiveFiles(t.Context(), &delta, fresh, selected))
 	assert.Empty(t, archiveEntries(t, delta.Bytes()))
 
-	manifest, err := BuildManifest(fresh)
+	manifest, err := BuildManifest(t.Context(), fresh)
 	require.NoError(t, err)
 	diff, err := MirrorDiff(mirror, manifest)
 	require.NoError(t, err)
@@ -504,11 +505,11 @@ func TestIssue1492EmptyCuratedRootsProduceEmptyArchives(t *testing.T) {
 		require.True(t, ok, "%s must retain its file-scope marker", agent)
 		assert.Empty(t, files)
 	}
-	manifest, err := BuildManifest(targets)
+	manifest, err := BuildManifest(t.Context(), targets)
 	require.NoError(t, err)
 	assert.Empty(t, manifest.Files)
 	var archive bytes.Buffer
-	require.NoError(t, WriteArchive(&archive, targets))
+	require.NoError(t, WriteArchive(t.Context(), &archive, targets))
 	assert.Empty(t, archiveEntries(t, archive.Bytes()))
 }
 
@@ -527,14 +528,14 @@ func TestIssue1492VanishedZedDatabaseRemainsEvictable(t *testing.T) {
 	fresh := resolveTargetsForTest(t, configured)
 	assert.Equal(t, []string{root}, fresh.Dirs[parser.AgentZed])
 	assert.Equal(t, []string{dbPath}, fresh.Files[parser.AgentZed])
-	manifest, err := BuildManifest(fresh)
+	manifest, err := BuildManifest(t.Context(), fresh)
 	require.NoError(t, err)
 	assert.Empty(t, manifest.Files)
 
 	selected, ok := SelectAllowedFiles(fresh, []string{dbPath})
 	require.True(t, ok)
 	var delta bytes.Buffer
-	require.NoError(t, WriteArchiveFiles(&delta, fresh, selected))
+	require.NoError(t, WriteArchiveFiles(t.Context(), &delta, fresh, selected))
 	assert.Empty(t, archiveEntries(t, delta.Bytes()))
 
 	mirror := t.TempDir()
@@ -691,12 +692,12 @@ func TestIssue1492CorruptZedDatabaseDoesNotBlockOtherAgents(t *testing.T) {
 			parser.AgentCursor: {cursorFile},
 		},
 	}
-	manifest, err := BuildManifest(targets)
+	manifest, err := BuildManifest(t.Context(), targets)
 	require.NoError(t, err)
 	assert.Equal(t, []string{cursorFile}, manifestPaths(manifest))
 
 	var archive bytes.Buffer
-	require.NoError(t, WriteArchive(&archive, targets))
+	require.NoError(t, WriteArchive(t.Context(), &archive, targets))
 	entries := archiveEntries(t, archive.Bytes())
 	require.Len(t, entries, 1)
 	assert.NotContains(t, strings.Join(keys(entries), "\n"), "threads.db")
@@ -709,7 +710,7 @@ func TestIssue1492ZedSnapshotDeltaUsesOnlineBackup(t *testing.T) {
 	writer, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, writer.Close()) })
-	_, err = writer.Exec(`PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE threads (id TEXT PRIMARY KEY); INSERT INTO threads VALUES ('delta-thread')`)
+	_, err = writer.ExecContext(t.Context(), `PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE threads (id TEXT PRIMARY KEY); INSERT INTO threads VALUES ('delta-thread')`)
 	require.NoError(t, err)
 	targets := resolveTargetsForTest(t, config.Config{AgentDirs: map[parser.AgentType][]string{
 		parser.AgentZed: {root},
@@ -717,7 +718,7 @@ func TestIssue1492ZedSnapshotDeltaUsesOnlineBackup(t *testing.T) {
 	files, ok := SelectAllowedFiles(targets, []string{dbPath})
 	require.True(t, ok, "Zed snapshot must be authorized as a delta file")
 	var delta bytes.Buffer
-	require.NoError(t, WriteArchiveFiles(&delta, targets, files))
+	require.NoError(t, WriteArchiveFiles(t.Context(), &delta, targets, files))
 	entries := archiveEntries(t, delta.Bytes())
 	require.Len(t, entries, 1)
 	var snapshot []byte
@@ -732,7 +733,7 @@ func TestIssue1492ZedSnapshotDeltaUsesOnlineBackup(t *testing.T) {
 	reader, err := sql.Open("sqlite3", snapshotPath)
 	require.NoError(t, err)
 	var id string
-	require.NoError(t, reader.QueryRow("SELECT id FROM threads").Scan(&id))
+	require.NoError(t, reader.QueryRowContext(t.Context(), "SELECT id FROM threads").Scan(&id))
 	assert.Equal(t, "delta-thread", id)
 	require.NoError(t, reader.Close())
 }

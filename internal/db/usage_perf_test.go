@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
@@ -30,7 +29,7 @@ func TestRealDBUsagePayload(t *testing.T) {
 	}
 	reader, err := sql.Open(sqliteUsageDriverName, makeDSN(path, true))
 	if err != nil {
-		t.Fatalf("open reader: %v", err)
+		require.NoError(t, err, "open reader")
 	}
 	reader.SetMaxOpenConns(4)
 	defer reader.Close()
@@ -39,13 +38,13 @@ func TestRealDBUsagePayload(t *testing.T) {
 	d.usageCache = newUsageCacheManager(filepath.Join(t.TempDir(), "sessions.db"))
 	d.usageCache.attachArchive(d)
 	defer d.usageCache.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 	tz := "America/New_York"
 
 	f := UsageFilter{From: "2000-01-01", To: "2035-01-01", Timezone: tz, Breakdowns: true}
 	r, err := d.GetDailyUsage(ctx, f)
 	if err != nil {
-		t.Fatalf("GetDailyUsage: %v", err)
+		require.NoError(t, err, "GetDailyUsage")
 	}
 	var proj, agent, model int
 	for _, day := range r.Daily {
@@ -62,7 +61,7 @@ func TestRealDBUsagePayload(t *testing.T) {
 
 	ix, err := d.GetSidebarSessionIndex(ctx, SessionFilter{})
 	if err != nil {
-		t.Fatalf("sidebar: %v", err)
+		require.NoError(t, err, "sidebar")
 	}
 	start = time.Now()
 	sb, _ := json.Marshal(ix)
@@ -70,7 +69,7 @@ func TestRealDBUsagePayload(t *testing.T) {
 		len(ix.Sessions), float64(len(sb))/1e6, round(time.Since(start)))
 	if out := os.Getenv("DUMP_SIDEBAR"); out != "" {
 		if err := dumpSidebarJSON(out, path, sb); err != nil {
-			t.Fatalf("dump sidebar: %v", err)
+			require.NoError(t, err, "dump sidebar")
 		}
 		t.Logf("wrote sidebar JSON to %s", out)
 	}
@@ -92,7 +91,7 @@ func TestRealDBUsagePerf(t *testing.T) {
 	// No Open(), so no migrations / drops touch the archive.
 	reader, err := sql.Open(sqliteUsageDriverName, makeDSN(path, true))
 	if err != nil {
-		t.Fatalf("open reader: %v", err)
+		require.NoError(t, err, "open reader")
 	}
 	reader.SetMaxOpenConns(4) // matches production reader pool
 	defer reader.Close()
@@ -102,7 +101,7 @@ func TestRealDBUsagePerf(t *testing.T) {
 	d.usageCache = newUsageCacheManager(filepath.Join(t.TempDir(), "sessions.db"))
 	d.usageCache.attachArchive(d)
 	defer d.usageCache.Close()
-	ctx := context.Background()
+	ctx := t.Context()
 	tz := "America/New_York"
 
 	walActive := fileExists(path + "-wal")
@@ -183,7 +182,7 @@ func TestRealDBUsagePerf(t *testing.T) {
 			res, err := p.fn()
 			d := time.Since(start)
 			if err != nil {
-				t.Fatalf("%s: %v", p.name, err)
+				require.NoErrorf(t, err, "%s", p.name)
 			}
 			if run == 0 {
 				cold, info = d, res
@@ -261,16 +260,18 @@ func TestRealDBUsageRollupOracle(t *testing.T) {
 				From: now.AddDate(0, 0, -6).Format("2006-01-02"),
 				To:   now.Format("2006-01-02"), Timezone: "America/New_York",
 				Breakdowns: true,
-			}},
+			},
+		},
 		{
 			"30d", UsageFilter{
 				From: now.AddDate(0, 0, -29).Format("2006-01-02"),
 				To:   now.Format("2006-01-02"), Timezone: "America/New_York",
 				Breakdowns: true,
-			}},
+			},
+		},
 		{"all", UsageFilter{Timezone: "America/New_York", Breakdowns: true}},
 	}
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, test := range filters {
 		t.Run(test.name, func(t *testing.T) {
 			discoveryStart := time.Now()
@@ -422,6 +423,7 @@ func cleanAbsPath(path string) (string, error) {
 }
 
 func timeConcurrent(t *testing.T, label string, fns []func() error) {
+	t.Helper()
 	start := time.Now()
 	var wg sync.WaitGroup
 	errs := make([]error, len(fns))
@@ -435,7 +437,7 @@ func timeConcurrent(t *testing.T, label string, fns []func() error) {
 	wg.Wait()
 	for _, e := range errs {
 		if e != nil {
-			t.Fatalf("%s: %v", label, e)
+			require.NoErrorf(t, e, "%s", label)
 		}
 	}
 	t.Logf("%-52s  wall=%s", label, round(time.Since(start)))

@@ -2,7 +2,6 @@ package sync_test
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -49,12 +48,12 @@ func TestCodexCheckpointFullParsePersistsCheckpoint(t *testing.T) {
 	initial := checkpointCodexInitial()
 	writeCheckpointCodexSession(t, env, initial)
 
-	env.engine.SyncAll(context.Background(), nil)
+	env.engine.SyncAll(t.Context(), nil)
 
-	cp, ok, err := env.db.GetParserCheckpoint("codex:" + checkpointTestUUID)
+	cp, ok, err := env.db.GetParserCheckpoint(t.Context(), "codex:"+checkpointTestUUID)
 	require.NoError(t, err)
 	require.True(t, ok, "a full Codex parse must persist a checkpoint")
-	blobs, ok, err := env.db.GetParserCheckpointBlobs("codex:" + checkpointTestUUID)
+	blobs, ok, err := env.db.GetParserCheckpointBlobs(t.Context(), "codex:"+checkpointTestUUID)
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, int64(len(initial)), cp.Offset)
@@ -68,14 +67,14 @@ func TestCodexCheckpointFullParsePersistsCheckpoint(t *testing.T) {
 
 func TestCodexCheckpointIncrementalResumeAdvancesCheckpoint(t *testing.T) {
 	env := setupTestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	initial := checkpointCodexInitial()
 	path := writeCheckpointCodexSession(t, env, initial)
 	env.engine.SyncAll(ctx, nil)
-	before, ok, err := env.db.GetParserCheckpoint("codex:" + checkpointTestUUID)
+	before, ok, err := env.db.GetParserCheckpoint(ctx, "codex:"+checkpointTestUUID)
 	require.NoError(t, err)
 	require.True(t, ok)
-	beforeBlobs, ok, err := env.db.GetParserCheckpointBlobs("codex:" + checkpointTestUUID)
+	beforeBlobs, ok, err := env.db.GetParserCheckpointBlobs(ctx, "codex:"+checkpointTestUUID)
 	require.NoError(t, err)
 	require.True(t, ok)
 
@@ -112,10 +111,10 @@ func TestCodexCheckpointIncrementalResumeAdvancesCheckpoint(t *testing.T) {
 	assert.NotEmpty(t, msgs[1].TokenUsage,
 		"the token_count following a late result must update the committed assistant")
 
-	after, ok, err := env.db.GetParserCheckpoint("codex:" + checkpointTestUUID)
+	after, ok, err := env.db.GetParserCheckpoint(ctx, "codex:"+checkpointTestUUID)
 	require.NoError(t, err)
 	require.True(t, ok)
-	afterBlobs, ok, err := env.db.GetParserCheckpointBlobs("codex:" + checkpointTestUUID)
+	afterBlobs, ok, err := env.db.GetParserCheckpointBlobs(ctx, "codex:"+checkpointTestUUID)
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, before.Offset+int64(len(appended)), after.Offset)
@@ -130,11 +129,11 @@ func TestCodexCheckpointIncrementalResumeAdvancesCheckpoint(t *testing.T) {
 
 func TestCodexCheckpointTruncationFallsBackToFullParse(t *testing.T) {
 	env := setupTestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	initial := checkpointCodexInitial()
 	path := writeCheckpointCodexSession(t, env, initial)
 	env.engine.SyncAll(ctx, nil)
-	_, ok, err := env.db.GetParserCheckpoint("codex:" + checkpointTestUUID)
+	_, ok, err := env.db.GetParserCheckpoint(ctx, "codex:"+checkpointTestUUID)
 	require.NoError(t, err)
 	require.True(t, ok)
 
@@ -147,7 +146,7 @@ func TestCodexCheckpointTruncationFallsBackToFullParse(t *testing.T) {
 	stats := env.engine.SyncAll(ctx, nil)
 	require.Equal(t, 1, stats.Synced,
 		"a truncated transcript must be authoritatively reparsed")
-	cp, ok, err := env.db.GetParserCheckpoint("codex:" + checkpointTestUUID)
+	cp, ok, err := env.db.GetParserCheckpoint(ctx, "codex:"+checkpointTestUUID)
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, truncated, cp.Offset,
@@ -156,7 +155,7 @@ func TestCodexCheckpointTruncationFallsBackToFullParse(t *testing.T) {
 
 func TestCodexCheckpointAnchorMismatchFallsBackToFullParse(t *testing.T) {
 	env := setupTestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	initial := checkpointCodexInitial()
 	path := writeCheckpointCodexSession(t, env, initial)
 	env.engine.SyncAll(ctx, nil)
@@ -180,7 +179,7 @@ func TestCodexCheckpointAnchorMismatchFallsBackToFullParse(t *testing.T) {
 	require.NoError(t, os.Chtimes(path, time.Now(), origMtime))
 
 	env.engine.SyncPaths([]string{path})
-	cp, ok, err := env.db.GetParserCheckpoint("codex:" + checkpointTestUUID)
+	cp, ok, err := env.db.GetParserCheckpoint(ctx, "codex:"+checkpointTestUUID)
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, int64(len(raw)), cp.Offset)
@@ -193,7 +192,7 @@ func TestCodexCheckpointAnchorMismatchFallsBackToFullParse(t *testing.T) {
 
 func TestCodexCheckpointInPlaceRewriteSameSizeSameMtimeIsRejected(t *testing.T) {
 	env := setupTestEnv(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	initial := checkpointCodexInitial()
 	path := writeCheckpointCodexSession(t, env, initial)
 	env.engine.SyncAll(ctx, nil)
@@ -221,7 +220,7 @@ func TestCodexCheckpointInPlaceRewriteSameSizeSameMtimeIsRejected(t *testing.T) 
 	require.Len(t, msgs, 2)
 	assert.NotEqual(t, "run command", msgs[0].Content,
 		"a same-stat rewrite must be re-parsed, not trusted")
-	cp, ok, err := env.db.GetParserCheckpoint("codex:" + checkpointTestUUID)
+	cp, ok, err := env.db.GetParserCheckpoint(ctx, "codex:"+checkpointTestUUID)
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, int64(len(initial)), cp.Offset,

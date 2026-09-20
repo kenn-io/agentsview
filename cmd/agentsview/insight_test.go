@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -225,7 +224,9 @@ func TestInsightGenerateCommand_StreamsAndSaves(t *testing.T) {
 		assert.Equal(t, "text/event-stream", r.Header.Get("Accept"))
 		assert.Equal(t, ts.URL, r.Header.Get("Origin"))
 		var body map[string]jsontext.Value
-		require.NoError(t, json.UnmarshalRead(r.Body, &body))
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
+			return
+		}
 		assert.Len(t, body, 9)
 		for key, value := range map[string]string{
 			"type":            "agent_analysis",
@@ -239,7 +240,9 @@ func TestInsightGenerateCommand_StreamsAndSaves(t *testing.T) {
 			"timezone":        "America/New_York",
 		} {
 			var got string
-			require.NoError(t, json.Unmarshal(body[key], &got), key)
+			if !assert.NoError(t, json.Unmarshal(body[key], &got), key) {
+				return
+			}
 			assert.Equal(t, value, got, key)
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -255,7 +258,9 @@ func TestInsightGenerateCommand_StreamsAndSaves(t *testing.T) {
 				})+
 				insightSSEEvent(t, "done", want),
 		)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 	}))
 	t.Cleanup(ts.Close)
 	explicitServerURL := ts.URL + "/prefix/path/?ignored=yes#fragment"
@@ -292,7 +297,9 @@ func TestInsightGenerateCommand_ErrorEvent(t *testing.T) {
 					"message": "agent returned empty content",
 				}),
 		)
-		require.NoError(t, err)
+		if !assert.NoError(t, err) {
+			return
+		}
 	}))
 	t.Cleanup(ts.Close)
 
@@ -408,7 +415,9 @@ func TestInsightGenerateCommand_RejectsCompletionWithoutOutput(t *testing.T) {
 				assert.Equal(t, http.MethodPost, r.Method)
 				w.Header().Set("Content-Type", "text/event-stream")
 				_, err := io.WriteString(w, tc.body)
-				require.NoError(t, err)
+				if !assert.NoError(t, err) {
+					return
+				}
 			}))
 			t.Cleanup(ts.Close)
 
@@ -448,7 +457,9 @@ func TestInsightTransportModes(t *testing.T) {
 					_, err := io.WriteString(w, insightSSEEvent(
 						t, "done", testInsight(5),
 					))
-					require.NoError(t, err)
+					if !assert.NoError(t, err) {
+						return
+					}
 				},
 			})
 			registerTestRuntime(t, dataDir, ts.URL, readOnly)
@@ -468,7 +479,8 @@ func TestInsightTransportModes(t *testing.T) {
 
 	t.Run("generation capability error stays server-owned", func(t *testing.T) {
 		ts := httptest.NewServer(http.HandlerFunc(func(
-			w http.ResponseWriter, r *http.Request) {
+			w http.ResponseWriter, r *http.Request,
+		) {
 			assert.Equal(t, "/api/v1/insights/generate", r.URL.Path)
 			w.WriteHeader(http.StatusNotImplemented)
 			writeInsightJSON(t, w, map[string]string{
@@ -502,7 +514,7 @@ func TestInsightCommandsDiscoverBasePathDaemon(t *testing.T) {
 			t.Setenv("AGENTSVIEW_AUTH_TOKEN", token)
 			t.Setenv("AGENTSVIEW_NO_DAEMON", "1")
 			database := dbtest.OpenTestDB(t)
-			id, err := database.InsertInsight(testInsight(0))
+			id, err := database.InsertInsight(t.Context(), testInsight(0))
 			require.NoError(t, err)
 			ts := httptest.NewUnstartedServer(nil)
 			host, port := splitTestServerURL(t, "http://"+ts.Listener.Addr().String())
@@ -597,14 +609,17 @@ func TestInsightHTTPErrorPreservesServerMessage(t *testing.T) {
 }
 
 func TestInsightContextCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	_, err := doInsightRequest(
+	response, err := doInsightRequest(
 		ctx, transport{Mode: transportHTTP, URL: "http://127.0.0.1:1"},
 		"", http.MethodGet, "/api/v1/insights", nil, nil,
 	)
+	if response != nil {
+		defer response.Body.Close()
+	}
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, context.Canceled))
+	assert.ErrorIs(t, err, context.Canceled)
 }
 
 func TestInsightHumanOutputSanitizesStoredFields(t *testing.T) {

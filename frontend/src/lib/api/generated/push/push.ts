@@ -5,6 +5,44 @@ import type { DaemonPushRequest } from "../models";
 
 import { orvalRequest } from "../../runtime.ts";
 
+export const getPostApiV1PushClickhouseUrl = () => {
+  return `/api/v1/push/clickhouse`;
+};
+
+/**
+ * @summary Push to ClickHouse
+ */
+export const postApiV1PushClickhouse = async (
+  daemonPushRequest: DaemonPushRequest,
+  options?: Parameters<typeof orvalRequest>[1],
+): Promise<Response> => {
+  const getHeaders = (
+    h?: NonNullable<RequestInit["headers"]>,
+  ): Record<string, string | readonly string[]> => {
+    if (!h) return {};
+    if (h instanceof Headers) return Object.fromEntries(h.entries());
+    if (Symbol.iterator in h) {
+      return Object.fromEntries(
+        Array.from(
+          h as Iterable<Iterable<string>>,
+          (entry) => Array.from(entry) as [string, string],
+        ),
+      );
+    }
+    const headers: Record<string, string | readonly string[]> = {};
+    for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+      if (value !== undefined) headers[name] = value;
+    }
+    return headers;
+  };
+  return orvalRequest<Response>(getPostApiV1PushClickhouseUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...getHeaders(options?.headers) },
+    body: JSON.stringify(daemonPushRequest),
+  });
+};
+
 export const getPostApiV1PushDuckdbUrl = () => {
   return `/api/v1/push/duckdb`;
 };

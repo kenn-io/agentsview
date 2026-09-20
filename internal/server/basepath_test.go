@@ -12,7 +12,7 @@ import (
 func TestBasePath_StripsPrefixForAPI(t *testing.T) {
 	s := testServer(t, 0, WithBasePath("/app"))
 
-	req := httptest.NewRequest("GET", "/app/api/v1/sessions", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/app/api/v1/sessions", nil)
 	req.Host = "127.0.0.1:0"
 	req.RemoteAddr = "127.0.0.1:12345"
 	w := httptest.NewRecorder()
@@ -32,7 +32,7 @@ func TestBasePath_StripsPrefixForAPI(t *testing.T) {
 func TestBasePath_RedirectsBarePrefix(t *testing.T) {
 	s := testServer(t, 0, WithBasePath("/app"))
 
-	req := httptest.NewRequest("GET", "/app", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/app", nil)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 
@@ -43,7 +43,7 @@ func TestBasePath_RedirectsBarePrefix(t *testing.T) {
 func TestBasePath_InjectsBaseHrefIntoHTML(t *testing.T) {
 	s := testServer(t, 0, WithBasePath("/viewer"))
 
-	req := httptest.NewRequest("GET", "/viewer/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/viewer/", nil)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 
@@ -55,7 +55,7 @@ func TestBasePath_InjectsBaseHrefIntoHTML(t *testing.T) {
 func TestBasePath_RewritesAssetPaths(t *testing.T) {
 	s := testServer(t, 0, WithBasePath("/viewer"))
 
-	req := httptest.NewRequest("GET", "/viewer/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/viewer/", nil)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 
@@ -79,7 +79,7 @@ func TestBasePath_SPAFallbackServesIndex(t *testing.T) {
 
 	// A non-existent path should fall back to index.html
 	// with the base tag injected.
-	req := httptest.NewRequest("GET", "/app/some/route", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/app/some/route", nil)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 
@@ -92,7 +92,7 @@ func TestBasePath_RejectsSiblingPath(t *testing.T) {
 	s := testServer(t, 0, WithBasePath("/app"))
 
 	// /appfoo should NOT be handled — only /app or /app/...
-	req := httptest.NewRequest("GET", "/appfoo/bar", nil)
+	req := httptest.NewRequestWithContext(t.Context(), "GET", "/appfoo/bar", nil)
 	req.Host = "127.0.0.1:0"
 	req.RemoteAddr = "127.0.0.1:12345"
 	w := httptest.NewRecorder()

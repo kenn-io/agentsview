@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding"
+	"encoding/hex"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -131,19 +132,19 @@ func (p *hermesProvider) Fingerprint(
 	return p.sources.Fingerprint(ctx, source)
 }
 
-func WriteHermesSessionJSONL(
+func WriteHermesSessionJSONL(ctx context.Context,
 	w io.Writer, storedPath string, roots []string, rawSessionID string,
 ) error {
 	var storedStateErr error
 	if path := ResolveSourceFilePath(storedPath); filepath.Base(path) == "state.db" {
 		if _, err := os.Stat(path); err == nil {
-			err = writeHermesStateSessionJSONL(w, path, rawSessionID)
+			err = writeHermesStateSessionJSONL(ctx, w, path, rawSessionID)
 			if err == nil {
 				return nil
 			}
-			var lookupErr hermesStateLookupError
+			_, hasLookupErr := errors.AsType[hermesStateLookupError](err)
 			if !errors.Is(err, os.ErrNotExist) &&
-				!errors.As(err, &lookupErr) {
+				!hasLookupErr {
 				return err
 			}
 			storedStateErr = err
@@ -157,14 +158,14 @@ func WriteHermesSessionJSONL(
 	}
 	provider, ok := NewProvider(AgentHermes, ProviderConfig{Roots: roots})
 	if !ok {
-		return fmt.Errorf("hermes provider unavailable")
+		return errors.New("hermes provider unavailable")
 	}
 	hp, ok := provider.(*hermesProvider)
 	if !ok {
-		return fmt.Errorf("hermes provider unavailable")
+		return errors.New("hermes provider unavailable")
 	}
 	source, found, err := hp.FindSource(
-		context.Background(),
+		ctx,
 		FindSourceRequest{RawSessionID: rawSessionID},
 	)
 	if err != nil {
@@ -181,13 +182,13 @@ func WriteHermesSessionJSONL(
 	}
 	src, ok := hp.sources.sourceFromRef(source)
 	if !ok {
-		return fmt.Errorf("hermes source path unavailable")
+		return errors.New("hermes source path unavailable")
 	}
 	if src.StateDB != "" && src.SessionID != "" {
-		return writeHermesStateSessionJSONL(w, src.StateDB, src.SessionID)
+		return writeHermesStateSessionJSONL(ctx, w, src.StateDB, src.SessionID)
 	}
 	if filepath.Base(src.Path) == "state.db" {
-		return writeHermesStateSessionJSONL(w, src.Path, rawSessionID)
+		return writeHermesStateSessionJSONL(ctx, w, src.Path, rawSessionID)
 	}
 	return copyHermesTranscriptFile(w, src.Path)
 }
@@ -201,7 +202,7 @@ func (p *hermesProvider) Parse(
 	}
 	src, ok := p.sources.sourceFromRef(req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("hermes source path unavailable")
+		return ParseOutcome{}, errors.New("hermes source path unavailable")
 	}
 	path := src.Path
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
@@ -209,7 +210,7 @@ func (p *hermesProvider) Parse(
 		return p.parseStateMember(ctx, src, req.Source.ProjectHint, machine, req.Fingerprint)
 	}
 	if filepath.Base(path) == "state.db" {
-		results, err := p.parseArchive(path, req.Source.ProjectHint, machine)
+		results, err := p.parseArchive(ctx, path, req.Source.ProjectHint, machine)
 		if err != nil {
 			return ParseOutcome{}, err
 		}
@@ -270,14 +271,14 @@ func (p *hermesProvider) parseStateMember(
 	}
 	defer conn.Close()
 	observeSharedContainerScan(ctx)
-	ss, found, err := readHermesStateSession(conn, src.SessionID)
+	ss, found, err := readHermesStateSession(ctx, conn, src.SessionID)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
 	if !found {
 		return ParseOutcome{ResultSetComplete: true, ForceReplace: true, SkipReason: SkipNoSession}, nil
 	}
-	messages, err := readHermesStateMessagesForSession(conn, src.SessionID)
+	messages, err := readHermesStateMessagesForSession(ctx, conn, src.SessionID)
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -597,7 +598,7 @@ func (s hermesSourceSet) discoverTranscriptEach(
 				}
 				membership = opened
 			}
-			found, err := membership.Has(id)
+			found, err := membership.Has(ctx, id)
 			if err != nil {
 				return err
 			}
@@ -628,7 +629,7 @@ func openHermesStateMembership(
 		return nil, fmt.Errorf("open hermes state db: %w", err)
 	}
 	observeSharedContainerScan(ctx)
-	stmt, err := conn.Prepare("SELECT 1 FROM sessions WHERE id = ? LIMIT 1")
+	stmt, err := conn.PrepareContext(ctx, "SELECT 1 FROM sessions WHERE id = ? LIMIT 1")
 	if err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("prepare hermes session lookup: %w", err)
@@ -636,9 +637,9 @@ func openHermesStateMembership(
 	return &hermesStateMembership{conn: conn, stmt: stmt}, nil
 }
 
-func (m *hermesStateMembership) Has(rawID string) (bool, error) {
+func (m *hermesStateMembership) Has(ctx context.Context, rawID string) (bool, error) {
 	var found int
-	err := m.stmt.QueryRow(rawID).Scan(&found)
+	err := m.stmt.QueryRowContext(ctx, rawID).Scan(&found)
 	if err == nil {
 		return true, nil
 	}
@@ -1073,7 +1074,7 @@ func (s hermesSourceSet) FindSource(
 	for _, root := range roots {
 		if stateDB, _, ok := hermesStatePaths(root); ok &&
 			IsValidSessionID(req.RawSessionID) {
-			found, err := hermesStateDBHasSession(stateDB, req.RawSessionID)
+			found, err := hermesStateDBHasSession(ctx, stateDB, req.RawSessionID)
 			switch {
 			case err != nil:
 				// Mirror parseArchive: an unreadable or schema-incompatible
@@ -1113,7 +1114,7 @@ func (e hermesStateLookupError) Unwrap() error {
 	return e.err
 }
 
-func hermesStateDBHasSession(stateDB string, rawID string) (bool, error) {
+func hermesStateDBHasSession(ctx context.Context, stateDB string, rawID string) (bool, error) {
 	conn, err := openSQLiteReadOnly(stateDB, sqliteReadOptions{})
 	if err != nil {
 		return false, fmt.Errorf("open hermes state db: %w", err)
@@ -1121,14 +1122,14 @@ func hermesStateDBHasSession(stateDB string, rawID string) (bool, error) {
 	defer conn.Close()
 
 	var found int
-	err = conn.QueryRow(
+	err = conn.QueryRowContext(ctx,
 		"SELECT 1 FROM sessions WHERE id = ? LIMIT 1",
 		rawID,
 	).Scan(&found)
 	if err == nil {
 		return true, nil
 	}
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}
 	return false, fmt.Errorf("query hermes session %s: %w", rawID, err)
@@ -1143,7 +1144,7 @@ func (s hermesSourceSet) Fingerprint(
 	}
 	src, ok := s.sourceFromRef(source)
 	if !ok {
-		return SourceFingerprint{}, fmt.Errorf("hermes source path unavailable")
+		return SourceFingerprint{}, errors.New("hermes source path unavailable")
 	}
 	path := src.Path
 	if src.SessionID != "" {
@@ -1279,8 +1280,10 @@ func hermesStateMemberSourceRef(root, stateDB, sessionID string) SourceRef {
 		Key:            path,
 		DisplayPath:    path,
 		FingerprintKey: path,
-		Opaque: hermesSource{Root: filepath.Clean(root), Path: path,
-			StateDB: filepath.Clean(stateDB), SessionID: sessionID},
+		Opaque: hermesSource{
+			Root: filepath.Clean(root), Path: path,
+			StateDB: filepath.Clean(stateDB), SessionID: sessionID,
+		},
 	}
 }
 
@@ -1488,7 +1491,7 @@ func hermesArchiveFingerprint(source SourceRef, stateDB string) (SourceFingerpri
 			return SourceFingerprint{}, err
 		}
 	}
-	fingerprint.Hash = fmt.Sprintf("%x", h.Sum(nil))
+	fingerprint.Hash = hex.EncodeToString(h.Sum(nil))
 	return fingerprint, nil
 }
 
@@ -1513,7 +1516,7 @@ func hermesStateMemberFingerprint(
 		}
 	}
 	observeSharedContainerScan(ctx)
-	ss, messages, selectedPath, err := readHermesStateSessionSource(
+	ss, messages, selectedPath, err := readHermesStateSessionSource(ctx,
 		src.StateDB, src.SessionID,
 	)
 	if err != nil {
@@ -1555,7 +1558,7 @@ func hermesStateMemberFingerprintFinish(
 			return SourceFingerprint{}, err
 		}
 	}
-	fingerprint.Hash = fmt.Sprintf("%x", h.Sum(nil))
+	fingerprint.Hash = hex.EncodeToString(h.Sum(nil))
 	return fingerprint, nil
 }
 
@@ -1630,15 +1633,15 @@ func seedHermesMemberCoresLocked(ctx context.Context, stateDB string) error {
 func cacheHermesMemberCore(
 	ctx context.Context, conn *sql.DB, stateDB, id, fingerprintKey string,
 ) error {
-	ss, messages, selectedPath, err := readHermesStateSessionSourceConn(
+	ss, messages, selectedPath, err := readHermesStateSessionSourceConn(ctx,
 		conn, stateDB, id,
 	)
 	if err != nil {
-		return nil
+		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
 	}
 	h := sha256.New()
 	if err := addHermesStateSessionFingerprint(h, ss, messages); err != nil {
-		return nil
+		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
 	}
 	marshaler, ok := h.(encoding.BinaryMarshaler)
 	if !ok {
@@ -1646,13 +1649,13 @@ func cacheHermesMemberCore(
 	}
 	state, err := marshaler.MarshalBinary()
 	if err != nil {
-		return nil
+		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
 	}
 	payload, err := json.Marshal(hermesMemberFingerprintCore{
 		HashState: state, SelectedPath: selectedPath,
 	})
 	if err != nil {
-		return nil
+		return nil //nolint:nilerr // Failure to build the optional checkpoint forces full parsing next time.
 	}
 	return reconciliationCachePut(
 		ctx, hermesMemberCoreCacheKey(fingerprintKey), string(payload),

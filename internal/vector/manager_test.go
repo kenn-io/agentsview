@@ -40,14 +40,7 @@ func blockingEncoder(release <-chan struct{}) kitvec.EncodeFunc {
 // the test otherwise. Used instead of a fixed sleep to avoid flakiness.
 func waitFor(t *testing.T, cond func() bool, msg string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if cond() {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	require.Fail(t, "timed out waiting for condition", msg)
+	require.Eventually(t, cond, 2*time.Second, time.Millisecond, msg)
 }
 
 // generationIDByFingerprint looks up a generation's CLI-facing ordinal ID
@@ -55,7 +48,7 @@ func waitFor(t *testing.T, cond func() bool, msg string) {
 // generation by ID.
 func generationIDByFingerprint(t *testing.T, ix *Index, fp string) int64 {
 	t.Helper()
-	gens, err := ix.Generations(context.Background())
+	gens, err := ix.Generations(t.Context())
 	require.NoError(t, err)
 	for _, g := range gens {
 		if g.Fingerprint == fp {
@@ -91,13 +84,13 @@ func TestManagerBuildUsingSelectsNamedEncoder(t *testing.T) {
 	}}
 	m := NewManager(ix, src, encoders, gen)
 
-	started, err := m.TryBuild(context.Background(), BuildRequest{Using: "remote"})
+	started, err := m.TryBuild(t.Context(), BuildRequest{Using: "remote"})
 	require.NoError(t, err)
 	require.True(t, started)
 	assert.Positive(t, remoteCalls.Load(), "build with Using must encode on the named server")
 	assert.Zero(t, localCalls.Load(), "the default server must stay idle")
 
-	started, err = m.TryBuild(context.Background(), BuildRequest{FullRebuild: true})
+	started, err = m.TryBuild(t.Context(), BuildRequest{FullRebuild: true})
 	require.NoError(t, err)
 	require.True(t, started)
 	assert.Positive(t, localCalls.Load(), "a build without Using must encode on the default server")
@@ -147,7 +140,7 @@ func TestManagerCapsBuildBatchesByWorstCaseTokenBudget(t *testing.T) {
 	}}
 	m := NewManager(ix, src, encoders, fakeGeneration("fake-model"))
 
-	started, err := m.TryBuild(context.Background(), BuildRequest{})
+	started, err := m.TryBuild(t.Context(), BuildRequest{})
 	require.NoError(t, err)
 	require.True(t, started)
 	assert.Equal(t, []int{3, 1}, submittedBatchSizes)
@@ -174,13 +167,13 @@ func TestManagerResolvesBuildTargetForEveryPass(t *testing.T) {
 		func(context.Context) (BuildTarget, error) { return target, nil },
 	)
 
-	started, err := m.TryBuild(context.Background(), BuildRequest{})
+	started, err := m.TryBuild(t.Context(), BuildRequest{})
 	require.NoError(t, err)
 	require.True(t, started)
 	assert.Equal(t, oldGeneration.Fingerprint(), m.Status().LastResult.Fingerprint)
 
 	target = BuildTarget{Source: twoDocSource(), Generation: newGeneration}
-	started, err = m.TryBuild(context.Background(), BuildRequest{})
+	started, err = m.TryBuild(t.Context(), BuildRequest{})
 	require.NoError(t, err)
 	require.True(t, started)
 	assert.Equal(t, newGeneration.Fingerprint(), m.Status().LastResult.Fingerprint)
@@ -194,13 +187,13 @@ func TestManagerBuildUnknownUsingFailsBeforeStarting(t *testing.T) {
 
 	err := m.StartBuild(BuildRequest{Using: "nope"})
 	require.ErrorContains(t, err, `no embeddings server named "nope"`)
-	assert.ErrorIs(t, err, ErrUnknownServer,
+	require.ErrorIs(t, err, ErrUnknownServer,
 		"callers map unknown-server errors to a client error via the sentinel")
 	assert.False(t, m.Status().Running, "a failed resolve must not leave the manager running")
 
-	started, err := m.TryBuild(context.Background(), BuildRequest{Using: "nope"})
+	started, err := m.TryBuild(t.Context(), BuildRequest{Using: "nope"})
 	require.ErrorContains(t, err, `no embeddings server named "nope"`)
-	assert.ErrorIs(t, err, ErrUnknownServer)
+	require.ErrorIs(t, err, ErrUnknownServer)
 	assert.False(t, started)
 }
 
@@ -226,12 +219,12 @@ func TestManagerRejectsConflictingRepairRequestBeforeStarting(t *testing.T) {
 
 			err := m.StartBuild(tt.req)
 			require.Error(t, err)
-			assert.ErrorContains(t, err, "mutually exclusive")
+			require.ErrorContains(t, err, "mutually exclusive")
 			assert.False(t, m.Status().Running)
 
-			started, err := m.TryBuild(context.Background(), tt.req)
+			started, err := m.TryBuild(t.Context(), tt.req)
 			require.Error(t, err)
-			assert.ErrorContains(t, err, "mutually exclusive")
+			require.ErrorContains(t, err, "mutually exclusive")
 			assert.False(t, started)
 			assert.False(t, m.Status().Running)
 		})
@@ -249,7 +242,7 @@ func TestManagerStartBuildSetsRunningAndConcurrentStartReturnsErrBuildRunning(t 
 	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")
 
 	err := m.StartBuild(BuildRequest{})
-	assert.ErrorIs(t, err, ErrBuildRunning)
+	require.ErrorIs(t, err, ErrBuildRunning)
 
 	close(release)
 	waitFor(t, func() bool { return !m.Status().Running }, "build never finished")
@@ -337,9 +330,9 @@ func TestManagerTryBuildReturnsFalseWhileRunning(t *testing.T) {
 	require.NoError(t, m.StartBuild(BuildRequest{}))
 	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")
 
-	started, err := m.TryBuild(context.Background(), BuildRequest{})
+	started, err := m.TryBuild(t.Context(), BuildRequest{})
 	assert.False(t, started, "TryBuild must drop rather than queue while running")
-	assert.NoError(t, err)
+	require.NoError(t, err)
 
 	close(release)
 	waitFor(t, func() bool { return !m.Status().Running }, "build never finished")
@@ -366,7 +359,7 @@ func TestManagerStatusSetsLastErrorOnEncoderFailure(t *testing.T) {
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 	failingEncoder := func(_ context.Context, _ []string) ([][]float32, error) {
-		return nil, fmt.Errorf("encoder rejected input")
+		return nil, errors.New("encoder rejected input")
 	}
 	m := NewManager(ix, src, soloEncoders(failingEncoder), gen)
 
@@ -382,7 +375,7 @@ func TestManagerStatusSetsLastErrorOnEncoderFailure(t *testing.T) {
 
 func TestManagerFailureReplacesPriorSuccessfulResult(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen := fakeGeneration("fake-model")
 	fail := false
 	encoder := func(ctx context.Context, texts []string) ([][]float32, error) {
@@ -427,7 +420,7 @@ func TestManagerStatusStampsBuildIdentityAndSpace(t *testing.T) {
 		"the configured space is reported even before any build")
 	assert.Equal(t, 3, status.Dimension)
 
-	started, err := m.TryBuild(context.Background(), BuildRequest{})
+	started, err := m.TryBuild(t.Context(), BuildRequest{})
 	require.NoError(t, err)
 	require.True(t, started)
 
@@ -436,7 +429,7 @@ func TestManagerStatusStampsBuildIdentityAndSpace(t *testing.T) {
 	assert.Equal(t, "2026-07-11T10:00:00Z", status.StartedAt)
 
 	m.now = func() time.Time { return base.Add(time.Minute) }
-	started, err = m.TryBuild(context.Background(), BuildRequest{FullRebuild: true})
+	started, err = m.TryBuild(t.Context(), BuildRequest{FullRebuild: true})
 	require.NoError(t, err)
 	require.True(t, started)
 
@@ -477,7 +470,7 @@ func TestManagerStatusPublishesAndClearsBuildETA(t *testing.T) {
 
 func TestManagerGenerationsDelegatesToIndex(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), gen)
@@ -494,7 +487,7 @@ func TestManagerGenerationsDelegatesToIndex(t *testing.T) {
 
 func TestManagerActivateForceRefusalMatrix(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 	genA := fakeGeneration("model-a")
 	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), genA)
@@ -533,7 +526,7 @@ func TestManagerActivateForceRefusalMatrix(t *testing.T) {
 
 func TestManagerRetireRefusesActiveGenerationWithoutForce(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), gen)
@@ -558,7 +551,7 @@ func TestManagerRetireRefusesActiveGenerationWithoutForce(t *testing.T) {
 // once any generation has been activated).
 func countActiveGenerations(t *testing.T, ix *Index) int {
 	t.Helper()
-	gens, err := ix.Generations(context.Background())
+	gens, err := ix.Generations(t.Context())
 	require.NoError(t, err)
 	active := 0
 	for _, g := range gens {
@@ -576,7 +569,7 @@ func countActiveGenerations(t *testing.T, ix *Index) int {
 // retire and activate steps and leave both generations active.
 func TestManagerConcurrentActivateNeverLeavesTwoActive(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 	genA := fakeGeneration("model-a")
 	genB := fakeGeneration("model-b")
@@ -643,13 +636,13 @@ func TestManagerStartBuildRecoversPanickedEncoder(t *testing.T) {
 // on the way up.
 func TestManagerActivateAndRetireUnknownIDPropagateNotFound(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 	m := NewManager(ix, src, soloEncoders(fakeBuildEncoder()), gen)
 
 	err := m.Activate(ctx, 999, false)
-	assert.ErrorIs(t, err, ErrGenerationNotFound)
+	require.ErrorIs(t, err, ErrGenerationNotFound)
 
 	err = m.Retire(ctx, 999, false)
 	assert.ErrorIs(t, err, ErrGenerationNotFound)
@@ -657,7 +650,7 @@ func TestManagerActivateAndRetireUnknownIDPropagateNotFound(t *testing.T) {
 
 func TestManagerActivateAndRetireRefuseWhileBuildRunning(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 	release := make(chan struct{})
@@ -667,10 +660,10 @@ func TestManagerActivateAndRetireRefuseWhileBuildRunning(t *testing.T) {
 	waitFor(t, func() bool { return m.Status().Running }, "build never reported running")
 
 	err := m.Activate(ctx, 1, true)
-	assert.ErrorIs(t, err, ErrBuildRunning)
+	require.ErrorIs(t, err, ErrBuildRunning)
 
 	err = m.Retire(ctx, 1, true)
-	assert.ErrorIs(t, err, ErrBuildRunning)
+	require.ErrorIs(t, err, ErrBuildRunning)
 
 	close(release)
 	waitFor(t, func() bool { return !m.Status().Running }, "build never finished")

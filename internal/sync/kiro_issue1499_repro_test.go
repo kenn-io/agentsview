@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,10 +21,10 @@ func TestKiroIssue1499CurrentLayoutReproduction(t *testing.T) {
 
 	provider, ok := parser.NewProvider(parser.AgentKiro, parser.ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	result, err := provider.Parse(context.Background(), parser.ParseRequest{Source: sources[0]})
+	result, err := provider.Parse(t.Context(), parser.ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	require.Len(t, result.Results, 1)
 	require.Equal(t, "kiro:sess_0123456789abcdef", result.Results[0].Result.Session.ID)

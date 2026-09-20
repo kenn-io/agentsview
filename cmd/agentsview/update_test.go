@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net"
 	"os"
@@ -18,14 +19,14 @@ func TestPerformUpdateWithDaemonLifecycleRestartsStoppedDaemon(t *testing.T) {
 	cfg := config.Config{DataDir: t.TempDir()}
 	var calls []string
 
-	err := performUpdateWithDaemonLifecycle(
+	err := performUpdateWithDaemonLifecycle(t.Context(),
 		&update.UpdateInfo{},
 		nil,
 		func() (config.Config, error) {
 			calls = append(calls, "load")
 			return cfg, nil
 		},
-		func(got config.Config) (updateDaemonStopResult, error) {
+		func(ctx context.Context, got config.Config) (updateDaemonStopResult, error) {
 			calls = append(calls, "stop")
 			assert.Equal(t, cfg.DataDir, got.DataDir)
 			return updateDaemonStopResult{
@@ -36,11 +37,11 @@ func TestPerformUpdateWithDaemonLifecycleRestartsStoppedDaemon(t *testing.T) {
 				RequireAuthKnown: true,
 			}, nil
 		},
-		func(_ *update.UpdateInfo, _ func(int64, int64)) error {
+		func(ctx context.Context, _ *update.UpdateInfo, _ func(int64, int64)) error {
 			calls = append(calls, "perform")
 			return nil
 		},
-		func(got config.Config, stop updateDaemonStopResult) error {
+		func(ctx context.Context, got config.Config, stop updateDaemonStopResult) error {
 			calls = append(calls, "restart")
 			assert.Equal(t, cfg.DataDir, got.DataDir)
 			assert.Equal(t, "127.0.0.1", stop.Host)
@@ -60,29 +61,29 @@ func TestPerformUpdateWithDaemonLifecycleRestartsAfterInstallFailure(t *testing.
 	installErr := errors.New("install failed")
 	var calls []string
 
-	err := performUpdateWithDaemonLifecycle(
+	err := performUpdateWithDaemonLifecycle(t.Context(),
 		&update.UpdateInfo{},
 		nil,
 		func() (config.Config, error) {
 			calls = append(calls, "load")
 			return cfg, nil
 		},
-		func(config.Config) (updateDaemonStopResult, error) {
+		func(context.Context, config.Config) (updateDaemonStopResult, error) {
 			calls = append(calls, "stop")
 			return updateDaemonStopResult{Stopped: true}, nil
 		},
-		func(_ *update.UpdateInfo, _ func(int64, int64)) error {
+		func(ctx context.Context, _ *update.UpdateInfo, _ func(int64, int64)) error {
 			calls = append(calls, "perform")
 			return installErr
 		},
-		func(config.Config, updateDaemonStopResult) error {
+		func(context.Context, config.Config, updateDaemonStopResult) error {
 			calls = append(calls, "restart")
 			return nil
 		},
 	)
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, installErr)
+	require.ErrorIs(t, err, installErr)
 	assert.Equal(t, []string{"load", "stop", "perform", "restart"}, calls)
 }
 
@@ -91,53 +92,51 @@ func TestPerformUpdateWithDaemonLifecycleRestartsAfterPartialStopFailure(t *test
 	stopErr := errors.New("second daemon failed to stop")
 	var calls []string
 
-	err := performUpdateWithDaemonLifecycle(
+	err := performUpdateWithDaemonLifecycle(t.Context(),
 		&update.UpdateInfo{},
 		nil,
 		func() (config.Config, error) {
 			calls = append(calls, "load")
 			return cfg, nil
 		},
-		func(config.Config) (updateDaemonStopResult, error) {
+		func(context.Context, config.Config) (updateDaemonStopResult, error) {
 			calls = append(calls, "stop")
 			return updateDaemonStopResult{Stopped: true}, stopErr
 		},
-		func(_ *update.UpdateInfo, _ func(int64, int64)) error {
-			t.Fatal("install must not run after stop failure")
-			return nil
+		func(ctx context.Context, _ *update.UpdateInfo, _ func(int64, int64)) error {
+			return errors.New("install must not run after stop failure")
 		},
-		func(config.Config, updateDaemonStopResult) error {
+		func(context.Context, config.Config, updateDaemonStopResult) error {
 			calls = append(calls, "restart")
 			return nil
 		},
 	)
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, stopErr)
+	require.ErrorIs(t, err, stopErr)
 	assert.Equal(t, []string{"load", "stop", "restart"}, calls)
 }
 
 func TestPerformUpdateWithDaemonLifecycleDoesNotRestartWhenNoneStopped(t *testing.T) {
 	var calls []string
 
-	err := performUpdateWithDaemonLifecycle(
+	err := performUpdateWithDaemonLifecycle(t.Context(),
 		&update.UpdateInfo{},
 		nil,
 		func() (config.Config, error) {
 			calls = append(calls, "load")
 			return config.Config{DataDir: t.TempDir()}, nil
 		},
-		func(config.Config) (updateDaemonStopResult, error) {
+		func(context.Context, config.Config) (updateDaemonStopResult, error) {
 			calls = append(calls, "stop")
 			return updateDaemonStopResult{}, nil
 		},
-		func(_ *update.UpdateInfo, _ func(int64, int64)) error {
+		func(ctx context.Context, _ *update.UpdateInfo, _ func(int64, int64)) error {
 			calls = append(calls, "perform")
 			return nil
 		},
-		func(config.Config, updateDaemonStopResult) error {
-			t.Fatal("restart must not run when no daemon was stopped")
-			return nil
+		func(context.Context, config.Config, updateDaemonStopResult) error {
+			return errors.New("restart must not run when no daemon was stopped")
 		},
 	)
 
@@ -185,7 +184,7 @@ func TestUpdateRestartPreservesPortChoice(t *testing.T) {
 			require.NoError(t, cmd.Flags().Parse([]string{"--port", strconv.Itoa(port)}))
 			cfg, err := config.LoadPFlags(cmd.Flags())
 			require.NoError(t, err)
-			first, _, err := prepareRunServeRuntimeConfig(cfg, 0, nil)
+			first, _, err := prepareRunServeRuntimeConfig(cmd.Context(), cfg, 0, nil)
 			require.NoError(t, err)
 			require.Equal(t, "http://viewer.example.test:8080", first.PublicURL)
 			_, err = WriteDaemonRuntimeWithAuthAndNoSync(
@@ -193,16 +192,16 @@ func TestUpdateRestartPreservesPortChoice(t *testing.T) {
 			)
 			require.NoError(t, err)
 			oldStop := stopDaemonRuntimeForUpgrade
-			stopDaemonRuntimeForUpgrade = func(_ config.Config, rt *DaemonRuntime) error {
+			stopDaemonRuntimeForUpgrade = func(ctx context.Context, _ config.Config, rt *DaemonRuntime) error {
 				require.Equal(t, first.Port, rt.Port)
 				return nil
 			}
 			t.Cleanup(func() { stopDaemonRuntimeForUpgrade = oldStop })
-			stopped, err := stopWritableDaemonsForUpdate(config.Config{DataDir: dir})
+			stopped, err := stopWritableDaemonsForUpdate(cmd.Context(), config.Config{DataDir: dir})
 			require.NoError(t, err)
 			require.True(t, stopped.Stopped)
 			if tt.occupied {
-				listener, err := net.Listen("tcp", net.JoinHostPort(first.Host, strconv.Itoa(first.Port)))
+				listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", net.JoinHostPort(first.Host, strconv.Itoa(first.Port)))
 				require.NoError(t, err)
 				t.Cleanup(func() { listener.Close() })
 			}
@@ -213,7 +212,7 @@ func TestUpdateRestartPreservesPortChoice(t *testing.T) {
 			require.NoError(t, err)
 			restartPort, err := cmd.Flags().GetInt("restart-port")
 			require.NoError(t, err)
-			restarted, _, err := prepareRunServeRuntimeConfig(cfg, restartPort, nil)
+			restarted, _, err := prepareRunServeRuntimeConfig(cmd.Context(), cfg, restartPort, nil)
 			if tt.occupied && !tt.ephemeral {
 				require.ErrorContains(t, err, "requested port")
 				return

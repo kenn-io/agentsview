@@ -48,19 +48,19 @@ func (r *report) measure(phase, name string, fn func() error) error {
 
 func run(ctx context.Context, o options, dir string) (report, error) {
 	r := report{Options: o}
-	sources, roots, err := corpus(dir, o)
+	sources, roots, err := corpus(ctx, dir, o)
 	if err != nil {
 		return r, err
 	}
 	if sources[0].Store != nil {
 		defer sources[0].Store.Close()
 	}
-	database, err := db.OpenIsolated(filepath.Join(dir, "sessions.db"))
+	database, err := db.OpenIsolated(ctx, filepath.Join(dir, "sessions.db"))
 	if err != nil {
 		return r, err
 	}
 	defer database.Close()
-	engine := syncengine.NewEngine(database, syncengine.EngineConfig{AgentDirs: roots, Machine: "simulation", DisableFilesystemProjectDiscovery: true})
+	engine := syncengine.NewEngine(ctx, database, syncengine.EngineConfig{AgentDirs: roots, Machine: "simulation", DisableFilesystemProjectDiscovery: true})
 	defer engine.Close()
 	if err := r.measure("cold", "ingest", func() error {
 		stats := engine.SyncAll(ctx, nil)
@@ -112,15 +112,15 @@ func run(ctx context.Context, o options, dir string) (report, error) {
 	defer stopProfile()
 	// No sleep or filesystem watcher debounce is included: each measurement
 	// exercises a completed engine batch, making equal workloads comparable.
-	for i := 0; i < o.Iterations; i++ {
+	for i := range o.Iterations {
 		if err := ctx.Err(); err != nil {
 			return r, err
 		}
 
 		var changed []string
-		for j := 0; j < o.Active; j++ {
+		for j := range o.Active {
 			s := &sources[j]
-			if err := s.appendTurns(1, o.ContentBytes); err != nil {
+			if err := s.appendTurns(ctx, 1, o.ContentBytes); err != nil {
 				return r, err
 			}
 			if s.Store == nil || len(changed) == 0 {

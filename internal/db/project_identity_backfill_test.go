@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -16,8 +15,8 @@ func TestEnsureProjectIdentityBackfillRequeuesUnverifiedCompletedGap(
 	t *testing.T,
 ) {
 	d := testDB(t)
-	ctx := context.Background()
-	require.NoError(t, d.UpsertSession(Session{
+	ctx := t.Context()
+	require.NoError(t, d.UpsertSession(ctx, Session{
 		ID: "missing-snapshot", Project: "app", Machine: "local",
 		Agent: "codex",
 	}))
@@ -48,7 +47,7 @@ func TestEnsureProjectIdentityBackfillVerifiesCompleteSnapshotSetOnce(
 	t *testing.T,
 ) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	_, err := d.getWriter().ExecContext(ctx, `
 		INSERT INTO background_migrations (
 			name, state, total_items, completed_items, completed_at
@@ -67,8 +66,8 @@ func TestEnsureProjectIdentityBackfillVerifiesCompleteSnapshotSetOnce(
 
 func TestSessionInsertCreatesUnknownProjectIdentitySnapshot(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
-	require.NoError(t, d.UpsertSession(Session{
+	ctx := t.Context()
+	require.NoError(t, d.UpsertSession(ctx, Session{
 		ID: "atomic-snapshot", Project: "app", Machine: "local",
 		Agent: "codex", Cwd: "/tmp/app", GitBranch: "feature/test",
 	}))
@@ -97,17 +96,17 @@ func TestResyncOrphanCopyLeavesLegacySnapshotGapEligibleForBackfill(
 	t *testing.T,
 ) {
 	dir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 	sourcePath := filepath.Join(dir, "source.db")
 
-	source, err := Open(sourcePath)
+	source, err := Open(ctx, sourcePath)
 	require.NoError(t, err)
 	for _, session := range []Session{
 		{ID: "live", Project: "app", Machine: "local", Agent: "codex"},
 		{ID: "legacy-orphan", Project: "app", Machine: "local", Agent: "codex"},
 		{ID: "known-orphan", Project: "app", Machine: "local", Agent: "codex"},
 	} {
-		require.NoError(t, source.UpsertSession(session))
+		require.NoError(t, source.UpsertSession(ctx, session))
 	}
 	require.NoError(t, source.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
@@ -123,7 +122,7 @@ func TestResyncOrphanCopyLeavesLegacySnapshotGapEligibleForBackfill(
 	require.NoError(t, source.Close())
 
 	destination := testDB(t)
-	require.NoError(t, destination.UpsertSession(Session{
+	require.NoError(t, destination.UpsertSession(ctx, Session{
 		ID: "live", Project: "app", Machine: "local", Agent: "codex",
 		Cwd: "/fresh/app",
 	}))
@@ -154,10 +153,10 @@ func TestResyncOrphanCopyLeavesLegacySnapshotGapEligibleForBackfill(
 
 func TestVersion76ResyncRejectsLegacyProjectIdentitySnapshots(t *testing.T) {
 	dir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 	sourcePath := filepath.Join(dir, "source.db")
 
-	source, err := Open(sourcePath)
+	source, err := Open(ctx, sourcePath)
 	require.NoError(t, err)
 	for _, session := range []Session{
 		{
@@ -169,7 +168,7 @@ func TestVersion76ResyncRejectsLegacyProjectIdentitySnapshots(t *testing.T) {
 			Agent: "codex",
 		},
 	} {
-		require.NoError(t, source.UpsertSession(session))
+		require.NoError(t, source.UpsertSession(ctx, session))
 		require.NoError(t, source.UpsertProjectIdentityObservation(ctx,
 			export.ProjectIdentityObservation{
 				SessionID: session.ID, Project: "mapped-app", Machine: "local",
@@ -183,7 +182,7 @@ func TestVersion76ResyncRejectsLegacyProjectIdentitySnapshots(t *testing.T) {
 	require.NoError(t, source.Close())
 
 	destination := testDB(t)
-	require.NoError(t, destination.UpsertSession(Session{
+	require.NoError(t, destination.UpsertSession(ctx, Session{
 		ID: "live", Project: "source-app", Machine: "local", Agent: "codex",
 	}))
 	require.NoError(t, destination.UpsertProjectIdentityObservation(ctx,
@@ -216,12 +215,12 @@ func TestResyncTrashedCopyLeavesLegacySnapshotGapEligibleForBackfill(
 	t *testing.T,
 ) {
 	dir := t.TempDir()
-	ctx := context.Background()
+	ctx := t.Context()
 	sourcePath := filepath.Join(dir, "source.db")
 
-	source, err := Open(sourcePath)
+	source, err := Open(ctx, sourcePath)
 	require.NoError(t, err)
-	require.NoError(t, source.UpsertSession(Session{
+	require.NoError(t, source.UpsertSession(ctx, Session{
 		ID: "legacy-trashed", Project: "app", Machine: "local", Agent: "codex",
 	}))
 	_, err = source.getWriter().ExecContext(ctx, `
@@ -254,9 +253,9 @@ func TestProjectIdentityBackfillBatchUsesKeysetAndAdvancesAtomically(
 	t *testing.T,
 ) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, id := range []string{"batch-a", "batch-b", "batch-c"} {
-		require.NoError(t, d.UpsertSession(Session{
+		require.NoError(t, d.UpsertSession(ctx, Session{
 			ID: id, Project: "app", Machine: "local", Agent: "codex",
 		}))
 	}
@@ -299,8 +298,8 @@ func TestProjectIdentityBackfillPersistsUnknownSnapshotForEmptyProject(
 	t *testing.T,
 ) {
 	d := testDB(t)
-	ctx := context.Background()
-	require.NoError(t, d.UpsertSession(Session{
+	ctx := t.Context()
+	require.NoError(t, d.UpsertSession(ctx, Session{
 		ID: "unresolved", Machine: "local", Agent: "antigravity-cli",
 	}))
 	_, err := d.getWriter().ExecContext(ctx,

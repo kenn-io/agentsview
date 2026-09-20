@@ -281,8 +281,10 @@ type CacheStats struct {
 	SavingsVsUncached   money.Money `json:"savingsVsUncached"`
 }
 
-const UnsupportedUsageKindNoTokenData = "no-token-data"
-const UnsupportedUsageKindCopilotNoTokenData = "copilot-no-token-data"
+const (
+	UnsupportedUsageKindNoTokenData        = "no-token-data"
+	UnsupportedUsageKindCopilotNoTokenData = "copilot-no-token-data"
+)
 
 // UnsupportedUsageKindForAgentFilter returns the unsupported-usage
 // kind for an agent filter whose agents record no per-message token

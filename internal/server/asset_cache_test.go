@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -39,6 +40,7 @@ func writeTestAsset(
 	t *testing.T, dataDir, contentType string, body []byte,
 ) (string, string) {
 	t.Helper()
+
 	ref, err := assets.Reference(contentType, body)
 	require.NoError(t, err)
 	filename := strings.TrimPrefix(ref, "asset://")
@@ -70,7 +72,7 @@ func assetResponse(
 ) *bytesOutput {
 	t.Helper()
 	response, err := srv.humaGetAsset(
-		context.Background(), &assetInput{Filename: filename},
+		t.Context(), &assetInput{Filename: filename},
 	)
 	require.NoError(t, err)
 	return response
@@ -79,7 +81,7 @@ func assetResponse(
 func assetErrorStatus(t *testing.T, srv *Server, filename string) int {
 	t.Helper()
 	_, err := srv.humaGetAsset(
-		context.Background(), &assetInput{Filename: filename},
+		t.Context(), &assetInput{Filename: filename},
 	)
 	require.Error(t, err)
 	statusErr, ok := err.(interface{ GetStatus() int })
@@ -89,7 +91,7 @@ func assetErrorStatus(t *testing.T, srv *Server, filename string) int {
 
 func runAssetCache(t *testing.T, cache *assetCache) context.CancelFunc {
 	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
 		cache.Run(ctx)
@@ -100,7 +102,7 @@ func runAssetCache(t *testing.T, cache *assetCache) context.CancelFunc {
 		select {
 		case <-done:
 		case <-time.After(time.Second):
-			t.Fatal("cache sweep loop did not stop after cancellation")
+			require.FailNow(t, "cache sweep loop did not stop after cancellation")
 		}
 	}
 }
@@ -150,7 +152,7 @@ func TestImageRenderCacheWarmedEntryOpenFailure(t *testing.T) {
 	}
 	previousOpenAssetReadOnly := openAssetReadOnly
 	openAssetReadOnly = func(string) (*os.File, error) {
-		return nil, fmt.Errorf("read-only eligibility denied")
+		return nil, errors.New("read-only eligibility denied")
 	}
 	t.Cleanup(func() {
 		readAssetFile = previousReadAssetFile
@@ -319,7 +321,7 @@ func TestImageRenderCacheRouteBoundaries(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, assetErrorStatus(t, srv, "nested/"+filename))
 	assert.Equal(t, http.StatusForbidden, assetErrorStatus(t, srv, "image.svg"))
 
-	assert.NoError(t, os.Remove(filePath))
+	require.NoError(t, os.Remove(filePath))
 	assert.Equal(t, http.StatusNotFound, assetErrorStatus(t, srv, filename))
 
 	changed := variantPNG(0x84)
@@ -378,7 +380,7 @@ func TestImageRenderCacheLifecycle(t *testing.T) {
 	cache.sweepInterval = 5 * time.Millisecond
 	srv.assetCache = cache
 	require.True(t, cache.put(filename, "image/png", body, info.Size(), info.ModTime()))
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	serveDone := make(chan error, 1)
 	go func() {
@@ -386,7 +388,7 @@ func TestImageRenderCacheLifecycle(t *testing.T) {
 	}()
 	serveDoneReceived := false
 	shutdown := func() error {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 		return srv.Shutdown(ctx)
 	}
@@ -398,7 +400,7 @@ func TestImageRenderCacheLifecycle(t *testing.T) {
 		select {
 		case <-serveDone:
 		case <-time.After(time.Second):
-			t.Errorf("Serve did not stop during cleanup")
+			assert.Failf(t, "test failed", "Serve did not stop during cleanup")
 		}
 	})
 	require.Eventually(t, func() bool {
@@ -413,16 +415,16 @@ func TestImageRenderCacheLifecycle(t *testing.T) {
 	select {
 	case err := <-serveDone:
 		serveDoneReceived = true
-		assert.ErrorIs(t, err, http.ErrServerClosed)
+		require.ErrorIs(t, err, http.ErrServerClosed)
 	case <-time.After(time.Second):
-		t.Fatal("Serve did not stop after Shutdown")
+		require.FailNow(t, "Serve did not stop after Shutdown")
 	}
 }
 
 func TestImageRenderCacheExpiryWorkBound(t *testing.T) {
 	previousReadAssetFile := readAssetFile
 	readAssetFile = func(string) ([]byte, error) {
-		return nil, fmt.Errorf("expiry must not read durable files")
+		return nil, errors.New("expiry must not read durable files")
 	}
 	t.Cleanup(func() { readAssetFile = previousReadAssetFile })
 
@@ -438,7 +440,7 @@ func TestImageRenderCacheExpiryWorkBound(t *testing.T) {
 			}
 			require.Equal(t, residentCount, cache.len())
 
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			done := make(chan struct{})
 			go func() {
 				cache.Run(ctx)
@@ -491,7 +493,7 @@ func TestImageRenderCacheConcurrent(t *testing.T) {
 	wg.Wait()
 	close(errs)
 	for err := range errs {
-		t.Error(err)
+		assert.Fail(t, fmt.Sprint(err))
 	}
 	stop()
 	assert.Equal(t, len(files), cache.len())

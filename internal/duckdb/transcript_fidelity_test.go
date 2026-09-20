@@ -3,12 +3,12 @@
 package duckdb
 
 import (
-	"context"
 	"encoding/json/v2"
 	"path/filepath"
 	"testing"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -17,14 +17,14 @@ import (
 // TestTranscriptFidelityRoundTripsViaDuckDBPush verifies that
 // transcript_fidelity is preserved across a DuckDB push + read cycle.
 func TestTranscriptFidelityRoundTripsViaDuckDBPush(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	sessionID := "fidelity-round-trip"
 	sess := syncSession(sessionID, "alpha", "fidelity first", "2026-01-20T00:00:00.000Z", 1)
 	sess.TranscriptFidelity = "high"
 
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session:         sess,
 		Messages:        []db.Message{syncMessage(sessionID, 0, "user", "fidelity first", "2026-01-20T00:00:00.000Z")},
 		DataVersion:     1,
@@ -32,7 +32,7 @@ func TestTranscriptFidelityRoundTripsViaDuckDBPush(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newTestSync(t, filepath.Join(t.TempDir(), "fidelity.duckdb"), local, SyncOptions{})
+	syncer := newTestSync(t, filepath.Join(t.TempDir(), "fidelity.duckdb"), local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)

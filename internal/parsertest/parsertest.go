@@ -13,11 +13,11 @@ import (
 // of the test and restores the original registry on cleanup. The
 // registry is a package-level variable, so tests that stub it must not
 // run in parallel with tests that read it.
-func StubAgentDefs(t testing.TB, defs ...parser.AgentDef) {
-	t.Helper()
+func StubAgentDefs(tb testing.TB, defs ...parser.AgentDef) {
+	tb.Helper()
 	orig := slices.Clone(parser.Registry)
 	parser.Registry = append(parser.Registry, defs...)
-	t.Cleanup(func() {
+	tb.Cleanup(func() {
 		parser.Registry = orig
 	})
 }

@@ -691,7 +691,7 @@ func (db *DB) searchContentFTS(
 	// otherwise raise a generic SQLITE_ERROR that classifyFTSError would misread
 	// as invalid user input (400). With FTS present, the only SQLITE_ERROR the
 	// MATCH query can raise comes from a malformed pattern.
-	if !db.HasFTS() {
+	if !db.HasFTS(ctx) {
 		return ContentSearchPage{}, errFTSUnavailable
 	}
 	ftsQuery, err := db.prepareMessageFTSQuery(ctx, f.Pattern)
@@ -775,10 +775,10 @@ func FTSSnippetRange(pattern, body string) (int, int) {
 // quotes or stray operators). Operational failures (I/O, corruption, busy)
 // carry distinct SQLite codes and pass through unchanged.
 func classifyFTSError(err error) error {
-	var sqliteErr sqlite3.Error
-	if errors.As(err, &sqliteErr) && sqliteErr.Code == sqlite3.ErrError {
+	sqliteErr, hasSqliteErr := errors.AsType[sqlite3.Error](err)
+	if hasSqliteErr && sqliteErr.Code == sqlite3.ErrError {
 		return &SearchInputError{
-			Msg: fmt.Sprintf("search: invalid FTS query: %s", sqliteErr.Error()),
+			Msg: "search: invalid FTS query: " + sqliteErr.Error(),
 		}
 	}
 	return err
@@ -1069,7 +1069,7 @@ func (db *DB) searchContentHybrid(
 	if searcher == nil {
 		return ContentSearchPage{}, ErrSemanticUnavailable
 	}
-	if !db.HasFTS() {
+	if !db.HasFTS(ctx) {
 		return ContentSearchPage{}, errFTSUnavailable
 	}
 
@@ -1384,6 +1384,7 @@ func (db *DB) semanticAllowedSessionIDs(
 		if err != nil {
 			return fmt.Errorf("semantic search session scope: %w", err)
 		}
+		defer rows.Close()
 		for rows.Next() {
 			var id string
 			if err := rows.Scan(&id); err != nil {
@@ -1443,45 +1444,52 @@ func (db *DB) enrichSemanticHits(
 ) (map[semanticHitKey]semanticHitInfo, error) {
 	out := make(map[semanticHitKey]semanticHitInfo, len(hits))
 	for start := 0; start < len(hits); start += enrichHitsChunk {
-		chunk := hits[start:min(start+enrichHitsChunk, len(hits))]
+		if err := func() error {
+			chunk := hits[start:min(start+enrichHitsChunk, len(hits))]
 
-		values := make([]string, len(chunk))
-		args := make([]any, 0, len(chunk)*2)
-		for i, h := range chunk {
-			values[i] = "(?, ?)"
-			args = append(args, h.SessionID, h.Ordinal)
-		}
-		query := "WITH hits(session_id, ordinal) AS (VALUES " +
-			strings.Join(values, ", ") + ") " +
-			"SELECT m.session_id, s.project, s.agent, m.role, m.ordinal, " +
-			"COALESCE(m.timestamp, ''), m.content, " +
-			"COALESCE(s.relationship_type, ''), " +
-			"COALESCE(s.parent_session_id, ''), m.is_sidechain " +
-			"FROM hits h " +
-			"JOIN messages m ON m.session_id = h.session_id AND m.ordinal = h.ordinal " +
-			"JOIN sessions s ON s.id = m.session_id"
-
-		rows, err := db.getReader().QueryContext(ctx, query, args...)
-		if err != nil {
-			return nil, fmt.Errorf("semantic search enrich: %w", err)
-		}
-		for rows.Next() {
-			var key semanticHitKey
-			var info semanticHitInfo
-			if err := rows.Scan(&key.sessionID, &info.project, &info.agent,
-				&info.role, &key.ordinal, &info.timestamp, &info.content,
-				&info.relationshipType, &info.parentSessionID,
-				&info.isSidechain); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("scan semantic hit: %w", err)
+			values := make([]string, len(chunk))
+			args := make([]any, 0, len(chunk)*2)
+			for i, h := range chunk {
+				values[i] = "(?, ?)"
+				args = append(args, h.SessionID, h.Ordinal)
 			}
-			out[key] = info
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		if err := rows.Close(); err != nil {
+			query := "WITH hits(session_id, ordinal) AS (VALUES " +
+				strings.Join(values, ", ") + ") " +
+				"SELECT m.session_id, s.project, s.agent, m.role, m.ordinal, " +
+				"COALESCE(m.timestamp, ''), m.content, " +
+				"COALESCE(s.relationship_type, ''), " +
+				"COALESCE(s.parent_session_id, ''), m.is_sidechain " +
+				"FROM hits h " +
+				"JOIN messages m ON m.session_id = h.session_id AND m.ordinal = h.ordinal " +
+				"JOIN sessions s ON s.id = m.session_id"
+
+			rows, err := db.getReader().QueryContext(ctx, query, args...)
+			if err != nil {
+				return fmt.Errorf("semantic search enrich: %w", err)
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var key semanticHitKey
+				var info semanticHitInfo
+				if err := rows.Scan(&key.sessionID, &info.project, &info.agent,
+					&info.role, &key.ordinal, &info.timestamp, &info.content,
+					&info.relationshipType, &info.parentSessionID,
+					&info.isSidechain); err != nil {
+					rows.Close()
+					return fmt.Errorf("scan semantic hit: %w", err)
+				}
+				out[key] = info
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return err
+			}
+			if err := rows.Close(); err != nil {
+				return err
+			}
+
+			return nil
+		}(); err != nil {
 			return nil, err
 		}
 	}

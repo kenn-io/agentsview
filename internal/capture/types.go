@@ -142,7 +142,7 @@ func DecodeResult(r io.Reader) (Result, error) {
 		return Result{}, fmt.Errorf("decoding capture result: %w", err)
 	}
 	var trailing any
-	if err := json.UnmarshalDecode(dec, &trailing); err != io.EOF {
+	if err := json.UnmarshalDecode(dec, &trailing); !errors.Is(err, io.EOF) {
 		if err == nil {
 			return Result{}, errors.New("capture result contains trailing JSON")
 		}

@@ -20,13 +20,14 @@ import (
 
 func TestArtifactExchangeRouteRequiresRunner(t *testing.T) {
 	srv := testServer(t, time.Second)
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost, "/api/v1/artifacts/exchange", nil,
 	)
 
-	_, pattern := srv.mux.Handler(req)
+	rec := httptest.NewRecorder()
+	srv.mux.ServeHTTP(rec, req)
 
-	assert.Equal(t, "/", pattern)
+	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 }
 
 func TestArtifactExchangeAcceptsAuthenticatedLoopbackRequest(t *testing.T) {
@@ -303,7 +304,7 @@ func artifactExchangeRequest(
 	body string,
 ) *http.Request {
 	t.Helper()
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost,
 		"http://"+host+"/api/v1/artifacts/exchange",
 		bytes.NewBufferString(body),
@@ -323,4 +324,23 @@ func artifactExchangeBody(t *testing.T, target string, full bool) string {
 	})
 	require.NoError(t, err)
 	return string(body)
+}
+
+func TestArtifactExchangeRejectsNonPost(t *testing.T) {
+	calls := 0
+	srv := testArtifactExchangeServer(t, func(context.Context, ArtifactExchangeRequest) (artifact.SyncResult, error) {
+		calls++
+		return artifact.SyncResult{}, nil
+	})
+	body := artifactExchangeBody(t, t.TempDir(), false)
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			req := artifactExchangeRequest(t, "127.0.0.1:4321", "127.0.0.1:43125", body)
+			req.Method = method
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
+			assert.Zero(t, calls)
+		})
+	}
 }

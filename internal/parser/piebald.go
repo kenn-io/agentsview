@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -83,7 +84,7 @@ func ForEachPiebaldSessionMeta(
 		}
 		observeStreamingDiscoveryBuffer(ctx, 1)
 		if err := yield(PiebaldSessionMeta{
-			SessionID:   fmt.Sprintf("%d", id),
+			SessionID:   strconv.FormatInt(id, 10),
 			VirtualPath: fmt.Sprintf("%s#%d", dbPath, id),
 			FileMtime:   parsePiebaldTimestamp(updatedAt).UnixNano(),
 		}); err != nil {
@@ -114,7 +115,7 @@ func piebaldSessionMeta(
 	if err != nil {
 		return PiebaldSessionMeta{}, false, err
 	}
-	idString := fmt.Sprintf("%d", id)
+	idString := strconv.FormatInt(id, 10)
 	return PiebaldSessionMeta{
 		SessionID: idString, VirtualPath: VirtualSourcePath(dbPath, idString),
 		FileMtime: parsePiebaldTimestamp(updatedAt).UnixNano(),
@@ -194,11 +195,7 @@ func piebaldChatSelect(where string) string {
 	` + where
 }
 
-type piebaldChatScanner interface {
-	Scan(dest ...any) error
-}
-
-func scanPiebaldChat(scanner piebaldChatScanner) (piebaldChatRow, error) {
+func scanPiebaldChat(scanner gooseRowScanner) (piebaldChatRow, error) {
 	var c piebaldChatRow
 	err := scanner.Scan(
 		&c.id, &c.title, &c.createdAt, &c.updatedAt,
@@ -347,7 +344,7 @@ func buildPiebaldSessionMeta(c piebaldChatRow, dbPath, machine string) ParsedSes
 		Agent:           AgentPiebald,
 		Cwd:             cwd,
 		GitBranch:       c.branchName,
-		SourceSessionID: fmt.Sprintf("%d", c.id),
+		SourceSessionID: strconv.FormatInt(c.id, 10),
 		SourceVersion:   "piebald-appdb-v1",
 		SessionName:     c.title,
 		File: FileInfo{

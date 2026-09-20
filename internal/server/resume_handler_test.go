@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -127,6 +129,7 @@ func assertMessagePointCommandForRuntime(
 	t *testing.T, command string, promptPath string,
 ) {
 	t.Helper()
+
 	if runtime.GOOS == "windows" {
 		script := decodeMessagePointPowerShellCommandForTest(t, command)
 		quotedPromptPath := powerShellSingleQuoteForTest(promptPath)
@@ -150,6 +153,7 @@ func decodeMessagePointPowerShellCommandForTest(
 	t *testing.T, command string,
 ) string {
 	t.Helper()
+
 	const prefix = "powershell.exe -NoProfile -EncodedCommand "
 	require.True(t, strings.HasPrefix(command, prefix), "command = %q", command)
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(command, prefix))
@@ -209,7 +213,7 @@ func TestResumeSession(t *testing.T) {
 
 	t.Run("remote deleted row precedes guard", func(t *testing.T) {
 		te.seedSession(t, "devbox1~deleted", "remote", 1)
-		require.NoError(t, te.db.SoftDeleteSession("devbox1~deleted"))
+		require.NoError(t, te.db.SoftDeleteSession(t.Context(), "devbox1~deleted"))
 		for _, body := range []string{`{}`, `{"command_only":true}`} {
 			w := te.post(t, "/api/v1/sessions/devbox1~deleted/resume", body)
 			assert.Equal(t, http.StatusNotFound, w.Code)
@@ -589,8 +593,7 @@ func TestResumeSession(t *testing.T) {
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		assert.False(t, resp.Launched, "expected launched=false for command_only")
 		wantProjectDir := canonicalTestPath(projectDir)
-		assert.Equal(t,
-			"cursor agent --resume chat-1 --workspace '"+wantProjectDir+"'",
+		assert.Equal(t, "cursor agent --resume chat-1 --workspace '"+wantProjectDir+"'",
 			resp.Command)
 		assertSamePath(t, "cwd", resp.Cwd, runDir)
 	})
@@ -663,7 +666,7 @@ func TestResumeSession(t *testing.T) {
 
 		if runtime.GOOS != "windows" {
 			idx := strings.LastIndex(resp.Command, "< ")
-			require.Greater(t, idx, 0, "command = %q", resp.Command)
+			require.Positive(t, idx, "command = %q", resp.Command)
 			extracted := strings.TrimSpace(resp.Command[idx+2:])
 			if semi := strings.Index(extracted, ";"); semi >= 0 {
 				extracted = strings.TrimSpace(extracted[:semi])
@@ -978,7 +981,7 @@ func TestResumeSession(t *testing.T) {
 		te.seedSession(t, "del-1", "/tmp", 3, func(s *db.Session) {
 			s.Agent = "claude"
 		})
-		require.NoError(t, te.db.SoftDeleteSession("del-1"))
+		require.NoError(t, te.db.SoftDeleteSession(t.Context(), "del-1"))
 		w := te.post(t,
 			"/api/v1/sessions/del-1/resume",
 			`{"command_only":true}`,
@@ -1321,4 +1324,75 @@ func TestSetTerminalConfigExpandsHomeBeforeImmediateResume(t *testing.T) {
 	assert.True(t, resp.Launched)
 	assert.Equal(t, "test-terminal", resp.Terminal)
 	assert.Empty(t, resp.Error)
+}
+
+func TestResumeTerminalSurvivesRequestCancellation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test fixture uses a POSIX executable script")
+	}
+	home := t.TempDir()
+	started := filepath.Join(home, "started")
+	completed := filepath.Join(home, "completed")
+	release := filepath.Join(home, "release")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("RESUME_STARTED", started)
+	t.Setenv("RESUME_COMPLETED", completed)
+	t.Setenv("RESUME_RELEASE", release)
+	binDir := filepath.Join(home, "bin")
+	require.NoError(t, os.MkdirAll(binDir, 0o755))
+	require.NoError(t, exec.CommandContext(t.Context(), "mkfifo", release).Run())
+	require.NoError(t, os.WriteFile(filepath.Join(binDir, "test-terminal"),
+		[]byte("#!/bin/sh\nprintf started > \"$RESUME_STARTED\"\nIFS= read -r _ < \"$RESUME_RELEASE\"\nprintf completed > \"$RESUME_COMPLETED\"\n"), 0o755))
+	releaseFile, err := os.OpenFile(release, os.O_RDWR, 0o600)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, _ = releaseFile.WriteString("\n")
+		_ = releaseFile.Close()
+	})
+
+	te := setup(t)
+	projectDir := t.TempDir()
+	te.seedSession(t, "cancelled-resume", projectDir, 1, func(s *db.Session) {
+		s.Agent = "claude"
+	})
+	w := te.post(t, "/api/v1/config/terminal",
+		`{"mode":"custom","custom_bin":"~/bin/test-terminal"}`)
+	assertStatus(t, w, http.StatusOK)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	req := httptest.NewRequestWithContext(ctx, http.MethodPost,
+		"/api/v1/sessions/cancelled-resume/resume", strings.NewReader(`{}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Origin", "http://127.0.0.1:0")
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		te.handler.ServeHTTP(response, req)
+		close(done)
+	}()
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(started)
+		return err == nil
+	}, time.Second, 5*time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		require.FailNow(t, "resume request did not return")
+	}
+	assertStatus(t, response, http.StatusOK)
+	var result struct {
+		Launched bool `json:"launched"`
+	}
+	require.NoError(t, json.Unmarshal(response.Body.Bytes(), &result))
+	assert.True(t, result.Launched)
+	assert.NoFileExists(t, completed)
+	_, err = releaseFile.WriteString("release\n")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(completed)
+		return err == nil
+	}, time.Second, 5*time.Millisecond)
 }

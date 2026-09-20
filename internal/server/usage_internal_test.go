@@ -27,7 +27,7 @@ func TestUsageInputAPIErrorPreservesMachineReadableCode(t *testing.T) {
 		Code: service.UsageErrorCodeUnknownProjectKey,
 		Msg:  "wording may change",
 	})
-	var response *apiErrorResponse
+	var response *apiResponseError
 	require.ErrorAs(t, err, &response)
 	assert.Equal(t, http.StatusBadRequest, response.Status)
 	assert.Equal(t, service.UsageErrorCodeUnknownProjectKey, response.Code)
@@ -79,6 +79,7 @@ func assertUsageQueryCalls(
 	wantDaily, wantCounts, wantMatching int,
 ) {
 	t.Helper()
+
 	assert.Equal(t, wantDaily, spy.dailyCalls, "daily usage calls")
 	assert.Equal(t, wantCounts, spy.countsCalls, "session count calls")
 	assert.Equal(t, wantMatching, spy.matchingSessionCalls, "matching session calls")
@@ -194,7 +195,7 @@ func TestUsageComparisonScansPriorPeriodOnly(t *testing.T) {
 	assert.Equal(t, "2024-05-31", out.PriorFrom)
 	assert.Equal(t, "2024-05-31", out.PriorTo)
 	assert.Equal(t, money.MustParseDollars("1"), out.PriorTotalCost)
-	assert.Equal(t, 2.0, out.DeltaPct)
+	assert.InDelta(t, 2.0, out.DeltaPct, 0)
 }
 
 func TestUsageComparisonCopiesGitBranchFilterToPriorPeriod(t *testing.T) {
@@ -428,8 +429,8 @@ func TestUsagePairwiseComparisonScansTwoDailyFilters(t *testing.T) {
 	assert.Equal(t, 2, spy.dailyCalls)
 	require.Len(t, spy.filters, 2)
 	assert.Equal(t, "claude-sonnet-4-20250514", spy.filters[0].Model)
-	assert.Equal(t, "", spy.filters[0].Project)
-	assert.Equal(t, "", spy.filters[1].Model)
+	assert.Empty(t, spy.filters[0].Project)
+	assert.Empty(t, spy.filters[1].Model)
 	assert.Equal(t, "beta", spy.filters[1].Project)
 	assert.False(t, spy.filters[0].SkipSessionCounts)
 	assert.False(t, spy.filters[1].SkipSessionCounts)
@@ -463,8 +464,7 @@ func TestUsagePairwiseComparisonOpenAPIAllowsNullCostPerSessionDelta(
 	require.True(t, ok, "costPerSessionDelta schema missing")
 
 	require.Len(t, costPerSessionSchema.AnyOf, 2)
-	assert.Equal(t,
-		"#/components/schemas/MoneyMoney",
+	assert.Equal(t, "#/components/schemas/MoneyMoney",
 		costPerSessionSchema.AnyOf[0].Ref,
 	)
 	assert.Equal(t, "null", costPerSessionSchema.AnyOf[1].Type)

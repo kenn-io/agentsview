@@ -2,10 +2,10 @@ package parser
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/v2"
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -254,7 +254,7 @@ func discoverOpenCodeFormatSessions(
 	return files
 }
 
-func findOpenCodeFormatSourceFile(
+func findOpenCodeFormatSourceFile(ctx context.Context,
 	f openCodeFormat, root, sessionID string,
 ) string {
 	if !IsValidSessionID(sessionID) {
@@ -280,14 +280,14 @@ func findOpenCodeFormatSourceFile(
 			}
 		}
 		for _, dbPath := range src.DBPaths {
-			if OpenCodeSQLiteSessionExists(dbPath, sessionID) {
+			if OpenCodeSQLiteSessionExists(ctx, dbPath, sessionID) {
 				return OpenCodeSQLiteVirtualPath(dbPath, sessionID)
 			}
 		}
 		return ""
 	case OpenCodeSourceSQLite:
 		for _, dbPath := range src.DBPaths {
-			if OpenCodeSQLiteSessionExists(dbPath, sessionID) {
+			if OpenCodeSQLiteSessionExists(ctx, dbPath, sessionID) {
 				return OpenCodeSQLiteVirtualPath(dbPath, sessionID)
 			}
 		}
@@ -349,6 +349,8 @@ func resolveOpenCodeFormatWatchRoots(
 		return []string{filepath.Join(root, "storage")}
 	case OpenCodeSourceSQLite:
 		return []string{root}
+	case OpenCodeSourceNone:
+		// Watch the logical root before the provider creates its storage.
 	}
 	if info, err := os.Stat(root); err == nil && info.IsDir() {
 		return []string{root}
@@ -606,7 +608,7 @@ func projectJSONLSessionFiles(
 				subagentsDir,
 				func(path string, sub os.DirEntry, err error) error {
 					if err != nil || sub.IsDir() {
-						return nil
+						return nil //nolint:nilerr // Unavailable optional subagent paths are skipped during discovery.
 					}
 					name := sub.Name()
 					if !strings.HasPrefix(name, "agent-") ||
@@ -667,7 +669,7 @@ func ClaudeSubagentTranscriptPaths(sessionPath string) []string {
 		subagentsDir,
 		func(path string, entry os.DirEntry, err error) error {
 			if err != nil || entry.IsDir() {
-				return nil
+				return nil //nolint:nilerr // Unavailable optional subagent paths are skipped during discovery.
 			}
 			name := entry.Name()
 			if !strings.HasPrefix(name, "agent-") ||
@@ -753,7 +755,7 @@ func claudeFindSourceFile(
 					subagentsDir,
 					func(path string, d os.DirEntry, err error) error {
 						if err != nil || d.IsDir() || d.Name() != target {
-							return nil
+							return nil //nolint:nilerr // Unavailable optional subagent paths are skipped during discovery.
 						}
 						found = path
 						return filepath.SkipAll
@@ -1053,7 +1055,7 @@ func addProjectPaths(
 // matching Gemini CLI's project hash algorithm.
 func geminiPathHash(path string) string {
 	h := sha256.Sum256([]byte(path))
-	return fmt.Sprintf("%x", h)
+	return hex.EncodeToString(h[:])
 }
 
 // isHexHash reports whether s is a 64-character lowercase hex

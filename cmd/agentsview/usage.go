@@ -138,6 +138,13 @@ func resolveUsageWindowPoint(
 }
 
 func runUsageDaily(cfg UsageDailyConfig) {
+	if err := runUsageDailyResult(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runUsageDailyResult(cfg UsageDailyConfig) error {
 	tz := cfg.Timezone
 	if tz == "" {
 		tz = localTimezone()
@@ -145,14 +152,12 @@ func runUsageDaily(cfg UsageDailyConfig) {
 
 	loc, err := time.LoadLocation(tz)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: invalid --timezone: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("invalid --timezone: %w", err)
 	}
 
 	since, until, err := resolveUsageWindow(cfg.Since, cfg.Until, time.Now(), loc)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	filter := db.UsageFilter{
@@ -174,8 +179,7 @@ func runUsageDaily(cfg UsageDailyConfig) {
 		DirectReadOnlyAction: "refresh usage directly",
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	defer closeArchiveQueryBackend(cleanup)
 
@@ -189,8 +193,7 @@ func runUsageDaily(cfg UsageDailyConfig) {
 	})
 	finishProgress()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if cfg.JSON {
@@ -208,16 +211,16 @@ func runUsageDaily(cfg UsageDailyConfig) {
 		}
 		enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
 		if err := json.MarshalEncode(enc, document); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
+			return err
 		}
-		return
+		return nil
 	}
 
 	printDailyTable(result, cfg.Breakdown)
 	if note := noTokenDataNote(cfg.Agent, result.Totals); note != "" {
 		fmt.Fprintln(os.Stderr, note)
 	}
+	return nil
 }
 
 // noTokenDataNote returns a one-line stderr note for a zero usage result when
@@ -270,6 +273,13 @@ func usageDateForTimezone(now time.Time, timezone string) string {
 }
 
 func runUsageStatusline(cfg UsageStatuslineConfig) {
+	if err := runUsageStatuslineResult(cfg); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func runUsageStatuslineResult(cfg UsageStatuslineConfig) error {
 	timezone := localTimezone()
 	today := usageDateForTimezone(time.Now(), timezone)
 	filter := db.UsageFilter{
@@ -289,8 +299,7 @@ func runUsageStatusline(cfg UsageStatuslineConfig) {
 		DirectReadOnlyAction: "refresh usage directly",
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	defer closeArchiveQueryBackend(cleanup)
 
@@ -299,21 +308,20 @@ func runUsageStatusline(cfg UsageStatuslineConfig) {
 		NoDefaultRange: true,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
 
 	if cfg.JSON {
-		printUsageStatuslineJSON(result, cfg.Agent, today)
-		return
+		return printUsageStatuslineJSON(result, cfg.Agent, today)
 	}
 
 	printUsageStatusline(result, cfg.Agent)
+	return nil
 }
 
 func printUsageStatuslineJSON(
 	result db.DailyUsageResult, agent, date string,
-) {
+) error {
 	enc := jsontext.NewEncoder(os.Stdout, jsontext.WithIndent("  "))
 	report := usageStatuslineReport{
 		Date:  date,
@@ -321,9 +329,9 @@ func printUsageStatuslineJSON(
 		Agent: agent,
 	}
 	if err := json.MarshalEncode(enc, report); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		return err
 	}
+	return nil
 }
 
 func printUsageStatusline(result db.DailyUsageResult, agent string) {
@@ -377,7 +385,7 @@ func ensureFreshData(
 	defer log.SetOutput(origLog)
 
 	if database.NeedsResync() {
-		engine := sync.NewEngine(database, sync.EngineConfig{
+		engine := sync.NewEngine(ctx, database, sync.EngineConfig{
 			AgentDirs:          appCfg.AgentDirs,
 			SourceMachines:     appCfg.SourceMachines,
 			ProviderMetadata:   appCfg.ProviderMetadata,
@@ -406,7 +414,7 @@ func ensureFreshData(
 		return
 	}
 
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(ctx, database, sync.EngineConfig{
 		AgentDirs:          appCfg.AgentDirs,
 		SourceMachines:     appCfg.SourceMachines,
 		ProviderMetadata:   appCfg.ProviderMetadata,
@@ -418,7 +426,7 @@ func ensureFreshData(
 	})
 	defer engine.Close()
 
-	since := engine.LastSyncStartedAt()
+	since := engine.LastSyncStartedAt(ctx)
 	if !since.IsZero() {
 		since = since.Add(-quickSyncMargin)
 	}
@@ -467,7 +475,7 @@ func printSyncSummaryStderr(stats sync.SyncStats, t time.Time) {
 // databases without a resync.
 func seedPricing(
 	database *db.DB,
-	runner pricingRefreshExclusiveRunner,
+	runner remoteSyncExclusiveRunner,
 ) {
 	err := runPricingExclusive(runner, func() error {
 		return pricingrefresh.SeedFallback(database)
@@ -624,7 +632,7 @@ func fetchHTTPDailyUsage(
 	if filter.MinUserMessages > 0 {
 		q.MinUserMessages = new(int64(filter.MinUserMessages))
 	}
-	api, err := apiclient.NewHTTPClient(tr.URL, authToken, http.DefaultClient)
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return db.DailyUsageResult{}, err
 	}
@@ -669,7 +677,8 @@ func fetchHTTPDailyUsage(
 		}
 		data, err := consumeDaemonPushEvents[apiclient.UsageSummaryResponse](stream, func(p struct {
 			Detail string `json:"detail"`
-		}) {
+		},
+		) {
 			query.Progress(p.Detail)
 		})
 		if err != nil {

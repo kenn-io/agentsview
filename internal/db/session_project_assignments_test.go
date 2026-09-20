@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,7 +12,7 @@ import (
 
 func TestAssignSessionProjectOverridesSyncAndFolderRules(t *testing.T) {
 	database := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, database, "session-a", "temp_project", func(session *Session) {
 		session.Machine = "host-a.example"
@@ -48,7 +47,7 @@ func TestAssignSessionProjectOverridesSyncAndFolderRules(t *testing.T) {
 
 func TestClearSessionProjectAssignmentRestoresAutomaticFolderMapping(t *testing.T) {
 	database := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, database, "session-a", "temporary", func(session *Session) {
 		session.Machine = "host-a.example"
@@ -79,9 +78,9 @@ func TestClearSessionProjectAssignmentRestoresAutomaticFolderMapping(t *testing.
 }
 
 func TestSessionProjectAssignmentMigrationBackfillsAutomaticProject(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "sessions.db")
-	database, err := Open(path)
+	database, err := Open(ctx, path)
 	require.NoError(t, err)
 	insertSession(t, database, "session-a", "automatic_project", func(session *Session) {
 		session.Machine = "host-a.example"
@@ -92,7 +91,7 @@ func TestSessionProjectAssignmentMigrationBackfillsAutomaticProject(t *testing.T
 
 	execRawSQLite(t, path,
 		`ALTER TABLE session_project_assignments DROP COLUMN original_project`)
-	database, err = Open(path)
+	database, err = Open(ctx, path)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = database.Close() })
 
@@ -103,7 +102,7 @@ func TestSessionProjectAssignmentMigrationBackfillsAutomaticProject(t *testing.T
 
 func TestAssignedSessionProvidesSiblingFolderEvidence(t *testing.T) {
 	database := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	sharedPath := filepath.Join(t.TempDir(), "sessions.jsonl")
 
 	insertSession(t, database, "assigned-reference", "temporary", func(session *Session) {
@@ -134,10 +133,10 @@ func TestAssignedSessionProvidesSiblingFolderEvidence(t *testing.T) {
 }
 
 func TestCopySessionMetadataFromPreservesSessionProjectAssignment(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	dir := t.TempDir()
 	sourcePath := filepath.Join(dir, "source.db")
-	source, err := Open(sourcePath)
+	source, err := Open(ctx, sourcePath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = source.Close() })
 	insertSession(t, source, "session-a", "temporary", func(session *Session) {
@@ -154,7 +153,7 @@ func TestCopySessionMetadataFromPreservesSessionProjectAssignment(t *testing.T) 
 	require.NoError(t, err)
 
 	destinationPath := filepath.Join(dir, "destination.db")
-	destination, err := Open(destinationPath)
+	destination, err := Open(ctx, destinationPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = destination.Close() })
 	insertSession(t, destination, "session-a", "reparsed", func(session *Session) {

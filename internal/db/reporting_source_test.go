@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json/jsontext"
@@ -238,9 +237,9 @@ func TestReportingDigestMatchesCapturedBaseline(t *testing.T) {
 	require.NoError(t, err)
 	canonical, err := export.MarshalCanonical(day)
 	require.NoError(t, err)
-	assert.Equal(t, reportingBaselineByteCount, len(canonical))
+	assert.Len(t, canonical, reportingBaselineByteCount)
 	assert.Equal(t, reportingBaselineSHA256, reportingBaselineDigest(canonical))
-	assert.Equal(t, 24, len(day.Hours))
+	assert.Len(t, day.Hours, 24)
 	assert.Equal(t, 2, stats.ActivityHistoryRows)
 	assert.Equal(t, 3, stats.PaddedUsageRows)
 
@@ -261,8 +260,10 @@ func TestReportingDigestMatchesCapturedBaseline(t *testing.T) {
 //
 // Update the constants from the actual values in the failed byte-count and
 // SHA-256 assertions, then rerun the test.
-const reportingBaselineByteCount = 98677
-const reportingBaselineSHA256 = "3a6a869c18380c2fdcab1165022968c761385737a3416dc26f98efdf40694f2e"
+const (
+	reportingBaselineByteCount = 98677
+	reportingBaselineSHA256    = "3a6a869c18380c2fdcab1165022968c761385737a3416dc26f98efdf40694f2e"
+)
 
 func reportingBaselineDigest(value []byte) string {
 	sum := sha256.Sum256(value)
@@ -276,7 +277,7 @@ func testReportingDateCountName(days int) string {
 func seedReportingSourceFixture(t *testing.T, d *DB) {
 	t.Helper()
 	require.NoError(t, d.SetArchiveIdentityForTest(
-		context.Background(), "reporting-source-archive",
+		t.Context(), "reporting-source-archive",
 		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 	))
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
@@ -284,35 +285,35 @@ func seedReportingSourceFixture(t *testing.T, d *DB) {
 		InputPerMTok:  money.MustParseDollars("2"),
 		OutputPerMTok: money.MustParseDollars("4"),
 	}}))
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(t, d.UpsertSession(t.Context(), Session{
 		ID: "range-boundary", Project: "range-project", Machine: "machine-a",
 		Agent: "agent-a", StartedAt: Ptr("2026-07-28T23:50:00Z"),
 		EndedAt: Ptr("2026-07-29T00:10:00Z"), MessageCount: 2,
 		UserMessageCount: 1,
 	}))
-	require.NoError(t, d.InsertMessages([]Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{
 		{SessionID: "range-boundary", Ordinal: 1, Role: "user", Timestamp: "2026-07-28T23:50:00Z"},
 		{SessionID: "range-boundary", Ordinal: 2, Role: "assistant", Timestamp: "2026-07-29T00:10:00Z", Model: "range-model", TokenUsage: jsontext.Value(`{"input_tokens":10,"output_tokens":20}`)},
 	}))
 	reportedCost := money.MustParseDollars("0.003")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(t, d.UpsertSession(t.Context(), Session{
 		ID: "range-usage-only", Project: "usage-project", Machine: "machine-a",
 		Agent: "agent-usage", StartedAt: Ptr("2026-07-27T08:00:00Z"),
 		EndedAt: Ptr("2026-07-27T08:01:00Z"),
 	}))
-	require.NoError(t, d.ReplaceSessionUsageEvents("range-usage-only", []UsageEvent{{
+	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), "range-usage-only", []UsageEvent{{
 		Source: "usage-source", Model: "usage-model", InputTokens: 7,
 		OutputTokens: 3, Cost: &reportedCost, CostStatus: "exact",
 		CostSource: "reported", OccurredAt: "2026-07-28T09:05:00Z",
 		DedupKey: "usage-only-row",
 	}}))
-	require.NoError(t, d.InsertCursorUsageEvents([]CursorUsageEvent{{
+	require.NoError(t, d.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{{
 		OccurredAt: "2026-07-28T09:06:00Z", Model: "cursor-model", Kind: "usage",
 		InputTokens: 5, OutputTokens: 2, Charged: money.MustParseDollars("0.001"),
 		DedupKey: "cursor-row",
 	}}))
 	require.NoError(t, d.UpsertProjectIdentityObservation(
-		context.Background(), export.ProjectIdentityObservation{
+		t.Context(), export.ProjectIdentityObservation{
 			SessionID: "range-boundary", Project: "range-project", Machine: "machine-a",
 			RootPath: "/work/range-project", ObservedAt: time.Date(2026, 7, 28, 23, 50, 0, 0, time.UTC),
 		},
@@ -321,16 +322,16 @@ func seedReportingSourceFixture(t *testing.T, d *DB) {
 
 func seedReportingLongRangeFixture(t *testing.T, d *DB) {
 	t.Helper()
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(t, d.UpsertSession(t.Context(), Session{
 		ID: "long-range", Project: "long-project", Machine: "machine-a", Agent: "agent-a",
 		StartedAt: Ptr("2026-07-01T00:00:00Z"), EndedAt: Ptr("2026-07-30T23:00:00Z"),
 		MessageCount: 2, UserMessageCount: 1,
 	}))
-	require.NoError(t, d.InsertMessages([]Message{
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{
 		{SessionID: "long-range", Ordinal: 1, Role: "user", Timestamp: "2026-07-01T00:00:00Z"},
 		{SessionID: "long-range", Ordinal: 2, Role: "assistant", Timestamp: "2026-07-30T23:00:00Z", Model: "long-model"},
 	}))
-	require.NoError(t, d.ReplaceSessionUsageEvents("long-range", []UsageEvent{
+	require.NoError(t, d.ReplaceSessionUsageEvents(t.Context(), "long-range", []UsageEvent{
 		{Source: "long-source", Model: "long-model", OccurredAt: "2026-07-01T12:00:00Z", DedupKey: "first"},
 		{Source: "long-source", Model: "long-model", OccurredAt: "2026-07-30T12:00:00Z", DedupKey: "second"},
 	}))

@@ -162,7 +162,7 @@ func TestCodexCapturedForkLineReplayTotals(t *testing.T) {
 				continue
 			}
 
-			result, parseErr := provider.parseSessionFromDetailed(
+			result, parseErr := provider.parseSessionFromDetailed(t.Context(),
 				targetPath, offset, len(messages), false,
 			)
 			if IsIncrementalFullParseFallback(parseErr) {

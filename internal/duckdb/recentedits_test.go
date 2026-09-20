@@ -3,13 +3,13 @@
 package duckdb
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // seedDuckEdit seeds a session, message, and one Edit tool_call into a local
@@ -30,7 +30,7 @@ func seedDuckEdit(
 		MessageCount: 1,
 		CreatedAt:    "2026-01-01T00:00:00Z",
 	}
-	require.NoError(t, local.UpsertSession(s), "seedDuckEdit upsertSession %s", sessionID)
+	require.NoError(t, local.UpsertSession(t.Context(), s), "seedDuckEdit upsertSession %s", sessionID)
 	msg := db.Message{
 		SessionID:     sessionID,
 		Ordinal:       ordinal,
@@ -49,7 +49,7 @@ func seedDuckEdit(
 			},
 		},
 	}
-	require.NoError(t, local.InsertMessages([]db.Message{msg}),
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{msg}),
 		"seedDuckEdit insertMessages %s/%d", sessionID, ordinal)
 }
 
@@ -62,7 +62,7 @@ func seedDuckEditTrashed(
 ) {
 	t.Helper()
 	seedDuckEdit(t, local, project, sessionID, ordinal, callIndex, filePath, ts)
-	require.NoError(t, local.SoftDeleteSession(sessionID),
+	require.NoError(t, local.SoftDeleteSession(t.Context(), sessionID),
 		"seedDuckEditTrashed mark deleted %s", sessionID)
 }
 
@@ -72,10 +72,10 @@ func newDuckRecentEditsStore(
 	t *testing.T, setup func(local *db.DB),
 ) *Store {
 	t.Helper()
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	setup(local)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err, "Push to DuckDB mirror")
@@ -83,7 +83,7 @@ func newDuckRecentEditsStore(
 }
 
 func TestDuckRecentEditsGroupingAndOrdering(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newDuckRecentEditsStore(t, func(local *db.DB) {
 		// projA: edits config.go twice (newer ts), projB: edits config.go once.
 		seedDuckEdit(t, local, "projA", "sA1", 1, 0, "config.go", "2026-06-24T10:00:00Z")
@@ -105,7 +105,7 @@ func TestDuckRecentEditsGroupingAndOrdering(t *testing.T) {
 }
 
 func TestDuckRecentEditsExcludesTrash(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newDuckRecentEditsStore(t, func(local *db.DB) {
 		seedDuckEdit(t, local, "proj", "sLive", 1, 0, "main.go", "2026-06-24T10:00:00Z")
 		seedDuckEditTrashed(t, local, "proj", "sDead", 1, 0, "deleted.go", "2026-06-24T11:00:00Z")
@@ -118,7 +118,7 @@ func TestDuckRecentEditsExcludesTrash(t *testing.T) {
 }
 
 func TestDuckRecentEditsProjectFilter(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newDuckRecentEditsStore(t, func(local *db.DB) {
 		seedDuckEdit(t, local, "alpha", "sAlpha", 1, 0, "a.go", "2026-06-24T10:00:00Z")
 		seedDuckEdit(t, local, "beta", "sBeta", 1, 0, "b.go", "2026-06-24T10:00:00Z")
@@ -132,7 +132,7 @@ func TestDuckRecentEditsProjectFilter(t *testing.T) {
 }
 
 func TestDuckRecentEditsSearchFilter(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newDuckRecentEditsStore(t, func(local *db.DB) {
 		seedDuckEdit(t, local, "proj", "s1", 1, 0, "internal/db/Recent.go", "2026-06-24T10:00:00Z")
 		seedDuckEdit(t, local, "proj", "s2", 1, 0, "internal/server/handler.go", "2026-06-24T09:00:00Z")
@@ -166,7 +166,7 @@ func TestDuckRecentEditsSearchFilter(t *testing.T) {
 }
 
 func TestDuckRecentEditsTruncationAndHasMore(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newDuckRecentEditsStore(t, func(local *db.DB) {
 		// Three distinct files in same project.
 		seedDuckEdit(t, local, "proj", "s1", 1, 0, "a.go", "2026-06-24T10:00:00Z")
@@ -197,7 +197,7 @@ func TestDuckRecentEditsTruncationAndHasMore(t *testing.T) {
 }
 
 func TestDuckRecentEditsNullTimestampsSortLast(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newDuckRecentEditsStore(t, func(local *db.DB) {
 		// File with a real timestamp.
 		seedDuckEdit(t, local, "proj", "sReal", 1, 0, "real.go", "2026-06-24T10:00:00Z")
@@ -214,7 +214,7 @@ func TestDuckRecentEditsNullTimestampsSortLast(t *testing.T) {
 }
 
 func TestDuckRecentEditsTieByCallIndex(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store := newDuckRecentEditsStore(t, func(local *db.DB) {
 		s := db.Session{
 			ID:           "sTie",
@@ -224,7 +224,7 @@ func TestDuckRecentEditsTieByCallIndex(t *testing.T) {
 			MessageCount: 1,
 			CreatedAt:    "2026-01-01T00:00:00Z",
 		}
-		require.NoError(t, local.UpsertSession(s))
+		require.NoError(t, local.UpsertSession(ctx, s))
 		// Same session, same ordinal, two Edit calls: callIndex 0 and 1.
 		// Higher call_index (1) should rank first (rn=1).
 		msg := db.Message{
@@ -236,13 +236,17 @@ func TestDuckRecentEditsTieByCallIndex(t *testing.T) {
 			Timestamp:     "2026-06-24T10:00:00Z",
 			HasToolUse:    true,
 			ToolCalls: []db.ToolCall{
-				{SessionID: "sTie", ToolName: "Edit", Category: "Edit",
-					FilePath: "tie.go", CallIndex: 0},
-				{SessionID: "sTie", ToolName: "Edit", Category: "Edit",
-					FilePath: "tie.go", CallIndex: 1},
+				{
+					SessionID: "sTie", ToolName: "Edit", Category: "Edit",
+					FilePath: "tie.go", CallIndex: 0,
+				},
+				{
+					SessionID: "sTie", ToolName: "Edit", Category: "Edit",
+					FilePath: "tie.go", CallIndex: 1,
+				},
 			},
 		}
-		require.NoError(t, local.InsertMessages([]db.Message{msg}))
+		require.NoError(t, local.InsertMessages(ctx, []db.Message{msg}))
 	})
 
 	res, err := store.RecentEdits(ctx, db.RecentEditsParams{MaxEditsPerFile: 5})

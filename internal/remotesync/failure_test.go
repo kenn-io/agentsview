@@ -272,7 +272,7 @@ func TestIsHostUnavailableWhenHTTPServerClosesBeforeHeaders(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	_, err := (HTTPSync{URL: server.URL}).fetchTargets(
-		context.Background(), server.Client(),
+		t.Context(), server.Client(),
 	)
 	require.NoError(t, <-serverResult)
 	require.Error(t, err)

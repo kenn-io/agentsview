@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -52,13 +51,13 @@ func TestMiMoCodeProviderParseRelabelsOpenCodeSession(t *testing.T) {
 		Machine: "testmachine",
 	})
 	require.True(t, ok)
-	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "mimocode:ses_mimo",
 	})
 	require.NoError(t, err)
 	require.True(t, found)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  source,
 		Machine: "testmachine",
 	})
@@ -91,7 +90,7 @@ func TestMiMoCodeProviderDiscoversSessions(t *testing.T) {
 
 	provider, ok := NewProvider(AgentMiMoCode, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 

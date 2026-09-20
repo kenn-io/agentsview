@@ -553,14 +553,22 @@ type claudeCompactField struct {
 
 func compactClaudeEntry(line []byte) string {
 	topFields := []claudeCompactField{
-		{name: "uuid"}, {name: "parentUuid"}, {name: "timestamp"},
-		{name: "isCompactSummary"}, {name: "isSidechain"},
-		{name: "isMeta"}, {name: "requestId"}, {name: "promptSource"},
+		{name: "uuid"},
+		{name: "parentUuid"},
+		{name: "timestamp"},
+		{name: "isCompactSummary"},
+		{name: "isSidechain"},
+		{name: "isMeta"},
+		{name: "requestId"},
+		{name: "promptSource"},
 		{name: "effort"},
 	}
 	messageFields := []claudeCompactField{
-		{name: "content"}, {name: "id"}, {name: "stop_reason"},
-		{name: "model"}, {name: "usage"},
+		{name: "content"},
+		{name: "id"},
+		{name: "stop_reason"},
+		{name: "model"},
+		{name: "usage"},
 	}
 	snapshotFields := []claudeCompactField{
 		{name: "timestamp"},
@@ -569,7 +577,8 @@ func compactClaudeEntry(line []byte) string {
 	// WebSearch tool result performed; it is the only surviving record
 	// of them in a Claude Code transcript.
 	toolResultFields := []claudeCompactField{
-		{name: "agentId"}, {name: "persistedOutputPath"},
+		{name: "agentId"},
+		{name: "persistedOutputPath"},
 		{name: "searchCount"},
 	}
 
@@ -723,16 +732,12 @@ func lastAssistantStopReason(messages []ParsedMessage) string {
 // provider-owned incremental body; it carries no legacy entrypoint
 // naming so the provider can call it without shimming a Parse* free
 // function.
-var ErrDAGDetected = fmt.Errorf(
-	"incremental parse: DAG uuid detected",
-)
+var ErrDAGDetected = errors.New("incremental parse: DAG uuid detected")
 
 // ErrClaudeIncrementalNeedsFullParse signals that appended Claude
 // lines contain content the incremental path cannot stitch into
 // already-stored rows (renames and late identity fields).
-var ErrClaudeIncrementalNeedsFullParse = fmt.Errorf(
-	"incremental parse: appended Claude lines require full parse",
-)
+var ErrClaudeIncrementalNeedsFullParse = errors.New("incremental parse: appended Claude lines require full parse")
 
 type ClaudeSubagentLink struct {
 	ToolUseID         string
@@ -1276,8 +1281,7 @@ func extractMessagesFrom(
 		}
 
 		content := gjson.Get(e.line, "message.content")
-		text, thinkingText, hasThinking, hasToolUse, tcs, trs :=
-			ExtractTextContent(context.Background(), content)
+		text, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(context.Background(), content)
 
 		// Convert command/skill invocation XML into readable
 		// text (e.g. "/roborev-fix 450"). If the content
@@ -1325,8 +1329,7 @@ func extractMessagesFrom(
 			// Split it into a hidden system-metadata message plus the
 			// real prompt, so first_message and the visible transcript
 			// show only the prompt.
-			if subtype, envelope, remainder, ok :=
-				splitClaudeIDEEnvelopePrompt(text); ok {
+			if subtype, envelope, remainder, ok := splitClaudeIDEEnvelopePrompt(text); ok {
 				hidden := claudeIDEEnvelopeMessage(e, ordinal, subtype, envelope)
 				if remainder == "" || isClaudeSystemMessage(remainder) {
 					// The remainder is discarded, so no visible
@@ -2288,16 +2291,16 @@ func resolveClaudePersistedToolResultsContext(
 
 	var top map[string]jsontext.Value
 	if err := json.Unmarshal([]byte(line), &top); err != nil || top == nil {
-		return line, nil
+		return line, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 	}
 
 	var msg map[string]jsontext.Value
 	if err := json.Unmarshal(top["message"], &msg); err != nil || msg == nil {
-		return line, nil
+		return line, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 	}
 	var blocks []jsontext.Value
 	if err := json.Unmarshal(msg["content"], &blocks); err != nil {
-		return line, nil
+		return line, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 	}
 
 	persistedPath := ""
@@ -2346,12 +2349,12 @@ func resolveClaudePersistedToolResultsContext(
 		}
 		contentData, err := json.Marshal(output)
 		if err != nil {
-			return line, nil
+			return line, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 		}
 		block["content"] = contentData
 		blocks[i], err = json.Marshal(block, json.Deterministic(true))
 		if err != nil {
-			return line, nil
+			return line, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 		}
 		changed = true
 	}
@@ -2361,17 +2364,17 @@ func resolveClaudePersistedToolResultsContext(
 
 	contentData, err := json.Marshal(blocks)
 	if err != nil {
-		return line, nil
+		return line, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 	}
 	msg["content"] = contentData
 	messageData, err := json.Marshal(msg, json.Deterministic(true))
 	if err != nil {
-		return line, nil
+		return line, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 	}
 	top["message"] = messageData
 	encoded, err := json.Marshal(top, json.Deterministic(true))
 	if err != nil {
-		return line, nil
+		return line, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 	}
 	return string(encoded), nil
 }
@@ -2429,7 +2432,7 @@ func readClaudePersistedToolResultContext(
 		}
 		f, err := os.Open(cleanResult)
 		if err != nil {
-			return "", false, nil
+			return "", false, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 		}
 		b, readErr := io.ReadAll(io.LimitReader(
 			checkedContextReader{ctx: ctx, reader: f}, maxPersistedToolResultSize+1,
@@ -2440,7 +2443,7 @@ func readClaudePersistedToolResultContext(
 			return "", false, readErr
 		}
 		if readErr != nil || closeErr != nil {
-			return "", false, nil
+			return "", false, nil //nolint:nilerr // Optional persisted-output enrichment preserves the original transcript on failure.
 		}
 		if len(b) > maxPersistedToolResultSize {
 			return stringutil.SafeTruncate(string(b), maxPersistedToolResultSize) +
@@ -2585,8 +2588,7 @@ func extractMessagesContext(
 		}
 
 		content := gjson.Get(e.line, "message.content")
-		text, thinkingText, hasThinking, hasToolUse, tcs, trs :=
-			ExtractTextContent(ctx, content)
+		text, thinkingText, hasThinking, hasToolUse, tcs, trs := ExtractTextContent(ctx, content)
 
 		// Convert command/skill invocation XML into readable
 		// text (e.g. "/roborev-fix 450"). If the content
@@ -2634,8 +2636,7 @@ func extractMessagesContext(
 			// Split it into a hidden system-metadata message plus the
 			// real prompt, so first_message and the visible transcript
 			// show only the prompt.
-			if subtype, envelope, remainder, ok :=
-				splitClaudeIDEEnvelopePrompt(text); ok {
+			if subtype, envelope, remainder, ok := splitClaudeIDEEnvelopePrompt(text); ok {
 				hidden := claudeIDEEnvelopeMessage(e, ordinal, subtype, envelope)
 				if remainder == "" || isClaudeSystemMessage(remainder) {
 					// The remainder is discarded, so no visible

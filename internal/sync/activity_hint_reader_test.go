@@ -132,8 +132,8 @@ func TestReadActivityHintsRetainsPartialAndDeduplicates(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, got.Hints)
 	assert.True(t, cursor.hasPartial)
-	assert.Equal(
-		t, int64(len(hintRecord("first", now))), cursor.partialOffset,
+	assert.Equal(t,
+		int64(len(hintRecord("first", now))), cursor.partialOffset,
 	)
 
 	file, err = os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)

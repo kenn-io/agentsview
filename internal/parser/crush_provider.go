@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"hash"
 	"maps"
@@ -519,7 +520,7 @@ func crushSessionFingerprint(
 	row, err := scanCrushSessionRow(db.QueryRowContext(
 		ctx, crushSessionSelect+" WHERE sessions.id = ?", sessionID,
 	))
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return "", false, nil
 	}
 	if err != nil {

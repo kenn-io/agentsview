@@ -27,7 +27,7 @@ func TestPublishedURLConnectsToListener(t *testing.T) {
 		{"IPv6 loopback", "tcp6", "[::1]:0", "::1"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			listener, err := net.Listen(tc.network, tc.address)
+			listener, err := (&net.ListenConfig{}).Listen(t.Context(), tc.network, tc.address)
 			if err != nil && tc.network == "tcp6" {
 				t.Skipf("IPv6 listener unavailable: %v", err)
 			}
@@ -56,7 +56,9 @@ func TestPublishedURLConnectsToListener(t *testing.T) {
 			assert.Equal(t, tc.host, endpoint.Hostname())
 			client := server.Client()
 			client.Timeout = 5 * time.Second
-			response, err := client.Get(rows[0].URL)
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, rows[0].URL, nil)
+			require.NoError(t, err)
+			response, err := client.Do(req)
 			require.NoError(t, err)
 			defer response.Body.Close()
 			body, err := io.ReadAll(response.Body)
@@ -71,7 +73,7 @@ func TestPublishedURLConnectsToListener(t *testing.T) {
 func TestPublishedListenerStatusAndCleanup(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.Chmod(dir, 0o700))
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, listener.Close()) })
 	cleanup, err := Publish(dir, listener.Addr().String(), "test-listener-token", "http://127.0.0.1:4321")

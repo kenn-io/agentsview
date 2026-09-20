@@ -17,6 +17,7 @@ import (
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 const pgUsageBenchmarkSchemaPrefix = "agentsview_pg_usage_bench"
@@ -94,23 +95,23 @@ func pgUsageBenchmarkSchema(t testing.TB) string {
 
 func openPGUsageBenchmarkFixture(t testing.TB) *pgUsageBenchmarkFixture {
 	t.Helper()
-	req := require.New(t)
+	require := require.New(t)
 	pgURL := testPGURL(t)
 	schema := pgUsageBenchmarkSchema(t)
 	admin, err := sql.Open("pgx", pgURL)
-	req.NoError(err)
+	require.NoError(err)
 	_, err = admin.Exec("DROP SCHEMA IF EXISTS " + schema + " CASCADE")
-	req.NoError(err)
-	req.NoError(admin.Close())
+	require.NoError(err)
+	require.NoError(admin.Close())
 
-	local, err := db.Open(t.TempDir() + "/usage-bench.db")
-	req.NoError(err)
+	local, err := db.Open(t.Context(), t.TempDir()+"/usage-bench.db")
+	require.NoError(err)
 	seedUsageParityFixture(t, local)
-	syncer, err := New(pgURL, schema, local, "bench-machine", true, SyncOptions{})
-	req.NoError(err)
-	req.NoError(EnsureSchema(t.Context(), syncer.pg, schema))
+	syncer, err := New(pgURL, schema, local, "bench-machine", true, storage.PusherOptions{})
+	require.NoError(err)
+	require.NoError(EnsureSchema(t.Context(), syncer.pg, schema))
 	remote, err := NewStore(pgURL, schema, true)
-	req.NoError(err)
+	require.NoError(err)
 	t.Cleanup(func() {
 		_ = remote.Close()
 		_ = syncer.Close()
@@ -121,7 +122,7 @@ func openPGUsageBenchmarkFixture(t testing.TB) *pgUsageBenchmarkFixture {
 	})
 
 	var version string
-	req.NoError(remote.DB().QueryRowContext(t.Context(), "SHOW server_version").Scan(&version))
+	require.NoError(remote.DB().QueryRowContext(t.Context(), "SHOW server_version").Scan(&version))
 	t.Logf("pg_version=%s fixture_baseline_sessions=%d fixture_baseline_messages=%d fixture_usage_events=%d", version, 6, 5, 1)
 	return &pgUsageBenchmarkFixture{
 		pgURL: pgURL, schema: schema,
@@ -184,9 +185,9 @@ func seedPGUsageBenchmarkBulkFixture(t testing.TB, local *db.DB, count int) {
 		{ModelPattern: "model-bulk-premium", InputPerMTok: money.Money{Microdollars: 2_000_000}, OutputPerMTok: money.Money{Microdollars: 3_000_000}},
 	}))
 	for i := range sessions {
-		require.NoError(t, local.UpsertSession(sessions[i]))
+		require.NoError(t, local.UpsertSession(t.Context(), sessions[i]))
 	}
-	require.NoError(t, local.InsertMessages(messages))
+	require.NoError(t, local.InsertMessages(t.Context(), messages))
 }
 
 func (f *pgUsageBenchmarkFixture) prime(t testing.TB) {
@@ -219,7 +220,7 @@ func (f *pgUsageBenchmarkFixture) resetRemoteEmpty(t testing.TB) {
 
 func (f *pgUsageBenchmarkFixture) requireFixedCardinality(t testing.TB) {
 	t.Helper()
-	messageCount, err := f.local.MessageCount("snapshot-winner")
+	messageCount, err := f.local.MessageCount(t.Context(), "snapshot-winner")
 	require.NoError(t, err)
 	require.Equal(t, 1, messageCount)
 	sessions, messages := pgUsageRemoteCardinality(t, f.remote)
@@ -244,8 +245,8 @@ func (f *pgUsageBenchmarkFixture) replaceDeltaSessionMessage(
 	require.NoError(t, err)
 	require.Len(t, messages, expectedCount)
 	messages[0].TokenUsage = []byte(payload)
-	require.NoError(t, f.local.ReplaceSessionMessages(sessionID, messages))
-	messageCount, err := f.local.MessageCount(sessionID)
+	require.NoError(t, f.local.ReplaceSessionMessages(t.Context(), sessionID, messages))
+	messageCount, err := f.local.MessageCount(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.Equal(t, expectedCount, messageCount)
 }

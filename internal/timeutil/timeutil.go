@@ -135,7 +135,7 @@ func localTimezoneOrUTC(resolve func() string) string {
 // LocalLocation returns the resolved local timezone location, or time.Local
 // when no loadable local timezone can be resolved.
 func LocalLocation() *time.Location {
-	return localLocation(BestEffortLocalTimezone, time.Local)
+	return localLocation(BestEffortLocalTimezone, time.Local) //nolint:forbidigo // Local calendar input and display need the operating system timezone as a fallback.
 }
 
 func localLocation(resolve func() string, fallback *time.Location) *time.Location {

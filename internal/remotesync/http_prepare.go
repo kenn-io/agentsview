@@ -189,7 +189,7 @@ func prepareHTTPSyncsWithUnavailable(
 // namespaces while the prepared set retains cleanup ownership. Callers must
 // invoke the idempotent release function after the rebuild stops using the
 // options. Close refuses to release any source while a borrow remains active.
-func (p *PreparedHTTPSyncs) BorrowRebuildOptions() (
+func (p *PreparedHTTPSyncs) BorrowRebuildOptions(ctx context.Context) (
 	options syncpkg.RebuildOptions,
 	release func(),
 	err error,
@@ -212,7 +212,7 @@ func (p *PreparedHTTPSyncs) BorrowRebuildOptions() (
 		if source == nil {
 			continue
 		}
-		contributor, err := source.RebuildContributor()
+		contributor, err := source.RebuildContributor(ctx)
 		if err != nil {
 			return syncpkg.RebuildOptions{}, nil, &HostError{
 				Host: source.sync.Host, Operation: "build rebuild contributor", Err: err,
@@ -297,8 +297,8 @@ type PreparedHTTP struct {
 	mirrorImport              *preparedMirrorImport
 	replaceJournal            func(string, MirrorChangeJournal) error
 	retireJournal             func(string) error
-	replaceRemoteSkippedFiles func(string, map[string]int64) error
-	applyRemoteSkippedChanges func(string, []string, map[string]int64) error
+	replaceRemoteSkippedFiles func(context.Context, string, map[string]int64) error
+	applyRemoteSkippedChanges func(context.Context, string, []string, map[string]int64) error
 	commitReady               bool
 	committed                 bool
 }
@@ -327,7 +327,8 @@ func (hs HTTPSync) prepare(
 ) (result *PreparedHTTP, err error) {
 	client := hs.Client
 	if client == nil {
-		client = http.DefaultClient
+		// Archive responses can stream for hours; ctx governs their lifetime.
+		client = &http.Client{Timeout: 0}
 	}
 	hs.reportProgressResolvingTargets()
 	targets, err := hs.fetchTargets(ctx, client)
@@ -379,9 +380,7 @@ func (hs HTTPSync) prepare(
 		return nil, err
 	}
 	dirScoped, fileScoped := targets.SplitFileScoped()
-	hs.reportProgressDetail(fmt.Sprintf(
-		"Fetching session manifest from %s", hs.Host,
-	))
+	hs.reportProgressDetail("Fetching session manifest from " + hs.Host)
 	manifest, supported, err := hs.fetchManifest(ctx, client, dirScoped)
 	if err != nil {
 		return nil, err
@@ -417,7 +416,7 @@ func (p *PreparedHTTP) Targets() TargetSet { return p.targets }
 // ImportActive imports the prepared source into the active database.
 func (p *PreparedHTTP) ImportActive(ctx context.Context) (SyncStats, error) {
 	if p == nil || p.closing || p.closed {
-		return SyncStats{}, fmt.Errorf("prepared HTTP source is closed")
+		return SyncStats{}, errors.New("prepared HTTP source is closed")
 	}
 	if p.mirrorImport == nil {
 		if p.legacy {
@@ -485,11 +484,9 @@ func (p *PreparedHTTP) reportDeltaImport(stats SyncStats) {
 // RebuildContributor converts this prepared source into an atomic rebuild
 // contributor. PreparedHTTP retains ownership of its root and mirror lock;
 // callers must Close it after the rebuild finishes.
-func (p *PreparedHTTP) RebuildContributor() (syncpkg.RebuildContributor, error) {
+func (p *PreparedHTTP) RebuildContributor(ctx context.Context) (syncpkg.RebuildContributor, error) {
 	if p == nil || p.closing || p.closed {
-		return syncpkg.RebuildContributor{}, fmt.Errorf(
-			"prepared HTTP source is closed",
-		)
+		return syncpkg.RebuildContributor{}, errors.New("prepared HTTP source is closed")
 	}
 	layout, config, err := newImportInputs(
 		p.sync.Host, p.sync.BlockedResultCategories, p.targets, p.root,
@@ -501,9 +498,9 @@ func (p *PreparedHTTP) RebuildContributor() (syncpkg.RebuildContributor, error) 
 	persistSkipCache := func(engine *syncpkg.Engine, database *db.DB) error {
 		var err error
 		if p.mirrorImport != nil {
-			err = p.mirrorImport.pending.persistSkipCache(database, engine)
+			err = p.mirrorImport.pending.persistSkipCache(ctx, database, engine)
 		} else {
-			err = saveEngineSkipCache(database, engine, layout.paths)
+			err = saveEngineSkipCache(ctx, database, engine, layout.paths)
 		}
 		if err != nil {
 			return &rebuildCachePersistError{err: err}
@@ -515,10 +512,10 @@ func (p *PreparedHTTP) RebuildContributor() (syncpkg.RebuildContributor, error) 
 	) error {
 		var err error
 		if p.mirrorImport != nil {
-			err = p.mirrorImport.pending.persistRetrySafeSkipCache(database, engine)
+			err = p.mirrorImport.pending.persistRetrySafeSkipCache(ctx, database, engine)
 		} else {
 			remoteCache := remoteRetrySafeEngineSkipCache(engine, layout.paths)
-			err = database.ReplaceRemoteSkippedFiles(layout.paths.host, remoteCache)
+			err = database.ReplaceRemoteSkippedFiles(ctx, layout.paths.host, remoteCache)
 		}
 		if err != nil {
 			return &rebuildCachePersistError{err: err}
@@ -556,8 +553,7 @@ func (p *PreparedHTTP) RebuildContributor() (syncpkg.RebuildContributor, error) 
 	}
 	if p.mirrorImport != nil {
 		contributor.ForceParse = p.mirrorImport.pending.forceParse
-		contributor.ForceFullParseAfterCache =
-			p.mirrorImport.pending.forceFullParse
+		contributor.ForceFullParseAfterCache = p.mirrorImport.pending.forceFullParse
 		contributor.Config.InitialSkipCache = p.mirrorImport.pending.cache
 	}
 	if p.sync.Lifecycle != nil {
@@ -601,7 +597,7 @@ func (p *PreparedHTTP) Commit() error {
 		return nil
 	}
 	if !p.commitReady {
-		return fmt.Errorf("prepared HTTP journal is not ready to commit")
+		return errors.New("prepared HTTP journal is not ready to commit")
 	}
 	start := time.Now()
 	if err := p.retireJournal(p.mirrorImport.journalPath); err != nil {
@@ -652,7 +648,7 @@ func (p *PreparedHTTP) Close() error {
 }
 
 func (hs HTTPSync) reportProgressResolvingTargets() {
-	hs.reportProgressDetail(fmt.Sprintf("Resolving agent directories on %s", hs.Host))
+	hs.reportProgressDetail("Resolving agent directories on " + hs.Host)
 }
 
 func (hs HTTPSync) reportLegacyFallback() {
@@ -892,7 +888,7 @@ func (hs HTTPSync) prepareMirror(
 		}
 		parser.EvictCodexSessionIndex(indexPath)
 		for uuid := range parser.CodexSessionIndexTitles(indexPath) {
-			storedPath := hs.DB.GetSessionFilePath(hs.Host + "~codex:" + uuid)
+			storedPath := hs.DB.GetSessionFilePath(ctx, hs.Host+"~codex:"+uuid)
 			remotePath, ok := strings.CutPrefix(storedPath, hs.Host+":")
 			if !ok {
 				continue
@@ -988,8 +984,8 @@ func (hs HTTPSync) prepareMirror(
 		err := hs.downloadIntoMirror(
 			ctx, client, targets.dirScoped, delta.Fetch, full, mirrorRoot,
 		)
-		var statusErr *StatusError
-		if err != nil && !full && errors.As(err, &statusErr) {
+		_, hasStatusErr := errors.AsType[*StatusError](err)
+		if err != nil && !full && hasStatusErr {
 			err = hs.downloadIntoMirror(
 				ctx, client, targets.dirScoped, delta.Fetch, true, mirrorRoot,
 			)

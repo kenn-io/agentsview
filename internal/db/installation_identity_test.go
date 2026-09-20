@@ -18,7 +18,7 @@ func TestInstallationAdoptionMovesOwnedArchiveState(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "project")
 	path := filepath.Join(root, "session.jsonl")
 	for _, machine := range []string{owner, "local", "unproven.example", "peer.example"} {
-		require.NoError(t, database.UpsertSessionWithProjectIdentity(Session{
+		require.NoError(t, database.UpsertSessionWithProjectIdentity(t.Context(), Session{
 			ID: machine, Machine: machine, Project: "project", Agent: "claude", FilePath: &path,
 		}, export.ProjectIdentityObservation{
 			SessionID: machine, Machine: machine, Project: "project", RootPath: root,
@@ -29,14 +29,14 @@ func TestInstallationAdoptionMovesOwnedArchiveState(t *testing.T) {
 		Machine: owner, PathPrefix: root, Project: "project", Enabled: true,
 	})
 	require.NoError(t, err)
-	starred, err := database.StarSession(owner)
+	starred, err := database.StarSession(t.Context(), owner)
 	require.NoError(t, err)
 	require.True(t, starred)
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`INSERT INTO local_session_source_baselines VALUES (?, ?, 'claude', ?)`, owner, owner, path)
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `INSERT INTO local_session_source_baselines VALUES (?, ?, 'claude', ?)`, owner, owner, path)
 		return err
 	}))
-	require.NoError(t, database.SetSyncState("artifact_local_machine_name", owner))
+	require.NoError(t, database.SetSyncState(t.Context(), "artifact_local_machine_name", owner))
 	_, err = database.EnsureInstallationIdentity(t.Context(), identity)
 	require.NoError(t, err)
 	for _, machine := range []string{owner, "local", "unproven.example", "peer.example"} {
@@ -66,15 +66,15 @@ func TestInstallationAdoptionMovesOwnedArchiveState(t *testing.T) {
 	require.NoError(t, database.Reader().QueryRowContext(t.Context(),
 		`SELECT machine FROM local_session_source_baselines WHERE session_id = ?`, owner).Scan(&baselineMachine))
 	assert.Equal(t, identity, baselineMachine)
-	alias, err := database.GetSyncState("machine_alias:" + owner)
+	alias, err := database.GetSyncState(t.Context(), "machine_alias:"+owner)
 	require.NoError(t, err)
 	assert.Equal(t, identity, alias)
-	oldAuthority, err := database.GetSyncState("artifact_local_machine_name")
+	oldAuthority, err := database.GetSyncState(t.Context(), "artifact_local_machine_name")
 	require.NoError(t, err)
 	assert.Empty(t, oldAuthority)
 
 	// A peer using the retired hostname is not newly claimed on later starts.
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(t, database.UpsertSession(t.Context(), Session{
 		ID: "later-peer", Machine: owner, Project: "project", Agent: "claude",
 	}))
 	_, err = database.EnsureInstallationIdentity(t.Context(), identity)
@@ -88,7 +88,7 @@ func TestInstallationAdoptionMovesOwnedArchiveState(t *testing.T) {
 func TestInstallationAdoptionLeavesUnownedHistoryInPlace(t *testing.T) {
 	const identity = "0123456789abcdef0123456789abcdef"
 	database := testDB(t)
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(t, database.UpsertSession(t.Context(), Session{
 		ID: "history", Machine: "oldhost.example", Project: "project", Agent: "claude",
 	}))
 	unowned, err := database.EnsureInstallationIdentity(t.Context(), identity)
@@ -117,14 +117,14 @@ func TestInstallationAdoptionRollsBackConflictingRules(t *testing.T) {
 		})
 		require.NoError(t, err)
 	}
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(t, database.UpsertSession(t.Context(), Session{
 		ID: "history", Machine: "oldhost.example", Project: "project", Agent: "claude",
 	}))
 	require.ErrorContains(t, database.AdoptMachineIdentity(t.Context(), identity, []string{"oldhost.example"}), "conflicting worktree")
 	session, err := database.GetSession(t.Context(), "history")
 	require.NoError(t, err)
 	assert.Equal(t, "oldhost.example", session.Machine)
-	marker, err := database.GetSyncState("artifact_local_installation_id")
+	marker, err := database.GetSyncState(t.Context(), "artifact_local_installation_id")
 	require.NoError(t, err)
 	assert.Empty(t, marker)
 }
@@ -134,7 +134,7 @@ func TestInstallationResetDoesNotClaimPreviousIdentity(t *testing.T) {
 	const first = "ffffffffffffffffffffffffffffffff"
 	const second = "00000000000000000000000000000001"
 	const former = "alpha.example"
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(t, database.UpsertSession(t.Context(), Session{
 		ID: "before-reset", Machine: former, Project: "project", Agent: "claude",
 	}))
 	require.NoError(t, database.AdoptMachineIdentity(t.Context(), first, []string{former}))
@@ -162,7 +162,7 @@ func TestInstallationAdoptionKeepsNewestRootObservation(t *testing.T) {
 				if machine == newestMachine {
 					observed = observed.Add(time.Nanosecond)
 				}
-				require.NoError(t, database.UpsertSessionWithProjectIdentity(Session{
+				require.NoError(t, database.UpsertSessionWithProjectIdentity(t.Context(), Session{
 					ID: machine, Machine: machine, Project: "project", Agent: "claude",
 				}, export.ProjectIdentityObservation{
 					SessionID: machine, Machine: machine, Project: "project", RootPath: "/workspace/project",

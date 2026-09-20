@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -24,10 +25,10 @@ const hasActiveSessionSourceBelowQuery = `
 // remains on the writable SQLite DB rather than the server Store contract:
 // filesystem events and their source-path reconciliation are local-only state,
 // so PostgreSQL/Cockroach read backends cannot observe or service the query.
-func (db *DB) HasActiveSessionSourceBelow(agent, path string) (bool, error) {
+func (db *DB) HasActiveSessionSourceBelow(ctx context.Context, agent, path string) (bool, error) {
 	lower, upper := activeSessionSourceBounds(path)
 	var one int
-	err := db.getReader().QueryRow(
+	err := db.getReader().QueryRow(ctx,
 		hasActiveSessionSourceBelowQuery, agent, lower, upper,
 	).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {

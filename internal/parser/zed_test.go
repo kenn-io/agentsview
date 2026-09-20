@@ -73,66 +73,66 @@ func TestParseZedSessions_JSON(t *testing.T) {
 
 	results, err := parseZedAll(dbPath, "local")
 	if err != nil {
-		t.Fatalf("ParseZedSessions: %v", err)
+		require.FailNowf(t, "test failed", "ParseZedSessions: %v", err)
 	}
 	if len(results) != 1 {
-		t.Fatalf("len(results) = %d, want 1", len(results))
+		require.FailNowf(t, "test failed", "len(results) = %d, want 1", len(results))
 	}
 
 	sess := results[0].Session
 	if sess.ID != "zed:10431c84-c47b-4e6c-b2df-f9f3b9ad025b" {
-		t.Fatalf("session ID = %q", sess.ID)
+		require.FailNowf(t, "test failed", "session ID = %q", sess.ID)
 	}
 	if sess.Project != "my_app" || sess.Cwd != "/Users/alice/code/my-app" {
-		t.Fatalf("project/cwd = %q/%q", sess.Project, sess.Cwd)
+		require.FailNowf(t, "test failed", "project/cwd = %q/%q", sess.Project, sess.Cwd)
 	}
 	if sess.FirstMessage != "Generate code" || sess.MessageCount != 2 || sess.UserMessageCount != 1 {
-		t.Fatalf("session summary = %+v", sess)
+		require.FailNowf(t, "test failed", "session summary = %+v", sess)
 	}
 	if sess.File.Path != ZedSQLiteVirtualPath(dbPath, "10431c84-c47b-4e6c-b2df-f9f3b9ad025b") {
-		t.Fatalf("file path = %q", sess.File.Path)
+		require.FailNowf(t, "test failed", "file path = %q", sess.File.Path)
 	}
 	if sess.TotalOutputTokens != 500 || sess.PeakContextTokens != 1500 {
-		t.Fatalf("tokens: total_out=%d (want 500), peak_ctx=%d (want 1500)", sess.TotalOutputTokens, sess.PeakContextTokens)
+		require.FailNowf(t, "test failed", "tokens: total_out=%d (want 500), peak_ctx=%d (want 1500)", sess.TotalOutputTokens, sess.PeakContextTokens)
 	}
 	if !sess.HasTotalOutputTokens || !sess.HasPeakContextTokens {
-		t.Fatalf("token presence flags not set: has_total=%v, has_peak=%v", sess.HasTotalOutputTokens, sess.HasPeakContextTokens)
+		require.FailNowf(t, "test failed", "token presence flags not set: has_total=%v, has_peak=%v", sess.HasTotalOutputTokens, sess.HasPeakContextTokens)
 	}
 
 	msgs := results[0].Messages
 	if msgs[0].Role != RoleUser || msgs[0].Content != "Generate code" {
-		t.Fatalf("user msg = %+v", msgs[0])
+		require.FailNowf(t, "test failed", "user msg = %+v", msgs[0])
 	}
 	if msgs[1].Role != RoleAssistant || msgs[1].Content != "Done" || !msgs[1].HasThinking || !msgs[1].HasToolUse {
-		t.Fatalf("assistant msg = %+v", msgs[1])
+		require.FailNowf(t, "test failed", "assistant msg = %+v", msgs[1])
 	}
 	if msgs[1].Model != "claude-opus-4" {
-		t.Fatalf("assistant model = %q, want %q", msgs[1].Model, "claude-opus-4")
+		require.FailNowf(t, "test failed", "assistant model = %q, want %q", msgs[1].Model, "claude-opus-4")
 	}
 	if len(msgs[1].ToolCalls) != 1 || msgs[1].ToolCalls[0].ToolName != "terminal" {
-		t.Fatalf("tool calls = %+v", msgs[1].ToolCalls)
+		require.FailNowf(t, "test failed", "tool calls = %+v", msgs[1].ToolCalls)
 	}
 	if len(msgs[1].ToolResults) != 1 || msgs[1].ToolResults[0].ToolUseID != "call_1" {
-		t.Fatalf("tool results = %+v", msgs[1].ToolResults)
+		require.FailNowf(t, "test failed", "tool results = %+v", msgs[1].ToolResults)
 	}
 	tr := msgs[1].ToolResults[0]
 	if got := DecodeContent(tr.ContentRaw); got != "ok" {
-		t.Fatalf("tool result ContentRaw decoded = %q, want %q (raw=%s)", got, "ok", tr.ContentRaw)
+		require.FailNowf(t, "test failed", "tool result ContentRaw decoded = %q, want %q (raw=%s)", got, "ok", tr.ContentRaw)
 	}
 
 	ue := results[0].UsageEvents
 	if len(ue) != 1 {
-		t.Fatalf("UsageEvents len = %d, want 1", len(ue))
+		require.FailNowf(t, "test failed", "UsageEvents len = %d, want 1", len(ue))
 	}
 	if ue[0].Model != "claude-opus-4" {
-		t.Fatalf("usage event model = %q, want %q", ue[0].Model, "claude-opus-4")
+		require.FailNowf(t, "test failed", "usage event model = %q, want %q", ue[0].Model, "claude-opus-4")
 	}
 	// input: 1000+1500=2500; output: 200+300=500
 	if ue[0].InputTokens != 2500 || ue[0].OutputTokens != 500 {
-		t.Fatalf("usage event tokens: in=%d (want 2500), out=%d (want 500)", ue[0].InputTokens, ue[0].OutputTokens)
+		require.FailNowf(t, "test failed", "usage event tokens: in=%d (want 2500), out=%d (want 500)", ue[0].InputTokens, ue[0].OutputTokens)
 	}
 	if ue[0].DedupKey != "session:zed:10431c84-c47b-4e6c-b2df-f9f3b9ad025b" {
-		t.Fatalf("usage event dedup key = %q", ue[0].DedupKey)
+		require.FailNowf(t, "test failed", "usage event dedup key = %q", ue[0].DedupKey)
 	}
 }
 
@@ -189,19 +189,19 @@ func TestExtractZedDocMeta(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := extractZedDocMeta(tc.doc)
 			if got.model != tc.wantModel {
-				t.Errorf("model = %q, want %q", got.model, tc.wantModel)
+				assert.Failf(t, "test failed", "model = %q, want %q", got.model, tc.wantModel)
 			}
 			if got.totalInputTokens != tc.wantTotalIn {
-				t.Errorf("totalInputTokens = %d, want %d", got.totalInputTokens, tc.wantTotalIn)
+				assert.Failf(t, "test failed", "totalInputTokens = %d, want %d", got.totalInputTokens, tc.wantTotalIn)
 			}
 			if got.totalOutputTokens != tc.wantTotalOut {
-				t.Errorf("totalOutputTokens = %d, want %d", got.totalOutputTokens, tc.wantTotalOut)
+				assert.Failf(t, "test failed", "totalOutputTokens = %d, want %d", got.totalOutputTokens, tc.wantTotalOut)
 			}
 			if got.peakContextTokens != tc.wantPeakCtx {
-				t.Errorf("peakContextTokens = %d, want %d", got.peakContextTokens, tc.wantPeakCtx)
+				assert.Failf(t, "test failed", "peakContextTokens = %d, want %d", got.peakContextTokens, tc.wantPeakCtx)
 			}
 			if got.hasTokenUsage != tc.wantHasUsage {
-				t.Errorf("hasTokenUsage = %v, want %v", got.hasTokenUsage, tc.wantHasUsage)
+				assert.Failf(t, "test failed", "hasTokenUsage = %v, want %v", got.hasTokenUsage, tc.wantHasUsage)
 			}
 		})
 	}
@@ -210,7 +210,7 @@ func TestExtractZedDocMeta(t *testing.T) {
 func TestParseZedSessions_ZstdAndFiltersChildren(t *testing.T) {
 	encoder, err := zstd.NewWriter(nil)
 	if err != nil {
-		t.Fatal(err)
+		require.FailNow(t, fmt.Sprint(err))
 	}
 	compressed := encoder.EncodeAll([]byte(`{
 		"messages": [{"User": {"content": [{"Text": "Hello"}]}}]
@@ -237,13 +237,13 @@ func TestParseZedSessions_ZstdAndFiltersChildren(t *testing.T) {
 
 	results, err := parseZedAll(dbPath, "local")
 	if err != nil {
-		t.Fatalf("ParseZedSessions: %v", err)
+		require.FailNowf(t, "test failed", "ParseZedSessions: %v", err)
 	}
 	if len(results) != 1 || results[0].Session.ID != "zed:parent" {
-		t.Fatalf("results = %+v", results)
+		require.FailNowf(t, "test failed", "results = %+v", results)
 	}
 	if results[0].Messages[0].Content != "Hello" {
-		t.Fatalf("message = %+v", results[0].Messages[0])
+		require.FailNowf(t, "test failed", "message = %+v", results[0].Messages[0])
 	}
 }
 
@@ -254,9 +254,9 @@ func TestParseZedSessions_LegacyFiveColumnSchema(t *testing.T) {
 	defer db.Close()
 	artifact, err := os.ReadFile(filepath.Join("testdata", "zed-legacy-threads.sql"))
 	require.NoError(t, err)
-	_, err = db.Exec(string(artifact))
+	_, err = db.ExecContext(t.Context(), string(artifact))
 	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO threads (id, summary, updated_at, data_type, data) VALUES (?, ?, ?, ?, ?)`,
+	_, err = db.ExecContext(t.Context(), `INSERT INTO threads (id, summary, updated_at, data_type, data) VALUES (?, ?, ?, ?, ?)`,
 		"legacy", "Legacy thread", "2026-06-08T09:14:10Z", "json", []byte(`{"messages":[{"User":{"content":[{"Text":"hello"}]}}]}`))
 	require.NoError(t, err)
 
@@ -266,8 +266,8 @@ func TestParseZedSessions_LegacyFiveColumnSchema(t *testing.T) {
 	sess := results[0].Session
 	assert.Equal(t, "zed:legacy", sess.ID)
 	assert.Equal(t, "Legacy thread", sess.SessionName)
-	assert.Equal(t, "", sess.ParentSessionID)
-	assert.Equal(t, "", sess.Cwd)
+	assert.Empty(t, sess.ParentSessionID)
+	assert.Empty(t, sess.Cwd)
 	assert.Equal(t, "unknown", sess.Project)
 	assert.Equal(t, "2026-06-08T09:14:10Z", sess.StartedAt.Format(time.RFC3339))
 }
@@ -276,9 +276,9 @@ func TestZedLegacyCompatibilityRequiresCoreColumns(t *testing.T) {
 	dbPath := createZedThreadsDB(t, nil)
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = db.Exec(`ALTER TABLE threads RENAME TO old_threads`)
+	_, err = db.ExecContext(t.Context(), `ALTER TABLE threads RENAME TO old_threads`)
 	require.NoError(t, err)
-	_, err = db.Exec(`CREATE TABLE threads (id TEXT, summary TEXT, updated_at TEXT, data_type TEXT)`)
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE threads (id TEXT, summary TEXT, updated_at TEXT, data_type TEXT)`)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 	_, err = parseZedAll(dbPath, "local")
@@ -294,10 +294,10 @@ func TestParseZedSessions_SkipsUnsupportedDataType(t *testing.T) {
 	}})
 	results, err := parseZedAll(dbPath, "local")
 	if err != nil {
-		t.Fatalf("ParseZedSessions: %v", err)
+		require.FailNowf(t, "test failed", "ParseZedSessions: %v", err)
 	}
 	if len(results) != 0 {
-		t.Fatalf("len(results) = %d, want 0", len(results))
+		require.FailNowf(t, "test failed", "len(results) = %d, want 0", len(results))
 	}
 }
 
@@ -306,10 +306,10 @@ func TestParseZedVirtualPath(t *testing.T) {
 	virtual := ZedSQLiteVirtualPath(dbPath, "sess-1")
 	gotDB, gotID, ok := parseZedVirtualPath(virtual)
 	if !ok || gotDB != dbPath || gotID != "sess-1" {
-		t.Fatalf("parseZedVirtualPath = (%q, %q, %v)", gotDB, gotID, ok)
+		require.FailNowf(t, "test failed", "parseZedVirtualPath = (%q, %q, %v)", gotDB, gotID, ok)
 	}
 	if _, _, ok := parseZedVirtualPath("/tmp/not-db#sess-1"); ok {
-		t.Fatal("parseZedVirtualPath accepted non-threads DB")
+		require.FailNow(t, "parseZedVirtualPath accepted non-threads DB")
 	}
 }
 
@@ -336,12 +336,14 @@ func createZedThreadsDBAt(
 	dbPath string,
 	threads []zedTestThread,
 ) {
+	t.Helper()
+
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
-		t.Fatal(err)
+		require.FailNow(t, fmt.Sprint(err))
 	}
 	defer db.Close()
-	_, err = db.Exec(`CREATE TABLE threads (
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE threads (
 		id TEXT PRIMARY KEY,
 		summary TEXT NOT NULL,
 		updated_at TEXT NOT NULL,
@@ -353,10 +355,10 @@ func createZedThreadsDBAt(
 		created_at TEXT
 	)`)
 	if err != nil {
-		t.Fatal(err)
+		require.FailNow(t, fmt.Sprint(err))
 	}
 	for _, thread := range threads {
-		_, err = db.Exec(`INSERT INTO threads (
+		_, err = db.ExecContext(t.Context(), `INSERT INTO threads (
 			id, summary, updated_at, data_type, data,
 			parent_id, folder_paths, created_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -370,7 +372,7 @@ func createZedThreadsDBAt(
 			thread.createdAt,
 		)
 		if err != nil {
-			t.Fatal(err)
+			require.FailNow(t, fmt.Sprint(err))
 		}
 	}
 }

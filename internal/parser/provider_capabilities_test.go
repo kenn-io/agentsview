@@ -59,9 +59,11 @@ func TestProviderCapabilitiesActivityHintsMatchConsumers(t *testing.T) {
 	for _, factory := range ProviderFactories() {
 		agent := factory.Definition().Type
 		got := factory.Capabilities().Source.ActivityHints
-		// TraeX writes the same history.jsonl at the same position relative
-		// to its sessions root, so it inherits the Codex hint reader.
-		if agent == AgentCodex || agent == AgentTraeX {
+		// TraeX and Augure Code inherit the Codex hint reader through the
+		// shared provider. A fork that writes no history.jsonl (none has been
+		// observed for Augure) simply yields no hints; the capability claim
+		// itself must stay consistent with the shared factory.
+		if agent == AgentCodex || agent == AgentTraeX || agent == AgentAugureCode {
 			assert.Equal(t, CapabilitySupported, got)
 			provider := factory.NewProvider(ProviderConfig{
 				Roots: []string{t.TempDir()},
@@ -272,9 +274,9 @@ func TestProviderCapabilitiesRequireWatchRootPlanner(t *testing.T) {
 		plan: WatchPlan{Roots: []WatchRoot{{Path: "/fallback"}}},
 	}
 
-	_, err := ResolveWatchRoots(context.Background(), provider)
+	_, err := ResolveWatchRoots(t.Context(), provider)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrUnsupportedProviderFeature)
+	require.ErrorIs(t, err, ErrUnsupportedProviderFeature)
 	assert.Zero(t, provider.watchPlanCalls,
 		"a false capability advertisement must not silently take the legacy path")
 }
@@ -291,7 +293,7 @@ func TestProviderCapabilitiesFallbackWatchPlanRetainsOnlyRootMetadata(t *testing
 		}}},
 	}
 
-	roots, err := ResolveWatchRoots(context.Background(), provider)
+	roots, err := ResolveWatchRoots(t.Context(), provider)
 	require.NoError(t, err)
 	assert.Equal(t, []WatchRoot{{
 		Path:        "/sessions",
@@ -315,7 +317,7 @@ func TestProviderCapabilitiesSourceSetAdapterImplementsWatchRootPlanner(t *testi
 	assert.Equal(t, CapabilitySupported, provider.Capabilities().Source.WatchRoots)
 	planner, ok := provider.(WatchRootPlanner)
 	require.True(t, ok)
-	roots, err := planner.WatchRoots(context.Background())
+	roots, err := planner.WatchRoots(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, []WatchRoot{{
 		Path:        root,
@@ -337,7 +339,8 @@ type streamingWithoutExactFactory struct{ testProviderFactory }
 
 func (factory streamingWithoutExactFactory) NewProvider(cfg ProviderConfig) Provider {
 	return &streamingWithoutExactProvider{
-		Def: factory.def, Caps: factory.caps, Config: cfg.Clone()}
+		Def: factory.def, Caps: factory.caps, Config: cfg.Clone(),
+	}
 }
 
 type streamingWithoutExactProvider struct{ testProvider }

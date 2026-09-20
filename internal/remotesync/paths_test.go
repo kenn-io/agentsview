@@ -106,27 +106,33 @@ func TestPathWithinForbiddenRootsWindowsStyleFixtures(t *testing.T) {
 	tests := []forbiddenRootCase{
 		{
 			"unc_root_matches_child",
-			[]string{`\\server\share\Secret`}, `\\server\share\Secret\file.txt`, true,
+			[]string{`\\server\share\Secret`},
+			`\\server\share\Secret\file.txt`, true,
 		},
 		{
 			"unc_root_matches_itself",
-			[]string{`\\server\share\Secret`}, `\\server\share\Secret`, true,
+			[]string{`\\server\share\Secret`},
+			`\\server\share\Secret`, true,
 		},
 		{
 			"unc_prefix_not_boundary",
-			[]string{`\\server\share\Secret`}, `\\server\share\Secret2\file.txt`, false,
+			[]string{`\\server\share\Secret`},
+			`\\server\share\Secret2\file.txt`, false,
 		},
 		{
 			"drive_letter_root_matches_child",
-			[]string{`C:\Users\foo\Secret`}, `C:\Users\foo\Secret\file.txt`, true,
+			[]string{`C:\Users\foo\Secret`},
+			`C:\Users\foo\Secret\file.txt`, true,
 		},
 		{
 			"drive_letter_mismatch_different_volume_rejected",
-			[]string{`C:\Users\foo\Secret`}, `D:\Users\foo\Secret\file.txt`, false,
+			[]string{`C:\Users\foo\Secret`},
+			`D:\Users\foo\Secret\file.txt`, false,
 		},
 		{
 			"drive_letter_relative_traversal_resolves_to_sibling",
-			[]string{`C:\a\b`}, `C:\a\b\..\c`, false,
+			[]string{`C:\a\b`},
+			`C:\a\b\..\c`, false,
 		},
 	}
 	for _, tc := range tests {

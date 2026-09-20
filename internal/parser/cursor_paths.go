@@ -462,6 +462,7 @@ func cursorTokenPrefixMatch(tokens, candidate []string) bool {
 func cursorEncodedTokens(s string) []string {
 	return strings.FieldsFunc(s, func(r rune) bool { return r == '-' })
 }
+
 func cursorComponentTokens(s string) []string {
 	return strings.FieldsFunc(s, func(r rune) bool { return r == '-' || r == '.' || r == '_' })
 }

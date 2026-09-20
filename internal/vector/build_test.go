@@ -3,7 +3,6 @@ package vector
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -67,7 +66,7 @@ func (s failingRefreshSource) ScanEmbeddableUnits(
 
 func TestBuildFirstBuildEmbedsAllAndActivates(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 
@@ -85,7 +84,7 @@ func TestBuildFirstBuildEmbedsAllAndActivates(t *testing.T) {
 
 func TestBuildSecondBuildNoChangesFillsZero(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 
@@ -100,7 +99,7 @@ func TestBuildSecondBuildNoChangesFillsZero(t *testing.T) {
 
 func TestBuildFailureDoesNotAdvanceCompletedCorpusRevision(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen := fakeGeneration("fake-model")
 	src := twoDocSource()
 
@@ -124,7 +123,7 @@ func TestBuildFailureDoesNotAdvanceCompletedCorpusRevision(t *testing.T) {
 
 func TestFailedFullRebuildClearsCompletedCorpusRevision(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen := fakeGeneration("fake-model")
 	src := twoDocSource()
 
@@ -158,7 +157,7 @@ func TestFailedFullRebuildClearsCompletedCorpusRevision(t *testing.T) {
 
 func TestFailedFullRefreshClearsCompletedCorpusRevision(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen := fakeGeneration("fake-model")
 
 	_, err := ix.Build(ctx, twoDocSource(), fakeBuildEncoder(), gen,
@@ -173,7 +172,7 @@ func TestFailedFullRefreshClearsCompletedCorpusRevision(t *testing.T) {
 		CorpusRevision: "revision-1",
 	})
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "source scan failed")
+	require.ErrorContains(t, err, "source scan failed")
 
 	row, ok := readMirrorRow(t, ix, DocKey("user", "s1", "u1", 0, 1))
 	require.True(t, ok)
@@ -196,7 +195,7 @@ func TestFailedFullRefreshClearsCompletedCorpusRevision(t *testing.T) {
 }
 
 func TestBuildCorpusFingerprintChangeForcesFullReconciliation(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	ix, err := OpenSpec(
 		ctx,
 		filepath.Join(t.TempDir(), "vectors.db"),
@@ -233,7 +232,7 @@ func TestBuildCorpusFingerprintChangeForcesFullReconciliation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.Refresh.Upserted)
 	assert.Equal(t, 1, result.Refresh.Deleted)
-	rows, err := ix.db.Query(`SELECT doc_key FROM vector_recall_entries ORDER BY doc_key`)
+	rows, err := ix.db.QueryContext(ctx, `SELECT doc_key FROM vector_recall_entries ORDER BY doc_key`)
 	require.NoError(t, err)
 	defer rows.Close()
 	var keys []string
@@ -248,7 +247,7 @@ func TestBuildCorpusFingerprintChangeForcesFullReconciliation(t *testing.T) {
 
 func TestBuildContentChangeReembedsExactlyOne(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 
@@ -270,7 +269,7 @@ func TestBuildContentChangeReembedsExactlyOne(t *testing.T) {
 
 func TestBuildModelChangeBuildsSecondGenerationAndRetiresOld(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 	gen1 := fakeGeneration("model-a")
 
@@ -303,7 +302,7 @@ func TestBuildModelChangeBuildsSecondGenerationAndRetiresOld(t *testing.T) {
 
 func TestBuildFullRebuildSameFingerprintReembedsEverything(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 
@@ -329,7 +328,7 @@ func TestBuildFullRebuildSameFingerprintReembedsEverything(t *testing.T) {
 // performing the requested rebuild.
 func TestBuildFullRebuildRetiredGenerationReembeds(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 	genA := fakeGeneration("model-a")
 	genB := fakeGeneration("model-b")
@@ -366,7 +365,7 @@ func TestBuildFullRebuildRetiredGenerationReembeds(t *testing.T) {
 // permanently miss the now-in-scope but chronologically older document.
 func TestBuildScopeChangeToIncludeAutomatedForcesFullRefreshAndEmbedsOlderDoc(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen := fakeGeneration("fake-model")
 
 	src := &fakeUnitSource{rows: []fakeUnit{
@@ -400,7 +399,7 @@ func TestBuildScopeChangeToIncludeAutomatedForcesFullRefreshAndEmbedsOlderDoc(t 
 // document's existing embedding.
 func TestBuildScopeChangeToExcludeAutomatedRemovesOutOfScopeMirrorRow(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen := fakeGeneration("fake-model")
 
 	src := &fakeUnitSource{rows: []fakeUnit{
@@ -442,7 +441,7 @@ func TestBuildScopeChangeToExcludeAutomatedRemovesOutOfScopeMirrorRow(t *testing
 // reconcile away now-out-of-scope automated rows a legacy mirror might carry.
 func TestBuildLegacyMirrorMissingScopeKeyForcesFullRefresh(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	gen := fakeGeneration("fake-model")
 
 	// Simulate the pre-scope-feature mirror state directly: a stamped
@@ -482,7 +481,7 @@ func TestBuildLegacyMirrorMissingScopeKeyForcesFullRefresh(t *testing.T) {
 // Missing column uses, or Total under-reports outstanding work.
 func TestCountPendingIncludesRevisionChangedDocs(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 
@@ -512,7 +511,7 @@ func TestCountPendingIncludesRevisionChangedDocs(t *testing.T) {
 // Done's unit, not count the document once.
 func TestCountPendingSumsChunksAcrossMultiChunkDocuments(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	longContent := strings.Repeat("word ", 2000) // far past the 4000-rune split threshold
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{
@@ -553,7 +552,7 @@ func TestBuildProgressReceivesFinalDoneEqualToTotalChunks(t *testing.T) {
 	t.Cleanup(func() { progressInterval = previous })
 
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 
@@ -583,7 +582,7 @@ func TestBuildProgressNeverExceedsTotalWithMultiChunkMessage(t *testing.T) {
 	t.Cleanup(func() { progressInterval = previous })
 
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	longContent := strings.Repeat("word ", 2000)
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{
@@ -615,7 +614,7 @@ func TestBuildProgressNeverExceedsTotalWithMultiChunkMessage(t *testing.T) {
 
 func TestBuildEncoderErrorAbortsAndRetryResumesWithoutReembedding(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{
 			unit:    userDoc("s1", "", 0, "one"),
@@ -634,7 +633,7 @@ func TestBuildEncoderErrorAbortsAndRetryResumesWithoutReembedding(t *testing.T) 
 
 	failOnBad := func(_ context.Context, texts []string) ([][]float32, error) {
 		if slices.Contains(texts, "bad") {
-			return nil, fmt.Errorf("encoder rejected input")
+			return nil, errors.New("encoder rejected input")
 		}
 		out := make([][]float32, len(texts))
 		for i := range texts {
@@ -647,7 +646,7 @@ func TestBuildEncoderErrorAbortsAndRetryResumesWithoutReembedding(t *testing.T) 
 	require.Error(t, err)
 
 	var stampCount int
-	require.NoError(t, ix.db.QueryRow(
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_stamps`,
 	).Scan(&stampCount))
 	assert.Equal(t, 1, stampCount, "only the document before the failing one was stamped")
@@ -660,7 +659,7 @@ func TestBuildEncoderErrorAbortsAndRetryResumesWithoutReembedding(t *testing.T) 
 
 func TestBuildRejectsInvalidEncoderOutput(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 	gen := fakeGeneration("invalid-output-model")
 	invalidEncoder := func(_ context.Context, texts []string) ([][]float32, error) {
@@ -693,7 +692,7 @@ func TestBuildRejectsInvalidEncoderOutput(t *testing.T) {
 // is stamped.
 func TestBuildSkipsPermanentlyRejectedDocumentAndContinues(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{
 			unit:    userDoc("s1", "", 0, "one"),
@@ -731,7 +730,7 @@ func TestBuildSkipsPermanentlyRejectedDocumentAndContinues(t *testing.T) {
 		"coverage is complete (every document stamped) once the poison doc is stamped-skipped")
 
 	var stampCount int
-	require.NoError(t, ix.db.QueryRow(
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_stamps`,
 	).Scan(&stampCount))
 	assert.Equal(t, 3, stampCount, "the skipped document is still stamped, just without vectors")
@@ -754,7 +753,7 @@ func TestBuildSkipsPermanentlyRejectedDocumentAndContinues(t *testing.T) {
 // auto-activating an empty generation.
 func TestBuildConfig404EncodeErrorAbortsAndLeavesDocumentsPending(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 
@@ -774,7 +773,7 @@ func TestBuildConfig404EncodeErrorAbortsAndLeavesDocumentsPending(t *testing.T) 
 	assert.Empty(t, active)
 
 	var stampCount int
-	require.NoError(t, ix.db.QueryRow(
+	require.NoError(t, ix.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message_vectors_stamps`,
 	).Scan(&stampCount))
 	assert.Equal(t, 0, stampCount, "failed route/config errors leave documents retryable")
@@ -787,7 +786,7 @@ func TestBuildConfig404EncodeErrorAbortsAndLeavesDocumentsPending(t *testing.T) 
 
 func TestBuildSchema400EncodeErrorAbortsAndLeavesDocumentsPending(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 	gen := fakeGeneration("fake-model")
 
@@ -811,7 +810,7 @@ func TestBuildSchema400EncodeErrorAbortsAndLeavesDocumentsPending(t *testing.T) 
 // permanently giving up on the document would lose it from the index.
 func TestBuild5xxEncodeErrorStillAbortsFill(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := &fakeUnitSource{rows: []fakeUnit{
 		{
 			unit:    userDoc("s1", "", 0, "one"),
@@ -858,7 +857,7 @@ func TestPermanentEncodeErrorRejectsTypedNilStatusError(t *testing.T) {
 // to the generation actually being built, not the abandoned one.
 func TestResolveBuildTargetRetiresOtherBuildingGeneration(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	genA := fakeGeneration("model-a")
 	fpA, err := ix.EnsureGeneration(ctx, genA, sqlitevec.StateBuilding)
@@ -898,7 +897,7 @@ func TestResolveBuildTargetRetiresOtherBuildingGeneration(t *testing.T) {
 // building.
 func TestBuildRetiresAbandonedBuildingGenerationEndToEnd(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 
 	genA := fakeGeneration("model-a")
@@ -944,7 +943,7 @@ func TestBuildRetiresAbandonedBuildingGenerationEndToEnd(t *testing.T) {
 // generation again.
 func TestBuildActiveFingerprintEarlyReturnRetiresAbandonedBuildingGeneration(t *testing.T) {
 	ix := openTestIndex(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	src := twoDocSource()
 	genA := fakeGeneration("model-a")
 

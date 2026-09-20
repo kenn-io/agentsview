@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -50,7 +49,7 @@ func daemonCommandTestDeps(t *testing.T) (*daemonCommandDeps, *bytes.Buffer) {
 	deps.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return nil, nil }
 	deps.isStarting = func(string) bool { return false }
 	deps.readStartupState = func(string) *startupState { return nil }
-	deps.startBackground = func(
+	deps.startBackground = func(ctx context.Context,
 		cfg config.Config, args []string, opts serveReplacementOptions,
 		policy backgroundLaunchPolicy,
 	) (backgroundLaunchResult, error) {
@@ -69,7 +68,7 @@ func daemonCommandTestDeps(t *testing.T) (*daemonCommandDeps, *bytes.Buffer) {
 	deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error { return nil }
 	deps.stopCaddy = func(io.Writer, daemon.RuntimeRecord) error { return nil }
 	deps.validateConfig = func(config.Config) error { return nil }
-	deps.checkDataVersion = func(string) error { return nil }
+	deps.checkDataVersion = func(context.Context, string) error { return nil }
 	deps.probeRecord = func(rec daemon.RuntimeRecord, _ string) (daemon.PingInfo, bool) {
 		return daemon.PingInfo{PID: rec.PID}, true
 	}
@@ -106,9 +105,9 @@ func testWritableRecord(pid int, path string) daemon.RuntimeRecord {
 		SourcePath: path,
 		StartedAt:  time.Unix(100, 0),
 		Metadata: map[string]string{
-			runtimeHost: "127.0.0.1", runtimePort: fmt.Sprint(8000 + pid),
-			runtimeAPIVersion:  fmt.Sprint(daemonAPIVersion),
-			runtimeDataVersion: fmt.Sprint(db.CurrentDataVersion()),
+			runtimeHost: "127.0.0.1", runtimePort: strconv.Itoa(8000 + pid),
+			runtimeAPIVersion:  strconv.Itoa(daemonAPIVersion),
+			runtimeDataVersion: strconv.Itoa(db.CurrentDataVersion()),
 		},
 	}
 }
@@ -159,7 +158,7 @@ func TestDaemonStartUsesConfigOnlyPolicyAndIsIdempotent(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
 	var gotArgs []string
 	var gotPolicy backgroundLaunchPolicy
-	deps.startBackground = func(
+	deps.startBackground = func(ctx context.Context,
 		cfg config.Config, args []string, _ serveReplacementOptions,
 		policy backgroundLaunchPolicy,
 	) (backgroundLaunchResult, error) {
@@ -184,7 +183,7 @@ func TestDaemonStartUsesConfigOnlyPolicyAndIsIdempotent(t *testing.T) {
 
 func TestDaemonStartStreamsProgressUntilReady(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.startBackground = func(
+	deps.startBackground = func(ctx context.Context,
 		_ config.Config, _ []string, _ serveReplacementOptions,
 		policy backgroundLaunchPolicy,
 	) (backgroundLaunchResult, error) {
@@ -219,8 +218,8 @@ func TestDaemonStartStreamsProgressUntilReady(t *testing.T) {
 
 func TestDaemonStartCancellationLeavesChildRunning(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	deps.startBackground = func(
+	ctx, cancel := context.WithCancel(t.Context())
+	deps.startBackground = func(ctx context.Context,
 		_ config.Config, _ []string, _ serveReplacementOptions,
 		policy backgroundLaunchPolicy,
 	) (backgroundLaunchResult, error) {
@@ -239,10 +238,10 @@ func TestDaemonStartCancellationLeavesChildRunning(t *testing.T) {
 	err := cmd.Execute()
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "pid 93")
-	assert.ErrorContains(t, err, "/data/serve.log")
-	assert.ErrorContains(t, err, "child continues running")
-	assert.ErrorContains(t, err, "agentsview daemon status")
+	require.ErrorContains(t, err, "pid 93")
+	require.ErrorContains(t, err, "/data/serve.log")
+	require.ErrorContains(t, err, "child continues running")
+	require.ErrorContains(t, err, "agentsview daemon status")
 	assert.Contains(t, out.String(), "Starting agentsview (pid 93)...")
 }
 
@@ -323,7 +322,7 @@ func TestDaemonStartUsesStartupStateFallbackWhileStarting(t *testing.T) {
 		}
 	}
 	starts := 0
-	deps.startBackground = func(
+	deps.startBackground = func(context.Context,
 		config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy,
 	) (backgroundLaunchResult, error) {
 		starts++
@@ -343,17 +342,17 @@ func TestDaemonStartPersistentStartupNeverLaunches(t *testing.T) {
 		return &startupState{PID: 77, StartedAt: time.Unix(100, 0), LogPath: "/tmp/serve.log", Phase: "sync"}
 	}
 	started := 0
-	deps.startBackground = func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+	deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
 		started++
 		return backgroundLaunchResult{}, nil
 	}
 
 	err := executeDaemonCommand(t, *deps, out, "start")
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "startup is still in progress")
-	assert.ErrorContains(t, err, "pid 77")
-	assert.ErrorContains(t, err, "/tmp/serve.log")
-	assert.ErrorContains(t, err, "verify")
+	require.ErrorContains(t, err, "startup is still in progress")
+	require.ErrorContains(t, err, "pid 77")
+	require.ErrorContains(t, err, "/tmp/serve.log")
+	require.ErrorContains(t, err, "verify")
 	assert.Equal(t, 0, started)
 }
 
@@ -364,15 +363,15 @@ func TestDaemonStartLateStartupLockDoesNotReportSuccess(t *testing.T) {
 	deps.readStartupState = func(string) *startupState {
 		return &startupState{PID: 78, LogPath: "/tmp/late-serve.log"}
 	}
-	deps.startBackground = func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+	deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
 		starting = true
 		return backgroundLaunchResult{}, nil
 	}
 
 	err := executeDaemonCommand(t, *deps, out, "start")
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "startup is still in progress")
-	assert.ErrorContains(t, err, "pid 78")
+	require.ErrorContains(t, err, "startup is still in progress")
+	require.ErrorContains(t, err, "pid 78")
 	assert.NotContains(t, out.String(), "pid 0")
 }
 
@@ -423,7 +422,7 @@ func TestDaemonStartLaunchContentionTerminalStates(t *testing.T) {
 			deps.acquireLaunchLockWithError = func(string) (daemonLaunchLock, bool, error) { return nil, false, nil }
 			deps.waitContendedLaunch = func(string) daemonLaunchObservation { return tt.observation }
 			deps.loadConfig = func() (config.Config, error) { loadCalls++; return config.Config{}, nil }
-			deps.startBackground = func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+			deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
 				startCalls++
 				return backgroundLaunchResult{}, nil
 			}
@@ -434,7 +433,7 @@ func TestDaemonStartLaunchContentionTerminalStates(t *testing.T) {
 				assert.Contains(t, out.String(), tt.wantOut)
 			} else {
 				require.Error(t, err)
-				assert.ErrorContains(t, err, tt.wantErr)
+				require.ErrorContains(t, err, tt.wantErr)
 			}
 			assert.Equal(t, 0, loadCalls, "contender must not read or write config")
 			assert.Equal(t, 0, startCalls, "contender must never start a second writer")
@@ -509,9 +508,9 @@ func TestDaemonStartContentionStartLockWithoutSnapshotUsesRecoveryError(t *testi
 
 	err := executeDaemonCommand(t, *deps, out, "start")
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "startup is still in progress")
-	assert.ErrorContains(t, err, "runtime publication may have failed")
-	assert.ErrorContains(t, err, startupStateFileName)
+	require.ErrorContains(t, err, "startup is still in progress")
+	require.ErrorContains(t, err, "runtime publication may have failed")
+	require.ErrorContains(t, err, startupStateFileName)
 	assert.NotContains(t, err.Error(), "launch is still in progress")
 }
 
@@ -533,15 +532,15 @@ func TestDaemonStartContentionHeldStartLockWinsOverPreexistingRecord(t *testing.
 		configLoads++
 		return config.Config{}, nil
 	}
-	deps.startBackground = func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+	deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
 		starts++
 		return backgroundLaunchResult{}, nil
 	}
 
 	err := executeDaemonCommand(t, *deps, out, "start")
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "startup is still in progress")
-	assert.ErrorContains(t, err, "pid 140")
+	require.ErrorContains(t, err, "startup is still in progress")
+	require.ErrorContains(t, err, "pid 140")
 	assert.NotContains(t, out.String(), "already running")
 	assert.Zero(t, configLoads)
 	assert.Zero(t, starts)
@@ -564,7 +563,7 @@ func TestDaemonStatusListsEveryWriterAndSurfacesInspectionErrors(t *testing.T) {
 	deps.statusRecords = func(string, string) ([]daemon.RuntimeRecord, error) { return nil, errors.New("store unavailable") }
 	err := executeDaemonCommand(t, *deps, out, "status")
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "store unavailable")
+	require.ErrorContains(t, err, "store unavailable")
 
 	deps.loadReadOnlyConfig = func() (config.Config, error) { return config.Config{}, errors.New("bad config") }
 	err = executeDaemonCommand(t, *deps, out, "status")
@@ -701,9 +700,9 @@ func TestDaemonStopPrevalidatesEveryWriterBeforeSignalling(t *testing.T) {
 
 	err := executeDaemonCommand(t, *deps, out, "stop")
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "pid 61")
-	assert.ErrorContains(t, err, "/runtime/61.json")
-	assert.ErrorContains(t, err, "verify")
+	require.ErrorContains(t, err, "pid 61")
+	require.ErrorContains(t, err, "/runtime/61.json")
+	require.ErrorContains(t, err, "verify")
 	assert.Equal(t, []int{61, 62}, prevalidated, "every target must be checked before stop can return")
 	assert.Empty(t, signalled)
 }
@@ -736,7 +735,7 @@ func TestDaemonStopStartingConfigFailureAndContentionSignalNobody(t *testing.T) 
 			deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error { signals++; return nil }
 			err := executeDaemonCommand(t, *deps, out, "stop")
 			require.Error(t, err)
-			assert.ErrorContains(t, err, tt.want)
+			require.ErrorContains(t, err, tt.want)
 			assert.Zero(t, signals)
 		})
 	}
@@ -783,13 +782,13 @@ func TestDaemonRestartValidatesBeforeStoppingAndUsesFreshConfig(t *testing.T) {
 		order = append(order, "config")
 		return config.Config{DataDir: dataDir, DBPath: "/fresh/sessions.db", NoSync: true}, nil
 	}
-	deps.checkDataVersion = func(path string) error {
+	deps.checkDataVersion = func(ctx context.Context, path string) error {
 		order = append(order, "data")
 		assert.Equal(t, "/fresh/sessions.db", path)
 		return nil
 	}
 	deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error { order = append(order, "stop"); return nil }
-	deps.startBackground = func(cfg config.Config, args []string, _ serveReplacementOptions, policy backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+	deps.startBackground = func(ctx context.Context, cfg config.Config, args []string, _ serveReplacementOptions, policy backgroundLaunchPolicy) (backgroundLaunchResult, error) {
 		order = append(order, "start")
 		assert.True(t, cfg.NoSync, "loader result reaches config-only lower layer, which clears runtime NoSync")
 		assert.Equal(t, []string{"serve"}, args)
@@ -808,7 +807,7 @@ func TestDaemonRestartStreamsProgressUntilReady(t *testing.T) {
 	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{testWritableRecord(91, "/runtime/91.json")}, nil
 	}
-	deps.startBackground = func(
+	deps.startBackground = func(ctx context.Context,
 		_ config.Config, _ []string, _ serveReplacementOptions,
 		policy backgroundLaunchPolicy,
 	) (backgroundLaunchResult, error) {
@@ -882,13 +881,13 @@ func TestDaemonRestartCancellationLeavesReplacementRunning(t *testing.T) {
 	deps.writableRecords = func(string, string) ([]daemon.RuntimeRecord, error) {
 		return []daemon.RuntimeRecord{testWritableRecord(91, "/runtime/91.json")}, nil
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	var stopped []int
 	deps.stopProcess = func(rec daemon.RuntimeRecord, _ time.Duration) error {
 		stopped = append(stopped, rec.PID)
 		return nil
 	}
-	deps.startBackground = func(
+	deps.startBackground = func(ctx context.Context,
 		_ config.Config, _ []string, _ serveReplacementOptions,
 		policy backgroundLaunchPolicy,
 	) (backgroundLaunchResult, error) {
@@ -907,10 +906,10 @@ func TestDaemonRestartCancellationLeavesReplacementRunning(t *testing.T) {
 	err := cmd.Execute()
 
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "pid 92")
-	assert.ErrorContains(t, err, "/data/serve.log")
-	assert.ErrorContains(t, err, "child continues running")
-	assert.ErrorContains(t, err, "agentsview daemon status")
+	require.ErrorContains(t, err, "pid 92")
+	require.ErrorContains(t, err, "/data/serve.log")
+	require.ErrorContains(t, err, "child continues running")
+	require.ErrorContains(t, err, "agentsview daemon status")
 	assert.Equal(t, []int{91}, stopped,
 		"cancellation must not stop the replacement child")
 	assert.Contains(t, out.String(), "Starting agentsview (pid 92)...")
@@ -967,7 +966,7 @@ func TestServeRestartDelegatesToCanonicalWriterOnlyRestart(t *testing.T) {
 		return nil
 	}
 	var gotPolicy backgroundLaunchPolicy
-	deps.startBackground = func(
+	deps.startBackground = func(ctx context.Context,
 		_ config.Config, args []string, _ serveReplacementOptions,
 		policy backgroundLaunchPolicy,
 	) (backgroundLaunchResult, error) {
@@ -1010,7 +1009,7 @@ func TestServeRestartRejectsServeFlagsAndArguments(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			deps, out := daemonCommandTestDeps(t)
 			starts := 0
-			deps.startBackground = func(
+			deps.startBackground = func(context.Context,
 				config.Config, []string, serveReplacementOptions,
 				backgroundLaunchPolicy,
 			) (backgroundLaunchResult, error) {
@@ -1032,7 +1031,7 @@ func TestDaemonRestartFailurePathsSignalNobody(t *testing.T) {
 		want  string
 	}{
 		{name: "data version", setup: func(d *daemonCommandDeps) {
-			d.checkDataVersion = func(string) error { return errors.New("data too new") }
+			d.checkDataVersion = func(context.Context, string) error { return errors.New("data too new") }
 		}, want: "data too new"},
 		{name: "persistent start", setup: func(d *daemonCommandDeps) {
 			d.isStarting = func(string) bool { return true }
@@ -1053,7 +1052,7 @@ func TestDaemonRestartFailurePathsSignalNobody(t *testing.T) {
 			deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error { signals++; return nil }
 			err := executeDaemonCommand(t, *deps, out, "restart")
 			require.Error(t, err)
-			assert.ErrorContains(t, err, tt.want)
+			require.ErrorContains(t, err, tt.want)
 			assert.Zero(t, signals)
 		})
 	}
@@ -1076,7 +1075,7 @@ func TestDaemonRestartUsesStartupStateFallbackWhileStarting(t *testing.T) {
 		stopped = rec
 		return nil
 	}
-	deps.startBackground = func(
+	deps.startBackground = func(ctx context.Context,
 		_ config.Config, args []string, _ serveReplacementOptions,
 		policy backgroundLaunchPolicy,
 	) (backgroundLaunchResult, error) {
@@ -1173,17 +1172,17 @@ func TestDaemonRestartInvalidServeConfigDoesNotStopOrStart(t *testing.T) {
 				return []daemon.RuntimeRecord{testWritableRecord(121, "/runtime/121.json")}, nil
 			}
 			dataChecks, signals, starts := 0, 0, 0
-			deps.checkDataVersion = func(string) error { dataChecks++; return nil }
+			deps.checkDataVersion = func(context.Context, string) error { dataChecks++; return nil }
 			deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error { signals++; return nil }
-			deps.startBackground = func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+			deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
 				starts++
 				return backgroundLaunchResult{}, nil
 			}
 
 			err := executeDaemonCommand(t, *deps, out, "restart")
 			require.Error(t, err)
-			assert.ErrorContains(t, err, "daemon restart: invalid config")
-			assert.ErrorContains(t, err, tt.wantErr)
+			require.ErrorContains(t, err, "daemon restart: invalid config")
+			require.ErrorContains(t, err, tt.wantErr)
 			assert.Zero(t, dataChecks)
 			assert.Zero(t, signals)
 			assert.Zero(t, starts)
@@ -1209,15 +1208,15 @@ func TestDaemonRestartChildFailureIncludesLogAndHeldLock(t *testing.T) {
 		order = append(order, "stop")
 		return nil
 	}
-	deps.startBackground = func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+	deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
 		assert.False(t, lock.unlocked, "restart must retain launch lock across stop/start gap")
 		order = append(order, "start")
 		return backgroundLaunchResult{LogPath: "/tmp/serve.log"}, errors.New("child exited")
 	}
 	err := executeDaemonCommand(t, *deps, out, "restart")
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "child exited")
-	assert.ErrorContains(t, err, "/tmp/serve.log")
+	require.ErrorContains(t, err, "child exited")
+	require.ErrorContains(t, err, "/tmp/serve.log")
 	assert.Equal(t, []string{"stop", "start"}, order)
 	assert.Equal(t, 1, lockAcquisitions)
 	assert.True(t, lock.unlocked)
@@ -1228,5 +1227,5 @@ func TestDaemonStartConfigFailureReturnsError(t *testing.T) {
 	deps.loadConfig = func() (config.Config, error) { return config.Config{}, errors.New("config invalid") }
 	err := executeDaemonCommand(t, *deps, out, "start")
 	require.Error(t, err)
-	assert.True(t, strings.Contains(err.Error(), "config invalid"))
+	assert.Contains(t, err.Error(), "config invalid")
 }

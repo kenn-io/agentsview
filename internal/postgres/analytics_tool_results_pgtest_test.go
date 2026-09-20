@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/duckdb"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestAnalyticsToolResultsAreNotUserPrompts(t *testing.T) {
@@ -21,11 +22,11 @@ func TestAnalyticsToolResultsAreNotUserPrompts(t *testing.T) {
 	local := testDB(t)
 	ctx := t.Context()
 	started := time.Now().UTC().Add(-time.Hour).Truncate(time.Hour).Format(time.RFC3339)
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 		ID: "tool-results", Project: "project", Machine: "local", Agent: "cortex",
 		StartedAt: &started, MessageCount: 6, UserMessageCount: 1,
 	}))
-	require.NoError(t, local.InsertMessages([]db.Message{
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
 		{SessionID: "tool-results", Ordinal: 0, Role: "user", Model: "model-a", SourceSubtype: "tool_result", Content: "failed", Timestamp: started},
 		{SessionID: "tool-results", Ordinal: 1, Role: "user", Content: "help", Timestamp: started},
 		{SessionID: "tool-results", Ordinal: 2, Role: "assistant", Model: "model-a", HasToolUse: true, Timestamp: started},
@@ -33,8 +34,8 @@ func TestAnalyticsToolResultsAreNotUserPrompts(t *testing.T) {
 		{SessionID: "tool-results", Ordinal: 4, Role: "assistant", Model: "model-a", HasToolUse: true, Timestamp: started},
 		{SessionID: "tool-results", Ordinal: 5, Role: "assistant", Model: "model-a", HasToolUse: true, Timestamp: started},
 	}))
-	require.NoError(t, local.UpdateSessionSignals("tool-results", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion, ShortPromptCount: 1}}))
-	ps, err := New(pgURL, "agentsview", local, "analytics-test-machine", true, SyncOptions{})
+	require.NoError(t, local.UpdateSessionSignals(t.Context(), "tool-results", db.SessionSignalUpdate{QualitySignals: db.QualitySignals{Version: db.CurrentQualitySignalVersion, ShortPromptCount: 1}}))
+	ps, err := New(pgURL, "agentsview", local, "analytics-test-machine", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	defer ps.Close()
 	require.NoError(t, ps.EnsureSchema(ctx))
@@ -44,9 +45,9 @@ func TestAnalyticsToolResultsAreNotUserPrompts(t *testing.T) {
 	require.NoError(t, err)
 	defer store.Close()
 	duckPath := filepath.Join(t.TempDir(), "analytics.duckdb")
-	_, err = duckdb.Push(ctx, duckPath, local, "analytics-test-machine", duckdb.SyncOptions{}, true, nil)
+	_, err = duckdb.Push(ctx, duckPath, local, "analytics-test-machine", storage.MirrorPushOptions{}, true, nil)
 	require.NoError(t, err)
-	duckStore, err := duckdb.NewStore(duckPath)
+	duckStore, err := duckdb.NewStore(t.Context(), duckPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, duckStore.Close()) })
 	for name, backend := range map[string]interface {

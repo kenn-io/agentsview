@@ -29,7 +29,7 @@ func TestHumaGetSessionStatsUsesServerGitHubToken(t *testing.T) {
 		sessions: spy,
 	}
 
-	_, err := srv.humaGetSessionStats(context.Background(), &sessionStatsInput{
+	_, err := srv.humaGetSessionStats(t.Context(), &sessionStatsInput{
 		IncludeGitHubOutcomes: true,
 	})
 

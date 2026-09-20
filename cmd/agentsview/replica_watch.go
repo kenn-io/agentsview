@@ -12,34 +12,27 @@ import (
 
 	"github.com/gofrs/flock"
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/storage"
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 	"go.kenn.io/kit/daemon"
 )
 
-// pgTarget is the subset of *postgres.Sync the pusher needs. It is an
-// interface so the pusher can be tested without a live database.
-type pgTarget interface {
-	EnsureSchema(ctx context.Context) error
-	PushWithOptions(
-		ctx context.Context, opts postgres.PushOptions,
-		onProgress func(postgres.PushProgress),
-	) (postgres.PushResult, error)
-	Close() error
-}
-
-// pgPusher runs a local sync then pushes to PostgreSQL, lazily
+// replicaPusher runs a local sync then pushes to a replica, lazily
 // connecting and reconnecting after errors so a transiently
 // unreachable database never crashes the daemon.
-type pgPusher struct {
-	localSync  func(context.Context) error
-	scopedSync func(
+type replicaPusher struct {
+	// label prefixes log lines, e.g. "pg watch".
+	label string
+	// displayName names the replica product in operator-facing warnings.
+	displayName string
+	localSync   func(context.Context) error
+	scopedSync  func(
 		context.Context, syncpkg.WatchBatch, *syncpkg.WatchRecoveryScope,
 		func() error,
 	) error
 	ensurePricing func(context.Context) error
-	connect       func() (pgTarget, error)
-	target        pgTarget
+	connect       func(context.Context) (storage.Pusher, error)
+	target        storage.Pusher
 	// vectorReconcileNeeded is true until a generation-wide vector
 	// reconciliation succeeds in this watch process, and again after
 	// any push error or a vector phase that skipped or deferred work.
@@ -47,24 +40,24 @@ type pgPusher struct {
 	// on the interval floor unnecessarily; while false, change pushes
 	// scope their vector reads to the changed relational sessions.
 	vectorReconcileNeeded bool
-	// lastReconciledVectorGeneration is the PG generation id of the last
-	// clean generation-wide reconciliation in this process. A scoped push
-	// carrying it lets the vector phase promote itself to generation-wide
-	// when the active generation id differs, so a re-embed or a
-	// reset/drop-and-recreate (by any machine) never leaves a generation
-	// partially populated.
+	// lastReconciledVectorGeneration is the replica generation id of the
+	// last clean generation-wide reconciliation in this process. A scoped
+	// push carrying it lets the vector phase promote itself to
+	// generation-wide when the active generation id differs, so a re-embed
+	// or a reset/drop-and-recreate (by any machine) never leaves a
+	// generation partially populated.
 	lastReconciledVectorGeneration int64
 }
 
-// push performs one local-sync-then-push cycle. On any PG error it
+// push performs one local-sync-then-push cycle. On any replica error it
 // drops the cached connection so the next call reconnects.
-func (p *pgPusher) push(
+func (p *replicaPusher) push(
 	ctx context.Context, reason pushReason, full bool,
 ) error {
 	return p.pushBatch(ctx, reason, full, nil, nil)
 }
 
-func (p *pgPusher) pushBatch(
+func (p *replicaPusher) pushBatch(
 	ctx context.Context,
 	reason pushReason,
 	full bool,
@@ -84,7 +77,7 @@ func (p *pgPusher) pushBatch(
 	return push()
 }
 
-func (p *pgPusher) pushAfterSync(
+func (p *replicaPusher) pushAfterSync(
 	ctx context.Context, reason pushReason, full bool,
 ) error {
 	if p.ensurePricing != nil {
@@ -99,7 +92,7 @@ func (p *pgPusher) pushAfterSync(
 		return err
 	}
 	if p.target == nil {
-		t, err := p.connect()
+		t, err := p.connect(ctx)
 		if err != nil {
 			return fmt.Errorf("connect: %w", err)
 		}
@@ -110,7 +103,7 @@ func (p *pgPusher) pushAfterSync(
 		return fmt.Errorf("ensure schema: %w", err)
 	}
 	scoped := scopedVectorPush(reason, full, p.vectorReconcileNeeded)
-	res, err := p.target.PushWithOptions(ctx, postgres.PushOptions{
+	res, err := p.target.PushWithOptions(ctx, storage.PushOptions{
 		Full:                           full,
 		ScopeVectorsToChangedSessions:  scoped,
 		LastReconciledVectorGeneration: p.lastReconciledVectorGeneration,
@@ -120,20 +113,19 @@ func (p *pgPusher) pushAfterSync(
 		p.reset()
 		return fmt.Errorf("push: %w", err)
 	}
-	p.vectorReconcileNeeded, p.lastReconciledVectorGeneration =
-		nextVectorReconcile(
-			p.vectorReconcileNeeded,
-			p.lastReconciledVectorGeneration, scoped, res,
-		)
+	p.vectorReconcileNeeded, p.lastReconciledVectorGeneration = nextVectorReconcile(
+		p.vectorReconcileNeeded,
+		p.lastReconciledVectorGeneration, scoped, res,
+	)
 	if res.Errors > 0 {
-		logPGWatchPushResult(res, reason)
+		logReplicaWatchPushResult(p.label, p.displayName, res, reason)
 		log.Printf(
-			"pg watch: %d session(s) failed to push; will retry",
-			res.Errors,
+			"%s: %d session(s) failed to push; will retry",
+			p.label, res.Errors,
 		)
 		return fmt.Errorf("%d session(s) failed to push", res.Errors)
 	}
-	logPGWatchPushResult(res, reason)
+	logReplicaWatchPushResult(p.label, p.displayName, res, reason)
 	return nil
 }
 
@@ -141,7 +133,7 @@ func (p *pgPusher) pushAfterSync(
 // to the changed relational sessions: only change-triggered, non-full
 // pushes after a clean generation-wide reconciliation qualify.
 // Startup, interval-floor, shutdown, and full pushes always reconcile
-// generation-wide, which also owns eviction of PG-only state rows and
+// generation-wide, which also owns eviction of replica-only state rows and
 // pickup of vector-only changes (e.g. an embeddings build finishing
 // with no relational change).
 func scopedVectorPush(
@@ -157,9 +149,9 @@ func scopedVectorPush(
 // generation id it reconciled; a clean scoped phase leaves both as they were.
 //
 // The phase ran generation-wide when the caller did not scope it, or when it
-// scoped but the active generation id differed from the last reconciled one —
-// pushVectors promotes that case, so the same predicate recovers it here
-// without a separate result flag. pushVectors also promotes when its machine
+// scoped but the active generation id differed from the last reconciled one:
+// the vector phase promotes that case, so the same predicate recovers it here
+// without a separate result flag. The phase also promotes when its machine
 // push record is missing (vector tables recreated onto a reused id); that
 // promotion is invisible here, and needs no recovery: the phase reconciled
 // the reused id generation-wide, so the unchanged memo describes it.
@@ -172,7 +164,7 @@ func scopedVectorPush(
 // resumes with the first response that carries one.
 func nextVectorReconcile(
 	current bool, lastGeneration int64,
-	scoped bool, res postgres.PushResult,
+	scoped bool, res storage.PushResult,
 ) (bool, int64) {
 	if res.Vectors.Skipped || res.Vectors.SessionsDeferred > 0 {
 		return true, lastGeneration
@@ -184,69 +176,72 @@ func nextVectorReconcile(
 	return current, lastGeneration
 }
 
-func logPGWatchPushResult(res postgres.PushResult, reason pushReason) {
+func logReplicaWatchPushResult(
+	label, displayName string, res storage.PushResult, reason pushReason,
+) {
 	if res.SkippedConflicts > 0 {
 		log.Printf(
-			"pg watch: pushed %d sessions, %d messages, skipped %d ownership conflict(s), %d errors (%s)",
-			res.SessionsPushed, res.MessagesPushed,
+			"%s: pushed %d sessions, %d messages, skipped %d ownership conflict(s), %d errors (%s)",
+			label, res.SessionsPushed, res.MessagesPushed,
 			res.SkippedConflicts, res.Errors, reason,
 		)
 		log.Printf(
-			"pg watch: %d session(s) skipped due to PostgreSQL ownership conflicts",
-			res.SkippedConflicts,
+			"%s: %d session(s) skipped due to %s ownership conflicts",
+			label, res.SkippedConflicts, displayName,
 		)
 		return
 	}
 	if res.Errors > 0 {
 		log.Printf(
-			"pg watch: pushed %d sessions, %d messages, %d errors (%s)",
-			res.SessionsPushed, res.MessagesPushed,
+			"%s: pushed %d sessions, %d messages, %d errors (%s)",
+			label, res.SessionsPushed, res.MessagesPushed,
 			res.Errors, reason,
 		)
 		return
 	}
 	log.Printf(
-		"pg watch: pushed %d sessions, %d messages (%s)",
-		res.SessionsPushed, res.MessagesPushed, reason,
+		"%s: pushed %d sessions, %d messages (%s)",
+		label, res.SessionsPushed, res.MessagesPushed, reason,
 	)
 }
 
-func (p *pgPusher) reset() {
+func (p *replicaPusher) reset() {
 	if p.target != nil {
 		_ = p.target.Close()
 		p.target = nil
 	}
 }
 
-// resolveWatchTargets validates PG config and resolves the project
+// resolveWatchTarget validates the replica config and resolves the project
 // filters for a watch run.
-func resolveWatchTargets(
+func resolveWatchTarget(
+	backend storage.Replica,
 	appCfg config.Config,
-	cfg PGPushConfig,
+	cfg ReplicaPushConfig,
 	targetName string,
 ) (
-	target pgTargetSelection,
+	target storage.ConfiguredReplica,
 	projects, exclude []string,
 	err error,
 ) {
-	targets, err := resolvePGTargetSelections(
-		appCfg, targetName, false,
-	)
+	refs, err := storage.SelectTargets(backend, appCfg, targetName, false)
 	if err != nil {
-		return pgTargetSelection{}, nil, nil, err
+		return storage.ConfiguredReplica{}, nil, nil, err
 	}
-	target = targets[0]
-	target, err = resolvePGTargetConfig(appCfg, target)
+	target, err = backend.ResolveTarget(appCfg, refs[0])
 	if err != nil {
-		return pgTargetSelection{}, nil, nil, err
+		return storage.ConfiguredReplica{}, nil, nil, err
 	}
-	if target.PG.URL == "" {
-		return pgTargetSelection{}, nil, nil,
-			fmt.Errorf("url not configured")
+	if target.Target.URL == "" {
+		return storage.ConfiguredReplica{}, nil, nil,
+			errors.New("url not configured")
 	}
-	projects, exclude, err = resolvePushProjects(target.PG, cfg)
+	if err := backend.ValidateTarget(target.Target); err != nil {
+		return storage.ConfiguredReplica{}, nil, nil, err
+	}
+	projects, exclude, err = resolvePushProjects(target, cfg)
 	if err != nil {
-		return pgTargetSelection{}, nil, nil, err
+		return storage.ConfiguredReplica{}, nil, nil, err
 	}
 	return target, projects, exclude, nil
 }
@@ -256,13 +251,15 @@ const (
 	defaultWatchInterval = 15 * time.Minute
 )
 
-// runPGPushWatch runs the long-lived auto-push daemon: an initial
+// runReplicaPushWatch runs the long-lived auto-push daemon: an initial
 // catch-up push, then pushes triggered by file changes (debounced)
 // and a periodic floor tick, until interrupted.
-func runPGPushWatch(
-	cfg PGPushConfig,
+func runReplicaPushWatch(
+	backend storage.Replica,
+	cfg ReplicaPushConfig,
 	targetName string,
 ) error {
+	name := backend.Name()
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -270,10 +267,10 @@ func runPGPushWatch(
 	if err := os.MkdirAll(appCfg.DataDir, 0o755); err != nil {
 		return fmt.Errorf("creating data dir: %w", err)
 	}
-	setupLogFileNamed(appCfg.DataDir, "pg-watch.log")
+	setupLogFileNamed(appCfg.DataDir, name+"-watch.log")
 
-	target, projects, exclude, err := resolveWatchTargets(
-		appCfg, cfg, targetName,
+	target, projects, exclude, err := resolveWatchTarget(
+		backend, appCfg, cfg, targetName,
 	)
 	if err != nil {
 		return err
@@ -291,7 +288,7 @@ func runPGPushWatch(
 	// Single-instance guard: only one watcher per data dir.
 	lockPath, err := (daemon.RuntimeStore{
 		Dir:    appCfg.DataDir,
-		Prefix: "pg-watch",
+		Prefix: name + "-watch",
 	}).LockPath()
 	if err != nil {
 		return err
@@ -306,7 +303,7 @@ func runPGPushWatch(
 	}
 	defer func() {
 		if rerr := lock.Unlock(); rerr != nil {
-			log.Printf("pg watch: releasing lock: %v", rerr)
+			log.Printf("%s watch: releasing lock: %v", name, rerr)
 		}
 	}()
 
@@ -316,17 +313,17 @@ func runPGPushWatch(
 	defer stop()
 
 	log.Printf(
-		"pg watch: starting (machine=%q debounce=%s interval=%s)",
-		target.PG.MachineName, debounce, interval,
+		"%s watch: starting (machine=%q debounce=%s interval=%s)",
+		name, target.Target.MachineName, debounce, interval,
 	)
 
-	backend, cleanup, err := resolveArchiveWriteBackend(ctx, appCfg)
+	writer, cleanup, err := resolveArchiveWriteBackend(ctx, appCfg)
 	if err != nil {
 		return fmt.Errorf("opening writer: %w", err)
 	}
 	defer cleanup()
-	if err := backend.PGPushWatch(
-		ctx, target, cfg, projects, exclude, debounce, interval,
+	if err := writer.ReplicaPushWatch(
+		ctx, backend, target, cfg, projects, exclude, debounce, interval,
 	); err != nil {
 		return err
 	}

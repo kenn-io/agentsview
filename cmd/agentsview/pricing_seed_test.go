@@ -38,8 +38,7 @@ func TestSeedFallbackPricing_UpgradesExistingDBWithSupplementals(t *testing.T) {
 
 	// Simulate a DB seeded by the pre-supplemental binary: meta holds
 	// the bare snapshot version and the alias rows are absent.
-	require.NoError(t,
-		database.SetPricingMeta("_fallback_version", pricing.FallbackVersion))
+	require.NoError(t, database.SetPricingMeta("_fallback_version", pricing.FallbackVersion))
 
 	require.NoError(t, pricingrefresh.SeedFallback(database))
 
@@ -96,9 +95,8 @@ func TestSeedFallbackPricing_DeletesStaleDateAliasRows(t *testing.T) {
 			CacheReadPerMTok: money.MustParseDollars("0.16"),
 		},
 	})
-	require.NoError(t,
-		database.SetPricingMeta("_fallback_version",
-			pricing.FallbackVersion+"+supplemental-1"))
+	require.NoError(t, database.SetPricingMeta("_fallback_version",
+		pricing.FallbackVersion+"+supplemental-1"))
 
 	require.NoError(t, pricingrefresh.SeedFallback(database))
 

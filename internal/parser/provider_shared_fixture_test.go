@@ -16,10 +16,18 @@ var sharedParserFixtureRoots = struct {
 }{}
 
 func TestMain(m *testing.M) {
+	var err error
+	sharedParserFixtureTempDir, err = os.MkdirTemp("", "agentsview-parser-fixtures-*")
+	if err != nil {
+		panic(err)
+	}
 	code := m.Run()
+	_ = os.RemoveAll(sharedParserFixtureTempDir)
 	cleanupSharedParserFixtureRoots()
 	os.Exit(code)
 }
+
+var sharedParserFixtureTempDir string
 
 func registerSharedParserFixtureRoot(path string) {
 	sharedParserFixtureRoots.Lock()
@@ -54,7 +62,8 @@ func zedProviderReadFixture(t *testing.T) sharedZedProviderFixture {
 	t.Helper()
 
 	sharedZedProviderReadFixture.Do(func() {
-		root, err := os.MkdirTemp("", "agentsview-zed-provider-fixture-*")
+		root := filepath.Join(sharedParserFixtureTempDir, "zed-provider-fixture")
+		err := os.MkdirAll(root, 0o700)
 		if err != nil {
 			sharedZedProviderReadFixture.err = err
 			return
@@ -121,7 +130,8 @@ func shelleyProviderReadFixture(t *testing.T) sharedShelleyProviderFixture {
 	t.Helper()
 
 	sharedShelleyProviderReadFixture.Do(func() {
-		root, err := os.MkdirTemp("", "agentsview-shelley-provider-fixture-*")
+		root := filepath.Join(sharedParserFixtureTempDir, "shelley-provider-fixture")
+		err := os.MkdirAll(root, 0o700)
 		if err != nil {
 			sharedShelleyProviderReadFixture.err = err
 			return
@@ -135,7 +145,7 @@ func shelleyProviderReadFixture(t *testing.T) sharedShelleyProviderFixture {
 			return
 		}
 		defer db.Close()
-		if _, err := db.Exec(shelleySchema); err != nil {
+		if _, err := db.ExecContext(t.Context(), shelleySchema); err != nil {
 			sharedShelleyProviderReadFixture.err = err
 			return
 		}
@@ -185,7 +195,8 @@ func openCodeSQLiteProviderReadFixture(
 	t.Helper()
 
 	sharedOpenCodeSQLiteProviderReadFixture.Do(func() {
-		root, err := os.MkdirTemp("", "agentsview-opencode-sqlite-provider-fixture-*")
+		root := filepath.Join(sharedParserFixtureTempDir, "opencode-sqlite-provider-fixture")
+		err := os.MkdirAll(root, 0o700)
 		if err != nil {
 			sharedOpenCodeSQLiteProviderReadFixture.err = err
 			return

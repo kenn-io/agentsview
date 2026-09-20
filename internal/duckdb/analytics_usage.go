@@ -829,6 +829,7 @@ func (s *Store) GetAnalyticsSummary(
 	if err != nil {
 		return db.AnalyticsSummary{}, fmt.Errorf("querying duckdb analytics summary: %w", err)
 	}
+	defer rows.Close()
 	resp := db.AnalyticsSummary{Agents: map[string]*db.AgentSummary{}}
 	if !rows.Next() {
 		rows.Close()
@@ -2691,10 +2692,10 @@ func (s *Store) duckSignalMessages(
 		return out, nil
 	}
 	placeholders := make([]string, len(rows))
-	args := make([]any, len(rows))
+	args := make([]any, 0, len(rows))
 	for i, r := range rows {
 		placeholders[i] = "?"
-		args[i] = r.ID
+		args = append(args, r.ID)
 	}
 	filterModels := duckAnalyticsCSVValues(f.Model)
 	q := `SELECT session_id, ordinal, role, content,
@@ -3553,7 +3554,7 @@ func duckUsageLocalDateSQL(f db.UsageFilter) (string, any) {
 			ref = t
 		}
 	}
-	_, offset := ref.In(time.Local).Zone()
+	_, offset := ref.In(time.Local).Zone() //nolint:forbidigo // Usage report dates follow the local timezone when no timezone is selected.
 	return "COALESCE(strftime(ts + (? * INTERVAL 1 SECOND), '%Y-%m-%d'), '')", offset
 }
 

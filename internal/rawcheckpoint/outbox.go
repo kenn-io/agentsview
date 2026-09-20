@@ -147,7 +147,7 @@ func OpenWithOptions(ctx context.Context, path string, options Options) (*Store,
 		options.MaxOutboxBytes = defaultMaxOutboxBytes
 	}
 	if options.MaxOutboxBytes < 0 {
-		return nil, fmt.Errorf("rawcheckpoint: maximum outbox bytes must be positive")
+		return nil, errors.New("rawcheckpoint: maximum outbox bytes must be positive")
 	}
 	if options.Now == nil {
 		options.Now = time.Now
@@ -331,7 +331,7 @@ func (s *Store) ReserveSourceCapture(
 	bytes int64,
 ) (Reservation, error) {
 	if source.Provider == "" || source.SourceKey == "" {
-		return Reservation{}, fmt.Errorf("rawcheckpoint: invalid source capture reservation")
+		return Reservation{}, errors.New("rawcheckpoint: invalid source capture reservation")
 	}
 	return s.reserveCapture(ctx, source, bytes)
 }
@@ -342,7 +342,7 @@ func (s *Store) reserveCapture(
 	bytes int64,
 ) (Reservation, error) {
 	if source.ConfiguredRootID == "" || bytes < 0 {
-		return Reservation{}, fmt.Errorf("rawcheckpoint: invalid capture reservation")
+		return Reservation{}, errors.New("rawcheckpoint: invalid capture reservation")
 	}
 	var reservation Reservation
 	full := false
@@ -354,7 +354,7 @@ func (s *Store) reserveCapture(
 			return fmt.Errorf("rawcheckpoint: reserve capture: read configured root: %w", err)
 		}
 		if source.Provider != "" && string(source.Provider) != provider {
-			return fmt.Errorf("rawcheckpoint: reserve capture: provider mismatch")
+			return errors.New("rawcheckpoint: reserve capture: provider mismatch")
 		}
 		source.Provider = parser.AgentType(provider)
 		usage, err := outboxUsageConn(ctx, conn)
@@ -367,7 +367,7 @@ func (s *Store) reserveCapture(
 		}
 		effectiveUsed := usage.UsedBytes - recyclable
 		if effectiveUsed < 0 {
-			return fmt.Errorf("rawcheckpoint: recyclable outbox capacity exceeds usage")
+			return errors.New("rawcheckpoint: recyclable outbox capacity exceeds usage")
 		}
 		if bytes > s.maxOutboxBytes-effectiveUsed-usage.ReservedBytes {
 			now := s.now().UTC()
@@ -515,7 +515,7 @@ func (s *Store) CompleteUnchangedCapture(
 ) error {
 	if reservationID == "" || source.Provider == "" ||
 		source.ConfiguredRootID == "" || source.SourceKey == "" {
-		return fmt.Errorf("rawcheckpoint: invalid unchanged capture")
+		return errors.New("rawcheckpoint: invalid unchanged capture")
 	}
 	return s.withImmediateWrite(ctx, "complete unchanged capture", func(conn *sql.Conn) error {
 		var reservationProvider, reservationRoot, reservationSourceKey string
@@ -567,7 +567,7 @@ func (s *Store) CompleteRootReconciliation(
 	configuredRootID string,
 ) error {
 	if configuredRootID == "" {
-		return fmt.Errorf("rawcheckpoint: invalid root reconciliation")
+		return errors.New("rawcheckpoint: invalid root reconciliation")
 	}
 	return s.withImmediateWrite(ctx, "complete root reconciliation", func(conn *sql.Conn) error {
 		var provider string
@@ -660,7 +660,7 @@ func (s *Store) CommitCapture(
 ) error {
 	s.objectMu.Lock()
 	defer s.objectMu.Unlock()
-	validated, metadataBytes, uniqueObjects, err := validateCapturedGeneration(s, generation)
+	validated, metadataBytes, uniqueObjects, err := validateCapturedGeneration(ctx, s, generation)
 	if err != nil {
 		return err
 	}
@@ -1135,28 +1135,35 @@ func loadAcknowledgedBase(
 	}
 	rows.Close()
 	for i, ordinal := range ordinals {
-		objectRows, err := queryer.QueryContext(ctx, `SELECT sha256, length
+		if err := func() error {
+			objectRows, err := queryer.QueryContext(ctx, `SELECT sha256, length
 			FROM raw_source_base_objects
 			WHERE provider = ? AND configured_root_id = ? AND source_key = ?
 			AND entry_ordinal = ? ORDER BY object_ordinal`, string(source.Provider),
-			source.ConfiguredRootID, source.SourceKey, ordinal)
-		if err != nil {
-			return nil, fmt.Errorf("rawcheckpoint: load acknowledged base objects: %w", err)
-		}
-		for objectRows.Next() {
-			var ref rawsync.ObjectRef
-			if err := objectRows.Scan(&ref.SHA256, &ref.Length); err != nil {
-				objectRows.Close()
-				return nil, fmt.Errorf("rawcheckpoint: load acknowledged base objects: %w", err)
+				source.ConfiguredRootID, source.SourceKey, ordinal)
+			if err != nil {
+				return fmt.Errorf("rawcheckpoint: load acknowledged base objects: %w", err)
 			}
-			entries[i].Objects = append(entries[i].Objects, ref)
-		}
-		if err := objectRows.Err(); err != nil {
-			objectRows.Close()
-			return nil, fmt.Errorf("rawcheckpoint: load acknowledged base objects: %w", err)
-		}
-		if err := objectRows.Close(); err != nil {
-			return nil, fmt.Errorf("rawcheckpoint: load acknowledged base objects: %w", err)
+			defer objectRows.Close()
+			for objectRows.Next() {
+				var ref rawsync.ObjectRef
+				if err := objectRows.Scan(&ref.SHA256, &ref.Length); err != nil {
+					objectRows.Close()
+					return fmt.Errorf("rawcheckpoint: load acknowledged base objects: %w", err)
+				}
+				entries[i].Objects = append(entries[i].Objects, ref)
+			}
+			if err := objectRows.Err(); err != nil {
+				objectRows.Close()
+				return fmt.Errorf("rawcheckpoint: load acknowledged base objects: %w", err)
+			}
+			if err := objectRows.Close(); err != nil {
+				return fmt.Errorf("rawcheckpoint: load acknowledged base objects: %w", err)
+			}
+
+			return nil
+		}(); err != nil {
+			return nil, err
 		}
 	}
 	return entries, nil
@@ -1246,26 +1253,33 @@ func loadGenerationEntries(
 		return nil, fmt.Errorf("rawcheckpoint: load generation entries: %w", err)
 	}
 	for i, ordinal := range ordinals {
-		objectRows, err := queryer.QueryContext(ctx, `SELECT sha256, length
+		if err := func() error {
+			objectRows, err := queryer.QueryContext(ctx, `SELECT sha256, length
 			FROM outbox_entry_objects WHERE capture_id = ? AND entry_ordinal = ?
 			ORDER BY object_ordinal`, captureID, ordinal)
-		if err != nil {
-			return nil, fmt.Errorf("rawcheckpoint: load generation objects: %w", err)
-		}
-		for objectRows.Next() {
-			var ref rawsync.ObjectRef
-			if err := objectRows.Scan(&ref.SHA256, &ref.Length); err != nil {
-				objectRows.Close()
-				return nil, fmt.Errorf("rawcheckpoint: load generation objects: %w", err)
+			if err != nil {
+				return fmt.Errorf("rawcheckpoint: load generation objects: %w", err)
 			}
-			entries[i].Objects = append(entries[i].Objects, ref)
-		}
-		if err := objectRows.Err(); err != nil {
-			objectRows.Close()
-			return nil, fmt.Errorf("rawcheckpoint: load generation objects: %w", err)
-		}
-		if err := objectRows.Close(); err != nil {
-			return nil, fmt.Errorf("rawcheckpoint: load generation objects: %w", err)
+			defer objectRows.Close()
+			for objectRows.Next() {
+				var ref rawsync.ObjectRef
+				if err := objectRows.Scan(&ref.SHA256, &ref.Length); err != nil {
+					objectRows.Close()
+					return fmt.Errorf("rawcheckpoint: load generation objects: %w", err)
+				}
+				entries[i].Objects = append(entries[i].Objects, ref)
+			}
+			if err := objectRows.Err(); err != nil {
+				objectRows.Close()
+				return fmt.Errorf("rawcheckpoint: load generation objects: %w", err)
+			}
+			if err := objectRows.Close(); err != nil {
+				return fmt.Errorf("rawcheckpoint: load generation objects: %w", err)
+			}
+
+			return nil
+		}(); err != nil {
+			return nil, err
 		}
 	}
 	return entries, nil
@@ -1286,6 +1300,7 @@ func (s *Store) CollectGarbage(ctx context.Context) (GarbageCollectionReport, er
 		if err != nil {
 			return fmt.Errorf("rawcheckpoint: list garbage: %w", err)
 		}
+		defer rows.Close()
 		var refs []rawsync.ObjectRef
 		for rows.Next() {
 			var ref rawsync.ObjectRef
@@ -1372,26 +1387,26 @@ func (s *Store) DiscardUnreferencedObjects(
 	})
 }
 
-func validateCapturedGeneration(
+func validateCapturedGeneration(ctx context.Context,
 	store *Store,
 	generation CapturedGeneration,
 ) (CapturedGeneration, int64, map[string]rawsync.ObjectRef, error) {
 	if generation.CaptureID == "" || generation.Source.Provider == "" ||
 		generation.Source.ConfiguredRootID == "" || generation.Source.SourceKey == "" ||
 		generation.CapturedAt.IsZero() {
-		return CapturedGeneration{}, 0, nil, fmt.Errorf("rawcheckpoint: invalid captured generation")
+		return CapturedGeneration{}, 0, nil, errors.New("rawcheckpoint: invalid captured generation")
 	}
 	switch generation.Kind {
 	case rawsync.ManifestSnapshot:
 		if len(generation.Entries) == 0 {
-			return CapturedGeneration{}, 0, nil, fmt.Errorf("rawcheckpoint: invalid captured generation")
+			return CapturedGeneration{}, 0, nil, errors.New("rawcheckpoint: invalid captured generation")
 		}
 	case rawsync.ManifestTombstone:
 		if len(generation.Entries) != 0 {
-			return CapturedGeneration{}, 0, nil, fmt.Errorf("rawcheckpoint: invalid captured generation")
+			return CapturedGeneration{}, 0, nil, errors.New("rawcheckpoint: invalid captured generation")
 		}
 	default:
-		return CapturedGeneration{}, 0, nil, fmt.Errorf("rawcheckpoint: invalid captured generation")
+		return CapturedGeneration{}, 0, nil, errors.New("rawcheckpoint: invalid captured generation")
 	}
 	validated := generation
 	validated.CapturedAt = generation.CapturedAt.UTC()
@@ -1405,11 +1420,11 @@ func validateCapturedGeneration(
 			return CapturedGeneration{}, 0, nil, fmt.Errorf("rawcheckpoint: invalid captured entry path: %w", err)
 		}
 		if _, ok := seenPaths[entry.Path]; ok || entry.Length < 0 || len(entry.Objects) == 0 {
-			return CapturedGeneration{}, 0, nil, fmt.Errorf("rawcheckpoint: invalid captured entry")
+			return CapturedGeneration{}, 0, nil, errors.New("rawcheckpoint: invalid captured entry")
 		}
 		seenPaths[entry.Path] = struct{}{}
 		if _, err := rawsync.NewObjectRef(entry.PrefixSHA256, 0); err != nil {
-			return CapturedGeneration{}, 0, nil, fmt.Errorf("rawcheckpoint: invalid captured prefix digest")
+			return CapturedGeneration{}, 0, nil, errors.New("rawcheckpoint: invalid captured prefix digest")
 		}
 		validated.Entries[i] = entry
 		validated.Entries[i].Objects = append([]rawsync.ObjectRef(nil), entry.Objects...)
@@ -1417,24 +1432,24 @@ func validateCapturedGeneration(
 		for _, ref := range entry.Objects {
 			canonical, err := rawsync.NewObjectRef(ref.SHA256, ref.Length)
 			if err != nil || canonical != ref || ref.Length > entry.Length-total {
-				return CapturedGeneration{}, 0, nil, fmt.Errorf("rawcheckpoint: invalid captured object reference")
+				return CapturedGeneration{}, 0, nil, errors.New("rawcheckpoint: invalid captured object reference")
 			}
 			total += ref.Length
 			key := ref.SHA256 + fmt.Sprintf(":%d", ref.Length)
 			if prior, ok := byDigest[ref.SHA256]; ok && prior.Length != ref.Length {
-				return CapturedGeneration{}, 0, nil, fmt.Errorf("rawcheckpoint: conflicting object lengths")
+				return CapturedGeneration{}, 0, nil, errors.New("rawcheckpoint: conflicting object lengths")
 			}
 			byDigest[ref.SHA256] = ref
 			uniqueObjects[key] = ref
 			metadataBytes += objectReferenceMetadataBytes
 		}
 		if total != entry.Length {
-			return CapturedGeneration{}, 0, nil, fmt.Errorf("rawcheckpoint: captured object lengths do not match entry")
+			return CapturedGeneration{}, 0, nil, errors.New("rawcheckpoint: captured object lengths do not match entry")
 		}
 	}
 	for _, ref := range uniqueObjects {
 		var state string
-		dbErr := store.db.QueryRow(`SELECT state FROM outbox_objects
+		dbErr := store.db.QueryRowContext(ctx, `SELECT state FROM outbox_objects
 			WHERE sha256 = ? AND length = ?`, ref.SHA256, ref.Length).Scan(&state)
 		info, err := os.Stat(store.ObjectPath(ref))
 		if dbErr == nil && state == "remote" {
@@ -1442,7 +1457,7 @@ func validateCapturedGeneration(
 			case errors.Is(err, os.ErrNotExist):
 				continue
 			case err != nil || !info.Mode().IsRegular() || info.Size() != ref.Length:
-				return CapturedGeneration{}, 0, nil, fmt.Errorf("rawcheckpoint: acknowledged object has conflicting local state")
+				return CapturedGeneration{}, 0, nil, errors.New("rawcheckpoint: acknowledged object has conflicting local state")
 			default:
 				if err := os.Remove(store.ObjectPath(ref)); err != nil {
 					return CapturedGeneration{}, 0, nil, fmt.Errorf(
@@ -1457,9 +1472,9 @@ func validateCapturedGeneration(
 			continue
 		}
 		if err == nil || !errors.Is(err, os.ErrNotExist) {
-			return CapturedGeneration{}, 0, nil, fmt.Errorf("rawcheckpoint: captured object has conflicting local state")
+			return CapturedGeneration{}, 0, nil, errors.New("rawcheckpoint: captured object has conflicting local state")
 		}
-		return CapturedGeneration{}, 0, nil, fmt.Errorf("rawcheckpoint: captured object is not durably installed")
+		return CapturedGeneration{}, 0, nil, errors.New("rawcheckpoint: captured object is not durably installed")
 	}
 	return validated, metadataBytes, uniqueObjects, nil
 }
@@ -1499,7 +1514,7 @@ func missingObjectBytesConn(
 		case err != nil:
 			return 0, fmt.Errorf("rawcheckpoint: inspect captured object: %w", err)
 		case length != ref.Length:
-			return 0, fmt.Errorf("rawcheckpoint: object digest has conflicting length")
+			return 0, errors.New("rawcheckpoint: object digest has conflicting length")
 		}
 	}
 	return bytes, nil
@@ -1515,7 +1530,7 @@ func insertCapturedObjectsConn(
 	for _, ref := range objects {
 		spoolName, err := filepath.Rel(store.spoolDir, store.ObjectPath(ref))
 		if err != nil || strings.HasPrefix(spoolName, "..") {
-			return fmt.Errorf("rawcheckpoint: derive object spool name")
+			return errors.New("rawcheckpoint: derive object spool name")
 		}
 		state := "live"
 		if info, statErr := os.Stat(store.ObjectPath(ref)); statErr != nil ||
@@ -1694,7 +1709,7 @@ func canonicalConfiguredRoot(root string) (string, error) {
 			checkpointFilesystemError(err))
 	}
 	if !info.IsDir() {
-		return "", fmt.Errorf("rawcheckpoint: configured root is not a directory")
+		return "", errors.New("rawcheckpoint: configured root is not a directory")
 	}
 	return filepath.Clean(canonical), nil
 }

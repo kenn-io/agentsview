@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -80,13 +79,13 @@ func TestResolvePGServeVectorState(t *testing.T) {
 func TestWirePGVectorSearchRecordsVectorDisabledReason(t *testing.T) {
 	store := &postgres.Store{}
 	require.NoError(t, wirePGVectorSearch(
-		context.Background(), config.Config{}, store, "pg serve"))
+		t.Context(), config.Config{}, store, "pg serve"))
 
-	_, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+	_, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "hello", Mode: "semantic",
 	})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, db.ErrSemanticUnavailable)
+	require.ErrorIs(t, err, db.ErrSemanticUnavailable)
 	assert.Contains(t, err.Error(), "PostgreSQL requires [vector] enabled")
 	assert.Contains(t, err.Error(), "agentsview pg push")
 	assert.NotContains(t, err.Error(), "agentsview embeddings build")

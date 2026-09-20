@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"path/filepath"
 	"strconv"
 	"testing"
@@ -13,14 +12,14 @@ import (
 )
 
 func TestOpenConfiguresThreadCount(t *testing.T) {
-	duck, err := Open(filepath.Join(t.TempDir(), "threads.duckdb"))
+	duck, err := Open(t.Context(), filepath.Join(t.TempDir(), "threads.duckdb"))
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		require.NoError(t, duck.Close())
 	})
 
 	var got string
-	require.NoError(t, duck.QueryRowContext(context.Background(), `
+	require.NoError(t, duck.QueryRowContext(t.Context(), `
 		SELECT value FROM duckdb_settings() WHERE name = 'threads'`,
 	).Scan(&got))
 	assert.Equal(t, strconv.Itoa(duckDBThreadCount()), got)

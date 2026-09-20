@@ -136,7 +136,7 @@ func TestOpenFolderTransportRejectsMarkerTempLookalike(t *testing.T) {
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
 	require.Error(t, err)
 	assert.Nil(t, transport)
-	assert.ErrorContains(t, err, "not an agentsview artifact target")
+	require.ErrorContains(t, err, "not an agentsview artifact target")
 	assert.FileExists(t, lookalike)
 	assert.NoFileExists(t, filepath.Join(target, folderMarkerName))
 }
@@ -175,7 +175,7 @@ func TestOpenFolderTransportRefusesUnmarkedNonemptyTarget(t *testing.T) {
 	transport, err := OpenFolderTransport(target, FolderTransportOptions{})
 	require.Error(t, err)
 	assert.Nil(t, transport)
-	assert.ErrorContains(t, err, "not an agentsview artifact target")
+	require.ErrorContains(t, err, "not an agentsview artifact target")
 	assert.FileExists(t, unrelated)
 	assert.NoFileExists(t, filepath.Join(target, ".agentsview-artifacts.json"))
 }
@@ -251,7 +251,7 @@ func TestOpenFolderTransportRejectsProtectedRootOverlap(t *testing.T) {
 			})
 			require.Error(t, err)
 			assert.Nil(t, transport)
-			assert.ErrorContains(t, err, "overlaps a protected root")
+			require.ErrorContains(t, err, "overlaps a protected root")
 			assert.NoFileExists(t, filepath.Join(target, ".agentsview-artifacts.json"))
 		})
 	}
@@ -260,16 +260,10 @@ func TestOpenFolderTransportRejectsProtectedRootOverlap(t *testing.T) {
 func TestOpenFolderTransportRejectsMixedRelativeAndAbsoluteOverlap(
 	t *testing.T,
 ) {
-	t.Parallel()
-
+	root := t.TempDir()
+	t.Chdir(root)
 	workingDirectory, err := os.Getwd()
 	require.NoError(t, err)
-	root, err := os.MkdirTemp(
-		workingDirectory,
-		".artifact-overlap-",
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, os.RemoveAll(root)) })
 	protected := filepath.Join(root, "provider")
 	target := filepath.Join(protected, "share")
 	require.NoError(t, os.MkdirAll(target, 0o755))
@@ -346,7 +340,7 @@ func TestOpenFolderTransportRejectsCaseAliasOverlap(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Nil(t, transport)
-	assert.ErrorContains(t, err, "overlaps a protected root")
+	require.ErrorContains(t, err, "overlaps a protected root")
 	assert.NoFileExists(t, filepath.Join(target, folderMarkerName))
 }
 
@@ -679,7 +673,7 @@ func TestFolderTransportWritesRejectionBeforeQuarantiningWire(t *testing.T) {
 	store := &transportRecordingStore{ArtifactStore: newTestArtifactStore(t)}
 	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, interrupted)
+	require.ErrorIs(t, err, interrupted)
 	assert.FileExists(t, wirePath)
 	kindRoot, err := os.OpenRoot(directory)
 	require.NoError(t, err)
@@ -726,7 +720,7 @@ func TestFolderTransportRequiresChangeRecorderBeforeAcceptingArtifact(
 		testFolderPublishOrigin,
 	)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "change recorder is required")
+	require.ErrorContains(t, err, "change recorder is required")
 	_, err = store.Stat(t.Context(), ref)
 	assert.ErrorIs(t, err, ErrArtifactNotFound)
 }
@@ -764,7 +758,7 @@ func TestFolderTransportRejectsCheckpointIdentityConflict(t *testing.T) {
 		testFolderPublishOrigin,
 	)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrArtifactConflict)
+	require.ErrorIs(t, err, ErrArtifactConflict)
 	assertArtifactBody(t, store, ref, localBody)
 }
 
@@ -798,9 +792,9 @@ func TestFolderTransportValidatesJournalIdentityBeforeCheckpointPersistence(
 
 	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrArtifactConflict)
+	require.ErrorIs(t, err, ErrArtifactConflict)
 	_, statErr := store.Stat(t.Context(), ref)
-	assert.ErrorIs(t, statErr, ErrArtifactNotFound)
+	require.ErrorIs(t, statErr, ErrArtifactNotFound)
 	assert.Empty(t, store.changed)
 
 	writeFolderWireFile(t, target, ref, expectedBody)
@@ -1092,6 +1086,8 @@ func TestFolderTransportDirectorySyncFailureStopsPublicationAuthority(
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			target := t.TempDir()
 			opened, openErr := OpenFolderTransport(
 				target,
@@ -1131,7 +1127,7 @@ func TestFolderTransportDirectorySyncFailureStopsPublicationAuthority(
 				testFolderPublishOrigin,
 			)
 			require.Error(t, exchangeErr)
-			assert.ErrorIs(t, exchangeErr, interrupted)
+			require.ErrorIs(t, exchangeErr, interrupted)
 			assert.Equal(t, tt.failCall, calls)
 			headPath := filepath.Join(
 				target,
@@ -1260,7 +1256,7 @@ func TestFolderTransportDirectorySyncFailureStopsSubdirectoryUse(t *testing.T) {
 
 	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, interrupted)
+	require.ErrorIs(t, err, interrupted)
 	assert.NoDirExists(t, filepath.Join(
 		target,
 		testFolderPublishOrigin,
@@ -1274,7 +1270,7 @@ func TestFolderTransportDirectorySyncFailureStopsSubdirectoryUse(t *testing.T) {
 
 	_, err = transport.Exchange(t.Context(), store, testFolderPublishOrigin)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, interrupted)
+	require.ErrorIs(t, err, interrupted)
 	assert.NoDirExists(t, filepath.Join(
 		target,
 		testFolderPublishOrigin,
@@ -1399,7 +1395,7 @@ func TestFolderTransportExchangeLockProtectsActivePublishTemp(t *testing.T) {
 		testFolderPublishOrigin,
 	)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.FileExists(t, active)
 }
 
@@ -1423,7 +1419,7 @@ func TestFolderTransportExchangeLockRejectsSymlinkEscape(t *testing.T) {
 		testFolderPublishOrigin,
 	)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "exchange lock is not a regular file")
+	require.ErrorContains(t, err, "exchange lock is not a regular file")
 	assert.NoFileExists(t, escaped)
 }
 
@@ -1447,8 +1443,8 @@ func TestFolderTransportRejectsOversizedStoreEntryBeforePublication(
 		testFolderPublishOrigin,
 	)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrArtifactInvalid)
-	assert.ErrorContains(t, err, "decoded size limit")
+	require.ErrorIs(t, err, ErrArtifactInvalid)
+	require.ErrorContains(t, err, "decoded size limit")
 	wire, err := ToWireRef(ref)
 	require.NoError(t, err)
 	assert.NoFileExists(t, filepath.Join(
@@ -1487,7 +1483,7 @@ func TestFolderTransportQuarantinePreservesDifferentReplacementIdentity(
 		identityForBytes(t, invalidBody),
 	)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrArtifactConflict)
+	require.ErrorIs(t, err, ErrArtifactConflict)
 	assertFolderWireBody(t, target, ref, replacementBody)
 }
 
@@ -1547,6 +1543,8 @@ func TestFolderTransportPushSharesLimitsAcrossKinds(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			target := t.TempDir()
 			origin := "local-a1b2c3"
 			transport, err := OpenFolderTransport(target, FolderTransportOptions{
@@ -1576,7 +1574,7 @@ func TestFolderTransportPushSharesLimitsAcrossKinds(t *testing.T) {
 			_, err = os.Stat(filepath.Join(
 				target, origin, string(KindManifests), manifestRef.Name,
 			))
-			assert.ErrorIs(t, err, fs.ErrNotExist)
+			require.ErrorIs(t, err, fs.ErrNotExist)
 
 			second, err := transport.Exchange(t.Context(), store, origin)
 			require.NoError(t, err)
@@ -1908,6 +1906,7 @@ func writeFolderWire(t *testing.T, target string, ref Ref, body []byte) {
 
 func writeFolderWireFile(t *testing.T, target string, ref Ref, body []byte) {
 	t.Helper()
+
 	wire, err := ToWireRef(ref)
 	require.NoError(t, err)
 	directory := filepath.Join(target, wire.Origin, string(wire.Kind))
@@ -1928,6 +1927,7 @@ func writeFolderWireFile(t *testing.T, target string, ref Ref, body []byte) {
 
 func appendFolderJournalTestEntry(t *testing.T, target string, entry Entry) {
 	t.Helper()
+
 	root, err := os.OpenRoot(target)
 	require.NoError(t, err)
 	transport := &folderTransport{root: root}
@@ -1959,6 +1959,7 @@ func assertFolderWireBody(
 	want []byte,
 ) {
 	t.Helper()
+
 	wire, err := ToWireRef(ref)
 	require.NoError(t, err)
 	file, err := os.Open(filepath.Join(

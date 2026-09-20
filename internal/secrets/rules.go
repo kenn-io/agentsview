@@ -220,7 +220,7 @@ func shannonEntropy(s string) float64 {
 		return 0
 	}
 	var freq [256]float64
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		freq[s[i]]++
 	}
 	n := float64(len(s))

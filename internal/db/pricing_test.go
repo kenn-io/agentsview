@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -16,7 +15,7 @@ func TestMigrationCreatesModelPricingTable(t *testing.T) {
 	d := testDB(t)
 
 	var count int
-	err := d.getReader().QueryRow(
+	err := d.getReader().QueryRow(t.Context(),
 		`SELECT count(*) FROM pragma_table_info('model_pricing')`,
 	).Scan(&count)
 	require.NoError(t, err, "pragma_table_info")
@@ -27,7 +26,7 @@ func TestMigrationCreatesModelPricingTable(t *testing.T) {
 func TestMigrationCreatesModelPricingBandsTable(t *testing.T) {
 	d := testDB(t)
 
-	rows, err := d.getReader().Query(
+	rows, err := d.getReader().Query(t.Context(),
 		`SELECT name FROM pragma_table_info('model_pricing_bands') ORDER BY cid`,
 	)
 	require.NoError(t, err)
@@ -326,16 +325,14 @@ func TestPricingMeta(t *testing.T) {
 	require.Empty(t, got)
 
 	// Set and read back.
-	require.NoError(t,
-		d.SetPricingMeta("_fallback_version", "v1"),
+	require.NoError(t, d.SetPricingMeta("_fallback_version", "v1"),
 		"SetPricingMeta v1")
 	got, err = d.GetPricingMeta("_fallback_version")
 	require.NoError(t, err, "GetPricingMeta v1")
 	require.Equal(t, "v1", got)
 
 	// Update overwrites.
-	require.NoError(t,
-		d.SetPricingMeta("_fallback_version", "v2"),
+	require.NoError(t, d.SetPricingMeta("_fallback_version", "v2"),
 		"SetPricingMeta v2")
 	got, err = d.GetPricingMeta("_fallback_version")
 	require.NoError(t, err, "GetPricingMeta v2")
@@ -381,7 +378,7 @@ func TestReconcileModelPricing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, removed)
 	var bands int
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		`SELECT COUNT(*) FROM model_pricing_bands WHERE model_pattern = ?`,
 		"minimax/minimax-m3",
 	).Scan(&bands))
@@ -532,7 +529,7 @@ func TestInsertMissingModelPricing_DoesNotOverwrite(t *testing.T) {
 
 	// Insert-missing with a DIFFERENT rate for the same pattern, plus a
 	// brand-new pattern.
-	err := d.InsertMissingModelPricing([]ModelPricing{
+	err := d.InsertMissingModelPricing(t.Context(), []ModelPricing{
 		{ModelPattern: "claude-opus-4-6", InputPerMTok: money.MustParseDollars("999.0"), OutputPerMTok: money.MustParseDollars("999.0")},
 		{ModelPattern: "gpt-5.4", InputPerMTok: money.MustParseDollars("2.5"), OutputPerMTok: money.MustParseDollars("15.0")},
 	})
@@ -557,7 +554,7 @@ func TestInsertMissingModelPricingDoesNotAttachBandsToExistingFlatModel(t *testi
 		InputPerMTok: money.MustParseDollars("1"),
 	}}))
 
-	require.NoError(t, d.InsertMissingModelPricing([]ModelPricing{
+	require.NoError(t, d.InsertMissingModelPricing(t.Context(), []ModelPricing{
 		{
 			ModelPattern: "existing-model",
 			InputPerMTok: money.MustParseDollars("99"),
@@ -589,7 +586,7 @@ func TestInsertMissingModelPricingDoesNotAttachBandsToExistingFlatModel(t *testi
 
 func TestLoadPricingMapKeepsCustomSourceWhenRatesMatchFallback(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	fallback := fallbackRateMap()
 	fallbackRates, ok := fallback["gpt-5.5"]
@@ -655,8 +652,7 @@ func TestDeleteModelPricing(t *testing.T) {
 	assert.Equal(t, money.MustParseDollars("5.0"), row.InputPerMTok)
 
 	// Deleting absent patterns and an empty list are no-ops.
-	require.NoError(t,
-		d.DeleteModelPricing([]string{"kimi-for-coding"}), "re-delete")
+	require.NoError(t, d.DeleteModelPricing([]string{"kimi-for-coding"}), "re-delete")
 	require.NoError(t, d.DeleteModelPricing(nil), "empty delete")
 }
 
@@ -673,7 +669,7 @@ func TestLoadPricingMapTreatsBandOnlyFallbackMismatchAsFetched(t *testing.T) {
 		CacheReadPerMTok:     fallback.CacheReadPerMTok,
 	}}))
 
-	rows, err := d.loadPricingMap(context.Background())
+	rows, err := d.loadPricingMap(t.Context())
 	require.NoError(t, err)
 	lookup := export.NewPricingResolver(rows).Lookup("gpt-5.5")
 	require.True(t, lookup.OK)

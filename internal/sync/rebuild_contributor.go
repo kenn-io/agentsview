@@ -80,17 +80,17 @@ func (e *RebuildContributorError) Error() string {
 func (e *RebuildContributorError) Unwrap() error { return e.Err }
 
 type rebuildOperations struct {
-	rebuildFTS                        func(*db.DB) error
-	rebuildUsageIndexes               func(*db.DB) error
+	rebuildFTS                        func(context.Context, *db.DB) error
+	rebuildUsageIndexes               func(context.Context, *db.DB) error
 	reopen                            func(*db.DB) error
 	listActiveWorktreeMappingMachines func(context.Context, *db.DB) ([]string, error)
 	applyWorktreeMappings             func(context.Context, *db.DB, string) (db.ApplyWorktreeProjectMappingsResult, error)
 }
 
 var productionRebuildOperations = rebuildOperations{
-	rebuildFTS: func(database *db.DB) error { return database.RebuildFTS() },
-	rebuildUsageIndexes: func(database *db.DB) error {
-		return database.RebuildBulkImportIndexes()
+	rebuildFTS: func(ctx context.Context, database *db.DB) error { return database.RebuildFTS(ctx) },
+	rebuildUsageIndexes: func(ctx context.Context, database *db.DB) error {
+		return database.RebuildBulkImportIndexes(ctx)
 	},
 	reopen: func(database *db.DB) error { return database.Reopen() },
 	listActiveWorktreeMappingMachines: func(
@@ -116,12 +116,10 @@ func (ops rebuildOperations) withDefaults() rebuildOperations {
 		ops.reopen = productionRebuildOperations.reopen
 	}
 	if ops.listActiveWorktreeMappingMachines == nil {
-		ops.listActiveWorktreeMappingMachines =
-			productionRebuildOperations.listActiveWorktreeMappingMachines
+		ops.listActiveWorktreeMappingMachines = productionRebuildOperations.listActiveWorktreeMappingMachines
 	}
 	if ops.applyWorktreeMappings == nil {
-		ops.applyWorktreeMappings =
-			productionRebuildOperations.applyWorktreeMappings
+		ops.applyWorktreeMappings = productionRebuildOperations.applyWorktreeMappings
 	}
 	return ops
 }

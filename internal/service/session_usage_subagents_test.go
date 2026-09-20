@@ -106,7 +106,7 @@ func TestSessionUsageWithSubagentsCombinesCostAcrossDescendants(t *testing.T) {
 	}
 
 	got, err := service.SessionUsageWithSubagents(
-		context.Background(), store, "root", true)
+		t.Context(), store, "root", true)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 
@@ -154,7 +154,7 @@ func TestSessionUsageWithSubagentsStopsAggregationAfterRowsLoad(t *testing.T) {
 			OutputTokens: 1, Priced: true,
 		}
 	}
-	ctx := &aggregationCancelContext{Context: context.Background()}
+	ctx := &aggregationCancelContext{Context: t.Context()}
 	store := &cancelAfterRowsStore{
 		cancelContext: ctx,
 		rollupStore: &rollupStore{
@@ -182,7 +182,7 @@ func TestSessionUsageTokenTotalsStopsDuringProjection(t *testing.T) {
 		}
 	}
 	ctx := &aggregationCancelContext{
-		Context: context.Background(), armed: true, remaining: 100,
+		Context: t.Context(), armed: true, remaining: 100,
 	}
 
 	totals, complete, err := service.SessionUsageTokenTotals(ctx, &db.SessionUsage{
@@ -197,7 +197,7 @@ func TestSessionUsageTokenTotalsStopsDuringProjection(t *testing.T) {
 
 func TestSessionUsageTokenTotalsRejectsPartialBreakdownMaterialization(t *testing.T) {
 	totals, complete, err := service.SessionUsageTokenTotals(
-		context.Background(), &db.SessionUsage{
+		t.Context(), &db.SessionUsage{
 			HasTokenData: true, TotalOutputTokens: 7, PeakContextTokens: 11,
 			BreakdownCount: 2, TokenBreakdownComplete: true,
 			Breakdown: []db.SessionUsageBreakdownEntry{{
@@ -241,7 +241,7 @@ func TestSessionUsageWithSubagentsCountsRowlessSessionsFromAggregates(t *testing
 	}
 
 	got, err := service.SessionUsageWithSubagents(
-		context.Background(), store, "root", false)
+		t.Context(), store, "root", false)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, 57, got.TotalOutputTokens,
@@ -262,7 +262,7 @@ func TestSessionUsageWithSubagentsReturnsOwnUsageWithoutDescendants(t *testing.T
 	}
 
 	got, err := service.SessionUsageWithSubagents(
-		context.Background(), store, "root", true)
+		t.Context(), store, "root", true)
 	require.NoError(t, err)
 	assert.Same(t, own, got,
 		"without subagents the store's own-session result passes through")
@@ -272,7 +272,7 @@ func TestSessionUsageWithSubagentsReturnsOwnUsageWithoutDescendants(t *testing.T
 func TestSessionUsageWithSubagentsIsMissingWhenSessionIsMissing(t *testing.T) {
 	store := &rollupStore{}
 	got, err := service.SessionUsageWithSubagents(
-		context.Background(), store, "absent", true)
+		t.Context(), store, "absent", true)
 	require.NoError(t, err)
 	assert.Nil(t, got)
 }
@@ -292,7 +292,7 @@ func TestSessionUsageWithSubagentsTerminatesOnCycles(t *testing.T) {
 	}
 
 	got, err := service.SessionUsageWithSubagents(
-		context.Background(), store, "root", false)
+		t.Context(), store, "root", false)
 	require.NoError(t, err)
 	assert.Equal(t, 1, got.SubagentCount,
 		"the root must not be re-counted as its own descendant")
@@ -319,7 +319,7 @@ func TestSessionUsageWithSubagentsDescendsThroughNonSubagentLinks(t *testing.T) 
 	}
 
 	got, err := service.SessionUsageWithSubagents(
-		context.Background(), store, "root", false)
+		t.Context(), store, "root", false)
 	require.NoError(t, err)
 	assert.Equal(t, 1, got.SubagentCount,
 		"forks are never counted as additional subagents")
@@ -344,7 +344,7 @@ func TestSessionUsageWithSubagentsWithholdsUsageWhenRootIsUnavailable(t *testing
 	}
 
 	got, _, err := service.SessionUsageWithRequiredSubagents(
-		context.Background(), store, "root", []string{"agent-a"}, false)
+		t.Context(), store, "root", []string{"agent-a"}, false)
 	require.NoError(t, err)
 	assert.False(t, got.HasTokenData,
 		"child usage must not turn unknown root usage into an exact total")
@@ -370,7 +370,7 @@ func TestSessionUsageWithSubagentsWithholdsUsageForUncoveredChild(t *testing.T) 
 	}
 
 	got, _, err := service.SessionUsageWithRequiredSubagents(
-		context.Background(), store, "root", []string{"agent-missing"}, false)
+		t.Context(), store, "root", []string{"agent-missing"}, false)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.False(t, got.HasTokenData,
@@ -379,7 +379,7 @@ func TestSessionUsageWithSubagentsWithholdsUsageForUncoveredChild(t *testing.T) 
 		"root-only cost must not be reported as the complete occurrence cost")
 
 	_, complete, err := service.SessionUsageTokenTotals(
-		context.Background(), got)
+		t.Context(), got)
 	require.NoError(t, err)
 	assert.False(t, complete)
 }
@@ -399,7 +399,7 @@ func TestSessionUsageWithRequiredSubagentsReconcilesRootOnlyRows(t *testing.T) {
 	}
 
 	got, descendants, err := service.SessionUsageWithRequiredSubagents(
-		context.Background(), store, "root", nil, true)
+		t.Context(), store, "root", nil, true)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Empty(t, descendants)
@@ -408,7 +408,7 @@ func TestSessionUsageWithRequiredSubagentsReconcilesRootOnlyRows(t *testing.T) {
 	assert.False(t, got.HasCost,
 		"a partial root row must not yield a partial computed cost")
 
-	_, complete, err := service.SessionUsageTokenTotals(context.Background(), got)
+	_, complete, err := service.SessionUsageTokenTotals(t.Context(), got)
 	require.NoError(t, err)
 	assert.False(t, complete,
 		"the row does not cover the stored root output total")
@@ -434,7 +434,7 @@ func TestSessionUsageWithSubagentsWithholdsIncompleteCost(t *testing.T) {
 	}
 
 	got, err := service.SessionUsageWithSubagents(
-		context.Background(), store, "root", false)
+		t.Context(), store, "root", false)
 	require.NoError(t, err)
 	assert.False(t, got.HasCost,
 		"one unpriced subagent row must not yield a partial total")
@@ -459,7 +459,7 @@ func TestSessionUsageWithSubagentsCombinesCostProvenance(t *testing.T) {
 	}
 
 	got, err := service.SessionUsageWithSubagents(
-		context.Background(), store, "root", false)
+		t.Context(), store, "root", false)
 	require.NoError(t, err)
 	assert.True(t, got.HasCost)
 	assert.Equal(t, export.CostSourceMixed, got.CostSource)
@@ -490,7 +490,7 @@ func TestSessionUsageWithSubagentsKeepsCostOnlyCarrierOutOfUsage(t *testing.T) {
 	}
 
 	got, err := service.SessionUsageWithSubagents(
-		context.Background(), store, "root", true)
+		t.Context(), store, "root", true)
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.True(t, got.HasCost)
@@ -511,7 +511,7 @@ func TestSessionUsageWithSubagentsPropagatesChildLookupError(t *testing.T) {
 	}
 
 	got, err := service.SessionUsageWithSubagents(
-		context.Background(), store, "root", false)
+		t.Context(), store, "root", false)
 	assert.Nil(t, got)
 	require.EqualError(t, err, "child lookup failed")
 }
@@ -546,7 +546,7 @@ func TestSessionUsageWithSubagentsFallsBackToPerSessionTotals(t *testing.T) {
 	}
 
 	got, err := service.SessionUsageWithSubagents(
-		context.Background(), store, "root", true)
+		t.Context(), store, "root", true)
 	require.NoError(t, err)
 	assert.Equal(t, 1, got.SubagentCount)
 	assert.True(t, got.HasCost)

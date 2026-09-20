@@ -40,6 +40,7 @@ nav = [
   {"PostgreSQL Sync" = "pg-sync.md"},
   {"Hosted Raw Sync" = "hosted-raw-sync.md"},
   {"DuckDB Mirror" = "duckdb.md"},
+  {"ClickHouse Sync" = "clickhouse-sync.md"},
 ]
 
 [project.extra]

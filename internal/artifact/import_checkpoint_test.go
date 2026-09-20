@@ -38,6 +38,8 @@ func TestReadVerifiedImportArtifactByteBoundaries(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			body := make([]byte, tc.limit)
 			identity := Identity{
 				SHA256: hashHex(body),
@@ -87,6 +89,8 @@ func TestFutureArtifactVersionErrorsIdentifyDependencyKind(t *testing.T) {
 	})
 
 	t.Run("segment", func(t *testing.T) {
+		t.Parallel()
+
 		_, err := decodeSegmentWithLimits(
 			[]byte(fmt.Sprintf(
 				"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":%d}\n",
@@ -289,6 +293,8 @@ func TestImportCollectionBoundaries(t *testing.T) {
 	}
 	for _, tc := range aggregateTests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			limits := productionArtifactLimits()
 			tc.configure(&limits)
 			body, err := encodeSegment(tc.message(2))
@@ -343,6 +349,7 @@ func TestDecodeImportCheckpointAcceptsSemanticCurrentJSON(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := decodeImportCheckpoint(
 				[]byte(tc.body), contractOrigin, "cp-0000000007.json",
 			)
@@ -483,6 +490,7 @@ func TestDecodeImportCheckpointRejectsInvalidCurrentJSON(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			_, err := decodeImportCheckpoint(
 				[]byte(tc.body), contractOrigin, tc.file,
 			)
@@ -552,6 +560,8 @@ func TestDecodeImportCheckpointDefersExtensibleFutureJSON(t *testing.T) {
 	}
 	for _, body := range tests {
 		t.Run(body, func(t *testing.T) {
+			t.Parallel()
+
 			_, err := decodeImportCheckpoint(
 				[]byte(body), contractOrigin, "cp-0000000007.json",
 			)
@@ -648,7 +658,7 @@ func TestReadVerifiedImportArtifactPreservesOperationalReadError(t *testing.T) {
 	_, err := readVerifiedImportArtifact(
 		t.Context(), store, store.entry, checkpointDecodedLimit,
 	)
-	assert.ErrorIs(t, err, operational)
+	require.ErrorIs(t, err, operational)
 	assert.Equal(t, 1, store.opens)
 }
 

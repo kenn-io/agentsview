@@ -112,15 +112,15 @@ func rewriteS3ClaudeToolResultLine(
 
 	var top map[string]jsontext.Value
 	if err := json.Unmarshal([]byte(line), &top); err != nil || top == nil {
-		return line, false, false, nil
+		return line, false, false, nil //nolint:nilerr // Non-JSON tool output is retained without optional sidecar enrichment.
 	}
 	var msg map[string]jsontext.Value
 	if err := json.Unmarshal(top["message"], &msg); err != nil || msg == nil {
-		return line, false, false, nil
+		return line, false, false, nil //nolint:nilerr // Non-JSON tool output is retained without optional sidecar enrichment.
 	}
 	var blocks []jsontext.Value
 	if err := json.Unmarshal(msg["content"], &blocks); err != nil {
-		return line, false, false, nil
+		return line, false, false, nil //nolint:nilerr // Non-JSON tool output is retained without optional sidecar enrichment.
 	}
 
 	resolvePath := func(original string) (string, bool, error) {
@@ -273,8 +273,8 @@ func localS3ClaudeToolResultPath(
 }
 
 func isMissingS3Object(err error) bool {
-	var resp minio.ErrorResponse
-	return errors.As(err, &resp) && resp.Code == minio.NoSuchKey
+	resp, hasResp := errors.AsType[minio.ErrorResponse](err)
+	return hasResp && resp.Code == minio.NoSuchKey
 }
 
 func s3ClaudeToolResultRel(original string) (string, bool) {

@@ -1,7 +1,8 @@
+//go:build !(windows && arm64)
+
 package duckdb
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/money"
 	pricingpkg "go.kenn.io/agentsview/internal/pricing"
+	"go.kenn.io/agentsview/internal/storage"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,7 +24,7 @@ import (
 // one SQL group (the price_model CASE keeps the eras in separate
 // groups before tokens are summed).
 func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{
@@ -72,7 +74,7 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 		"2026-07-20T12:00:00.000Z", 2)
 	postSession.Agent = "kimi"
 
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
 		{
 			Session: preSession,
 			Messages: []db.Message{
@@ -98,7 +100,7 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -129,7 +131,7 @@ func TestDailyUsageKimiDateAliasPricing(t *testing.T) {
 }
 
 func TestDailyUsageKimiFixedK26AliasPricing(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
@@ -141,7 +143,7 @@ func TestDailyUsageKimiFixedK26AliasPricing(t *testing.T) {
 		"duck-kimi-k2d6", "alpha", "fixed K2.6 alias",
 		"2026-07-20T12:00:00.000Z", 1)
 	session.Agent = "kimi-work"
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session: session,
 		Messages: []db.Message{{
 			SessionID: "duck-kimi-k2d6",
@@ -157,7 +159,7 @@ func TestDailyUsageKimiFixedK26AliasPricing(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -178,7 +180,7 @@ func TestDailyUsageKimiFixedK26AliasPricing(t *testing.T) {
 }
 
 func TestDailyUsageGPTReserveLunaPricing(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	tokenUsage := jsontext.Value(
@@ -194,7 +196,7 @@ func TestDailyUsageGPTReserveLunaPricing(t *testing.T) {
 			fixture.id, "alpha", "Luna Reserve",
 			"2026-09-05T12:00:00.000Z", 1)
 		session.Agent = "codex"
-		_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 			Session: session,
 			Messages: []db.Message{{
 				SessionID:  fixture.id,
@@ -210,7 +212,7 @@ func TestDailyUsageGPTReserveLunaPricing(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -246,7 +248,7 @@ func TestDailyUsageGPTReserveLunaPricing(t *testing.T) {
 // usage path (breakdown rows) applies the same date-based mapping as
 // the aggregate path.
 func TestSessionUsageKimiDateAliasPricing(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{
@@ -272,7 +274,7 @@ func TestSessionUsageKimiDateAliasPricing(t *testing.T) {
 		"2026-07-18T12:00:00.000Z", 2)
 	session.Agent = "kimi"
 
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session: session,
 		Messages: []db.Message{
 			{
@@ -297,7 +299,7 @@ func TestSessionUsageKimiDateAliasPricing(t *testing.T) {
 	}})
 	require.NoError(t, err)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -318,7 +320,7 @@ func TestSessionUsageKimiDateAliasPricing(t *testing.T) {
 }
 
 func TestSessionUsageKimiExactCustomAliasPricing(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	customPricing := map[string]config.CustomModelRate{
 		"kimi-for-coding": {
@@ -336,7 +338,7 @@ func TestSessionUsageKimiExactCustomAliasPricing(t *testing.T) {
 		"duck-kimi-custom-alias", "alpha", "custom alias session",
 		"2026-07-20T12:00:00.000Z", 1)
 	session.Agent = "kimi"
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session: session,
 		Messages: []db.Message{{
 			SessionID: "duck-kimi-custom-alias",
@@ -355,10 +357,10 @@ func TestSessionUsageKimiExactCustomAliasPricing(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, want)
 	require.Len(t, want.Breakdown, 1)
-	assert.Equal(t, money.MustParseDollars("7"), want.Cost)
+	assert.Equal(t, want.Cost, money.MustParseDollars("7"))
 	assert.Equal(t, want.Cost, want.Breakdown[0].Cost)
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -382,7 +384,7 @@ func TestSessionUsageKimiExactCustomAliasPricing(t *testing.T) {
 // session through the DuckDB mirror: the nested cache_creation TTL split
 // prices 1h writes at the 1h rate, matching Claude Code's total_cost_usd.
 func TestDailyUsageClaude1hCacheWritePricing(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 
 	require.NoError(t, local.UpsertModelPricing([]db.ModelPricing{{
@@ -398,7 +400,7 @@ func TestDailyUsageClaude1hCacheWritePricing(t *testing.T) {
 		"duck-1h-cache", "alpha", "1h cache writes",
 		"2026-08-13T11:59:00.000Z", 1)
 	session.Agent = "claude"
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session: session,
 		Messages: []db.Message{
 			{
@@ -428,7 +430,7 @@ func TestDailyUsageClaude1hCacheWritePricing(t *testing.T) {
 		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -456,7 +458,7 @@ func TestDailyUsageClaude1hCacheWritePricing(t *testing.T) {
 }
 
 func TestDuckPositBillingPublicAPIReproduction(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	session := syncSession(
 		"duck-posit-billing", "posit", "Posit billing",
 		"2026-08-01T10:00:00Z", 1)
@@ -466,7 +468,7 @@ func TestDuckPositBillingPublicAPIReproduction(t *testing.T) {
 		ModelPattern: "duck-posit-model",
 		InputPerMTok: money.MustParseDollars("1"),
 	}}))
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session: session,
 		Messages: []db.Message{{
 			SessionID: session.ID, Ordinal: 0, Role: "assistant",
@@ -477,7 +479,7 @@ func TestDuckPositBillingPublicAPIReproduction(t *testing.T) {
 		DataVersion: 1, ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -502,7 +504,7 @@ func TestDuckPositBillingPublicAPIReproduction(t *testing.T) {
 }
 
 func TestPriceModelCasePreservesQualifiedBedrockModels(t *testing.T) {
-	syncer := newInMemoryTestSync(t, newLocalDB(t), SyncOptions{})
+	syncer := newInMemoryTestSync(t, newLocalDB(t), storage.MirrorPushOptions{})
 	for _, tt := range []struct{ model, want string }{
 		{"openai.gpt-6-astra", "bedrock_mantle/openai.gpt-6-astra"},
 		{"openai.gpt-5.4", "bedrock_mantle/openai.gpt-5.4"},

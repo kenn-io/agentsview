@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"encoding/json/v2"
 	"errors"
 	"io"
@@ -81,7 +80,7 @@ func TestProcessS3ClaudeFetchesPersistedToolResultSidecar(t *testing.T) {
 	}
 
 	e := &Engine{db: database, machine: "central"}
-	res := e.processFile(context.Background(), parser.DiscoveredFile{
+	res := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:       parser.AgentClaude,
 		Path:        path,
 		Project:     "test-proj",
@@ -94,8 +93,7 @@ func TestProcessS3ClaudeFetchesPersistedToolResultSidecar(t *testing.T) {
 	require.Len(t, res.results, 1)
 	require.Len(t, res.results[0].Messages, 3)
 	require.Len(t, res.results[0].Messages[2].ToolResults, 1)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		fullOutput,
 		parser.DecodeContent(res.results[0].Messages[2].ToolResults[0].ContentRaw),
 	)
@@ -138,7 +136,7 @@ func TestProcessS3IcodemateFetchesPersistedToolResultSidecar(t *testing.T) {
 	}
 
 	e := &Engine{db: database, machine: "central"}
-	res := e.processFile(context.Background(), parser.DiscoveredFile{
+	res := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:       parser.AgentIcodemate,
 		Path:        path,
 		Project:     "test-proj",
@@ -153,8 +151,7 @@ func TestProcessS3IcodemateFetchesPersistedToolResultSidecar(t *testing.T) {
 	assert.Equal(t, "laptop~icodemate:parent-session", res.results[0].Session.ID)
 	require.Len(t, res.results[0].Messages, 3)
 	require.Len(t, res.results[0].Messages[2].ToolResults, 1)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		fullOutput,
 		parser.DecodeContent(
 			res.results[0].Messages[2].ToolResults[0].ContentRaw,
@@ -198,7 +195,7 @@ func TestProcessS3ClaudeMissingSidecarKeepsPersistedPreview(t *testing.T) {
 	}
 
 	e := &Engine{db: database, machine: "central"}
-	res := e.processFile(context.Background(), parser.DiscoveredFile{
+	res := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:       parser.AgentClaude,
 		Path:        path,
 		Project:     "test-proj",
@@ -211,8 +208,7 @@ func TestProcessS3ClaudeMissingSidecarKeepsPersistedPreview(t *testing.T) {
 	require.Len(t, res.results, 1)
 	require.Len(t, res.results[0].Messages, 3)
 	require.Len(t, res.results[0].Messages[2].ToolResults, 1)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		persistedContent,
 		parser.DecodeContent(res.results[0].Messages[2].ToolResults[0].ContentRaw),
 	)
@@ -252,7 +248,7 @@ func TestProcessS3ClaudeSidecarFetchErrorIsRetryable(t *testing.T) {
 	}
 
 	e := &Engine{db: database, machine: "central"}
-	res := e.processFile(context.Background(), parser.DiscoveredFile{
+	res := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:       parser.AgentClaude,
 		Path:        path,
 		Project:     "test-proj",
@@ -303,7 +299,7 @@ func TestProcessS3ClaudeHydratedSidecarReplacesStoredPreview(t *testing.T) {
 	}
 
 	e := &Engine{db: database, machine: "central"}
-	first := e.processFile(context.Background(), parser.DiscoveredFile{
+	first := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:       parser.AgentClaude,
 		Path:        path,
 		Project:     "test-proj",
@@ -320,7 +316,7 @@ func TestProcessS3ClaudeHydratedSidecarReplacesStoredPreview(t *testing.T) {
 	require.Equal(t, 0, failed)
 
 	sidecarAvailable = true
-	second := e.processFile(context.Background(), parser.DiscoveredFile{
+	second := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:       parser.AgentClaude,
 		Path:        path,
 		Project:     "test-proj",
@@ -339,7 +335,7 @@ func TestProcessS3ClaudeHydratedSidecarReplacesStoredPreview(t *testing.T) {
 	require.Equal(t, 0, failed)
 
 	msgs, err := database.GetAllMessages(
-		context.Background(), "laptop~parent-session",
+		t.Context(), "laptop~parent-session",
 	)
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
@@ -422,7 +418,7 @@ func TestSyncSingleSessionS3ClaudeSidecarOnlyChangeReplacesPreview(
 			parser.AgentClaude: {"s3://bucket/laptop/raw/claude"},
 		},
 	}
-	first := e.processFile(context.Background(), parser.DiscoveredFile{
+	first := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:       parser.AgentClaude,
 		Path:        path,
 		Project:     "test-proj",
@@ -442,7 +438,7 @@ func TestSyncSingleSessionS3ClaudeSidecarOnlyChangeReplacesPreview(
 	require.NoError(t, e.SyncSingleSession("laptop~parent-session"))
 
 	msgs, err := database.GetAllMessages(
-		context.Background(), "laptop~parent-session",
+		t.Context(), "laptop~parent-session",
 	)
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
@@ -488,7 +484,7 @@ func TestProcessS3ClaudeMissingSidecarReplacesStoredHydratedOutput(
 	}
 
 	e := &Engine{db: database, machine: "central"}
-	first := e.processFile(context.Background(), parser.DiscoveredFile{
+	first := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:       parser.AgentClaude,
 		Path:        path,
 		Project:     "test-proj",
@@ -506,7 +502,7 @@ func TestProcessS3ClaudeMissingSidecarReplacesStoredHydratedOutput(
 	require.Equal(t, 0, failed)
 
 	sidecarAvailable = false
-	second := e.processFile(context.Background(), parser.DiscoveredFile{
+	second := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:       parser.AgentClaude,
 		Path:        path,
 		Project:     "test-proj",
@@ -525,7 +521,7 @@ func TestProcessS3ClaudeMissingSidecarReplacesStoredHydratedOutput(
 	require.Equal(t, 0, failed)
 
 	msgs, err := database.GetAllMessages(
-		context.Background(), "laptop~parent-session",
+		t.Context(), "laptop~parent-session",
 	)
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
@@ -568,7 +564,7 @@ func TestProcessS3ClaudeFetchesSidecarFromCustomProjectsRoot(t *testing.T) {
 	}
 
 	e := &Engine{db: database, machine: "central"}
-	res := e.processFile(context.Background(), parser.DiscoveredFile{
+	res := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:       parser.AgentClaude,
 		Path:        path,
 		Project:     "test-proj",
@@ -581,8 +577,7 @@ func TestProcessS3ClaudeFetchesSidecarFromCustomProjectsRoot(t *testing.T) {
 	require.Len(t, res.results, 1)
 	require.Len(t, res.results[0].Messages, 3)
 	require.Len(t, res.results[0].Messages[2].ToolResults, 1)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		fullOutput,
 		parser.DecodeContent(res.results[0].Messages[2].ToolResults[0].ContentRaw),
 	)
@@ -628,7 +623,7 @@ func TestProcessS3ClaudeFetchesCustomRootSidecarWithSubagentsInS3Prefix(
 	}
 
 	e := &Engine{db: database, machine: "central"}
-	res := e.processFile(context.Background(), parser.DiscoveredFile{
+	res := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:       parser.AgentClaude,
 		Path:        path,
 		Project:     "test-proj",
@@ -641,8 +636,7 @@ func TestProcessS3ClaudeFetchesCustomRootSidecarWithSubagentsInS3Prefix(
 	require.Len(t, res.results, 1)
 	require.Len(t, res.results[0].Messages, 3)
 	require.Len(t, res.results[0].Messages[2].ToolResults, 1)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		fullOutput,
 		parser.DecodeContent(res.results[0].Messages[2].ToolResults[0].ContentRaw),
 	)
@@ -688,7 +682,7 @@ func TestProcessS3ClaudeFetchesSubagentLocalPersistedToolResultSidecar(
 	}
 
 	e := &Engine{db: database, machine: "central"}
-	res := e.processFile(context.Background(), parser.DiscoveredFile{
+	res := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:       parser.AgentClaude,
 		Path:        path,
 		Project:     "test-proj",
@@ -701,8 +695,7 @@ func TestProcessS3ClaudeFetchesSubagentLocalPersistedToolResultSidecar(
 	require.Len(t, res.results, 1)
 	require.Len(t, res.results[0].Messages, 3)
 	require.Len(t, res.results[0].Messages[2].ToolResults, 1)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		fullOutput,
 		parser.DecodeContent(res.results[0].Messages[2].ToolResults[0].ContentRaw),
 	)
@@ -748,7 +741,7 @@ func TestProcessS3ClaudeFetchesParentSidecarWithUnrelatedSubagentsAncestor(
 	}
 
 	e := &Engine{db: database, machine: "central"}
-	res := e.processFile(context.Background(), parser.DiscoveredFile{
+	res := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:       parser.AgentClaude,
 		Path:        path,
 		Project:     "test-proj",
@@ -761,8 +754,7 @@ func TestProcessS3ClaudeFetchesParentSidecarWithUnrelatedSubagentsAncestor(
 	require.Len(t, res.results, 1)
 	require.Len(t, res.results[0].Messages, 3)
 	require.Len(t, res.results[0].Messages[2].ToolResults, 1)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		fullOutput,
 		parser.DecodeContent(res.results[0].Messages[2].ToolResults[0].ContentRaw),
 	)
@@ -808,7 +800,7 @@ func TestProcessS3ClaudeFetchesNestedSubagentLocalPersistedToolResultSidecar(
 	}
 
 	e := &Engine{db: database, machine: "central"}
-	res := e.processFile(context.Background(), parser.DiscoveredFile{
+	res := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:       parser.AgentClaude,
 		Path:        path,
 		Project:     "test-proj",
@@ -821,8 +813,7 @@ func TestProcessS3ClaudeFetchesNestedSubagentLocalPersistedToolResultSidecar(
 	require.Len(t, res.results, 1)
 	require.Len(t, res.results[0].Messages, 3)
 	require.Len(t, res.results[0].Messages[2].ToolResults, 1)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		fullOutput,
 		parser.DecodeContent(res.results[0].Messages[2].ToolResults[0].ContentRaw),
 	)
@@ -868,7 +859,7 @@ func TestProcessS3ClaudeFetchesSidecarWithUnrelatedToolResultsAncestor(
 	}
 
 	e := &Engine{db: database, machine: "central"}
-	res := e.processFile(context.Background(), parser.DiscoveredFile{
+	res := e.processFile(t.Context(), parser.DiscoveredFile{
 		Agent:       parser.AgentClaude,
 		Path:        path,
 		Project:     "test-proj",
@@ -881,8 +872,7 @@ func TestProcessS3ClaudeFetchesSidecarWithUnrelatedToolResultsAncestor(
 	require.Len(t, res.results, 1)
 	require.Len(t, res.results[0].Messages, 3)
 	require.Len(t, res.results[0].Messages[2].ToolResults, 1)
-	assert.Equal(
-		t,
+	assert.Equal(t,
 		fullOutput,
 		parser.DecodeContent(res.results[0].Messages[2].ToolResults[0].ContentRaw),
 	)

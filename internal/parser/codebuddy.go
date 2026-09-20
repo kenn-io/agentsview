@@ -2,6 +2,7 @@ package parser
 
 import (
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -48,10 +49,10 @@ func parseCodeBuddySession(indexPath, projectHint, machine string) (*ParsedSessi
 
 	indexRoot := gjson.ParseBytes(indexBytes)
 	if !gjson.ValidBytes(indexBytes) {
-		return nil, nil, fmt.Errorf("invalid CodeBuddy session manifest")
+		return nil, nil, errors.New("invalid CodeBuddy session manifest")
 	}
 	if !indexRoot.IsObject() || !indexRoot.Get("messages").IsArray() {
-		return nil, nil, fmt.Errorf("invalid CodeBuddy session manifest: messages must be an array")
+		return nil, nil, errors.New("invalid CodeBuddy session manifest: messages must be an array")
 	}
 	msgRefs := indexRoot.Get("messages").Array()
 

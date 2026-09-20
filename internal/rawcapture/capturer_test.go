@@ -5,8 +5,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,6 +72,7 @@ func captureFileProvider(
 	content string,
 ) (*captureTestProvider, parser.SourceRef, string) {
 	t.Helper()
+
 	root := t.TempDir()
 	path := filepath.Join(root, "project", "session.jsonl")
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
@@ -222,7 +223,7 @@ func TestConcurrentCapturesDoNotDiscardAnotherCaptureSharedObject(t *testing.T) 
 	providerB.plan.SourceKey = "source-2"
 	sourceB.Key = "source-2"
 	digest := sha256.Sum256([]byte("shared\n"))
-	ref := rawsync.ObjectRef{SHA256: fmt.Sprintf("%x", digest), Length: 7}
+	ref := rawsync.ObjectRef{SHA256: hex.EncodeToString(digest[:]), Length: 7}
 	objectDir := filepath.Dir(store.ObjectPath(ref))
 	installedA := make(chan struct{})
 	releaseA := make(chan struct{})
@@ -354,8 +355,7 @@ func TestCapturerReplacesPermanentFailureWhenSourceIsUnchanged(t *testing.T) {
 	}
 	usage, err := store.OutboxUsage(t.Context())
 	require.NoError(t, err)
-	assert.Equal(t,
-		replacementRef.Length+rawcheckpoint.CaptureMetadataCharge(1, 1),
+	assert.Equal(t, replacementRef.Length+rawcheckpoint.CaptureMetadataCharge(1, 1),
 		usage.UsedBytes,
 	)
 	status, err := store.ClientStatus(t.Context())
@@ -744,22 +744,22 @@ func TestCapturerSnapshotsSQLiteWithOnlineBackup(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	db.SetMaxOpenConns(2)
-	_, err = db.Exec(`PRAGMA journal_mode=WAL`)
+	_, err = db.ExecContext(t.Context(), `PRAGMA journal_mode=WAL`)
 	require.NoError(t, err)
-	_, err = db.Exec(`PRAGMA wal_autocheckpoint=0`)
+	_, err = db.ExecContext(t.Context(), `PRAGMA wal_autocheckpoint=0`)
 	require.NoError(t, err)
-	_, err = db.Exec(`CREATE TABLE items (value TEXT NOT NULL)`)
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE items (value TEXT NOT NULL)`)
 	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO items (value) VALUES ('committed')`)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO items (value) VALUES ('committed')`)
 	require.NoError(t, err)
 	requestedModTime := time.Date(2024, time.January, 2, 3, 4, 5, 678_000_000, time.UTC)
 	require.NoError(t, os.Chtimes(dbPath, requestedModTime, requestedModTime))
 	sourceInfo, err := os.Stat(dbPath)
 	require.NoError(t, err)
-	tx, err := db.Begin()
+	tx, err := db.BeginTx(t.Context(), nil)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = tx.Rollback() })
-	_, err = tx.Exec(`INSERT INTO items (value) VALUES ('uncommitted')`)
+	_, err = tx.ExecContext(t.Context(), `INSERT INTO items (value) VALUES ('uncommitted')`)
 	require.NoError(t, err)
 
 	provider := &captureTestProvider{
@@ -800,7 +800,7 @@ func TestCapturerSnapshotsSQLiteWithOnlineBackup(t *testing.T) {
 	require.NoError(t, err)
 	defer snapshot.Close()
 	var values string
-	err = snapshot.QueryRow(`SELECT group_concat(value, ',') FROM items`).Scan(&values)
+	err = snapshot.QueryRowContext(t.Context(), `SELECT group_concat(value, ',') FROM items`).Scan(&values)
 	require.NoError(t, err)
 	assert.Equal(t, "committed", values)
 	temporary, err := os.ReadDir(store.CaptureTempDir())
@@ -811,7 +811,7 @@ func TestCapturerSnapshotsSQLiteWithOnlineBackup(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, StatusUnchanged, unchanged.Status)
 	require.NoError(t, tx.Rollback())
-	_, err = db.Exec(`INSERT INTO items (value) VALUES ('later')`)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO items (value) VALUES ('later')`)
 	require.NoError(t, err)
 	changed, err := New(store).Capture(t.Context(), provider, source)
 	require.NoError(t, err)
@@ -876,9 +876,9 @@ func TestCapturerReservesSQLiteSnapshotCapacityBeforeBackup(t *testing.T) {
 	dbPath := filepath.Join(root, "live.db")
 	db, err := sql.Open(sqliteSnapshotDriverName, dbPath)
 	require.NoError(t, err)
-	_, err = db.Exec(`CREATE TABLE items (value BLOB NOT NULL)`)
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE items (value BLOB NOT NULL)`)
 	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO items (value) VALUES (zeroblob(16384))`)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO items (value) VALUES (zeroblob(16384))`)
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 	provider := &captureTestProvider{
@@ -946,11 +946,12 @@ func TestCapturerKeepsCommittedSQLiteCaptureWhenSnapshotCleanupFails(t *testing.
 
 func writeSQLiteCaptureTestDB(t *testing.T, path, value string) {
 	t.Helper()
+
 	database, err := sql.Open(sqliteSnapshotDriverName, path)
 	require.NoError(t, err)
-	_, err = database.Exec(`CREATE TABLE items (value TEXT NOT NULL)`)
+	_, err = database.ExecContext(t.Context(), `CREATE TABLE items (value TEXT NOT NULL)`)
 	require.NoError(t, err)
-	_, err = database.Exec(`INSERT INTO items (value) VALUES (?)`, value)
+	_, err = database.ExecContext(t.Context(), `INSERT INTO items (value) VALUES (?)`, value)
 	require.NoError(t, err)
 	require.NoError(t, database.Close())
 }
@@ -1405,7 +1406,7 @@ func TestCapturerPreservesAndSanitizesObservationIOErrors(t *testing.T) {
 	_, err := capturer.Capture(t.Context(), provider, source)
 
 	require.ErrorIs(t, err, syscall.EIO)
-	assert.NotErrorIs(t, err, ErrSourceChanged)
+	require.NotErrorIs(t, err, ErrSourceChanged)
 	assert.NotContains(t, err.Error(), sourcePath)
 	assert.Contains(t, err.Error(), `project/session.jsonl`)
 }
@@ -1510,8 +1511,7 @@ func TestCapturerRollsOverBeforeProspectiveCanonicalLimit(t *testing.T) {
 	limits.MaxCanonicalBytes = uploadCanonicalBytes(
 		t, first.Source, []rawcheckpoint.CapturedEntry{fullEntry},
 	) + len(".999999999")
-	require.Greater(t,
-		uploadCanonicalBytes(t, first.Source, []rawcheckpoint.CapturedEntry{appendEntry}),
+	require.Greater(t, uploadCanonicalBytes(t, first.Source, []rawcheckpoint.CapturedEntry{appendEntry}),
 		limits.MaxCanonicalBytes,
 	)
 	capturer.manifestLimits = limits
@@ -1634,4 +1634,25 @@ func TestCapturerRejectsSidecarEntryWithoutDeclaredRoot(t *testing.T) {
 	_, err := capturer.Capture(t.Context(), provider, source)
 
 	require.Error(t, err)
+}
+
+func TestCapturerRejectsEscapeBetweenRootedStatAndOpen(t *testing.T) {
+	store, _ := openCapturerTestStore(t, 1<<20)
+	provider, source, sourcePath := captureFileProvider(t, "safe\n")
+	projectDir := filepath.Dir(sourcePath)
+	outsideDir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(outsideDir, filepath.Base(sourcePath)), []byte("outside\n"), 0o600))
+	capturer := New(store)
+	capturer.files.openRoot = func(root *os.Root, relative string) (*os.File, error) {
+		require.NoError(t, os.Rename(projectDir, projectDir+"-original"))
+		if err := os.Symlink(outsideDir, projectDir); err != nil {
+			t.Skipf("symlink unavailable: %v", err)
+		}
+		return root.Open(relative)
+	}
+	_, err := capturer.Capture(t.Context(), provider, source)
+	require.ErrorIs(t, err, ErrSourceChanged)
+	_, found, err := store.NextGeneration(t.Context())
+	require.NoError(t, err)
+	assert.False(t, found)
 }

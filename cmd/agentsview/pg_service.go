@@ -12,89 +12,98 @@ import (
 
 	"github.com/spf13/cobra"
 	"go.kenn.io/agentsview/internal/config"
-	"go.kenn.io/agentsview/internal/postgres"
+	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func newPGServiceCommand() *cobra.Command {
+	return newServiceCommands(pgServiceKind)
+}
+
+func newClickHouseServiceCommand() *cobra.Command {
+	return newServiceCommands(clickHouseServiceKind)
+}
+
+func newServiceCommands(kind serviceKind) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:          "service",
-		Short:        "Install and manage the pg push --watch background service",
+		Short:        fmt.Sprintf("Install and manage the %s push --watch background service", kind.Name),
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return cmd.Help()
 		},
 	}
-	cmd.AddCommand(newPGServiceInstallCommand())
-	cmd.AddCommand(newPGServiceUninstallCommand())
-	cmd.AddCommand(newPGServiceStatusCommand())
-	cmd.AddCommand(newPGServiceStartCommand())
-	cmd.AddCommand(newPGServiceStopCommand())
-	cmd.AddCommand(newPGServiceLogsCommand())
+	cmd.AddCommand(newServiceInstallCommand(kind))
+	cmd.AddCommand(newServiceUninstallCommand(kind))
+	cmd.AddCommand(newServiceStatusCommand(kind))
+	cmd.AddCommand(newServiceStartCommand(kind))
+	cmd.AddCommand(newServiceStopCommand(kind))
+	cmd.AddCommand(newServiceLogsCommand(kind))
 	return cmd
 }
 
-func newPGServiceInstallCommand() *cobra.Command {
+func newServiceInstallCommand(kind serviceKind) *cobra.Command {
 	return &cobra.Command{
 		Use:          "install",
 		Short:        "Install and start the auto-push service",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServiceInstall()
+			runServiceInstall(kind)
 		},
 	}
 }
 
-func newPGServiceUninstallCommand() *cobra.Command {
+func newServiceUninstallCommand(kind serviceKind) *cobra.Command {
 	return &cobra.Command{
 		Use:          "uninstall",
 		Short:        "Stop and remove the auto-push service",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServiceSimple("uninstall")
+			runServiceSimple(kind, "uninstall")
 		},
 	}
 }
 
-func newPGServiceStatusCommand() *cobra.Command {
+func newServiceStatusCommand(kind serviceKind) *cobra.Command {
 	return &cobra.Command{
 		Use:          "status",
 		Short:        "Show the auto-push service status",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServiceStatus()
+			runServiceStatus(kind)
 		},
 	}
 }
 
-func newPGServiceStartCommand() *cobra.Command {
+func newServiceStartCommand(kind serviceKind) *cobra.Command {
 	return &cobra.Command{
 		Use:          "start",
 		Short:        "Start the auto-push service",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServiceSimple("start")
+			runServiceSimple(kind, "start")
 		},
 	}
 }
 
-func newPGServiceStopCommand() *cobra.Command {
+func newServiceStopCommand(kind serviceKind) *cobra.Command {
 	return &cobra.Command{
 		Use:          "stop",
 		Short:        "Stop the auto-push service",
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServiceSimple("stop")
+			runServiceSimple(kind, "stop")
 		},
 	}
 }
 
-func newPGServiceLogsCommand() *cobra.Command {
+func newServiceLogsCommand(kind serviceKind) *cobra.Command {
 	var follow bool
 	cmd := &cobra.Command{
 		Use:          "logs",
@@ -102,7 +111,7 @@ func newPGServiceLogsCommand() *cobra.Command {
 		SilenceUsage: true,
 		Args:         cobra.NoArgs,
 		Run: func(cmd *cobra.Command, args []string) {
-			runServiceLogs(follow)
+			runServiceLogs(kind, follow)
 		},
 	}
 	cmd.Flags().BoolVarP(&follow, "follow", "f", false, "Follow the log output")
@@ -110,34 +119,34 @@ func newPGServiceLogsCommand() *cobra.Command {
 }
 
 // loadServiceConfig loads minimal config and ensures the data dir.
-func loadServiceConfig() config.Config {
+func loadServiceConfig(kind serviceKind) config.Config {
 	appCfg, err := config.LoadMinimal()
 	if err != nil {
-		fatal("pg service: loading config: %v", err)
+		fatal("%s service: loading config: %v", kind.Name, err)
 	}
 	if err := os.MkdirAll(appCfg.DataDir, 0o755); err != nil {
-		fatal("pg service: creating data dir: %v", err)
+		fatal("%s service: creating data dir: %v", kind.Name, err)
 	}
 	return appCfg
 }
 
-func runServiceInstall() {
-	appCfg := loadServiceConfig()
-	spec, err := buildServiceSpec(appCfg)
+func runServiceInstall(kind serviceKind) {
+	appCfg := loadServiceConfig(kind)
+	spec, err := buildServiceSpec(appCfg, kind)
 	if err != nil {
-		fatal("pg service install: %v", err)
+		fatal("%s service install: %v", kind.Name, err)
 	}
 	warnUninheritedServiceEnv(
-		os.Stdout, setEnvVarsAffectingService(os.LookupEnv),
+		os.Stdout, setEnvVarsAffectingService(kind, os.LookupEnv),
 	)
-	mgr, err := newServiceManager()
+	mgr, err := newServiceManager(kind)
 	if err != nil {
-		fatal("pg service install: %v", err)
+		fatal("%s service install: %v", kind.Name, err)
 	}
 	ctx := context.Background()
 
 	if err := mgr.install(ctx, spec); err != nil {
-		fatal("pg service install: %v", err)
+		fatal("%s service install: %v", kind.Name, err)
 	}
 	fmt.Printf("Installed service unit at %s\n", mgr.unitPath())
 
@@ -165,25 +174,25 @@ func runServiceInstall() {
 
 	fmt.Println()
 	fmt.Println("Service installed and started.")
-	fmt.Println("View logs with: agentsview pg service logs -f")
+	fmt.Printf("View logs with: agentsview %s service logs -f\n", kind.Name)
 }
 
-func runServiceStatus() {
-	mgr, err := newServiceManager()
+func runServiceStatus(kind serviceKind) {
+	mgr, err := newServiceManager(kind)
 	if err != nil {
-		fatal("pg service status: %v", err)
+		fatal("%s service status: %v", kind.Name, err)
 	}
 	ctx := context.Background()
 	out, _ := mgr.status(ctx)
 	// Show the last successful push time from local sync state.
-	appCfg := loadServiceConfig()
-	database, derr := openReadOnlyDB(appCfg)
+	appCfg := loadServiceConfig(kind)
+	database, derr := openReadOnlyDB(ctx, appCfg)
 	if derr != nil {
 		writeServiceStatus(os.Stdout, out, "", false)
 		return
 	}
 	defer database.Close()
-	lastPush, gerr := readServiceLastPush(appCfg, database)
+	lastPush, gerr := readServiceLastPush(ctx, kind, appCfg, database)
 	if gerr != nil {
 		writeServiceStatus(os.Stdout, out, "", false)
 		return
@@ -206,58 +215,55 @@ func writeServiceStatus(
 	fmt.Fprintf(out, "Last push: %s\n", valueOrNever(lastPush))
 }
 
-func readServiceLastPush(
+func readServiceLastPush(ctx context.Context,
+	kind serviceKind,
 	appCfg config.Config,
-	database postgres.SyncStateStore,
+	database *db.DB,
 ) (string, error) {
-	targets, err := resolvePGTargetSelections(appCfg, "", false)
+	backend, err := replicaBackendNamed(kind.Name)
 	if err != nil {
 		return "", err
 	}
-	target := targets[0]
-	target, err = resolvePGTargetConfig(appCfg, target)
+	target, err := storage.DefaultTarget(backend, appCfg)
 	if err != nil {
 		return "", err
 	}
-	return postgres.ReadLastPushAt(
-		database,
-		target.SyncStateTarget,
-		target.PG.Projects,
-		target.PG.ExcludeProjects,
-		target.MigrateLegacySyncState,
+	return backend.LastPushAt(
+		ctx, database, target,
+		target.Projects, target.ExcludeProjects,
 	)
 }
 
-func runServiceSimple(action string) {
-	mgr, err := newServiceManager()
+func runServiceSimple(kind serviceKind, action string) {
+	mgr, err := newServiceManager(kind)
 	if err != nil {
-		fatal("pg service %s: %v", action, err)
+		fatal("%s service %s: %v", kind.Name, action, err)
 	}
 	ctx := context.Background()
 	switch action {
 	case "uninstall":
 		if err := mgr.uninstall(ctx); err != nil {
-			fatal("pg service uninstall: %v", err)
+			fatal("%s service uninstall: %v", kind.Name, err)
 		}
 		fmt.Println("Service stopped and removed.")
 	case "start":
 		if err := mgr.start(ctx); err != nil {
-			fatal("pg service start: %v", err)
+			fatal("%s service start: %v", kind.Name, err)
 		}
 		fmt.Println("Service started.")
 	case "stop":
 		if err := mgr.stop(ctx); err != nil {
-			fatal("pg service stop: %v", err)
+			fatal("%s service stop: %v", kind.Name, err)
 		}
 		fmt.Println("Service stopped.")
 	}
 }
 
-func runServiceLogs(follow bool) {
-	appCfg := loadServiceConfig()
-	logPath := filepath.Join(appCfg.DataDir, "pg-watch.log")
+func runServiceLogs(kind serviceKind, follow bool) {
+	appCfg := loadServiceConfig(kind)
+	logPath := filepath.Join(appCfg.DataDir, kind.LogName)
 	if err := tailFile(os.Stdout, logPath, follow); err != nil {
-		fatal("pg service logs: %v", err)
+		fatal("%s service logs: %v", kind.Name, err)
 	}
 }
 

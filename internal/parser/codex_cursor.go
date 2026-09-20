@@ -122,10 +122,10 @@ func (s *codexCursorState) MarshalBinary() ([]byte, error) {
 	if err := writeStr(s.lastTaskEvent); err != nil {
 		return nil, err
 	}
-	if err := write(uint8(s.pendingCallCount)); err != nil {
+	if err := write(s.pendingCallCount); err != nil {
 		return nil, err
 	}
-	for i := 0; i < int(s.pendingCallCount); i++ {
+	for i := range s.pendingCallCount {
 		pending := s.pendingCalls[i]
 		if err := writeStr(pending.id); err != nil {
 			return nil, err
@@ -227,7 +227,7 @@ func (s *codexCursorState) UnmarshalBinary(data []byte) error {
 		)
 	}
 	s.pendingCallCount = count
-	for i := 0; i < int(count); i++ {
+	for i := range count {
 		pending := &s.pendingCalls[i]
 		if pending.id, err = readStr(); err != nil {
 			return err
@@ -287,7 +287,7 @@ func (s *codexCursorState) rememberToolCall(
 }
 
 func (s *codexCursorState) toolCallName(id string) (string, bool) {
-	for i := 0; i < int(s.pendingCallCount); i++ {
+	for i := range s.pendingCallCount {
 		if s.pendingCalls[i].id == id {
 			return s.pendingCalls[i].name, true
 		}
@@ -298,7 +298,7 @@ func (s *codexCursorState) toolCallName(id string) (string, bool) {
 func (s *codexCursorState) toolCallPosition(
 	id string,
 ) (*ParsedToolCallPosition, bool) {
-	for i := 0; i < int(s.pendingCallCount); i++ {
+	for i := range s.pendingCallCount {
 		pending := s.pendingCalls[i]
 		if pending.id != id {
 			continue
@@ -315,13 +315,13 @@ func (s *codexCursorState) toolCallPosition(
 }
 
 func (s *codexCursorState) clearPendingCallPositions() {
-	for i := 0; i < int(s.pendingCallCount); i++ {
+	for i := range s.pendingCallCount {
 		s.pendingCalls[i].positionKnown = false
 	}
 }
 
 func (s *codexCursorState) forgetToolCall(id string) {
-	for i := 0; i < int(s.pendingCallCount); i++ {
+	for i := range s.pendingCallCount {
 		if s.pendingCalls[i].id != id {
 			continue
 		}
@@ -533,7 +533,7 @@ func cloneCodexCursorState(state codexCursorState) codexCursorState {
 	state.cwd = strings.Clone(state.cwd)
 	state.agentPath = strings.Clone(state.agentPath)
 	state.lastTaskEvent = strings.Clone(state.lastTaskEvent)
-	for i := 0; i < int(state.pendingCallCount); i++ {
+	for i := range state.pendingCallCount {
 		state.pendingCalls[i].id = strings.Clone(state.pendingCalls[i].id)
 		state.pendingCalls[i].name = strings.Clone(state.pendingCalls[i].name)
 	}
@@ -561,7 +561,7 @@ func estimateCodexCursorEntryBytes(
 
 func codexPendingCallStringBytes(state codexCursorState) int {
 	total := 0
-	for i := 0; i < int(state.pendingCallCount); i++ {
+	for i := range state.pendingCallCount {
 		total += len(state.pendingCalls[i].id) + len(state.pendingCalls[i].name)
 	}
 	return total

@@ -29,7 +29,7 @@ func TestFullContentCommitsSignalStateOnce(t *testing.T) {
 					scratch := newScratchStagedResults(t)
 					return d.ReplaceSessionContentStaged(t.Context(), "s1", msgs, scratch, nil, func(map[string]bool) (SessionSignalUpdate, []SecretFinding, error) { return update, nil, nil })
 				default:
-					return d.ReplaceSessionContent("s1", msgs, update, nil)
+					return d.ReplaceSessionContent(t.Context(), "s1", msgs, update, nil)
 				}
 			}
 			commits := 0
@@ -52,16 +52,16 @@ func TestFullContentCommitsSignalStateOnce(t *testing.T) {
 				before := commits
 				require.NoError(t, write())
 				assert.Equal(t, 1, commits-before, "content and seed must share one commit")
-				state, ok, err := d.GetSessionSignalState("s1")
+				state, ok, err := d.GetSessionSignalState(t.Context(), "s1")
 				require.NoError(t, err)
 				require.True(t, ok)
-				revision, err := d.TranscriptRevision("s1")
+				revision, err := d.TranscriptRevision(t.Context(), "s1")
 				require.NoError(t, err)
 				assert.Equal(t, revision, state.TranscriptRevision)
 				assert.Equal(t, []byte(content+"-state"), state.State)
 			}
 			// A failed seed must roll back the content too.
-			_, err = d.getWriter().Exec(`CREATE TRIGGER reject_signal_seed BEFORE INSERT ON session_signal_state BEGIN SELECT RAISE(ABORT, 'reject seed'); END`)
+			_, err = d.getWriter().Exec(t.Context(), `CREATE TRIGGER reject_signal_seed BEFORE INSERT ON session_signal_state BEGIN SELECT RAISE(ABORT, 'reject seed'); END`)
 			require.NoError(t, err)
 			msgs[0].Content = "must roll back"
 			if mode == "bulk" {

@@ -1,9 +1,10 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Pre-change baseline for content-search page fetches. CI's bench-gate
@@ -44,7 +45,7 @@ func seedContentSearchBench(b *testing.B, d *DB) {
 	b.Helper()
 	for i := range benchContentSessions {
 		sessionID := fmt.Sprintf("bench-search-%03d", i)
-		if err := d.UpsertSession(Session{
+		if err := d.UpsertSession(b.Context(), Session{
 			ID: sessionID, Project: "bench", Machine: "local", Agent: "claude",
 			// MessageCount > 0 so buildSessionFilter's base
 			// "message_count > 0" predicate keeps the session; UserMessageCount
@@ -53,11 +54,11 @@ func seedContentSearchBench(b *testing.B, d *DB) {
 			MessageCount:     benchContentMessages,
 			UserMessageCount: 2,
 		}); err != nil {
-			b.Fatalf("seed session %s: %v", sessionID, err)
+			require.NoErrorf(b, err, "seed session %s", sessionID)
 		}
 		msgs := benchContentSearchMessages(sessionID)
-		if err := d.InsertMessages(msgs); err != nil {
-			b.Fatalf("seed messages for %s: %v", sessionID, err)
+		if err := d.InsertMessages(b.Context(), msgs); err != nil {
+			require.NoErrorf(b, err, "seed messages for %s", sessionID)
 		}
 	}
 }
@@ -139,9 +140,10 @@ func BenchmarkSearchContentSubstringPage(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		page, err := d.SearchContent(context.Background(), f)
+		page, err := d.SearchContent(b.Context(), f)
 		if err != nil || len(page.Matches) != 50 {
-			b.Fatalf("search: %v (%d matches, want a full 50-hit page)", err, len(page.Matches))
+			require.NoError(b, err, "search")
+			require.Len(b, page.Matches, 50, "search matches")
 		}
 	}
 }
@@ -153,7 +155,7 @@ func BenchmarkSearchContentSubstringPage(b *testing.B) {
 // derivation shape this benchmark exists to measure.
 func BenchmarkSearchContentFTSPage(b *testing.B) {
 	d := testDB(b)
-	if !d.HasFTS() {
+	if !d.HasFTS(b.Context()) {
 		b.Skip("fts5 not available")
 	}
 	seedContentSearchBench(b, d)
@@ -161,9 +163,10 @@ func BenchmarkSearchContentFTSPage(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		page, err := d.SearchContent(context.Background(), f)
+		page, err := d.SearchContent(b.Context(), f)
 		if err != nil || len(page.Matches) != 50 {
-			b.Fatalf("search: %v (%d matches, want a full 50-hit page)", err, len(page.Matches))
+			require.NoError(b, err, "search")
+			require.Len(b, page.Matches, 50, "search matches")
 		}
 	}
 }

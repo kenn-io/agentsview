@@ -3,21 +3,20 @@
 package duckdb
 
 import (
-	"context"
 	"encoding/json/v2"
-	"errors"
 	"slices"
 	"testing"
 
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
+	"go.kenn.io/agentsview/internal/storage"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestDuckDBSessionDateFilterIncludesOverlappingSessions(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	for _, session := range []db.Session{
 		{
@@ -35,14 +34,14 @@ func TestDuckDBSessionDateFilterIncludesOverlappingSessions(t *testing.T) {
 			StartedAt: new("2024-06-15T22:00:00Z"), MessageCount: 2,
 		},
 	} {
-		require.NoError(t, local.UpsertSession(session), "upsert %s", session.ID)
+		require.NoError(t, local.UpsertSession(ctx, session), "upsert %s", session.ID)
 	}
-	require.NoError(t, local.InsertMessages([]db.Message{{
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{{
 		SessionID: "open", Ordinal: 1, Role: "user", Content: "x",
 		Timestamp: "2024-06-16T11:00:00Z", ContentLength: 1,
 	}}), "insert open-session message")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err, "push to DuckDB")
@@ -63,12 +62,12 @@ func TestDuckDBSessionDateFilterIncludesOverlappingSessions(t *testing.T) {
 }
 
 func TestClaudeProvenanceRoundTrip(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	startedAt := "2024-06-15T08:00:00Z"
 	endedAt := "2024-06-15T09:00:00Z"
 	sessionName := "Agent Title"
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(ctx, db.Session{
 		ID:               "duck-identity",
 		Project:          "duck-identity",
 		Machine:          "local",
@@ -85,7 +84,7 @@ func TestClaudeProvenanceRoundTrip(t *testing.T) {
 	}), "upsert identity session")
 	_, err := local.AssignSessionProject(ctx, "duck-identity", "duck_identity")
 	require.NoError(t, err, "assign identity session project")
-	require.NoError(t, local.InsertMessages([]db.Message{{
+	require.NoError(t, local.InsertMessages(ctx, []db.Message{{
 		SessionID:     "duck-identity",
 		Ordinal:       0,
 		Role:          "user",
@@ -94,7 +93,7 @@ func TestClaudeProvenanceRoundTrip(t *testing.T) {
 		PromptSource:  "typed",
 	}}), "insert identity message")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err, "push to DuckDB")
@@ -125,7 +124,7 @@ func TestClaudeProvenanceRoundTrip(t *testing.T) {
 }
 
 func TestDuckDBSidebarIndexTotalCountsCanonicalRoots(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	rootID := "sidebar-root"
 	missingParentID := "missing-parent"
@@ -151,10 +150,10 @@ func TestDuckDBSidebarIndexTotalCountsCanonicalRoots(t *testing.T) {
 			RelationshipType: "subagent",
 		},
 	} {
-		require.NoError(t, local.UpsertSession(session), "upsert %s", session.ID)
+		require.NoError(t, local.UpsertSession(ctx, session), "upsert %s", session.ID)
 	}
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	pushDataReadMirror(t, ctx, syncer)
 	store := NewStoreFromDB(syncer.DB())
 
@@ -195,7 +194,7 @@ func TestDuckDBStoreContract(t *testing.T) {
 
 func TestDuckDBSystemPrefixSQLTerminalRemainder(t *testing.T) {
 	conn := openTestDuckDB(t)
-	rows, err := conn.Query(`
+	rows, err := conn.QueryContext(t.Context(), `
 		WITH candidates(label, role, content) AS (VALUES
 			('reminder-only', 'user', '<system-reminder>a</system-reminder><system-reminder>b</system-reminder>'),
 			('reminder-task', 'user', '<system-reminder>a</system-reminder><task-notification>done</task-notification>'),
@@ -203,7 +202,7 @@ func TestDuckDBSystemPrefixSQLTerminalRemainder(t *testing.T) {
 			('reminder-malformed', 'user', '<system-reminder>a')
 		)
 		SELECT label FROM candidates
-		WHERE ` + db.DuckDBSystemPrefixSQL("content", "role") + `
+		WHERE `+db.DuckDBSystemPrefixSQL("content", "role")+`
 		ORDER BY label`)
 	require.NoError(t, err)
 	defer rows.Close()
@@ -231,10 +230,10 @@ func TestDuckDBStoreHasSemanticFalse(t *testing.T) {
 func TestDuckDBSearchContentSemanticModesUnavailable(t *testing.T) {
 	s := &Store{}
 	for _, mode := range []string{"semantic", "hybrid"} {
-		_, err := s.SearchContent(context.Background(),
+		_, err := s.SearchContent(t.Context(),
 			db.ContentSearchFilter{Pattern: "x", Mode: mode})
 		require.Error(t, err, "mode %q", mode)
-		assert.True(t, errors.Is(err, db.ErrSemanticUnavailable),
+		require.ErrorIs(t, err, db.ErrSemanticUnavailable,
 			"mode %q: want ErrSemanticUnavailable, got %v", mode, err)
 		assert.Contains(t, err.Error(),
 			"semantic search is not supported by the DuckDB backend",
@@ -266,12 +265,12 @@ func TestDuckDBSearchContentSemanticInvalidInputReturns400Before501(t *testing.T
 			t.Run(mode+"/"+tc.name, func(t *testing.T) {
 				f := tc.f
 				f.Mode = mode
-				_, err := s.SearchContent(context.Background(), f)
+				_, err := s.SearchContent(t.Context(), f)
 				require.Error(t, err)
 				var inputErr *db.SearchInputError
-				assert.True(t, errors.As(err, &inputErr),
+				require.ErrorAs(t, err, &inputErr,
 					"expected *db.SearchInputError, got %T: %v", err, err)
-				assert.False(t, errors.Is(err, db.ErrSemanticUnavailable),
+				assert.NotErrorIs(t, err, db.ErrSemanticUnavailable,
 					"invalid input must not be masked as ErrSemanticUnavailable")
 			})
 		}
@@ -279,15 +278,15 @@ func TestDuckDBSearchContentSemanticInvalidInputReturns400Before501(t *testing.T
 }
 
 func TestDuckDBFindSessionIDsByPartialLiteralCaseSensitive(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	for _, id := range []string{"abc_def", "abcXdef", "abc%def", "ABCdef"} {
-		require.NoError(t, local.UpsertSession(db.Session{
+		require.NoError(t, local.UpsertSession(ctx, db.Session{
 			ID: id, Project: "proj", Machine: "test",
 			Agent: "claude", MessageCount: 1,
 		}), "upsert %q", id)
 	}
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -308,20 +307,20 @@ func TestDuckDBFindSessionIDsByPartialLiteralCaseSensitive(t *testing.T) {
 }
 
 func TestDuckDBFindSessionIDsByRawSuffix(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	for _, id := range []string{
 		"plain-id", "codex:uuid", "host~uuid", "host~uuid-fork",
 		"host~P-E", "host~wild_%_literal", "host~trashed",
 	} {
-		require.NoError(t, local.UpsertSession(db.Session{
+		require.NoError(t, local.UpsertSession(ctx, db.Session{
 			ID: id, Project: "proj", Machine: "test",
 			Agent: "claude", MessageCount: 1,
 		}), "upsert %q", id)
 	}
-	require.NoError(t, local.SoftDeleteSession("host~trashed"))
+	require.NoError(t, local.SoftDeleteSession(ctx, "host~trashed"))
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err := syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -357,7 +356,8 @@ func duckContractSessionsCursorsAndMetadata(
 	t *testing.T, store *Store, fixture syncFixture,
 ) {
 	t.Helper()
-	ctx := context.Background()
+
+	ctx := t.Context()
 
 	page, err := store.ListSessions(ctx, db.SessionFilter{Limit: 1})
 	require.NoError(t, err)
@@ -441,6 +441,7 @@ func duckContractSessionsCursorsAndMetadata(
 
 func assertDuckJSONTranscriptRevision(t *testing.T, value any, want string) {
 	t.Helper()
+
 	raw, err := json.Marshal(value)
 	require.NoError(t, err)
 	var fields map[string]any
@@ -454,7 +455,8 @@ func duckContractMessagesSearchAndSecrets(
 	t *testing.T, store *Store, fixture syncFixture,
 ) {
 	t.Helper()
-	ctx := context.Background()
+
+	ctx := t.Context()
 
 	msgs, err := store.GetMessages(ctx, fixture.alphaID, 0, 10, true)
 	require.NoError(t, err)
@@ -523,22 +525,23 @@ func duckContractReadOnlyCuration(
 	t *testing.T, store *Store, fixture syncFixture,
 ) {
 	t.Helper()
-	ctx := context.Background()
+
+	ctx := t.Context()
 
 	stars, err := store.ListStarredSessionIDs(ctx)
 	require.NoError(t, err)
 	require.Equal(t, []string{fixture.alphaID}, stars)
 
-	ok, err := store.StarSession(fixture.betaID)
+	ok, err := store.StarSession(ctx, fixture.betaID)
 	require.ErrorIs(t, err, db.ErrReadOnly)
 	require.False(t, ok)
-	require.ErrorIs(t, store.UnstarSession(fixture.alphaID), db.ErrReadOnly)
-	require.ErrorIs(t, store.BulkStarSessions([]string{fixture.betaID}), db.ErrReadOnly)
+	require.ErrorIs(t, store.UnstarSession(ctx, fixture.alphaID), db.ErrReadOnly)
+	require.ErrorIs(t, store.BulkStarSessions(ctx, []string{fixture.betaID}), db.ErrReadOnly)
 
-	pinID, err := store.PinMessage(fixture.alphaID, 1, nil)
+	pinID, err := store.PinMessage(ctx, fixture.alphaID, 1, nil)
 	require.ErrorIs(t, err, db.ErrReadOnly)
 	require.Zero(t, pinID)
-	require.ErrorIs(t, store.UnpinMessage(fixture.alphaID, 1), db.ErrReadOnly)
+	require.ErrorIs(t, store.UnpinMessage(ctx, fixture.alphaID, 1), db.ErrReadOnly)
 
 	pins, err := store.ListPinnedMessages(ctx, fixture.alphaID, "")
 	require.NoError(t, err)
@@ -550,7 +553,8 @@ func duckContractAnalyticsTrendsAndUsage(
 	t *testing.T, store *Store, fixture syncFixture,
 ) {
 	t.Helper()
-	ctx := context.Background()
+
+	ctx := t.Context()
 	filter := db.AnalyticsFilter{From: "2026-01-01", To: "2026-01-31", Timezone: "UTC"}
 
 	summary, err := store.GetAnalyticsSummary(ctx, filter)
@@ -622,18 +626,18 @@ func duckContractLocalOnlyMethodsReadOnly(
 	t.Helper()
 	require.True(t, store.ReadOnly())
 	name := "ignored"
-	requireReadOnlyDuck(t, store.RenameSession(fixture.alphaID, &name))
-	requireReadOnlyDuck(t, store.SoftDeleteSession(fixture.alphaID))
-	_, err := store.RestoreSession(fixture.alphaID)
+	requireReadOnlyDuck(t, store.RenameSession(t.Context(), fixture.alphaID, &name))
+	requireReadOnlyDuck(t, store.SoftDeleteSession(t.Context(), fixture.alphaID))
+	_, err := store.RestoreSession(t.Context(), fixture.alphaID)
 	requireReadOnlyDuck(t, err)
-	_, err = store.DeleteSessionIfTrashed(fixture.alphaID)
+	_, err = store.DeleteSessionIfTrashed(t.Context(), fixture.alphaID)
 	requireReadOnlyDuck(t, err)
-	_, err = store.EmptyTrash()
+	_, err = store.EmptyTrash(t.Context())
 	requireReadOnlyDuck(t, err)
-	_, err = store.InsertInsight(db.Insight{})
+	_, err = store.InsertInsight(t.Context(), db.Insight{})
 	requireReadOnlyDuck(t, err)
-	requireReadOnlyDuck(t, store.DeleteInsight(1))
-	_, err = store.RecordRecallQueryEvent(context.Background(), db.RecallQueryEvent{
+	requireReadOnlyDuck(t, store.DeleteInsight(t.Context(), 1))
+	_, err = store.RecordRecallQueryEvent(t.Context(), db.RecallQueryEvent{
 		Surface: db.RecallQuerySurfaceQuery,
 	})
 	requireReadOnlyDuck(t, err)
@@ -650,7 +654,8 @@ func duckContractDataInventoryRulesCandidates(
 	t *testing.T, store *Store, _ syncFixture,
 ) {
 	t.Helper()
-	ctx := context.Background()
+
+	ctx := t.Context()
 
 	inventory, err := store.GetProjectInventory(ctx, db.ProjectDateFilter{})
 	require.NoError(t, err)
@@ -681,16 +686,16 @@ func duckContractDataInventoryRulesCandidates(
 func requireReadOnlyDuck(t *testing.T, err error) {
 	t.Helper()
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, db.ErrReadOnly), "expected ErrReadOnly, got %v", err)
+	assert.ErrorIs(t, err, db.ErrReadOnly, "expected ErrReadOnly, got %v", err)
 }
 
 func TestDuckDBGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows(
 	t *testing.T,
 ) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	ts := "2024-06-15T10:00:00Z"
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session: db.Session{
 			ID:               "duck-copilot-empty",
 			Project:          "alpha",
@@ -713,7 +718,7 @@ func TestDuckDBGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows
 	}})
 	require.NoError(t, err, "seed copilot session")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -732,10 +737,10 @@ func TestDuckDBGetUsageMatchingSessionCountCountsCopilotSessionsWithoutUsageRows
 func TestDuckDBGetUsageMatchingSessionCountCountsCopilotSessionByMessageTimestampOutsideSessionWindow(
 	t *testing.T,
 ) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	activityTS := "2026-02-08T10:00:00Z"
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
 		{
 			Session: db.Session{
 				ID:               "duck-copilot-late-message",
@@ -781,7 +786,7 @@ func TestDuckDBGetUsageMatchingSessionCountCountsCopilotSessionByMessageTimestam
 	})
 	require.NoError(t, err, "seed copilot sessions")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -805,11 +810,11 @@ func TestDuckDBGetUsageMatchingSessionCountCountsCopilotSessionByMessageTimestam
 func TestDuckDBGetUsageMatchingSessionCountModelFilterAppliesToBoundedRow(
 	t *testing.T,
 ) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	startedAt := "2026-02-08T10:00:00Z"
 	endedAt := "2026-02-10T12:00:00Z"
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session: db.Session{
 			ID:               "duck-copilot-mixed-model",
 			Project:          "alpha",
@@ -842,7 +847,7 @@ func TestDuckDBGetUsageMatchingSessionCountModelFilterAppliesToBoundedRow(
 	}})
 	require.NoError(t, err, "seed mixed-model copilot session")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -866,10 +871,10 @@ func TestDuckDBGetUsageMatchingSessionCountModelFilterAppliesToBoundedRow(
 func TestDuckDBGetUsageMatchingSessionCountCountsAssistantMessageWithNoModel(
 	t *testing.T,
 ) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	ts := "2026-02-10T10:00:00Z"
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{{
 		Session: db.Session{
 			ID:               "duck-copilot-no-model",
 			Project:          "alpha",
@@ -892,7 +897,7 @@ func TestDuckDBGetUsageMatchingSessionCountCountsAssistantMessageWithNoModel(
 	}})
 	require.NoError(t, err, "seed no-model copilot session")
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)
@@ -916,10 +921,10 @@ func TestDuckDBGetUsageMatchingSessionCountCountsAssistantMessageWithNoModel(
 func TestDuckDBGetUsageMatchingSessionCountUnboundedMatchesBoundedSemantics(
 	t *testing.T,
 ) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local := newLocalDB(t)
 	ts := "2026-03-01T10:00:00Z"
-	_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{
+	_, err := local.WriteSessionBatchAtomic(ctx, []db.SessionBatchWrite{
 		{
 			Session: db.Session{
 				ID:               "duck-copilot-live",
@@ -983,9 +988,9 @@ func TestDuckDBGetUsageMatchingSessionCountUnboundedMatchesBoundedSemantics(
 		},
 	})
 	require.NoError(t, err, "seed copilot sessions")
-	require.NoError(t, local.SoftDeleteSession("duck-copilot-trashed"))
+	require.NoError(t, local.SoftDeleteSession(ctx, "duck-copilot-trashed"))
 
-	syncer := newInMemoryTestSync(t, local, SyncOptions{})
+	syncer := newInMemoryTestSync(t, local, storage.MirrorPushOptions{})
 	require.NoError(t, createSchema(ctx, syncer.DB()))
 	_, err = syncer.pushEverything(ctx, nil)
 	require.NoError(t, err)

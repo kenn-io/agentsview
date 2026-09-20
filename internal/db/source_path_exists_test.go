@@ -34,7 +34,7 @@ func TestHasActiveSessionSourceBelow(t *testing.T) {
 			s.FilePath = &path
 		})
 	}
-	require.NoError(t, database.SoftDeleteSession("deleted"))
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "deleted"))
 	baselineSessionSource(t, database, defaultMachine, "codex", sourceMissingPath)
 	changed, err := database.MarkSessionSourceMissing(
 		t.Context(), defaultMachine, "codex", "source-missing", sourceMissingPath,
@@ -55,7 +55,7 @@ func TestHasActiveSessionSourceBelow(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := database.HasActiveSessionSourceBelow(tc.agent, tc.path)
+			got, err := database.HasActiveSessionSourceBelow(t.Context(), tc.agent, tc.path)
 			require.NoError(t, err)
 			assert.Equal(t, tc.want, got)
 		})
@@ -71,7 +71,7 @@ func TestHasActiveSessionSourceBelow(t *testing.T) {
 	} {
 		t.Run(tc.name+" query shape", func(t *testing.T) {
 			lower, upper := activeSessionSourceBounds(tc.path)
-			rows, err := database.getReader().Query(
+			rows, err := database.getReader().Query(t.Context(),
 				hasActiveSessionSourceBelowQuery,
 				"codex", lower, upper,
 			)
@@ -83,11 +83,11 @@ func TestHasActiveSessionSourceBelow(t *testing.T) {
 				gotRows = append(gotRows, one)
 			}
 			require.NoError(t, rows.Err())
-			require.NoError(t, rows.Close())
+			defer rows.Close()
 			assert.Equal(t, tc.wantRows, gotRows,
 				"the prefix probe must return at most its one sentinel row")
 
-			planRows, err := database.getReader().Query(
+			planRows, err := database.getReader().Query(t.Context(),
 				"EXPLAIN QUERY PLAN "+hasActiveSessionSourceBelowQuery,
 				"codex", lower, upper,
 			)
@@ -100,7 +100,7 @@ func TestHasActiveSessionSourceBelow(t *testing.T) {
 				plan = append(plan, detail)
 			}
 			require.NoError(t, planRows.Err())
-			require.NoError(t, planRows.Close())
+			defer planRows.Close()
 			assert.Condition(t, func() bool {
 				return strings.Contains(strings.Join(plan, "\n"),
 					"idx_sessions_agent_file_path_active (agent=? AND file_path>? AND file_path<?)")

@@ -3,6 +3,7 @@ package parser
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -119,7 +120,7 @@ func (lr *lineReader) nextBytes() ([]byte, bool) {
 	for {
 		line, err := lr.readLineBytes()
 		if err != nil {
-			if err != io.EOF {
+			if !errors.Is(err, io.EOF) {
 				lr.err = err
 			}
 			return nil, false

@@ -9,6 +9,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// sessionWatchStarted observes successful subscription before consuming events.
+var sessionWatchStarted func()
+
 func newSessionWatchCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:          "watch <id>",
@@ -34,6 +37,9 @@ func newSessionWatchCommand() *cobra.Command {
 			ch, err := svc.Watch(cmd.Context(), id)
 			if err != nil {
 				return err
+			}
+			if sessionWatchStarted != nil {
+				sessionWatchStarted()
 			}
 			enc := jsontext.NewEncoder(cmd.OutOrStdout())
 			for ev := range ch {

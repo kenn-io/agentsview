@@ -446,9 +446,6 @@ func stripCanceledLeaves(err error) (error, bool) {
 	if err == nil {
 		return nil, false
 	}
-	if err == context.Canceled {
-		return nil, true
-	}
 	if tree, ok := err.(interface{ Unwrap() []error }); ok {
 		branches := tree.Unwrap()
 		kept := make([]error, 0, len(branches))
@@ -481,6 +478,10 @@ func stripCanceledLeaves(err error) (error, bool) {
 			// the original wrapper and its canceled branch.
 			return stripped, true
 		}
+		return err, false
+	}
+	if errors.Is(err, context.Canceled) {
+		return nil, true
 	}
 	return err, false
 }

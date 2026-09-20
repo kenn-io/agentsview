@@ -137,7 +137,8 @@ func canonicalRawCaptureTestPath(t *testing.T, path string) string {
 
 func TestResolveRawCapturePlanLeavesUnsupportedProviderUntouched(t *testing.T) {
 	provider := &rawCaptureTestProvider{
-		Def: AgentDef{Type: AgentClaude}}
+		Def: AgentDef{Type: AgentClaude},
+	}
 
 	plan, ok, err := ResolveRawCapturePlan(t.Context(), provider, SourceRef{
 		Provider: AgentClaude,
@@ -153,7 +154,8 @@ func TestResolveRawCapturePlanLeavesUnsupportedProviderUntouched(t *testing.T) {
 func TestResolveRawCapturePlanRequiresDeclaredInterface(t *testing.T) {
 	provider := &rawCaptureUndeclaredProvider{
 		Def:  AgentDef{Type: AgentClaude},
-		Caps: rawCaptureTestCapabilities()}
+		Caps: rawCaptureTestCapabilities(),
+	}
 
 	_, ok, err := ResolveRawCapturePlan(t.Context(), provider, SourceRef{
 		Provider: AgentClaude,

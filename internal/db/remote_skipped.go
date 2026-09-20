@@ -10,10 +10,10 @@ import (
 
 // LoadRemoteSkippedFiles returns persisted skip cache entries
 // for the given remote host as a map from path to file_mtime.
-func (db *DB) LoadRemoteSkippedFiles(
+func (db *DB) LoadRemoteSkippedFiles(ctx context.Context,
 	host string,
 ) (map[string]int64, error) {
-	rows, err := db.getReader().Query(
+	rows, err := db.getReader().Query(ctx,
 		"SELECT path, file_mtime FROM remote_skipped_files"+
 			" WHERE host = ?",
 		host,
@@ -77,42 +77,49 @@ func (db *DB) LoadRemoteSkippedFilesForScopes(
 
 	result := make(map[string]int64)
 	for _, prefix := range prefixes {
-		rows, err := db.getReader().QueryContext(
-			ctx,
-			`SELECT path, file_mtime FROM remote_skipped_files
+		if err := func() error {
+			rows, err := db.getReader().QueryContext(
+				ctx,
+				`SELECT path, file_mtime FROM remote_skipped_files
 			 WHERE host = ? AND path >= ? AND path < ?`,
-			host, prefix, prefix+"\U0010ffff",
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"loading scoped remote skipped files for %s: %w", host, err,
+				host, prefix, prefix+"\U0010ffff",
 			)
-		}
-		for rows.Next() {
-			var path string
-			var mtime int64
-			if err := rows.Scan(&path, &mtime); err != nil {
-				_ = rows.Close()
-				return nil, fmt.Errorf(
-					"scanning scoped remote skipped file: %w", err,
+			if err != nil {
+				return fmt.Errorf(
+					"loading scoped remote skipped files for %s: %w", host, err,
 				)
 			}
-			base := remoteSkippedFileBasePath(path)
-			_, exactMatch := exact[base]
-			if !exactMatch && !remoteSkippedFileWithinAnyRoot(base, roots) {
-				continue
+			defer rows.Close()
+			for rows.Next() {
+				var path string
+				var mtime int64
+				if err := rows.Scan(&path, &mtime); err != nil {
+					_ = rows.Close()
+					return fmt.Errorf(
+						"scanning scoped remote skipped file: %w", err,
+					)
+				}
+				base := remoteSkippedFileBasePath(path)
+				_, exactMatch := exact[base]
+				if !exactMatch && !remoteSkippedFileWithinAnyRoot(base, roots) {
+					continue
+				}
+				result[path] = mtime
 			}
-			result[path] = mtime
-		}
-		if err := rows.Close(); err != nil {
-			return nil, fmt.Errorf(
-				"closing scoped remote skipped file rows: %w", err,
-			)
-		}
-		if err := rows.Err(); err != nil {
-			return nil, fmt.Errorf(
-				"iterating scoped remote skipped files: %w", err,
-			)
+			if err := rows.Close(); err != nil {
+				return fmt.Errorf(
+					"closing scoped remote skipped file rows: %w", err,
+				)
+			}
+			if err := rows.Err(); err != nil {
+				return fmt.Errorf(
+					"iterating scoped remote skipped files: %w", err,
+				)
+			}
+
+			return nil
+		}(); err != nil {
+			return nil, err
 		}
 	}
 	return result, nil
@@ -136,7 +143,7 @@ func remoteSkippedFileWithinAnyRoot(path string, roots map[string]struct{}) bool
 
 // ClearRemoteSkippedFiles removes all skip cache entries for the given host.
 // Entries for other hosts are not affected.
-func (db *DB) ClearRemoteSkippedFiles(host string) error {
+func (db *DB) ClearRemoteSkippedFiles(ctx context.Context, host string) error {
 	if err := db.requireWritable(); err != nil {
 		return err
 	}
@@ -144,7 +151,7 @@ func (db *DB) ClearRemoteSkippedFiles(host string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	if _, err := db.getWriter().Exec(
+	if _, err := db.getWriter().Exec(ctx,
 		"DELETE FROM remote_skipped_files WHERE host = ?",
 		host,
 	); err != nil {
@@ -159,19 +166,19 @@ func (db *DB) ClearRemoteSkippedFiles(host string) error {
 // ReplaceRemoteSkippedFiles replaces all skip cache entries
 // for the given host in a single transaction. Entries for
 // other hosts are not affected.
-func (db *DB) ReplaceRemoteSkippedFiles(
+func (db *DB) ReplaceRemoteSkippedFiles(ctx context.Context,
 	host string, entries map[string]int64,
 ) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if _, err := tx.Exec(
+	if _, err := tx.ExecContext(ctx,
 		"DELETE FROM remote_skipped_files WHERE host = ?",
 		host,
 	); err != nil {
@@ -181,8 +188,8 @@ func (db *DB) ReplaceRemoteSkippedFiles(
 		)
 	}
 
-	stmt, err := tx.Prepare(
-		"INSERT INTO remote_skipped_files" +
+	stmt, err := tx.PrepareContext(ctx,
+		"INSERT INTO remote_skipped_files"+
 			" (host, path, file_mtime) VALUES (?, ?, ?)",
 	)
 	if err != nil {
@@ -191,7 +198,7 @@ func (db *DB) ReplaceRemoteSkippedFiles(
 	defer stmt.Close()
 
 	for path, mtime := range entries {
-		if _, err := stmt.Exec(host, path, mtime); err != nil {
+		if _, err := stmt.ExecContext(ctx, host, path, mtime); err != nil {
 			return fmt.Errorf(
 				"inserting remote skipped file %s: %w",
 				path, err,
@@ -204,7 +211,7 @@ func (db *DB) ReplaceRemoteSkippedFiles(
 
 // ApplyRemoteSkippedFileChanges deletes and upserts selected host cache rows
 // in one transaction. Unmentioned paths and other hosts are left untouched.
-func (db *DB) ApplyRemoteSkippedFileChanges(
+func (db *DB) ApplyRemoteSkippedFileChanges(ctx context.Context,
 	host string,
 	deletes []string,
 	upserts map[string]int64,
@@ -218,13 +225,13 @@ func (db *DB) ApplyRemoteSkippedFileChanges(
 
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin remote skip cache update: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	deleteStmt, err := tx.Prepare(
+	deleteStmt, err := tx.PrepareContext(ctx,
 		"DELETE FROM remote_skipped_files WHERE host = ? AND path = ?",
 	)
 	if err != nil {
@@ -232,12 +239,12 @@ func (db *DB) ApplyRemoteSkippedFileChanges(
 	}
 	defer deleteStmt.Close()
 	for _, path := range deletes {
-		if _, err := deleteStmt.Exec(host, path); err != nil {
+		if _, err := deleteStmt.ExecContext(ctx, host, path); err != nil {
 			return fmt.Errorf("deleting remote skipped file %s: %w", path, err)
 		}
 	}
 
-	upsertStmt, err := tx.Prepare(
+	upsertStmt, err := tx.PrepareContext(ctx,
 		`INSERT INTO remote_skipped_files (host, path, file_mtime)
 		 VALUES (?, ?, ?)
 		 ON CONFLICT(host, path) DO UPDATE SET file_mtime = excluded.file_mtime`,
@@ -252,7 +259,7 @@ func (db *DB) ApplyRemoteSkippedFileChanges(
 	}
 	sort.Strings(paths)
 	for _, path := range paths {
-		if _, err := upsertStmt.Exec(host, path, upserts[path]); err != nil {
+		if _, err := upsertStmt.ExecContext(ctx, host, path, upserts[path]); err != nil {
 			return fmt.Errorf("upserting remote skipped file %s: %w", path, err)
 		}
 	}

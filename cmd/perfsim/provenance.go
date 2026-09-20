@@ -2,7 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
-	"fmt"
+	"encoding/hex"
 	"io"
 	"os"
 	"runtime/debug"
@@ -31,7 +31,7 @@ func provenance() buildProvenance {
 			defer f.Close()
 			h := sha256.New()
 			if _, err := io.Copy(h, f); err == nil {
-				p.ExecutableSHA256 = fmt.Sprintf("%x", h.Sum(nil))
+				p.ExecutableSHA256 = hex.EncodeToString(h.Sum(nil))
 			}
 		}
 	}

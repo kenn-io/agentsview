@@ -20,7 +20,7 @@ func TestWriteArchiveSkipsFIFO(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		var buf bytes.Buffer
-		done <- WriteArchive(&buf, TargetSet{ExtraFiles: []string{fifo}})
+		done <- WriteArchive(t.Context(), &buf, TargetSet{ExtraFiles: []string{fifo}})
 	}()
 
 	select {

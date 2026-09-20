@@ -100,6 +100,7 @@ type issue1476WatchFactory struct{ provider *issue1476WatchProvider }
 
 func (f issue1476WatchFactory) Definition() parser.AgentDef       { return f.provider.Definition() }
 func (f issue1476WatchFactory) Capabilities() parser.Capabilities { return f.provider.Capabilities() }
+
 func (f issue1476WatchFactory) NewProvider(cfg parser.ProviderConfig) parser.Provider {
 	clone := *f.provider
 	clone.Config = cfg.Clone()
@@ -119,7 +120,7 @@ func newIssue1476WatchEngine(
 		agentDirs[agent] = []string{root}
 		modes[agent] = parser.ProviderMigrationProviderAuthoritative
 	}
-	engine := NewEngine(openTestDB(t), EngineConfig{
+	engine := NewEngine(t.Context(), openTestDB(t), EngineConfig{
 		AgentDirs: agentDirs, Machine: "local", ProviderFactories: factories,
 		ProviderMigrationModes: modes,
 	})
@@ -198,7 +199,7 @@ func TestSyncWatchBatchThenRunDeferredPathExecutesPlannedRoot(t *testing.T) {
 	require.Error(t, err)
 	assert.False(t, workCalled,
 		"deferred processing must not run post-sync acknowledgement work")
-	assert.Greater(t, discoverCalls.Load(), int32(0),
+	assert.Positive(t, discoverCalls.Load(),
 		"producer-marked defer-only paths must allow one planned root phase")
 	var retry interface{ WatchRetryBatch() WatchBatch }
 	require.ErrorAs(t, err, &retry)
@@ -237,7 +238,7 @@ func TestSyncWatchBatchThenRunComposesDeferredPathAndRootFailure(t *testing.T) {
 		Paths: []string{path}, ReconcileRoots: []string{root}, LostEvents: true,
 	}, nil, nil)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, rootCause)
+	require.ErrorIs(t, err, rootCause)
 	var retry interface{ WatchRetryBatch() WatchBatch }
 	require.ErrorAs(t, err, &retry)
 	assert.Equal(t, WatchBatch{
@@ -270,7 +271,7 @@ func TestSyncWatchBatchThenRunMixedDeferredErrorsSuppressRoots(t *testing.T) {
 		Paths: []string{path}, ReconcileRoots: []string{root},
 	}, nil, nil)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, classificationCause)
+	require.ErrorIs(t, err, classificationCause)
 	var deferOnly interface{ ReconciliationRetryDeferOnly() bool }
 	require.ErrorAs(t, err, &deferOnly)
 	assert.False(t, deferOnly.ReconciliationRetryDeferOnly())
@@ -303,7 +304,7 @@ func TestSyncWatchBatchThenRunDeferredCancellationSuppressesRoots(t *testing.T) 
 		Paths: []string{path}, ReconcileRoots: []string{root},
 	}, nil, nil)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	var deferOnly interface{ ReconciliationRetryDeferOnly() bool }
 	require.ErrorAs(t, err, &deferOnly)
 	assert.False(t, deferOnly.ReconciliationRetryDeferOnly())
@@ -363,7 +364,7 @@ func TestIssue1476SourceProofWithheldCoversDeferredAndHardFailures(t *testing.T)
 			assert.True(t, tc.job.sourceProofWithheld(tc.hard))
 		})
 	}
-	assert.False(t, (processResult{}).sourceProofWithheld(false))
+	assert.False(t, (&processResult{}).sourceProofWithheld(false))
 	t.Log("proof gate: hard failure, deferred count, retry session IDs, and legacy retry all withhold")
 }
 
@@ -424,7 +425,7 @@ func TestIssue1476OverflowRetryBatchReachesWatcherBackoff(t *testing.T) {
 				}},
 				sources: sources, parseOutcomes: outcomes,
 			}
-			engine := NewEngine(database, EngineConfig{
+			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{agent: {root}}, Machine: "local",
 				ProviderFactories: []parser.ProviderFactory{manyStreamingFactory{provider}},
 				ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{
@@ -519,7 +520,7 @@ func TestIssue1476WatchBatchKeepsExactDeferredPath(t *testing.T) {
 		cause, []string{`C:\sessions\changed.jsonl`}, []string{`C:\sessions`}, false, false,
 	)
 	var retry interface{ WatchRetryBatch() WatchBatch }
-	require.True(t, errors.As(err, &retry))
+	require.ErrorAs(t, err, &retry)
 	assert.Equal(t, []string{deferredPath}, retry.WatchRetryBatch().Paths)
 	assert.Equal(t, []string{`C:\sessions\hard-failure`}, retry.WatchRetryBatch().ReconcileRoots)
 	t.Logf("exact retry scope: retained path %q", deferredPath)

@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"os"
 	"sync"
 	"testing"
@@ -440,7 +439,7 @@ func TestLockedFlushSeesSessionClaimedByBlockedTimer(t *testing.T) {
 	}
 
 	path := fx.writeClaudeSession(t, "proj", "sig-race.jsonl", "hello")
-	e.SyncAll(context.Background(), nil)
+	e.SyncAll(t.Context(), nil)
 	sid := fx.sessionIDFor(t, path)
 
 	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")
@@ -458,6 +457,16 @@ func TestLockedFlushSeesSessionClaimedByBlockedTimer(t *testing.T) {
 		return time.Now().Add(3 * time.Second)
 	}
 
+	// Observe the timer requesting the existing exclusive section.
+	exclusiveEntered := make(chan struct{}, 1)
+	exclusive := e.signalSched.exclusive
+	e.signalSched.exclusive = func(flush func()) {
+		select {
+		case exclusiveEntered <- struct{}{}:
+		default:
+		}
+		exclusive(flush)
+	}
 	// A sync is in progress when the timer fires.
 	e.syncMu.Lock()
 	timerDone := make(chan struct{})
@@ -465,9 +474,7 @@ func TestLockedFlushSeesSessionClaimedByBlockedTimer(t *testing.T) {
 		timerCB()
 		close(timerDone)
 	}()
-	// Give the timer goroutine time to reach the lock (and, in the
-	// buggy ordering, to claim the session before blocking).
-	time.Sleep(50 * time.Millisecond)
+	<-exclusiveEntered
 
 	// The sync now flushes before its push work, as SyncThenRun does.
 	e.signalSched.flushAllInline()
@@ -490,7 +497,7 @@ func TestLockedFlushSeesSessionClaimedByBlockedTimer(t *testing.T) {
 // signal, the observable for whether a recompute has run.
 func secretLeakCount(t *testing.T, fx *engineFixture, sessionID string) int {
 	t.Helper()
-	sess, err := fx.db.GetSessionFull(context.Background(), sessionID)
+	sess, err := fx.db.GetSessionFull(t.Context(), sessionID)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, sess, "session %s not found", sessionID)
 	return sess.SecretLeakCount
@@ -499,7 +506,7 @@ func secretLeakCount(t *testing.T, fx *engineFixture, sessionID string) int {
 func TestWriteIncrementalDebouncesSignalRecompute(t *testing.T) {
 	fx := newEngineFixture(t)
 	path := fx.writeClaudeSession(t, "proj", "sig-debounce.jsonl", "hello")
-	fx.engine.SyncAll(context.Background(), nil)
+	fx.engine.SyncAll(t.Context(), nil)
 	sid := fx.sessionIDFor(t, path)
 	require.Zero(t, secretLeakCount(t, fx, sid))
 
@@ -536,7 +543,7 @@ func TestWriteIncrementalDebouncesSignalRecompute(t *testing.T) {
 func TestClaudeAssistantAppendDebouncesSignalRecompute(t *testing.T) {
 	fx := newEngineFixture(t)
 	path := fx.writeClaudeSession(t, "proj", "assistant-debounce.jsonl", "hello")
-	fx.engine.SyncAll(context.Background(), nil)
+	fx.engine.SyncAll(t.Context(), nil)
 	sid := fx.sessionIDFor(t, path)
 
 	// Open the debounce window with a user append, then stream an assistant
@@ -564,7 +571,7 @@ func TestClaudeAssistantAppendDebouncesSignalRecompute(t *testing.T) {
 func TestSyncThenRunFlushesSignalsBeforeWork(t *testing.T) {
 	fx := newEngineFixture(t)
 	path := fx.writeClaudeSession(t, "proj", "sig-flush.jsonl", "hello")
-	fx.engine.SyncAll(context.Background(), nil)
+	fx.engine.SyncAll(t.Context(), nil)
 	sid := fx.sessionIDFor(t, path)
 
 	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")
@@ -576,7 +583,7 @@ func TestSyncThenRunFlushesSignalsBeforeWork(t *testing.T) {
 		"second write within interval should defer the recompute")
 
 	var seen int
-	_, err := fx.engine.SyncThenRun(context.Background(), false, nil,
+	_, err := fx.engine.SyncThenRun(t.Context(), false, nil,
 		func(bool) error {
 			seen = secretLeakCount(t, fx, sid)
 			return nil
@@ -592,7 +599,7 @@ func TestSyncThenRunFlushesSignalsBeforeWork(t *testing.T) {
 func TestRunExclusiveFlushedFlushesSignalsBeforeWork(t *testing.T) {
 	fx := newEngineFixture(t)
 	path := fx.writeClaudeSession(t, "proj", "sig-flush-excl.jsonl", "hello")
-	fx.engine.SyncAll(context.Background(), nil)
+	fx.engine.SyncAll(t.Context(), nil)
 	sid := fx.sessionIDFor(t, path)
 
 	fx.appendClaudeMessage(t, path, "key AKIA7QHWN2DKR4FYPLJM leaked")

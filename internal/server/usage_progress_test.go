@@ -50,7 +50,7 @@ func TestUsageSummaryWaitsForPreparationBeyondWriteTimeout(t *testing.T) {
 			ts := httptest.NewServer(s.Handler())
 			t.Cleanup(ts.Close)
 			params := oneDayUsageRange + "&current_microdollars=0&left_dimension=model&left_value=model-a&right_dimension=model&right_value=model-b"
-			req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/v1/usage"+path+"?"+params, nil)
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, ts.URL+"/api/v1/usage"+path+"?"+params, nil)
 			require.NoError(t, err)
 			req.Host = "127.0.0.1:0"
 			resp, err := ts.Client().Do(req)
@@ -97,13 +97,13 @@ func TestUsageSummaryStreamReportsBeforeQueryFinishesAndCancels(t *testing.T) {
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
-		t.Fatal("usage query did not start")
+		require.FailNow(t, "usage query did not start")
 	}
 	cancel()
 	select {
 	case <-canceled:
 	case <-time.After(5 * time.Second):
-		t.Fatal("disconnect did not cancel the usage query")
+		require.FailNow(t, "disconnect did not cancel the usage query")
 	}
 }
 

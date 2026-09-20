@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"errors"
 	"math"
 	"testing"
 
@@ -90,11 +89,11 @@ func TestSemanticUnavailableError(t *testing.T) {
 
 	// No reason set: bare sentinel.
 	err := s.semanticUnavailableError()
-	assert.True(t, errors.Is(err, db.ErrSemanticUnavailable))
+	require.ErrorIs(t, err, db.ErrSemanticUnavailable)
 
 	s.SetSemanticUnavailableReason("pgvector extension not installed")
 	err = s.semanticUnavailableError()
-	assert.True(t, errors.Is(err, db.ErrSemanticUnavailable),
+	require.ErrorIs(t, err, db.ErrSemanticUnavailable,
 		"reasoned error still wraps the sentinel")
 	assert.Contains(t, err.Error(), "pgvector extension not installed")
 }

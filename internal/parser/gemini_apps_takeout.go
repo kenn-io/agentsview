@@ -3,6 +3,7 @@ package parser
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -22,8 +23,10 @@ type GeminiAppsExportParser interface {
 	ParseGeminiAppsExport(string, func(ParseResult) error) (GeminiAppsParseSummary, error)
 }
 
-var geminiAppsTimestampRE = regexp.MustCompile(`(?i)\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4},\s+\d{1,2}:\d{2}:\d{2}[\x{00a0}\x{202f} ]*(?:AM|PM)[\x{00a0}\x{202f} ]+(\S+)`)
-var geminiAppsTimestampLikeRE = regexp.MustCompile(`(?i)(?:\b\d{1,2}\D+\d{4}\b|\b\d{4}\D+\d{1,2}\D+\d{1,2}\b)`)
+var (
+	geminiAppsTimestampRE     = regexp.MustCompile(`(?i)\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2},\s+\d{4},\s+\d{1,2}:\d{2}:\d{2}[\x{00a0}\x{202f} ]*(?:AM|PM)[\x{00a0}\x{202f} ]+(\S+)`)
+	geminiAppsTimestampLikeRE = regexp.MustCompile(`(?i)(?:\b\d{1,2}\D+\d{4}\b|\b\d{4}\D+\d{1,2}\D+\d{1,2}\b)`)
+)
 
 type geminiAppsFilePlan struct {
 	results         []ParseResult
@@ -40,7 +43,7 @@ func (p *geminiAppsImportOnlyProvider) ParseGeminiAppsExport(root string, callba
 		return summary, err
 	}
 	if len(paths) == 0 {
-		return summary, fmt.Errorf("no HTML files found in import source")
+		return summary, errors.New("no HTML files found in import source")
 	}
 
 	plans := make([]geminiAppsFilePlan, 0, len(paths))
@@ -57,7 +60,7 @@ func (p *geminiAppsImportOnlyProvider) ParseGeminiAppsExport(root string, callba
 		plans = append(plans, plan)
 	}
 	if !admitted {
-		return summary, fmt.Errorf("input does not contain a Gemini Apps My Activity HTML document")
+		return summary, errors.New("input does not contain a Gemini Apps My Activity HTML document")
 	}
 	for _, plan := range plans {
 		summary.Skipped += plan.skipped
@@ -83,7 +86,7 @@ func (p *geminiAppsImportOnlyProvider) ParseGeminiAppsExport(root string, callba
 		}
 	}
 	if len(plans) == 0 || countPlannedResults(plans) == 0 {
-		return summary, fmt.Errorf("input contains no admissible Prompted records")
+		return summary, errors.New("input contains no admissible Prompted records")
 	}
 	return summary, nil
 }
@@ -124,10 +127,10 @@ func planGeminiAppsFile(path string) (geminiAppsFilePlan, bool, error) {
 		return plan, false, nil
 	}
 	if info.language != "" && !strings.EqualFold(strings.SplitN(info.language, "-", 2)[0], "en") {
-		return geminiAppsFilePlan{}, false, fmt.Errorf("unsupported Gemini Apps Takeout locale")
+		return geminiAppsFilePlan{}, false, errors.New("unsupported Gemini Apps Takeout locale")
 	}
 	if !geminiAppsTitleAdmitted(info.title) {
-		return geminiAppsFilePlan{}, false, fmt.Errorf("unsupported localized or changed Gemini Apps Takeout format")
+		return geminiAppsFilePlan{}, false, errors.New("unsupported localized or changed Gemini Apps Takeout format")
 	}
 	for _, cell := range geminiCells {
 		admittedCell, result, err := planGeminiAppsCell(cell)
@@ -135,7 +138,7 @@ func planGeminiAppsFile(path string) (geminiAppsFilePlan, bool, error) {
 			continue
 		}
 		if err != nil {
-			if _, unsupported := err.(geminiAppsUnsupportedError); unsupported {
+			if _, ok := errors.AsType[geminiAppsUnsupportedError](err); ok {
 				return geminiAppsFilePlan{}, false, err
 			}
 			plan.errors++
@@ -199,20 +202,20 @@ func planGeminiAppsCell(cell *html.Node) (bool, ParseResult, error) {
 	match := geminiAppsTimestampRE.FindStringSubmatch(headerText)
 	if match == nil {
 		if geminiAppsTimestampLikeRE.MatchString(headerText) {
-			return true, ParseResult{}, geminiAppsUnsupportedError{fmt.Errorf("activity record has no supported header timestamp")}
+			return true, ParseResult{}, geminiAppsUnsupportedError{errors.New("activity record has no supported header timestamp")}
 		}
-		return true, ParseResult{}, fmt.Errorf("activity record has no supported header timestamp")
+		return true, ParseResult{}, errors.New("activity record has no supported header timestamp")
 	}
 	ts, err := parseGeminiAppsTimestamp(match[0], match[1])
 	if err != nil {
 		return true, ParseResult{}, geminiAppsUnsupportedError{err}
 	}
 	if content == nil {
-		return true, ParseResult{}, fmt.Errorf("prompted activity record has no content cell")
+		return true, ParseResult{}, errors.New("prompted activity record has no content cell")
 	}
 	payload := geminiAppsContentText(content, match[0])
 	if payload == "" {
-		return true, ParseResult{}, fmt.Errorf("prompted activity record has no prompt")
+		return true, ParseResult{}, errors.New("prompted activity record has no prompt")
 	}
 	result := ParseResult{Session: ParsedSession{Project: "gemini.google.com", Machine: "local", Agent: AgentGeminiApps, FirstMessage: payload, SessionName: payload, StartedAt: ts, EndedAt: ts, MessageCount: 1, UserMessageCount: 1}}
 	result.Messages = []ParsedMessage{{Ordinal: 0, Role: RoleUser, Content: payload, Timestamp: ts, ContentLength: len(payload)}}
@@ -404,6 +407,7 @@ func sanitizeGeminiAppsText(value string) string {
 	}
 	return b.String()
 }
+
 func isGeminiAppsIgnored(tag string) bool {
 	switch tag {
 	case "script", "style", "template", "noscript":
@@ -411,6 +415,7 @@ func isGeminiAppsIgnored(tag string) bool {
 	}
 	return false
 }
+
 func hasClass(n *html.Node, wanted string) bool {
 	for c := range strings.FieldsSeq(attr(n, "class")) {
 		if strings.EqualFold(c, wanted) {
@@ -419,6 +424,7 @@ func hasClass(n *html.Node, wanted string) bool {
 	}
 	return false
 }
+
 func attr(n *html.Node, key string) string {
 	for _, a := range n.Attr {
 		if strings.EqualFold(a.Key, key) {
@@ -427,6 +433,7 @@ func attr(n *html.Node, key string) string {
 	}
 	return ""
 }
+
 func firstDescendantClass(n *html.Node, class string) *html.Node {
 	if n.Type == html.ElementNode && hasClass(n, class) {
 		return n
@@ -438,6 +445,7 @@ func firstDescendantClass(n *html.Node, class string) *html.Node {
 	}
 	return nil
 }
+
 func geminiAppsProductHeading(n *html.Node) string {
 	for child := n.FirstChild; child != nil; child = child.NextSibling {
 		if child.Type == html.ElementNode && strings.HasPrefix(strings.ToLower(child.Data), "h") {
@@ -452,10 +460,12 @@ func geminiAppsProductHeading(n *html.Node) string {
 	}
 	return ""
 }
+
 func normalizeMetadata(value string) string {
 	value = strings.NewReplacer("\u00a0", " ", "\u202f", " ").Replace(value)
 	return strings.Join(strings.Fields(value), " ")
 }
+
 func geminiAppsTitleAdmitted(title string) bool {
 	value := strings.ToLower(normalizeMetadata(title))
 	return value == "my activity history" || strings.Contains(value, "gemini apps")
@@ -507,6 +517,7 @@ func parseGeminiAppsTimestamp(value, zone string) (time.Time, error) {
 	}
 	return parsed, nil
 }
+
 func geminiAppsZoneOffset(zone string) (int, bool) {
 	switch zone {
 	case "UTC", "GMT":

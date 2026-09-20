@@ -4,6 +4,8 @@ RESUME_AGENTS["claude"] = (id) => `claude --resume ${shellQuote(id)}`;
 RESUME_AGENTS["codex"] = (id) => `codex resume ${shellQuote(id)}`;
 // TraeX ships the traex, traecli, and trae-cli aliases; use the shortest.
 RESUME_AGENTS["traex"] = (id) => `traex resume ${shellQuote(id)}`;
+// The Augure Code agent's command is the vendor's own `augure` CLI.
+RESUME_AGENTS["augure-code"] = (id) => `augure resume ${shellQuote(id)}`;
 RESUME_AGENTS["copilot"] = (id) => `copilot --resume=${shellQuote(id)}`;
 RESUME_AGENTS["cursor"] = (id) => `cursor agent --resume ${shellQuote(id)}`;
 RESUME_AGENTS["gemini"] = (id) => `gemini --resume ${shellQuote(id)}`;
@@ -95,7 +97,8 @@ export function buildResumeCommand(
 
   if (flags?.model) {
     if (agent === "claude") cmd += ` --model ${shellQuote(flags.model)}`;
-    if (agent === "codex" || agent === "traex") cmd += ` -m ${shellQuote(flags.model)}`;
+    if (agent === "codex" || agent === "traex" || agent === "augure-code")
+      cmd += ` -m ${shellQuote(flags.model)}`;
   }
 
   if (agent === "claude" && flags) {

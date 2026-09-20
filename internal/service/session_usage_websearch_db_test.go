@@ -3,7 +3,6 @@
 package service_test
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"testing"
 
@@ -21,7 +20,7 @@ import (
 // $0.02 on top.
 func TestSessionUsageWithSubagentsBillsSubagentWebSearches(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	require.NoError(t, d.UpsertModelPricing([]db.ModelPricing{{
 		ModelPattern:  "test-opus",

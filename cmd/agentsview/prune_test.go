@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -33,6 +32,7 @@ func TestParsePruneFlags(t *testing.T) {
 			args: []string{"--project", "myapp"},
 			check: func(t *testing.T, cfg PruneConfig) {
 				t.Helper()
+
 				assert.Equal(t, "myapp", cfg.Filter.Project)
 				assert.False(t, cfg.DryRun, "DryRun default")
 				assert.False(t, cfg.Yes, "Yes default")
@@ -50,6 +50,7 @@ func TestParsePruneFlags(t *testing.T) {
 			},
 			check: func(t *testing.T, cfg PruneConfig) {
 				t.Helper()
+
 				assert.Equal(t, "p", cfg.Filter.Project)
 				require.NotNil(t, cfg.Filter.MaxMessages)
 				assert.Equal(t, 5, *cfg.Filter.MaxMessages)
@@ -101,7 +102,7 @@ func TestPrunerEmptyFilterReturnsError(t *testing.T) {
 		Filter: db.PruneFilter{},
 	}
 
-	err := pruner.Prune(cfg)
+	err := pruner.Prune(t.Context(), cfg)
 	require.Error(t, err, "expected error for empty filter")
 	assert.Contains(t, err.Error(), "at least one filter",
 		"error should mention filter requirement")
@@ -216,7 +217,7 @@ func TestPrunerMaxMessagesCountsUserOnly(t *testing.T) {
 		DryRun: true,
 	}
 
-	require.NoError(t, pruner.Prune(cfg), "Prune")
+	require.NoError(t, pruner.Prune(t.Context(), cfg), "Prune")
 
 	out := buf.String()
 	assert.Contains(t, out, "Found 1 sessions",
@@ -274,7 +275,7 @@ func TestPruner_PruneScenarios(t *testing.T) {
 			})
 
 			pruner, buf := newTestPruner(t, d, tt.input)
-			require.NoError(t, pruner.Prune(tt.cfg), "Prune")
+			require.NoError(t, pruner.Prune(t.Context(), tt.cfg), "Prune")
 
 			out := buf.String()
 			for _, want := range tt.wantOutput {
@@ -286,7 +287,7 @@ func TestPruner_PruneScenarios(t *testing.T) {
 					"should not prompt when --yes is set")
 			}
 
-			s, _ := d.GetSession(context.Background(), "s1")
+			s, _ := d.GetSession(t.Context(), "s1")
 			if tt.wantKept {
 				assert.NotNil(t, s, "session was deleted unexpectedly")
 			} else {

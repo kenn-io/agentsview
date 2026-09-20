@@ -270,7 +270,7 @@ func TestGetAnalyticsToolsAggregatesToolCallsInSQL(t *testing.T) {
 	}
 
 	resp, err := store.GetAnalyticsTools(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{
 			From: "2024-06-01",
 			To:   "2024-06-30",
@@ -294,7 +294,7 @@ func TestGetAnalyticsSkillsAggregatesToolCallsInSQL(t *testing.T) {
 	}
 
 	resp, err := store.GetAnalyticsSkills(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{
 			From: "2024-06-01",
 			To:   "2024-06-30",
@@ -329,7 +329,7 @@ func TestGetAnalyticsToolsModelFilterJoinsMessages(t *testing.T) {
 	}
 
 	_, err := store.GetAnalyticsTools(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{
 			From:  "2024-06-01",
 			To:    "2024-06-30",
@@ -362,7 +362,7 @@ func TestGetAnalyticsSkillsModelFilterUsesMatchingMessages(t *testing.T) {
 	}
 
 	_, err := store.GetAnalyticsSkills(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{
 			From:  "2024-06-01",
 			To:    "2024-06-30",
@@ -398,7 +398,7 @@ func TestQueryVelocityMsgsScansNativeTimestamps(t *testing.T) {
 	sessionMsgs := map[string][]velocityMsg{}
 
 	err := store.queryVelocityMsgs(
-		context.Background(),
+		t.Context(),
 		[]string{"s1"},
 		time.UTC,
 		sessionMsgs,
@@ -408,8 +408,8 @@ func TestQueryVelocityMsgsScansNativeTimestamps(t *testing.T) {
 	require.Len(t, sessionMsgs["s1"], 2)
 	assert.Equal(t, "assistant", sessionMsgs["s1"][1].role)
 	assert.True(t, sessionMsgs["s1"][1].valid)
-	assert.Equal(t, 10.0,
-		sessionMsgs["s1"][1].ts.Sub(sessionMsgs["s1"][0].ts).Seconds())
+	assert.InDelta(t, 10.0,
+		sessionMsgs["s1"][1].ts.Sub(sessionMsgs["s1"][0].ts).Seconds(), 1e-9)
 }
 
 func TestGetAnalyticsSummaryModelsFollowFilteredSessions(t *testing.T) {
@@ -418,7 +418,7 @@ func TestGetAnalyticsSummaryModelsFollowFilteredSessions(t *testing.T) {
 	}
 
 	resp, err := store.GetAnalyticsSummary(
-		context.Background(),
+		t.Context(),
 		db.AnalyticsFilter{
 			From:     "2024-06-03",
 			To:       "2024-06-03",
@@ -432,21 +432,23 @@ func TestGetAnalyticsSummaryModelsFollowFilteredSessions(t *testing.T) {
 func TestGetAnalyticsToolsWindowsMessagesInSQL(t *testing.T) {
 	assertAnalyticsMessageWindowQuery(t, false)
 }
+
 func TestGetAnalyticsSkillsWindowsMessagesInSQL(t *testing.T) {
 	assertAnalyticsMessageWindowQuery(t, true)
 }
 
 func assertAnalyticsMessageWindowQuery(t *testing.T, skills bool) {
 	t.Helper()
+
 	state := &analyticsProbeState{}
 	store := &Store{pg: newAnalyticsProbeDB(t, state)}
 	f := db.AnalyticsFilter{From: "2024-06-01", To: "2024-06-30", Model: "model-a"}
 	if skills {
-		resp, err := store.GetAnalyticsSkills(context.Background(), f, "week")
+		resp, err := store.GetAnalyticsSkills(t.Context(), f, "week")
 		require.NoError(t, err)
 		assert.Equal(t, 3, resp.TotalSkillCalls)
 	} else {
-		resp, err := store.GetAnalyticsTools(context.Background(), f)
+		resp, err := store.GetAnalyticsTools(t.Context(), f)
 		require.NoError(t, err)
 		assert.Equal(t, 4, resp.TotalCalls)
 	}

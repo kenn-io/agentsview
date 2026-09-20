@@ -2,6 +2,7 @@ package parser
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"os"
 	"path/filepath"
@@ -35,14 +36,14 @@ func classifyTraeLayout(root string, snapshot traeSessionSnapshot) traeLayoutSta
 
 // TraeEncryptedLayoutDetected reports the measured modern Trae layout for a
 // configured User root. Files outside the expected profile shape stay quiet.
-func TraeEncryptedLayoutDetected(root string) bool {
+func TraeEncryptedLayoutDetected(ctx context.Context, root string) bool {
 	dbs := traeDBs(root)
 	if len(dbs) == 0 {
 		return false
 	}
 	foundUnsupported := false
 	for _, db := range dbs {
-		snapshot, err := traeLoadSessionSnapshot(db.path)
+		snapshot, err := traeLoadSessionSnapshot(ctx, db.path)
 		if err != nil {
 			continue
 		}
@@ -51,6 +52,8 @@ func TraeEncryptedLayoutDetected(root string) bool {
 			return false
 		case traeLayoutUnsupported:
 			foundUnsupported = true
+		case traeLayoutValidEmpty, traeLayoutIncomplete:
+			// Neither layout proves an unsupported populated database.
 		}
 	}
 	return foundUnsupported

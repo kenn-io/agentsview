@@ -23,33 +23,33 @@ func TestCompactStagedReplacementReclaimsFreePages(t *testing.T) {
 	const payload = "0123456789abcdef0123456789abcdef"
 	const rows = 256
 	const repeats = 4096
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
-		if _, err := tx.Exec(`CREATE TABLE compact_test_payload (value TEXT NOT NULL)`); err != nil {
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(t.Context(), `CREATE TABLE compact_test_payload (value TEXT NOT NULL)`); err != nil {
 			return err
 		}
-		stmt, err := tx.Prepare(`INSERT INTO compact_test_payload(value) VALUES (?)`)
+		stmt, err := tx.PrepareContext(t.Context(), `INSERT INTO compact_test_payload(value) VALUES (?)`)
 		if err != nil {
 			return err
 		}
 		defer stmt.Close()
 		value := strings.Repeat(payload, repeats)
 		for range rows {
-			if _, err := stmt.Exec(value); err != nil {
+			if _, err := stmt.ExecContext(t.Context(), value); err != nil {
 				return err
 			}
 		}
 		return nil
 	}))
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`DELETE FROM compact_test_payload`)
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `DELETE FROM compact_test_payload`)
 		return err
 	}))
 
-	before, err := database.EstimateCompact(context.Background())
+	before, err := database.EstimateCompact(t.Context())
 	require.NoError(t, err)
 	require.Positive(t, before.FreeListBytes)
 
-	result, err := database.Compact(context.Background(), CompactOptions{
+	result, err := database.Compact(t.Context(), CompactOptions{
 		StagingDir: t.TempDir(),
 	})
 	require.NoError(t, err)
@@ -59,7 +59,7 @@ func TestCompactStagedReplacementReclaimsFreePages(t *testing.T) {
 	require.Empty(t, result.BackupPath)
 
 	var count int
-	require.NoError(t, database.Reader().QueryRow(
+	require.NoError(t, database.Reader().QueryRow(t.Context(),
 		`SELECT count(*) FROM compact_test_payload`,
 	).Scan(&count))
 	require.Zero(t, count)
@@ -69,7 +69,7 @@ func TestCompactStagedReplacementReclaimsFreePages(t *testing.T) {
 
 func TestCompactEstimateIncludesWALAndStagingRequirement(t *testing.T) {
 	database := testDB(t)
-	estimate, err := database.EstimateCompact(context.Background())
+	estimate, err := database.EstimateCompact(t.Context())
 	require.NoError(t, err)
 	require.Positive(t, estimate.DatabaseBytes)
 	require.GreaterOrEqual(t, estimate.TotalBytes, estimate.DatabaseBytes)
@@ -88,56 +88,54 @@ func TestCompactSpaceRequirementsIncludeInstallingCopy(t *testing.T) {
 	)
 	sharedBase := compactByteSum(backupBytes, compactedBytes, compactedBytes)
 	stagingBase := compactByteSum(backupBytes, compactedBytes)
-	require.Equal(t,
-		compactByteSum(sharedBase, compactSafetyBytes(sharedBase)),
+	require.Equal(t, compactByteSum(sharedBase, compactSafetyBytes(sharedBase)),
 		requirements.SharedFilesystemBytes,
 	)
-	require.Equal(t,
-		compactByteSum(stagingBase, compactSafetyBytes(stagingBase)),
+	require.Equal(t, compactByteSum(stagingBase, compactSafetyBytes(stagingBase)),
 		requirements.StagingFilesystemBytes,
 	)
-	require.Equal(t,
-		compactByteSum(compactedBytes, compactSafetyBytes(compactedBytes)),
+	require.Equal(t, compactByteSum(compactedBytes, compactSafetyBytes(compactedBytes)),
 		requirements.DatabaseFilesystemBytes,
 	)
 }
 
 func TestCompactCloseFailureReopensUnchangedArchive(t *testing.T) {
 	database := testDB(t)
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
 			CREATE TABLE compact_close_failure (value INTEGER NOT NULL);
 			INSERT INTO compact_close_failure(value) VALUES (1), (2), (3);
 		`)
 		return err
 	}))
 	require.NoError(t, database.CheckpointWALTruncateWithRetry(
-		context.Background(),
+		t.Context(),
 	))
 
-	rows, err := database.rawReader().Query(
+	rows, err := database.rawReader().QueryContext(t.Context(),
 		`SELECT value FROM compact_close_failure ORDER BY value`,
 	)
 	require.NoError(t, err)
 	defer rows.Close()
 	require.True(t, rows.Next())
+	require.NoError(t, rows.Err())
 
 	restoreTimeout := SetCloseDrainTimeoutForTest(20 * time.Millisecond)
 	defer restoreTimeout()
 	staging := t.TempDir()
-	_, err = database.Compact(context.Background(), CompactOptions{
+	_, err = database.Compact(t.Context(), CompactOptions{
 		StagingDir: staging,
 	})
 	require.ErrorContains(t, err, "database file is not safe to replace")
 
 	var count int
-	require.NoError(t, database.Reader().QueryRow(
+	require.NoError(t, database.Reader().QueryRow(t.Context(),
 		`SELECT count(*) FROM compact_close_failure`,
 	).Scan(&count))
 	require.Equal(t, 3, count)
 	// Service is fully restored: the write barrier is down again.
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`INSERT INTO compact_close_failure(value) VALUES (4)`)
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `INSERT INTO compact_close_failure(value) VALUES (4)`)
 		return err
 	}))
 	require.NoFileExists(t, database.Path()+".installing")
@@ -149,8 +147,8 @@ func TestCompactCloseFailureReopensUnchangedArchive(t *testing.T) {
 
 func TestCompactKeepsBarrierWhenAbortLeavesManifest(t *testing.T) {
 	database := testDB(t)
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
 			CREATE TABLE compact_manifest_probe (value INTEGER NOT NULL);
 			INSERT INTO compact_manifest_probe(value) VALUES (1);
 		`)
@@ -161,14 +159,15 @@ func TestCompactKeepsBarrierWhenAbortLeavesManifest(t *testing.T) {
 	// time out after the prepared manifest is already durable, routing into
 	// the abort path.
 	require.NoError(t, database.CheckpointWALTruncateWithRetry(
-		context.Background(),
+		t.Context(),
 	))
-	rows, err := database.rawReader().Query(
+	rows, err := database.rawReader().QueryContext(t.Context(),
 		`SELECT value FROM compact_manifest_probe`,
 	)
 	require.NoError(t, err)
 	defer rows.Close()
 	require.True(t, rows.Next())
+	require.NoError(t, rows.Err())
 	restoreTimeout := SetCloseDrainTimeoutForTest(20 * time.Millisecond)
 	defer restoreTimeout()
 
@@ -177,15 +176,15 @@ func TestCompactKeepsBarrierWhenAbortLeavesManifest(t *testing.T) {
 	removeCompactManifest = func(string) error { return injected }
 	defer func() { removeCompactManifest = prevRemove }()
 
-	_, err = database.Compact(context.Background(), CompactOptions{
+	_, err = database.Compact(t.Context(), CompactOptions{
 		StagingDir: t.TempDir(),
 	})
 	require.ErrorIs(t, err, injected)
 	require.ErrorContains(t, err, "writes stay barred")
 	require.FileExists(t, compactManifestPath(database.Path()))
 
-	writeErr := database.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`INSERT INTO compact_manifest_probe(value) VALUES (2)`)
+	writeErr := database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `INSERT INTO compact_manifest_probe(value) VALUES (2)`)
 		return err
 	})
 	require.ErrorIs(t, writeErr, ErrWriterClosed,
@@ -194,7 +193,7 @@ func TestCompactKeepsBarrierWhenAbortLeavesManifest(t *testing.T) {
 
 	// Reads keep serving the unchanged archive while the barrier holds.
 	var count int
-	require.NoError(t, database.Reader().QueryRow(
+	require.NoError(t, database.Reader().QueryRow(t.Context(),
 		`SELECT count(*) FROM compact_manifest_probe`,
 	).Scan(&count))
 	require.Equal(t, 1, count)
@@ -204,7 +203,7 @@ func TestCompactKeepsBarrierWhenAbortLeavesManifest(t *testing.T) {
 func TestCompactKeepBackupRetainsOnlyOriginal(t *testing.T) {
 	database := testDB(t)
 	staging := t.TempDir()
-	result, err := database.Compact(context.Background(), CompactOptions{
+	result, err := database.Compact(t.Context(), CompactOptions{
 		StagingDir: staging,
 		KeepBackup: true,
 	})
@@ -218,11 +217,11 @@ func TestCompactKeepBackupRetainsOnlyOriginal(t *testing.T) {
 
 func TestCompactBarsWritesDuringBuildAndRestoresThem(t *testing.T) {
 	database := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	var duringErr, rawErr error
 	compactTestHookDuringBuild = func() {
-		duringErr = database.Update(func(tx *sql.Tx) error {
-			_, err := tx.Exec(`CREATE TABLE compact_barrier_probe (x INTEGER)`)
+		duringErr = database.Update(ctx, func(tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx, `CREATE TABLE compact_barrier_probe (x INTEGER)`)
 			return err
 		})
 		// A raw writer path that never takes db.mu must hit the same barrier.
@@ -238,12 +237,11 @@ func TestCompactBarsWritesDuringBuildAndRestoresThem(t *testing.T) {
 		"a write during the staged build must fail fast, not park or succeed")
 	require.ErrorIs(t, rawErr, ErrWriterClosed,
 		"raw writer paths without db.mu must honor the compact barrier")
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`CREATE TABLE compact_barrier_probe (x INTEGER)`)
+	require.NoError(t, database.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `CREATE TABLE compact_barrier_probe (x INTEGER)`)
 		return err
 	}), "writes must flow again after the compaction commits")
-	require.NoError(t,
-		database.UpsertProviderStatHash(ctx, parser.AgentCodex, "probe.jsonl", 1),
+	require.NoError(t, database.UpsertProviderStatHash(ctx, parser.AgentCodex, "probe.jsonl", 1),
 		"raw writer paths must flow again after the compaction commits")
 }
 
@@ -255,11 +253,11 @@ func TestCompactBarsRawWritesBetweenInstallAndCommit(t *testing.T) {
 	var rawErr error
 	compactTestHookAfterInstall = func() {
 		rawErr = database.UpsertProviderStatHash(
-			context.Background(), parser.AgentCodex, "probe.jsonl", 1)
+			t.Context(), parser.AgentCodex, "probe.jsonl", 1)
 	}
 	defer func() { compactTestHookAfterInstall = nil }()
 
-	_, err := database.Compact(context.Background(), CompactOptions{
+	_, err := database.Compact(t.Context(), CompactOptions{
 		StagingDir: t.TempDir(),
 	})
 	require.NoError(t, err)
@@ -283,13 +281,13 @@ func TestCompactKeepsGitCacheReadOnlyBetweenInstallAndCommit(t *testing.T) {
 			"the compaction barrier must remain active before commit")
 		require.NotNil(t, database.rawWriter(),
 			"the installed archive must already have a reopened writer pool")
-		stats, statsErr = database.GetSessionStats(context.Background(), StatsFilter{
+		stats, statsErr = database.GetSessionStats(t.Context(), StatsFilter{
 			Since: "28d", IncludeGitOutcomes: true,
 		})
 	}
 	defer func() { compactTestHookAfterInstall = nil }()
 
-	_, err := database.Compact(context.Background(), CompactOptions{
+	_, err := database.Compact(t.Context(), CompactOptions{
 		StagingDir: t.TempDir(),
 	})
 	require.NoError(t, err)
@@ -299,7 +297,7 @@ func TestCompactKeepsGitCacheReadOnlyBetweenInstallAndCommit(t *testing.T) {
 	assert.Equal(t, 3, stats.OutcomeStats.Commits, "Commits")
 
 	var cacheRows int
-	require.NoError(t, database.Reader().QueryRow(
+	require.NoError(t, database.Reader().QueryRow(t.Context(),
 		`SELECT count(*) FROM git_cache`,
 	).Scan(&cacheRows))
 	assert.Zero(t, cacheRows,
@@ -311,13 +309,13 @@ func TestCompactConcurrentAttemptReturnsBusy(t *testing.T) {
 	secondStaging := t.TempDir()
 	var secondErr error
 	compactTestHookDuringBuild = func() {
-		_, secondErr = database.Compact(context.Background(), CompactOptions{
+		_, secondErr = database.Compact(t.Context(), CompactOptions{
 			StagingDir: secondStaging,
 		})
 	}
 	defer func() { compactTestHookDuringBuild = nil }()
 
-	_, err := database.Compact(context.Background(), CompactOptions{
+	_, err := database.Compact(t.Context(), CompactOptions{
 		StagingDir: t.TempDir(),
 	})
 	require.NoError(t, err, "the first compaction must complete")
@@ -327,15 +325,15 @@ func TestCompactConcurrentAttemptReturnsBusy(t *testing.T) {
 
 func TestCompactSurvivesCallerCancelAfterInstall(t *testing.T) {
 	database := testDB(t)
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
 			CREATE TABLE compact_cancel_probe (value INTEGER NOT NULL);
 			INSERT INTO compact_cancel_probe(value) VALUES (7);
 		`)
 		return err
 	}))
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	compactTestHookAfterInstall = func() { cancel() }
 	defer func() { compactTestHookAfterInstall = nil }()
@@ -346,7 +344,7 @@ func TestCompactSurvivesCallerCancelAfterInstall(t *testing.T) {
 	require.Positive(t, result.After.DatabaseBytes)
 
 	var value int
-	require.NoError(t, database.Reader().QueryRow(
+	require.NoError(t, database.Reader().QueryRow(t.Context(),
 		`SELECT value FROM compact_cancel_probe`,
 	).Scan(&value))
 	require.Equal(t, 7, value)
@@ -357,22 +355,22 @@ func TestCompactRestartsUsageCacheBackfill(t *testing.T) {
 	database := testDB(t)
 	started := make(chan struct{}, 4)
 	database.SetUsageCacheBackfillStarted(func() { started <- struct{}{} })
-	require.NoError(t, database.StartUsageCacheBackfill(context.Background()))
+	require.NoError(t, database.StartUsageCacheBackfill(t.Context()))
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):
-		t.Fatal("initial backfill pass did not start")
+		require.Fail(t, "initial backfill pass did not start")
 	}
-	require.NoError(t, database.WaitUsageCacheBackfill(context.Background()))
+	require.NoError(t, database.WaitUsageCacheBackfill(t.Context()))
 
-	_, err := database.Compact(context.Background(), CompactOptions{
+	_, err := database.Compact(t.Context(), CompactOptions{
 		StagingDir: t.TempDir(),
 	})
 	require.NoError(t, err)
 	select {
 	case <-started:
 	case <-time.After(5 * time.Second):
-		t.Fatal("compaction did not restart the usage cache backfill")
+		require.Fail(t, "compaction did not restart the usage cache backfill")
 	}
 }
 
@@ -381,7 +379,7 @@ func TestCompactRefusedWhileWriterBarrierHeld(t *testing.T) {
 	require.NoError(t, database.CloseWriter())
 	defer func() { require.NoError(t, database.ReopenWriter()) }()
 
-	_, err := database.Compact(context.Background(), CompactOptions{
+	_, err := database.Compact(t.Context(), CompactOptions{
 		StagingDir: t.TempDir(),
 	})
 	require.ErrorIs(t, err, ErrWriterClosed)
@@ -391,7 +389,7 @@ func TestCompactRefusedWhileWriterBarrierHeld(t *testing.T) {
 
 func TestCompactPreservesRecallFTSSearchable(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	if d.recallFTSKind(ctx) != "fts5" {
 		t.Skip("requires fts5 runtime support")
 	}
@@ -405,14 +403,14 @@ func TestCompactPreservesRecallFTSSearchable(t *testing.T) {
 		"alpha aardvark", "beta barnacle", "gamma heliotrope overflow",
 	}
 	for i, body := range bodies {
-		_, err := d.InsertRecallEntry(RecallEntry{
+		_, err := d.InsertRecallEntry(ctx, RecallEntry{
 			ID: fmt.Sprintf("m%d", i+1), Type: "fact", Scope: "project",
 			Status: "accepted", Title: "t", Body: body,
 			Project: "agentsview", Agent: "codex", SourceSessionID: "s1",
 		})
 		require.NoError(t, err, "insert recall")
 	}
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(ctx,
 		`DELETE FROM recall_entries WHERE id IN ('m1', 'm2')`,
 	)
 	require.NoError(t, err, "delete earlier entries")
@@ -436,7 +434,7 @@ func TestRecoverCompactCommittedManifestPreservesLaterWrites(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
 	d := testDBAtPath(t, path, "archive")
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, d.CheckpointWALTruncateWithRetry(ctx))
 
 	opDir := filepath.Join(dir, compactStagingName, "agentsview-compact-crashed")
@@ -447,8 +445,8 @@ func TestRecoverCompactCommittedManifestPreservesLaterWrites(t *testing.T) {
 
 	// A write that landed after the commit record but before cleanup
 	// finished. Recovery must never take it away.
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
+	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
 			CREATE TABLE compact_committed_probe (value INTEGER NOT NULL);
 			INSERT INTO compact_committed_probe(value) VALUES (42);
 		`)
@@ -476,11 +474,11 @@ func TestRecoverCompactCommittedManifestPreservesLaterWrites(t *testing.T) {
 	require.NoFileExists(t, compactManifestPath(path))
 	require.NoDirExists(t, opDir, "committed recovery removes the operation directory")
 
-	reopened, err := OpenReadOnly(path)
+	reopened, err := OpenReadOnly(ctx, path)
 	require.NoError(t, err, "reopen recovered archive")
 	defer reopened.Close()
 	var value int
-	require.NoError(t, reopened.Reader().QueryRow(
+	require.NoError(t, reopened.Reader().QueryRow(ctx,
 		`SELECT value FROM compact_committed_probe`,
 	).Scan(&value))
 	require.Equal(t, 42, value,
@@ -491,7 +489,7 @@ func TestRecoverCompactPreparedManifestKeepsVerifiedArchive(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
 	d := testDBAtPath(t, path, "archive")
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, d.CheckpointWALTruncateWithRetry(ctx))
 
 	opDir := filepath.Join(dir, compactStagingName, "agentsview-compact-crashed")
@@ -638,7 +636,7 @@ func TestCompactStagingSweepIgnoresOtherArchives(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(foreign, compactCandidateName), []byte("other archive candidate"), 0o600))
 
-	_, err := database.Compact(context.Background(), CompactOptions{
+	_, err := database.Compact(t.Context(), CompactOptions{
 		StagingDir: staging,
 	})
 	require.NoError(t, err)
@@ -657,7 +655,7 @@ func TestOpenIgnoresCompactManifestForDerivedDatabase(t *testing.T) {
 
 	// A resync builds its temp database beside the archive; the archive's
 	// pending manifest must not block or confuse that open.
-	derived, err := Open(filepath.Join(dir, "sessions.db"+"-resync"))
+	derived, err := Open(t.Context(), filepath.Join(dir, "sessions.db"+"-resync"))
 	require.NoError(t, err)
 	require.NoError(t, derived.Close())
 	require.FileExists(t, manifestPath,

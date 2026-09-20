@@ -40,8 +40,10 @@ func TestReportingJointProjectIdentityRequiresEverySession(t *testing.T) {
 					}))
 				}
 			}
-			opts := ReportingExportOptions{Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
-				Now: time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4}
+			opts := ReportingExportOptions{
+				Date: time.Date(2026, 7, 28, 0, 0, 0, 0, time.UTC),
+				Now:  time.Date(2026, 7, 29, 0, 0, 0, 0, time.UTC), SchemaVersion: 4,
+			}
 			day, err := d.ExportReportingDay(t.Context(), opts)
 			require.NoError(t, err)
 			hour := day.Hours[12]
@@ -54,7 +56,7 @@ func TestReportingJointProjectIdentityRequiresEverySession(t *testing.T) {
 				require.NotNil(t, identity.Identity)
 				assert.Equal(t, "example.com/team/api", identity.Identity.NormalizedRemote)
 				opts.afterSnapshot = func() {
-					_, err := d.getWriter().Exec(`DELETE FROM session_project_identity_snapshots WHERE session_id = 'session-b'`)
+					_, err := d.getWriter().Exec(t.Context(), `DELETE FROM session_project_identity_snapshots WHERE session_id = 'session-b'`)
 					require.NoError(t, err)
 				}
 				during, err := d.ExportReportingDay(t.Context(), opts)
@@ -71,9 +73,9 @@ func TestReportingJointProjectIdentityRequiresEverySession(t *testing.T) {
 				assert.Nil(t, identity.Identity)
 			}
 			if tc.usageOnly {
-				assert.Equal(t, 1.0, hour.Activity.Totals.AgentMinutes)
+				assert.InDelta(t, 1.0, hour.Activity.Totals.AgentMinutes, 0)
 			} else {
-				assert.Equal(t, 2.0, hour.Activity.Totals.AgentMinutes)
+				assert.InDelta(t, 2.0, hour.Activity.Totals.AgentMinutes, 0)
 			}
 		})
 	}

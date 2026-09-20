@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -121,10 +122,10 @@ func TestDaemonWaitForLaunchContentionRejectsUnconfirmedLiveWriter(t *testing.T)
 	var out bytes.Buffer
 	err = reportDaemonLaunchContention(&out, dir, observation, time.Now())
 	require.Error(t, err)
-	assert.ErrorContains(t, err, fmt.Sprintf("pid %d", pid))
-	assert.ErrorContains(t, err, path)
-	assert.ErrorContains(t, err, "verify")
-	assert.ErrorContains(t, err, "terminate")
+	require.ErrorContains(t, err, fmt.Sprintf("pid %d", pid))
+	require.ErrorContains(t, err, path)
+	require.ErrorContains(t, err, "verify")
+	require.ErrorContains(t, err, "terminate")
 	assert.NotContains(t, out.String(), "already running")
 	assert.True(t, daemon.ProcessAlive(pid))
 }
@@ -135,8 +136,8 @@ func TestDaemonWaitForLaunchContentionRejectsIncompatibleResponsiveWriter(t *tes
 	rec := testWritableRecord(os.Getpid(), "/runtime/incompatible.json")
 	rec.Address = endpoint.Addr
 	rec.Metadata[runtimeHost] = endpoint.Host
-	rec.Metadata[runtimePort] = fmt.Sprint(endpoint.Port)
-	rec.Metadata[runtimeAPIVersion] = fmt.Sprint(daemonAPIVersion + 1)
+	rec.Metadata[runtimePort] = strconv.Itoa(endpoint.Port)
+	rec.Metadata[runtimeAPIVersion] = strconv.Itoa(daemonAPIVersion + 1)
 
 	waitDeps := defaultDaemonLaunchWaitDeps()
 	waitDeps.loadReadOnlyConfig = func() (config.Config, error) {
@@ -155,9 +156,9 @@ func TestDaemonWaitForLaunchContentionRejectsIncompatibleResponsiveWriter(t *tes
 	var out bytes.Buffer
 	err := reportDaemonLaunchContention(&out, dir, observation, time.Now())
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "incompatible")
-	assert.ErrorContains(t, err, fmt.Sprintf("pid %d", rec.PID))
-	assert.ErrorContains(t, err, "daemon restart")
+	require.ErrorContains(t, err, "incompatible")
+	require.ErrorContains(t, err, fmt.Sprintf("pid %d", rec.PID))
+	require.ErrorContains(t, err, "daemon restart")
 	assert.NotContains(t, out.String(), "already running")
 }
 
@@ -168,7 +169,7 @@ func TestDaemonWaitForLaunchContentionRejectsCompatibleUnresponsiveWriter(t *tes
 	rec.Metadata[runtimePort] = "1"
 	createTime, ok := processCreateTimeMillis(rec.PID)
 	require.True(t, ok)
-	rec.Metadata[runtimeCreateTime] = fmt.Sprint(createTime)
+	rec.Metadata[runtimeCreateTime] = strconv.FormatInt(createTime, 10)
 
 	waitDeps := defaultDaemonLaunchWaitDeps()
 	waitDeps.loadReadOnlyConfig = func() (config.Config, error) {
@@ -182,9 +183,9 @@ func TestDaemonWaitForLaunchContentionRejectsCompatibleUnresponsiveWriter(t *tes
 	var out bytes.Buffer
 	err := reportDaemonLaunchContention(&out, dir, observation, time.Now())
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "not responding")
-	assert.ErrorContains(t, err, fmt.Sprintf("pid %d", rec.PID))
-	assert.ErrorContains(t, err, "daemon restart")
+	require.ErrorContains(t, err, "not responding")
+	require.ErrorContains(t, err, fmt.Sprintf("pid %d", rec.PID))
+	require.ErrorContains(t, err, "daemon restart")
 	assert.NotContains(t, out.String(), "already running")
 }
 
@@ -197,7 +198,7 @@ func TestDaemonWaitForLaunchContentionSurfacesReadOnlyConfigError(t *testing.T) 
 
 	observation := waitForDaemonLaunchContentionWithDeps(dir, waitDeps)
 	require.Error(t, observation.Err)
-	assert.ErrorContains(t, observation.Err, "read-only config failed")
+	require.ErrorContains(t, observation.Err, "read-only config failed")
 	var out bytes.Buffer
 	err := reportDaemonLaunchContention(&out, dir, observation, time.Now())
 	require.Error(t, err)
@@ -226,10 +227,10 @@ func TestDaemonStopRevalidatesIdentityBeforeEverySignal(t *testing.T) {
 
 	err := executeDaemonCommand(t, *deps, out, "stop")
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "partial stop")
-	assert.ErrorContains(t, err, "stopped pid 201")
-	assert.ErrorContains(t, err, "remaining pids 202, 203")
-	assert.ErrorContains(t, err, "verify")
+	require.ErrorContains(t, err, "partial stop")
+	require.ErrorContains(t, err, "stopped pid 201")
+	require.ErrorContains(t, err, "remaining pids 202, 203")
+	require.ErrorContains(t, err, "verify")
 	assert.Equal(t, []int{201, 202, 203, 201, 202}, confirmations)
 	assert.Equal(t, []int{201}, signalled,
 		"changed and later identities must never be signalled")
@@ -254,16 +255,16 @@ func TestDaemonStopRevalidationFailureBeforeFirstSignalSaysAborted(t *testing.T)
 
 	err := executeDaemonCommand(t, *deps, out, "stop")
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "stop aborted before signaling")
-	assert.ErrorContains(t, err, "no process was signalled")
-	assert.ErrorContains(t, err, "remaining pids 204")
+	require.ErrorContains(t, err, "stop aborted before signaling")
+	require.ErrorContains(t, err, "no process was signalled")
+	require.ErrorContains(t, err, "remaining pids 204")
 	assert.NotContains(t, err.Error(), "partial stop")
 	assert.Zero(t, signals)
 }
 
 func TestDaemonStartSlowReadinessIsNotReportedRunning(t *testing.T) {
 	deps, out := daemonCommandTestDeps(t)
-	deps.startBackground = func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+	deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
 		return backgroundLaunchResult{
 			Started: true, LogPath: "/tmp/slow-start.log", childPID: 301,
 		}, nil
@@ -271,9 +272,9 @@ func TestDaemonStartSlowReadinessIsNotReportedRunning(t *testing.T) {
 
 	err := executeDaemonCommand(t, *deps, out, "start")
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "startup is still in progress")
-	assert.ErrorContains(t, err, "pid 301")
-	assert.ErrorContains(t, err, "/tmp/slow-start.log")
+	require.ErrorContains(t, err, "startup is still in progress")
+	require.ErrorContains(t, err, "pid 301")
+	require.ErrorContains(t, err, "/tmp/slow-start.log")
 	assert.NotContains(t, out.String(), "agentsview running")
 }
 
@@ -286,7 +287,7 @@ func TestDaemonRestartSlowReadinessIsNotReportedSuccessful(t *testing.T) {
 					return []daemon.RuntimeRecord{testWritableRecord(302, "/runtime/302.json")}, nil
 				}
 			}
-			deps.startBackground = func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+			deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
 				return backgroundLaunchResult{
 					Started: true, LogPath: "/tmp/slow-restart.log", childPID: 303,
 				}, nil
@@ -294,9 +295,9 @@ func TestDaemonRestartSlowReadinessIsNotReportedSuccessful(t *testing.T) {
 
 			err := executeDaemonCommand(t, *deps, out, "restart")
 			require.Error(t, err)
-			assert.ErrorContains(t, err, "startup is still in progress")
-			assert.ErrorContains(t, err, "pid 303")
-			assert.ErrorContains(t, err, "/tmp/slow-restart.log")
+			require.ErrorContains(t, err, "startup is still in progress")
+			require.ErrorContains(t, err, "pid 303")
+			require.ErrorContains(t, err, "/tmp/slow-restart.log")
 			assert.NotContains(t, out.String(), "restarted")
 			assert.NotContains(t, out.String(), "started (was not running)")
 		})
@@ -315,15 +316,15 @@ func TestDaemonCanonicalCleanupFailureStopsRestart(t *testing.T) {
 				return errors.New("caddy would not stop")
 			}
 			starts := 0
-			deps.startBackground = func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+			deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
 				starts++
 				return backgroundLaunchResult{}, nil
 			}
 
 			err := executeDaemonCommand(t, *deps, out, command)
 			require.Error(t, err)
-			assert.ErrorContains(t, err, "managed caddy")
-			assert.ErrorContains(t, err, "caddy would not stop")
+			require.ErrorContains(t, err, "managed caddy")
+			require.ErrorContains(t, err, "caddy would not stop")
 			assert.Contains(t, out.String(), "managed caddy cleanup failed")
 			assert.Zero(t, starts, "restart must not start after cleanup failure")
 		})
@@ -363,8 +364,8 @@ func TestDaemonCanonicalCommandsSurfaceLaunchLockErrors(t *testing.T) {
 
 			err := executeDaemonCommand(t, *deps, out, command)
 			require.Error(t, err)
-			assert.ErrorContains(t, err, "acquiring launch lock")
-			assert.ErrorContains(t, err, "permission denied")
+			require.ErrorContains(t, err, "acquiring launch lock")
+			require.ErrorContains(t, err, "permission denied")
 			assert.NotContains(t, err.Error(), "busy")
 			assert.Zero(t, configLoads)
 		})
@@ -391,16 +392,16 @@ func TestDaemonMutationRejectsLoadedDataDirMismatch(t *testing.T) {
 				return nil, nil
 			}
 			deps.stopProcess = func(daemon.RuntimeRecord, time.Duration) error { signals++; return nil }
-			deps.startBackground = func(config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
+			deps.startBackground = func(context.Context, config.Config, []string, serveReplacementOptions, backgroundLaunchPolicy) (backgroundLaunchResult, error) {
 				starts++
 				return backgroundLaunchResult{}, nil
 			}
 
 			err := executeDaemonCommand(t, *deps, out, command)
 			require.Error(t, err)
-			assert.ErrorContains(t, err, "data dir changed after launch lock")
-			assert.ErrorContains(t, err, strconv.Quote(lockedDir))
-			assert.ErrorContains(t, err, strconv.Quote(loadedDir))
+			require.ErrorContains(t, err, "data dir changed after launch lock")
+			require.ErrorContains(t, err, strconv.Quote(lockedDir))
+			require.ErrorContains(t, err, strconv.Quote(loadedDir))
 			assert.Zero(t, discoveries)
 			assert.Zero(t, signals)
 			assert.Zero(t, starts)
@@ -414,8 +415,8 @@ func TestStopOrphanedCaddyChildWithWriterReportsCanonicalOutput(t *testing.T) {
 	created, ok := processCreateTimeMillis(pid)
 	require.True(t, ok)
 	rec := daemon.RuntimeRecord{Metadata: map[string]string{
-		runtimeCaddyPID:        fmt.Sprint(pid),
-		runtimeCaddyCreateTime: fmt.Sprint(created),
+		runtimeCaddyPID:        strconv.Itoa(pid),
+		runtimeCaddyCreateTime: strconv.FormatInt(created, 10),
 	}}
 	var out bytes.Buffer
 
@@ -427,14 +428,14 @@ func TestStopOrphanedCaddyChildWithWriterReportsCanonicalOutput(t *testing.T) {
 func TestStopOrphanedCaddyChildWithWriterRejectsUnknownIdentity(t *testing.T) {
 	pid := startSleepProcess(t)
 	rec := daemon.RuntimeRecord{Metadata: map[string]string{
-		runtimeCaddyPID: fmt.Sprint(pid),
+		runtimeCaddyPID: strconv.Itoa(pid),
 	}}
 	var out bytes.Buffer
 
 	err := stopOrphanedCaddyChildWithWriter(&out, rec)
 	require.Error(t, err)
-	assert.ErrorContains(t, err, "identity could not be confirmed")
-	assert.ErrorContains(t, err, fmt.Sprintf("pid %d", pid))
+	require.ErrorContains(t, err, "identity could not be confirmed")
+	require.ErrorContains(t, err, fmt.Sprintf("pid %d", pid))
 	assert.True(t, daemon.ProcessAlive(pid))
 	assert.Empty(t, out.String())
 }
@@ -442,7 +443,7 @@ func TestStopOrphanedCaddyChildWithWriterRejectsUnknownIdentity(t *testing.T) {
 func TestStopOrphanedCaddyChildLegacyWarnsOnUnknownIdentity(t *testing.T) {
 	pid := startSleepProcess(t)
 	rec := daemon.RuntimeRecord{Metadata: map[string]string{
-		runtimeCaddyPID: fmt.Sprint(pid),
+		runtimeCaddyPID: strconv.Itoa(pid),
 	}}
 
 	out := captureStdout(t, func() { stopOrphanedCaddyChild(rec) })

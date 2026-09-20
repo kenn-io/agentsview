@@ -204,8 +204,8 @@ func (hs HTTPSync) downloadIntoMirror(
 		"Extracting %d changed files from %s", len(fetch), hs.Host,
 	)
 	if full {
-		downloadLabel = fmt.Sprintf("Downloading session archive from %s", hs.Host)
-		extractLabel = fmt.Sprintf("Extracting session archive from %s", hs.Host)
+		downloadLabel = "Downloading session archive from " + hs.Host
+		extractLabel = "Extracting session archive from " + hs.Host
 	} else {
 		request.DeltaFiles = fetch
 	}
@@ -301,7 +301,7 @@ func (hs HTTPSync) downloadAndExtract(
 			return "", err
 		}
 	}
-	downloadLabel := fmt.Sprintf("Downloading session archive from %s", hs.Host)
+	downloadLabel := "Downloading session archive from " + hs.Host
 	archive, err := hs.downloadArchive(ctx, resp, downloadLabel, os.TempDir())
 	if err != nil {
 		return "", err
@@ -336,7 +336,7 @@ func (hs HTTPSync) downloadAndExtract(
 	if err != nil {
 		return "", fmt.Errorf("create temp dir: %w", err)
 	}
-	extractLabel := fmt.Sprintf("Extracting session archive from %s", hs.Host)
+	extractLabel := "Extracting session archive from " + hs.Host
 	if err := archive.extract(ctx, tmpDir, hs.Progress, extractLabel); err != nil {
 		return "", err
 	}

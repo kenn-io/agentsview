@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -11,11 +12,11 @@ import (
 // with an EXISTS check so the operation is atomic and avoids FK
 // errors if the session is concurrently deleted.  Returns false
 // if the session does not exist (idempotent for already-starred).
-func (db *DB) StarSession(sessionID string) (bool, error) {
+func (db *DB) StarSession(ctx context.Context, sessionID string) (bool, error) {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 	w := db.getWriter()
-	res, err := w.Exec(`
+	res, err := w.Exec(ctx, `
 		INSERT OR IGNORE INTO starred_sessions (session_id)
 		SELECT ? WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ?)`,
 		sessionID, sessionID)
@@ -28,10 +29,10 @@ func (db *DB) StarSession(sessionID string) (bool, error) {
 	}
 	// Zero rows: either already starred or session doesn't exist.
 	var exists int
-	err = w.QueryRow(
+	err = w.QueryRow(ctx,
 		"SELECT 1 FROM sessions WHERE id = ?", sessionID,
 	).Scan(&exists)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil // session doesn't exist
 	}
 	if err != nil {
@@ -41,10 +42,10 @@ func (db *DB) StarSession(sessionID string) (bool, error) {
 }
 
 // UnstarSession removes a session's star.
-func (db *DB) UnstarSession(sessionID string) error {
+func (db *DB) UnstarSession(ctx context.Context, sessionID string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	_, err := db.getWriter().Exec(
+	_, err := db.getWriter().Exec(ctx,
 		"DELETE FROM starred_sessions WHERE session_id = ?",
 		sessionID,
 	)
@@ -142,7 +143,7 @@ func curationScopeWhere(alias string, projects, excludeProjects []string) (strin
 
 // BulkStarSessions stars multiple sessions in a single transaction.
 // Used for migrating localStorage stars to the database.
-func (db *DB) BulkStarSessions(sessionIDs []string) error {
+func (db *DB) BulkStarSessions(ctx context.Context, sessionIDs []string) error {
 	if err := db.requireWritable(); err != nil {
 		return err
 	}
@@ -153,7 +154,7 @@ func (db *DB) BulkStarSessions(sessionIDs []string) error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
@@ -163,7 +164,7 @@ func (db *DB) BulkStarSessions(sessionIDs []string) error {
 	// (sessions pruned or deleted from disk) are silently skipped
 	// instead of causing a foreign key violation that aborts the
 	// entire migration transaction.
-	stmt, err := tx.Prepare(`
+	stmt, err := tx.PrepareContext(ctx, `
 		INSERT OR IGNORE INTO starred_sessions (session_id)
 		SELECT ? WHERE EXISTS (SELECT 1 FROM sessions WHERE id = ?)`)
 	if err != nil {
@@ -172,7 +173,7 @@ func (db *DB) BulkStarSessions(sessionIDs []string) error {
 	defer stmt.Close()
 
 	for _, id := range sessionIDs {
-		if _, err := stmt.Exec(id, id); err != nil {
+		if _, err := stmt.ExecContext(ctx, id, id); err != nil {
 			return fmt.Errorf("starring session %s: %w", id, err)
 		}
 	}

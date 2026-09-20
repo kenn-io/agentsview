@@ -13,8 +13,10 @@ import (
 	"go.kenn.io/agentsview/internal/pathutil"
 )
 
-var _ Provider = (*cursorProvider)(nil)
-var _ S3Provider = (*cursorProvider)(nil)
+var (
+	_ Provider   = (*cursorProvider)(nil)
+	_ S3Provider = (*cursorProvider)(nil)
+)
 
 type cursorProviderFactory struct {
 	def        AgentDef
@@ -51,7 +53,7 @@ func (f *cursorProviderFactory) NewProvider(cfg ProviderConfig) Provider {
 
 // ResolveMetadataDir returns the sibling .cursor/chats directory for a local
 // .cursor/projects root. Remote, rewritten and unrelated roots yield "".
-func (f cursorProviderFactory) ResolveMetadataDir(path string) (string, error) {
+func (f *cursorProviderFactory) ResolveMetadataDir(path string) (string, error) {
 	root, err := pathutil.ResolveAbsolute(path)
 	if err != nil {
 		return "", err
@@ -115,7 +117,7 @@ func (p *cursorProvider) Parse(
 	}
 	path, ok := p.sources.pathFromSource(req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("cursor source path unavailable")
+		return ParseOutcome{}, errors.New("cursor source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	cwd := ""
@@ -150,7 +152,7 @@ func (p *cursorProvider) Parse(
 	if errors.Is(enrichErr, errCursorStoreFormat) {
 		log.Printf("warning: %v; using Cursor transcript only", enrichErr)
 	} else if enrichErr != nil {
-		return ParseOutcome{
+		return ParseOutcome{ //nolint:nilerr // The operational error is carried in ParseOutcome.SourceErrors for retry classification.
 			SourceErrors: []SourceError{{
 				SourceKey:   req.Source.Key,
 				DisplayPath: path,
@@ -913,7 +915,7 @@ func (s cursorSourceSet) Fingerprint(
 	}
 	path, ok := s.pathFromSource(source)
 	if !ok {
-		return SourceFingerprint{}, fmt.Errorf("cursor source path unavailable")
+		return SourceFingerprint{}, errors.New("cursor source path unavailable")
 	}
 	info, err := os.Stat(path)
 	if err != nil {

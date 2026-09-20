@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 	"time"
@@ -18,12 +17,12 @@ func TestGptmeProviderParsesFixture(t *testing.T) {
 		Machine: "testmachine",
 	})
 	require.True(t, ok)
-	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "2026-06-13-write-hello-world",
 	})
 	require.NoError(t, err)
 	require.True(t, found)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  source,
 		Machine: "testmachine",
 	})
@@ -78,7 +77,7 @@ func TestGptmeProviderDiscoversFixture(t *testing.T) {
 	provider, ok := NewProvider(AgentGptme, ProviderConfig{Roots: []string{logsDir}})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, AgentGptme, sources[0].Provider)
@@ -90,14 +89,14 @@ func TestGptmeProviderFindsFixtureSource(t *testing.T) {
 	provider, ok := NewProvider(AgentGptme, ProviderConfig{Roots: []string{logsDir}})
 	require.True(t, ok)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "2026-06-13-write-hello-world",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Contains(t, found.DisplayPath, "conversation.jsonl")
 
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "nonexistent-session",
 	})
 	require.NoError(t, err)

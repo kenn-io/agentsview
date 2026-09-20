@@ -1,7 +1,6 @@
 package config
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -61,7 +60,7 @@ func TestPiHomesAddSessionRoots(t *testing.T) {
 			}
 			provider, ok := parser.NewProvider(parser.AgentPi, parser.ProviderConfig{Roots: cfg.ResolveDirs(parser.AgentPi)})
 			require.True(t, ok)
-			sources, err := provider.Discover(context.Background())
+			sources, err := provider.Discover(t.Context())
 			require.NoError(t, err)
 			require.Len(t, sources, 2)
 			assert.ElementsMatch(t, []string{workSession, personalSession}, []string{sources[0].DisplayPath, sources[1].DisplayPath})

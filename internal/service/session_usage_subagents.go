@@ -165,8 +165,7 @@ func sessionUsageWithDescendants(
 			return nil, usageErr
 		}
 		if ownUsage != nil {
-			tokenExpectations[descendant.ID] =
-				sessionTokenExpectationFromUsage(ownUsage)
+			tokenExpectations[descendant.ID] = sessionTokenExpectationFromUsage(ownUsage)
 		}
 	}
 	return combineSubagentUsageFromRows(
@@ -274,13 +273,12 @@ func combineSubagentUsageFromRows(
 		out.HasTokenData = true
 	}
 	var sessionCostCovered bool
-	out.HasTokenData, sessionCostCovered, out.TokenBreakdownComplete, err =
-		combinedSessionCoverage(
-			ctx, rootID, out.HasTokenData, root.HasTokenData, root.HasCost,
-			rootStoredOutputTokens > 0 || root.PeakContextTokens > 0,
-			descendants, combined.usageRowsBySession,
-			discardedContributingSessions, canonicalTokenCoverageBySession,
-			tokenExpectations, requireComplete)
+	out.HasTokenData, sessionCostCovered, out.TokenBreakdownComplete, err = combinedSessionCoverage(
+		ctx, rootID, out.HasTokenData, root.HasTokenData, root.HasCost,
+		rootStoredOutputTokens > 0 || root.PeakContextTokens > 0,
+		descendants, combined.usageRowsBySession,
+		discardedContributingSessions, canonicalTokenCoverageBySession,
+		tokenExpectations, requireComplete)
 	if err != nil {
 		return nil, err
 	}

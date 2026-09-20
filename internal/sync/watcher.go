@@ -1335,8 +1335,8 @@ func (w *Watcher) accumulateBackendEvent(event backendEvent) {
 }
 
 func callbackRetryBatch(err error) (WatchBatch, bool) {
-	var retryErr WatchRetryError
-	if !errors.As(err, &retryErr) {
+	retryErr, hasRetryErr := errors.AsType[WatchRetryError](err)
+	if !hasRetryErr {
 		return WatchBatch{}, false
 	}
 	retry := retryErr.WatchRetryBatch()

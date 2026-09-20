@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -36,12 +35,12 @@ func upsertSession(
 	if startedAt != "" {
 		s.StartedAt = &startedAt
 	}
-	require.NoError(t, d.UpsertSession(s), "upsert %s", id)
+	require.NoError(t, d.UpsertSession(t.Context(), s), "upsert %s", id)
 }
 
 func TestResolveSessionID_PrefixedInput_NoEvidence_UnchangedNotKnown(t *testing.T) {
 	d := newTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// A prefixed input with no DB row and no disk evidence is
 	// returned unchanged so downstream lookup/error messages
@@ -56,7 +55,7 @@ func TestResolveSessionID_PrefixedInput_NoEvidence_UnchangedNotKnown(t *testing.
 
 func TestResolveSessionID_HostPrefixedInput_ReturnedUnchanged(t *testing.T) {
 	d := newTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Host-prefixed IDs are unambiguously canonical remote IDs;
 	// resolution short-circuits without touching DB or disk.
@@ -68,7 +67,7 @@ func TestResolveSessionID_HostPrefixedInput_ReturnedUnchanged(t *testing.T) {
 
 func TestResolveSessionID_BareClaudeUUID_ExactMatch(t *testing.T) {
 	d := newTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Claude sessions have no prefix; the bare UUID is the
 	// canonical ID stored in sessions.id.
@@ -82,7 +81,7 @@ func TestResolveSessionID_BareClaudeUUID_ExactMatch(t *testing.T) {
 
 func TestResolveSessionID_BareCodexUUID_ResolvesToPrefixed(t *testing.T) {
 	d := newTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	bare := "019d5490-fe31-7e62-838c-8ba4193f245d"
 	stored := "codex:" + bare
@@ -95,7 +94,7 @@ func TestResolveSessionID_BareCodexUUID_ResolvesToPrefixed(t *testing.T) {
 
 func TestResolveSessionID_Ambiguous_MostRecentWins(t *testing.T) {
 	d := newTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	bare := "22222222-2222-2222-2222-222222222222"
 	// Older codex session.
@@ -110,7 +109,7 @@ func TestResolveSessionID_Ambiguous_MostRecentWins(t *testing.T) {
 
 func TestResolveSessionID_NotInDB_FoundOnDisk(t *testing.T) {
 	d := newTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a codex session file on disk: the probe path
 	// should resolve a bare raw UUID to the prefixed form.
@@ -132,7 +131,7 @@ func TestResolveSessionID_NotInDB_FoundOnDisk(t *testing.T) {
 
 func TestResolveSessionID_NotFoundAnywhere_PassThrough(t *testing.T) {
 	d := newTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	bare := "44444444-4444-4444-4444-444444444444"
 	got, known := resolveRawSessionID(ctx, d, nil, bare)
@@ -142,7 +141,7 @@ func TestResolveSessionID_NotFoundAnywhere_PassThrough(t *testing.T) {
 
 func TestResolveSessionID_BareClaudeAndPrefixedSameUUID_ClaudeExactWins(t *testing.T) {
 	d := newTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Edge: a bare Claude UUID that ALSO exists as a prefixed
 	// session (e.g. codex:<same-uuid>). The Claude row is an
@@ -158,7 +157,7 @@ func TestResolveSessionID_BareClaudeAndPrefixedSameUUID_ClaudeExactWins(t *testi
 
 func TestResolveSessionID_ExactMatchWinsOverNewerCollisions(t *testing.T) {
 	d := newTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Bare Claude session is the exact match but older than
 	// multiple prefixed sessions sharing the same suffix. The
@@ -179,7 +178,7 @@ func TestResolveSessionID_ExactMatchWinsOverNewerCollisions(t *testing.T) {
 
 func TestResolveSessionID_KimiRawID_ResolvesToPrefixed(t *testing.T) {
 	d := newTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Kimi raw IDs have the shape "<project-hash>:<session-uuid>".
 	// The stored canonical form prepends "kimi:".
@@ -194,7 +193,7 @@ func TestResolveSessionID_KimiRawID_ResolvesToPrefixed(t *testing.T) {
 
 func TestResolveSessionID_OpenClawRawID_ResolvesToPrefixed(t *testing.T) {
 	d := newTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// OpenClaw raw IDs have the shape "<agentId>:<sessionId>".
 	raw := "main:abc-123"
@@ -208,7 +207,7 @@ func TestResolveSessionID_OpenClawRawID_ResolvesToPrefixed(t *testing.T) {
 
 func TestResolveSessionID_CanonicalKimiID_ResolvesWhenInDB(t *testing.T) {
 	d := newTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// A canonical Kimi ID already in the DB resolves via the
 	// exact-match branch. A canonical ID with no DB row and no
@@ -224,7 +223,7 @@ func TestResolveSessionID_CanonicalKimiID_ResolvesWhenInDB(t *testing.T) {
 
 func TestResolveSessionID_CanonicalCodexID_OnDiskNotInDB(t *testing.T) {
 	d := newTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Canonical "codex:<uuid>" not yet synced but present on
 	// disk must resolve via the canonical disk probe, which strips
@@ -249,7 +248,7 @@ func TestResolveSessionID_CanonicalCodexID_OnDiskNotInDB(t *testing.T) {
 
 func TestResolveSessionID_ProviderAuthoritativeCursorOnDiskNotInDB(t *testing.T) {
 	d := newTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	cursorDir := t.TempDir()
 	rawID := "provider-cursor"
@@ -282,7 +281,7 @@ func TestResolveSessionID_ProviderAuthoritativeCursorOnDiskNotInDB(t *testing.T)
 
 func TestResolveSessionID_DevinCanonicalID_OnDiskNotInDB(t *testing.T) {
 	d := newTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	root := t.TempDir()
 	cliDir := filepath.Join(root, "cli")
@@ -292,7 +291,7 @@ func TestResolveSessionID_DevinCanonicalID_OnDiskNotInDB(t *testing.T) {
 	devinDB, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, devinDB.Close()) })
-	_, err = devinDB.Exec(`
+	_, err = devinDB.ExecContext(ctx, `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
 			title TEXT,
@@ -326,7 +325,7 @@ func TestResolveSessionID_DevinCanonicalID_OnDiskNotInDB(t *testing.T) {
 
 func TestResolveSessionID_GooseOnDiskNotInDB(t *testing.T) {
 	d := newTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	root := t.TempDir()
 	sessionsDir := filepath.Join(root, "data", "sessions")
@@ -335,7 +334,7 @@ func TestResolveSessionID_GooseOnDiskNotInDB(t *testing.T) {
 	gooseDB, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, gooseDB.Close()) })
-	_, err = gooseDB.Exec(`
+	_, err = gooseDB.ExecContext(ctx, `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
 			working_dir TEXT NOT NULL,
@@ -374,7 +373,7 @@ func TestResolveSessionID_GooseOnDiskNotInDB(t *testing.T) {
 
 func TestResolveSessionID_RawOpenClawCollidesWithCodexPrefix(t *testing.T) {
 	d := newTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// OpenClaw permits arbitrary alphanumeric-dash-underscore
 	// agent IDs, so a user may have one literally named "codex".
@@ -395,7 +394,7 @@ func TestResolveSessionID_RawOpenClawCollidesWithCodexPrefix(t *testing.T) {
 
 func TestResolveSessionID_UnderscoreID_NoFalseMatch(t *testing.T) {
 	d := newTestDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Underscore is a LIKE wildcard in SQLite. If the query
 	// uses LIKE naively, a raw id "20260403_aaa" would match
@@ -405,12 +404,12 @@ func TestResolveSessionID_UnderscoreID_NoFalseMatch(t *testing.T) {
 	// wins.
 	raw := "20260403_aaa"
 	decoy := "codex:20260403Xaaa"
-	real := "codex:" + raw
+	actualID := "codex:" + raw
 	upsertSession(t, d, decoy, "codex", "2026-04-16T10:00:00Z")
-	upsertSession(t, d, real, "codex", "2026-04-17T10:00:00Z")
+	upsertSession(t, d, actualID, "codex", "2026-04-17T10:00:00Z")
 
 	got, known := resolveRawSessionID(ctx, d, nil, raw)
-	assert.Equal(t, real, got, "underscore is literal")
+	assert.Equal(t, actualID, got, "underscore is literal")
 	assert.True(t, known)
 }
 

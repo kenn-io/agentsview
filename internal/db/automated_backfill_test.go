@@ -1,11 +1,9 @@
 package db
 
 import (
-	"context"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -88,7 +86,7 @@ func TestBackfillIsAutomatedMatchingHashBoundsTextAllocations(t *testing.T) {
 		s.FirstMessage = &title
 		s.UserMessageCount = 1
 	})
-	require.NoError(t, d.ReplaceSessionMessages(
+	require.NoError(t, d.ReplaceSessionMessages(t.Context(),
 		"prefix-first-user",
 		[]Message{userMsg("prefix-first-user", 0, prefixPrompt)},
 	), "store large prefix-matching first user message")
@@ -112,7 +110,7 @@ func TestBackfillIsAutomatedMatchingHashBoundsTextAllocations(t *testing.T) {
 		s.UserMessageCount = 2
 	})
 
-	_, err := d.getWriter().Exec(`
+	_, err := d.getWriter().Exec(t.Context(), `
 		UPDATE sessions
 		SET is_automated = CASE id
 			WHEN 'prefix-first-message' THEN 0
@@ -126,7 +124,7 @@ func TestBackfillIsAutomatedMatchingHashBoundsTextAllocations(t *testing.T) {
 			'late-substring', 'stale-multi-turn'
 		)`)
 	require.NoError(t, err, "seed stale automation flags")
-	_, err = d.getWriter().Exec(
+	_, err = d.getWriter().Exec(t.Context(),
 		`INSERT INTO stats (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 		ClassifierHashKey, ClassifierHash(),
@@ -134,13 +132,14 @@ func TestBackfillIsAutomatedMatchingHashBoundsTextAllocations(t *testing.T) {
 	require.NoError(t, err, "stamp current classifier hash")
 
 	result := testing.Benchmark(func(b *testing.B) {
+		b.Helper()
 		b.ReportAllocs()
 		for range b.N {
 			d.mu.Lock()
-			err := d.backfillIsAutomatedLocked(d.getWriter())
+			err := d.backfillIsAutomatedLocked(t.Context(), d.getWriter())
 			d.mu.Unlock()
 			if err != nil {
-				b.Fatal(err)
+				require.NoError(t, err)
 			}
 		}
 	})
@@ -155,7 +154,7 @@ func TestBackfillIsAutomatedMatchingHashBoundsTextAllocations(t *testing.T) {
 		"late-substring":       true,
 		"stale-multi-turn":     false,
 	} {
-		session, err := d.GetSession(context.Background(), id)
+		session, err := d.GetSession(t.Context(), id)
 		require.NoError(t, err, "get %s", id)
 		require.NotNil(t, session, "missing %s", id)
 		assert.Equal(t, want, session.IsAutomated, id)
@@ -174,7 +173,7 @@ func TestBackfillIsAutomatedBidirectional(t *testing.T) {
 		s.UserMessageCount = 1
 	})
 	// Force is_automated to 0 to simulate pre-migration state.
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(t.Context(),
 		"UPDATE sessions SET is_automated = 0 WHERE id = 'missed'",
 	)
 	require.NoError(t, err, "force missed to 0")
@@ -187,13 +186,13 @@ func TestBackfillIsAutomatedBidirectional(t *testing.T) {
 		s.MessageCount = 10
 		s.UserMessageCount = 5
 	})
-	_, err = d.getWriter().Exec(
+	_, err = d.getWriter().Exec(t.Context(),
 		"UPDATE sessions SET is_automated = 1 WHERE id = 'stale'",
 	)
 	require.NoError(t, err, "force stale to 1")
 
 	// Clear the marker so the backfill will run.
-	_, err = d.getWriter().Exec(
+	_, err = d.getWriter().Exec(t.Context(),
 		"DELETE FROM stats WHERE key = ?",
 		ClassifierHashKey,
 	)
@@ -201,11 +200,11 @@ func TestBackfillIsAutomatedBidirectional(t *testing.T) {
 
 	// Run backfill.
 	d.mu.Lock()
-	err = d.backfillIsAutomatedLocked(d.getWriter())
+	err = d.backfillIsAutomatedLocked(t.Context(), d.getWriter())
 	d.mu.Unlock()
 	require.NoError(t, err, "first backfill run")
 
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// False negative should now be set.
 	missed, err := d.GetSession(ctx, "missed")
@@ -230,21 +229,21 @@ func TestBackfillIsAutomatedMarkerDoesNotHideCorruption(t *testing.T) {
 	})
 
 	// Clear the marker and run backfill.
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(t.Context(),
 		"DELETE FROM stats WHERE key = ?",
 		ClassifierHashKey,
 	)
 	require.NoError(t, err, "clear marker")
 
 	d.mu.Lock()
-	err = d.backfillIsAutomatedLocked(d.getWriter())
+	err = d.backfillIsAutomatedLocked(t.Context(), d.getWriter())
 	d.mu.Unlock()
 	require.NoError(t, err, "first run")
 
 	// Manually corrupt the session. Matching classifier hashes
 	// cannot be trusted as a complete integrity marker because
 	// other DB write paths can import or preserve stale flags.
-	_, err = d.getWriter().Exec(
+	_, err = d.getWriter().Exec(t.Context(),
 		"UPDATE sessions SET is_automated = 0 WHERE id = 'review'",
 	)
 	require.NoError(t, err, "corrupt")
@@ -252,11 +251,11 @@ func TestBackfillIsAutomatedMarkerDoesNotHideCorruption(t *testing.T) {
 	// Second run should repair the inconsistent row even though
 	// the current hash is already stored.
 	d.mu.Lock()
-	err = d.backfillIsAutomatedLocked(d.getWriter())
+	err = d.backfillIsAutomatedLocked(t.Context(), d.getWriter())
 	d.mu.Unlock()
 	require.NoError(t, err, "second run")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	review, err := d.GetSession(ctx, "review")
 	require.NoError(t, err, "get review")
 	assert.True(t, review.IsAutomated,
@@ -265,7 +264,7 @@ func TestBackfillIsAutomatedMarkerDoesNotHideCorruption(t *testing.T) {
 
 func TestBackfillIsAutomatedRepairsFalseNegativeWithMatchingHash(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "stale-hash", "proj", func(s *Session) {
 		fm := "You are combining multiple code review outputs into a single GitHub PR comment. Rules follow."
@@ -274,11 +273,11 @@ func TestBackfillIsAutomatedRepairsFalseNegativeWithMatchingHash(t *testing.T) {
 		s.UserMessageCount = 1
 	})
 
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(ctx,
 		"UPDATE sessions SET is_automated = 0 WHERE id = 'stale-hash'",
 	)
 	require.NoError(t, err, "force stale is_automated=0")
-	_, err = d.getWriter().Exec(
+	_, err = d.getWriter().Exec(ctx,
 		`INSERT INTO stats (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 		ClassifierHashKey, ClassifierHash(),
@@ -286,7 +285,7 @@ func TestBackfillIsAutomatedRepairsFalseNegativeWithMatchingHash(t *testing.T) {
 	require.NoError(t, err, "stamp current classifier hash")
 
 	d.mu.Lock()
-	err = d.backfillIsAutomatedLocked(d.getWriter())
+	err = d.backfillIsAutomatedLocked(ctx, d.getWriter())
 	d.mu.Unlock()
 	require.NoError(t, err, "backfill")
 
@@ -300,7 +299,7 @@ func TestBackfillIsAutomatedUsesFirstUserMessageWhenFirstMessageIsTitle(
 	t *testing.T,
 ) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	title := "Generated review title"
 	insertSession(t, d, "title-review", "proj", func(s *Session) {
@@ -308,18 +307,18 @@ func TestBackfillIsAutomatedUsesFirstUserMessageWhenFirstMessageIsTitle(
 		s.MessageCount = 2
 		s.UserMessageCount = 1
 	})
-	require.NoError(t, d.ReplaceSessionMessages("title-review", []Message{
+	require.NoError(t, d.ReplaceSessionMessages(ctx, "title-review", []Message{
 		userMsg("title-review", 0,
 			"You are a code reviewer. Review the code changes shown below."),
 		asstMsg("title-review", 1, "Review complete."),
 	}), "ReplaceSessionMessages")
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(ctx,
 		"UPDATE sessions SET is_automated = 0 WHERE id = 'title-review'",
 	)
 	require.NoError(t, err, "force stale is_automated=0")
 
 	d.mu.Lock()
-	err = d.backfillIsAutomatedLocked(d.getWriter())
+	err = d.backfillIsAutomatedLocked(ctx, d.getWriter())
 	d.mu.Unlock()
 	require.NoError(t, err, "backfill")
 
@@ -332,7 +331,7 @@ func TestBackfillIsAutomatedUsesFirstUserMessageWhenFirstMessageIsTitle(
 
 func TestOpenRepairsAutomatedFalseNegativeWithMatchingHash(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")
-	d, err := Open(path)
+	d, err := Open(t.Context(), path)
 	require.NoError(t, err, "open")
 
 	insertSession(t, d, "reload-stale", "proj", func(s *Session) {
@@ -341,11 +340,11 @@ func TestOpenRepairsAutomatedFalseNegativeWithMatchingHash(t *testing.T) {
 		s.MessageCount = 2
 		s.UserMessageCount = 1
 	})
-	_, err = d.getWriter().Exec(
+	_, err = d.getWriter().Exec(t.Context(),
 		"UPDATE sessions SET is_automated = 0 WHERE id = 'reload-stale'",
 	)
 	require.NoError(t, err, "force stale is_automated=0")
-	_, err = d.getWriter().Exec(
+	_, err = d.getWriter().Exec(t.Context(),
 		`INSERT INTO stats (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 		ClassifierHashKey, ClassifierHash(),
@@ -353,11 +352,11 @@ func TestOpenRepairsAutomatedFalseNegativeWithMatchingHash(t *testing.T) {
 	require.NoError(t, err, "stamp current classifier hash")
 	require.NoError(t, d.Close(), "close")
 
-	reopened, err := Open(path)
+	reopened, err := Open(t.Context(), path)
 	require.NoError(t, err, "reopen")
 	defer reopened.Close()
 
-	got, err := reopened.GetSession(context.Background(), "reload-stale")
+	got, err := reopened.GetSession(t.Context(), "reload-stale")
 	require.NoError(t, err, "get reload-stale")
 	assert.True(t, got.IsAutomated,
 		"Open must repair stale is_automated=0 despite matching hash")
@@ -370,7 +369,7 @@ func TestOpenRepairsAutomatedFalseNegativeWithMatchingHash(t *testing.T) {
 // is_automated. UpdateSessionIncremental must re-evaluate.
 func TestIncrementalUpdateReclassifiesOnPatternChange(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Simulate a pre-existing single-turn session whose
 	// first_message now matches a classifier pattern but whose
@@ -381,7 +380,7 @@ func TestIncrementalUpdateReclassifiesOnPatternChange(t *testing.T) {
 		s.MessageCount = 2
 		s.UserMessageCount = 1
 	})
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(ctx,
 		"UPDATE sessions SET is_automated = 0 WHERE id = 'changelog-inc'",
 	)
 	require.NoError(t, err, "force stale is_automated=0")
@@ -416,7 +415,7 @@ func TestIncrementalUpdateReclassifiesOnPatternChange(t *testing.T) {
 // be cleared even if first_message still matches a pattern.
 func TestIncrementalUpdateClearsWhenCountGrows(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "grew-past-one", "proj", func(s *Session) {
 		fm := "You are a code reviewer. Review the code."
@@ -460,7 +459,7 @@ func TestIncrementalUpdateClearsWhenCountGrows(t *testing.T) {
 // when first_message doesn't match any pattern.
 func TestIncrementalUpdateLeavesNonMatching(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "normal-single", "proj", func(s *Session) {
 		fm := "Fix the login bug please"
@@ -502,7 +501,7 @@ func TestIncrementalUpdateLeavesNonMatching(t *testing.T) {
 // after the user appended a resolving result or a new prompt.
 func TestIncrementalUpdateClearsTerminationStatus(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "stale-term", "proj", func(s *Session) {
 		s.MessageCount = 2
@@ -544,7 +543,7 @@ func TestIncrementalUpdateClearsTerminationStatus(t *testing.T) {
 
 func TestBackfillIsAutomatedBumpsLocalModifiedAt(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed a single-turn roborev session that the new classifier
 	// will flip to is_automated = 1.
@@ -555,8 +554,8 @@ func TestBackfillIsAutomatedBumpsLocalModifiedAt(t *testing.T) {
 		s.UserMessageCount = 1
 	})
 	// Force is_automated = 0 so the backfill has work to do.
-	_, err := d.getWriter().Exec(
-		"UPDATE sessions SET is_automated = 0 WHERE id = 'to-flip'",
+	_, err := d.getWriter().Exec(ctx,
+		"UPDATE sessions SET is_automated = 0, local_modified_at = '2000-01-01T00:00:00.000Z' WHERE id = 'to-flip'",
 	)
 	require.NoError(t, err, "force to-flip to 0")
 
@@ -568,20 +567,15 @@ func TestBackfillIsAutomatedBumpsLocalModifiedAt(t *testing.T) {
 		beforeLM = *before.LocalModifiedAt
 	}
 
-	// SQLite's strftime('now') ticks at millisecond precision.
-	// Sleep a few ms so a re-set produces a strictly later value.
-	// (Mirrors internal/db/signals_test.go:164.)
-	time.Sleep(5 * time.Millisecond)
-
 	// Clear the marker so the backfill runs.
-	_, err = d.getWriter().Exec(
+	_, err = d.getWriter().Exec(ctx,
 		"DELETE FROM stats WHERE key = ?",
 		ClassifierHashKey,
 	)
 	require.NoError(t, err, "clear marker")
 
 	d.mu.Lock()
-	err = d.backfillIsAutomatedLocked(d.getWriter())
+	err = d.backfillIsAutomatedLocked(ctx, d.getWriter())
 	d.mu.Unlock()
 	require.NoError(t, err, "backfill run")
 
@@ -617,7 +611,7 @@ func TestBackfillIsAutomatedRerunsOnHashChange(t *testing.T) {
 		s.MessageCount = 2
 		s.UserMessageCount = 1
 	})
-	ctx := context.Background()
+	ctx := t.Context()
 	pre, err := d.GetSession(ctx, "essay")
 	require.NoError(t, err, "get essay before")
 	require.False(t, pre.IsAutomated,
@@ -628,7 +622,7 @@ func TestBackfillIsAutomatedRerunsOnHashChange(t *testing.T) {
 	// runs and flips is_automated to 1.
 	SetUserAutomationPrefixes([]string{"You are analyzing an essay"})
 	d.mu.Lock()
-	err = d.backfillIsAutomatedLocked(d.getWriter())
+	err = d.backfillIsAutomatedLocked(ctx, d.getWriter())
 	d.mu.Unlock()
 	require.NoError(t, err, "backfill after prefix add")
 
@@ -640,12 +634,12 @@ func TestBackfillIsAutomatedRerunsOnHashChange(t *testing.T) {
 	// A second backfill (no further classifier change) still
 	// repairs inconsistent rows; the stored hash is not a
 	// substitute for row integrity.
-	_, err = d.getWriter().Exec(
+	_, err = d.getWriter().Exec(ctx,
 		"UPDATE sessions SET is_automated = 0 WHERE id = 'essay'",
 	)
 	require.NoError(t, err, "force back to 0")
 	d.mu.Lock()
-	err = d.backfillIsAutomatedLocked(d.getWriter())
+	err = d.backfillIsAutomatedLocked(ctx, d.getWriter())
 	d.mu.Unlock()
 	require.NoError(t, err, "second backfill")
 	got, err = d.GetSession(ctx, "essay")
@@ -676,7 +670,7 @@ func TestBackfillFixesOrphanCopyClassificationGap(t *testing.T) {
 
 	// 1. Old DB with a misclassified single-turn roborev session.
 	srcPath := filepath.Join(dir, "old.db")
-	srcDB, err := Open(srcPath)
+	srcDB, err := Open(t.Context(), srcPath)
 	require.NoError(t, err, "Open src")
 	insertSession(t, srcDB, "stale-orphan", "proj", func(s *Session) {
 		fm := "You are a code reviewer. Review the code."
@@ -684,7 +678,7 @@ func TestBackfillFixesOrphanCopyClassificationGap(t *testing.T) {
 		s.MessageCount = 3
 		s.UserMessageCount = 1
 	})
-	_, err = srcDB.getWriter().Exec(
+	_, err = srcDB.getWriter().Exec(t.Context(),
 		"UPDATE sessions SET is_automated = 0 WHERE id = 'stale-orphan'",
 	)
 	require.NoError(t, err, "force orphan to is_automated=0")
@@ -693,7 +687,7 @@ func TestBackfillFixesOrphanCopyClassificationGap(t *testing.T) {
 	// 2. Fresh dst DB (Open's at-Open backfill ran on an empty
 	// table and stamped the current classifier hash).
 	dstPath := filepath.Join(dir, "new.db")
-	dstDB, err := Open(dstPath)
+	dstDB, err := Open(t.Context(), dstPath)
 	require.NoError(t, err, "Open dst")
 	defer dstDB.Close()
 
@@ -702,7 +696,7 @@ func TestBackfillFixesOrphanCopyClassificationGap(t *testing.T) {
 	require.NoError(t, err, "CopyOrphanedDataFrom")
 	require.Equal(t, 1, count, "expected 1 orphan")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	got, err := dstDB.GetSession(ctx, "stale-orphan")
 	require.NoError(t, err, "get orphan after copy")
 	require.False(t, got.IsAutomated,
@@ -711,7 +705,7 @@ func TestBackfillFixesOrphanCopyClassificationGap(t *testing.T) {
 	// 4. A regular backfill must still repair the row even
 	// though the stored classifier hash already matches.
 	dstDB.mu.Lock()
-	err = dstDB.backfillIsAutomatedLocked(dstDB.getWriter())
+	err = dstDB.backfillIsAutomatedLocked(ctx, dstDB.getWriter())
 	dstDB.mu.Unlock()
 	require.NoError(t, err, "backfill")
 	got, err = dstDB.GetSession(ctx, "stale-orphan")
@@ -728,7 +722,7 @@ func TestBackfillFixesOrphanCopyClassificationGap(t *testing.T) {
 // the old DB but are now stamped under the temp DB's hash.
 func TestForceBackfillIsAutomatedRunsDespiteMatchingHash(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Seed a single-turn roborev session that should be
 	// is_automated = 1 under the current classifier.
@@ -742,7 +736,7 @@ func TestForceBackfillIsAutomatedRunsDespiteMatchingHash(t *testing.T) {
 	// Force is_automated = 0 to simulate a row imported via
 	// CopyOrphanedDataFrom from a DB whose classifier set was
 	// stale at the time the flag was computed.
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(ctx,
 		"UPDATE sessions SET is_automated = 0 WHERE id = 'stuck'",
 	)
 	require.NoError(t, err, "force stuck to 0")
@@ -750,7 +744,7 @@ func TestForceBackfillIsAutomatedRunsDespiteMatchingHash(t *testing.T) {
 	// Stamp the current hash so a *plain* backfill would
 	// short-circuit (mirrors ResyncAll's temp DB state after
 	// at-Open backfill ran on an empty table).
-	_, err = d.getWriter().Exec(
+	_, err = d.getWriter().Exec(ctx,
 		`INSERT INTO stats (key, value) VALUES (?, ?)
 		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
 		ClassifierHashKey, ClassifierHash(),
@@ -759,7 +753,7 @@ func TestForceBackfillIsAutomatedRunsDespiteMatchingHash(t *testing.T) {
 
 	// The force path must reclassify regardless of the stored
 	// hash and re-stamp the current classifier hash.
-	require.NoError(t, d.ForceBackfillIsAutomated(), "force backfill")
+	require.NoError(t, d.ForceBackfillIsAutomated(ctx), "force backfill")
 
 	got, err := d.GetSession(ctx, "stuck")
 	require.NoError(t, err, "get stuck after force")
@@ -769,7 +763,7 @@ func TestForceBackfillIsAutomatedRunsDespiteMatchingHash(t *testing.T) {
 	// And the hash must be re-stamped after the force run so
 	// subsequent Opens don't re-do the work.
 	var stored string
-	err = d.getWriter().QueryRow(
+	err = d.getWriter().QueryRow(ctx,
 		`SELECT value FROM stats WHERE key = ?`,
 		ClassifierHashKey,
 	).Scan(&stored)
@@ -793,15 +787,15 @@ func TestAutomationIgnoresToolResultAsFirstPrompt(t *testing.T) {
 				{SessionID: "orphan", Ordinal: 1, Role: "user", Content: prompt},
 			}
 			assert.Equal(t, automated, IsAutomatedTranscript(1, messages, nil))
-			require.NoError(t, database.UpsertSession(Session{
+			require.NoError(t, database.UpsertSession(t.Context(), Session{
 				ID: "orphan", Agent: "codex", Project: "project", Machine: "local", UserMessageCount: 1,
 			}))
-			require.NoError(t, database.InsertMessages(messages))
+			require.NoError(t, database.InsertMessages(t.Context(), messages))
 			stored, err := database.GetSessionFull(t.Context(), "orphan")
 			require.NoError(t, err)
 			require.NotNil(t, stored)
 			assert.Equal(t, automated, stored.IsAutomated, "write-time classification")
-			require.NoError(t, database.ForceBackfillIsAutomated())
+			require.NoError(t, database.ForceBackfillIsAutomated(t.Context()))
 			stored, err = database.GetSessionFull(t.Context(), "orphan")
 			require.NoError(t, err)
 			require.NotNil(t, stored)

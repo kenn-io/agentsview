@@ -151,6 +151,7 @@ func (s *Store) semanticAllowedSessionIDsPG(
 	if err != nil {
 		return nil, fmt.Errorf("pg semantic search session scope: %w", err)
 	}
+	defer rows.Close()
 	defer func() { _ = rows.Close() }()
 
 	allowed := make(map[string]bool, len(ids))
@@ -215,6 +216,7 @@ SELECT m.session_id, s.project, s.agent, m.role, m.ordinal,
 	if err != nil {
 		return nil, fmt.Errorf("pg semantic search enrich: %w", err)
 	}
+	defer rows.Close()
 	defer func() { _ = rows.Close() }()
 
 	for rows.Next() {

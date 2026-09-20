@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -30,13 +31,13 @@ type ForgeSeeder struct {
 	t  *testing.T
 }
 
-func (s *ForgeSeeder) AddConversation(
+func (s *ForgeSeeder) AddConversation(ctx context.Context,
 	conversationID, title string,
 	workspaceID int64,
 	context, createdAt, updatedAt, metrics string,
 ) {
 	s.t.Helper()
-	_, err := s.db.Exec(
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO conversations
 		 (conversation_id, title, workspace_id, context, created_at, updated_at, metrics)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -50,7 +51,7 @@ func newForgeTestDB(t *testing.T) (string, *ForgeSeeder, *sql.DB) {
 	dbPath := filepath.Join(t.TempDir(), ".forge.db")
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open test db")
-	_, err = db.Exec(forgeSchema)
+	_, err = db.ExecContext(t.Context(), forgeSchema)
 	require.NoError(t, err, "create schema")
 	seeder := &ForgeSeeder{db: db, t: t}
 	return dbPath, seeder, db
@@ -150,7 +151,7 @@ func seedForgeConversation(t *testing.T, seeder *ForgeSeeder) {
 	  ]
 	}`
 	metrics := `{"input_tokens":360,"output_tokens":55,"cached_input_tokens":85}`
-	seeder.AddConversation(
+	seeder.AddConversation(t.Context(),
 		"conv-001",
 		"Add Forge Support",
 		123,
@@ -261,7 +262,7 @@ func TestCollectForgeToolCalls_TaskSubagentIDPrefixed(t *testing.T) {
 	    }
 	  ]
 	}`
-	seeder.AddConversation(
+	seeder.AddConversation(t.Context(),
 		"parent-conv", "Parent", 1, context,
 		"2026-05-02 10:00:00", "2026-05-02 10:00:01", "",
 	)
@@ -334,7 +335,7 @@ func TestForgeTokenFallbacks(t *testing.T) {
 		    }
 		  ]
 		}`
-		seeder.AddConversation(
+		seeder.AddConversation(t.Context(),
 			"token-fallback-1", "No Metrics", 1,
 			context,
 			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
@@ -380,7 +381,7 @@ func TestForgeTokenFallbacks(t *testing.T) {
 		    }
 		  ]
 		}`
-		seeder.AddConversation(
+		seeder.AddConversation(t.Context(),
 			"token-fallback-2", "Output Only Metrics", 1,
 			context,
 			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
@@ -419,7 +420,7 @@ func TestForgeTokenFallbacks(t *testing.T) {
 		    }
 		  ]
 		}`
-		seeder.AddConversation(
+		seeder.AddConversation(t.Context(),
 			"token-fallback-3", "No Cached Tokens", 1,
 			context,
 			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
@@ -453,7 +454,7 @@ func TestForgeTokenFallbacks(t *testing.T) {
 		    }
 		  ]
 		}`
-		seeder.AddConversation(
+		seeder.AddConversation(t.Context(),
 			"token-fallback-4", "No Usage At All", 1,
 			context,
 			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
@@ -507,7 +508,7 @@ func TestForgeDegenerate(t *testing.T) {
 		    }
 		  ]
 		}`
-		seeder.AddConversation(
+		seeder.AddConversation(t.Context(),
 			"degen-1", "Empty Assistant", 1,
 			context,
 			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
@@ -549,7 +550,7 @@ func TestForgeDegenerate(t *testing.T) {
 		    }
 		  ]
 		}`
-		seeder.AddConversation(
+		seeder.AddConversation(t.Context(),
 			"degen-2", "Empty Call ID", 1,
 			context,
 			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
@@ -582,7 +583,7 @@ func TestForgeDegenerate(t *testing.T) {
 		    }
 		  ]
 		}`
-		seeder.AddConversation(
+		seeder.AddConversation(t.Context(),
 			"degen-3", "Raw Content Fallback", 1,
 			context,
 			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
@@ -621,7 +622,7 @@ func TestForgeCwdEdgeCases(t *testing.T) {
 		    }
 		  ]
 		}`
-		seeder.AddConversation(
+		seeder.AddConversation(t.Context(),
 			"cwd-1", "No System", 1,
 			context,
 			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
@@ -663,7 +664,7 @@ func TestForgeCwdEdgeCases(t *testing.T) {
 		    }
 		  ]
 		}`
-		seeder.AddConversation(
+		seeder.AddConversation(t.Context(),
 			"cwd-2", "System No Tag", 1,
 			context,
 			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
@@ -703,7 +704,7 @@ func TestForgeCwdEdgeCases(t *testing.T) {
 		    }
 		  ]
 		}`
-		seeder.AddConversation(
+		seeder.AddConversation(t.Context(),
 			"cwd-3", "Empty CWD Tag", 1,
 			context,
 			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
@@ -734,7 +735,7 @@ func TestForgeCwdEdgeCases(t *testing.T) {
 		    }
 		  ]
 		}`
-		seeder.AddConversation(
+		seeder.AddConversation(t.Context(),
 			"cwd-4", "CWD In User Message", 1,
 			context,
 			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
@@ -804,14 +805,14 @@ func TestForgeEndedAtFallback(t *testing.T) {
 	}`
 	// Set updated_at to empty so loadForgeConversations COALESCE returns created_at,
 	// but force a NULL by inserting directly.
-	seeder.AddConversation(
+	seeder.AddConversation(t.Context(),
 		"ended-fallback", "Ended At Fallback", 1,
 		context,
 		"2026-05-02 10:00:00", "",
 		"",
 	)
 	// Override to NULL updated_at.
-	_, err := db.Exec("UPDATE conversations SET updated_at = NULL WHERE conversation_id = 'ended-fallback'")
+	_, err := db.ExecContext(t.Context(), "UPDATE conversations SET updated_at = NULL WHERE conversation_id = 'ended-fallback'")
 	require.NoError(t, err, "update")
 
 	sessions, err := parseForgeAll(dbPath, "m")
@@ -857,7 +858,7 @@ func TestForgeToolOutputText(t *testing.T) {
 		    }
 		  ]
 		}`
-		seeder.AddConversation(
+		seeder.AddConversation(t.Context(),
 			"tool-output-1", "Top Level Text", 1,
 			context,
 			"2026-05-02 10:00:00", "2026-05-02 10:00:01",
@@ -929,7 +930,7 @@ func TestForgeSkillToolName(t *testing.T) {
 			    }
 			  ]
 			}`
-			seeder.AddConversation(
+			seeder.AddConversation(t.Context(),
 				"skill-test-"+tc.name, "Skill Test", 1,
 				context,
 				"2026-05-02 10:00:00", "2026-05-02 10:00:01",
@@ -987,7 +988,7 @@ func TestForgeReasoningNoText(t *testing.T) {
 	    }
 	  ]
 	}`
-	seeder.AddConversation(
+	seeder.AddConversation(t.Context(),
 		"reasoning-no-text", "No Reasoning Text", 1,
 		context,
 		"2026-05-02 10:00:00", "2026-05-02 10:00:01",

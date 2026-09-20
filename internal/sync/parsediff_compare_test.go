@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"errors"
 	"os"
@@ -542,8 +541,8 @@ func TestCompareSessionFields(t *testing.T) {
 				assert.Equal(t, w.field, diffs[i].Field)
 				assert.Equal(t, w.stored, diffs[i].Stored)
 				assert.Equal(t, w.parsed, diffs[i].Parsed)
-				assert.Equal(
-					t, w.informational, diffs[i].Informational,
+				assert.Equal(t,
+					w.informational, diffs[i].Informational,
 				)
 			}
 		})
@@ -559,8 +558,8 @@ func TestCompareSessionFieldsTruncatesLongValues(t *testing.T) {
 	diffs := compareSessionFields(&stored, prepared)
 	require.Len(t, diffs, 1)
 	assert.Equal(t, FieldFirstMessage, diffs[0].Field)
-	assert.Equal(
-		t, strings.Repeat("x", maxRenderedValueRunes)+"...",
+	assert.Equal(t,
+		strings.Repeat("x", maxRenderedValueRunes)+"...",
 		diffs[0].Parsed,
 	)
 	assert.Contains(t, diffs[0].Detail, "parsed 200 runes")
@@ -616,8 +615,7 @@ func TestCompareMessageMetadata(t *testing.T) {
 		assert.Equal(t, FieldModels, diffs[0].Field)
 		assert.Equal(t, "model-a", diffs[0].Stored)
 		assert.Equal(t, "model-a, model-b", diffs[0].Parsed)
-		assert.Equal(
-			t,
+		assert.Equal(t,
 			"2/3 messages differ; first at ordinal 1: model-a -> model-b",
 			diffs[0].Detail,
 		)
@@ -629,14 +627,14 @@ func TestCompareMessageMetadata(t *testing.T) {
 		diffs := compareMessageMetadata(stored, parsed, true, false, false)
 		require.Len(t, diffs, 1)
 		assert.Equal(t, FieldMessageTokens, diffs[0].Field)
-		assert.Equal(
-			t, "context=100 output=5 usage_bytes=0", diffs[0].Stored,
+		assert.Equal(t,
+			"context=100 output=5 usage_bytes=0", diffs[0].Stored,
 		)
-		assert.Equal(
-			t, "context=110 output=5 usage_bytes=0", diffs[0].Parsed,
+		assert.Equal(t,
+			"context=110 output=5 usage_bytes=0", diffs[0].Parsed,
 		)
-		assert.Equal(
-			t, "1/1 messages differ; first at ordinal 0",
+		assert.Equal(t,
+			"1/1 messages differ; first at ordinal 0",
 			diffs[0].Detail,
 		)
 	})
@@ -789,17 +787,27 @@ func TestCompareMessageMetadata(t *testing.T) {
 				mutate func(*db.ToolCall)
 				detail string
 			}{
-				{"category", func(tc *db.ToolCall) { tc.Category = "Bash" },
-					`category "Read" -> "Bash"`},
-				{"tool_use_id", func(tc *db.ToolCall) { tc.ToolUseID = "tu2" },
-					"tool_use_id differs"},
-				{"input_json", func(tc *db.ToolCall) { tc.InputJSON = `{"file":"b"}` },
-					"input_json differs"},
-				{"skill_name", func(tc *db.ToolCall) { tc.SkillName = "s2" },
-					`skill_name "s1" -> "s2"`},
-				{"subagent_session_id",
+				{
+					"category", func(tc *db.ToolCall) { tc.Category = "Bash" },
+					`category "Read" -> "Bash"`,
+				},
+				{
+					"tool_use_id", func(tc *db.ToolCall) { tc.ToolUseID = "tu2" },
+					"tool_use_id differs",
+				},
+				{
+					"input_json", func(tc *db.ToolCall) { tc.InputJSON = `{"file":"b"}` },
+					"input_json differs",
+				},
+				{
+					"skill_name", func(tc *db.ToolCall) { tc.SkillName = "s2" },
+					`skill_name "s1" -> "s2"`,
+				},
+				{
+					"subagent_session_id",
 					func(tc *db.ToolCall) { tc.SubagentSessionID = "agent-2" },
-					"subagent_session_id differs"},
+					"subagent_session_id differs",
+				},
 			}
 			for _, sc := range subCases {
 				t.Run(sc.name, func(t *testing.T) {
@@ -1058,7 +1066,7 @@ func TestCompareUsageEvents(t *testing.T) {
 // path, so this parity is the design's top risk.
 func TestFingerprintTwinMatchesDB(t *testing.T) {
 	d := openTestDB(t)
-	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
+	e := NewEngine(t.Context(), d, EngineConfig{Machine: "test-machine"})
 
 	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	pw := pendingWrite{
@@ -1130,30 +1138,30 @@ func TestFingerprintTwinMatchesDB(t *testing.T) {
 	require.Equal(t, sessionWriteOK, verdict)
 	require.NotEmpty(t, msgs)
 
-	storedFP, err := d.MessageTokenFingerprint(prepared.ID)
+	storedFP, err := d.MessageTokenFingerprint(t.Context(), prepared.ID)
 	require.NoError(t, err)
 	require.NotEmpty(t, storedFP)
 
-	assert.Equal(
-		t, storedFP, messageTokenFingerprintTwin(msgs),
+	assert.Equal(t,
+		storedFP, messageTokenFingerprintTwin(msgs),
 		"in-memory twin must match db.MessageTokenFingerprint exactly",
 	)
 
-	storedRoleTimeFP, err := d.MessageRoleTimeFingerprint(prepared.ID)
+	storedRoleTimeFP, err := d.MessageRoleTimeFingerprint(t.Context(), prepared.ID)
 	require.NoError(t, err)
 	require.NotEmpty(t, storedRoleTimeFP)
 
-	assert.Equal(
-		t, storedRoleTimeFP, messageRoleTimeFingerprintTwin(msgs),
+	assert.Equal(t,
+		storedRoleTimeFP, messageRoleTimeFingerprintTwin(msgs),
 		"in-memory twin must match db.MessageRoleTimeFingerprint exactly",
 	)
 
-	storedContentFP, err := d.MessageContentHashFingerprint(prepared.ID)
+	storedContentFP, err := d.MessageContentHashFingerprint(t.Context(), prepared.ID)
 	require.NoError(t, err)
 	require.NotEmpty(t, storedContentFP)
 
-	assert.Equal(
-		t, storedContentFP, messageContentHashFingerprintTwin(msgs),
+	assert.Equal(t,
+		storedContentFP, messageContentHashFingerprintTwin(msgs),
 		"in-memory twin must match db.MessageContentHashFingerprint exactly",
 	)
 }
@@ -1163,7 +1171,7 @@ func TestFingerprintTwinMatchesDB(t *testing.T) {
 // covering the session row, message metadata, and usage events.
 func TestCompareStoredSessionRoundTrip(t *testing.T) {
 	d := openTestDB(t)
-	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
+	e := NewEngine(t.Context(), d, EngineConfig{Machine: "test-machine"})
 
 	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	pw := pendingWrite{
@@ -1234,7 +1242,7 @@ func TestCompareStoredSessionRoundTrip(t *testing.T) {
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
-		context.Background(), stored, prepared, msgs, events,
+		t.Context(), stored, prepared, msgs, events,
 	)
 	require.NoError(t, err)
 	assert.Empty(t, diffs, "self-written session must be identical")
@@ -1244,7 +1252,7 @@ func TestCompareStoredSessionRoundTrip(t *testing.T) {
 // expects the comparator to attribute it through the database path.
 func TestCompareStoredSessionDetectsDrift(t *testing.T) {
 	d := openTestDB(t)
-	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
+	e := NewEngine(t.Context(), d, EngineConfig{Machine: "test-machine"})
 
 	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	pw := pendingWrite{
@@ -1287,7 +1295,7 @@ func TestCompareStoredSessionDetectsDrift(t *testing.T) {
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
-		context.Background(), stored, prepared, msgs, nil,
+		t.Context(), stored, prepared, msgs, nil,
 	)
 	require.NoError(t, err)
 	require.Len(t, diffs, 1)
@@ -1304,7 +1312,7 @@ func pdWriteSingleMessageSession(
 ) (*Engine, *db.DB, pendingWrite) {
 	t.Helper()
 	d := openTestDB(t)
-	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
+	e := NewEngine(t.Context(), d, EngineConfig{Machine: "test-machine"})
 	ts := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	pw := pendingWrite{
 		sess: parser.ParsedSession{
@@ -1344,7 +1352,7 @@ func TestCompareStoredSessionDetectsContentDrift(t *testing.T) {
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
-		context.Background(), stored, prepared, msgs, nil,
+		t.Context(), stored, prepared, msgs, nil,
 	)
 	require.NoError(t, err)
 	require.Len(t, diffs, 1)
@@ -1370,7 +1378,7 @@ func TestCompareStoredSessionDetectsMetadataDrift(t *testing.T) {
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
-		context.Background(), stored, prepared, msgs, nil,
+		t.Context(), stored, prepared, msgs, nil,
 	)
 	require.NoError(t, err)
 	require.Len(t, diffs, 1)
@@ -1437,7 +1445,7 @@ func pdWriteToolSession(
 ) (*Engine, *db.DB, pendingWrite) {
 	t.Helper()
 	d := openTestDB(t)
-	e := NewEngine(d, EngineConfig{Machine: "test-machine"})
+	e := NewEngine(t.Context(), d, EngineConfig{Machine: "test-machine"})
 	pw := pdToolSession(id)
 	written, _, failed, _ := e.writeBatch(
 		[]pendingWrite{pw}, syncWriteBulk, false,
@@ -1455,13 +1463,13 @@ func TestToolCallAndFlagsFingerprintTwinsMatchDB(t *testing.T) {
 	prepared, msgs, verdict := e.prepareSessionWrite(pw, nil)
 	require.Equal(t, sessionWriteOK, verdict)
 
-	storedFlagsFP, err := d.MessageFlagsFingerprint(prepared.ID)
+	storedFlagsFP, err := d.MessageFlagsFingerprint(t.Context(), prepared.ID)
 	require.NoError(t, err)
 	require.NotEmpty(t, storedFlagsFP)
 	assert.Equal(t, storedFlagsFP, messageFlagsFingerprintTwin(msgs),
 		"flags twin must match db.MessageFlagsFingerprint exactly")
 
-	storedToolFP, err := d.ToolCallParseDiffFingerprint(prepared.ID)
+	storedToolFP, err := d.ToolCallParseDiffFingerprint(t.Context(), prepared.ID)
 	require.NoError(t, err)
 	require.NotEmpty(t, storedToolFP)
 	assert.Equal(t, storedToolFP, toolCallParseDiffFingerprintTwin(msgs),
@@ -1491,7 +1499,7 @@ func TestCompareStoredSessionRoundTripToolCalls(t *testing.T) {
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
-		context.Background(), stored, prepared, msgs, nil,
+		t.Context(), stored, prepared, msgs, nil,
 	)
 	require.NoError(t, err)
 	assert.Empty(t, diffs,
@@ -1510,7 +1518,7 @@ func TestCompareStoredSessionDetectsToolCallDrift(t *testing.T) {
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
-		context.Background(), stored, prepared, msgs, nil,
+		t.Context(), stored, prepared, msgs, nil,
 	)
 	require.NoError(t, err)
 	require.Len(t, diffs, 1)
@@ -1529,7 +1537,7 @@ func TestCompareStoredSessionDetectsFlagDrift(t *testing.T) {
 
 	stored := pdFetchStored(t, d, prepared.ID)
 	diffs, err := e.compareStoredSession(
-		context.Background(), stored, prepared, msgs, nil,
+		t.Context(), stored, prepared, msgs, nil,
 	)
 	require.NoError(t, err)
 	require.Len(t, diffs, 1)
@@ -1540,7 +1548,7 @@ func TestCompareStoredSessionDetectsFlagDrift(t *testing.T) {
 func pdFetchStored(t *testing.T, d *db.DB, id string) *db.Session {
 	t.Helper()
 	sessions, err := d.ListSessionsModifiedBetween(
-		context.Background(), "", "", nil, nil,
+		t.Context(), "", "", nil, nil,
 	)
 	require.NoError(t, err)
 	for i := range sessions {
@@ -1810,7 +1818,7 @@ func TestParseDiffLiveMtimeIgnoresCodexIndex(t *testing.T) {
 	require.NoError(t, os.Chtimes(rollout, base, base), "chtimes rollout")
 	require.NoError(t, os.Chtimes(indexPath, base, base), "chtimes index")
 
-	m1, err := parseDiffLiveMtime(parser.AgentCodex, rollout)
+	m1, err := parseDiffLiveMtime(t.Context(), parser.AgentCodex, rollout)
 	require.NoError(t, err)
 	rollInfo, err := os.Stat(rollout)
 	require.NoError(t, err)
@@ -1822,7 +1830,7 @@ func TestParseDiffLiveMtimeIgnoresCodexIndex(t *testing.T) {
 	// transcript mtime.
 	future := time.Now().Add(time.Hour)
 	require.NoError(t, os.Chtimes(indexPath, future, future), "advance index")
-	m2, err := parseDiffLiveMtime(parser.AgentCodex, rollout)
+	m2, err := parseDiffLiveMtime(t.Context(), parser.AgentCodex, rollout)
 	require.NoError(t, err)
 	assert.Equal(t, rollInfo.ModTime().UnixNano(), m2,
 		"codex raced mtime ignores the advanced session_index.jsonl")
@@ -1933,7 +1941,7 @@ func TestParseDiffSourceReliableForRaced(t *testing.T) {
 			want:  false,
 		},
 	}
-	engine := NewDiffEngine(dbtest.OpenTestDB(t), EngineConfig{})
+	engine := NewDiffEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := engine.parseDiffSourceReliableForRaced(tt.agent, tt.path)
@@ -2009,7 +2017,7 @@ func TestParseDiffPresenceSweepKeepsMixedProviderRetryCoverage(t *testing.T) {
 	var presencePaths []string
 
 	err := engine.parseDiffCollectFile(
-		context.Background(),
+		t.Context(),
 		report,
 		job,
 		map[string]parser.AgentType{sourcePath: parser.AgentClaude},
@@ -2063,7 +2071,7 @@ func TestParseDiffPresenceSweepSkipsIncompleteProviderResults(t *testing.T) {
 	var presencePaths []string
 
 	err := engine.parseDiffCollectFile(
-		context.Background(),
+		t.Context(),
 		report,
 		job,
 		map[string]parser.AgentType{sourcePath: parser.AgentClaude},
@@ -2119,7 +2127,7 @@ func TestParseDiffProviderVirtualSQLiteErrorUsesExactSource(t *testing.T) {
 	var presencePaths []string
 
 	err := engine.parseDiffCollectFile(
-		context.Background(),
+		t.Context(),
 		report,
 		job,
 		map[string]parser.AgentType{firstPath: parser.AgentOpenCode},
@@ -2174,7 +2182,7 @@ func TestParseDiffProviderVirtualSQLitePresenceUsesExactSource(t *testing.T) {
 	var presencePaths []string
 
 	err := engine.parseDiffCollectFile(
-		context.Background(),
+		t.Context(),
 		report,
 		job,
 		map[string]parser.AgentType{firstPath: parser.AgentOpenCode},
@@ -2207,7 +2215,7 @@ func TestParseDiffProviderVirtualSQLiteLimitUsesExactSource(t *testing.T) {
 	dbPath := "/tmp/opencode.db"
 	firstPath := parser.OpenCodeSQLiteVirtualPath(dbPath, "ses_one")
 	secondPath := parser.OpenCodeSQLiteVirtualPath(dbPath, "ses_two")
-	_, cutPaths, limited := sortAndLimitParseDiffFiles(
+	_, cutPaths, limited := sortAndLimitParseDiffFiles(t.Context(),
 		[]parser.DiscoveredFile{
 			{Path: firstPath, Agent: parser.AgentOpenCode},
 			{Path: secondPath, Agent: parser.AgentOpenCode},
@@ -2219,8 +2227,7 @@ func TestParseDiffProviderVirtualSQLiteLimitUsesExactSource(t *testing.T) {
 	assert.Len(t, cutPaths, 1)
 	assert.False(t, cutPaths[dbPath])
 	for path := range cutPaths {
-		assert.True(t,
-			path == firstPath || path == secondPath,
+		assert.True(t, path == firstPath || path == secondPath,
 			"cut path %q must be one exact virtual source", path,
 		)
 	}
@@ -2240,7 +2247,7 @@ func TestParseDiffDevinVirtualSQLiteLimitUsesExactSource(t *testing.T) {
 	dbPath := filepath.Join("/tmp", "devin", "cli", "sessions.db")
 	firstPath := parser.VirtualSourcePath(dbPath, "ses_one")
 	secondPath := parser.VirtualSourcePath(dbPath, "ses_two")
-	_, cutPaths, limited := sortAndLimitParseDiffFiles(
+	_, cutPaths, limited := sortAndLimitParseDiffFiles(t.Context(),
 		[]parser.DiscoveredFile{
 			{Path: firstPath, Agent: parser.AgentDevin},
 			{Path: secondPath, Agent: parser.AgentDevin},
@@ -2252,8 +2259,7 @@ func TestParseDiffDevinVirtualSQLiteLimitUsesExactSource(t *testing.T) {
 	assert.Len(t, cutPaths, 1)
 	assert.False(t, cutPaths[dbPath])
 	for path := range cutPaths {
-		assert.True(t,
-			path == firstPath || path == secondPath,
+		assert.True(t, path == firstPath || path == secondPath,
 			"cut path %q must be one exact Devin virtual source", path,
 		)
 	}
@@ -2273,7 +2279,7 @@ func TestParseDiffDBBackedLimitOrdersByDiscoveryMtime(t *testing.T) {
 	older := parser.SourceRef{Provider: parser.AgentForge, DiscoveryMTimeNS: 100}
 	newer := parser.SourceRef{Provider: parser.AgentForge, DiscoveryMTimeNS: 200}
 
-	kept, cutPaths, limited := sortAndLimitParseDiffFiles(
+	kept, cutPaths, limited := sortAndLimitParseDiffFiles(t.Context(),
 		[]parser.DiscoveredFile{
 			{Path: olderPath, Agent: parser.AgentForge, ProviderSource: &older},
 			{Path: newerPath, Agent: parser.AgentForge, ProviderSource: &newer},
@@ -2354,7 +2360,7 @@ func TestParseDiffCodebuffCompanionOnlyChangeAdvancesOrderingMtime(t *testing.T)
 	runStateB := filepath.Join(dirB, "run-state.json")
 	require.NoError(t, os.Chtimes(runStateB, newerTime, newerTime))
 
-	kept, cutPaths, limited := sortAndLimitParseDiffFiles(
+	kept, cutPaths, limited := sortAndLimitParseDiffFiles(t.Context(),
 		[]parser.DiscoveredFile{
 			{Path: chatA, Agent: parser.AgentCodebuff},
 			{Path: chatB, Agent: parser.AgentCodebuff},
@@ -2428,7 +2434,7 @@ func TestParseDiffFreebuffCompanionOnlyChangeAdvancesOrderingMtime(t *testing.T)
 	runStateB := filepath.Join(dirB, "run-state.json")
 	require.NoError(t, os.Chtimes(runStateB, newerTime, newerTime))
 
-	kept, cutPaths, limited := sortAndLimitParseDiffFiles(
+	kept, cutPaths, limited := sortAndLimitParseDiffFiles(t.Context(),
 		[]parser.DiscoveredFile{
 			{Path: chatA, Agent: parser.AgentFreebuff},
 			{Path: chatB, Agent: parser.AgentFreebuff},

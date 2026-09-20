@@ -317,6 +317,7 @@ func discardRejectedGenerationConn(
 	if err != nil {
 		return fmt.Errorf("rawcheckpoint: discard rejected generation: %w", err)
 	}
+	defer rows.Close()
 	var discarded []string
 	for rows.Next() {
 		var current string
@@ -639,26 +640,33 @@ func loadCapturedEntriesConn(
 	}
 	rows.Close()
 	for i, ordinal := range ordinals {
-		objectRows, err := conn.QueryContext(ctx, `SELECT sha256, length
+		if err := func() error {
+			objectRows, err := conn.QueryContext(ctx, `SELECT sha256, length
 			FROM outbox_entry_objects WHERE capture_id = ? AND entry_ordinal = ?
 			ORDER BY object_ordinal`, captureID, ordinal)
-		if err != nil {
-			return nil, fmt.Errorf("rawcheckpoint: load captured objects: %w", err)
-		}
-		for objectRows.Next() {
-			var ref rawsync.ObjectRef
-			if err := objectRows.Scan(&ref.SHA256, &ref.Length); err != nil {
-				objectRows.Close()
-				return nil, fmt.Errorf("rawcheckpoint: load captured objects: %w", err)
+			if err != nil {
+				return fmt.Errorf("rawcheckpoint: load captured objects: %w", err)
 			}
-			entries[i].Objects = append(entries[i].Objects, ref)
-		}
-		if err := objectRows.Err(); err != nil {
-			objectRows.Close()
-			return nil, fmt.Errorf("rawcheckpoint: load captured objects: %w", err)
-		}
-		if err := objectRows.Close(); err != nil {
-			return nil, fmt.Errorf("rawcheckpoint: load captured objects: %w", err)
+			defer objectRows.Close()
+			for objectRows.Next() {
+				var ref rawsync.ObjectRef
+				if err := objectRows.Scan(&ref.SHA256, &ref.Length); err != nil {
+					objectRows.Close()
+					return fmt.Errorf("rawcheckpoint: load captured objects: %w", err)
+				}
+				entries[i].Objects = append(entries[i].Objects, ref)
+			}
+			if err := objectRows.Err(); err != nil {
+				objectRows.Close()
+				return fmt.Errorf("rawcheckpoint: load captured objects: %w", err)
+			}
+			if err := objectRows.Close(); err != nil {
+				return fmt.Errorf("rawcheckpoint: load captured objects: %w", err)
+			}
+
+			return nil
+		}(); err != nil {
+			return nil, err
 		}
 	}
 	return entries, nil
@@ -704,6 +712,7 @@ func releaseGenerationObjectsConn(ctx context.Context, conn *sql.Conn, captureID
 	if err != nil {
 		return fmt.Errorf("rawcheckpoint: release generation objects: %w", err)
 	}
+	defer rows.Close()
 	type referenced struct {
 		ref   rawsync.ObjectRef
 		count int64
@@ -734,7 +743,7 @@ func releaseGenerationObjectsConn(ctx context.Context, conn *sql.Conn, captureID
 		}
 		changed, err := result.RowsAffected()
 		if err != nil || changed != 1 {
-			return fmt.Errorf("rawcheckpoint: release generation object reference mismatch")
+			return errors.New("rawcheckpoint: release generation object reference mismatch")
 		}
 	}
 	return nil

@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -18,7 +17,7 @@ func branchInfoForTest(project, branch string) BranchInfo {
 
 func TestGetDailyUsageGitBranchFilter(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seed := []struct {
 		id, project, branch string
@@ -37,7 +36,7 @@ func TestGetDailyUsageGitBranchFilter(t *testing.T) {
 			sess.StartedAt = new("2026-05-14T10:00:00Z")
 			sess.UserMessageCount = 2
 		})
-		require.NoError(t, d.ReplaceSessionUsageEvents(s.id, []UsageEvent{{
+		require.NoError(t, d.ReplaceSessionUsageEvents(ctx, s.id, []UsageEvent{{
 			SessionID:    s.id,
 			Source:       "session",
 			Model:        "gpt-5.4",
@@ -128,7 +127,7 @@ func TestGetBranches(t *testing.T) {
 		s.UserMessageCount = 1
 	})
 
-	all, err := d.GetBranches(context.Background(), false, false)
+	all, err := d.GetBranches(t.Context(), false, false)
 	require.NoError(t, err, "GetBranches includeAll")
 	assert.Equal(t, []BranchInfo{
 		branchInfoForTest("alpha", ""),
@@ -138,7 +137,7 @@ func TestGetBranches(t *testing.T) {
 		branchInfoForTest("gamma", "solo"),
 	}, all, "distinct (project, branch) pairs, ordered, empty branch included")
 
-	filtered, err := d.GetBranches(context.Background(), true, false)
+	filtered, err := d.GetBranches(t.Context(), true, false)
 	require.NoError(t, err, "GetBranches excludeOneShot")
 	assert.NotContains(t, filtered, branchInfoForTest("gamma", "solo"),
 		"one-shot branch excluded when excludeOneShot is set")

@@ -3,7 +3,6 @@ package parser
 import (
 	"context"
 	"encoding/json/v2"
-	"errors"
 	"path/filepath"
 	"testing"
 
@@ -30,7 +29,7 @@ func TestProviderConfigCloneCopiesRoots(t *testing.T) {
 }
 
 func TestProviderBaseZeroValueOptionalMethods(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	var base ProviderBase
 
 	discovered, err := base.Discover(ctx)
@@ -66,7 +65,7 @@ func TestProviderBaseZeroValueOptionalMethods(t *testing.T) {
 	})
 	require.Error(t, err)
 	assert.Empty(t, fingerprint)
-	assert.True(t, errors.Is(err, ErrUnsupportedProviderFeature))
+	require.ErrorIs(t, err, ErrUnsupportedProviderFeature)
 	var unsupported UnsupportedProviderFeatureError
 	require.ErrorAs(t, err, &unsupported)
 	assert.Equal(t, AgentType(""), unsupported.Provider)
@@ -94,7 +93,7 @@ func TestUnsupportedProviderFeatureErrorWrapsSentinel(t *testing.T) {
 		Feature:  ProviderFeatureFingerprint,
 	}
 
-	assert.True(t, errors.Is(err, ErrUnsupportedProviderFeature))
+	require.ErrorIs(t, err, ErrUnsupportedProviderFeature)
 	assert.Contains(t, err.Error(), string(AgentCodex))
 	assert.Contains(t, err.Error(), ProviderFeatureFingerprint)
 }
@@ -223,9 +222,11 @@ func TestVerifiedLocalStatCapabilitiesMatchConsumers(t *testing.T) {
 	wantSupported := map[AgentType]bool{
 		AgentClaude: true,
 		AgentCodex:  true,
-		// TraeX shares the Codex provider; the gate stats the transcript and
-		// only looks for a session_index.jsonl sidecar under Codex itself.
-		AgentTraeX: true,
+		// TraeX and Augure Code share the Codex provider; the gate stats the
+		// transcript and only looks for a session_index.jsonl sidecar under
+		// Codex itself.
+		AgentTraeX:      true,
+		AgentAugureCode: true,
 	}
 	for _, factory := range ProviderFactories() {
 		agent := factory.Definition().Type

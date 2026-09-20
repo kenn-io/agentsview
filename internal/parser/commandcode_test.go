@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,7 +25,7 @@ func TestCommandCodeProviderDiscoversSessions(t *testing.T) {
 	provider, ok := NewProvider(AgentCommandCode, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, AgentCommandCode, sources[0].Provider)
@@ -45,14 +44,14 @@ func TestCommandCodeProviderFindsSourceFile(t *testing.T) {
 	provider, ok := NewProvider(AgentCommandCode, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "sess_123",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, path, found.DisplayPath)
 
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "sess_missing",
 	})
 	require.NoError(t, err)
@@ -78,12 +77,12 @@ func TestCommandCodeProviderParsesSession(t *testing.T) {
 		Machine: "local",
 	})
 	require.True(t, ok)
-	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "sess_123",
 	})
 	require.NoError(t, err)
 	require.True(t, found)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  source,
 		Machine: "local",
 	})

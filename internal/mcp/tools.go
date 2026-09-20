@@ -5,6 +5,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -640,8 +641,7 @@ func (t *toolset) searchContent(
 	// it here with the same message the HTTP transport uses
 	// (internal/server/huma_routes_search.go).
 	if in.Scope != "" && in.Mode != "semantic" && in.Mode != "hybrid" {
-		return nil, searchContentOut{}, fmt.Errorf(
-			"scope is only supported for semantic and hybrid search modes")
+		return nil, searchContentOut{}, errors.New("scope is only supported for semantic and hybrid search modes")
 	}
 	res, err := t.svc.SearchContent(ctx, service.ContentSearchRequest{
 		Pattern:          in.Pattern,

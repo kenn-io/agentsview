@@ -69,8 +69,7 @@ func (c *vsCopilotRootComposite) fingerprint(
 ) (size, mtime int64, err error) {
 	if !c.done {
 		c.done = true
-		c.size, c.mtime, c.err =
-			VisualStudioCopilotTraceFingerprintStrict(tracePath)
+		c.size, c.mtime, c.err = VisualStudioCopilotTraceFingerprintStrict(tracePath)
 	}
 	return c.size, c.mtime, c.err
 }
@@ -725,8 +724,7 @@ func vsCopilotClassifyPath(
 ) (multiSessionMatch, bool) {
 	root = filepath.Clean(root)
 	path = filepath.Clean(path)
-	if tracePath, conversationID, ok :=
-		splitVisualStudioCopilotVirtualPath(path); ok {
+	if tracePath, conversationID, ok := splitVisualStudioCopilotVirtualPath(path); ok {
 		if isVisualStudioCopilotVS2026SessionPath(tracePath) {
 			conversationID = canonicalVisualStudioCopilotConversationID(
 				conversationID,
@@ -781,7 +779,7 @@ func vsCopilotClassifyPath(
 	return multiSessionMatch{}, false
 }
 
-func vsCopilotFindMember(root, rawID string) (multiSessionMatch, bool) {
+func vsCopilotFindMember(_ context.Context, root, rawID string) (multiSessionMatch, bool) {
 	path := findVisualStudioCopilotSourceFile(root, rawID)
 	if path == "" {
 		return multiSessionMatch{}, false

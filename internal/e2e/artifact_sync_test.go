@@ -131,9 +131,9 @@ func TestArtifactSyncTwoInstanceFolder(t *testing.T) {
 	assert.Equal(t, updatedSource, preservedSource)
 
 	controlDataDir := t.TempDir()
-	controlDB, err := db.Open(filepath.Join(controlDataDir, "sessions.db"))
+	controlDB, err := db.Open(t.Context(), filepath.Join(controlDataDir, "sessions.db"))
 	require.NoError(t, err)
-	require.NoError(t, controlDB.ConfigureArtifactLocalMachine("control"))
+	require.NoError(t, controlDB.ConfigureArtifactLocalMachine(t.Context(), "control"))
 	require.NoError(t, controlDB.Close())
 	assert.NoDirExists(t, filepath.Join(controlDataDir, "artifacts"))
 }
@@ -170,11 +170,11 @@ func newArtifactSyncNode(
 
 func (n *artifactSyncNode) open(t *testing.T) {
 	t.Helper()
-	database, err := db.Open(n.databasePath)
+	database, err := db.Open(t.Context(), n.databasePath)
 	require.NoError(t, err)
-	require.NoError(t, database.ConfigureArtifactLocalMachine(n.machine))
+	require.NoError(t, database.ConfigureArtifactLocalMachine(t.Context(), n.machine))
 	n.database = database
-	n.engine = agentsync.NewEngine(database, agentsync.EngineConfig{
+	n.engine = agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {n.providerRoot},
 		},

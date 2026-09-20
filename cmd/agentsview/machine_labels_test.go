@@ -22,7 +22,7 @@ func TestMachineLabelCatalogDiscardsPartialResult(t *testing.T) {
 	wantErr := errors.New("catalog unavailable")
 
 	got := machineLabelCatalog(
-		context.Background(), &stderr,
+		t.Context(), &stderr,
 		func(context.Context) (service.MachineLabelCatalog, error) {
 			return service.MachineLabelCatalog{"partial-key": "Partial Label"}, wantErr
 		},
@@ -37,7 +37,7 @@ func TestMachineLabelCatalogNilSuccessReturnsEmpty(t *testing.T) {
 	var stderr bytes.Buffer
 
 	got := machineLabelCatalog(
-		context.Background(), &stderr,
+		t.Context(), &stderr,
 		func(context.Context) (service.MachineLabelCatalog, error) { return nil, nil },
 	)
 
@@ -89,7 +89,7 @@ func TestMachineLabelCatalogHTTPNullBodyReturnsEmpty(t *testing.T) {
 	var stderr bytes.Buffer
 
 	labels := machineLabelCatalog(
-		context.Background(), &stderr,
+		t.Context(), &stderr,
 		func(ctx context.Context) (service.MachineLabelCatalog, error) {
 			return service.MachineLabels(
 				ctx, servicehttp.NewHTTPBackend(server.URL, "", true, ""),
@@ -134,12 +134,12 @@ func TestSessionListJSONIncludesMachineLabelCatalog(t *testing.T) {
 			s.Machine = machineKey
 		},
 	})
-	database, err := db.Open(sessionsDBPath(dataDir))
+	database, err := db.Open(t.Context(), sessionsDBPath(dataDir))
 	require.NoError(t, err)
-	require.NoError(t, database.SetSyncState(
+	require.NoError(t, database.SetSyncState(t.Context(),
 		db.MachineLabelKeyPrefix+machineKey, "Build Host",
 	))
-	require.NoError(t, database.SetSyncState(
+	require.NoError(t, database.SetSyncState(t.Context(),
 		db.MachineLabelKeyPrefix+"unrelated-machine", "Other Host",
 	))
 	require.NoError(t, database.Close())

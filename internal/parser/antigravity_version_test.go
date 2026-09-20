@@ -78,13 +78,14 @@ func openSchemaDB(
 	t *testing.T, path string, userVersion int, stmts ...string,
 ) *sql.DB {
 	t.Helper()
+
 	build, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "open for build")
 	for _, stmt := range stmts {
-		_, err := build.Exec(stmt)
+		_, err := build.ExecContext(t.Context(), stmt)
 		require.NoError(t, err, "exec %q", stmt)
 	}
-	_, err = build.Exec("PRAGMA user_version = " + itoa(userVersion))
+	_, err = build.ExecContext(t.Context(), "PRAGMA user_version = "+itoa(userVersion))
 	require.NoError(t, err, "set user_version")
 	require.NoError(t, build.Close(), "close build")
 
@@ -211,7 +212,7 @@ func TestAntigravitySchemaFingerprintBaseline(t *testing.T) {
 	db := openSchemaDB(t, filepath.Join(dir, "baseline.db"), 1, stmts...)
 	defer db.Close()
 
-	fp, err := antigravitySchemaFingerprint(db)
+	fp, err := antigravitySchemaFingerprint(t.Context(), db)
 	require.NoError(t, err)
 	assert.Equal(t, agyBaselineFullFingerprint, fp,
 		"Go fingerprint must equal agy-reader recorded sha256")
@@ -254,15 +255,14 @@ func TestAntigravitySchemaFingerprintCases(t *testing.T) {
 			db := openSchemaDB(t, path, tt.userVersion, tt.stmts...)
 			defer db.Close()
 
-			fp, err := antigravitySchemaFingerprint(db)
+			fp, err := antigravitySchemaFingerprint(t.Context(), db)
 			require.NoError(t, err)
 			label := antigravitySchemaLabel(fp)
 
 			if tt.wantLabel != "" {
 				assert.Equal(t, tt.wantLabel, label)
 			} else {
-				assert.True(t,
-					strings.HasPrefix(label, antigravitySchemaUnknownPrefix),
+				assert.True(t, strings.HasPrefix(label, antigravitySchemaUnknownPrefix),
 					"mutated schema should produce unknown marker, got %q",
 					label)
 				assert.NotEqual(t, agyBaselineFullFingerprint, fp,
@@ -283,9 +283,9 @@ func TestAntigravitySchemaFingerprintDeterministic(t *testing.T) {
 	db2 := openSchemaDB(t, filepath.Join(dir, "b.db"), 1, stmts...)
 	defer db2.Close()
 
-	fp1, err := antigravitySchemaFingerprint(db1)
+	fp1, err := antigravitySchemaFingerprint(t.Context(), db1)
 	require.NoError(t, err)
-	fp2, err := antigravitySchemaFingerprint(db2)
+	fp2, err := antigravitySchemaFingerprint(t.Context(), db2)
 	require.NoError(t, err)
 	assert.Equal(t, fp1, fp2, "identical schema must hash identically")
 }
@@ -359,7 +359,7 @@ func TestAntigravityCLIDBStepsCarriesSourceVersionOnStepError(t *testing.T) {
 			"PRIMARY KEY (`trajectory_id`))")
 	require.NoError(t, db.Close())
 
-	result, err := loadAntigravityCLIDBSteps(path)
+	result, err := loadAntigravityCLIDBSteps(t.Context(), path)
 	require.Error(t, err, "missing steps table must fail the step query")
 	assert.True(t,
 		strings.HasPrefix(result.sourceVersion, antigravitySchemaUnknownPrefix),

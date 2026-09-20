@@ -14,6 +14,7 @@ import (
 
 func TestSessionListIncludeSource(t *testing.T) {
 	seed := func(t *testing.T, dataDir string) {
+		t.Helper()
 		sourcePath := filepath.Join(
 			dataDir, ".claude", "projects", "agentsview", "session-source.jsonl",
 		)
@@ -46,6 +47,7 @@ func TestSessionListIncludeSource(t *testing.T) {
 	}
 	assertSessionList := func(t *testing.T, out string) []map[string]any {
 		t.Helper()
+
 		got := decodeCLIJSON[cliSessionList](t, out)
 		require.Equal(t, 3, got.Total)
 		require.Len(t, got.Sessions, 3)

@@ -15,10 +15,12 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-const tokenCoverageRepairMetadataKey = "token_coverage_repair_v1"
-const sourceCurationBackfillMetadataKey = "source_curation_baseline_backfill_v1"
-const projectIdentityRemoteScrubMetadataKey = "git_remote_credentials_scrub_v1"
-const tokenCoverageBackfillBatchSize = 1000
+const (
+	tokenCoverageRepairMetadataKey        = "token_coverage_repair_v1"
+	sourceCurationBackfillMetadataKey     = "source_curation_baseline_backfill_v1"
+	projectIdentityRemoteScrubMetadataKey = "git_remote_credentials_scrub_v1"
+	tokenCoverageBackfillBatchSize        = 1000
+)
 
 type columnMigration struct {
 	table  string
@@ -351,7 +353,7 @@ CREATE TABLE IF NOT EXISTS model_pricing (
 CREATE TABLE IF NOT EXISTS model_pricing_bands (
     model_pattern TEXT NOT NULL
         REFERENCES model_pricing(model_pattern) ON DELETE CASCADE,
-    above_input_tokens BIGINT NOT NULL CHECK (above_input_tokens > 0),
+    above_input_tokens BIGINT NOT NULL,
     input_microdollars_per_mtok BIGINT NOT NULL,
     output_microdollars_per_mtok BIGINT NOT NULL,
     cache_creation_microdollars_per_mtok BIGINT NOT NULL,
@@ -362,10 +364,10 @@ CREATE TABLE IF NOT EXISTS model_pricing_bands (
 );
 
 CREATE TABLE IF NOT EXISTS genai_pricing (
-    singleton SMALLINT PRIMARY KEY CHECK (singleton = 1),
+    singleton SMALLINT PRIMARY KEY,
     version TEXT NOT NULL,
     source_ref TEXT NOT NULL DEFAULT '',
-    source TEXT NOT NULL CHECK (source IN ('embedded', 'fetched')),
+    source TEXT NOT NULL,
     data_json BYTEA NOT NULL,
     updated_at TEXT NOT NULL DEFAULT ''
 );
@@ -763,7 +765,8 @@ func rekeyMigratedCursorUsageEventsPG(ctx context.Context, tx *sql.Tx) error {
 	}
 	var lastID int64
 	for {
-		rows, err := tx.QueryContext(ctx, `
+		updates, err := func() ([]keyUpdate, error) {
+			rows, err := tx.QueryContext(ctx, `
 			SELECT id, occurred_at, model, kind,
 				input_tokens, output_tokens, cache_write_tokens, cache_read_tokens,
 				charged_microdollars, cursor_token_fee_microdollars,
@@ -772,35 +775,41 @@ func rekeyMigratedCursorUsageEventsPG(ctx context.Context, tx *sql.Tx) error {
 			WHERE id > $1
 			ORDER BY id
 			LIMIT 1000`, lastID)
-		if err != nil {
-			return fmt.Errorf("querying migrated PG cursor usage keys: %w", err)
-		}
-		updates := make([]keyUpdate, 0, 1000)
-		for rows.Next() {
-			var id int64
-			var occurredAt time.Time
-			var ev db.CursorUsageEvent
-			if err := rows.Scan(
-				&id, &occurredAt, &ev.Model, &ev.Kind,
-				&ev.InputTokens, &ev.OutputTokens,
-				&ev.CacheWriteTokens, &ev.CacheReadTokens,
-				&ev.Charged.Microdollars, &ev.CursorTokenFee.Microdollars,
-				&ev.UserID, &ev.UserEmail, &ev.IsHeadless,
-			); err != nil {
-				rows.Close()
-				return fmt.Errorf("scanning migrated PG cursor usage key: %w", err)
+			if err != nil {
+				return nil, fmt.Errorf("querying migrated PG cursor usage keys: %w", err)
 			}
-			ev.OccurredAt = occurredAt.UTC().Format(time.RFC3339Nano)
-			updates = append(updates, keyUpdate{
-				id: id, key: db.CursorUsageEventDedupKey(ev),
-			})
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return fmt.Errorf("iterating migrated PG cursor usage keys: %w", err)
-		}
-		if err := rows.Close(); err != nil {
-			return fmt.Errorf("closing migrated PG cursor usage keys: %w", err)
+			defer rows.Close()
+			updates := make([]keyUpdate, 0, 1000)
+			for rows.Next() {
+				var id int64
+				var occurredAt time.Time
+				var ev db.CursorUsageEvent
+				if err := rows.Scan(
+					&id, &occurredAt, &ev.Model, &ev.Kind,
+					&ev.InputTokens, &ev.OutputTokens,
+					&ev.CacheWriteTokens, &ev.CacheReadTokens,
+					&ev.Charged.Microdollars, &ev.CursorTokenFee.Microdollars,
+					&ev.UserID, &ev.UserEmail, &ev.IsHeadless,
+				); err != nil {
+					rows.Close()
+					return nil, fmt.Errorf("scanning migrated PG cursor usage key: %w", err)
+				}
+				ev.OccurredAt = occurredAt.UTC().Format(time.RFC3339Nano)
+				updates = append(updates, keyUpdate{
+					id: id, key: db.CursorUsageEventDedupKey(ev),
+				})
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return nil, fmt.Errorf("iterating migrated PG cursor usage keys: %w", err)
+			}
+			if err := rows.Close(); err != nil {
+				return nil, fmt.Errorf("closing migrated PG cursor usage keys: %w", err)
+			}
+			return updates, nil
+		}()
+		if err != nil {
+			return err
 		}
 		if len(updates) == 0 {
 			break
@@ -1835,6 +1844,7 @@ func scrubProjectIdentityGitRemoteCredentialsPG(
 			"listing pg project identity remotes for scrub: %w", err,
 		)
 	}
+	defer rows.Close()
 
 	type pendingScrub struct {
 		obs       export.ProjectIdentityObservation
@@ -1965,12 +1975,8 @@ func batchUpdateAutomatedPG(
 	return nil
 }
 
-type columnQueryer interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}
-
 func loadExistingColumns(
-	ctx context.Context, db columnQueryer, alters []columnMigration,
+	ctx context.Context, db pgSessionQueryer, alters []columnMigration,
 	extraTables ...string,
 ) (map[string]map[string]bool, error) {
 	tablesSeen := map[string]bool{}
@@ -2317,51 +2323,58 @@ func batchLoadPGMessageCoverage(
 ) (map[string][2]bool, error) {
 	coverage := map[string][2]bool{}
 	for start := 0; start < len(candidates); start += tokenCoverageBackfillBatchSize {
-		end := min(
-			start+tokenCoverageBackfillBatchSize,
-			len(candidates),
-		)
-		batch := candidates[start:end]
-		args := make([]any, len(batch))
-		placeholders := make([]string, len(batch))
-		for i, c := range batch {
-			args[i] = c.ID
-			placeholders[i] = fmt.Sprintf("$%d", i+1)
-		}
-		rows, err := conn.QueryContext(ctx,
-			`SELECT session_id, has_context_tokens,
+		if err := func() error {
+			end := min(
+				start+tokenCoverageBackfillBatchSize,
+				len(candidates),
+			)
+			batch := candidates[start:end]
+			args := make([]any, len(batch))
+			placeholders := make([]string, len(batch))
+			for i, c := range batch {
+				args[i] = c.ID
+				placeholders[i] = fmt.Sprintf("$%d", i+1)
+			}
+			rows, err := conn.QueryContext(ctx,
+				`SELECT session_id, has_context_tokens,
 				has_output_tokens
 			 FROM messages
 			 WHERE session_id IN (`+strings.Join(placeholders, ",")+`)`,
-			args...,
-		)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"querying pg session message coverage: %w", err,
+				args...,
 			)
-		}
-		for rows.Next() {
-			var sessionID string
-			var hasContext, hasOutput bool
-			if err := rows.Scan(
-				&sessionID, &hasContext, &hasOutput,
-			); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf(
-					"scanning pg session message coverage: %w",
-					err,
+			if err != nil {
+				return fmt.Errorf(
+					"querying pg session message coverage: %w", err,
 				)
 			}
-			entry := coverage[sessionID]
-			entry[0] = entry[0] || hasContext
-			entry[1] = entry[1] || hasOutput
-			coverage[sessionID] = entry
-		}
-		if err := rows.Err(); err != nil {
-			rows.Close()
-			return nil, err
-		}
-		if err := rows.Close(); err != nil {
+			defer rows.Close()
+			for rows.Next() {
+				var sessionID string
+				var hasContext, hasOutput bool
+				if err := rows.Scan(
+					&sessionID, &hasContext, &hasOutput,
+				); err != nil {
+					rows.Close()
+					return fmt.Errorf(
+						"scanning pg session message coverage: %w",
+						err,
+					)
+				}
+				entry := coverage[sessionID]
+				entry[0] = entry[0] || hasContext
+				entry[1] = entry[1] || hasOutput
+				coverage[sessionID] = entry
+			}
+			if err := rows.Err(); err != nil {
+				rows.Close()
+				return err
+			}
+			if err := rows.Close(); err != nil {
+				return err
+			}
+
+			return nil
+		}(); err != nil {
 			return nil, err
 		}
 	}
@@ -2461,7 +2474,7 @@ func CheckSchemaCompat(
 		)
 	}
 
-	rows, err := db.QueryContext(ctx,
+	_, err := db.ExecContext(ctx,
 		`SELECT updated_at, `+pgSessionCols+`
 		 FROM sessions LIMIT 0`)
 	if err != nil {
@@ -2470,9 +2483,8 @@ func CheckSchemaCompat(
 			err,
 		)
 	}
-	rows.Close()
 
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT source_display_name, source_deleted_at, deletion_cause
 		 FROM sessions LIMIT 0`)
 	if err != nil {
@@ -2480,27 +2492,24 @@ func CheckSchemaCompat(
 			"sessions table missing curation columns: %w", err,
 		)
 	}
-	rows.Close()
 
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT id FROM excluded_sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
 			"excluded_sessions table missing required columns: %w", err,
 		)
 	}
-	rows.Close()
 
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT session_id, alias_id FROM session_aliases LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
 			"session_aliases table missing required columns: %w", err,
 		)
 	}
-	rows.Close()
 
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT call_index, file_path FROM tool_calls LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
@@ -2508,9 +2517,8 @@ func CheckSchemaCompat(
 			err,
 		)
 	}
-	rows.Close()
 
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT session_id, ordinal, role, content, thinking_text,
 			timestamp, has_thinking, has_tool_use,
 			content_length, is_system, model, reasoning_effort, token_usage,
@@ -2527,8 +2535,7 @@ func CheckSchemaCompat(
 			err,
 		)
 	}
-	rows.Close()
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT source_archive_id, source_archive_salt
 		 FROM source_archives LIMIT 0`)
 	if err != nil {
@@ -2536,8 +2543,7 @@ func CheckSchemaCompat(
 			"source_archives table missing required columns: %w", err,
 		)
 	}
-	rows.Close()
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT session_id, created_at
 		 FROM starred_sessions LIMIT 0`)
 	if err != nil {
@@ -2546,8 +2552,7 @@ func CheckSchemaCompat(
 			err,
 		)
 	}
-	rows.Close()
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT id, session_id, message_id, ordinal,
 			source_uuid, note, created_at
 		 FROM pinned_messages LIMIT 0`)
@@ -2557,8 +2562,7 @@ func CheckSchemaCompat(
 			err,
 		)
 	}
-	rows.Close()
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT total_output_tokens, peak_context_tokens,
 			has_total_output_tokens, has_peak_context_tokens
 		 FROM sessions LIMIT 0`)
@@ -2568,9 +2572,8 @@ func CheckSchemaCompat(
 			err,
 		)
 	}
-	rows.Close()
 
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT quality_signal_version, short_prompt_count,
 			unstructured_start, missing_success_criteria_count,
 			missing_verification_count, duplicate_prompt_count,
@@ -2582,9 +2585,8 @@ func CheckSchemaCompat(
 			err,
 		)
 	}
-	rows.Close()
 
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT event_index FROM tool_result_events LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
@@ -2592,9 +2594,8 @@ func CheckSchemaCompat(
 			err,
 		)
 	}
-	rows.Close()
 
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT id, provider_id, cost_microdollars FROM usage_events LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
@@ -2602,10 +2603,9 @@ func CheckSchemaCompat(
 			err,
 		)
 	}
-	rows.Close()
 
 	hasModelPricing := true
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT input_microdollars_per_mtok,
 			output_microdollars_per_mtok,
 			cache_creation_microdollars_per_mtok,
@@ -2620,12 +2620,10 @@ func CheckSchemaCompat(
 			)
 		}
 		hasModelPricing = false
-	} else {
-		rows.Close()
 	}
 
 	if hasModelPricing {
-		rows, err = db.QueryContext(ctx,
+		_, err = db.ExecContext(ctx,
 			`SELECT model_pattern, above_input_tokens,
 				input_microdollars_per_mtok, output_microdollars_per_mtok,
 				cache_creation_microdollars_per_mtok,
@@ -2638,9 +2636,8 @@ func CheckSchemaCompat(
 				err,
 			)
 		}
-		rows.Close()
 
-		rows, err = db.QueryContext(ctx,
+		_, err = db.ExecContext(ctx,
 			`SELECT singleton, version, source_ref, source, data_json, updated_at
 			 FROM genai_pricing LIMIT 0`)
 		if err != nil {
@@ -2649,10 +2646,9 @@ func CheckSchemaCompat(
 				err,
 			)
 		}
-		rows.Close()
 	}
 
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT id, type, date_from, date_to, project, agent,
 			model, prompt, content, kind, schema_version,
 			template_id, template_version, aggregate_hash,
@@ -2662,10 +2658,9 @@ func CheckSchemaCompat(
 	if err != nil {
 		return fmt.Errorf("insights table missing required columns: %w", err)
 	}
-	rows.Close()
 
 	if pgHasTable(ctx, db, "cursor_usage_events") {
-		rows, err = db.QueryContext(ctx,
+		_, err = db.ExecContext(ctx,
 			`SELECT id, occurred_at, model, kind,
 				input_tokens, output_tokens,
 				cache_write_tokens, cache_read_tokens,
@@ -2678,10 +2673,9 @@ func CheckSchemaCompat(
 				err,
 			)
 		}
-		rows.Close()
 	}
 
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT id, session_id, rule_name, confidence, location_kind,
 			message_ordinal, call_index, event_index,
 			match_start, match_end, match_index,
@@ -2690,8 +2684,7 @@ func CheckSchemaCompat(
 	if err != nil {
 		return fmt.Errorf("secret_findings table missing required columns: %w", err)
 	}
-	rows.Close()
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT source_archive_id, source_archive_salt,
 			project, machine, root_path, git_remote, git_remote_name,
 			repository_path, worktree_name, worktree_root_path,
@@ -2705,8 +2698,7 @@ func CheckSchemaCompat(
 			err,
 		)
 	}
-	rows.Close()
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT source_archive_id, source_database_generation,
 			source_session_id, project, machine, root_path, git_remote,
 			git_remote_name, repository_path, worktree_name,
@@ -2720,8 +2712,7 @@ func CheckSchemaCompat(
 			err,
 		)
 	}
-	rows.Close()
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT source_archive_id, source_database_generation, file_path
 		 FROM sessions LIMIT 0`)
 	if err != nil {
@@ -2729,8 +2720,7 @@ func CheckSchemaCompat(
 			"sessions table missing provenance columns: %w", err,
 		)
 	}
-	rows.Close()
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT source_archive_id, machine, path_prefix, layout, project,
 			original_project, enabled, updated_at
 		 FROM source_worktree_project_mappings LIMIT 0`)
@@ -2740,14 +2730,12 @@ func CheckSchemaCompat(
 			err,
 		)
 	}
-	rows.Close()
-	rows, err = db.QueryContext(ctx,
+	_, err = db.ExecContext(ctx,
 		`SELECT key, value FROM sync_metadata LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
 			"sync_metadata table missing required columns: %w", err)
 	}
-	rows.Close()
 	return nil
 }
 
@@ -2755,13 +2743,12 @@ func CheckSchemaCompat(
 // CheckSchemaCompat also checks sync_metadata because PG serve reads machine
 // display labels from it.
 func checkPushSchemaCompat(ctx context.Context, db *sql.DB) error {
-	rows, err := db.QueryContext(ctx,
+	_, err := db.ExecContext(ctx,
 		`SELECT owner_marker, prompt_evidence_discarded FROM sessions LIMIT 0`)
 	if err != nil {
 		return fmt.Errorf(
 			"sessions table missing push ownership columns: %w", err)
 	}
-	rows.Close()
 	return nil
 }
 

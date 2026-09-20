@@ -219,6 +219,7 @@ func newE2ERawSyncServer(
 	uploads *e2EUploadSessionStore,
 ) (*httptest.Server, *rawsync.DeviceAuthService) {
 	t.Helper()
+
 	repository, err := artifact.OpenRepository(t.Context(), t.TempDir())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, repository.Close()) })

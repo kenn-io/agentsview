@@ -6,6 +6,7 @@ describe("supportsResume", () => {
     expect(supportsResume("claude")).toBe(true);
     expect(supportsResume("codex")).toBe(true);
     expect(supportsResume("traex")).toBe(true);
+    expect(supportsResume("augure-code")).toBe(true);
     expect(supportsResume("copilot")).toBe(true);
     expect(supportsResume("cursor")).toBe(true);
     expect(supportsResume("gemini")).toBe(true);
@@ -68,6 +69,15 @@ describe("buildResumeCommand", () => {
     expect(buildResumeCommand("traex", "traex:sess-1")).toBe("traex resume sess-1");
     expect(buildResumeCommand("traex", "traex:run-1", { model: "gpt-5-codex" })).toBe(
       "traex resume run-1 -m gpt-5-codex",
+    );
+  });
+
+  it("generates augure-code resume command with the vendor CLI name", () => {
+    expect(buildResumeCommand("augure-code", "augure-code:sess-1")).toBe(
+      "augure resume sess-1",
+    );
+    expect(buildResumeCommand("augure-code", "augure-code:run-1", { model: "ossington-5" })).toBe(
+      "augure resume run-1 -m ossington-5",
     );
   });
 

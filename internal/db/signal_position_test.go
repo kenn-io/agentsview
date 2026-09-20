@@ -1,6 +1,7 @@
 package db
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/mattn/go-sqlite3"
@@ -25,12 +26,13 @@ func TestToolCallsByPositionWithinSQLiteVariableLimit(t *testing.T) {
 		return nil
 	}))
 	require.NoError(t, conn.Close())
-	tx, err := d.getWriter().Begin()
+	tx, err := d.getWriter().Begin(t.Context())
 	require.NoError(t, err)
 	defer func() { require.NoError(t, tx.Rollback()) }()
 	q := signalTxQuery{tx: tx, sessionID: "s1"}
 	// Repeating the first position after the chunk boundary must not repeat its fact.
-	facts, err := q.ToolCallsByPosition(t.Context(), append(positions, positions[0]))
+	queryPositions := append(slices.Clone(positions), positions[0])
+	facts, err := q.ToolCallsByPosition(t.Context(), queryPositions)
 	require.NoError(t, err)
 	got := make([]ToolCallPosition, len(facts))
 	for i, fact := range facts {
@@ -53,7 +55,7 @@ func TestToolCallsByPositionKeepsExactOccurrences(t *testing.T) {
 			})
 		}
 	}
-	tx, err := d.getWriter().Begin()
+	tx, err := d.getWriter().Begin(t.Context())
 	require.NoError(t, err)
 	defer func() { require.NoError(t, tx.Rollback()) }()
 	q := signalTxQuery{tx: tx, sessionID: "s1"}

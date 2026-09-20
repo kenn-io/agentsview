@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -11,14 +10,14 @@ import (
 )
 
 func TestForegroundCompactRunnerReturnsPopulatedResult(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "sessions.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "sessions.db"))
 	require.NoError(t, err)
 	defer database.Close()
-	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{})
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{})
 	defer engine.Close()
 
 	result, err := newForegroundCompactRunner(engine, database)(
-		context.Background(), db.CompactOptions{StagingDir: t.TempDir()},
+		t.Context(), db.CompactOptions{StagingDir: t.TempDir()},
 	)
 	require.NoError(t, err)
 	require.Positive(t, result.Before.DatabaseBytes)

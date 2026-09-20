@@ -43,9 +43,9 @@ func TestStreamDirectoryTreeContinuesAfterUnreadableSubtree(t *testing.T) {
 		return nil
 	})
 
-	assert.ErrorIs(t, err, injected)
+	require.ErrorIs(t, err, injected)
 	var incomplete DiscoveryIncompleteError
-	assert.ErrorAs(t, err, &incomplete)
+	require.ErrorAs(t, err, &incomplete)
 	assert.Equal(t, []string{healthy}, yielded)
 }
 
@@ -66,7 +66,7 @@ func TestStreamDirectoryTreeYieldErrorAbortsImmediately(t *testing.T) {
 		return injected
 	})
 
-	assert.ErrorIs(t, err, injected)
+	require.ErrorIs(t, err, injected)
 	assert.Equal(t, 1, calls)
 }
 
@@ -111,7 +111,7 @@ func TestStreamDirectoryEntriesStopsAfterMidTraversalCancellation(t *testing.T) 
 		return nil
 	})
 
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, streamingDirectoryBatchSize+1, count)
 }
 

@@ -238,6 +238,8 @@ func literalExpression(expr ast.Expr, timeImport string) (string, bool) {
 			left, leftOK := literalExpression(expr.X, timeImport)
 			right, rightOK := literalExpression(expr.Y, timeImport)
 			return "(" + left + " " + expr.Op.String() + " " + right + ")", leftOK && rightOK
+		default:
+			return "", false
 		}
 	case *ast.SelectorExpr:
 		qualifier, ok := expr.X.(*ast.Ident)

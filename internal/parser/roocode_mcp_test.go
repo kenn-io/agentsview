@@ -14,7 +14,7 @@ import (
 func TestParseRooCodeSessionMCPResponsePairing(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-mcp-pair")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-mcp-pair",
@@ -29,7 +29,7 @@ func TestParseRooCodeSessionMCPResponsePairing(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Sequence: user task, MCP tool call, mcp_server_response
@@ -63,7 +63,7 @@ func TestParseRooCodeSessionMCPResponsePairing(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -87,7 +87,7 @@ func TestParseRooCodeSessionMCPResponsePairing(t *testing.T) {
 func TestParseRooCodeSessionMCPResponseNoPending(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-mcp-nopending")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-mcp-nopending",
@@ -102,7 +102,7 @@ func TestParseRooCodeSessionMCPResponseNoPending(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// MCP response with no preceding MCP tool call — should be
@@ -125,7 +125,7 @@ func TestParseRooCodeSessionMCPResponseNoPending(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -143,7 +143,7 @@ func TestParseRooCodeSessionMCPResponseNoPending(t *testing.T) {
 func TestParseRooCodeSessionEmptyMCPResponsePairsCompleted(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-mcp-empty")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-mcp-empty",
@@ -157,7 +157,7 @@ func TestParseRooCodeSessionEmptyMCPResponsePairsCompleted(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// An MCP tool whose response body is empty must still resolve
@@ -186,7 +186,7 @@ func TestParseRooCodeSessionEmptyMCPResponsePairsCompleted(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -200,9 +200,8 @@ func TestParseRooCodeSessionEmptyMCPResponsePairsCompleted(t *testing.T) {
 	tc := msgs[1].ToolCalls[0]
 	require.Len(t, tc.ResultEvents, 1)
 	assert.Equal(t, "completed", tc.ResultEvents[0].Status)
-	assert.Equal(t, "", tc.ResultEvents[0].Content)
-	assert.True(t,
-		tc.ResultEvents[0].Timestamp.Equal(time.UnixMilli(1688836870000)),
+	assert.Empty(t, tc.ResultEvents[0].Content)
+	assert.True(t, tc.ResultEvents[0].Timestamp.Equal(time.UnixMilli(1688836870000)),
 		"result event should carry the mcp_server_response timestamp")
 
 	// The resolved tool call must not read as orphaned.
@@ -238,7 +237,7 @@ func TestParseRooCodeSessionCanonicalMCPPayloads(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
 			taskDir := filepath.Join(tmpDir, "tasks", "test-task-mcp-canonical")
-			require.NoError(t, os.MkdirAll(taskDir, 0755))
+			require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 			historyItem := rooCodeHistoryItem{
 				ID:        "test-task-mcp-canonical",
@@ -251,7 +250,7 @@ func TestParseRooCodeSessionCanonicalMCPPayloads(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(
 				filepath.Join(taskDir, "history_item.json"),
-				historyJSON, 0644,
+				historyJSON, 0o644,
 			))
 
 			// Canonical Roo/Cline use_mcp_server payloads carry a
@@ -281,7 +280,7 @@ func TestParseRooCodeSessionCanonicalMCPPayloads(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(
 				filepath.Join(taskDir, "ui_messages.json"),
-				messagesJSON, 0644,
+				messagesJSON, 0o644,
 			))
 
 			sess, msgs, err := parseRooCodeSession(taskDir, "", "")

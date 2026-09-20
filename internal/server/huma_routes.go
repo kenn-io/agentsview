@@ -44,7 +44,7 @@ type bytesOutput struct {
 	Body               []byte
 }
 
-type apiErrorResponse struct {
+type apiResponseError struct {
 	Status              int    `json:"-"`
 	Code                string `json:"code,omitempty"`
 	Message             string `json:"error"`
@@ -54,20 +54,20 @@ type apiErrorResponse struct {
 	CurrentUploadOffset *int64 `json:"upload_offset,omitempty"`
 }
 
-func (e *apiErrorResponse) Error() string {
+func (e *apiResponseError) Error() string {
 	return e.Message
 }
 
-func (e *apiErrorResponse) GetStatus() int {
+func (e *apiResponseError) GetStatus() int {
 	return e.Status
 }
 
 func apiError(status int, message string) error {
-	return &apiErrorResponse{Status: status, Message: message}
+	return &apiResponseError{Status: status, Message: message}
 }
 
 func apiErrorWithCode(status int, code, message string) error {
-	return &apiErrorResponse{Status: status, Code: code, Message: message}
+	return &apiResponseError{Status: status, Code: code, Message: message}
 }
 
 var configureHumaOnce stdsync.Once
@@ -96,7 +96,7 @@ func configureHuma() {
 			if strings.Contains(message, "(query.type:") {
 				message = "invalid type: " + message
 			}
-			return &apiErrorResponse{
+			return &apiResponseError{
 				Status:  status,
 				Message: message,
 			}
@@ -117,6 +117,7 @@ type requestInfo struct {
 	Forwarded  bool
 }
 
+//nolint:recvcheck // Huma discovers Schema on values and mutates parameters through pointers.
 type optionalIntParam struct {
 	Value int
 	IsSet bool
@@ -143,6 +144,8 @@ func optionalIntValue(p optionalIntParam) *int {
 
 // optionalBoolParam distinguishes an omitted query param from an explicit
 // false, so a sort key's canonical direction is used unless ?descending is set.
+//
+//nolint:recvcheck // Huma discovers Schema on values and mutates parameters through pointers.
 type optionalBoolParam struct {
 	Value bool
 	IsSet bool
@@ -193,6 +196,10 @@ func isLocalhostContext(ctx context.Context) bool {
 }
 
 func agentsViewSchemaNamer(t reflect.Type, hint string) string {
+	if schemaNamedType(t) == reflect.TypeFor[apiResponseError]() {
+		// Keep the published schema name independent of the Go error type name.
+		return "ApiErrorResponse"
+	}
 	name := huma.DefaultSchemaNamer(t, hint)
 	base := schemaNamedType(t)
 	pkgPath := base.PkgPath()
@@ -516,12 +523,12 @@ func (s *Server) rejectWriterClosedWrite() error {
 // that passed the pre-stream writer gate cannot race a maintenance pass
 // closing the writer mid-operation. Local servers without a daemon engine
 // share the on-demand sync engine's lock.
-func (s *Server) serializeArchiveWrite(work func() error) error {
+func (s *Server) serializeArchiveWrite(ctx context.Context, work func() error) error {
 	if s.engine != nil {
 		return s.engine.RunExclusive(work)
 	}
 	if local, ok := s.db.(*db.DB); ok {
-		return s.syncEngineForLocal(local).RunExclusive(work)
+		return s.syncEngineForLocal(ctx, local).RunExclusive(work)
 	}
 	return work()
 }
@@ -531,12 +538,12 @@ func (s *Server) serializeArchiveWrite(work func() error) error {
 // newForegroundCompactRunner puts compaction behind. Background work keeps
 // serializeArchiveWrite so scheduled obligations are not lost. Local servers
 // without a daemon engine share the on-demand sync engine's lock.
-func (s *Server) tryArchiveWrite(work func() error) error {
+func (s *Server) tryArchiveWrite(ctx context.Context, work func() error) error {
 	if s.engine != nil {
 		return s.engine.TryRunExclusive(work)
 	}
 	if local, ok := s.db.(*db.DB); ok {
-		return s.syncEngineForLocal(local).TryRunExclusive(work)
+		return s.syncEngineForLocal(ctx, local).TryRunExclusive(work)
 	}
 	return work()
 }
@@ -621,4 +628,13 @@ func writeHumaJSON(ctx huma.Context, status int, value any) {
 
 func sjson(w io.Writer, value any) error {
 	return json.MarshalEncode(jsontext.NewEncoder(w), value)
+}
+
+// handleHTTP registers handlers that own streaming and response serialization
+// through the same Huma adapter as the typed API operations.
+func (s *Server) handleHTTP(op *huma.Operation, handler http.HandlerFunc) {
+	s.api.Adapter().Handle(op, func(ctx huma.Context) {
+		r, w := humago.Unwrap(ctx)
+		handler(w, r)
+	})
 }

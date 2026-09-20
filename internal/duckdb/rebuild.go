@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // mirrorWorkDirSuffix is appended to the mirror path to form the mirror's
@@ -86,11 +87,11 @@ func ensureMirrorWorkDir(path string) (string, error) {
 // fails at any point leaves the previous mirror (if any) fully intact.
 func rebuildMirror(
 	ctx context.Context, path string, local *db.DB, machine string,
-	opts SyncOptions, onProgress func(PushProgress),
-) (PushResult, error) {
+	opts storage.MirrorPushOptions, onProgress func(storage.MirrorPushProgress),
+) (storage.MirrorPushResult, error) {
 	tmpPath, err := createMirrorTempPath(path)
 	if err != nil {
-		return PushResult{}, err
+		return storage.MirrorPushResult{}, err
 	}
 	success := false
 	defer func() {
@@ -99,9 +100,9 @@ func rebuildMirror(
 		}
 	}()
 
-	s, err := New(tmpPath, local, machine, opts)
+	s, err := New(ctx, tmpPath, local, machine, opts)
 	if err != nil {
-		return PushResult{}, err
+		return storage.MirrorPushResult{}, err
 	}
 	result, buildErr := buildMirrorInto(ctx, s, opts, onProgress)
 	if closeErr := s.Close(); closeErr != nil && buildErr == nil {
@@ -238,7 +239,7 @@ func isGeneratedSweepName(name, prefix string) bool {
 	if suffix == "" {
 		return false
 	}
-	for i := 0; i < len(suffix); i++ {
+	for i := range len(suffix) {
 		if suffix[i] < '0' || suffix[i] > '9' {
 			return false
 		}
@@ -305,21 +306,21 @@ func captureRebuildSnapshot(ctx context.Context, local *db.DB) (rebuildSnapshot,
 // every in-scope session plus the mirror's global tables, records mirror
 // metadata, and checkpoints so the on-disk file reflects every write.
 //
-// It owns start-to-finish timing for PushResult.Duration rather than
+// It owns start-to-finish timing for storage.MirrorPushResult.Duration rather than
 // letting pushEverything set it: identity publication and the metadata
 // write both happen after pushEverything returns, so a Duration captured
 // inside pushEverything alone would underreport a --full push's real wall
 // time by everything after the session push loop.
 func buildMirrorInto(
-	ctx context.Context, s *Sync, opts SyncOptions, onProgress func(PushProgress),
-) (PushResult, error) {
+	ctx context.Context, s *Sync, opts storage.MirrorPushOptions, onProgress func(storage.MirrorPushProgress),
+) (storage.MirrorPushResult, error) {
 	start := time.Now()
 	if err := createSchema(ctx, s.duck); err != nil {
-		return PushResult{}, err
+		return storage.MirrorPushResult{}, err
 	}
 	snapshot, err := captureRebuildSnapshot(ctx, s.local)
 	if err != nil {
-		return PushResult{}, err
+		return storage.MirrorPushResult{}, err
 	}
 	result, err := s.pushEverything(ctx, onProgress)
 	if err != nil {
@@ -360,9 +361,9 @@ func buildMirrorInto(
 // succeeds, so it can capture the revision syncProjectIdentityObservations
 // returns without changing this function's signature.
 func (s *Sync) pushEverything(
-	ctx context.Context, onProgress func(PushProgress),
-) (PushResult, error) {
-	var result PushResult
+	ctx context.Context, onProgress func(storage.MirrorPushProgress),
+) (storage.MirrorPushResult, error) {
+	var result storage.MirrorPushResult
 	if err := s.ensureArchiveID(ctx); err != nil {
 		return result, err
 	}
@@ -487,7 +488,7 @@ func validateBuiltMirror(ctx context.Context, tmpPath string, wantSessions int) 
 			probe.SchemaVersion, SchemaVersion,
 		)
 	}
-	conn, err := OpenReadOnly(tmpPath)
+	conn, err := OpenReadOnly(ctx, tmpPath)
 	if err != nil {
 		return fmt.Errorf("validating rebuilt duckdb mirror: %w", err)
 	}

@@ -15,9 +15,10 @@ import (
 
 	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
-// fakeVectorSource is an in-memory VectorPushSource whose generation, aggregate
+// fakeVectorSource is an in-memory storage.VectorPushSource whose generation, aggregate
 // hashes, and per-session docs are mutated between pushes to drive the delta,
 // eviction, and cross-generation cases. genOverride, when set, replaces the
 // nth BeginExport answer (1-based call count) so a test can change the source
@@ -27,21 +28,21 @@ import (
 // export); by default SessionDocs echoes the delta-scan hash so pushes
 // proceed.
 type fakeVectorSource struct {
-	gen          VectorGenerationInfo
+	gen          storage.VectorGenerationInfo
 	hasGen       bool
 	hashes       map[string]string
-	docs         map[string][]VectorPushDoc
+	docs         map[string][]storage.VectorPushDoc
 	exportHashes map[string]string
 	docsCalls    map[string]int // per-session SessionDocs invocation count
 	genCalls     int
-	genOverride  func(call int, sessionIDs []string) (VectorGenerationInfo, bool, error)
+	genOverride  func(call int, sessionIDs []string) (storage.VectorGenerationInfo, bool, error)
 	genScopes    [][]string // sessionIDs of each Generation call
 	hashScopes   [][]string // sessionIDs of each SessionDocHashes call
 }
 
 func (f *fakeVectorSource) BeginExport(
 	ctx context.Context, sessionIDs []string,
-) (VectorExport, bool, error) {
+) (storage.VectorExport, bool, error) {
 	f.genCalls++
 	f.genScopes = append(f.genScopes, append([]string(nil), sessionIDs...))
 	gen, ok, err := f.gen, f.hasGen, error(nil)
@@ -56,11 +57,11 @@ func (f *fakeVectorSource) BeginExport(
 
 type fakeVectorExport struct {
 	source *fakeVectorSource
-	gen    VectorGenerationInfo
+	gen    storage.VectorGenerationInfo
 	closed bool
 }
 
-func (e *fakeVectorExport) Generation() VectorGenerationInfo { return e.gen }
+func (e *fakeVectorExport) Generation() storage.VectorGenerationInfo { return e.gen }
 
 func (e *fakeVectorExport) SessionDocHashes(
 	ctx context.Context, sessionIDs []string,
@@ -80,7 +81,7 @@ func (e *fakeVectorExport) SessionDocHashes(
 
 func (e *fakeVectorExport) SessionDocs(
 	ctx context.Context, id string,
-) ([]VectorPushDoc, string, error) {
+) ([]storage.VectorPushDoc, string, error) {
 	f := e.source
 	if f.docsCalls == nil {
 		f.docsCalls = make(map[string]int)
@@ -116,7 +117,7 @@ func newVectorPushTestSync(
 		t.Skip("pgvector extension unavailable")
 	}
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	t.Cleanup(func() { _ = localDB.Close() })
 
@@ -134,7 +135,7 @@ func newVectorPushTestSync(
 // creates a PG sessions row carrying this pusher's owner marker.
 func seedVectorSession(t *testing.T, localDB *db.DB, id string) {
 	t.Helper()
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID:               id,
 		Project:          "proj",
 		Machine:          "test-machine",
@@ -143,7 +144,7 @@ func seedVectorSession(t *testing.T, localDB *db.DB, id string) {
 		UserMessageCount: 1,
 		CreatedAt:        "2026-01-01T00:00:00Z",
 	}), "UpsertSession "+id)
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     id,
 		Ordinal:       0,
 		Role:          "user",
@@ -156,7 +157,7 @@ func seedVectorSession(t *testing.T, localDB *db.DB, id string) {
 // the PG sessions row carries a project the vector push filter can scope on.
 func seedVectorSessionProject(t *testing.T, localDB *db.DB, id, project string) {
 	t.Helper()
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID:               id,
 		Project:          project,
 		Machine:          "test-machine",
@@ -165,7 +166,7 @@ func seedVectorSessionProject(t *testing.T, localDB *db.DB, id, project string) 
 		UserMessageCount: 1,
 		CreatedAt:        "2026-01-01T00:00:00Z",
 	}), "UpsertSession "+id)
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     id,
 		Ordinal:       0,
 		Role:          "user",
@@ -174,13 +175,13 @@ func seedVectorSessionProject(t *testing.T, localDB *db.DB, id, project string) 
 	}}), "InsertMessages "+id)
 }
 
-// vdoc builds a VectorPushDoc with the supplied embeddings as consecutive
+// vdoc builds a storage.VectorPushDoc with the supplied embeddings as consecutive
 // chunks (chunk_index 0..n-1).
 func vdoc(
 	sessionID, docKey string, ordinal int,
 	content, hash string, chunks ...[]float32,
-) VectorPushDoc {
-	d := VectorPushDoc{
+) storage.VectorPushDoc {
+	d := storage.VectorPushDoc{
 		DocKey:      docKey,
 		SessionID:   sessionID,
 		Ordinal:     ordinal,
@@ -190,7 +191,7 @@ func vdoc(
 		ContentHash: hash,
 	}
 	for i, emb := range chunks {
-		d.Chunks = append(d.Chunks, VectorPushChunk{ChunkIndex: i, Embedding: emb})
+		d.Chunks = append(d.Chunks, storage.VectorPushChunk{ChunkIndex: i, Embedding: emb})
 	}
 	return d
 }
@@ -225,10 +226,10 @@ func TestVectorPushChangeScoped(t *testing.T) {
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
 	src := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-scoped", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-scoped", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "ha1", "B": "hb1"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "A#0", 0, "c1", "ha1", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "B#0", 0, "c2", "hb1", []float32{0, 1, 0, 0})},
 		},
@@ -254,7 +255,7 @@ VALUES ($1, 'orphan', 'stale')`, genID)
 
 	// A changes relationally and in the vector source; B changes only in
 	// the vector source (e.g. an embeddings build finishing later).
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID:               "A",
 		Project:          "proj",
 		Machine:          "test-machine",
@@ -263,7 +264,7 @@ VALUES ($1, 'orphan', 'stale')`, genID)
 		UserMessageCount: 2,
 		CreatedAt:        "2026-01-01T00:00:00Z",
 	}), "reupsert A")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     "A",
 		Ordinal:       1,
 		Role:          "user",
@@ -273,15 +274,15 @@ VALUES ($1, 'orphan', 'stale')`, genID)
 	// InsertMessages touches no sync_marker signal, so advance A's marker
 	// the way real ingestion does for a relational change; without this A
 	// stays below the baseline watermark and the scoped push selects nothing.
-	require.NoError(t, localDB.BumpLocalModifiedAt("A"), "advance A sync marker")
+	require.NoError(t, localDB.BumpLocalModifiedAt(t.Context(), "A"), "advance A sync marker")
 	src.hashes = map[string]string{"A": "ha2", "B": "hb2"}
-	src.docs = map[string][]VectorPushDoc{
+	src.docs = map[string][]storage.VectorPushDoc{
 		"A": {vdoc("A", "A#0", 0, "c1b", "ha2", []float32{0, 0, 1, 0})},
 		"B": {vdoc("B", "B#0", 0, "c2b", "hb2", []float32{0, 0, 0, 1})},
 	}
 	src.hashScopes = nil
 
-	res, err = sync.PushWithOptions(ctx, PushOptions{
+	res, err = sync.PushWithOptions(ctx, storage.PushOptions{
 		ScopeVectorsToChangedSessions: true,
 	}, nil)
 	require.NoError(t, err, "scoped Push")
@@ -338,10 +339,10 @@ func TestVectorPushGenerationSwitchPromotesScopedPush(t *testing.T) {
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
 	src := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp1", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp1", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "a1", "B": "b1"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "A#0", 0, "ca1", "a1", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "B#0", 0, "cb1", "b1", []float32{0, 1, 0, 0})},
 		},
@@ -356,9 +357,9 @@ func TestVectorPushGenerationSwitchPromotesScopedPush(t *testing.T) {
 
 	// The embedding generation changes: a new fingerprint with fresh
 	// per-session docs across the whole corpus.
-	src.gen = VectorGenerationInfo{Fingerprint: "fp2", Model: "m", Dimension: 4}
+	src.gen = storage.VectorGenerationInfo{Fingerprint: "fp2", Model: "m", Dimension: 4}
 	src.hashes = map[string]string{"A": "a2", "B": "b2"}
-	src.docs = map[string][]VectorPushDoc{
+	src.docs = map[string][]storage.VectorPushDoc{
 		"A": {vdoc("A", "A#0", 0, "ca2", "a2", []float32{0, 0, 1, 0})},
 		"B": {vdoc("B", "B#0", 0, "cb2", "b2", []float32{0, 0, 0, 1})},
 	}
@@ -402,10 +403,10 @@ func TestVectorPushRecreatedGenerationPromotesScopedPush(t *testing.T) {
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
 	src := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp1", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp1", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "a1", "B": "b1"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "A#0", 0, "ca1", "a1", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "B#0", 0, "cb1", "b1", []float32{0, 1, 0, 0})},
 		},
@@ -468,10 +469,10 @@ func TestVectorPushRecreatedTablesReusedIDPromotesScopedPush(t *testing.T) {
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
 	src := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp1", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp1", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "a1", "B": "b1"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "A#0", 0, "ca1", "a1", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "B#0", 0, "cb1", "b1", []float32{0, 1, 0, 0})},
 		},
@@ -533,10 +534,10 @@ func TestVectorPushPromotionRechecksFullReadiness(t *testing.T) {
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
 	src := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-pr", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-pr", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "a1", "B": "b1"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "A#0", 0, "ca1", "a1", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "B#0", 0, "cb1", "b1", []float32{0, 1, 0, 0})},
 		},
@@ -555,14 +556,14 @@ func TestVectorPushPromotionRechecksFullReadiness(t *testing.T) {
 	src.genCalls = 0
 	src.genScopes = nil
 	src.hashScopes = nil
-	src.genOverride = func(call int, sessionIDs []string) (VectorGenerationInfo, bool, error) {
+	src.genOverride = func(call int, sessionIDs []string) (storage.VectorGenerationInfo, bool, error) {
 		if call == 1 {
 			assert.Equal(t, []string{"A"}, sessionIDs)
 			return src.gen, true, nil
 		}
 		assert.Nil(t, sessionIDs, "promoted push must recheck full readiness")
-		return VectorGenerationInfo{}, false, fmt.Errorf(
-			"%w: 1 document(s) pending", ErrVectorSourceNotReady)
+		return storage.VectorGenerationInfo{}, false, fmt.Errorf(
+			"%w: 1 document(s) pending", storage.ErrVectorSourceNotReady)
 	}
 
 	vres, err := sync.pushVectors(ctx, false, []string{"A"}, genID, nil, nil)
@@ -588,10 +589,10 @@ func TestVectorPushPromotionDefersRegistrationUntilReady(t *testing.T) {
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
 	src := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-pr0", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-pr0", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "a1", "B": "b1"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "A#0", 0, "ca1", "a1", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "B#0", 0, "cb1", "b1", []float32{0, 1, 0, 0})},
 		},
@@ -601,14 +602,14 @@ func TestVectorPushPromotionDefersRegistrationUntilReady(t *testing.T) {
 	src.genCalls = 0
 	src.genScopes = nil
 	src.hashScopes = nil
-	src.genOverride = func(call int, sessionIDs []string) (VectorGenerationInfo, bool, error) {
+	src.genOverride = func(call int, sessionIDs []string) (storage.VectorGenerationInfo, bool, error) {
 		if call == 1 {
 			assert.Equal(t, []string{"A"}, sessionIDs)
 			return src.gen, true, nil
 		}
 		assert.Nil(t, sessionIDs, "promotion must re-open the full export")
-		return VectorGenerationInfo{}, false, fmt.Errorf(
-			"%w: 1 document(s) pending", ErrVectorSourceNotReady)
+		return storage.VectorGenerationInfo{}, false, fmt.Errorf(
+			"%w: 1 document(s) pending", storage.ErrVectorSourceNotReady)
 	}
 
 	vres, err := sync.pushVectors(ctx, false, []string{"A"}, 99, nil, nil)
@@ -637,10 +638,10 @@ func TestVectorPushRecreatedGenerationAfterScopedProbePromotesGenerationWide(t *
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
 	src := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-race", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-race", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "a1", "B": "b1"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "A#0", 0, "ca1", "a1", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "B#0", 0, "cb1", "b1", []float32{0, 1, 0, 0})},
 		},
@@ -704,10 +705,10 @@ func TestVectorPushRecreatedTablesAfterScopedApplyRetriesGenerationWide(t *testi
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
 	src := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-post", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-post", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "a1", "B": "b1"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "A#0", 0, "ca1", "a1", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "B#0", 0, "cb1", "b1", []float32{0, 1, 0, 0})},
 		},
@@ -774,10 +775,10 @@ func TestVectorPushDeferredFullPassDoesNotRecordMachineWitness(t *testing.T) {
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
 	src := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-w", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-w", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "a1", "B": "b1"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "A#0", 0, "ca1", "a1", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "B#0", 0, "cb1", "b1", []float32{0, 1, 0, 0})},
 		},
@@ -788,7 +789,7 @@ func TestVectorPushDeferredFullPassDoesNotRecordMachineWitness(t *testing.T) {
 	require.NoError(t, err, "baseline Push")
 	genID := res.Vectors.GenerationID
 	require.NotZero(t, genID)
-	witnessKey, err := sync.vectorGenerationWitnessKey()
+	witnessKey, err := sync.vectorGenerationWitnessKey(t.Context())
 	require.NoError(t, err, "vectorGenerationWitnessKey")
 	_, err = pg.Exec(
 		`DELETE FROM vector_generation_machines WHERE generation_id = $1`, genID,
@@ -796,7 +797,7 @@ func TestVectorPushDeferredFullPassDoesNotRecordMachineWitness(t *testing.T) {
 	require.NoError(t, err, "drop machine record")
 
 	src.hashes = map[string]string{"A": "a2", "B": "b2"}
-	src.docs = map[string][]VectorPushDoc{
+	src.docs = map[string][]storage.VectorPushDoc{
 		"A": {vdoc("A", "A#0", 0, "ca2", "a2", []float32{9, 0, 0, 0})},
 		"B": {vdoc("B", "B#0", 0, "cb2", "b2", []float32{0, 9, 0, 0})},
 	}
@@ -849,10 +850,10 @@ func TestVectorPushFilteredWitnessDoesNotCrossScopesAfterTableRecreation(t *test
 	seedVectorSessionProject(t, localDB, "beta-2", "beta")
 
 	src := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-filtered", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-filtered", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"alpha": "ha", "beta-1": "hb1", "beta-2": "hb2"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"alpha":  {vdoc("alpha", "alpha#0", 0, "a", "ha", []float32{1, 0, 0, 0})},
 			"beta-1": {vdoc("beta-1", "beta-1#0", 0, "b1", "hb1", []float32{0, 1, 0, 0})},
 			"beta-2": {vdoc("beta-2", "beta-2#0", 0, "b2", "hb2", []float32{0, 0, 1, 0})},
@@ -941,10 +942,10 @@ func TestVectorPushFullRechecksGenerationBeforeRecordingWitness(t *testing.T) {
 	seedVectorSession(t, localDB, "A")
 	seedVectorSession(t, localDB, "B")
 	src := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-full-race", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-full-race", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "a1", "B": "b1"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "A#0", 0, "ca1", "a1", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "B#0", 0, "cb1", "b1", []float32{0, 1, 0, 0})},
 		},
@@ -958,13 +959,13 @@ func TestVectorPushFullRechecksGenerationBeforeRecordingWitness(t *testing.T) {
 	require.NoError(t, pg.QueryRow(
 		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp-full-race",
 	).Scan(&gen1), "gen1 id")
-	witnessKey, err := sync.vectorGenerationWitnessKey()
+	witnessKey, err := sync.vectorGenerationWitnessKey(ctx)
 	require.NoError(t, err, "vectorGenerationWitnessKey")
 
 	src.genScopes = nil
 	src.hashScopes = nil
 	src.hashes = map[string]string{"A": "a2", "B": "b2"}
-	src.docs = map[string][]VectorPushDoc{
+	src.docs = map[string][]storage.VectorPushDoc{
 		"A": {vdoc("A", "A#0", 0, "ca2", "a2", []float32{0, 0, 1, 0})},
 		"B": {vdoc("B", "B#0", 0, "cb2", "b2", []float32{0, 0, 0, 1})},
 	}
@@ -1023,10 +1024,10 @@ func TestVectorPushRoundTrip(t *testing.T) {
 	seedVectorSession(t, localDB, "B")
 
 	sync.vectorSource = &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-rt", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-rt", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "ha", "B": "hb"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {
 				vdoc("A", "A#0", 0, "c1", "h1",
 					[]float32{1, 0, 0, 0}, []float32{0, 1, 0, 0}),
@@ -1036,8 +1037,8 @@ func TestVectorPushRoundTrip(t *testing.T) {
 		},
 	}
 
-	var vectorReports, prepareReports []PushProgress
-	res, err := sync.Push(ctx, false, func(p PushProgress) {
+	var vectorReports, prepareReports []storage.PushProgress
+	res, err := sync.Push(ctx, false, func(p storage.PushProgress) {
 		switch p.Phase {
 		case "vectors":
 			vectorReports = append(vectorReports, p)
@@ -1066,7 +1067,7 @@ func TestVectorPushRoundTrip(t *testing.T) {
 	require.NoError(t, err, "LookupVectorGeneration")
 	require.True(t, ok, "generation registered")
 	assert.Equal(t, 4, dim)
-	witnessKey, err := sync.vectorGenerationWitnessKey()
+	witnessKey, err := sync.vectorGenerationWitnessKey(ctx)
 	require.NoError(t, err, "vectorGenerationWitnessKey")
 
 	assert.Equal(t, 3,
@@ -1090,10 +1091,10 @@ func TestVectorPushDeltaNoop(t *testing.T) {
 	seedVectorSession(t, localDB, "B")
 
 	sync.vectorSource = &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-noop", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-noop", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "ha", "B": "hb"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "A#0", 0, "c1", "h1", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "B#0", 0, "c3", "h3", []float32{0, 0, 0, 1})},
 		},
@@ -1122,10 +1123,10 @@ func TestVectorPushFullRepairsSilentCorruption(t *testing.T) {
 	seedVectorSession(t, localDB, "A")
 
 	sync.vectorSource = &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-full", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-full", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "ha"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "A#0", 0, "c1", "h1", []float32{1, 0, 0, 0})},
 		},
 	}
@@ -1169,10 +1170,10 @@ func TestVectorPushDeferredOnSessionError(t *testing.T) {
 	seedVectorSession(t, localDB, "B")
 
 	fake := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-def", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-def", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "ha1", "B": "hb1"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "A#0", 0, "old", "h-old", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "B#0", 0, "cb", "hb", []float32{0, 0, 0, 1})},
 		},
@@ -1184,7 +1185,7 @@ func TestVectorPushDeferredOnSessionError(t *testing.T) {
 
 	// A's docs change locally, but its session push failed this run.
 	fake.hashes["A"] = "ha2"
-	fake.docs["A"] = []VectorPushDoc{
+	fake.docs["A"] = []storage.VectorPushDoc{
 		vdoc("A", "A#0", 0, "new", "h-new", []float32{0, 1, 0, 0}),
 	}
 	res, err := sync.pushVectors(
@@ -1222,10 +1223,10 @@ func TestVectorPushContentChange(t *testing.T) {
 	seedVectorSession(t, localDB, "B")
 
 	fake := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-cc", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-cc", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "ha", "B": "hb"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "A#0", 0, "c1", "h1", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "B#0", 0, "c3", "h3", []float32{0, 0, 0, 1})},
 		},
@@ -1236,7 +1237,7 @@ func TestVectorPushContentChange(t *testing.T) {
 	require.NoError(t, err, "first Push")
 
 	fake.hashes["A"] = "ha2"
-	fake.docs["A"] = []VectorPushDoc{
+	fake.docs["A"] = []storage.VectorPushDoc{
 		vdoc("A", "A#0", 0, "c1-updated", "h1b", []float32{0, 1, 0, 0}),
 	}
 
@@ -1263,10 +1264,10 @@ func TestVectorPushEviction(t *testing.T) {
 	seedVectorSession(t, localDB, "B")
 
 	fake := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-ev", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-ev", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "ha", "B": "hb"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "A#0", 0, "c1", "h1", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "B#0", 0, "c3", "h3", []float32{0, 0, 0, 1})},
 		},
@@ -1326,10 +1327,10 @@ func TestVectorPushSharedDocAcrossGenerations(t *testing.T) {
 	seedVectorSession(t, localDB, "Y")
 
 	fake := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-a", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-a", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"X": "hx", "Y": "hy"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"X": {vdoc("X", "X#0", 0, "cx", "hx1", []float32{1, 0, 0, 0})},
 			"Y": {vdoc("Y", "Y#0", 0, "cy", "hy1", []float32{0, 1, 0, 0})},
 		},
@@ -1387,10 +1388,10 @@ func TestVectorPushOrdinalShift(t *testing.T) {
 	seedVectorSession(t, localDB, "A")
 
 	fake := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-sh", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-sh", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "h1"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {
 				vdoc("A", "k0", 0, "c0", "hc0", []float32{1, 0, 0, 0}),
 				vdoc("A", "k1", 1, "c1", "hc1", []float32{0, 1, 0, 0}),
@@ -1404,7 +1405,7 @@ func TestVectorPushOrdinalShift(t *testing.T) {
 
 	// Shift k0/k1 up to ordinals 1/2 and insert kNew at ordinal 0.
 	fake.hashes["A"] = "h2"
-	fake.docs["A"] = []VectorPushDoc{
+	fake.docs["A"] = []storage.VectorPushDoc{
 		vdoc("A", "kNew", 0, "cn", "hcn", []float32{0, 0, 1, 0}),
 		vdoc("A", "k0", 1, "c0", "hc0", []float32{1, 0, 0, 0}),
 		vdoc("A", "k1", 2, "c1", "hc1", []float32{0, 1, 0, 0}),
@@ -1440,10 +1441,10 @@ func TestVectorPushDocRemovedAndShared(t *testing.T) {
 
 	// Gen A embeds kShared + kDropShared (not kDropSolo).
 	fake := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-ga", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-ga", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "ha"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {
 				vdoc("A", "kShared", 0, "cs", "hcs", []float32{1, 0, 0, 0}),
 				vdoc("A", "kDropShared", 1, "cds", "hcds", []float32{0, 1, 0, 0}),
@@ -1460,7 +1461,7 @@ func TestVectorPushDocRemovedAndShared(t *testing.T) {
 	// Gen B embeds all three docs for A.
 	fake.gen.Fingerprint = "fp-gb"
 	fake.hashes["A"] = "hb1"
-	fake.docs["A"] = []VectorPushDoc{
+	fake.docs["A"] = []storage.VectorPushDoc{
 		vdoc("A", "kShared", 0, "cs", "hcs", []float32{1, 0, 0, 0}),
 		vdoc("A", "kDropShared", 1, "cds", "hcds", []float32{0, 1, 0, 0}),
 		vdoc("A", "kDropSolo", 2, "cdo", "hcdo", []float32{0, 0, 1, 0}),
@@ -1473,7 +1474,7 @@ func TestVectorPushDocRemovedAndShared(t *testing.T) {
 
 	// Shrink gen B's A to only kShared: kDropShared + kDropSolo vanish locally.
 	fake.hashes["A"] = "hb2"
-	fake.docs["A"] = []VectorPushDoc{
+	fake.docs["A"] = []storage.VectorPushDoc{
 		vdoc("A", "kShared", 0, "cs", "hcs", []float32{1, 0, 0, 0}),
 	}
 	res, err := sync.Push(ctx, false, nil)
@@ -1525,10 +1526,10 @@ func TestVectorPushConflictSkipped(t *testing.T) {
 	seedVectorSession(t, localDB, "B")
 
 	fake := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-cf", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-cf", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "ha", "B": "hb"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "cA0", 0, "ca", "hca", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "cB0", 0, "cb", "hcb", []float32{0, 0, 0, 1})},
 		},
@@ -1545,7 +1546,7 @@ func TestVectorPushConflictSkipped(t *testing.T) {
 	// A changed locally: the vector phase must skip it as a conflict, leaving
 	// its pushed content intact.
 	fake.hashes["A"] = "ha2"
-	fake.docs["A"] = []VectorPushDoc{
+	fake.docs["A"] = []storage.VectorPushDoc{
 		vdoc("A", "cA0", 0, "ca-new", "hca2", []float32{0, 1, 0, 0}),
 	}
 	res, err := sync.pushVectors(ctx, false, nil, 0, nil, nil)
@@ -1590,10 +1591,10 @@ func TestVectorPushLegacyMachineOwnership(t *testing.T) {
 	seedVectorSession(t, localDB, "B")
 
 	fake := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-lg", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-lg", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "ha", "B": "hb"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "lA0", 0, "ca", "hca", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "lB0", 0, "cb", "hcb", []float32{0, 0, 0, 1})},
 		},
@@ -1613,10 +1614,10 @@ func TestVectorPushLegacyMachineOwnership(t *testing.T) {
 
 	// Both change locally: only B may push.
 	fake.hashes["A"], fake.hashes["B"] = "ha2", "hb2"
-	fake.docs["A"] = []VectorPushDoc{
+	fake.docs["A"] = []storage.VectorPushDoc{
 		vdoc("A", "lA0", 0, "ca-new", "hca2", []float32{0, 1, 0, 0}),
 	}
-	fake.docs["B"] = []VectorPushDoc{
+	fake.docs["B"] = []storage.VectorPushDoc{
 		vdoc("B", "lB0", 0, "cb-new", "hcb2", []float32{0, 0, 1, 0}),
 	}
 	res, err := sync.pushVectors(ctx, false, nil, 0, nil, nil)
@@ -1635,7 +1636,7 @@ func TestVectorPushLegacyMachineOwnership(t *testing.T) {
 
 	// Both vanish locally: only B may be evicted.
 	fake.hashes = map[string]string{}
-	fake.docs = map[string][]VectorPushDoc{}
+	fake.docs = map[string][]storage.VectorPushDoc{}
 	res, err = sync.pushVectors(ctx, false, nil, 0, nil, nil)
 	require.NoError(t, err, "legacy evict")
 	assert.Equal(t, 1, res.Conflicts, "foreign legacy row is not evicted")
@@ -1660,10 +1661,10 @@ func TestVectorPushEvictionUsesStableExportSnapshot(t *testing.T) {
 	seedVectorSession(t, localDB, "B")
 
 	fake := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-ur", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-ur", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "ha", "B": "hb"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "uA0", 0, "ca", "hca", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "uB0", 0, "cb", "hcb", []float32{0, 0, 0, 1})},
 		},
@@ -1678,12 +1679,12 @@ func TestVectorPushEvictionUsesStableExportSnapshot(t *testing.T) {
 	delete(fake.docs, "B")
 	fake.genCalls = 0
 	fake.genScopes = nil
-	fake.genOverride = func(call int, _ []string) (VectorGenerationInfo, bool, error) {
+	fake.genOverride = func(call int, _ []string) (storage.VectorGenerationInfo, bool, error) {
 		if call == 1 {
 			return fake.gen, true, nil
 		}
-		return VectorGenerationInfo{}, false, fmt.Errorf(
-			"%w: rebuild started", ErrVectorSourceNotReady)
+		return storage.VectorGenerationInfo{}, false, fmt.Errorf(
+			"%w: rebuild started", storage.ErrVectorSourceNotReady)
 	}
 	res, err := sync.pushVectors(ctx, false, nil, 0, nil, nil)
 	require.NoError(t, err, "push with stable export")
@@ -1709,10 +1710,10 @@ func TestVectorPushSkipsWhenSourceUnreadyAtBeginExport(t *testing.T) {
 	seedVectorSession(t, localDB, "B")
 
 	fake := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-ur", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-ur", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "ha", "B": "hb"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "uA0", 0, "ca", "hca", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "uB0", 0, "cb", "hcb", []float32{0, 0, 0, 1})},
 		},
@@ -1725,9 +1726,9 @@ func TestVectorPushSkipsWhenSourceUnreadyAtBeginExport(t *testing.T) {
 	delete(fake.docs, "B")
 	fake.genCalls = 0
 	fake.genScopes = nil
-	fake.genOverride = func(call int, _ []string) (VectorGenerationInfo, bool, error) {
-		return VectorGenerationInfo{}, false, fmt.Errorf(
-			"%w: rebuild started", ErrVectorSourceNotReady)
+	fake.genOverride = func(call int, _ []string) (storage.VectorGenerationInfo, bool, error) {
+		return storage.VectorGenerationInfo{}, false, fmt.Errorf(
+			"%w: rebuild started", storage.ErrVectorSourceNotReady)
 	}
 
 	res, err := sync.pushVectors(ctx, false, nil, 0, nil, nil)
@@ -1764,10 +1765,10 @@ func TestVectorPushProjectScope(t *testing.T) {
 	seedVectorSessionProject(t, localDB, "beta", "beta")
 
 	fake := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-scope", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-scope", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"alpha": "ha", "beta": "hb"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"alpha": {vdoc("alpha", "alpha#0", 0, "a-orig", "ha1", []float32{1, 0, 0, 0})},
 			"beta":  {vdoc("beta", "beta#0", 0, "b-orig", "hb1", []float32{0, 0, 0, 1})},
 		},
@@ -1781,11 +1782,11 @@ func TestVectorPushProjectScope(t *testing.T) {
 	// Restrict the push to project alpha and change both sessions locally.
 	sync.projects = []string{"alpha"}
 	fake.hashes["alpha"] = "ha2"
-	fake.docs["alpha"] = []VectorPushDoc{
+	fake.docs["alpha"] = []storage.VectorPushDoc{
 		vdoc("alpha", "alpha#0", 0, "a-updated", "ha2", []float32{0, 1, 0, 0}),
 	}
 	fake.hashes["beta"] = "hb2"
-	fake.docs["beta"] = []VectorPushDoc{
+	fake.docs["beta"] = []storage.VectorPushDoc{
 		vdoc("beta", "beta#0", 0, "b-updated", "hb2", []float32{0, 1, 0, 0}),
 	}
 
@@ -1832,10 +1833,10 @@ func TestVectorPushLocalProjectMoveOutOfScope(t *testing.T) {
 	seedVectorSessionProject(t, localDB, "mover", "alpha")
 
 	fake := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-move", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-move", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"mover": "h1"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"mover": {vdoc("mover", "mover#0", 0, "orig", "hc1", []float32{1, 0, 0, 0})},
 		},
 	}
@@ -1847,7 +1848,7 @@ func TestVectorPushLocalProjectMoveOutOfScope(t *testing.T) {
 
 	// The session moves to beta locally, but its PG sessions.project stays alpha
 	// (a filtered session push skips it). The local doc content also changes.
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID:               "mover",
 		Project:          "beta",
 		Machine:          "test-machine",
@@ -1857,7 +1858,7 @@ func TestVectorPushLocalProjectMoveOutOfScope(t *testing.T) {
 		CreatedAt:        "2026-01-01T00:00:00Z",
 	}), "move mover to beta")
 	fake.hashes["mover"] = "h2"
-	fake.docs["mover"] = []VectorPushDoc{
+	fake.docs["mover"] = []storage.VectorPushDoc{
 		vdoc("mover", "mover#0", 0, "updated", "hc2", []float32{0, 1, 0, 0}),
 	}
 
@@ -1907,10 +1908,10 @@ func TestVectorPushSkipsDocExportForMissingSession(t *testing.T) {
 	seedVectorSession(t, localDB, "A")
 
 	fake := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-skip", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-skip", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "ha", "ghost": "hg"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A":     {vdoc("A", "A#0", 0, "ca", "hca", []float32{1, 0, 0, 0})},
 			"ghost": {vdoc("ghost", "g#0", 0, "cg", "hcg", []float32{0, 1, 0, 0})},
 		},
@@ -1941,10 +1942,10 @@ func TestVectorPushOrphanStateEvicted(t *testing.T) {
 	seedVectorSession(t, localDB, "B")
 
 	fake := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-or", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-or", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "ha", "B": "hb"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "oA0", 0, "ca", "hca", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "oB0", 0, "cb", "hcb", []float32{0, 0, 0, 1})},
 		},
@@ -1994,10 +1995,10 @@ func TestVectorPushDefersSessionWhenExportDiverges(t *testing.T) {
 	seedVectorSession(t, localDB, "A")
 
 	source := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-div", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-div", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "ha"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "A#0", 0, "c1", "h1",
 				[]float32{1, 0, 0, 0}, []float32{0, 1, 0, 0})},
 		},
@@ -2017,7 +2018,7 @@ func TestVectorPushDefersSessionWhenExportDiverges(t *testing.T) {
 	// hash differs from the scan's.
 	source.hashes = map[string]string{"A": "ha-changed"}
 	source.exportHashes = map[string]string{"A": "ha-mid-rebuild"}
-	source.docs = map[string][]VectorPushDoc{
+	source.docs = map[string][]storage.VectorPushDoc{
 		"A": {vdoc("A", "A#0", 0, "c1", "h1", []float32{9, 9, 9, 9})},
 	}
 
@@ -2060,10 +2061,10 @@ func TestVectorEvictionRechecksOwnershipInTx(t *testing.T) {
 	seedVectorSession(t, localDB, "B")
 
 	sync.vectorSource = &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-ev", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-ev", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "ha", "B": "hb"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "A#0", 0, "c1", "h1", []float32{1, 0, 0, 0})},
 			"B": {vdoc("B", "B#0", 0, "c2", "h2", []float32{0, 1, 0, 0})},
 		},
@@ -2096,7 +2097,7 @@ func TestVectorEvictionRechecksOwnershipInTx(t *testing.T) {
 		owner:  owner,
 	}
 
-	var res VectorPushResult
+	var res storage.VectorPushResult
 	require.NoError(t,
 		sync.evictVectorSessions(ctx, scope, []string{"A", "B"}, &res))
 
@@ -2130,10 +2131,10 @@ func TestVectorPushEvictionDefersFailedSession(t *testing.T) {
 	seedVectorSession(t, localDB, "A")
 
 	fake := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-evf", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-evf", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"A": "ha"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"A": {vdoc("A", "A#0", 0, "c1", "h1", []float32{1, 0, 0, 0})},
 		},
 	}
@@ -2147,7 +2148,7 @@ func TestVectorPushEvictionDefersFailedSession(t *testing.T) {
 
 	// A's embedded docs all vanish locally while its session push fails.
 	fake.hashes = map[string]string{}
-	fake.docs = map[string][]VectorPushDoc{}
+	fake.docs = map[string][]storage.VectorPushDoc{}
 
 	res, err := sync.pushVectors(
 		ctx, false, nil, 0, map[string]struct{}{"A": {}}, nil,
@@ -2186,10 +2187,10 @@ func TestVectorPushFilteredEvictionScopesByLocalProject(t *testing.T) {
 	seedVectorSessionProject(t, localDB, "gone-in", "alpha")
 
 	fake := &fakeVectorSource{
-		gen:    VectorGenerationInfo{Fingerprint: "fp-evs", Model: "m", Dimension: 4},
+		gen:    storage.VectorGenerationInfo{Fingerprint: "fp-evs", Model: "m", Dimension: 4},
 		hasGen: true,
 		hashes: map[string]string{"moved": "hm", "gone-out": "ho", "gone-in": "hi"},
-		docs: map[string][]VectorPushDoc{
+		docs: map[string][]storage.VectorPushDoc{
 			"moved":    {vdoc("moved", "m#0", 0, "cm", "hm1", []float32{1, 0, 0, 0})},
 			"gone-out": {vdoc("gone-out", "o#0", 0, "co", "ho1", []float32{0, 1, 0, 0})},
 			"gone-in":  {vdoc("gone-in", "i#0", 0, "ci", "hi1", []float32{0, 0, 1, 0})},
@@ -2207,15 +2208,15 @@ func TestVectorPushFilteredEvictionScopesByLocalProject(t *testing.T) {
 	// "moved" changes project locally (alpha -> beta) — its PG project stays
 	// alpha because a filtered session push skips it. The others vanish from
 	// the local archive entirely. All three drop out of the embedded set.
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID: "moved", Project: "beta", Machine: "test-machine",
 		Agent: "claude", MessageCount: 1, UserMessageCount: 1,
 		CreatedAt: "2026-01-01T00:00:00Z",
 	}), "move session to beta")
-	require.NoError(t, localDB.DeleteSession("gone-out"))
-	require.NoError(t, localDB.DeleteSession("gone-in"))
+	require.NoError(t, localDB.DeleteSession(t.Context(), "gone-out"))
+	require.NoError(t, localDB.DeleteSession(t.Context(), "gone-in"))
 	fake.hashes = map[string]string{}
-	fake.docs = map[string][]VectorPushDoc{}
+	fake.docs = map[string][]storage.VectorPushDoc{}
 
 	sync.projects = []string{"alpha"}
 	res, err := sync.pushVectors(ctx, false, nil, 0, nil, nil)
@@ -2300,7 +2301,7 @@ func TestVectorPushSkipsOnInsufficientPrivilege(t *testing.T) {
 	require.NoError(t, err, "Open restricted")
 	t.Cleanup(func() { _ = restricted.Close() })
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	t.Cleanup(func() { _ = localDB.Close() })
 
@@ -2312,7 +2313,7 @@ func TestVectorPushSkipsOnInsufficientPrivilege(t *testing.T) {
 		schemaDone: true,
 	}
 	sync.vectorSource = &fakeVectorSource{
-		gen: VectorGenerationInfo{
+		gen: storage.VectorGenerationInfo{
 			Fingerprint: "fp-priv", Model: "m", Dimension: 4,
 		},
 		hasGen: true,
@@ -2330,9 +2331,9 @@ func TestUsageOnlyPushClearsVectors(t *testing.T) {
 	sync, local, pg := newVectorPushTestSync(t, pgURL, "agentsview_usage_vector_test")
 	seedVectorSession(t, local, "usage-session")
 	src := &fakeVectorSource{
-		gen: VectorGenerationInfo{Fingerprint: "usage-gen", Model: "model-a", Dimension: 4}, hasGen: true,
+		gen: storage.VectorGenerationInfo{Fingerprint: "usage-gen", Model: "model-a", Dimension: 4}, hasGen: true,
 		hashes: map[string]string{"usage-session": "hash-a"},
-		docs:   map[string][]VectorPushDoc{"usage-session": {vdoc("usage-session", "usage-session#0", 0, "stored transcript text", "hash-a", []float32{1, 0, 0, 0})}},
+		docs:   map[string][]storage.VectorPushDoc{"usage-session": {vdoc("usage-session", "usage-session#0", 0, "stored transcript text", "hash-a", []float32{1, 0, 0, 0})}},
 	}
 	sync.vectorSource = src
 	_, err := sync.Push(t.Context(), true, nil)
@@ -2364,13 +2365,13 @@ func TestUsageOnlyPushEvictsDeletedSessionVectors(t *testing.T) {
 		t.Run(fmt.Sprintf("full=%t", full), func(t *testing.T) {
 			sync, local, pg := newVectorPushTestSync(t, testPGURL(t), "agentsview_usage_deleted_vector_test")
 			src := &fakeVectorSource{
-				gen: VectorGenerationInfo{Fingerprint: "generation-a", Model: "model-a", Dimension: 4}, hasGen: true,
-				hashes: map[string]string{}, docs: map[string][]VectorPushDoc{},
+				gen: storage.VectorGenerationInfo{Fingerprint: "generation-a", Model: "model-a", Dimension: 4}, hasGen: true,
+				hashes: map[string]string{}, docs: map[string][]storage.VectorPushDoc{},
 			}
 			for _, id := range []string{"removed", "other-owner"} {
 				seedVectorSession(t, local, id)
 				src.hashes[id] = "hash-" + id
-				src.docs[id] = []VectorPushDoc{vdoc(id, id+"#0", 0, id+" transcript", "hash-"+id, []float32{1, 0, 0, 0})}
+				src.docs[id] = []storage.VectorPushDoc{vdoc(id, id+"#0", 0, id+" transcript", "hash-"+id, []float32{1, 0, 0, 0})}
 			}
 			sync.vectorSource = src
 			var generations []int64
@@ -2385,7 +2386,7 @@ func TestUsageOnlyPushEvictsDeletedSessionVectors(t *testing.T) {
 			_, err := pg.Exec(`UPDATE sessions SET owner_marker = 'another-archive' WHERE id = 'other-owner'`)
 			require.NoError(t, err)
 			for _, id := range []string{"removed", "other-owner"} {
-				require.NoError(t, local.DeleteSession(id))
+				require.NoError(t, local.DeleteSession(t.Context(), id))
 			}
 			local.SetArchiveContent(config.ArchiveContentUsage)
 			sync.vectorSource = nil // Usage-only CLI pushes do not open the local vector index.

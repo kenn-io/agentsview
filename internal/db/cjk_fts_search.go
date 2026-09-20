@@ -25,7 +25,7 @@ func (db *DB) prepareMessageFTSQuery(
 		match: prepared,
 		plain: StripFTSQuotes(prepared),
 	}
-	if prepared == "" || !containsCJK(trimmed) || !db.HasCJKFTS() {
+	if prepared == "" || !containsCJK(trimmed) || !db.HasCJKFTS(ctx) {
 		return query, nil
 	}
 

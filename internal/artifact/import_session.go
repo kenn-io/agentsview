@@ -29,13 +29,13 @@ func loadImportedSession(
 		return db.SessionBatchWrite{}, importClosureInvalid, nil
 	}
 	if err := validateHashHex(manifestHash); err != nil {
-		return db.SessionBatchWrite{}, importClosureInvalid, nil
+		return db.SessionBatchWrite{}, importClosureInvalid, nil //nolint:nilerr // Malformed manifest references are reported through importClosureInvalid.
 	}
 	manifestRef, err := NewRef(
 		origin, KindManifests, manifestHash+".json",
 	)
 	if err != nil {
-		return db.SessionBatchWrite{}, importClosureInvalid, nil
+		return db.SessionBatchWrite{}, importClosureInvalid, nil //nolint:nilerr // Malformed manifest references are reported through importClosureInvalid.
 	}
 	manifestEntry, found, err := statImportDependency(ctx, store, manifestRef)
 	if err != nil {

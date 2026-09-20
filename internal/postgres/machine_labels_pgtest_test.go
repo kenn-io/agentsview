@@ -3,6 +3,7 @@
 package postgres
 
 import (
+	"go.kenn.io/agentsview/internal/storage"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,9 +17,9 @@ func TestPushMachineMetadataWithoutSessionChanges(t *testing.T) {
 	cleanNamedPGSchema(t, pgURL, schema)
 	t.Cleanup(func() { cleanNamedPGSchema(t, pgURL, schema) })
 	local := testDB(t)
-	require.NoError(t, local.SetSyncState("machine_label:installation-a", "Laptop"))
-	require.NoError(t, local.SetSyncState("machine_alias:old-owner", "installation-a"))
-	syncer, err := New(pgURL, schema, local, "installation-a", true, SyncOptions{})
+	require.NoError(t, local.SetSyncState(t.Context(), "machine_label:installation-a", "Laptop"))
+	require.NoError(t, local.SetSyncState(t.Context(), "machine_alias:old-owner", "installation-a"))
+	syncer, err := New(pgURL, schema, local, "installation-a", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, syncer.Close()) })
 	require.NoError(t, syncer.EnsureSchema(ctx))
@@ -33,8 +34,8 @@ func TestPushMachineMetadataWithoutSessionChanges(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, map[string]string{"old-owner": "installation-a"}, aliases)
 
-	require.NoError(t, local.SetSyncState("machine_label:installation-a", "Work laptop"))
-	require.NoError(t, local.SetSyncState("machine_alias:older-owner", "installation-a"))
+	require.NoError(t, local.SetSyncState(t.Context(), "machine_label:installation-a", "Work laptop"))
+	require.NoError(t, local.SetSyncState(t.Context(), "machine_alias:older-owner", "installation-a"))
 	result, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 	assert.Zero(t, result.SessionsPushed)
@@ -46,9 +47,9 @@ func TestPushMachineMetadataWithoutSessionChanges(t *testing.T) {
 	assert.Equal(t, map[string]string{"old-owner": "installation-a", "older-owner": "installation-a"}, aliases)
 
 	other := testDB(t)
-	require.NoError(t, other.SetSyncState("machine_alias:old-owner", "installation-b"))
-	require.NoError(t, other.SetSyncState("machine_label:installation-b", "Desktop"))
-	otherSync, err := New(pgURL, schema, other, "installation-b", true, SyncOptions{})
+	require.NoError(t, other.SetSyncState(t.Context(), "machine_alias:old-owner", "installation-b"))
+	require.NoError(t, other.SetSyncState(t.Context(), "machine_label:installation-b", "Desktop"))
+	otherSync, err := New(pgURL, schema, other, "installation-b", true, storage.PusherOptions{})
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, otherSync.Close()) })
 	_, err = otherSync.Push(ctx, false, nil)

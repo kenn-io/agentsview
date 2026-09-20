@@ -121,7 +121,7 @@ func claudeSniffHead(
 	}
 	info, err := os.Stat(path)
 	if err != nil || info.IsDir() {
-		return claudeHeadSniff{}, nil
+		return claudeHeadSniff{}, nil //nolint:nilerr // Unavailable optional lineage metadata yields no lineage hint.
 	}
 	ctimeNS, changeTimeVerified := codexIndexChangeTime(path, info)
 	claudeSniffMu.Lock()
@@ -374,7 +374,7 @@ func claudeResolveSiblingLineage(
 	dir := filepath.Dir(path)
 	dirEntries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil, nil
+		return nil, nil //nolint:nilerr // Unavailable optional lineage metadata yields no lineage hint.
 	}
 	base := filepath.Base(path)
 	type candidate struct {

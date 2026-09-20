@@ -3,17 +3,17 @@
 package duckdb
 
 import (
-	"context"
 	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 func TestReasoningEffortDuckDBReadAndWrite(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, fixture := newSyncedStore(t)
 	_, err := store.duck.ExecContext(ctx,
 		`UPDATE messages SET reasoning_effort = ? WHERE session_id = ? AND ordinal = 1`,
@@ -28,7 +28,7 @@ func TestReasoningEffortDuckDBReadAndWrite(t *testing.T) {
 }
 
 func TestReasoningEffortDuckDBInsertMessagePath(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	store, fixture := newSyncedStore(t)
 	message := db.Message{
 		ID:              99_999_999,
@@ -49,25 +49,25 @@ func TestReasoningEffortDuckDBInsertMessagePath(t *testing.T) {
 }
 
 func TestReasoningEffortDuckDBRebuildsOldSchemaMirror(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
 	messages, err := local.GetAllMessages(ctx, "sess-1")
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
 	messages[1].ReasoningEffort = "high"
-	require.NoError(t, local.ReplaceSessionMessages("sess-1", messages))
+	require.NoError(t, local.ReplaceSessionMessages(ctx, "sess-1", messages))
 
-	_, err = Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	_, err = Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 
 	setMirrorMetadataValue(t, path, schemaVersionMetadataKey, strconv.Itoa(SchemaVersion-1))
 
-	result, err := Push(ctx, path, local, "m", SyncOptions{}, false, nil)
+	result, err := Push(ctx, path, local, "m", storage.MirrorPushOptions{}, false, nil)
 	require.NoError(t, err)
 	assert.True(t, result.Diagnostics.Full)
 	assert.Contains(t, result.Diagnostics.RebuildReason, "schema")
 
-	conn, err := Open(path)
+	conn, err := Open(ctx, path)
 	require.NoError(t, err)
 	defer conn.Close()
 	var effort string

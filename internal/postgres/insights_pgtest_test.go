@@ -25,7 +25,7 @@ func TestStoreInsightCRUD(t *testing.T) {
 	project := "insight-project"
 	cacheKey := "insight-cache-key"
 
-	firstID, err := store.InsertInsight(db.Insight{
+	firstID, err := store.InsertInsight(t.Context(), db.Insight{
 		Type:        "daily_activity",
 		DateFrom:    "2026-03-12",
 		DateTo:      "2026-03-12",
@@ -40,7 +40,7 @@ func TestStoreInsightCRUD(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	secondID, err := store.InsertInsight(db.Insight{
+	secondID, err := store.InsertInsight(t.Context(), db.Insight{
 		Type:        "daily_activity",
 		DateFrom:    "2026-03-12",
 		DateTo:      "2026-03-12",
@@ -76,7 +76,7 @@ func TestStoreInsightCRUD(t *testing.T) {
 	assert.Equal(t, secondID, cached.ID)
 	assert.Equal(t, "hit", cached.CacheStatus)
 
-	require.NoError(t, store.DeleteInsight(firstID), "DeleteInsight first")
+	require.NoError(t, store.DeleteInsight(t.Context(), firstID), "DeleteInsight first")
 	got, err = store.GetInsight(ctx, firstID)
 	require.NoError(t, err, "GetInsight after delete")
 	assert.Nil(t, got)

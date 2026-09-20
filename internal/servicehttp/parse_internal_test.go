@@ -2,11 +2,12 @@ package servicehttp
 
 import (
 	"errors"
-	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

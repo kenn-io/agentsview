@@ -163,6 +163,8 @@ func grokSubagentIDFromResult(raw string) string {
 		switch parsed.Type {
 		case gjson.String:
 			text = parsed.Str
+		case gjson.Null, gjson.False, gjson.Number, gjson.True:
+			return ""
 		case gjson.JSON:
 			if id := strings.TrimSpace(parsed.Get("subagent_id").String()); id != "" {
 				if IsValidSessionID(id) {

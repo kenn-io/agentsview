@@ -186,7 +186,7 @@ func TestParseClaudeSession_EdgeCases(t *testing.T) {
 	t.Run("truncates long first message", func(t *testing.T) {
 		content := testjsonl.ClaudeUserJSON(generateLargeString(400), tsZero) + "\n"
 		sess, _ := runClaudeParserTest(t, "test.jsonl", content)
-		assert.Equal(t, 303, len(sess.FirstMessage))
+		assert.Len(t, sess.FirstMessage, 303)
 	})
 
 	t.Run("skips invalid JSON lines", func(t *testing.T) {
@@ -230,7 +230,6 @@ func TestParseClaudeSession_EdgeCases(t *testing.T) {
 }
 
 func TestParseClaudeSession_SkippedMessages(t *testing.T) {
-
 	t.Run("skips isMeta user messages", func(t *testing.T) {
 		content := testjsonl.JoinJSONL(
 			testjsonl.ClaudeMetaUserJSON("meta context", tsZero, true, false),
@@ -349,8 +348,7 @@ func TestParseClaudeSession_SkippedMessages(t *testing.T) {
 		assert.Equal(t, RoleUser, msgs[0].Role)
 		assert.Equal(t, "system", msgs[0].SourceType)
 		assert.Equal(t, "ide_opened_file", msgs[0].SourceSubtype)
-		assert.Equal(t,
-			"<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file>",
+		assert.Equal(t, "<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file>",
 			msgs[0].Content)
 
 		assert.False(t, msgs[1].IsSystem)
@@ -359,8 +357,7 @@ func TestParseClaudeSession_SkippedMessages(t *testing.T) {
 
 		assert.True(t, msgs[2].IsSystem)
 		assert.Equal(t, "ide_selection", msgs[2].SourceSubtype)
-		assert.Equal(t,
-			"<ide_selection>The user selected package main.</ide_selection>",
+		assert.Equal(t, "<ide_selection>The user selected package main.</ide_selection>",
 			msgs[2].Content)
 
 		assert.False(t, msgs[3].IsSystem)
@@ -480,7 +477,7 @@ func TestParseClaudeSession_SkippedMessages(t *testing.T) {
 		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
 		assert.Equal(t, 2, sess.MessageCount)
 		assert.Equal(t, 1, sess.UserMessageCount)
-		assert.Equal(t, "", sess.FirstMessage, "slash command with no follow-up yields empty first_message")
+		assert.Empty(t, sess.FirstMessage, "slash command with no follow-up yields empty first_message")
 		assert.Equal(t, RoleUser, msgs[0].Role)
 		assert.Equal(t, "/roborev-fix 450", msgs[0].Content)
 	})
@@ -841,7 +838,7 @@ func TestParseClaudeSessionFrom_Incremental(t *testing.T) {
 	results, err := parseClaudeSession(path, "proj", "local")
 	require.NoError(t, err)
 	require.NotEmpty(t, results)
-	assert.Equal(t, 2, len(results[0].Messages))
+	assert.Len(t, results[0].Messages, 2)
 	assert.Equal(t, 0, results[0].Messages[0].Ordinal)
 	assert.Equal(t, 1, results[0].Messages[1].Ordinal)
 
@@ -868,7 +865,7 @@ func TestParseClaudeSessionFrom_Incremental(t *testing.T) {
 		path, offset, 2, "",
 	)
 	require.NoError(t, err)
-	assert.Equal(t, 2, len(newMsgs))
+	assert.Len(t, newMsgs, 2)
 
 	// Ordinals continue from startOrdinal=2.
 	assert.Equal(t, 2, newMsgs[0].Ordinal)
@@ -1060,8 +1057,7 @@ func TestParseClaudeSessionFrom_IDEContextPrependedToPrompt(t *testing.T) {
 	assert.True(t, newMsgs[0].IsSystem)
 	assert.Equal(t, "system", newMsgs[0].SourceType)
 	assert.Equal(t, "ide_opened_file", newMsgs[0].SourceSubtype)
-	assert.Equal(t,
-		"<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file>",
+	assert.Equal(t, "<ide_opened_file>The user opened /workspace/app/README.md.</ide_opened_file>",
 		newMsgs[0].Content)
 
 	assert.False(t, newMsgs[1].IsSystem)
@@ -1251,7 +1247,7 @@ func TestParseClaudeSessionFrom_SkipsNonMessages(
 		path, offset, 1, "",
 	)
 	require.NoError(t, err)
-	assert.Equal(t, 1, len(newMsgs))
+	assert.Len(t, newMsgs, 1)
 	assert.Equal(t, RoleAssistant, newMsgs[0].Role)
 	assert.Equal(t, 1, newMsgs[0].Ordinal)
 }
@@ -1311,7 +1307,7 @@ func TestParseClaudeSessionFrom_PartialLineAtEOF(
 		path, offset, 1, "",
 	)
 	require.NoError(t, err)
-	assert.Equal(t, 1, len(newMsgs))
+	assert.Len(t, newMsgs, 1)
 	assert.Equal(t, RoleAssistant, newMsgs[0].Role)
 
 	// consumed should cover only the complete line, not
@@ -1580,7 +1576,7 @@ func TestParseClaudeSessionFrom_LinearUUID(
 		path, offset, 1, "",
 	)
 	require.NoError(t, err)
-	assert.Equal(t, 2, len(newMsgs))
+	assert.Len(t, newMsgs, 2)
 	assert.Equal(t, 1, newMsgs[0].Ordinal)
 	assert.Equal(t, 2, newMsgs[1].Ordinal)
 	assert.False(t, endedAt.IsZero())
@@ -1686,10 +1682,8 @@ func TestReadClaudePersistedToolResultTruncatesOversizedFile(
 	got, ok := readClaudePersistedToolResult(sessionPath, resultPath)
 	require.True(t, ok)
 	assert.True(t, strings.HasPrefix(got, "prefix"))
-	assert.Equal(
-		t,
-		maxPersistedToolResultSize+len("\n\n[agentsview: persisted tool result truncated at 16 MiB]"),
-		len(got),
+	assert.Len(t,
+		got, maxPersistedToolResultSize+len("\n\n[agentsview: persisted tool result truncated at 16 MiB]"),
 	)
 	assert.True(t, strings.HasSuffix(
 		got,
@@ -1852,6 +1846,7 @@ func TestParseClaudeSessionFrom_QueuedCommandBeforeContinuationFallsBack(
 		t *testing.T, appended string, storedTailID *string,
 	) ([]ParsedMessage, error) {
 		t.Helper()
+
 		path := createTestFile(
 			t, "inc-queued-boundary.jsonl", initial,
 		)
@@ -2145,7 +2140,7 @@ func TestParseClaudeSessionFrom_RewindOntoFilteredEntryFallsBack(
 			storedLinearParse: new(false),
 		},
 	)
-	assert.ErrorIs(t, perr, ErrDAGDetected)
+	require.ErrorIs(t, perr, ErrDAGDetected)
 
 	// The full parse resolves the fork: u2 has children a2 and a3, and
 	// the small-gap retry heuristic follows the latest branch, so a2
@@ -2445,7 +2440,7 @@ func TestParseClaudeSession_TokenUsage(t *testing.T) {
 		)
 		sess, msgs := runClaudeParserTest(t, "test.jsonl", content)
 
-		require.Equal(t, 2, len(msgs))
+		require.Len(t, msgs, 2)
 		assert.Equal(t, 0, msgs[1].ContextTokens)
 		assert.Equal(t, 0, msgs[1].OutputTokens)
 		assert.True(t, msgs[1].HasContextTokens)
@@ -2526,14 +2521,14 @@ func TestTruncateRespectsRuneBoundaries(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			got := truncate(tc.input, tc.maxLen)
 			if got != tc.want {
-				t.Errorf(
+				assert.Failf(t, "test failed",
 					"truncate(%q, %d) = %q, want %q",
 					tc.input, tc.maxLen, got, tc.want,
 				)
 			}
 			// Verify result is valid UTF-8.
 			if !utf8.ValidString(got) {
-				t.Errorf(
+				assert.Failf(t, "test failed",
 					"truncate produced invalid UTF-8: %q",
 					got,
 				)
@@ -2554,29 +2549,29 @@ func TestParseClaudeSession_ExtractsMessageIDAndRequestID(t *testing.T) {
 		`"usage":{"input_tokens":10,"output_tokens":20,` +
 		`"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}}`
 	if err := os.WriteFile(path, []byte(line+"\n"), 0o644); err != nil {
-		t.Fatalf("write fixture: %v", err)
+		require.FailNowf(t, "test failed", "write fixture: %v", err)
 	}
 
 	results, err := parseClaudeSession(path, "proj", "m")
 	if err != nil {
-		t.Fatalf("parse: %v", err)
+		require.FailNowf(t, "test failed", "parse: %v", err)
 	}
 	if len(results) != 1 {
-		t.Fatalf("results = %d, want 1", len(results))
+		require.FailNowf(t, "test failed", "results = %d, want 1", len(results))
 	}
 	msgs := results[0].Messages
 	if len(msgs) != 1 {
-		t.Fatalf("messages = %d, want 1", len(msgs))
+		require.FailNowf(t, "test failed", "messages = %d, want 1", len(msgs))
 	}
 	m := msgs[0]
 	if m.ClaudeMessageID != "msg_01XYZ" {
-		t.Errorf("ClaudeMessageID = %q, want msg_01XYZ", m.ClaudeMessageID)
+		assert.Failf(t, "test failed", "ClaudeMessageID = %q, want msg_01XYZ", m.ClaudeMessageID)
 	}
 	if m.ClaudeRequestID != "req_01ABC" {
-		t.Errorf("ClaudeRequestID = %q, want req_01ABC", m.ClaudeRequestID)
+		assert.Failf(t, "test failed", "ClaudeRequestID = %q, want req_01ABC", m.ClaudeRequestID)
 	}
 	if m.OutputTokens != 20 {
-		t.Errorf("OutputTokens = %d, want 20", m.OutputTokens)
+		assert.Failf(t, "test failed", "OutputTokens = %d, want 20", m.OutputTokens)
 	}
 }
 
@@ -2793,8 +2788,7 @@ func TestParseClaudeSession_CompactBoundary(t *testing.T) {
 		assert.Equal(t, "compact-uuid", cb.SourceUUID)
 		assert.Equal(t, "parent-uuid", cb.SourceParentUUID)
 		assert.True(t, cb.IsSidechain)
-		assert.Equal(
-			t,
+		assert.Equal(t,
 			"Summary of conversation so far...\n"+
 				"Additional context.",
 			cb.Content,
@@ -2903,6 +2897,7 @@ func TestExtractTextContent_ReturnsThinkingText(t *testing.T) {
 	})
 
 	t.Run("skips empty thinking blocks", func(t *testing.T) {
+		t.Parallel()
 		content := gjson.Parse(`[
 			{"type":"thinking","thinking":""},
 			{"type":"thinking","thinking":"real thought"}
@@ -2938,6 +2933,7 @@ func TestClassifyClaudeSystemMessage(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			got := classifyClaudeSystemMessage(c.content)
 			assert.Equal(t, c.expected, got)
 		})
@@ -3078,7 +3074,7 @@ func TestParseClaudeSession_SkipClearEffortFirstMessage(t *testing.T) {
 			),
 		)
 		sess, _ := runClaudeParserTest(t, "test.jsonl", content)
-		assert.Equal(t, "", sess.FirstMessage)
+		assert.Empty(t, sess.FirstMessage)
 		assert.Equal(t, 2, sess.UserMessageCount)
 	})
 

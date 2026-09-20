@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -499,7 +500,7 @@ func dropCopiedToolContentTx(
 		return ` IN (SELECT s.id FROM sessions s
 			WHERE s.id` + inCopied + `
 			  AND s.data_version < ` +
-			fmt.Sprint(toolOutputMarkerDataVersion) + `
+			strconv.Itoa(toolOutputMarkerDataVersion) + `
 			  AND s.agent IN (` + agents + `))`
 	}
 	statements := []struct {
@@ -530,13 +531,15 @@ func dropCopiedToolContentTx(
 			UPDATE messages SET content = '', content_length = 0
 			WHERE is_system = 1 AND session_id` +
 			inUnmarked(`'`+string(parser.AgentZencoder)+`'`)},
-		// Codex and TraeX stored unpaired agent notifications as ordinary
-		// user rows, with no field that distinguishes them from prompts.
-		{"unmarked Codex and TraeX tool output", `
+		// Codex, TraeX, and Augure Code stored unpaired agent notifications
+		// as ordinary user rows, with no field that distinguishes them from
+		// prompts.
+		{"unmarked Codex, TraeX, and Augure Code tool output", `
 			UPDATE messages SET content = '', content_length = 0
 			WHERE role = 'user' AND session_id` +
 			inUnmarked(`'`+string(parser.AgentCodex)+`', '`+
-				string(parser.AgentTraeX)+`'`)},
+				string(parser.AgentTraeX)+`', '`+
+				string(parser.AgentAugureCode)+`'`)},
 		// gptme stored tool output as assistant rows without a model, while
 		// model replies carry the model name.
 		{"unmarked gptme tool output", `
@@ -694,6 +697,7 @@ func redactCopiedToolUseRenderingsTx(
 	if err != nil {
 		return fmt.Errorf("listing copied tool renderings: %w", err)
 	}
+	defer rows.Close()
 	type pending struct {
 		id      int64
 		content string

@@ -225,8 +225,7 @@ func preflightSegmentData(data []byte, limits artifactLimits) (segmentPreflight,
 				limits.segmentMessages,
 			)
 		}
-		recordVersion, messageNested, err :=
-			preflightMessageNestedCollections(line, limits)
+		recordVersion, messageNested, err := preflightMessageNestedCollections(line, limits)
 		if err != nil {
 			return segmentPreflight{}, err
 		}

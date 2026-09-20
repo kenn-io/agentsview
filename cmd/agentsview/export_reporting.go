@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -161,7 +162,7 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 				return err
 			}
 			if fromValue == "" || toValue == "" {
-				return fmt.Errorf("--from and --to are required")
+				return errors.New("--from and --to are required")
 			}
 			from, err := export.ParseReportingDate(fromValue)
 			if err != nil {
@@ -172,7 +173,7 @@ func newExportDigestCommand(deps exportReportingDeps) *cobra.Command {
 				return fmt.Errorf("invalid --to: %w", err)
 			}
 			if from.After(to) {
-				return fmt.Errorf("--from must not be after --to")
+				return errors.New("--from must not be after --to")
 			}
 			dayCount := int(to.Sub(from)/(24*time.Hour)) + 1
 			if dayCount > maxReportingDigestDays {
@@ -263,7 +264,7 @@ func openReportingExportDB(
 	if err != nil {
 		return nil, func() {}, fmt.Errorf("loading config: %w", err)
 	}
-	database, err := openExportReadOnlyDB(appConfig)
+	database, err := openExportReadOnlyDB(cmd.Context(), appConfig)
 	if err != nil {
 		return nil, func() {}, err
 	}

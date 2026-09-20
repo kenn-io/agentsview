@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -123,7 +122,7 @@ func TestTrendBucketDate(t *testing.T) {
 
 func TestGetTrendsTermsSQLite(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	start := "2024-06-01T09:00:00Z"
 	insertSession(t, d, "s1", "proj-a", func(s *Session) {
 		s.StartedAt = &start
@@ -158,7 +157,7 @@ func TestGetTrendsTermsSQLite(t *testing.T) {
 
 func TestGetTrendsTermsSQLiteProjectFilter(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	start := "2024-06-01T09:00:00Z"
 	insertSession(t, d, "s1", "proj-a", func(s *Session) {
 		s.StartedAt = &start
@@ -188,7 +187,7 @@ func TestGetTrendsTermsSQLiteProjectFilter(t *testing.T) {
 
 func TestGetTrendsTermsSQLiteModelFilter(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	start := "2024-06-01T09:00:00Z"
 	insertSession(t, d, "s1", "proj-a", func(s *Session) {
 		s.StartedAt = &start
@@ -230,7 +229,7 @@ func TestGetTrendsTermsSQLiteModelFilterStaysOnMatchingMessages(
 	t *testing.T,
 ) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	start := "2024-06-01T09:00:00Z"
 	insertSession(t, d, "s1", "proj-a", func(s *Session) {
 		s.StartedAt = &start
@@ -268,7 +267,7 @@ func TestGetTrendsTermsSQLiteModelFilterStaysOnMatchingMessages(
 
 func TestGetTrendsTermsSQLiteUsesMessageTimestampRange(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	start := "2024-05-01T09:00:00Z"
 	created := "2024-05-01T08:00:00Z"
 	insertSession(t, d, "s1", "proj-a", func(s *Session) {
@@ -292,7 +291,7 @@ func TestGetTrendsTermsSQLiteUsesMessageTimestampRange(t *testing.T) {
 
 func TestGetTrendsTermsSQLiteDoesNotFilterBySessionTimestamp(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	start := "not-a-time"
 	insertSession(t, d, "s1", "proj-a", func(s *Session) {
 		s.StartedAt = &start
@@ -314,7 +313,7 @@ func TestGetTrendsTermsSQLiteDoesNotFilterBySessionTimestamp(t *testing.T) {
 
 func TestGetTrendsTermsSQLiteAppliesDayAndHourToMessageTimestamp(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	start := "2024-06-04T08:00:00Z"
 	insertSession(t, d, "s1", "proj-a", func(s *Session) {
 		s.StartedAt = &start
@@ -343,7 +342,7 @@ func TestGetTrendsTermsSQLiteAppliesDayAndHourToMessageTimestamp(t *testing.T) {
 
 func TestGetTrendsTermsSQLiteTimestampFallback(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	start := "2024-06-05T09:00:00Z"
 	created := "2024-06-04T08:00:00Z"
 	insertSession(t, d, "s1", "proj-a", func(s *Session) {
@@ -367,7 +366,7 @@ func TestGetTrendsTermsSQLiteTimestampFallback(t *testing.T) {
 
 func TestGetTrendsTermsSQLiteExcludesLegacySystemPrefixes(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	start := "2024-06-01T09:00:00Z"
 	insertSession(t, d, "s1", "proj-a", func(s *Session) {
 		s.StartedAt = &start

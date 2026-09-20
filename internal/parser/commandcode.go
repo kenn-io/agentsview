@@ -83,8 +83,7 @@ func (p *commandCodeProvider) parseSessionContext(
 
 		role := root.Get("role").Str
 		content := root.Get("content")
-		text, thinking, hasThinking, hasToolUse, toolCalls, toolResults :=
-			extractCommandCodeContent(content)
+		text, thinking, hasThinking, hasToolUse, toolCalls, toolResults := extractCommandCodeContent(content)
 		text = strings.TrimSpace(text)
 
 		switch role {

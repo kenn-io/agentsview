@@ -159,7 +159,7 @@ CREATE TABLE IF NOT EXISTS artifact_export_queue (
     generation INTEGER NOT NULL DEFAULT 1,
     -- Acknowledgement clears pending but retains the row as durable generation
     -- authority, preventing an old claim from becoming valid after requeue.
-    pending INTEGER NOT NULL DEFAULT 1 CHECK (pending IN (0, 1)),
+    pending INTEGER NOT NULL DEFAULT 1,
     rejected_generation INTEGER,
     last_error TEXT NOT NULL DEFAULT '',
     rejected_at TEXT
@@ -431,10 +431,7 @@ CREATE TABLE IF NOT EXISTS recall_entries (
     type              TEXT NOT NULL,
     scope             TEXT NOT NULL,
     status            TEXT NOT NULL DEFAULT 'accepted',
-    review_state      TEXT NOT NULL DEFAULT 'unreviewed_auto'
-        CHECK (review_state IN (
-            'human_reviewed', 'unreviewed_auto', 'calibrated_auto', 'eval_raw'
-        )),
+    review_state      TEXT NOT NULL DEFAULT 'unreviewed_auto',
     title             TEXT NOT NULL,
     body              TEXT NOT NULL,
     trigger           TEXT NOT NULL DEFAULT '',
@@ -477,7 +474,7 @@ CREATE INDEX IF NOT EXISTS idx_recall_entries_supersession
 -- Monotonic source revision for Recall vector freshness. Unlike timestamps,
 -- this cannot collide when several corpus mutations happen in one clock tick.
 CREATE TABLE IF NOT EXISTS recall_corpus_state (
-    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    singleton INTEGER PRIMARY KEY,
     revision  INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO recall_corpus_state (singleton, revision) VALUES (1, 0);
@@ -487,7 +484,7 @@ INSERT OR IGNORE INTO recall_corpus_state (singleton, revision) VALUES (1, 0);
 -- deliberately separate from recall_corpus_state: embedding freshness only
 -- tracks the accepted fields sent to the embedding provider.
 CREATE TABLE IF NOT EXISTS recall_query_state (
-    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    singleton INTEGER PRIMARY KEY,
     revision  INTEGER NOT NULL DEFAULT 0
 );
 INSERT OR IGNORE INTO recall_query_state (singleton, revision) VALUES (1, 0);
@@ -637,8 +634,8 @@ CREATE TABLE IF NOT EXISTS recall_query_events (
     filters_json         TEXT NOT NULL DEFAULT '{}',
     trusted_only         INTEGER NOT NULL DEFAULT 0,
     score_policy_version TEXT NOT NULL,
-    result_count         INTEGER NOT NULL DEFAULT 0 CHECK (result_count >= 0),
-    packed_count         INTEGER NOT NULL DEFAULT 0 CHECK (packed_count >= 0),
+    result_count         INTEGER NOT NULL DEFAULT 0,
+    packed_count         INTEGER NOT NULL DEFAULT 0,
     top_score            REAL NOT NULL DEFAULT 0,
     miss_reason          TEXT NOT NULL DEFAULT '',
     created_at           TEXT NOT NULL
@@ -653,10 +650,10 @@ CREATE INDEX IF NOT EXISTS idx_recall_query_events_surface
 CREATE TABLE IF NOT EXISTS recall_query_exposures (
     query_id TEXT NOT NULL
         REFERENCES recall_query_events(id) ON DELETE CASCADE,
-    rank     INTEGER NOT NULL CHECK (rank >= 1),
+    rank     INTEGER NOT NULL,
     entry_id TEXT NOT NULL,
     score    REAL NOT NULL,
-    packed   INTEGER NOT NULL DEFAULT 0 CHECK (packed IN (0, 1)),
+    packed   INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (query_id, rank)
 );
 
@@ -669,8 +666,7 @@ CREATE INDEX IF NOT EXISTS idx_recall_query_exposures_entry
 -- changing configuration creates a new generation rather than mixing corpora.
 CREATE TABLE IF NOT EXISTS recall_extract_generations (
     fingerprint TEXT PRIMARY KEY,
-    state       TEXT NOT NULL DEFAULT 'building'
-        CHECK (state IN ('building', 'active', 'retired')),
+    state       TEXT NOT NULL DEFAULT 'building',
     model       TEXT NOT NULL,
     segmenter   TEXT NOT NULL,
     params_json TEXT NOT NULL DEFAULT '{}',
@@ -691,8 +687,7 @@ CREATE TABLE IF NOT EXISTS recall_extract_progress (
         REFERENCES recall_extract_generations(fingerprint) ON DELETE CASCADE,
     unit_cursor    INTEGER NOT NULL DEFAULT 0,
     units_total    INTEGER NOT NULL DEFAULT 0,
-    state          TEXT NOT NULL DEFAULT 'pending'
-        CHECK (state IN ('pending', 'partial', 'done', 'failed')),
+    state          TEXT NOT NULL DEFAULT 'pending',
     content_digest TEXT NOT NULL DEFAULT '',
     -- pre-read cutoff of the last coverage claim; advances on insert, digest
     -- reset, and same-digest revisits alike, so it marks the transcript
@@ -912,7 +907,7 @@ CREATE TABLE IF NOT EXISTS project_identity_observation_changes (
     root_path   TEXT NOT NULL DEFAULT '',
     git_remote  TEXT NOT NULL DEFAULT '',
     revision    INTEGER NOT NULL,
-    deleted     INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+    deleted     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (project, machine, root_path, git_remote)
 );
 
@@ -923,7 +918,7 @@ CREATE TABLE IF NOT EXISTS session_project_identity_snapshot_changes (
     session_id  TEXT NOT NULL,
     project     TEXT NOT NULL,
     revision    INTEGER NOT NULL,
-    deleted     INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+    deleted     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (session_id, project)
 );
 
@@ -1071,7 +1066,7 @@ CREATE TABLE IF NOT EXISTS session_deletion_changes (
     session_id TEXT PRIMARY KEY,
     project    TEXT NOT NULL,
     revision   INTEGER NOT NULL,
-    deleted    INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1))
+    deleted    INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_session_deletion_changes_revision
@@ -1120,7 +1115,7 @@ CREATE TABLE IF NOT EXISTS worktree_project_mapping_changes (
     machine     TEXT NOT NULL,
     path_prefix TEXT NOT NULL,
     revision    INTEGER NOT NULL,
-    deleted     INTEGER NOT NULL DEFAULT 0 CHECK (deleted IN (0, 1)),
+    deleted     INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (machine, path_prefix)
 );
 
@@ -1226,7 +1221,7 @@ CREATE TABLE IF NOT EXISTS model_pricing (
 CREATE TABLE IF NOT EXISTS model_pricing_bands (
     model_pattern TEXT NOT NULL
         REFERENCES model_pricing(model_pattern) ON DELETE CASCADE,
-    above_input_tokens INTEGER NOT NULL CHECK (above_input_tokens > 0),
+    above_input_tokens INTEGER NOT NULL,
     input_microdollars_per_mtok INTEGER NOT NULL,
     output_microdollars_per_mtok INTEGER NOT NULL,
     cache_creation_microdollars_per_mtok INTEGER NOT NULL,
@@ -1238,10 +1233,10 @@ CREATE TABLE IF NOT EXISTS model_pricing_bands (
 );
 
 CREATE TABLE IF NOT EXISTS genai_pricing (
-    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    singleton INTEGER PRIMARY KEY,
     version TEXT NOT NULL,
     source_ref TEXT NOT NULL DEFAULT '',
-    source TEXT NOT NULL CHECK (source IN ('embedded', 'fetched')),
+    source TEXT NOT NULL,
     data_json BLOB NOT NULL,
     updated_at TEXT NOT NULL
         DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now'))
@@ -1291,22 +1286,12 @@ CREATE TABLE IF NOT EXISTS artifact_import_queue (
     kind                        TEXT NOT NULL,
     name                        TEXT NOT NULL,
     sha256                      TEXT NOT NULL,
-    size                        INTEGER NOT NULL CHECK (size >= 0),
-    required_checkpoint_version INTEGER NOT NULL CHECK (
-        required_checkpoint_version >= 1
-    ),
-    required_manifest_version   INTEGER NOT NULL CHECK (
-        required_manifest_version >= 1
-    ),
-    required_segment_version    INTEGER NOT NULL CHECK (
-        required_segment_version >= 1
-    ),
-    attempt_generation          INTEGER NOT NULL DEFAULT 0 CHECK (
-        attempt_generation >= 0
-    ),
-    quarantine_pending          INTEGER NOT NULL DEFAULT 0 CHECK (
-        quarantine_pending IN (0, 1)
-    ),
+    size                        INTEGER NOT NULL,
+    required_checkpoint_version INTEGER NOT NULL,
+    required_manifest_version   INTEGER NOT NULL,
+    required_segment_version    INTEGER NOT NULL,
+    attempt_generation          INTEGER NOT NULL DEFAULT 0,
+    quarantine_pending          INTEGER NOT NULL DEFAULT 0,
     enqueued_at                 TEXT NOT NULL DEFAULT (
         strftime('%Y-%m-%dT%H:%M:%fZ','now')
     ),
@@ -1326,22 +1311,22 @@ ON artifact_import_queue (
 );
 
 CREATE TABLE IF NOT EXISTS artifact_import_attempt_generations (
-    singleton  INTEGER PRIMARY KEY CHECK (singleton = 1),
-    generation INTEGER NOT NULL CHECK (generation >= 0)
+    singleton  INTEGER PRIMARY KEY,
+    generation INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS artifact_peer_checkpoint_heads (
     origin            TEXT PRIMARY KEY,
-    sequence          INTEGER NOT NULL CHECK (sequence >= 1),
+    sequence          INTEGER NOT NULL,
     checkpoint_sha256 TEXT NOT NULL,
-    checkpoint_size   INTEGER NOT NULL CHECK (checkpoint_size >= 0)
+    checkpoint_size   INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS artifact_checkpoint_landings (
     origin            TEXT PRIMARY KEY,
-    sequence          INTEGER NOT NULL CHECK (sequence >= 1),
+    sequence          INTEGER NOT NULL,
     checkpoint_sha256 TEXT NOT NULL,
-    checkpoint_size   INTEGER NOT NULL CHECK (checkpoint_size >= 0)
+    checkpoint_size   INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS artifact_checkpoint_landing_sessions (
@@ -1355,15 +1340,15 @@ CREATE TABLE IF NOT EXISTS artifact_checkpoint_landing_sessions (
 
 CREATE TABLE IF NOT EXISTS artifact_checkpoint_stages (
     origin            TEXT NOT NULL,
-    sequence          INTEGER NOT NULL CHECK (sequence >= 1),
+    sequence          INTEGER NOT NULL,
     checkpoint_sha256 TEXT NOT NULL,
-    checkpoint_size   INTEGER NOT NULL CHECK (checkpoint_size >= 0),
-    complete          INTEGER NOT NULL DEFAULT 0 CHECK (complete IN (0, 1)),
-    session_count     INTEGER NOT NULL DEFAULT 0 CHECK (session_count >= 0),
-    pending_count     INTEGER NOT NULL DEFAULT 0 CHECK (pending_count >= 0),
-    decoded_count     INTEGER NOT NULL DEFAULT 0 CHECK (decoded_count >= 0),
-    decode_offset     INTEGER NOT NULL DEFAULT 0 CHECK (decode_offset >= 0),
-    decoder_version   INTEGER NOT NULL DEFAULT 1 CHECK (decoder_version >= 1),
+    checkpoint_size   INTEGER NOT NULL,
+    complete          INTEGER NOT NULL DEFAULT 0,
+    session_count     INTEGER NOT NULL DEFAULT 0,
+    pending_count     INTEGER NOT NULL DEFAULT 0,
+    decoded_count     INTEGER NOT NULL DEFAULT 0,
+    decode_offset     INTEGER NOT NULL DEFAULT 0,
+    decoder_version   INTEGER NOT NULL DEFAULT 1,
     PRIMARY KEY (origin, sequence)
 );
 
@@ -1372,10 +1357,8 @@ CREATE TABLE IF NOT EXISTS artifact_checkpoint_stage_sessions (
     sequence           INTEGER NOT NULL,
     gid                TEXT NOT NULL,
     manifest_hash      TEXT NOT NULL,
-    attempt_generation INTEGER NOT NULL DEFAULT 0 CHECK (
-        attempt_generation >= 0
-    ),
-    satisfied         INTEGER NOT NULL DEFAULT 0 CHECK (satisfied IN (0, 1)),
+    attempt_generation INTEGER NOT NULL DEFAULT 0,
+    satisfied         INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (origin, sequence, gid),
     FOREIGN KEY (origin, sequence)
         REFERENCES artifact_checkpoint_stages(origin, sequence)

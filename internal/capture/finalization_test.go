@@ -49,7 +49,7 @@ func TestAwaitQuiescentSourcesClassifiesDeadlineDuringLookup(t *testing.T) {
 				SourceObserved:    test.sourceObserved,
 				Limits:            testLimits(),
 			}}
-			ctx := &deadlineOnSecondErrContext{Context: context.Background()}
+			ctx := &deadlineOnSecondErrContext{Context: t.Context()}
 
 			_, err := awaitQuiescentSources(
 				ctx, state, time.Now().Add(time.Minute))
@@ -141,7 +141,7 @@ func TestCompletedAttemptBecomesRecoverableTimeoutAtSealDeadline(t *testing.T) {
 	}, nil)
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Equal(t, ReportingFailed, result.Reporting.Outcome)
 	assert.Equal(t, ReasonFinalizationTimeout, result.Reporting.Reason)
 	assert.Empty(t, state.manifest.SealedDigest)
@@ -182,9 +182,9 @@ func TestCompletedRetryKeepsPriorFailureWhenSealingExpires(t *testing.T) {
 }
 
 func TestFinishIngestedResultClassifiesArchiveCloseFailure(t *testing.T) {
-	database, err := db.OpenIsolated(filepath.Join(t.TempDir(), "capture.db"))
+	database, err := db.OpenIsolated(t.Context(), filepath.Join(t.TempDir(), "capture.db"))
 	require.NoError(t, err)
-	rows, err := database.Reader().Query("SELECT 1")
+	rows, err := database.Reader().Query(t.Context(), "SELECT 1")
 	require.NoError(t, err)
 	require.True(t, rows.Next())
 	restoreTimeout := db.SetCloseDrainTimeoutForTest(10 * time.Millisecond)
@@ -200,7 +200,7 @@ func TestFinishIngestedResultClassifiesArchiveCloseFailure(t *testing.T) {
 		ProviderSessionID: "11111111-1111-4111-8111-111111111111",
 	}}
 	result, err := finishIngestedResult(
-		context.Background(),
+		t.Context(),
 		state,
 		&ingestedCapture{
 			Database: database,
@@ -221,7 +221,7 @@ func TestOpenCaptureEngineStopsBeforeInitializationAfterDeadline(t *testing.T) {
 	state := &captureState{dir: t.TempDir(), manifest: manifest{
 		Provider: string(ProviderClaude),
 	}}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	database, engine, err := openCaptureEngine(ctx, state, nil)
@@ -251,9 +251,9 @@ func TestOpenCaptureEngineRebuildsInterruptedScratchArchive(t *testing.T) {
 func TestFinishIngestedResultBoundsArchiveCloseByFinalizationDeadline(
 	t *testing.T,
 ) {
-	database, err := db.OpenIsolated(filepath.Join(t.TempDir(), "capture.db"))
+	database, err := db.OpenIsolated(t.Context(), filepath.Join(t.TempDir(), "capture.db"))
 	require.NoError(t, err)
-	rows, err := database.Reader().Query("SELECT 1")
+	rows, err := database.Reader().Query(t.Context(), "SELECT 1")
 	require.NoError(t, err)
 	require.True(t, rows.Next())
 	restoreTimeout := db.SetCloseDrainTimeoutForTest(2 * time.Second)
@@ -268,7 +268,7 @@ func TestFinishIngestedResultBoundsArchiveCloseByFinalizationDeadline(
 		Provider:          string(ProviderClaude),
 		ProviderSessionID: "11111111-1111-4111-8111-111111111111",
 	}}
-	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Millisecond)
 	defer cancel()
 	started := time.Now()
 	result, err := finishIngestedResult(
@@ -285,7 +285,7 @@ func TestFinishIngestedResultBoundsArchiveCloseByFinalizationDeadline(
 	)
 
 	require.Error(t, err)
-	assert.ErrorIs(t, err, context.DeadlineExceeded)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 	assert.Less(t, time.Since(started), 500*time.Millisecond)
 	assert.Equal(t, ReportingFailed, result.Reporting.Outcome)
 	assert.Equal(t, ReasonFinalizationTimeout, result.Reporting.Reason)
@@ -308,7 +308,7 @@ func TestCodexFinalVerificationRejectsLateChildCandidate(t *testing.T) {
 	childPath := writeSource("rollout-child", childID)
 	limits := testLimits()
 	expected, err := snapshotSources(
-		context.Background(), []string{rootPath, childPath}, limits)
+		t.Context(), []string{rootPath, childPath}, limits)
 	require.NoError(t, err)
 	writeSource("rollout-late-conflict", childID)
 	state := &captureState{manifest: manifest{
@@ -316,7 +316,7 @@ func TestCodexFinalVerificationRejectsLateChildCandidate(t *testing.T) {
 	}}
 
 	unchanged, err := liveSourcesUnchanged(
-		context.Background(), state, expected, []codexSourceSelection{
+		t.Context(), state, expected, []codexSourceSelection{
 			{ID: rootID, Anchor: anchor, LivePath: rootPath},
 			{ID: childID, Anchor: anchor, LivePath: childPath},
 		},

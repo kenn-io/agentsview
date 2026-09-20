@@ -75,7 +75,7 @@ type usageQuerySnapshot struct {
 
 // Close exists to make the snapshot boundary explicit to callers. Capture
 // copies every value and closes its archive transaction before returning.
-func (usageQuerySnapshot) Close() error { return nil }
+func (*usageQuerySnapshot) Close() error { return nil }
 
 type usageQuerySessionRecord struct {
 	session usageQuerySession
@@ -119,6 +119,7 @@ func (db *DB) captureUsageQuery(
 	if err != nil {
 		return usageQuerySnapshot{}, fmt.Errorf("discovering usage candidates: %w", err)
 	}
+	defer rows.Close()
 	var candidateIDs []string
 	for rows.Next() {
 		var id string
@@ -144,8 +145,7 @@ func (db *DB) captureUsageQuery(
 		return usageQuerySnapshot{}, fmt.Errorf("fingerprinting usage events: %w", err)
 	}
 	for i := range records {
-		records[i].version.UsageEventFingerprint =
-			fingerprints[records[i].session.ID]
+		records[i].version.UsageEventFingerprint = fingerprints[records[i].session.ID]
 		snapshot.Sessions = append(snapshot.Sessions, records[i].session)
 		snapshot.Versions = append(snapshot.Versions, records[i].version)
 	}
@@ -269,15 +269,16 @@ func loadUsageQuerySessionRecords(
 	records := make([]usageQuerySessionRecord, 0, len(candidateIDs))
 	filterWhere, filterArgs := filter.appendUsageSessionFilterClauses("1=1", nil)
 	for start := 0; start < len(candidateIDs); start += batchSize {
-		end := min(start+batchSize, len(candidateIDs))
-		ids := candidateIDs[start:end]
-		placeholders := make([]string, len(ids))
-		idArgs := make([]any, len(ids))
-		for i, id := range ids {
-			placeholders[i] = "?"
-			idArgs[i] = id
-		}
-		query := `SELECT
+		if err := func() error {
+			end := min(start+batchSize, len(candidateIDs))
+			ids := candidateIDs[start:end]
+			placeholders := make([]string, len(ids))
+			idArgs := make([]any, len(ids))
+			for i, id := range ids {
+				placeholders[i] = "?"
+				idArgs[i] = id
+			}
+			query := `SELECT
 			s.id, s.project, s.machine, s.agent, COALESCE(s.git_branch, ''),
 			COALESCE(s.created_at, ''), COALESCE(s.started_at, ''),
 			COALESCE(s.ended_at, ''),
@@ -292,48 +293,54 @@ func loadUsageQuerySessionRecords(
 			COALESCE(s.sync_marker, ''), COALESCE(s.transcript_revision, '0')
 		FROM sessions s
 		WHERE s.deleted_at IS NULL AND s.id IN (` +
-			strings.Join(placeholders, ",") + `)
+				strings.Join(placeholders, ",") + `)
 		ORDER BY s.id`
-		args := append(append([]any(nil), filterArgs...), idArgs...)
-		rows, err := tx.QueryContext(ctx, query, args...)
-		if err != nil {
-			return nil, fmt.Errorf("loading usage candidate metadata: %w", err)
-		}
-		for rows.Next() {
-			var record usageQuerySessionRecord
-			var passes, automated, hasTotalOutput, hasPeakContext int
-			if err := rows.Scan(
-				&record.session.ID, &record.session.Project,
-				&record.session.Machine, &record.session.Agent,
-				&record.session.GitBranch, &record.session.CreatedAt,
-				&record.session.StartedAt, &record.session.EndedAt,
-				&record.session.DisplayName, &record.session.UserMessageCount,
-				&record.session.TotalOutputTokens,
-				&record.session.PeakContextTokens,
-				&hasTotalOutput, &hasPeakContext,
-				&automated, &record.session.TerminationStatus, &passes,
-				&record.version.SyncMarker, &record.version.TranscriptRevision,
-			); err != nil {
-				_ = rows.Close()
-				return nil, fmt.Errorf("scanning usage candidate metadata: %w", err)
+			args := append(append([]any(nil), filterArgs...), idArgs...)
+			rows, err := tx.QueryContext(ctx, query, args...)
+			if err != nil {
+				return fmt.Errorf("loading usage candidate metadata: %w", err)
 			}
-			record.session.IsAutomated = automated != 0
-			record.session.HasTotalOutput = hasTotalOutput != 0
-			record.session.HasPeakContext = hasPeakContext != 0
-			record.session.PassesFilter = passes != 0
-			if millis, _, _ := usagefacts.ParseTimestamp(record.session.StartedAt); millis != nil {
-				record.session.StartedAtMillis = millis
-				record.session.StartedAtNanos = usagefacts.ParseTimestampNanos(
-					record.session.StartedAt)
+			defer rows.Close()
+			for rows.Next() {
+				var record usageQuerySessionRecord
+				var passes, automated, hasTotalOutput, hasPeakContext int
+				if err := rows.Scan(
+					&record.session.ID, &record.session.Project,
+					&record.session.Machine, &record.session.Agent,
+					&record.session.GitBranch, &record.session.CreatedAt,
+					&record.session.StartedAt, &record.session.EndedAt,
+					&record.session.DisplayName, &record.session.UserMessageCount,
+					&record.session.TotalOutputTokens,
+					&record.session.PeakContextTokens,
+					&hasTotalOutput, &hasPeakContext,
+					&automated, &record.session.TerminationStatus, &passes,
+					&record.version.SyncMarker, &record.version.TranscriptRevision,
+				); err != nil {
+					_ = rows.Close()
+					return fmt.Errorf("scanning usage candidate metadata: %w", err)
+				}
+				record.session.IsAutomated = automated != 0
+				record.session.HasTotalOutput = hasTotalOutput != 0
+				record.session.HasPeakContext = hasPeakContext != 0
+				record.session.PassesFilter = passes != 0
+				if millis, _, _ := usagefacts.ParseTimestamp(record.session.StartedAt); millis != nil {
+					record.session.StartedAtMillis = millis
+					record.session.StartedAtNanos = usagefacts.ParseTimestampNanos(
+						record.session.StartedAt)
+				}
+				record.version.SessionID = record.session.ID
+				records = append(records, record)
 			}
-			record.version.SessionID = record.session.ID
-			records = append(records, record)
-		}
-		if err := rows.Close(); err != nil {
-			return nil, fmt.Errorf("closing usage candidate metadata: %w", err)
-		}
-		if err := rows.Err(); err != nil {
-			return nil, fmt.Errorf("iterating usage candidate metadata: %w", err)
+			if err := rows.Close(); err != nil {
+				return fmt.Errorf("closing usage candidate metadata: %w", err)
+			}
+			if err := rows.Err(); err != nil {
+				return fmt.Errorf("iterating usage candidate metadata: %w", err)
+			}
+
+			return nil
+		}(); err != nil {
+			return nil, err
 		}
 	}
 	sort.Slice(records, func(i, j int) bool {

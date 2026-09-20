@@ -33,6 +33,7 @@ func writeTimingFixtures(t *testing.T, root string, files map[string]string) {
 
 func assertTimingScan(t *testing.T, root string, files map[string]string, wantCode int, wantOutput string) {
 	t.Helper()
+
 	var stderr bytes.Buffer
 	assert.Equal(t, wantCode, run([]string{root}, &stderr))
 	assert.Equal(t, wantOutput, stderr.String())

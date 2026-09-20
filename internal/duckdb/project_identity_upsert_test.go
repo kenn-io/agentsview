@@ -1,7 +1,8 @@
+//go:build !(windows && arm64)
+
 package duckdb
 
 import (
-	"context"
 	"database/sql"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func TestUpsertSessionProjectIdentitySnapshotsBatchesStatements(t *testing.T) {
 }
 
 func TestDuckUpsertUnknownDoesNotReplaceAmbiguousEvidence(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	database := openTestDuckDB(t)
 	require.NoError(t, EnsureSchema(ctx, database))
 	exec := func(query string, args ...any) error {

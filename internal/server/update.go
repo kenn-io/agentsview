@@ -1,10 +1,15 @@
 package server
 
-import "go.kenn.io/agentsview/internal/update"
+import (
+	"context"
+
+	"go.kenn.io/agentsview/internal/update"
+)
 
 // UpdateCheckFunc is the signature for functions that check for
 // available updates. The default is update.CheckForUpdate.
 type UpdateCheckFunc func(
+	ctx context.Context,
 	currentVersion string,
 	forceCheck bool,
 	cacheDir string,

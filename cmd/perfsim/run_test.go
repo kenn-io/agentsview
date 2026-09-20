@@ -22,7 +22,7 @@ func TestSimulatorParsesAndAppendsBothProviders(t *testing.T) {
 	assert.Equal(t, 16, result.Initial.MessageCount)
 	assert.Equal(t, 4, result.Final.SessionCount)
 	assert.Equal(t, 24, result.Final.MessageCount)
-	archive, err := db.OpenReadOnly(filepath.Join(data, "sessions.db"))
+	archive, err := db.OpenReadOnly(t.Context(), filepath.Join(data, "sessions.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, archive.Close()) })
 	empty, err := archive.GetSessionFull(t.Context(), "00000000-0000-4000-8000-000000000005")
@@ -67,7 +67,7 @@ func TestSimulatorScansSQLiteAndArchivesChildOnlyEdits(t *testing.T) {
 			assert.Equal(t, 4, result.Initial.SessionCount)
 			assert.Equal(t, 20, result.Initial.MessageCount)
 			assert.Equal(t, 28, result.Final.MessageCount)
-			archive, err := db.OpenReadOnly(filepath.Join(data, "sessions.db"))
+			archive, err := db.OpenReadOnly(t.Context(), filepath.Join(data, "sessions.db"))
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, archive.Close()) })
 			for _, id := range []string{"opencode:ses_000000000001", "opencode:ses_000000000002"} {
@@ -94,7 +94,7 @@ func TestSimulatorScansSQLiteAndArchivesChildOnlyEdits(t *testing.T) {
 			if format == "opencode-v2" {
 				query = `SELECT p.time_updated - s.time_updated FROM session_message p JOIN session_v2 s ON s.id = p.session_id WHERE p.id = 'msg_ses_000000000001_00000004_1'`
 			}
-			require.NoError(t, producer.QueryRow(query).Scan(&childAhead))
+			require.NoError(t, producer.QueryRowContext(t.Context(), query).Scan(&childAhead))
 			assert.Positive(t, childAhead, "part edits must exercise a change invisible to session-row-only scans")
 		})
 	}
@@ -114,6 +114,6 @@ func TestGenerateOnlyRetainsSQLiteWorkload(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
 	var messages int
-	require.NoError(t, store.QueryRow("SELECT COUNT(*) FROM message").Scan(&messages))
+	require.NoError(t, store.QueryRowContext(t.Context(), "SELECT COUNT(*) FROM message").Scan(&messages))
 	assert.Equal(t, 8, messages)
 }

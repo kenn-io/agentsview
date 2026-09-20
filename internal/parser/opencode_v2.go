@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
@@ -15,7 +16,7 @@ import (
 
 // Upgrades retain v1 tables and copy one complete session at a time. Prefer
 // session_v2 only for IDs already copied; legacy-only IDs remain discoverable.
-func openCodeSessionTablesCached(db *sql.DB, dbPath string) ([]string, bool, bool, error) {
+func openCodeSessionTablesCached(ctx context.Context, db *sql.DB, dbPath string) ([]string, bool, bool, error) {
 	state, cacheable := StatSQLiteContainerState(dbPath)
 	openCodeSessionSchemaCacheMu.Lock()
 	entry, hit := openCodeSessionSchemaCache[dbPath]
@@ -25,7 +26,7 @@ func openCodeSessionTablesCached(db *sql.DB, dbPath string) ([]string, bool, boo
 	}
 	var tables []string
 	for _, table := range []string{"session_v2", "session"} {
-		has, err := openCodeTableHasColumn(db, table, "id")
+		has, err := openCodeTableHasColumn(ctx, db, table, "id")
 		if err != nil {
 			return nil, false, false, err
 		}
@@ -33,11 +34,11 @@ func openCodeSessionTablesCached(db *sql.DB, dbPath string) ([]string, bool, boo
 			tables = append(tables, table)
 		}
 	}
-	idle, err := openCodeTableHasColumn(db, "session_v2", "time_idle")
+	idle, err := openCodeTableHasColumn(ctx, db, "session_v2", "time_idle")
 	if err != nil {
 		return nil, false, false, err
 	}
-	migration, err := openCodeTableHasColumn(db, "kv", "value")
+	migration, err := openCodeTableHasColumn(ctx, db, "kv", "value")
 	if err != nil {
 		return nil, false, false, err
 	}
@@ -57,14 +58,14 @@ func openCodeSessionTablesCached(db *sql.DB, dbPath string) ([]string, bool, boo
 	return tables, idle, migration, nil
 }
 
-func openCodeSessionTableCached(db *sql.DB, dbPath, sessionID string) (string, error) {
-	tables, _, _, err := openCodeSessionTablesCached(db, dbPath)
+func openCodeSessionTableCached(ctx context.Context, db *sql.DB, dbPath, sessionID string) (string, error) {
+	tables, _, _, err := openCodeSessionTablesCached(ctx, db, dbPath)
 	if err != nil {
 		return "", err
 	}
 	if len(tables) == 2 {
 		var found bool
-		if err := db.QueryRow("SELECT EXISTS(SELECT 1 FROM session_v2 WHERE id = ?)", sessionID).Scan(&found); err != nil {
+		if err := db.QueryRowContext(ctx, "SELECT EXISTS(SELECT 1 FROM session_v2 WHERE id = ?)", sessionID).Scan(&found); err != nil {
 			return "", err
 		}
 		if !found {
@@ -92,8 +93,8 @@ func openCodeSessionFrom(table string, idle, migration bool) string {
   MAX(time_updated, COALESCE(time_idle, 0)) time_updated FROM session_v2)`
 }
 
-func openCodeSessionFromCached(db *sql.DB, dbPath, table string) (string, error) {
-	_, idle, migration, err := openCodeSessionTablesCached(db, dbPath)
+func openCodeSessionFromCached(ctx context.Context, db *sql.DB, dbPath, table string) (string, error) {
+	_, idle, migration, err := openCodeSessionTablesCached(ctx, db, dbPath)
 	return openCodeSessionFrom(table, idle, migration), err
 }
 
@@ -109,7 +110,7 @@ const (
 
 // OpenCode v2 stores complete message states, updated in place. Released Kilo
 // databases order them by creation time and ID; newer schemas add event seq.
-func openCodeProjectionFormatCached(db *sql.DB, dbPath string) (openCodeProjectionFormat, error) {
+func openCodeProjectionFormatCached(ctx context.Context, db *sql.DB, dbPath string) (openCodeProjectionFormat, error) {
 	state, cacheable := StatSQLiteContainerState(dbPath)
 	openCodeSessionSchemaCacheMu.Lock()
 	entry, hit := openCodeSessionSchemaCache[dbPath]
@@ -117,14 +118,14 @@ func openCodeProjectionFormatCached(db *sql.DB, dbPath string) (openCodeProjecti
 	if cacheable && hit && entry.state == state && entry.v2Once {
 		return entry.projectionFormat, nil
 	}
-	has, err := openCodeTableHasColumn(db, "session_message", "data")
+	has, err := openCodeTableHasColumn(ctx, db, "session_message", "data")
 	if err != nil {
 		return openCodeProjectionAbsent, err
 	}
 	format := openCodeProjectionAbsent
 	if has {
 		format = openCodeProjectionChronological
-		seq, err := openCodeTableHasColumn(db, "session_message", "seq")
+		seq, err := openCodeTableHasColumn(ctx, db, "session_message", "seq")
 		if err != nil {
 			return openCodeProjectionAbsent, err
 		}
@@ -222,12 +223,12 @@ type openCodeV2Content struct {
 	} `json:"state"`
 }
 
-func loadOpenCodeV2Messages(db *sql.DB, sessionID, cwd string, format openCodeProjectionFormat) ([]ParsedMessage, bool, string, error) {
+func loadOpenCodeV2Messages(ctx context.Context, db *sql.DB, sessionID, cwd string, format openCodeProjectionFormat) ([]ParsedMessage, bool, string, error) {
 	order := "seq"
 	if format == openCodeProjectionChronological {
 		order = "time_created, id"
 	}
-	rows, err := db.Query(`SELECT id, type, time_created, data FROM session_message WHERE session_id = ? ORDER BY `+order, sessionID)
+	rows, err := db.QueryContext(ctx, `SELECT id, type, time_created, data FROM session_message WHERE session_id = ? ORDER BY `+order, sessionID)
 	if err != nil {
 		return nil, false, "", fmt.Errorf("loading opencode v2 messages: %w", err)
 	}

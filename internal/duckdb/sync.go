@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
-	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -16,7 +15,7 @@ import (
 	"time"
 
 	"go.kenn.io/agentsview/internal/db"
-	"go.kenn.io/agentsview/internal/jsonutil"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 const localSyncTimestampLayout = "2006-01-02T15:04:05.000Z"
@@ -46,97 +45,6 @@ const (
 	duckDBQuackClientConnection
 )
 
-// SyncOptions holds optional DuckDB push-scope filters and push-mode
-// behavior.
-type SyncOptions struct {
-	Projects        []string
-	ExcludeProjects []string
-	// Automatic marks a watch-mode / daemon-driven push, keeping its cost
-	// bounded by the changed batch: when reader processes (serve holds the
-	// mirror read-only) block the incremental push's write open, automatic
-	// pushes defer (a successful no-op with Diagnostics.Deferred set)
-	// instead of running an O(archive) rebuild on every changed batch, AND
-	// they skip archive-scale diagnostics (the full scope COUNT behind
-	// Diagnostics.LocalSessionCount, which stays 0). Explicit pushes leave
-	// it unset and do neither.
-	Automatic bool
-}
-
-// PushResult summarizes a DuckDB push operation.
-type PushResult struct {
-	SessionsPushed int
-	MessagesPushed int
-	Errors         int
-	Duration       time.Duration
-	Diagnostics    PushDiagnostics
-}
-
-type pushResultJSON PushResult
-
-func (r PushResult) MarshalJSONTo(out *jsontext.Encoder) error {
-	return jsonutil.MarshalDurationFields(out, pushResultJSON(r))
-}
-
-func (r *PushResult) UnmarshalJSONFrom(in *jsontext.Decoder) error {
-	var decoded pushResultJSON
-	if err := jsonutil.UnmarshalDurationFields(in, &decoded); err != nil {
-		return err
-	}
-	*r = PushResult(decoded)
-	return nil
-}
-
-// PushDiagnostics summarizes how a DuckDB push selected sessions.
-type PushDiagnostics struct {
-	Full bool
-	// RebuildReason is the human-readable reason a rebuild was chosen
-	// instead of an incremental push (see rebuildReason); empty for an
-	// incremental push (Full is false).
-	RebuildReason string
-	Cutoff        string
-	// LocalSessionCount is the number of local sessions in the push scope.
-	// Automatic incremental pushes skip the archive-scale COUNT that
-	// produces it and leave it 0 (see SyncOptions.Automatic); the CLI
-	// omits the figure when it is 0.
-	LocalSessionCount        int
-	CandidateSessions        PushSessionCounts
-	SkippedUnchangedSessions PushSessionCounts
-	PushedSessions           PushSessionCounts
-	// DeletedStaleSessions counts sessions an incremental push removed
-	// from the mirror: applied in-scope deletion-journal tombstones,
-	// out-of-scope tombstones that were still mirror-resident, and window
-	// candidates whose project moved out of the push scope (see
-	// applyDeletionDelta and deleteOutOfScopeMirrorSessions).
-	DeletedStaleSessions int
-	// CurationRefreshed reports whether this push actually rewrote
-	// starred_sessions/pinned_messages, as opposed to skipping the refresh
-	// because the local in-scope curation state's fingerprint matched what
-	// was already recorded in the mirror (see refreshCurationIfChanged).
-	CurationRefreshed bool
-	// Deferred reports that the push touched nothing because reader
-	// processes hold the mirror (blocking the incremental push's write
-	// open) and the caller opted into SyncOptions.Automatic; DeferredReason
-	// carries the human-readable explanation. No cutoff or mirror state
-	// advances on a deferred push, so the next unheld push catches up on
-	// everything that changed in the meantime.
-	Deferred       bool
-	DeferredReason string
-}
-
-// PushSessionCounts summarizes a set of sessions without exposing content.
-type PushSessionCounts struct {
-	Total   int
-	ByAgent map[string]int
-}
-
-// PushProgress is reported after each attempted session.
-type PushProgress struct {
-	SessionsDone  int
-	SessionsTotal int
-	MessagesDone  int
-	Errors        int
-}
-
 // SyncStatus holds summary information about the DuckDB mirror, read from
 // the target's own sync_metadata (see readMachineStatus) rather than any
 // local watermark.
@@ -160,13 +68,13 @@ type SyncStatus struct {
 // creates or migrates schema: callers reach New only from rebuildMirror
 // (which creates schema itself on a fresh file) and incrementalPush (which
 // requires an already-valid mirror, verified by ProbeMirror beforehand).
-func New(
-	path string, local *db.DB, machine string, opts SyncOptions,
+func New(ctx context.Context,
+	path string, local *db.DB, machine string, opts storage.MirrorPushOptions,
 ) (*Sync, error) {
 	if err := validateSyncInputs(local, machine); err != nil {
 		return nil, err
 	}
-	duck, err := Open(path)
+	duck, err := Open(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -182,10 +90,10 @@ func New(
 
 func validateSyncInputs(local *db.DB, machine string) error {
 	if local == nil {
-		return fmt.Errorf("local db is required")
+		return errors.New("local db is required")
 	}
 	if machine == "" {
-		return fmt.Errorf("machine name must not be empty")
+		return errors.New("machine name must not be empty")
 	}
 	return nil
 }
@@ -229,25 +137,25 @@ func (s *Sync) isFiltered() bool {
 // WRITER holds the file — another push in flight, or a serve process from a
 // build predating the read-only serve change — and fails closed. When the
 // incremental push's own write open is blocked by reader processes, the
-// push defers (SyncOptions.Automatic) or falls back to a rebuild, which
+// push defers (storage.MirrorPushOptions.Automatic) or falls back to a rebuild, which
 // never write-opens the destination (temp file plus atomic rename). Every
 // rebuild logs and records its trigger in Diagnostics.RebuildReason, since
 // a rebuild silently substituted for a requested incremental push is
 // otherwise invisible to the operator.
 func Push(
 	ctx context.Context, path string, local *db.DB, machine string,
-	opts SyncOptions, full bool, onProgress func(PushProgress),
-) (PushResult, error) {
+	opts storage.MirrorPushOptions, full bool, onProgress func(storage.MirrorPushProgress),
+) (storage.MirrorPushResult, error) {
 	if err := sweepStaleTempFiles(path); err != nil {
 		log.Printf("duckdbsync: sweeping stale rebuild temp files: %v", err)
 	}
 	scope := canonicalPushScope(opts.Projects, opts.ExcludeProjects)
 	probe, err := ProbeMirror(ctx, path)
 	if err != nil {
-		return PushResult{}, err
+		return storage.MirrorPushResult{}, err
 	}
 	if probe.LockConflict {
-		return PushResult{}, fmt.Errorf(
+		return storage.MirrorPushResult{}, fmt.Errorf(
 			"another process holds the mirror %s read-write (%s); wait for "+
 				"the running push to finish, or restart the serving process "+
 				"if it predates the read-only serve change",
@@ -256,15 +164,15 @@ func Push(
 	}
 	localDeletionRevision, err := local.SessionDeletionPublicationRevision(ctx)
 	if err != nil {
-		return PushResult{}, err
+		return storage.MirrorPushResult{}, err
 	}
 	localDatabaseID, err := local.GetDatabaseID(ctx)
 	if err != nil {
-		return PushResult{}, fmt.Errorf("reading local archive database id: %w", err)
+		return storage.MirrorPushResult{}, fmt.Errorf("reading local archive database id: %w", err)
 	}
 	localArchiveID, err := local.GetArchiveID(ctx)
 	if err != nil {
-		return PushResult{}, fmt.Errorf("reading local archive id: %w", err)
+		return storage.MirrorPushResult{}, fmt.Errorf("reading local archive id: %w", err)
 	}
 
 	reason := rebuildReason(
@@ -275,7 +183,7 @@ func Push(
 		result, err := incrementalPush(ctx, path, local, machine, opts, probe, onProgress)
 		switch {
 		case err == nil:
-			cleanUpLegacyDuckDBSyncState(local)
+			cleanUpLegacyDuckDBSyncState(ctx, local)
 			return result, nil
 		case !isMirrorHeldError(err):
 			return result, err
@@ -285,13 +193,13 @@ func Push(
 		reason = "mirror is held open by reader processes; " +
 			"incremental write access unavailable"
 	} else if err := ensureReplaceableMirror(path, probe); err != nil {
-		return PushResult{}, err
+		return storage.MirrorPushResult{}, err
 	}
 	log.Printf("duckdbsync: rebuilding mirror: %s", reason)
 	result, err := rebuildMirror(ctx, path, local, machine, opts, onProgress)
 	result.Diagnostics.RebuildReason = reason
 	if err == nil {
-		cleanUpLegacyDuckDBSyncState(local)
+		cleanUpLegacyDuckDBSyncState(ctx, local)
 	}
 	return result, err
 }
@@ -302,11 +210,10 @@ func Push(
 // watcher-triggered batch would be unbounded work, and no cutoff or mirror
 // state advances here, so the next unheld push catches up on everything
 // that changed in the meantime.
-func deferredHeldMirrorPush() PushResult {
-	var result PushResult
+func deferredHeldMirrorPush() storage.MirrorPushResult {
+	var result storage.MirrorPushResult
 	result.Diagnostics.Deferred = true
-	result.Diagnostics.DeferredReason =
-		"mirror is held open by reader processes; deferring until write access is available"
+	result.Diagnostics.DeferredReason = "mirror is held open by reader processes; deferring until write access is available"
 	log.Printf("duckdbsync: %s", result.Diagnostics.DeferredReason)
 	return result
 }
@@ -345,8 +252,8 @@ const legacyDuckDBSyncStateKeyPrefix = "duckdb_"
 // cleanUpLegacyDuckDBSyncState removes leftover pre-schema-v3 pg_sync_state
 // rows. Best-effort: a failure here does not affect the push that just
 // succeeded, so it is only logged, not returned as an error.
-func cleanUpLegacyDuckDBSyncState(local *db.DB) {
-	if err := local.DeleteSyncStateByPrefix(legacyDuckDBSyncStateKeyPrefix); err != nil {
+func cleanUpLegacyDuckDBSyncState(ctx context.Context, local *db.DB) {
+	if err := local.DeleteSyncStateByPrefix(ctx, legacyDuckDBSyncStateKeyPrefix); err != nil {
 		log.Printf("duckdbsync: cleaning up legacy sync state: %v", err)
 	}
 }
@@ -358,11 +265,11 @@ func cleanUpLegacyDuckDBSyncState(local *db.DB) {
 // nothing failed.
 func incrementalPush(
 	ctx context.Context, path string, local *db.DB, machine string,
-	opts SyncOptions, probe MirrorProbe, onProgress func(PushProgress),
-) (PushResult, error) {
-	s, err := New(path, local, machine, opts)
+	opts storage.MirrorPushOptions, probe MirrorProbe, onProgress func(storage.MirrorPushProgress),
+) (storage.MirrorPushResult, error) {
+	s, err := New(ctx, path, local, machine, opts)
 	if err != nil {
-		return PushResult{}, err
+		return storage.MirrorPushResult{}, err
 	}
 	defer func() { _ = s.Close() }()
 	return s.runIncrementalPush(ctx, opts, probe, onProgress)
@@ -373,11 +280,11 @@ func incrementalPush(
 // (see checkpointSpy in sync_fastpath_test.go) and drive it directly instead
 // of only through the free Push entry point.
 func (s *Sync) runIncrementalPush(
-	ctx context.Context, opts SyncOptions, probe MirrorProbe,
-	onProgress func(PushProgress),
-) (PushResult, error) {
+	ctx context.Context, opts storage.MirrorPushOptions, probe MirrorProbe,
+	onProgress func(storage.MirrorPushProgress),
+) (storage.MirrorPushResult, error) {
 	start := time.Now()
-	var result PushResult
+	var result storage.MirrorPushResult
 
 	if err := s.ensureArchiveID(ctx); err != nil {
 		return result, err
@@ -484,8 +391,8 @@ func (s *Sync) runIncrementalPush(
 // candidates that are still mirror-resident are removed here; work stays
 // bounded by the changed window either way.
 func (s *Sync) pushChangedSessions(
-	ctx context.Context, probe MirrorProbe, onProgress func(PushProgress),
-	result *PushResult,
+	ctx context.Context, probe MirrorProbe, onProgress func(storage.MirrorPushProgress),
+	result *storage.MirrorPushResult,
 ) ([]db.Session, []db.Session, error) {
 	cutoff := time.Now().UTC().Format(localSyncTimestampLayout)
 	result.Diagnostics.Cutoff = cutoff
@@ -557,7 +464,7 @@ func (s *Sync) partitionPushScope(
 // Removed rows are counted in Diagnostics.DeletedStaleSessions alongside
 // deletion-journal tombstones.
 func (s *Sync) deleteOutOfScopeMirrorSessions(
-	ctx context.Context, outOfScope []db.Session, result *PushResult,
+	ctx context.Context, outOfScope []db.Session, result *storage.MirrorPushResult,
 ) error {
 	if len(outOfScope) == 0 {
 		return nil
@@ -719,7 +626,7 @@ func (s *Sync) readMirrorResidentBatch(
 // advancing the cutoff/revisions past a partially failed push would let the
 // failed sessions silently fall out of the next incremental window.
 func (s *Sync) finalizeIncrementalPush(
-	ctx context.Context, opts SyncOptions, cutoff string,
+	ctx context.Context, opts storage.MirrorPushOptions, cutoff string,
 	deletionRevision, identityRevision, mappingRevision int64,
 ) error {
 	// The source database id is re-read rather than copied from the probe:
@@ -777,9 +684,9 @@ func (s *Sync) pushSessionBatchForMode(
 	sessions []db.Session,
 	offset int,
 	total int,
-	result *PushResult,
+	result *storage.MirrorPushResult,
 	pushed *[]db.Session,
-	onProgress func(PushProgress),
+	onProgress func(storage.MirrorPushProgress),
 	fingerprints map[string]string,
 ) error {
 	return pushSessionBatchWith(
@@ -798,9 +705,9 @@ func pushSessionBatchWith(
 	sessions []db.Session,
 	offset int,
 	total int,
-	result *PushResult,
+	result *storage.MirrorPushResult,
 	pushed *[]db.Session,
-	onProgress func(PushProgress),
+	onProgress func(storage.MirrorPushProgress),
 	tryBatch func(context.Context, []db.Session) ([]int, error),
 	pushSingle func(context.Context, db.Session) (int, error),
 ) error {
@@ -855,8 +762,8 @@ func abandonDuckPushFallback(
 	abandoned int,
 	done int,
 	total int,
-	result *PushResult,
-	onProgress func(PushProgress),
+	result *storage.MirrorPushResult,
+	onProgress func(storage.MirrorPushProgress),
 ) error {
 	if abandoned > 0 {
 		result.Errors += abandoned
@@ -886,13 +793,13 @@ func fatalDuckPushError(ctx context.Context, err error) error {
 func reportDuckPushProgress(
 	done int,
 	total int,
-	result *PushResult,
-	onProgress func(PushProgress),
+	result *storage.MirrorPushResult,
+	onProgress func(storage.MirrorPushProgress),
 ) {
 	if onProgress == nil {
 		return
 	}
-	onProgress(PushProgress{
+	onProgress(storage.MirrorPushProgress{
 		SessionsDone:  done,
 		SessionsTotal: total,
 		MessagesDone:  result.MessagesPushed,
@@ -941,8 +848,8 @@ func (s *Sync) pushSingleSession(
 	return messages, nil
 }
 
-func countPushSessions(sessions []db.Session) PushSessionCounts {
-	counts := PushSessionCounts{Total: len(sessions)}
+func countPushSessions(sessions []db.Session) storage.MirrorSessionCounts {
+	counts := storage.MirrorSessionCounts{Total: len(sessions)}
 	if len(sessions) == 0 {
 		return counts
 	}
@@ -991,7 +898,7 @@ func (s *Sync) sessionFingerprints(
 		// file_path and call_index are json:"-" on ToolCall, so the
 		// marshaled Messages do not cover them. Fold in the tool-call
 		// fingerprint so a file_path-only backfill invalidates the mirror.
-		toolCalls, err := s.local.ToolCallFingerprint(sess.ID)
+		toolCalls, err := s.local.ToolCallFingerprint(ctx, sess.ID)
 		if err != nil {
 			return nil, fmt.Errorf("tool call fingerprint %s: %w", sess.ID, err)
 		}

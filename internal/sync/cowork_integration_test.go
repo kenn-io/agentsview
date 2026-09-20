@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"encoding/json/v2"
 	"os"
 	"path/filepath"
@@ -61,8 +60,7 @@ func writeCoworkSyncFixture(
 			`"content":[{"type":"text","text":"hi back"}],` +
 			`"usage":{"input_tokens":10,"output_tokens":5}}}`,
 	}
-	require.NoError(t,
-		os.WriteFile(transcriptPath, []byte(strings.Join(lines, "\n")+"\n"), 0o644),
+	require.NoError(t, os.WriteFile(transcriptPath, []byte(strings.Join(lines, "\n")+"\n"), 0o644),
 		"write transcript",
 	)
 	return metaPath, transcriptPath
@@ -75,7 +73,7 @@ func TestSyncAllSinceCoworkMetaUpdateTriggersResync(t *testing.T) {
 
 	coworkDir := t.TempDir()
 	testDB := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), testDB, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCowork: {coworkDir},
 		},
@@ -105,7 +103,7 @@ func TestSyncAllSinceCoworkMetaUpdateTriggersResync(t *testing.T) {
 	require.NoError(t, os.Chtimes(metaPath, metaTime, metaTime))
 
 	cutoff := transcriptTime.Add(500 * time.Millisecond)
-	stats := engine.SyncAllSince(context.Background(), cutoff, nil)
+	stats := engine.SyncAllSince(t.Context(), cutoff, nil)
 	require.Equal(t, 1, stats.Synced, "synced = %d, want 1", stats.Synced)
 
 	assertSessionState(t, testDB, "cowork:"+sessionID, func(sess *db.Session) {
@@ -121,7 +119,7 @@ func TestSourceMtimeCoworkIncludesMetaMtime(t *testing.T) {
 
 	coworkDir := t.TempDir()
 	testDB := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), testDB, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCowork: {coworkDir},
 		},
@@ -141,7 +139,7 @@ func TestSourceMtimeCoworkIncludesMetaMtime(t *testing.T) {
 	require.NoError(t, os.Chtimes(metaPath, metaTime, metaTime))
 
 	engine.SyncPaths([]string{transcriptPath})
-	assert.Equal(t, metaTime.UnixNano(), engine.SourceMtime("cowork:"+sessionID))
+	assert.Equal(t, metaTime.UnixNano(), engine.SourceMtime(t.Context(), "cowork:"+sessionID))
 }
 
 func TestSyncPathsCoworkReplacesUpdatedMessageOrdinal(t *testing.T) {
@@ -151,7 +149,7 @@ func TestSyncPathsCoworkReplacesUpdatedMessageOrdinal(t *testing.T) {
 
 	coworkDir := t.TempDir()
 	testDB := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), testDB, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCowork: {coworkDir},
 		},
@@ -186,7 +184,7 @@ func assertCoworkAssistantContent(
 	t.Helper()
 
 	msgs, err := database.GetMessages(
-		context.Background(), "cowork:"+rawSessionID, 0, 100, true,
+		t.Context(), "cowork:"+rawSessionID, 0, 100, true,
 	)
 	require.NoError(t, err, "GetMessages")
 	require.Len(t, msgs, 2, "messages")

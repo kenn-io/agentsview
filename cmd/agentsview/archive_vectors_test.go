@@ -24,7 +24,7 @@ func TestUsageOnlyClearsExistingVectorContent(t *testing.T) {
 	require.NoError(t, recall.Close())
 	cfg.ArchiveContent = config.ArchiveContentUsage
 	cfg.Vector.Enabled = false
-	database, err := openDB(cfg)
+	database, err := openDB(t.Context(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	// Usage-only gating also applies when vectors are explicitly enabled.

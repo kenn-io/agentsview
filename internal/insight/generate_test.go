@@ -187,6 +187,7 @@ func createMockBinary(
 	t *testing.T, stdout string, exitCode int, writeArgs bool, name string,
 ) (bin, argsFile string) {
 	t.Helper()
+
 	dir := t.TempDir()
 	dataFile := filepath.Join(dir, "stdout.txt")
 	require.NoError(t, os.WriteFile(dataFile, []byte(stdout), 0o644))
@@ -230,6 +231,8 @@ func createMockBinary(
 func fakeClaudeBin(
 	t *testing.T, stdout string, exitCode int,
 ) string {
+	t.Helper()
+
 	bin, _ := createMockBinary(t, stdout, exitCode, false, "claude")
 	return bin
 }
@@ -263,7 +266,7 @@ func TestGenerateStreamWithOptions_UsesConfiguredBinary(t *testing.T) {
 	t.Setenv("PATH", "/bin:/usr/bin")
 
 	result, err := GenerateStreamWithOptions(
-		context.Background(), "claude", "test prompt", nil,
+		t.Context(), "claude", "test prompt", nil,
 		GenerateOptions{
 			Agents: map[string]AgentConfig{
 				"claude": {Binary: bin},
@@ -285,7 +288,7 @@ func TestGenerateClaude_CLIFlags(t *testing.T) {
 	)
 
 	result, err := generateClaude(
-		context.Background(), bin, "test prompt", nil,
+		t.Context(), bin, "test prompt", nil,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "OK", result.Content)
@@ -321,7 +324,7 @@ func TestGenerateCodex_CLIFlags(t *testing.T) {
 	)
 
 	result, err := generateCodex(
-		context.Background(), bin, "test prompt", nil,
+		t.Context(), bin, "test prompt", nil,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "OK", result.Content)
@@ -352,7 +355,7 @@ func TestGenerateCopilot_CLIFlags(t *testing.T) {
 	)
 
 	result, err := generateCopilot(
-		context.Background(), bin, "test prompt", nil,
+		t.Context(), bin, "test prompt", nil,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "Hello from copilot", result.Content)
@@ -384,7 +387,7 @@ func TestGenerateCopilot_EmptyResult(t *testing.T) {
 	)
 
 	_, err := generateCopilot(
-		context.Background(), bin, "test", nil,
+		t.Context(), bin, "test", nil,
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "empty result")
@@ -401,7 +404,7 @@ func TestGenerateCopilot_PreservesBlankLines(t *testing.T) {
 	)
 
 	result, err := generateCopilot(
-		context.Background(), bin, "test", nil,
+		t.Context(), bin, "test", nil,
 	)
 	require.NoError(t, err)
 	assert.Contains(t, result.Content, "\n\n", "blank lines lost")
@@ -459,7 +462,7 @@ func TestGenerateClaude_SalvageOnNonZeroExit(t *testing.T) {
 				t, tt.stdout, tt.exitCode,
 			)
 			result, err := generateClaude(
-				context.Background(), bin, "test", nil,
+				t.Context(), bin, "test", nil,
 			)
 
 			if tt.wantErr {
@@ -479,6 +482,8 @@ func TestGenerateClaude_SalvageOnNonZeroExit(t *testing.T) {
 func fakeGeminiBin(
 	t *testing.T, stdout string, exitCode int,
 ) (bin, argsFile string) {
+	t.Helper()
+
 	return createMockBinary(t, stdout, exitCode, true, "gemini")
 }
 
@@ -486,6 +491,7 @@ func fakeGeminiBinWithEnvCapture(
 	t *testing.T, stdout string, exitCode int,
 ) (bin, argsFile, envFile string) {
 	t.Helper()
+
 	dir := t.TempDir()
 	dataFile := filepath.Join(dir, "stdout.txt")
 	require.NoError(t, os.WriteFile(dataFile, []byte(stdout), 0o644))
@@ -526,7 +532,7 @@ func TestGenerateGemini_ModelFlag(t *testing.T) {
 	bin, argsFile := fakeGeminiBin(t, streamJSON, 0)
 
 	result, err := generateGemini(
-		context.Background(), bin, "test prompt", nil,
+		t.Context(), bin, "test prompt", nil,
 		AgentConfig{AllowUnsafe: true},
 	)
 	require.NoError(t, err)
@@ -549,7 +555,7 @@ func TestGenerateGemini_RequiresSandboxOrUnsafeOptIn(t *testing.T) {
 	bin, _ := fakeGeminiBin(t, "", 0)
 
 	_, err := generateGemini(
-		context.Background(), bin, "test prompt", nil,
+		t.Context(), bin, "test prompt", nil,
 		AgentConfig{},
 	)
 	require.Error(t, err)
@@ -563,7 +569,7 @@ func TestGenerateGemini_SetsSandboxEnv(t *testing.T) {
 	)
 
 	result, err := generateGemini(
-		context.Background(), bin, "test prompt", nil,
+		t.Context(), bin, "test prompt", nil,
 		AgentConfig{Sandbox: "sandbox-exec"},
 	)
 	require.NoError(t, err)
@@ -584,7 +590,7 @@ func TestGenerateClaude_CancelledContext(t *testing.T) {
 		t, `[{"type":"result","result":"OK","modelUsage":{"m1":{}}}]`, 0,
 	)
 	ctx, cancel := context.WithCancel(
-		context.Background(),
+		t.Context(),
 	)
 	cancel()
 
@@ -601,7 +607,7 @@ func TestGenerateClaude_SuccessNotDiscarded(t *testing.T) {
 		t, `[{"type":"result","result":"OK","modelUsage":{"m1":{}}}]`, 0,
 	)
 	result, err := generateClaude(
-		context.Background(), bin, "test", nil,
+		t.Context(), bin, "test", nil,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, "OK", result.Content)
@@ -661,7 +667,7 @@ func TestGenerateClaude_TruncatesLargeStdoutLogEvent(t *testing.T) {
 
 	var logs []LogEvent
 	result, err := generateClaude(
-		context.Background(),
+		t.Context(),
 		bin,
 		"test",
 		func(ev LogEvent) { logs = append(logs, ev) },
