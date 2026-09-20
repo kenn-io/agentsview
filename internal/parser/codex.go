@@ -463,13 +463,6 @@ func (b *codexSessionBuilder) handleResponseItem(ctx context.Context,
 	}
 
 	content := extractCodexContent(payload)
-	if role == "user" && !b.firstUserSeen {
-		content = extractCodexInitialUserContent(payload)
-	}
-	if strings.TrimSpace(content) == "" {
-		return
-	}
-
 	if role == "user" && b.handleSubagentNotification(ctx, content, ts) {
 		return
 	}
@@ -478,9 +471,10 @@ func (b *codexSessionBuilder) handleResponseItem(ctx context.Context,
 		if isCodexTurnAbortedMessage(content) {
 			b.markFirstUserReplayPossible()
 		}
-		if isCodexSystemMessage(content) {
-			return
-		}
+		content = preprocessCodexUserTextBlocks(extractCodexTextBlocks(payload), !b.firstUserSeen)
+	}
+	if strings.TrimSpace(content) == "" {
+		return
 	}
 
 	if role == "user" {
@@ -1495,23 +1489,16 @@ func codexAgentPathLeaf(agentPath string) string {
 	return trimmed
 }
 
-// extractCodexInitialUserContent filters the synthetic blocks bundled with
-// Codex's recommended-plugins injection while retaining user-authored blocks
-// from the same response item.
-func extractCodexInitialUserContent(payload gjson.Result) string {
-	texts := extractCodexTextBlocks(payload)
-	if len(texts) == 0 {
-		return strings.Join(texts, "\n")
+// preprocessCodexUserTextBlocks removes recognized injected context from each
+// block before display and prompt classification. Plugin
+// discovery remains initial-only so later user quotations are preserved.
+func preprocessCodexUserTextBlocks(texts []string, initial bool) string {
+	if initial && len(texts) > 0 {
+		texts[0] = stripCodexRecommendedPlugins(texts[0])
 	}
-
-	stripped := stripCodexRecommendedPlugins(texts[0])
-	if stripped == texts[0] {
-		return strings.Join(texts, "\n")
-	}
-	texts[0] = stripped
 	kept := texts[:0]
 	for _, text := range texts {
-		text = stripCodexInitialSystemPrefix(text)
+		text = stripCodexSystemPrefix(text)
 		if strings.TrimSpace(text) == "" || isCodexSystemMessage(text) {
 			continue
 		}
@@ -2669,11 +2656,11 @@ func stripCodexRecommendedPlugins(content string) string {
 	return prefix + suffix
 }
 
-// stripCodexInitialSystemPrefix removes complete synthetic envelopes from the
-// start of an initial text block. A genuine prompt may follow an injected
+// stripCodexSystemPrefix removes complete synthetic envelopes from the
+// start of a user text block. A genuine prompt may follow an injected
 // envelope in the same block, so only text through the first matching close
 // tag is removed.
-func stripCodexInitialSystemPrefix(content string) string {
+func stripCodexSystemPrefix(content string) string {
 	for {
 		trimmed := strings.TrimLeft(content, "\r\n")
 		var closeTag string

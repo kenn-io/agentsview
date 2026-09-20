@@ -508,7 +508,11 @@ CREATE INDEX IF NOT EXISTS idx_provider_freshness_updated_at
 // `thread_source=roborev` is persisted as session_kind roborev so roborev
 // reviews stay identifiable as code review. Existing Codex-format rows
 // need re-parsing.)
-const dataVersion = 112
+// (113: Codex injected context is removed per text block before storing
+// messages and classifying user prompts. Re-parse unchanged sources to
+// remove retained context, restore omitted prompts, and correct first-message
+// previews and user-message counts.)
+const dataVersion = 113
 
 const tokenCoverageRepairStatsKey = "token_coverage_repair_v1"
 
@@ -1231,6 +1235,12 @@ func OpenFreshIsolatedContext(ctx context.Context, path string) (*DB, error) {
 	}
 	closeOnError := func(err error) (*DB, error) {
 		return nil, errors.Join(err, d.CloseContext(ctx))
+	}
+	d.mu.Lock()
+	err = ensureConversationSchemaLocked(ctx, d.getWriter(), d.usageOnlyStorage())
+	d.mu.Unlock()
+	if err != nil {
+		return closeOnError(fmt.Errorf("initializing conversation export state: %w", err))
 	}
 	if _, err := d.GetOrCreateDatabaseID(ctx); err != nil {
 		return closeOnError(fmt.Errorf("initializing database id: %w", err))
@@ -2958,6 +2968,9 @@ func (db *DB) migrateColumns(ctx context.Context, progress OpenProgressFunc) err
 		return err
 	}
 	if err := scopeLegacyDevinSourceUUIDsLocked(ctx, w); err != nil {
+		return err
+	}
+	if err := ensureConversationSchemaLocked(ctx, w, db.usageOnlyStorage()); err != nil {
 		return err
 	}
 

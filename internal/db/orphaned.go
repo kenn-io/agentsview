@@ -201,6 +201,9 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 	if err := reconcileTranscriptRevisionsTx(ctx, tx); err != nil {
 		return nil, fmt.Errorf("reconciling transcript revisions: %w", err)
 	}
+	if err := reconcileConversationResyncTx(ctx, tx, d.usageOnlyStorage()); err != nil {
+		return nil, fmt.Errorf("reconciling conversation identities: %w", err)
+	}
 	if count > 0 {
 		if err := copySessionDataForIDs(ctx, tx, "_orphaned_ids"); err != nil {
 			return nil, fmt.Errorf("copying orphaned data: %w", err)
@@ -224,6 +227,9 @@ func (d *DB) CopyOrphanedDataFromExcluding(
 		if err := clearCopiedSelfParents(ctx, tx, "_orphaned_ids"); err != nil {
 			return nil, err
 		}
+	}
+	if err := retainConversationTombstonesTx(ctx, tx); err != nil {
+		return nil, fmt.Errorf("retaining conversation tombstones: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -1478,6 +1484,7 @@ func (d *DB) CopySessionMetadataFrom(
 				'database_id',
 				'project_identity_publication_revision',
 				'session_deletion_publication_revision',
+				'conversation_publication_revision',
 				'worktree_mapping_publication_revision'
 			)
 			AND key NOT GLOB 'remote_import_data_version:*'
@@ -2045,6 +2052,9 @@ func copySessionDataForIDs(
 			"WHERE session_id IN (SELECT id FROM "+tempIDsTable+")",
 	); err != nil {
 		return fmt.Errorf("copying messages: %w", err)
+	}
+	if err := copyConversationRowsTx(ctx, tx, "session_id IN (SELECT id FROM "+tempIDsTable+")"); err != nil {
+		return fmt.Errorf("copying conversation messages: %w", err)
 	}
 
 	if oldDBHasTable(ctx, tx, "usage_events") {

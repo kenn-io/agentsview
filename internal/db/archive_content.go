@@ -58,8 +58,8 @@ func (db *DB) usageOnlyStorage() bool {
 	return db.ArchiveContent().UsageOnly()
 }
 
-// ErrArchiveContentExcluded reports a write that the archive's content
-// policy does not store. Callers can match it with errors.Is.
+// ErrArchiveContentExcluded reports data that the archive's content policy
+// does not permit storing or exporting. Callers can match it with errors.Is.
 var ErrArchiveContentExcluded = errors.New(
 	"archive content policy excludes this data",
 )
@@ -374,9 +374,7 @@ func usageOnlySubagentLinks(
 // from rows the write path only updates in part: session titles the upsert
 // leaves untouched and pin notes a message replacement carries across.
 func clearUsageOnlyTextTx(
-	tx interface {
-		Exec(string, ...any) (sql.Result, error)
-	},
+	tx transactionQueries,
 	sessionID string,
 ) error {
 	if _, err := tx.Exec(
@@ -402,7 +400,7 @@ func clearUsageOnlyTextTx(
 		}
 	}
 
-	return nil
+	return clearUsageOnlyConversationTx(tx, sessionID)
 }
 
 // settleUsageOnlySessionTx brings an existing session row that predates the
@@ -471,14 +469,19 @@ func applyArchiveContentToCopiedSessionsTx(
 	ctx context.Context, tx *sql.Tx, tempIDsTable string,
 	policy config.ArchiveContent,
 ) error {
+	var err error
 	switch policy {
+	case config.ArchiveContentFull:
+		// The copied content already matches the policy.
 	case config.ArchiveContentTranscripts:
-		return dropCopiedToolContentTx(ctx, tx, tempIDsTable)
+		err = dropCopiedToolContentTx(ctx, tx, tempIDsTable)
 	case config.ArchiveContentUsage:
-		return compactCopiedSessionsForUsageTx(ctx, tx, tempIDsTable)
-	default:
-		return nil
+		err = compactCopiedSessionsForUsageTx(ctx, tx, tempIDsTable)
 	}
+	if err != nil {
+		return err
+	}
+	return refreshConversationMessagesFromArchiveTx(ctx, tx, "session_id IN (SELECT id FROM "+tempIDsTable+")")
 }
 
 // toolOutputMarkerDataVersion is the first data version whose parsers mark
@@ -600,6 +603,9 @@ func compactCopiedSessionsForUsageTx(
 	ctx context.Context, tx *sql.Tx, tempIDsTable string,
 ) error {
 	inCopied := ` IN (SELECT id FROM ` + tempIDsTable + `)`
+	if _, err := tx.ExecContext(ctx, `UPDATE conversation_messages SET body=NULL,digest='',text_bytes=0,gap='archive_content_excluded' WHERE session_id`+inCopied); err != nil {
+		return err
+	}
 	statements := []struct {
 		label string
 		sql   string
@@ -664,6 +670,9 @@ func compactCopiedSessionsForUsageTx(
 		return fmt.Errorf("listing copied sessions: %w", err)
 	}
 	for _, id := range ids {
+		if err := clearUsageOnlyConversationTx(contextTransaction{ctx: ctx, tx: tx}, id); err != nil {
+			return err
+		}
 		if err := settleUsageOnlySignalsTx(tx, id); err != nil {
 			return fmt.Errorf("settling copied signals for %s: %w", id, err)
 		}

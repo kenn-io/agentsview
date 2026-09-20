@@ -423,11 +423,6 @@ func TestImportSkipPathBumpsLocalModifiedAt(t *testing.T) {
 	_, err := ImportClaudeAI(ctx, d, strings.NewReader(testConversationsJSON), nil)
 	require.NoError(t, err)
 
-	full1, err := d.GetSessionFull(ctx, "claude-ai:import-test-001")
-	require.NoError(t, err)
-	require.NotNil(t, full1.LocalModifiedAt)
-	t1 := *full1.LocalModifiedAt
-
 	// Backdate the fixture so the skip-path bump is detectably later without
 	// depending on wall-clock scheduling.
 	require.NoError(t, d.Update(ctx, func(tx *sql.Tx) error {
@@ -436,6 +431,11 @@ func TestImportSkipPathBumpsLocalModifiedAt(t *testing.T) {
 				"WHERE id = 'claude-ai:import-test-001'")
 		return err
 	}))
+
+	full1, err := d.GetSessionFull(ctx, "claude-ai:import-test-001")
+	require.NoError(t, err)
+	require.NotNil(t, full1.LocalModifiedAt)
+	t1 := *full1.LocalModifiedAt
 
 	// Re-import with same messages but a different name. Message count and
 	// ended_at are unchanged, so upsertConversation takes the skip path and

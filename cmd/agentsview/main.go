@@ -1417,6 +1417,7 @@ func openReadOnlyDB(ctx context.Context, cfg config.Config) (*db.DB, error) {
 	if err != nil {
 		return nil, schemaUpgradeHint(err)
 	}
+	database.SetArchiveContent(cfg.ArchiveContent)
 	if database.NeedsResync() {
 		database.Close()
 		return nil, appendDaemonRestartUpgradeHint(

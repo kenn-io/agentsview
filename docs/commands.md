@@ -1353,7 +1353,26 @@ stdout empty, and exit with code 4:
 
 ______________________________________________________________________
 
-### `agentsview export hour|day|digest`
+### `agentsview export conversations`
+
+List conversation changes without message text, then fetch selected visible
+user/assistant messages in bounded chunks. See
+[Conversation Export](/docs/conversation-export/) for identity, content,
+checkpoint and coverage rules.
+
+```bash
+agentsview export conversations changes
+agentsview export conversations changes --checkpoint SAVED_CHECKPOINT
+agentsview export conversations message SESSION_ID MESSAGE_ID \
+  --database-id DATABASE_ID --revision REVISION
+```
+
+These commands read the local archive and do not send content to another system.
+Existing session summary and activity exports remain content-free.
+
+______________________________________________________________________
+
+### `agentsview export hour|day|digest|range`
 
 Export hourly activity and usage, complete days, or digests that identify
 changed hours from the local SQLite archive. A digest is a checksum of the
@@ -1361,6 +1380,7 @@ exported content. See [Reporting Export](/docs/reporting-export/) for the JSON
 fields, version rules, and correction workflow.
 
 ```bash
+agentsview export range
 agentsview export hour 2026-07-28-13
 agentsview export day 2026-07-28
 agentsview export day --schema-version 4 --bucket 1m 2026-07-28

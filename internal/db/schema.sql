@@ -1438,3 +1438,24 @@ CREATE TABLE IF NOT EXISTS session_signal_state (
     signal_version      INTEGER NOT NULL,
     updated_at          TEXT NOT NULL
 );
+
+-- SQLite-only parser-proven conversation projection and compact latest changes.
+-- Bodies are stored once here; removed rows retain metadata, not old text.
+CREATE TABLE IF NOT EXISTS conversation_messages (
+    session_id TEXT NOT NULL, message_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL, role TEXT NOT NULL, timestamp TEXT NOT NULL DEFAULT '',
+    source_id TEXT NOT NULL DEFAULT '', body TEXT, digest TEXT NOT NULL DEFAULT '',
+    text_bytes INTEGER NOT NULL DEFAULT 0, gap TEXT NOT NULL DEFAULT '',
+    deleted INTEGER NOT NULL DEFAULT 0, removed INTEGER NOT NULL DEFAULT 0,
+    revision INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY(session_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_messages_revision ON conversation_messages(revision);
+CREATE INDEX IF NOT EXISTS idx_conversation_messages_source ON conversation_messages(session_id, source_id);
+CREATE TABLE IF NOT EXISTS conversation_session_changes (
+    session_id TEXT PRIMARY KEY,
+    revision INTEGER NOT NULL,
+    deleted INTEGER NOT NULL DEFAULT 0,
+    gap TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_conversation_session_changes_revision ON conversation_session_changes(revision);

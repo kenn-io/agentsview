@@ -13,6 +13,34 @@ parser change that needs a full resync must build a fresh database, sync source
 files, copy orphaned sessions from the old database, and swap the files
 atomically. Preserve sessions even when their source files no longer exist.
 
+### Conversation export
+
+Conversation exports consume normalized SQLite message records for every agent.
+The database is the system of record: use stored content, roles, system markers,
+and source identities. Do not add agent allowlists, export-only parser fields,
+or source reparse requirements. Export metadata and message writes commit in the
+same transaction. After archive copies apply content policies, refresh the
+export index from the final stored messages while preserving their message IDs.
+Usage-only writes publish a session-level coverage gap even when policy removes
+every message.
+
+Message IDs are opaque archive identities, not row IDs, ordinals, timestamps, or
+text hashes. Preserve them through verified appends, unchanged complete
+reparses, and unambiguous native source IDs, including retained tombstones.
+Changed no-ID replacements must report identity ambiguity. Rebuilds retain these
+IDs and tombstones but use the new database generation for revisions and
+cursors.
+
+Initialize a missing conversation index from existing database messages on
+writable open. Copied orphans and trash use the same stored records; absent
+source files do not make their archived text unavailable.
+
+Keep only current bodies and compact latest changes, not a body event log.
+Project-only changes publish session invalidations without changing message
+revisions. Manifest and bounded body reads resolve project evidence in their own
+SQLite snapshot; body reads also pin the database generation and message
+revision. This local contract does not widen raw artifacts or mirror schemas.
+
 ### Codex incremental import state
 
 Four SQLite-only tables support local Codex imports: `parser_checkpoints` holds

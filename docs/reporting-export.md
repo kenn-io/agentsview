@@ -33,6 +33,43 @@ one newline. Diagnostics go to stderr. A malformed or future period, an open
 hour, a reversed or oversized digest range, or an unavailable archive produces a
 non-zero exit.
 
+## Discover the reporting range
+
+Run `agentsview export range` before choosing dates for a historical import. It
+reads the local SQLite archive directly and writes one canonical JSON document:
+
+```json
+{
+  "schema_version": 1,
+  "earliest_date": "2026-06-01",
+  "closed_through": "2026-07-29T14:00:00Z"
+}
+```
+
+`earliest_date` is a conservative UTC starting date for dated activity or usage
+in closed hours. It includes subagents and forks, usage-only sessions,
+standalone Cursor usage, message and usage timestamps older than session
+metadata, terminal tool executions, and session start or creation fallbacks for
+untimed activity. Deleted sessions, ineligible usage, invalid timestamps, and
+timestamps in open or future hours do not establish a bound. The starting date
+can precede the first nonempty report because discovery does not perform the
+full activity aggregation or usage deduplication.
+
+`closed_through` is the exclusive UTC hour cutoff. In the example, hours before
+14:00 are closed; the 14:00 hour is still open. An archive with no dated
+reporting evidence before that cutoff returns `"earliest_date": null` and still
+returns the cutoff. This includes an empty archive.
+
+Range schema 1 is independent of the hour, day, and digest schemas. The command
+exports no projects, session lists, or conversation text and accepts no report
+scope or schema options. It does not migrate the archive; an archive that
+requires an upgrade must first be opened by the matching writable version.
+
+These bounds describe availability, not a completeness guarantee or an import
+checkpoint. Late imports, corrections, and deletions can change older reports.
+Keep using date and hour digests to find those changes, and split digest reads
+into ranges of at most 31 dates.
+
 ## Hour and day documents
 
 The v3 hour shape is:
@@ -293,9 +330,9 @@ Every day is assembled from one SQLite read transaction. Sessions, messages,
 usage rows, pricing, and project identity therefore describe one coherent
 archive snapshot even when a sync writes concurrently. Usage deduplication and
 authoritative session-cost allocation happen once on the merged usage stream
-across the day before rows are partitioned by hour.
-All dates in one digest share that read transaction, while survivor selection
-and session-cost allocation still run independently for each date.
+across the day before rows are partitioned by hour. All dates in one digest
+share that read transaction, while survivor selection and session-cost
+allocation still run independently for each date.
 
 Usage selects the greatest output-token snapshot for each Claude message/request
 identity before generic deduplication, retains the earliest session for
