@@ -159,7 +159,6 @@
       name: machine,
       label: sessions.machineLabel(machine),
       displayLabel: sessions.machineLabel(machine),
-      meta: sessions.machineLabel(machine) !== machine ? machine : undefined,
     })),
   ]);
   const automationOptions: TypeaheadOption[] = $derived([

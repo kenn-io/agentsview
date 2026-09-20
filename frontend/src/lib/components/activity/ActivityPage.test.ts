@@ -6,6 +6,7 @@ vi.mock("../../feature-flags.js", () => ({
   PROJECT_MAPPING_WORKSPACE_ENABLED: true,
 }));
 import { activity } from "../../stores/activity.svelte.js";
+import { sessions } from "../../stores/sessions.svelte.js";
 import { router } from "../../stores/router.svelte.js";
 import { yokedDates } from "../../stores/yokedDates.svelte.js";
 import source from "./ActivityPage.svelte?raw";
@@ -109,6 +110,29 @@ async function selectFirstActivityRange() {
   await fireEvent.pointerDown(target, { button: 0 });
   await fireEvent.pointerUp(window);
 }
+
+it("shows machine labels without full IDs crowding the menu and filters by ID", async () => {
+  stubActivityPageCollaborators();
+  const machine = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+  activity.machines = [machine];
+  sessions.machineLabels = { [machine]: "Workstation" };
+  const component = mount(ActivityPage, { target: document.body });
+  try {
+    await flushEffects();
+    await fireEvent.click(screen.getByTitle("Filter by machine"));
+    const option = screen.getByRole("option", { name: "Workstation" });
+    await fireEvent.mouseDown(option);
+    expect(activity.machine).toBe(machine);
+  } finally {
+    unmount(component);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+    activity.machines = [];
+    activity.setMachine("");
+    sessions.machineLabels = {};
+  }
+});
 
 describe("ActivityPage refresh control", () => {
   it("shows report progress in the refresh status instead of the report body", async () => {
