@@ -1299,6 +1299,16 @@ func TestGetSessionDirectory(t *testing.T) {
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		t.Logf("cursor precedence status=%d path=%q", w.Code, resp.Path)
 		assert.Equal(t, removedCursorCwd, resp.Path)
+
+		te.seedSession(t, "dir-order-cursor-workspace", cursorFallback, 1, func(s *db.Session) {
+			s.Agent = "cursor"
+			s.FilePath = &cursorTranscript
+		})
+		w = te.get(t, "/api/v1/sessions/dir-order-cursor-workspace/directory")
+		assertStatus(t, w, http.StatusOK)
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+		t.Logf("cursor workspace status=%d path=%q", w.Code, resp.Path)
+		assert.Equal(t, cursorWorkspace, resp.Path)
 	})
 
 	t.Run("relative_metadata_falls_back", func(t *testing.T) {
@@ -1503,8 +1513,7 @@ func TestGetSessionDirectory(t *testing.T) {
 	})
 
 	t.Run("lookup_boundaries", func(t *testing.T) {
-		te.seedSession(t, "dir-trashed", t.TempDir(), 1, func(s *db.Session) {
-		})
+		te.seedSession(t, "dir-trashed", t.TempDir(), 1)
 		require.NoError(t, te.db.SoftDeleteSession(t.Context(), "dir-trashed"))
 		w := te.get(t, "/api/v1/sessions/dir-trashed/directory")
 		t.Logf("trashed status=%d body=%s", w.Code, w.Body.String())
