@@ -1404,17 +1404,19 @@ func TestGetSessionDirectory(t *testing.T) {
 		))
 
 		cases := []struct {
-			name  string
-			id    string
-			setup func(*db.Session)
-			want  string
+			name          string
+			id            string
+			setup         func(*db.Session)
+			sourceMissing bool
+			want          string
 		}{
 			{
-				name: "nil_source",
-				id:   "dir-cached-nil-source",
+				name:          "source_missing",
+				id:            "dir-cached-source-missing",
+				sourceMissing: true,
 				setup: func(s *db.Session) {
 					s.Cwd = cachedDir
-					s.SourceMissingAt = new(tsSeed)
+					s.FilePath = &missingSource
 				},
 				want: cachedDir,
 			},
@@ -1450,6 +1452,18 @@ func TestGetSessionDirectory(t *testing.T) {
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
 				te.seedSession(t, tc.id, t.TempDir(), 1, tc.setup)
+				if tc.sourceMissing {
+					require.NoError(t, te.db.BaselineActiveSessionSourcePaths(
+						t.Context(), "test", []db.SessionSourcePath{{
+							Agent: "claude", FilePath: missingSource,
+						}},
+					))
+					changed, err := te.db.MarkSessionSourceMissing(
+						t.Context(), "test", "claude", tc.id, missingSource,
+					)
+					require.NoError(t, err)
+					assert.True(t, changed)
+				}
 				before, err := te.db.GetSessionFull(t.Context(), tc.id)
 				require.NoError(t, err)
 				require.NotNil(t, before)
