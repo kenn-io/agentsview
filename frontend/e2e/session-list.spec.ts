@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
 import { clickNavTab } from "./helpers/nav";
+import { createMockSessions, handleSessionsRoute, sessionsRoutePattern } from "./helpers/mock-sessions";
 
 // Test-fixture assumptions: project-alpha has 2 sessions,
 // project-beta has 3, project-duration has 1 (the duration UX
@@ -27,6 +28,31 @@ test("CI session startup tolerates a slow initial response", async ({ browserNam
 
   expect(delayedRequests).toBeGreaterThan(0);
   await expect(sp.sessionItems.first()).toBeVisible();
+});
+
+test("session previews hide a leading system-reminder envelope", async ({ page }) => {
+  const session = {
+    ...createMockSessions(1, "preview", () => "project-preview")[0]!,
+    first_message:
+      '<system-reminder data-role="user-context">ctx</system-reminder>\nrefactor the auth guard',
+  };
+  await page.route(sessionsRoutePattern, handleSessionsRoute([{ sessions: [session], project: null }]));
+  await page.route("**/api/v1/projects*", (route) =>
+    route.fulfill({ json: { projects: [{ name: "project-preview", session_count: 1 }] } }),
+  );
+
+  const sp = new SessionsPage(page);
+  for (const width of [1280, 768, 400]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/sessions");
+    if (!(await sp.sessionItems.first().isVisible())) {
+      await page.getByRole("button", { name: /sidebar/i }).click();
+    }
+    await expect(sp.sessionItems.first()).toBeVisible();
+    const name = sp.sessionItems.first().locator(".session-name");
+    await expect(name).toHaveText("refactor the auth guard");
+    await expect(name).toHaveAttribute("title", "refactor the auth guard");
+  }
 });
 
 test.describe("Session list", () => {
