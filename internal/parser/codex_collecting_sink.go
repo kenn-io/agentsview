@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"encoding/json/v2"
 	"sort"
 
@@ -88,7 +89,7 @@ func (s *CodexCollectingSink) InsertMessage(m ParsedMessage) int {
 	return idx
 }
 
-func (s *CodexCollectingSink) AppendToolResultEvent(
+func (s *CodexCollectingSink) AppendToolResultEvent(ctx context.Context,
 	callID string, target *ParsedToolCallPosition, ev ParsedToolResultEvent,
 ) {
 	s.appendToolResultEvent(callID, target, ev, false)

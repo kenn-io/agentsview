@@ -72,7 +72,7 @@ func writeSQLiteSnapshot(dstPath, srcPath string) (err error) {
 				)
 			}
 			if !done {
-				return fmt.Errorf("copy sqlite online backup: backup incomplete")
+				return errors.New("copy sqlite online backup: backup incomplete")
 			}
 			return nil
 		})
@@ -96,7 +96,7 @@ func writeSQLiteSnapshot(dstPath, srcPath string) (err error) {
 // copy, and a later sync retries after the writer repairs or replaces
 // it. Failing the manifest instead would block every other agent's
 // sync behind one bad file.
-func sqliteSnapshotIdentity(path string) (int64, time.Time, bool) {
+func sqliteSnapshotIdentity(ctx context.Context, path string) (int64, time.Time, bool) {
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() {
 		return 0, time.Time{}, false
@@ -107,10 +107,10 @@ func sqliteSnapshotIdentity(path string) (int64, time.Time, bool) {
 	}
 	defer conn.Close()
 	var pageSize, pageCount int64
-	if err := conn.QueryRow(`PRAGMA page_size`).Scan(&pageSize); err != nil {
+	if err := conn.QueryRowContext(ctx, `PRAGMA page_size`).Scan(&pageSize); err != nil {
 		return 0, time.Time{}, false
 	}
-	if err := conn.QueryRow(`PRAGMA page_count`).Scan(&pageCount); err != nil {
+	if err := conn.QueryRowContext(ctx, `PRAGMA page_count`).Scan(&pageCount); err != nil {
 		return 0, time.Time{}, false
 	}
 	return pageSize * pageCount, sqliteSnapshotModTime(path, info.ModTime()), true

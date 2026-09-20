@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,7 +9,7 @@ import (
 
 func TestReadPushSessionMessageComparisonsNoSessions(t *testing.T) {
 	comparisons, err := readPushSessionMessageComparisons(
-		context.Background(), nil, nil,
+		t.Context(), nil, nil,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, comparisons)
@@ -70,10 +69,9 @@ func TestComparisonAggregates(t *testing.T) {
 
 	msgAgg, toolAgg, ok = comparisonAggregates("sess", comparisons)
 	require.True(t, ok)
-	assert.Equal(t,
-		pushMessageAggregate{
-			Count: 3, Sum: 9, Max: 5, Min: 1, SysFP: "0,2",
-		},
+	assert.Equal(t, pushMessageAggregate{
+		Count: 3, Sum: 9, Max: 5, Min: 1, SysFP: "0,2",
+	},
 		msgAgg,
 	)
 	assert.Equal(t, pushToolCallAggregate{Count: 2, Sum: 11}, toolAgg)

@@ -29,7 +29,7 @@ func TestPGTranscriptFidelityRoundTripsAndRepushes(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -50,7 +50,7 @@ func TestPGTranscriptFidelityRoundTripsAndRepushes(t *testing.T) {
 		TranscriptFidelity: "summary",
 		CreatedAt:          "2026-01-01T00:00:00Z",
 	}
-	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession (summary)")
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession (summary)")
 
 	_, err = sync.Push(ctx, false, nil)
 	require.NoError(t, err, "Push (summary)")
@@ -67,12 +67,12 @@ func TestPGTranscriptFidelityRoundTripsAndRepushes(t *testing.T) {
 
 	// Change fidelity and re-push — exercises the IS DISTINCT FROM clause.
 	sess.TranscriptFidelity = "full"
-	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession (full)")
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession (full)")
 
 	// Clear the push watermark so the engine re-evaluates all sessions.
-	require.NoError(t, localDB.SetSyncState("last_push_at", ""),
+	require.NoError(t, localDB.SetSyncState(t.Context(), "last_push_at", ""),
 		"clearing last_push_at")
-	require.NoError(t, localDB.SetSyncState(lastPushBoundaryStateKey, ""),
+	require.NoError(t, localDB.SetSyncState(t.Context(), lastPushBoundaryStateKey, ""),
 		"clearing boundary state")
 
 	_, err = sync.Push(ctx, false, nil)

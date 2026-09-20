@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -604,7 +605,7 @@ func buildSessionFilterWithBuilder(
 	// parent belongs to the requested project.
 	if f.ProjectLabels != nil {
 		filterPreds, oneShotPred := sessionFilterPredicates(f, b, q)
-		allPreds := append(basePreds, filterPreds...)
+		allPreds := slices.Concat(basePreds, filterPreds)
 		if oneShotPred != "" {
 			allPreds = append(allPreds, oneShotPred)
 		}
@@ -617,7 +618,7 @@ func buildSessionFilterWithBuilder(
 
 	if !f.IncludeChildren {
 		filterPreds, oneShotPred := sessionFilterPredicates(f, b, q)
-		allPreds := append(basePreds, filterPreds...)
+		allPreds := slices.Concat(basePreds, filterPreds)
 		if oneShotPred != "" {
 			allPreds = append(allPreds, oneShotPred)
 		}

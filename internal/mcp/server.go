@@ -220,7 +220,7 @@ func isCleanStdioShutdown(err error) bool {
 // calls can finish. addr must already be validated as a safe bind
 // address (see the cmd layer's loopback guard).
 func ServeHTTP(ctx context.Context, opts ServeOptions, addr string) (result error) {
-	listener, err := net.Listen("tcp", addr)
+	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
 	if err != nil {
 		return err
 	}

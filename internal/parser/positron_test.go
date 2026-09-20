@@ -61,7 +61,7 @@ func TestPositronProviderParseSession(t *testing.T) {
 	tmpDir := t.TempDir()
 	sessionPath := filepath.Join(tmpDir, "test-session.json")
 	require.NoError(t, os.WriteFile(
-		sessionPath, []byte(sessionJSON), 0644,
+		sessionPath, []byte(sessionJSON), 0o644,
 	))
 
 	p := &positronProvider{}
@@ -94,7 +94,7 @@ func TestPositronProviderParseSession(t *testing.T) {
 func TestPositronProviderParseOversizedJSONL(t *testing.T) {
 	line := `{"kind":0,"v":{"version":3,"sessionId":"positron-jsonl","requests":[{"message":{"text":"Run a subagent"},"response":[{"value":"small response"}]}]}}` + "\n"
 	path := filepath.Join(t.TempDir(), "positron.jsonl")
-	require.NoError(t, os.WriteFile(path, []byte(line), 0644))
+	require.NoError(t, os.WriteFile(path, []byte(line), 0o644))
 
 	p := &positronProvider{}
 	sess, msgs, err := p.parseSession(path, "test-project", "test-machine")
@@ -116,14 +116,14 @@ func TestPositronSourceSetDiscoverSessions(t *testing.T) {
 		tmpDir, "workspaceStorage", "abc123hash",
 	)
 	chatDir := filepath.Join(hashDir, "chatSessions")
-	require.NoError(t, os.MkdirAll(chatDir, 0755))
+	require.NoError(t, os.MkdirAll(chatDir, 0o755))
 
 	// Create workspace.json
 	wsJSON := `{"folder": "file:///Users/test/myproject"}`
 	require.NoError(t, os.WriteFile(
 		filepath.Join(hashDir, "workspace.json"),
 		[]byte(wsJSON),
-		0644,
+		0o644,
 	))
 
 	// Create session files. The .json file with a .jsonl sibling must be
@@ -137,7 +137,7 @@ func TestPositronSourceSetDiscoverSessions(t *testing.T) {
 		require.NoError(t, os.WriteFile(
 			filepath.Join(chatDir, name),
 			[]byte(sessionJSON),
-			0644,
+			0o644,
 		))
 	}
 
@@ -145,7 +145,7 @@ func TestPositronSourceSetDiscoverSessions(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		filepath.Join(chatDir, "readme.txt"),
 		[]byte("ignore me"),
-		0644,
+		0o644,
 	))
 
 	set := newPositronTestSourceSet(tmpDir)
@@ -169,12 +169,12 @@ func TestPositronSourceSetFindSourceFile(t *testing.T) {
 		tmpDir, "workspaceStorage", "abc123hash",
 	)
 	chatDir := filepath.Join(hashDir, "chatSessions")
-	require.NoError(t, os.MkdirAll(chatDir, 0755))
+	require.NoError(t, os.MkdirAll(chatDir, 0o755))
 
 	// Create session file
 	sessionPath := filepath.Join(chatDir, "test-uuid.json")
 	require.NoError(t, os.WriteFile(
-		sessionPath, []byte(`{}`), 0644,
+		sessionPath, []byte(`{}`), 0o644,
 	))
 
 	set := newPositronTestSourceSet(tmpDir)

@@ -35,12 +35,10 @@ func TestParseLiteLLMPricing(t *testing.T) {
 
 	assert.Equal(t, money.Money{Microdollars: 3_000_000}, found.InputPerMTok)
 	assert.Equal(t, money.Money{Microdollars: 15_000_000}, found.OutputPerMTok)
-	assert.Equal(t,
-		money.Money{Microdollars: 3_750_000},
+	assert.Equal(t, money.Money{Microdollars: 3_750_000},
 		found.CacheCreationPerMTok,
 	)
-	assert.Equal(t,
-		money.Money{Microdollars: 300_000},
+	assert.Equal(t, money.Money{Microdollars: 300_000},
 		found.CacheReadPerMTok,
 	)
 }

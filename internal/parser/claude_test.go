@@ -64,8 +64,8 @@ func TestClaudeSessionIdentityAbsent(t *testing.T) {
 	results, _, err := claudeParseWithExclusions(path, "project", "local")
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	assert.Equal(t, "", results[0].Session.AgentLabel)
-	assert.Equal(t, "", results[0].Session.Entrypoint)
+	assert.Empty(t, results[0].Session.AgentLabel)
+	assert.Empty(t, results[0].Session.Entrypoint)
 	assert.Equal(t, AgentClaude, results[0].Session.Agent)
 }
 
@@ -111,9 +111,9 @@ func TestClaudeSessionKindAndPromptSourceAbsent(t *testing.T) {
 	results, _, err := claudeParseWithExclusions(path, "project", "local")
 	require.NoError(t, err)
 	require.Len(t, results, 1)
-	assert.Equal(t, "", results[0].Session.SessionKind)
+	assert.Empty(t, results[0].Session.SessionKind)
 	for _, m := range results[0].Messages {
-		assert.Equal(t, "", m.PromptSource, "ordinal %d", m.Ordinal)
+		assert.Empty(t, m.PromptSource, "ordinal %d", m.Ordinal)
 	}
 }
 
@@ -199,6 +199,7 @@ func TestParseClaudeSession_Metadata(t *testing.T) {
 			wantResultLen: 1,
 			wantSession: func(t *testing.T, s ParsedSession) {
 				t.Helper()
+
 				assert.Equal(t, "/home/user/project", s.Cwd)
 				assert.Equal(t, "feat/cool-feature", s.GitBranch)
 				assert.Equal(t, "session-001", s.SourceSessionID)
@@ -208,11 +209,12 @@ func TestParseClaudeSession_Metadata(t *testing.T) {
 			},
 			wantMessages: func(t *testing.T, msgs []ParsedMessage) {
 				t.Helper()
+
 				require.Len(t, msgs, 2)
 
 				assert.Equal(t, "user", msgs[0].SourceType)
 				assert.Equal(t, "uuid-1", msgs[0].SourceUUID)
-				assert.Equal(t, "", msgs[0].SourceParentUUID)
+				assert.Empty(t, msgs[0].SourceParentUUID)
 				assert.False(t, msgs[0].IsSidechain)
 
 				assert.Equal(t, "assistant", msgs[1].SourceType)

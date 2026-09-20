@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,12 +26,12 @@ func TestOMPProviderParsesWithOMPIdentity(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, AgentOMP, discovered[0].Provider)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: discovered[0],
 	})
 	require.NoError(t, err)
@@ -70,14 +69,14 @@ func TestReasonixProviderDiscoverAndParse(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, AgentReasonix, discovered[0].Provider)
 	assert.Equal(t, transcript, discovered[0].DisplayPath)
 	assert.Equal(t, "proj", discovered[0].ProjectHint)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      discovered[0],
 		Fingerprint: SourceFingerprint{Hash: "deadbeef"},
 	})
@@ -107,11 +106,11 @@ func TestReasonixProviderFingerprintFoldsSidecar(t *testing.T) {
 	metaInfo, err := os.Stat(transcript + ".meta")
 	require.NoError(t, err)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 
-	fp, err := provider.Fingerprint(context.Background(), discovered[0])
+	fp, err := provider.Fingerprint(t.Context(), discovered[0])
 	require.NoError(t, err)
 	assert.Equal(t, transcriptInfo.Size()+metaInfo.Size(), fp.Size,
 		"composite size must include the sidecar")
@@ -127,18 +126,18 @@ func TestReasonixProviderFingerprintHashChangesForSidecarOnlyChange(t *testing.T
 	provider, ok := NewProvider(AgentReasonix, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 
-	before, err := provider.Fingerprint(context.Background(), discovered[0])
+	before, err := provider.Fingerprint(t.Context(), discovered[0])
 	require.NoError(t, err)
 
 	writeSourceFile(t, transcript+".meta", `{"id":"session-fp-hash","model":"gpt-4.1",`+
 		`"topic_title":"Updated","workspace_root":"/home/u/other",`+
 		`"created_at":"2026-02-01T10:00:00Z","updated_at":"2026-02-01T10:10:00Z"}`)
 
-	after, err := provider.Fingerprint(context.Background(), discovered[0])
+	after, err := provider.Fingerprint(t.Context(), discovered[0])
 	require.NoError(t, err)
 	assert.NotEqual(t, before.Hash, after.Hash,
 		"metadata-only changes must affect the composite fingerprint hash")
@@ -155,7 +154,7 @@ func TestReasonixProviderChangedPathSidecar(t *testing.T) {
 	provider, ok := NewProvider(AgentReasonix, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 
-	sources, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path:      transcript + ".meta",
 		EventKind: "write",
 	})
@@ -164,7 +163,7 @@ func TestReasonixProviderChangedPathSidecar(t *testing.T) {
 	assert.Equal(t, transcript, sources[0].DisplayPath)
 	assert.Equal(t, "proj", sources[0].ProjectHint)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "session-cp",
 	})
 	require.NoError(t, err)
@@ -216,7 +215,7 @@ func TestReasonixProviderChangedPathLayouts(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			transcript := writeReasonixSession(t, tt.dir, tt.sessionID)
 			sources, err := provider.SourcesForChangedPath(
-				context.Background(),
+				t.Context(),
 				ChangedPathRequest{Path: transcript, EventKind: "write"},
 			)
 			require.NoError(t, err)
@@ -237,7 +236,7 @@ func TestReasonixProviderChangedPathDeletedSidecarAndTranscript(t *testing.T) {
 	require.True(t, ok)
 
 	require.NoError(t, os.Remove(meta))
-	sources, err := provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	sources, err := provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path:      meta,
 		EventKind: "remove",
 	})
@@ -247,7 +246,7 @@ func TestReasonixProviderChangedPathDeletedSidecarAndTranscript(t *testing.T) {
 		"deleted sidecar events must reparse the live transcript")
 
 	require.NoError(t, os.Remove(transcript))
-	sources, err = provider.SourcesForChangedPath(context.Background(), ChangedPathRequest{
+	sources, err = provider.SourcesForChangedPath(t.Context(), ChangedPathRequest{
 		Path:      transcript,
 		EventKind: "remove",
 	})
@@ -299,7 +298,7 @@ func TestAiderProviderFindSourceRejectsStalePositionalPath(t *testing.T) {
 	require.True(t, ok)
 
 	// Without a freshness requirement the stored positional path is honored.
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: storedPath,
 		RawSessionID:   rawB,
 	})
@@ -316,7 +315,7 @@ func TestAiderProviderFindSourceRejectsStalePositionalPath(t *testing.T) {
 	require.Equal(t, AiderVirtualPath(path, 2), shifted, "runB is now at index 2")
 
 	// A fresh lookup must reject the stale index and re-resolve runB by raw ID.
-	fresh, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	fresh, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath:     storedPath,
 		RawSessionID:       rawB,
 		RequireFreshSource: true,
@@ -338,16 +337,16 @@ func TestAiderProviderDiscoverAndFanOut(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, AgentAider, discovered[0].Provider)
 	assert.Equal(t, historyPath, discovered[0].DisplayPath)
 
-	fp, err := provider.Fingerprint(context.Background(), discovered[0])
+	fp, err := provider.Fingerprint(t.Context(), discovered[0])
 	require.NoError(t, err)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      discovered[0],
 		Fingerprint: fp,
 	})
@@ -372,15 +371,15 @@ func TestAiderProviderFindSourceByRawID(t *testing.T) {
 	provider, ok := NewProvider(AgentAider, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: discovered[0]})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: discovered[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 2)
 
 	rawID := strings.TrimPrefix(outcome.Results[1].Result.Session.ID, "aider:")
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: rawID,
 	})
 	require.NoError(t, err)
@@ -389,7 +388,7 @@ func TestAiderProviderFindSourceByRawID(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, 1, idx, "the second run resolves to run index 1")
 
-	single, err := provider.Parse(context.Background(), ParseRequest{Source: found})
+	single, err := provider.Parse(t.Context(), ParseRequest{Source: found})
 	require.NoError(t, err)
 	require.Len(t, single.Results, 1)
 	assert.Equal(t, outcome.Results[1].Result.Session.ID,
@@ -414,10 +413,10 @@ func TestAiderProviderRemoteIdentityStable(t *testing.T) {
 			PathRewriter: rewriter,
 		})
 		require.True(t, ok)
-		discovered, err := provider.Discover(context.Background())
+		discovered, err := provider.Discover(t.Context())
 		require.NoError(t, err)
 		require.Len(t, discovered, 1)
-		outcome, err := provider.Parse(context.Background(), ParseRequest{Source: discovered[0]})
+		outcome, err := provider.Parse(t.Context(), ParseRequest{Source: discovered[0]})
 		require.NoError(t, err)
 		ids := make([]string, 0, len(outcome.Results))
 		for _, r := range outcome.Results {

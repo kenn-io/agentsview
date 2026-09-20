@@ -1,7 +1,6 @@
 package postgres
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -14,7 +13,7 @@ func TestPGFindSessionIDsByRawSuffixUsesExactFirstSuffixQuery(t *testing.T) {
 	store := &Store{pg: newUsageProbeDB(t, state)}
 
 	ids, err := store.FindSessionIDsByRawSuffix(
-		context.Background(), "project-hash:session-uuid", 2,
+		t.Context(), "project-hash:session-uuid", 2,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, []string{

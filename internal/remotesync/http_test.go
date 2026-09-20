@@ -111,7 +111,9 @@ func TestHTTPSyncRejectsMismatchedRemoteProtocol(t *testing.T) {
 func TestRequestArchivePreservesEmptyDeltaSelection(t *testing.T) {
 	var received ArchiveRequest
 	server := newCurrentProtocolServer(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.NoError(t, json.UnmarshalRead(r.Body, &received))
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &received)) {
+			return
+		}
 		w.Header().Set("Content-Type", "application/x-tar")
 	}))
 	t.Cleanup(server.Close)
@@ -146,7 +148,7 @@ func TestHTTPSyncDownloadsArchiveAndImports(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
@@ -155,7 +157,7 @@ func TestHTTPSyncDownloadsArchiveAndImports(t *testing.T) {
 		URL:   ts.URL,
 		Token: "remote-token",
 		DB:    database,
-	}.Run(context.Background())
+	}.Run(t.Context())
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.SessionsSynced)
@@ -182,7 +184,7 @@ func TestHTTPSyncReportsDownloadAndImportProgress(t *testing.T) {
 	}))
 	t.Cleanup(ts.Close)
 
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	var progress []syncpkg.Progress
@@ -195,7 +197,7 @@ func TestHTTPSyncReportsDownloadAndImportProgress(t *testing.T) {
 		Progress: func(p syncpkg.Progress) {
 			progress = append(progress, p)
 		},
-	}.Run(context.Background())
+	}.Run(t.Context())
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.SessionsSynced)
@@ -240,7 +242,7 @@ func TestHTTPSyncReportsCompressedTransferThenExtraction(t *testing.T) {
 	}
 	mirrorRoot := filepath.Join(t.TempDir(), "remote-mirrors", "devbox")
 	err = hs.downloadIntoMirror(
-		context.Background(), ts.Client(), TargetSet{}, []string{"session.jsonl"},
+		t.Context(), ts.Client(), TargetSet{}, []string{"session.jsonl"},
 		false, mirrorRoot,
 	)
 	require.NoError(t, err)
@@ -293,7 +295,7 @@ func TestPrepareHTTPSyncReportsManifestComparisonBeforeTransfer(t *testing.T) {
 		progress = append(progress, p)
 	}
 
-	prepared, err := hs.Prepare(context.Background())
+	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
 
@@ -335,7 +337,7 @@ func TestHTTPSyncLegacyCompressedTransferPreservesWireProgress(t *testing.T) {
 		},
 	}
 	root, err := hs.downloadAndExtract(
-		context.Background(), ts.Client(), TargetSet{},
+		t.Context(), ts.Client(), TargetSet{},
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, os.RemoveAll(root)) })
@@ -404,7 +406,7 @@ func TestHTTPSyncRemovesSpooledArchive(t *testing.T) {
 			mirrorRoot := filepath.Join(parent, "devbox")
 
 			err := (HTTPSync{Host: "devbox", URL: ts.URL}).downloadIntoMirror(
-				context.Background(), ts.Client(), TargetSet{}, []string{"session.jsonl"},
+				t.Context(), ts.Client(), TargetSet{}, []string{"session.jsonl"},
 				false, mirrorRoot,
 			)
 			if tt.wantErr {
@@ -450,7 +452,7 @@ func TestHTTPSyncMirrorRetainsPostExtractionSpoolCleanup(t *testing.T) {
 	mirrorRoot := filepath.Join(t.TempDir(), "mirrors", "devbox")
 
 	err := hs.downloadIntoMirror(
-		context.Background(), ts.Client(), TargetSet{}, []string{"session.jsonl"},
+		t.Context(), ts.Client(), TargetSet{}, []string{"session.jsonl"},
 		false, mirrorRoot,
 	)
 
@@ -484,7 +486,7 @@ func TestHTTPSyncLegacyRetainsCleanupWithoutLeakingExtractedRoot(t *testing.T) {
 	}}
 
 	root, err := hs.downloadAndExtract(
-		context.Background(), ts.Client(), TargetSet{},
+		t.Context(), ts.Client(), TargetSet{},
 	)
 
 	assert.Empty(t, root, "failed cleanup must not transfer root ownership")
@@ -520,7 +522,7 @@ func TestHTTPSyncLegacyRetainsSpoolWhenExtractionRootCreationFails(t *testing.T)
 		Progress: func(p syncpkg.Progress) {
 			if p.BytesDone == int64(len(archive)) {
 				for _, name := range []string{"TMPDIR", "TMP", "TEMP", "SystemTemp"} {
-					require.NoError(t, os.Setenv(name, invalidTemp))
+					t.Setenv(name, invalidTemp)
 				}
 			}
 		},
@@ -534,7 +536,7 @@ func TestHTTPSyncLegacyRetainsSpoolWhenExtractionRootCreationFails(t *testing.T)
 	}
 
 	root, err := hs.downloadAndExtract(
-		context.Background(), ts.Client(), TargetSet{},
+		t.Context(), ts.Client(), TargetSet{},
 	)
 
 	assert.Empty(t, root)
@@ -548,7 +550,7 @@ func TestHTTPSyncLegacyRetainsSpoolWhenExtractionRootCreationFails(t *testing.T)
 }
 
 func TestHTTPSyncRemovesSpooledArchiveOnCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	parent := filepath.Join(t.TempDir(), "remote-mirrors")
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
@@ -587,7 +589,7 @@ func TestDownloadArchiveCloseFailureRemovesIsolatedSpool(t *testing.T) {
 	}
 
 	archive, err := (HTTPSync{}).downloadArchive(
-		context.Background(), resp, "Downloading", parent,
+		t.Context(), resp, "Downloading", parent,
 	)
 
 	assert.Nil(t, archive)
@@ -612,7 +614,7 @@ func TestDownloadedArchiveUsesIsolatedSpoolOutsideMirror(t *testing.T) {
 	}
 
 	archive, err := (HTTPSync{}).downloadArchive(
-		context.Background(), resp, "Downloading", parent,
+		t.Context(), resp, "Downloading", parent,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, archive)
@@ -684,7 +686,7 @@ func TestDownloadedArchiveExtractionCancellationMidEntry(t *testing.T) {
 			}
 			t.Cleanup(func() { require.NoError(t, archive.Close()) })
 			dst := filepath.Join(t.TempDir(), "extracted")
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
 			released := false
 			t.Cleanup(func() {
@@ -711,8 +713,7 @@ func TestDownloadedArchiveExtractionCancellationMidEntry(t *testing.T) {
 			case <-time.After(backgroundWaitTimeout):
 				require.FailNow(t, "timed out waiting for canceled extraction")
 			}
-			assert.NoFileExists(t,
-				filepath.Join(dst, "home/user/large-session.jsonl"))
+			assert.NoFileExists(t, filepath.Join(dst, "home/user/large-session.jsonl"))
 			require.NoError(t, archive.Close())
 			assert.NoDirExists(t, spoolDir)
 		})
@@ -726,7 +727,7 @@ func TestPrepareHTTPSyncCancellationReleasesMirrorOwnership(t *testing.T) {
 		strings.Repeat("entry\n", 4096))
 	dataDir := t.TempDir()
 	_, hs := newMirrorSync(t, remote, dataDir)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	extractionStarted := false
 	hs.Progress = func(p syncpkg.Progress) {
 		if strings.HasPrefix(p.Detail, "Extracting ") {
@@ -767,7 +768,7 @@ func TestHTTPSyncLegacyCancellationCleansOwnedRoots(t *testing.T) {
 	t.Cleanup(ts.Close)
 	tempParent := t.TempDir()
 	setPortableTempDir(t, tempParent)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	hs := HTTPSync{
 		Host: "devbox",
 		URL:  ts.URL,
@@ -857,27 +858,28 @@ func uniqueProgressDetails(progress []syncpkg.Progress) []string {
 }
 
 func maxBytesDone(progress []syncpkg.Progress) int64 {
-	var max int64
+	var maximum int64
 	for _, p := range progress {
-		if p.BytesDone > max {
-			max = p.BytesDone
+		if p.BytesDone > maximum {
+			maximum = p.BytesDone
 		}
 	}
-	return max
+	return maximum
 }
 
 func maxBytesTotal(progress []syncpkg.Progress) int64 {
-	var max int64
+	var maximum int64
 	for _, p := range progress {
-		if p.BytesTotal > max {
-			max = p.BytesTotal
+		if p.BytesTotal > maximum {
+			maximum = p.BytesTotal
 		}
 	}
-	return max
+	return maximum
 }
 
 func buildHTTPTestTar(t *testing.T, files map[string]string) []byte {
 	t.Helper()
+
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
 	mtime := time.Date(2026, 6, 28, 12, 0, 0, 0, time.UTC)
@@ -926,7 +928,9 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 		switch r.URL.Path {
 		case "/api/v1/remote-sync/targets":
 			w.Header().Set("Content-Type", "application/json")
-			require.NoError(t, json.MarshalWrite(w, remote.targets))
+			if !assert.NoError(t, json.MarshalWrite(w, remote.targets)) {
+				return
+			}
 		case "/api/v1/remote-sync/manifest":
 			if remote.onManifest != nil {
 				remote.onManifest()
@@ -949,8 +953,10 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 			// the manifest cannot model, which the handler surfaces as
 			// 501 so the client falls back to the full archive.
 			var req TargetSet
-			require.NoError(t, json.UnmarshalRead(r.Body, &req))
-			manifest, err := BuildManifest(req)
+			if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+				return
+			}
+			manifest, err := BuildManifest(r.Context(), req)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusNotImplemented)
 				return
@@ -958,11 +964,17 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Content-Encoding", "gzip")
 			gz := gzip.NewWriter(w)
-			require.NoError(t, json.MarshalWrite(gz, manifest))
-			require.NoError(t, gz.Close())
+			if !assert.NoError(t, json.MarshalWrite(gz, manifest)) {
+				return
+			}
+			if !assert.NoError(t, gz.Close()) {
+				return
+			}
 		case "/api/v1/remote-sync/archive":
 			var req ArchiveRequest
-			require.NoError(t, json.UnmarshalRead(r.Body, &req))
+			if !assert.NoError(t, json.UnmarshalRead(r.Body, &req)) {
+				return
+			}
 			remote.archiveRequests = append(remote.archiveRequests, req)
 			if remote.onArchive != nil {
 				remote.onArchive(req)
@@ -979,10 +991,10 @@ func newMirrorTestRemote(t *testing.T) *mirrorTestRemote {
 				return
 			}
 			if req.DeltaFiles != nil {
-				require.NoError(t, WriteArchiveFiles(
+				assert.NoError(t, WriteArchiveFiles(r.Context(),
 					w, remote.targets, req.DeltaFiles))
 			} else {
-				require.NoError(t, WriteArchive(w, req.TargetSet))
+				assert.NoError(t, WriteArchive(r.Context(), w, req.TargetSet))
 			}
 		default:
 			http.NotFound(w, r)
@@ -1012,6 +1024,7 @@ func (r *mirrorTestRemote) addFileScopedAgent(t *testing.T) string {
 
 func (r *mirrorTestRemote) addWindsurfFileScopedAgent(t *testing.T) string {
 	t.Helper()
+
 	userRoot := filepath.Join(filepath.Dir(r.dir), "Windsurf", "User")
 	workspaceDir := filepath.Join(
 		userRoot, "workspaceStorage", "workspace-replay",
@@ -1024,9 +1037,9 @@ func (r *mirrorTestRemote) addWindsurfFileScopedAgent(t *testing.T) string {
 	stateDB := filepath.Join(workspaceDir, parser.WindsurfStateDBName)
 	conn, err := sql.Open("sqlite3", stateDB)
 	require.NoError(t, err)
-	_, err = conn.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
+	_, err = conn.ExecContext(t.Context(), `CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
 	require.NoError(t, err)
-	_, err = conn.Exec(
+	_, err = conn.ExecContext(t.Context(),
 		`INSERT INTO ItemTable (key, value) VALUES (?, ?)`,
 		"workbench.panel.aichat.view.aichat.chatdata",
 		`{"version":1,"sessionId":"replay-session","requests":[{"requestId":"request-1","message":{"text":"Question"},"response":[{"value":"Imported reply"}],"timestamp":1710000000000}]}`,
@@ -1056,6 +1069,7 @@ func (r *mirrorTestRemote) writeSession(
 	t *testing.T, name string, mtime time.Time, userTexts ...string,
 ) string {
 	t.Helper()
+
 	dir := filepath.Join(r.dir, "test-project")
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	builder := testjsonl.NewSessionBuilder()
@@ -1071,7 +1085,7 @@ func (r *mirrorTestRemote) writeSession(
 
 func newMirrorSync(t *testing.T, remote *mirrorTestRemote, dataDir string) (*db.DB, HTTPSync) {
 	t.Helper()
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	return database, HTTPSync{
@@ -1120,7 +1134,7 @@ func TestHTTPUnchangedMirrorImportsIntoNewDatabaseGeneration(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, first.SessionsSynced)
 
-	replacement, err := db.Open(filepath.Join(t.TempDir(), "replacement.db"))
+	replacement, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "replacement.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, replacement.Close()) })
 	require.NoError(t, replacement.CopySyncStateFrom(database.Path()))
@@ -1146,7 +1160,7 @@ func TestHTTPMirrorJournalFlipFailureRetainsArmedWork(t *testing.T) {
 		time.Date(2026, 8, 14, 10, 0, 0, 0, time.UTC), "flip retry")
 	dataDir := t.TempDir()
 	database, hs := newMirrorSync(t, remote, dataDir)
-	require.NoError(t, database.ReplaceRemoteSkippedFiles(
+	require.NoError(t, database.ReplaceRemoteSkippedFiles(t.Context(),
 		hs.Host, map[string]int64{remotePath: 1},
 	))
 	flipErr := errors.New("journal flip sentinel")
@@ -1176,7 +1190,7 @@ func TestHTTPMirrorJournalFlipFailureRetainsArmedWork(t *testing.T) {
 	require.NoError(t, loadErr)
 	require.Len(t, journal.Entries, 1)
 	assert.True(t, journal.Entries[0].InvalidateCache)
-	cache, cacheErr := database.LoadRemoteSkippedFiles(hs.Host)
+	cache, cacheErr := database.LoadRemoteSkippedFiles(t.Context(), hs.Host)
 	require.NoError(t, cacheErr)
 	assert.Empty(t, cache, "pruning is durable before the failed flip")
 	page, listErr := database.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
@@ -1363,7 +1377,7 @@ func TestHTTPExplicitFullReparsesEarlierRowsOfAppendedClaudeSession(t *testing.T
 
 	raw, err := sql.Open("sqlite3", database.Path())
 	require.NoError(t, err)
-	_, err = raw.Exec(`
+	_, err = raw.ExecContext(t.Context(), `
 		UPDATE messages
 		SET content = 'corrupted', content_length = length('corrupted')
 		WHERE session_id = 'devbox~session' AND ordinal = 0`)
@@ -1379,7 +1393,7 @@ func TestHTTPExplicitFullReparsesEarlierRowsOfAppendedClaudeSession(t *testing.T
 	assert.Equal(t, FullImportExplicit, stats.FullReason)
 
 	var content string
-	require.NoError(t, database.Reader().QueryRow(`
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `
 		SELECT content FROM messages
 		WHERE session_id = 'devbox~session' AND ordinal = 0`,
 	).Scan(&content))
@@ -1393,7 +1407,7 @@ func TestHTTPExplicitFullReparsesUnchangedStreamingProvider(t *testing.T) {
 	require.NoError(t, os.MkdirAll(warpDir, 0o755))
 	warpDB, err := sql.Open("sqlite3", filepath.Join(warpDir, parser.WarpDBFilename))
 	require.NoError(t, err)
-	_, err = warpDB.Exec(`
+	_, err = warpDB.ExecContext(t.Context(), `
 		CREATE TABLE agent_conversations (
 			id INTEGER PRIMARY KEY NOT NULL,
 			conversation_id TEXT NOT NULL,
@@ -1483,7 +1497,7 @@ func TestHTTPDisarmedExplicitFullReplayUsesPersistedSkip(t *testing.T) {
 	database, hs := newMirrorSync(t, remote, dataDir)
 	_, err := hs.Run(t.Context())
 	require.NoError(t, err)
-	cache, err := database.LoadRemoteSkippedFiles(hs.Host)
+	cache, err := database.LoadRemoteSkippedFiles(t.Context(), hs.Host)
 	require.NoError(t, err)
 	require.NotEmpty(t, cache)
 
@@ -1523,7 +1537,7 @@ func TestHTTPExplicitFullRearmsRetainedFullJournalBeforeExecution(t *testing.T) 
 	database, hs := newMirrorSync(t, remote, dataDir)
 	_, err := hs.Run(t.Context())
 	require.NoError(t, err)
-	cache, err := database.LoadRemoteSkippedFiles(hs.Host)
+	cache, err := database.LoadRemoteSkippedFiles(t.Context(), hs.Host)
 	require.NoError(t, err)
 	require.NotEmpty(t, cache)
 
@@ -1540,7 +1554,7 @@ func TestHTTPExplicitFullRearmsRetainedFullJournalBeforeExecution(t *testing.T) 
 	require.NoError(t, err)
 	require.NoError(t, prepared.Close(),
 		"simulate a rebuild that stops before the remote contributor runs")
-	afterPrepare, err := database.LoadRemoteSkippedFiles(hs.Host)
+	afterPrepare, err := database.LoadRemoteSkippedFiles(t.Context(), hs.Host)
 	require.NoError(t, err)
 	assert.Empty(t, afterPrepare,
 		"explicit full preparation must durably invalidate retained failure cache state")
@@ -1583,11 +1597,11 @@ func TestHTTPSyncFailedRebuildDoesNotCacheDiscardedParserExclusion(t *testing.T)
 
 	hs.Full = true
 	hs.FullReason = FullImportDataRebuild
-	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{})
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{})
 	t.Cleanup(engine.Close)
 	first, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
-	firstContributor, err := first.RebuildContributor()
+	firstContributor, err := first.RebuildContributor(t.Context())
 	require.NoError(t, err)
 	firstStats, err := engine.ResyncAllWithOptions(
 		t.Context(), nil,
@@ -1600,7 +1614,7 @@ func TestHTTPSyncFailedRebuildDoesNotCacheDiscardedParserExclusion(t *testing.T)
 	assert.Positive(t, firstStats.Failed)
 	require.NoError(t, first.Close())
 
-	failedCache, err := database.LoadRemoteSkippedFiles(hs.Host)
+	failedCache, err := database.LoadRemoteSkippedFiles(t.Context(), hs.Host)
 	require.NoError(t, err)
 	for key := range failedCache {
 		path, _ := syncpkg.SplitProviderSkipCachePath(key)
@@ -1612,7 +1626,7 @@ func TestHTTPSyncFailedRebuildDoesNotCacheDiscardedParserExclusion(t *testing.T)
 	require.NoError(t, os.RemoveAll(qwenPawRoot))
 	second, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
-	secondContributor, err := second.RebuildContributor()
+	secondContributor, err := second.RebuildContributor(t.Context())
 	require.NoError(t, err)
 	secondStats, err := engine.ResyncAllWithOptions(
 		t.Context(), nil,
@@ -1649,7 +1663,7 @@ func TestHTTPSyncAutomaticDataRebuildFullParsesAfterAttemptCache(t *testing.T) {
 	database, hs := newMirrorSync(t, remote, t.TempDir())
 	_, err := hs.Run(t.Context())
 	require.NoError(t, err)
-	cache, err := database.LoadRemoteSkippedFiles(hs.Host)
+	cache, err := database.LoadRemoteSkippedFiles(t.Context(), hs.Host)
 	require.NoError(t, err)
 	require.NotEmpty(t, cache)
 
@@ -1658,14 +1672,14 @@ func TestHTTPSyncAutomaticDataRebuildFullParsesAfterAttemptCache(t *testing.T) {
 	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
-	contributor, err := prepared.RebuildContributor()
+	contributor, err := prepared.RebuildContributor(t.Context())
 	require.NoError(t, err)
 	assert.False(t, contributor.ForceParse)
 	assert.True(t, contributor.ForceFullParseAfterCache)
 	assert.Empty(t, contributor.Config.InitialSkipCache,
 		"a new rebuild must not trust skip entries from routine imports")
 
-	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{})
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{})
 	t.Cleanup(engine.Close)
 	stats, err := engine.ResyncAllWithOptions(
 		t.Context(), nil, syncpkg.RebuildOptions{
@@ -1695,7 +1709,7 @@ func TestHTTPSyncAutomaticDataRebuildRejectsOlderAttemptCache(t *testing.T) {
 	database, hs := newMirrorSync(t, remote, t.TempDir())
 	_, err := hs.Run(t.Context())
 	require.NoError(t, err)
-	cache, err := database.LoadRemoteSkippedFiles(hs.Host)
+	cache, err := database.LoadRemoteSkippedFiles(t.Context(), hs.Host)
 	require.NoError(t, err)
 	require.NotEmpty(t, cache)
 
@@ -1718,12 +1732,12 @@ func TestHTTPSyncAutomaticDataRebuildRejectsOlderAttemptCache(t *testing.T) {
 	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
-	contributor, err := prepared.RebuildContributor()
+	contributor, err := prepared.RebuildContributor(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, contributor.Config.InitialSkipCache,
 		"a parser upgrade must not trust an older rebuild attempt cache")
 
-	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{})
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{})
 	t.Cleanup(engine.Close)
 	stats, err := engine.ResyncAllWithOptions(
 		t.Context(), nil, syncpkg.RebuildOptions{
@@ -1759,14 +1773,14 @@ func TestHTTPLegacyAutomaticDataRebuildFullParsesAfterAttemptCache(t *testing.T)
 	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
-	contributor, err := prepared.RebuildContributor()
+	contributor, err := prepared.RebuildContributor(t.Context())
 	require.NoError(t, err)
 	assert.False(t, contributor.ForceParse)
 	assert.True(t, contributor.ForceFullParseAfterCache)
 	assert.Empty(t, contributor.Config.InitialSkipCache,
 		"legacy rebuilds have no durable attempt generation")
 
-	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{})
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{})
 	t.Cleanup(engine.Close)
 	stats, err := engine.ResyncAllWithOptions(
 		t.Context(), nil, syncpkg.RebuildOptions{
@@ -1900,7 +1914,7 @@ func TestHTTPSyncMirrorSecondSyncTransfersOnlyDelta(t *testing.T) {
 	dataDir := t.TempDir()
 	database, hs := newMirrorSync(t, remote, dataDir)
 
-	stats, err := hs.Run(context.Background())
+	stats, err := hs.Run(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 5, stats.SessionsSynced)
 	require.Len(t, remote.archiveRequests, 1)
@@ -1914,7 +1928,7 @@ func TestHTTPSyncMirrorSecondSyncTransfersOnlyDelta(t *testing.T) {
 	added := remote.writeSession(t, "f.jsonl", base.Add(6*time.Second), "session f")
 	require.NoError(t, os.Remove(staleRemote))
 
-	stats, err = hs.Run(context.Background())
+	stats, err = hs.Run(t.Context())
 	require.NoError(t, err)
 	require.Len(t, remote.archiveRequests, 2)
 	assert.ElementsMatch(t, []string{changed, added}, remote.archiveRequests[1].DeltaFiles)
@@ -1926,12 +1940,12 @@ func TestHTTPSyncMirrorSecondSyncTransfersOnlyDelta(t *testing.T) {
 	staleLocal, err := safeRemappedRemotePath(mirrorRoot, staleRemote)
 	require.NoError(t, err)
 	assert.NoFileExists(t, staleLocal)
-	page, err := database.ListSessions(context.Background(), db.SessionFilter{Limit: 10})
+	page, err := database.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
 	require.NoError(t, err)
 	assert.Len(t, page.Sessions, 6)
 
 	// Third sync with no remote changes: no archive request at all.
-	stats, err = hs.Run(context.Background())
+	stats, err = hs.Run(t.Context())
 	require.NoError(t, err)
 	assert.Len(t, remote.archiveRequests, 2)
 	assert.Equal(t, 0, stats.SessionsSynced)
@@ -1950,7 +1964,7 @@ func TestHTTPSyncMirrorRemovesSidecarThatVanishesDuringDeltaArchive(t *testing.T
 	dataDir := t.TempDir()
 	_, hs := newMirrorSync(t, remote, dataDir)
 
-	prepared, err := hs.Prepare(context.Background())
+	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, prepared.Close())
 	localWAL, err := safeRemappedRemotePath(MirrorDir(dataDir, "devbox"), wal)
@@ -1965,7 +1979,7 @@ func TestHTTPSyncMirrorRemovesSidecarThatVanishesDuringDeltaArchive(t *testing.T
 		}
 	}
 
-	prepared, err = hs.Prepare(context.Background())
+	prepared, err = hs.Prepare(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, prepared.Close())
 	assert.NoFileExists(t, localWAL)
@@ -2004,21 +2018,21 @@ func TestHTTPSyncMirrorRefreshesStateDBWhenWALVanishesDuringDeltaArchive(t *test
 	}
 	t.Cleanup(func() { require.NoError(t, closeWriter()) })
 	var journalMode string
-	require.NoError(t, writer.QueryRow(`PRAGMA journal_mode = WAL`).Scan(&journalMode))
+	require.NoError(t, writer.QueryRowContext(t.Context(), `PRAGMA journal_mode = WAL`).Scan(&journalMode))
 	assert.Equal(t, "wal", journalMode)
-	_, err = writer.Exec(`PRAGMA wal_autocheckpoint = 0`)
+	_, err = writer.ExecContext(t.Context(), `PRAGMA wal_autocheckpoint = 0`)
 	require.NoError(t, err)
-	_, err = writer.Exec(`PRAGMA user_version = 1`)
+	_, err = writer.ExecContext(t.Context(), `PRAGMA user_version = 1`)
 	require.NoError(t, err)
 	require.FileExists(t, stateWAL)
 
 	dataDir := t.TempDir()
 	database, hs := newMirrorSync(t, remote, dataDir)
-	stats, err := hs.Run(context.Background())
+	stats, err := hs.Run(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.SessionsSynced)
 	baseline, err := database.GetSession(
-		context.Background(), "devbox~hermes:database-only",
+		t.Context(), "devbox~hermes:database-only",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, baseline)
@@ -2027,7 +2041,7 @@ func TestHTTPSyncMirrorRefreshesStateDBWhenWALVanishesDuringDeltaArchive(t *test
 
 	stateBefore, err := os.Stat(stateDB)
 	require.NoError(t, err)
-	_, err = writer.Exec(`
+	_, err = writer.ExecContext(t.Context(), `
 		UPDATE sessions
 		SET title = 'Checkpointed profile'
 		WHERE id = 'database-only'
@@ -2042,7 +2056,7 @@ func TestHTTPSyncMirrorRefreshesStateDBWhenWALVanishesDuringDeltaArchive(t *test
 
 	checkpointResult := make(chan error, 1)
 	remote.onArchive = func(ArchiveRequest) {
-		_, checkpointErr := writer.Exec(`PRAGMA wal_checkpoint(TRUNCATE)`)
+		_, checkpointErr := writer.ExecContext(t.Context(), `PRAGMA wal_checkpoint(TRUNCATE)`)
 		checkpointErr = errors.Join(checkpointErr, closeWriter())
 		if removeErr := os.Remove(stateWAL); !os.IsNotExist(removeErr) {
 			checkpointErr = errors.Join(checkpointErr, removeErr)
@@ -2050,7 +2064,7 @@ func TestHTTPSyncMirrorRefreshesStateDBWhenWALVanishesDuringDeltaArchive(t *test
 		checkpointResult <- checkpointErr
 	}
 
-	stats, err = hs.Run(context.Background())
+	_, err = hs.Run(t.Context())
 	require.NoError(t, err)
 	select {
 	case checkpointErr := <-checkpointResult:
@@ -2065,14 +2079,14 @@ func TestHTTPSyncMirrorRefreshesStateDBWhenWALVanishesDuringDeltaArchive(t *test
 	assert.NoFileExists(t, localWAL)
 
 	refreshed, err := database.GetSession(
-		context.Background(), "devbox~hermes:database-only",
+		t.Context(), "devbox~hermes:database-only",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, refreshed)
 	require.NotNil(t, refreshed.DisplayName)
 	assert.Equal(t, "Checkpointed profile", *refreshed.DisplayName)
 
-	stats, err = hs.Run(context.Background())
+	stats, err = hs.Run(t.Context())
 	require.NoError(t, err)
 	assert.Zero(t, stats.SessionsSynced)
 	assert.Len(t, remote.archiveRequests, 2,
@@ -2087,7 +2101,7 @@ func TestHTTPSyncRejectsMissingManifestEndpoint(t *testing.T) {
 	dataDir := t.TempDir()
 	_, hs := newMirrorSync(t, remote, dataDir)
 
-	_, err := hs.Run(context.Background())
+	_, err := hs.Run(t.Context())
 	require.Error(t, err)
 	var statusErr *StatusError
 	require.ErrorAs(t, err, &statusErr)
@@ -2107,7 +2121,7 @@ func TestHTTPLegacyExplicitFullReplacesAppendedSession(t *testing.T) {
 
 	raw, err := sql.Open("sqlite3", database.Path())
 	require.NoError(t, err)
-	_, err = raw.Exec(`
+	_, err = raw.ExecContext(t.Context(), `
 		UPDATE messages
 		SET content = 'corrupted', content_length = length('corrupted')
 		WHERE session_id = 'devbox~session' AND ordinal = 0`)
@@ -2124,7 +2138,7 @@ func TestHTTPLegacyExplicitFullReplacesAppendedSession(t *testing.T) {
 	assert.Equal(t, FullImportExplicit, stats.FullReason)
 
 	var content string
-	require.NoError(t, database.Reader().QueryRow(`
+	require.NoError(t, database.Reader().QueryRow(t.Context(), `
 		SELECT content FROM messages
 		WHERE session_id = 'devbox~session' AND ordinal = 0`,
 	).Scan(&content))
@@ -2177,7 +2191,7 @@ func TestHTTPSyncRejectsNonJSONManifest(t *testing.T) {
 	remote.manifestHTML = true
 	_, hs := newMirrorSync(t, remote, t.TempDir())
 
-	_, err := hs.Run(context.Background())
+	_, err := hs.Run(t.Context())
 	require.ErrorContains(t, err, "decode remote manifest")
 	assert.Empty(t, remote.archiveRequests)
 }
@@ -2191,14 +2205,14 @@ func TestHTTPSyncFallsBackToFullWhenDeltaRejected(t *testing.T) {
 	dataDir := t.TempDir()
 	_, hs := newMirrorSync(t, remote, dataDir)
 
-	_, err := hs.Run(context.Background())
+	_, err := hs.Run(t.Context())
 	require.NoError(t, err)
 
 	remote.rejectDelta = true
 	remote.writeSession(t, "a.jsonl", base.Add(5*time.Second),
 		"session a", "session a continued")
 
-	stats, err := hs.Run(context.Background())
+	stats, err := hs.Run(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.SessionsSynced)
 	// Requests: bootstrap full, rejected delta, retried full.
@@ -2219,13 +2233,13 @@ func TestHTTPSyncIncrementalMatchesFreshFullSync(t *testing.T) {
 	remote.writeSession(t, "e.jsonl", base, "session e")
 
 	incDB, incSync := newMirrorSync(t, remote, t.TempDir())
-	_, err := incSync.Run(context.Background())
+	_, err := incSync.Run(t.Context())
 	require.NoError(t, err)
 
 	remote.writeSession(t, "a.jsonl", base.Add(2*time.Second),
 		"session a", "session a continued")
 	added := remote.writeSession(t, "c.jsonl", base.Add(3*time.Second), "session c")
-	_, err = incSync.Run(context.Background())
+	_, err = incSync.Run(t.Context())
 	require.NoError(t, err)
 
 	// Requests: bootstrap full, then a delta for exactly the changes.
@@ -2235,7 +2249,7 @@ func TestHTTPSyncIncrementalMatchesFreshFullSync(t *testing.T) {
 		remote.archiveRequests[1].DeltaFiles)
 
 	freshDB, freshSync := newMirrorSync(t, remote, t.TempDir())
-	_, err = freshSync.Run(context.Background())
+	_, err = freshSync.Run(t.Context())
 	require.NoError(t, err)
 
 	assert.Equal(t, sessionSummaries(t, freshDB), sessionSummaries(t, incDB))
@@ -2252,7 +2266,7 @@ func TestHTTPSyncMirrorRecoversFromDirAtFilePath(t *testing.T) {
 	dataDir := t.TempDir()
 	_, hs := newMirrorSync(t, remote, dataDir)
 
-	_, err := hs.Run(context.Background())
+	_, err := hs.Run(t.Context())
 	require.NoError(t, err)
 
 	// Simulate a crashed extraction: a directory occupies a.jsonl's
@@ -2262,7 +2276,7 @@ func TestHTTPSyncMirrorRecoversFromDirAtFilePath(t *testing.T) {
 	require.NoError(t, os.Remove(local))
 	require.NoError(t, os.Mkdir(local, 0o755))
 
-	_, err = hs.Run(context.Background())
+	_, err = hs.Run(t.Context())
 	require.NoError(t, err)
 	info, err := os.Stat(local)
 	require.NoError(t, err)
@@ -2277,13 +2291,14 @@ func TestHTTPSyncMirrorRecoversFromDirAtFilePath(t *testing.T) {
 // file's new content is parsed.
 func sessionSummaries(t *testing.T, database *db.DB) []string {
 	t.Helper()
-	page, err := database.ListSessions(context.Background(), db.SessionFilter{Limit: 100})
+
+	page, err := database.ListSessions(t.Context(), db.SessionFilter{Limit: 100})
 	require.NoError(t, err)
 	out := make([]string, 0, len(page.Sessions))
 	for _, s := range page.Sessions {
-		count, ok := database.GetSessionMessageCount(s.ID)
+		count, ok := database.GetSessionMessageCount(t.Context(), s.ID)
 		require.True(t, ok, "message count for %s", s.ID)
-		hash, ok := database.GetSessionFileHash(s.ID)
+		hash, ok := database.GetSessionFileHash(t.Context(), s.ID)
 		require.True(t, ok, "file hash for %s", s.ID)
 		out = append(out, fmt.Sprintf("%s|%s|%d|%s", s.ID, s.Machine, count, hash))
 	}
@@ -2307,7 +2322,7 @@ func TestHTTPSyncMirrorPartitionsFileScopedAgents(t *testing.T) {
 	dataDir := t.TempDir()
 	_, hs := newMirrorSync(t, remote, dataDir)
 
-	stats, err := hs.Run(context.Background())
+	stats, err := hs.Run(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 5, stats.SessionsSynced)
 	// Bootstrap: one full archive for the dir-scoped corpus, one for
@@ -2330,7 +2345,7 @@ func TestHTTPSyncMirrorPartitionsFileScopedAgents(t *testing.T) {
 	// back in the mirror.
 	changed := remote.writeSession(t, "a.jsonl", base.Add(5*time.Second),
 		"session a", "session a continued")
-	stats, err = hs.Run(context.Background())
+	stats, err = hs.Run(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.SessionsSynced)
 	require.Len(t, remote.archiveRequests, 4)
@@ -2344,7 +2359,7 @@ func TestHTTPSyncMirrorPartitionsFileScopedAgents(t *testing.T) {
 	require.NoError(t, os.Remove(scoped))
 	delete(remote.targets.Dirs, parser.AgentGemini)
 	remote.targets.Files = nil
-	_, err = hs.Run(context.Background())
+	_, err = hs.Run(t.Context())
 	require.NoError(t, err)
 	assert.NoFileExists(t, scopedLocal)
 	assert.Len(t, remote.archiveRequests, 4,
@@ -2544,6 +2559,7 @@ func (r *mirrorTestRemote) addRooCodeAgent(
 	t *testing.T, taskCount int, mtime time.Time,
 ) (string, []string) {
 	t.Helper()
+
 	rooRoot := filepath.Join(filepath.Dir(r.dir), "roo-cline")
 	transcripts := make([]string, 0, taskCount)
 	for i := range taskCount {
@@ -2590,7 +2606,7 @@ func TestHTTPSyncMirrorRooCodeDeltaTransfersOnlyChangedTranscript(t *testing.T) 
 	dataDir := t.TempDir()
 	_, hs := newMirrorSync(t, remote, dataDir)
 
-	stats, err := hs.Run(context.Background())
+	stats, err := hs.Run(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 4, stats.SessionsSynced)
 	// Bootstrap: one full archive, and no recurring file-scoped
@@ -2617,7 +2633,7 @@ func TestHTTPSyncMirrorRooCodeDeltaTransfersOnlyChangedTranscript(t *testing.T) 
 	require.NoError(t, os.Chtimes(changed,
 		base.Add(5*time.Second), base.Add(5*time.Second)))
 
-	stats, err = hs.Run(context.Background())
+	stats, err = hs.Run(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.SessionsSynced)
 	require.Len(t, remote.archiveRequests, 2)
@@ -2625,7 +2641,7 @@ func TestHTTPSyncMirrorRooCodeDeltaTransfersOnlyChangedTranscript(t *testing.T) 
 
 	// Nothing changed: no archive request at all, so per-poll transfer
 	// work is bounded by the changed batch, not the archive size.
-	stats, err = hs.Run(context.Background())
+	stats, err = hs.Run(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 0, stats.SessionsSynced)
 	assert.Len(t, remote.archiveRequests, 2)
@@ -2646,7 +2662,7 @@ func TestHTTPSyncHoldsMirrorLockDuringManifestFetch(t *testing.T) {
 	remote.onManifest = func() {
 		// assert, not require: this runs on the server goroutine, where
 		// FailNow must not be called.
-		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
 		defer cancel()
 		lock, err := AcquireMirrorLock(ctx, mirrorRoot)
 		if lock != nil {
@@ -2658,7 +2674,7 @@ func TestHTTPSyncHoldsMirrorLockDuringManifestFetch(t *testing.T) {
 		assert.Error(t, err, "mirror lock must be held during the manifest fetch")
 	}
 
-	_, err := hs.Run(context.Background())
+	_, err := hs.Run(t.Context())
 	require.NoError(t, err)
 }
 
@@ -2678,7 +2694,7 @@ func TestPrepareHTTPSyncContributorDeltaCardinality(t *testing.T) {
 			dataDir := t.TempDir()
 			database, hs := newMirrorSync(t, remote, dataDir)
 
-			prepared, err := hs.Prepare(context.Background())
+			prepared, err := hs.Prepare(t.Context())
 			require.NoError(t, err)
 			require.NoError(t, prepared.Close())
 			require.Len(t, remote.archiveRequests, 1)
@@ -2687,16 +2703,16 @@ func TestPrepareHTTPSyncContributorDeltaCardinality(t *testing.T) {
 			remote.writeSession(t, "000.jsonl", base.Add(time.Second),
 				"session 0", "session 0 continued")
 			hs.Full = true
-			prepared, err = hs.Prepare(context.Background())
+			prepared, err = hs.Prepare(t.Context())
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, prepared.Close()) })
-			contributor, err := prepared.RebuildContributor()
+			contributor, err := prepared.RebuildContributor(t.Context())
 			require.NoError(t, err)
 			assert.True(t, contributor.ForceParse,
 				"explicit full-import intent must reach the rebuild contributor")
-			engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{})
+			engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{})
 			stats, err := engine.ResyncAllWithOptions(
-				context.Background(), nil,
+				t.Context(), nil,
 				syncpkg.RebuildOptions{Contributors: []syncpkg.RebuildContributor{
 					contributor,
 				}},
@@ -2717,10 +2733,10 @@ func TestPreparedHTTPSyncContributorKeepsLockUntilClose(t *testing.T) {
 	remote.writeSession(t, "session.jsonl",
 		time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC), "locked contributor")
 	database, hs := newMirrorSync(t, remote, t.TempDir())
-	prepared, err := hs.Prepare(context.Background())
+	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
-	contributor, err := prepared.RebuildContributor()
+	contributor, err := prepared.RebuildContributor(t.Context())
 	require.NoError(t, err)
 
 	contributorStarted := make(chan struct{})
@@ -2737,7 +2753,7 @@ func TestPreparedHTTPSyncContributorKeepsLockUntilClose(t *testing.T) {
 		}
 		return originalProgress(progress)
 	}
-	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{})
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{})
 	t.Cleanup(engine.Close)
 	type rebuildResult struct {
 		stats syncpkg.SyncStats
@@ -2746,7 +2762,7 @@ func TestPreparedHTTPSyncContributorKeepsLockUntilClose(t *testing.T) {
 	rebuilt := make(chan rebuildResult, 1)
 	go func() {
 		stats, runErr := engine.ResyncAllWithOptions(
-			context.Background(), nil,
+			t.Context(), nil,
 			syncpkg.RebuildOptions{Contributors: []syncpkg.RebuildContributor{
 				contributor,
 			}},
@@ -2758,13 +2774,13 @@ func TestPreparedHTTPSyncContributorKeepsLockUntilClose(t *testing.T) {
 	case <-time.After(backgroundWaitTimeout):
 		require.FailNow(t, "timed out waiting for contributor")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
 	competing, lockErr := AcquireMirrorLock(ctx, prepared.Root())
 	cancel()
 	if competing != nil {
 		require.NoError(t, competing.Close())
 	}
-	assert.Error(t, lockErr, "prepared source must retain its lock during contribution")
+	require.Error(t, lockErr, "prepared source must retain its lock during contribution")
 	close(continueContributor)
 	select {
 	case result := <-rebuilt:
@@ -2789,13 +2805,13 @@ func TestPrepareHTTPSyncUnchangedFullMakesNoArchiveRequest(t *testing.T) {
 			}
 			_, hs := newMirrorSync(t, remote, t.TempDir())
 
-			prepared, err := hs.Prepare(context.Background())
+			prepared, err := hs.Prepare(t.Context())
 			require.NoError(t, err)
 			require.NoError(t, prepared.Close())
 			require.Len(t, remote.archiveRequests, 1)
 
 			hs.Full = true
-			prepared, err = hs.Prepare(context.Background())
+			prepared, err = hs.Prepare(t.Context())
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, prepared.Close()) })
 			assert.Len(t, remote.archiveRequests, 1,
@@ -2812,13 +2828,13 @@ func TestPrepareHTTPSyncManualMirrorRemovalBootstrapsFull(t *testing.T) {
 	dataDir := t.TempDir()
 	_, hs := newMirrorSync(t, remote, dataDir)
 
-	prepared, err := hs.Prepare(context.Background())
+	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, prepared.Close())
 	require.Len(t, remote.archiveRequests, 1)
 
 	require.NoError(t, os.RemoveAll(MirrorDir(dataDir, "devbox")))
-	prepared, err = hs.Prepare(context.Background())
+	prepared, err = hs.Prepare(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
 
@@ -2834,7 +2850,7 @@ func TestPreparedHTTPSyncCloseReleasesLockAndRemovesLegacyRoot(t *testing.T) {
 		dataDir := t.TempDir()
 		_, hs := newMirrorSync(t, remote, dataDir)
 
-		prepared, err := hs.Prepare(context.Background())
+		prepared, err := hs.Prepare(t.Context())
 		require.NoError(t, err)
 		root := prepared.Root()
 		assert.Equal(t, MirrorDir(dataDir, "devbox"), root)
@@ -2856,7 +2872,7 @@ func TestPreparedHTTPSyncCloseReleasesLockAndRemovesLegacyRoot(t *testing.T) {
 		dataDir := t.TempDir()
 		_, hs := newMirrorSync(t, remote, dataDir)
 
-		prepared, err := hs.Prepare(context.Background())
+		prepared, err := hs.Prepare(t.Context())
 		require.NoError(t, err)
 		root := prepared.Root()
 		assert.DirExists(t, root)
@@ -2878,7 +2894,7 @@ func TestPreparedHTTPSyncCloseRetriesFailedCleanup(t *testing.T) {
 		time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC), "session a")
 	dataDir := t.TempDir()
 	_, hs := newMirrorSync(t, remote, dataDir)
-	prepared, err := hs.Prepare(context.Background())
+	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
 	root := prepared.Root()
 
@@ -2902,8 +2918,8 @@ func TestPreparedHTTPSyncCloseRetriesFailedCleanup(t *testing.T) {
 	}
 
 	err = prepared.Close()
-	assert.ErrorIs(t, err, removeErr)
-	assert.ErrorIs(t, err, unlockErr)
+	require.ErrorIs(t, err, removeErr)
+	require.ErrorIs(t, err, unlockErr)
 	assert.DirExists(t, root)
 	assertMirrorLocked(t, MirrorDir(dataDir, "devbox"))
 
@@ -2922,7 +2938,7 @@ func TestPreparedHTTPSyncCloseTracksCleanupIndependently(t *testing.T) {
 			time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC), "session a")
 		dataDir := t.TempDir()
 		_, hs := newMirrorSync(t, remote, dataDir)
-		prepared, err := hs.Prepare(context.Background())
+		prepared, err := hs.Prepare(t.Context())
 		require.NoError(t, err)
 		return prepared, MirrorDir(dataDir, "devbox")
 	}
@@ -2944,7 +2960,7 @@ func TestPreparedHTTPSyncCloseTracksCleanupIndependently(t *testing.T) {
 			return lock.Close()
 		}
 
-		assert.ErrorIs(t, prepared.Close(), removeErr)
+		require.ErrorIs(t, prepared.Close(), removeErr)
 		assertMirrorUnlocked(t, mirrorRoot)
 		require.NoError(t, prepared.Close())
 		assert.Equal(t, 1, unlockCalls)
@@ -2967,7 +2983,7 @@ func TestPreparedHTTPSyncCloseTracksCleanupIndependently(t *testing.T) {
 			return lock.Close()
 		}
 
-		assert.ErrorIs(t, prepared.Close(), unlockErr)
+		require.ErrorIs(t, prepared.Close(), unlockErr)
 		assert.NoDirExists(t, prepared.Root())
 		assertMirrorLocked(t, mirrorRoot)
 		require.NoError(t, prepared.Close())
@@ -2983,14 +2999,14 @@ func TestPrepareHTTPSyncClearsOnlySelectedHostCacheBeforeMirrorMutation(t *testi
 	remote.writeSession(t, "b.jsonl", base, "session b")
 	remote.writeSession(t, "c.jsonl", base, "session c")
 	database, hs := newMirrorSync(t, remote, t.TempDir())
-	prepared, err := hs.Prepare(context.Background())
+	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, prepared.Close())
 
-	require.NoError(t, database.ReplaceRemoteSkippedFiles(
+	require.NoError(t, database.ReplaceRemoteSkippedFiles(t.Context(),
 		"devbox", map[string]int64{changed: 101},
 	))
-	require.NoError(t, database.ReplaceRemoteSkippedFiles(
+	require.NoError(t, database.ReplaceRemoteSkippedFiles(t.Context(),
 		"other-host", map[string]int64{"/remote/other.jsonl": 202},
 	))
 	remote.writeSession(t, "a.jsonl", base.Add(time.Second),
@@ -3002,16 +3018,16 @@ func TestPrepareHTTPSyncClearsOnlySelectedHostCacheBeforeMirrorMutation(t *testi
 	}
 	atArchive := make(chan cacheSnapshot, 1)
 	remote.onArchive = func(ArchiveRequest) {
-		selected, err := database.LoadRemoteSkippedFiles("devbox")
+		selected, err := database.LoadRemoteSkippedFiles(t.Context(), "devbox")
 		if err != nil {
 			atArchive <- cacheSnapshot{err: err}
 			return
 		}
-		other, err := database.LoadRemoteSkippedFiles("other-host")
+		other, err := database.LoadRemoteSkippedFiles(t.Context(), "other-host")
 		atArchive <- cacheSnapshot{selected: selected, other: other, err: err}
 	}
 
-	prepared, err = hs.Prepare(context.Background())
+	prepared, err = hs.Prepare(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
 	var snapshot cacheSnapshot
@@ -3024,7 +3040,7 @@ func TestPrepareHTTPSyncClearsOnlySelectedHostCacheBeforeMirrorMutation(t *testi
 	assert.Equal(t, map[string]int64{changed: 101}, snapshot.selected,
 		"cache pruning follows durable mirror mutation")
 	assert.Equal(t, map[string]int64{"/remote/other.jsonl": 202}, snapshot.other)
-	selected, err := database.LoadRemoteSkippedFiles("devbox")
+	selected, err := database.LoadRemoteSkippedFiles(t.Context(), "devbox")
 	require.NoError(t, err)
 	assert.Empty(t, selected)
 }
@@ -3034,25 +3050,25 @@ func TestPrepareHTTPSyncUnchangedPreservesSelectedHostCache(t *testing.T) {
 	path := remote.writeSession(t, "a.jsonl",
 		time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC), "session a")
 	database, hs := newMirrorSync(t, remote, t.TempDir())
-	prepared, err := hs.Prepare(context.Background())
+	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, prepared.Close())
 
-	require.NoError(t, database.ReplaceRemoteSkippedFiles(
+	require.NoError(t, database.ReplaceRemoteSkippedFiles(t.Context(),
 		"devbox", map[string]int64{path: 303},
 	))
-	require.NoError(t, database.ReplaceRemoteSkippedFiles(
+	require.NoError(t, database.ReplaceRemoteSkippedFiles(t.Context(),
 		"other-host", map[string]int64{"/remote/other.jsonl": 304},
 	))
 	requests := len(remote.archiveRequests)
-	prepared, err = hs.Prepare(context.Background())
+	prepared, err = hs.Prepare(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
 	assert.Len(t, remote.archiveRequests, requests)
-	selected, err := database.LoadRemoteSkippedFiles("devbox")
+	selected, err := database.LoadRemoteSkippedFiles(t.Context(), "devbox")
 	require.NoError(t, err)
 	assert.Equal(t, map[string]int64{path: 303}, selected)
-	other, err := database.LoadRemoteSkippedFiles("other-host")
+	other, err := database.LoadRemoteSkippedFiles(t.Context(), "other-host")
 	require.NoError(t, err)
 	assert.Equal(t, map[string]int64{"/remote/other.jsonl": 304}, other)
 }
@@ -3063,7 +3079,7 @@ func TestPrepareHTTPSyncFailureCleansOwnedResources(t *testing.T) {
 		remote.manifestStatus = http.StatusInternalServerError
 		_, hs := newMirrorSync(t, remote, t.TempDir())
 
-		prepared, err := hs.Prepare(context.Background())
+		prepared, err := hs.Prepare(t.Context())
 		require.Error(t, err)
 		assert.Nil(t, prepared)
 		assertMirrorUnlocked(t, MirrorDir(hs.DataDir, "devbox"))
@@ -3081,7 +3097,7 @@ func TestPrepareHTTPSyncFailureCleansOwnedResources(t *testing.T) {
 		setPortableTempDir(t, tempParent)
 		_, hs := newMirrorSync(t, remote, t.TempDir())
 
-		prepared, err := hs.Prepare(context.Background())
+		prepared, err := hs.Prepare(t.Context())
 		require.Error(t, err)
 		assert.Nil(t, prepared)
 		roots, globErr := filepath.Glob(filepath.Join(tempParent, "agentsview-http-*"))
@@ -3099,14 +3115,14 @@ func TestPrepareHTTPSyncFailureCleansOwnedResources(t *testing.T) {
 		require.NoError(t, err)
 		remote.archiveBody = tarWithoutEndMarker(t, name, "partial mirror")
 		database, hs := newMirrorSync(t, remote, t.TempDir())
-		require.NoError(t, database.ReplaceRemoteSkippedFiles(
+		require.NoError(t, database.ReplaceRemoteSkippedFiles(t.Context(),
 			"devbox", map[string]int64{path: 404},
 		))
-		require.NoError(t, database.ReplaceRemoteSkippedFiles(
+		require.NoError(t, database.ReplaceRemoteSkippedFiles(t.Context(),
 			"other-host", map[string]int64{"/remote/other.jsonl": 505},
 		))
 
-		prepared, err := hs.Prepare(context.Background())
+		prepared, err := hs.Prepare(t.Context())
 		require.Error(t, err)
 		assert.Nil(t, prepared)
 		local, mapErr := safeRemappedRemotePath(MirrorDir(hs.DataDir, "devbox"), path)
@@ -3114,7 +3130,7 @@ func TestPrepareHTTPSyncFailureCleansOwnedResources(t *testing.T) {
 		body, readErr := os.ReadFile(local)
 		require.NoError(t, readErr)
 		assert.Equal(t, "partial mirror", string(body))
-		selected, loadErr := database.LoadRemoteSkippedFiles("devbox")
+		selected, loadErr := database.LoadRemoteSkippedFiles(t.Context(), "devbox")
 		require.NoError(t, loadErr)
 		assert.Equal(t, map[string]int64{path: 404}, selected,
 			"processing never starts, so the armed journal owns retry invalidation")
@@ -3124,7 +3140,7 @@ func TestPrepareHTTPSyncFailureCleansOwnedResources(t *testing.T) {
 		require.NoError(t, journalErr)
 		require.Len(t, journal.Entries, 1)
 		assert.True(t, journal.Entries[0].InvalidateCache)
-		other, loadErr := database.LoadRemoteSkippedFiles("other-host")
+		other, loadErr := database.LoadRemoteSkippedFiles(t.Context(), "other-host")
 		require.NoError(t, loadErr)
 		assert.Equal(t, map[string]int64{"/remote/other.jsonl": 505}, other)
 		assertMirrorUnlocked(t, MirrorDir(hs.DataDir, "devbox"))
@@ -3155,7 +3171,7 @@ func TestPrepareHTTPSyncsSortsHostsAndUnwindsOnFailure(t *testing.T) {
 	remoteB.onManifest = func() { requestOrder = append(requestOrder, "host-b") }
 
 	syncs := []HTTPSync{syncB, syncA}
-	prepared, err := PrepareHTTPSyncs(context.Background(), syncs)
+	prepared, err := PrepareHTTPSyncs(t.Context(), syncs)
 	require.Error(t, err)
 	assert.Nil(t, prepared)
 	assert.Equal(t, []string{"host-b", "host-a"}, []string{
@@ -3183,7 +3199,7 @@ func TestPrepareAvailableHTTPSyncsOmitsOfflineHost(t *testing.T) {
 		}},
 	}
 	prepared, unavailable, err := prepareHTTPSyncsWithUnavailable(
-		context.Background(), syncs, true,
+		t.Context(), syncs, true,
 		func(_ context.Context, hs HTTPSync) (*PreparedHTTP, error) {
 			if hs.Host == "offline" {
 				return nil, fakeTimeoutError{}
@@ -3198,7 +3214,7 @@ func TestPrepareAvailableHTTPSyncsOmitsOfflineHost(t *testing.T) {
 	assert.Equal(t, "offline", unavailable[0].Host)
 	require.Len(t, prepared.sources, 1)
 	assert.Equal(t, "reachable", prepared.sources[0].sync.Host)
-	options, release, err := prepared.BorrowRebuildOptions()
+	options, release, err := prepared.BorrowRebuildOptions(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, []string{"offline~"},
 		options.UnavailableContributorIDPrefixes)
@@ -3217,10 +3233,7 @@ func TestPrepareHTTPSyncsLegacySourcesDoNotCreateWorkingDirectoryLocks(t *testin
 		time.Date(2026, 7, 11, 11, 0, 0, 0, time.UTC), "host b")
 
 	workingDir := t.TempDir()
-	previousDir, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(workingDir))
-	t.Cleanup(func() { require.NoError(t, os.Chdir(previousDir)) })
+	t.Chdir(workingDir)
 	setPortableTempDir(t, t.TempDir())
 
 	var requestOrder []string
@@ -3234,7 +3247,7 @@ func TestPrepareHTTPSyncsLegacySourcesDoNotCreateWorkingDirectoryLocks(t *testin
 	syncB := HTTPSync{Host: "host-b", URL: remoteB.ts.URL, Client: remoteB.ts.Client()}
 	syncs := []HTTPSync{syncB, syncA}
 
-	prepared, err := PrepareHTTPSyncs(context.Background(), syncs)
+	prepared, err := PrepareHTTPSyncs(t.Context(), syncs)
 	require.NoError(t, err)
 	require.NotNil(t, prepared)
 	require.NoError(t, prepared.Close())
@@ -3428,6 +3441,7 @@ func TestPrepareHTTPSyncsRejectsDuplicateCanonicalLockIdentity(t *testing.T) {
 
 func assertDuplicateCanonicalLockIdentity(t *testing.T, dataDirA, dataDirB string) {
 	t.Helper()
+
 	remote := newMirrorTestRemote(t)
 	remote.writeSession(t, "duplicate.jsonl",
 		time.Date(2026, 7, 11, 14, 30, 0, 0, time.UTC), "duplicate")
@@ -3440,12 +3454,12 @@ func assertDuplicateCanonicalLockIdentity(t *testing.T, dataDirA, dataDirB strin
 	remote.onManifest = func() { manifestRequests++ }
 	syncs := []HTTPSync{syncB, syncA}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 750*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 750*time.Millisecond)
 	defer cancel()
 	prepared, err := PrepareHTTPSyncs(ctx, syncs)
 	require.Error(t, err)
 	assert.Nil(t, prepared)
-	assert.ErrorIs(t, err, ErrDuplicateMirrorLock)
+	require.ErrorIs(t, err, ErrDuplicateMirrorLock)
 	var hostErr *HostError
 	require.ErrorAs(t, err, &hostErr)
 	assert.Equal(t, "shared-host", hostErr.Host)
@@ -3464,7 +3478,7 @@ func assertDuplicateCanonicalLockIdentity(t *testing.T, dataDirA, dataDirB strin
 	assert.Equal(t, []string{dataDirB, dataDirA}, []string{
 		syncs[0].DataDir, syncs[1].DataDir,
 	}, "duplicate detection must preserve caller order")
-	lockCtx, lockCancel := context.WithTimeout(context.Background(), time.Second)
+	lockCtx, lockCancel := context.WithTimeout(t.Context(), time.Second)
 	defer lockCancel()
 	lock, lockErr := AcquireMirrorLock(lockCtx, MirrorDir(dataDirA, syncA.Host))
 	require.NoError(t, lockErr)
@@ -3487,10 +3501,10 @@ func TestPreparedHTTPSyncsHoldAllLocksUntilClose(t *testing.T) {
 	syncB.DB = database
 
 	prepared, err := PrepareHTTPSyncs(
-		context.Background(), []HTTPSync{syncB, syncA},
+		t.Context(), []HTTPSync{syncB, syncA},
 	)
 	require.NoError(t, err)
-	options, release, err := prepared.BorrowRebuildOptions()
+	options, release, err := prepared.BorrowRebuildOptions(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		release()
@@ -3501,7 +3515,7 @@ func TestPreparedHTTPSyncsHoldAllLocksUntilClose(t *testing.T) {
 	})
 
 	for _, host := range []string{"host-a", "host-b"} {
-		lockCtx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+		lockCtx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
 		competing, lockErr := AcquireMirrorLock(
 			lockCtx, MirrorDir(dataDir, host),
 		)
@@ -3509,14 +3523,14 @@ func TestPreparedHTTPSyncsHoldAllLocksUntilClose(t *testing.T) {
 		if competing != nil {
 			require.NoError(t, competing.Close())
 		}
-		assert.Error(t, lockErr,
+		require.Error(t, lockErr,
 			"all mirror locks remain held across earlier contributor work")
 	}
 
 	release()
 	require.NoError(t, prepared.Close())
 	for _, host := range []string{"host-a", "host-b"} {
-		lockCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		lockCtx, cancel := context.WithTimeout(t.Context(), time.Second)
 		competing, lockErr := AcquireMirrorLock(
 			lockCtx, MirrorDir(dataDir, host),
 		)
@@ -3525,8 +3539,8 @@ func TestPreparedHTTPSyncsHoldAllLocksUntilClose(t *testing.T) {
 		require.NotNil(t, competing, host)
 		require.NoError(t, competing.Close())
 	}
-	_, _, err = prepared.BorrowRebuildOptions()
-	assert.ErrorIs(t, err, ErrPreparedClosed,
+	_, _, err = prepared.BorrowRebuildOptions(t.Context())
+	require.ErrorIs(t, err, ErrPreparedClosed,
 		"closed aggregate cannot expose contributors")
 }
 
@@ -3536,9 +3550,9 @@ func TestPreparedHTTPSyncsBorrowBlocksCloseUntilRelease(t *testing.T) {
 		time.Date(2026, 7, 11, 15, 30, 0, 0, time.UTC), "borrowed")
 	dataDir := t.TempDir()
 	_, hs := newMirrorSync(t, remote, dataDir)
-	prepared, err := PrepareHTTPSyncs(context.Background(), []HTTPSync{hs})
+	prepared, err := PrepareHTTPSyncs(t.Context(), []HTTPSync{hs})
 	require.NoError(t, err)
-	options, release, err := prepared.BorrowRebuildOptions()
+	options, release, err := prepared.BorrowRebuildOptions(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(func() {
 		release()
@@ -3547,29 +3561,29 @@ func TestPreparedHTTPSyncsBorrowBlocksCloseUntilRelease(t *testing.T) {
 	require.Len(t, options.Contributors, 1)
 	assert.Equal(t, hs.Host, options.Contributors[0].Name)
 
-	assert.ErrorIs(t, prepared.Close(), ErrPreparedInUse)
-	_, _, err = prepared.BorrowRebuildOptions()
-	assert.ErrorIs(t, err, ErrPreparedClosed,
+	require.ErrorIs(t, prepared.Close(), ErrPreparedInUse)
+	_, _, err = prepared.BorrowRebuildOptions(t.Context())
+	require.ErrorIs(t, err, ErrPreparedClosed,
 		"a Close attempt ends new borrowing while retained ownership remains retryable")
-	lockCtx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	lockCtx, cancel := context.WithTimeout(t.Context(), 40*time.Millisecond)
 	competing, lockErr := AcquireMirrorLock(lockCtx, MirrorDir(dataDir, hs.Host))
 	cancel()
 	if competing != nil {
 		require.NoError(t, competing.Close())
 	}
-	assert.Error(t, lockErr, "borrowed Close must retain its mirror lock")
+	require.Error(t, lockErr, "borrowed Close must retain its mirror lock")
 
 	release()
 	release()
 	require.NoError(t, prepared.Close())
-	lockCtx, cancel = context.WithTimeout(context.Background(), time.Second)
+	lockCtx, cancel = context.WithTimeout(t.Context(), time.Second)
 	competing, lockErr = AcquireMirrorLock(lockCtx, MirrorDir(dataDir, hs.Host))
 	cancel()
 	require.NoError(t, lockErr)
 	require.NotNil(t, competing)
 	require.NoError(t, competing.Close())
-	_, _, err = prepared.BorrowRebuildOptions()
-	assert.ErrorIs(t, err, ErrPreparedClosed)
+	_, _, err = prepared.BorrowRebuildOptions(lockCtx)
+	require.ErrorIs(t, err, ErrPreparedClosed)
 }
 
 func TestPreparedHTTPSyncsBorrowAndCloseAreRaceSafe(t *testing.T) {
@@ -3578,7 +3592,7 @@ func TestPreparedHTTPSyncsBorrowAndCloseAreRaceSafe(t *testing.T) {
 		lock:        &MirrorLockHandle{},
 		releaseLock: func(*MirrorLockHandle) error { return nil },
 	}}}
-	_, initialRelease, err := prepared.BorrowRebuildOptions()
+	_, initialRelease, err := prepared.BorrowRebuildOptions(t.Context())
 	require.NoError(t, err)
 	start := make(chan struct{})
 	borrowResults := make(chan error, 8)
@@ -3586,7 +3600,7 @@ func TestPreparedHTTPSyncsBorrowAndCloseAreRaceSafe(t *testing.T) {
 	for range 8 {
 		go func() {
 			<-start
-			_, release, borrowErr := prepared.BorrowRebuildOptions()
+			_, release, borrowErr := prepared.BorrowRebuildOptions(t.Context())
 			if borrowErr == nil {
 				release()
 				release()
@@ -3604,7 +3618,7 @@ func TestPreparedHTTPSyncsBorrowAndCloseAreRaceSafe(t *testing.T) {
 		assert.True(t, borrowErr == nil || errors.Is(borrowErr, ErrPreparedClosed),
 			"unexpected borrow result: %v", borrowErr)
 	}
-	assert.ErrorIs(t, <-closeResult, ErrPreparedInUse)
+	require.ErrorIs(t, <-closeResult, ErrPreparedInUse)
 	initialRelease()
 	require.NoError(t, prepared.Close())
 }
@@ -3634,7 +3648,7 @@ func TestPreparedHTTPSyncsCloseReversesJoinsAndRetries(t *testing.T) {
 		},
 	}}
 
-	assert.ErrorIs(t, prepared.Close(), transient)
+	require.ErrorIs(t, prepared.Close(), transient)
 	assert.Equal(t, []string{"host-b", "host-a"}, order)
 	require.NoError(t, prepared.Close())
 	assert.Equal(t, []string{"host-b", "host-a", "host-b"}, order,
@@ -3667,7 +3681,7 @@ func TestPrepareHTTPSyncsReturnsFailedUnwindOwnership(t *testing.T) {
 	var ownedRoot string
 
 	prepared, err := prepareHTTPSyncs(
-		context.Background(), []HTTPSync{syncB, syncA},
+		t.Context(), []HTTPSync{syncB, syncA},
 		func(ctx context.Context, hs HTTPSync) (*PreparedHTTP, error) {
 			source, prepareErr := hs.Prepare(ctx)
 			if prepareErr != nil || hs.Host != "host-a" {
@@ -3694,8 +3708,8 @@ func TestPrepareHTTPSyncsReturnsFailedUnwindOwnership(t *testing.T) {
 	require.Error(t, err)
 	require.NotNil(t, prepared,
 		"failed cleanup ownership must be returned with the preparation error")
-	assert.ErrorIs(t, err, removeErr)
-	assert.ErrorIs(t, err, unlockErr)
+	require.ErrorIs(t, err, removeErr)
+	require.ErrorIs(t, err, unlockErr)
 	var primary *HostError
 	require.ErrorAs(t, err, &primary)
 	assert.Equal(t, "host-b", primary.Host)
@@ -3718,7 +3732,7 @@ func TestPrepareHTTPSyncRetainsCurrentSourceWhenCleanupFails(t *testing.T) {
 		unlockErr := errors.New("transient current-source unlock failure")
 		unlockCalls := 0
 
-		source, err := hs.prepare(context.Background(), func(source *PreparedHTTP) {
+		source, err := hs.prepare(t.Context(), func(source *PreparedHTTP) {
 			source.releaseLock = func(lock *MirrorLockHandle) error {
 				unlockCalls++
 				if unlockCalls == 1 {
@@ -3729,9 +3743,9 @@ func TestPrepareHTTPSyncRetainsCurrentSourceWhenCleanupFails(t *testing.T) {
 		})
 		require.Error(t, err)
 		require.NotNil(t, source)
-		assert.ErrorIs(t, err, unlockErr)
+		require.ErrorIs(t, err, unlockErr)
 		var statusErr *StatusError
-		assert.ErrorAs(t, err, &statusErr)
+		require.ErrorAs(t, err, &statusErr)
 		assertMirrorLocked(t, MirrorDir(hs.DataDir, hs.Host))
 
 		require.NoError(t, source.Close())
@@ -3746,7 +3760,7 @@ func TestPrepareHTTPSyncRetainsCurrentSourceWhenCleanupFails(t *testing.T) {
 		unlockCalls := 0
 
 		prepared, err := prepareHTTPSyncs(
-			context.Background(), []HTTPSync{hs},
+			t.Context(), []HTTPSync{hs},
 			func(ctx context.Context, hs HTTPSync) (*PreparedHTTP, error) {
 				return hs.prepare(ctx, func(source *PreparedHTTP) {
 					source.releaseLock = func(lock *MirrorLockHandle) error {
@@ -3761,7 +3775,7 @@ func TestPrepareHTTPSyncRetainsCurrentSourceWhenCleanupFails(t *testing.T) {
 		)
 		require.Error(t, err)
 		require.NotNil(t, prepared)
-		assert.ErrorIs(t, err, unlockErr)
+		require.ErrorIs(t, err, unlockErr)
 		var hostErr *HostError
 		require.ErrorAs(t, err, &hostErr)
 		assert.Equal(t, hs.Host, hostErr.Host)
@@ -3794,11 +3808,11 @@ func TestHTTPSyncRunHandlesPreparationCleanupOwnership(t *testing.T) {
 			})
 		}
 
-		_, err := hs.Run(context.Background())
+		_, err := hs.Run(t.Context())
 		require.Error(t, err)
-		assert.ErrorIs(t, err, unlockErr)
+		require.ErrorIs(t, err, unlockErr)
 		var owner *PreparedCleanupError
-		assert.False(t, errors.As(err, &owner),
+		assert.NotErrorAs(t, err, &owner,
 			"successful Run retry must not return cleanup ownership")
 		assert.Equal(t, 2, unlockCalls)
 		assertMirrorUnlocked(t, MirrorDir(hs.DataDir, hs.Host))
@@ -3823,11 +3837,11 @@ func TestHTTPSyncRunHandlesPreparationCleanupOwnership(t *testing.T) {
 			})
 		}
 
-		_, err := hs.Run(context.Background())
+		_, err := hs.Run(t.Context())
 		require.Error(t, err)
-		assert.ErrorIs(t, err, unlockErr)
+		require.ErrorIs(t, err, unlockErr)
 		var statusErr *StatusError
-		assert.ErrorAs(t, err, &statusErr)
+		require.ErrorAs(t, err, &statusErr)
 		var owner *PreparedCleanupError
 		require.ErrorAs(t, err, &owner)
 		assert.Equal(t, 2, unlockCalls, "Run must not double-close before returning")
@@ -3864,12 +3878,12 @@ func TestCleanupRegistryBlocksLaterRunWithPreparedCleanupError(t *testing.T) {
 
 	_, err := registry.Run(func() (SyncStats, error) {
 		callbacks++
-		return hs.Run(context.Background())
+		return hs.Run(t.Context())
 	})
 	require.Error(t, err)
 	var owner *PreparedCleanupError
 	require.ErrorAs(t, err, &owner)
-	assert.ErrorIs(t, err, unlockErr)
+	require.ErrorIs(t, err, unlockErr)
 	assert.Equal(t, 3, unlockCalls)
 	assertMirrorLocked(t, MirrorDir(hs.DataDir, hs.Host))
 
@@ -3882,8 +3896,8 @@ func TestCleanupRegistryBlocksLaterRunWithPreparedCleanupError(t *testing.T) {
 	var retained *PreparedCleanupError
 	require.ErrorAs(t, err, &retained)
 	assert.Same(t, owner, retained)
-	assert.ErrorIs(t, err, owner)
-	assert.ErrorIs(t, err, unlockErr)
+	require.ErrorIs(t, err, owner)
+	require.ErrorIs(t, err, unlockErr)
 	assert.Equal(t, 1, callbacks, "pending cleanup must block the later callback")
 	assert.Equal(t, 4, unlockCalls)
 	assertMirrorLocked(t, MirrorDir(hs.DataDir, hs.Host))
@@ -3914,10 +3928,10 @@ func TestPreparedHTTPCloseAttemptMakesSourceUnusableUntilCleanupCompletes(t *tes
 	}
 
 	require.ErrorIs(t, prepared.Close(), unlockErr)
-	_, importErr := prepared.ImportActive(context.Background())
-	assert.ErrorContains(t, importErr, "closed")
-	_, contributorErr := prepared.RebuildContributor()
-	assert.ErrorContains(t, contributorErr, "closed")
+	_, importErr := prepared.ImportActive(t.Context())
+	require.ErrorContains(t, importErr, "closed")
+	_, contributorErr := prepared.RebuildContributor(t.Context())
+	require.ErrorContains(t, contributorErr, "closed")
 	require.NoError(t, prepared.Close())
 	assert.Equal(t, 2, unlockCalls)
 }
@@ -3945,7 +3959,7 @@ func TestCleanupRegistryRetainsFailedArchiveSpoolCleanup(t *testing.T) {
 	_, err := registry.Run(func() (SyncStats, error) {
 		callbacks++
 		archive, downloadErr := hs.downloadArchive(
-			context.Background(),
+			t.Context(),
 			&http.Response{
 				StatusCode: http.StatusOK,
 				Body:       failingArchiveBody{err: readErr},
@@ -3956,8 +3970,8 @@ func TestCleanupRegistryRetainsFailedArchiveSpoolCleanup(t *testing.T) {
 		return SyncStats{}, downloadErr
 	})
 	require.Error(t, err)
-	assert.ErrorIs(t, err, readErr)
-	assert.ErrorIs(t, err, removeErr)
+	require.ErrorIs(t, err, readErr)
+	require.ErrorIs(t, err, removeErr)
 	var owner *downloadedArchiveCleanupError
 	require.ErrorAs(t, err, &owner)
 	assert.Equal(t, 2, removeCalls, "registry retries cleanup before retaining it")
@@ -3981,7 +3995,7 @@ func TestPrepareHTTPSyncsCacheInvalidationFailureRetainsArmedJournal(t *testing.
 	dataDir := t.TempDir()
 	database, hs := newMirrorSync(t, remote, dataDir)
 	hs.Host = "readonly-host"
-	prepared, err := hs.Prepare(context.Background())
+	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
 	require.NoError(t, prepared.Close())
 
@@ -3991,24 +4005,24 @@ func TestPrepareHTTPSyncsCacheInvalidationFailureRetainsArmedJournal(t *testing.
 	require.NoError(t, err)
 	beforeInfo, err := os.Stat(local)
 	require.NoError(t, err)
-	require.NoError(t, database.ReplaceRemoteSkippedFiles(
+	require.NoError(t, database.ReplaceRemoteSkippedFiles(t.Context(),
 		hs.Host, map[string]int64{path: beforeInfo.ModTime().UnixNano()},
 	))
 	requestsBefore := len(remote.archiveRequests)
 	remote.writeSession(t, "a.jsonl", base.Add(time.Second),
 		"replacement with a different size")
-	readonly, err := db.OpenReadOnly(database.Path())
+	readonly, err := db.OpenReadOnly(t.Context(), database.Path())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, readonly.Close()) })
 	hs.DB = readonly
 
-	preparedSet, err := PrepareHTTPSyncs(context.Background(), []HTTPSync{hs})
+	preparedSet, err := PrepareHTTPSyncs(t.Context(), []HTTPSync{hs})
 	require.Error(t, err)
 	assert.Nil(t, preparedSet)
 	var hostErr *HostError
 	require.ErrorAs(t, err, &hostErr)
 	assert.Equal(t, "readonly-host", hostErr.Host)
-	assert.ErrorIs(t, err, db.ErrReadOnly)
+	require.ErrorIs(t, err, db.ErrReadOnly)
 	afterBytes, readErr := os.ReadFile(local)
 	require.NoError(t, readErr)
 	afterInfo, statErr := os.Stat(local)
@@ -4034,17 +4048,17 @@ func TestPrepareHTTPSyncSameMtimeSizeChangeRecoversAfterAbortedRebuild(t *testin
 	deleted := remote.writeSession(t, "deleted.jsonl", base, "retained archive row")
 	dataDir := t.TempDir()
 	database, hs := newMirrorSync(t, remote, dataDir)
-	stats, err := hs.Run(context.Background())
+	stats, err := hs.Run(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 2, stats.SessionsSynced)
 	initial, err := database.ListSessions(
-		context.Background(), db.SessionFilter{Limit: 10},
+		t.Context(), db.SessionFilter{Limit: 10},
 	)
 	require.NoError(t, err)
 	var changedSessionID string
 	for _, session := range initial.Sessions {
 		messages, messageErr := database.GetMessages(
-			context.Background(), session.ID, 0, 10, true,
+			t.Context(), session.ID, 0, 10, true,
 		)
 		require.NoError(t, messageErr)
 		if len(messages) == 1 && strings.Contains(
@@ -4055,12 +4069,12 @@ func TestPrepareHTTPSyncSameMtimeSizeChangeRecoversAfterAbortedRebuild(t *testin
 	}
 	require.NotEmpty(t, changedSessionID)
 
-	require.NoError(t, database.ReplaceRemoteSkippedFiles(
+	require.NoError(t, database.ReplaceRemoteSkippedFiles(t.Context(),
 		hs.Host, map[string]int64{changed: base.UnixNano()},
 	))
 	remote.writeSession(t, "changed.jsonl", base, "new")
 	require.NoError(t, os.Remove(deleted))
-	prepared, err := hs.Prepare(context.Background())
+	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
 	changedLocal, err := safeRemappedRemotePath(prepared.Root(), changed)
 	require.NoError(t, err)
@@ -4070,20 +4084,20 @@ func TestPrepareHTTPSyncSameMtimeSizeChangeRecoversAfterAbortedRebuild(t *testin
 	deletedLocal, err := safeRemappedRemotePath(prepared.Root(), deleted)
 	require.NoError(t, err)
 	assert.NoFileExists(t, deletedLocal)
-	cache, err := database.LoadRemoteSkippedFiles(hs.Host)
+	cache, err := database.LoadRemoteSkippedFiles(t.Context(), hs.Host)
 	require.NoError(t, err)
 	assert.Empty(t, cache, "cache invalidation commits before mirror mutation")
 	require.NoError(t, prepared.Close(), "simulate rebuild abort before import")
 
-	stats, err = hs.Run(context.Background())
+	stats, err = hs.Run(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.SessionsSynced)
-	page, err := database.ListSessions(context.Background(), db.SessionFilter{Limit: 10})
+	page, err := database.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 2,
 		"remote deletion must not delete the persistent archive row")
 	messages, err := database.GetMessages(
-		context.Background(), changedSessionID, 0, 10, true,
+		t.Context(), changedSessionID, 0, 10, true,
 	)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
@@ -4121,8 +4135,7 @@ func TestHTTPMirrorSameMtimeGrowingRewriteFullParses(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
-	assert.Equal(t,
-		"replacement with a deliberately larger body",
+	assert.Equal(t, "replacement with a deliberately larger body",
 		messages[0].Content,
 	)
 }
@@ -4160,8 +4173,7 @@ func TestHTTPMirrorBootstrapSameMtimeGrowingRewriteFullParses(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
-	assert.Equal(t,
-		"replacement with a deliberately larger body",
+	assert.Equal(t, "replacement with a deliberately larger body",
 		messages[0].Content,
 	)
 }
@@ -4189,9 +4201,9 @@ func TestHTTPMirrorInterruptedGrowingRewriteRetainsFullParse(t *testing.T) {
 			case "active import":
 				_, err = prepared.ImportActive(cancelled)
 			case "rebuild before contributor":
-				contributor, contributorErr := prepared.RebuildContributor()
+				contributor, contributorErr := prepared.RebuildContributor(cancelled)
 				require.NoError(t, contributorErr)
-				local := syncpkg.NewEngine(database, syncpkg.EngineConfig{})
+				local := syncpkg.NewEngine(cancelled, database, syncpkg.EngineConfig{})
 				t.Cleanup(local.Close)
 				_, err = local.ResyncAllWithOptions(
 					cancelled, nil, syncpkg.RebuildOptions{
@@ -4199,7 +4211,7 @@ func TestHTTPMirrorInterruptedGrowingRewriteRetainsFullParse(t *testing.T) {
 					},
 				)
 			default:
-				t.Fatalf("unknown interruption mode %q", mode)
+				require.FailNowf(t, "test failed", "unknown interruption mode %q", mode)
 			}
 			require.ErrorIs(t, err, context.Canceled)
 			require.NoError(t, prepared.Close())
@@ -4213,8 +4225,7 @@ func TestHTTPMirrorInterruptedGrowingRewriteRetainsFullParse(t *testing.T) {
 			)
 			require.NoError(t, err)
 			require.Len(t, messages, 1)
-			assert.Equal(t,
-				"replacement with a deliberately larger body",
+			assert.Equal(t, "replacement with a deliberately larger body",
 				messages[0].Content,
 			)
 		})
@@ -4238,18 +4249,18 @@ func setPortableTempDir(t *testing.T, dir string) {
 
 func assertMirrorLocked(t *testing.T, mirrorRoot string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
 	defer cancel()
 	lock, err := AcquireMirrorLock(ctx, mirrorRoot)
 	if lock != nil {
 		require.NoError(t, lock.Close())
 	}
-	assert.Error(t, err)
+	require.Error(t, err)
 }
 
 func assertMirrorUnlocked(t *testing.T, mirrorRoot string) {
 	t.Helper()
-	lock, err := AcquireMirrorLock(context.Background(), mirrorRoot)
+	lock, err := AcquireMirrorLock(t.Context(), mirrorRoot)
 	require.NoError(t, err)
 	require.NoError(t, lock.Close())
 }

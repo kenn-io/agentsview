@@ -8,20 +8,26 @@ import (
 	"time"
 )
 
-var tokenPattern = regexp.MustCompile(`[A-Za-z0-9_]+`)
-var technicalPhrasePattern = regexp.MustCompile(
-	`(?i)\b(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\b|\b[A-Za-z0-9_.-]+\.(?:go|py|js|jsx|ts|tsx|rs|java|c|cc|cpp|h|hpp|sql|json|ya?ml|toml|md|txt|sh)\b`,
+var (
+	tokenPattern           = regexp.MustCompile(`[A-Za-z0-9_]+`)
+	technicalPhrasePattern = regexp.MustCompile(
+		`(?i)\b(?:[A-Za-z0-9_.-]+/)+[A-Za-z0-9_.-]+\b|\b[A-Za-z0-9_.-]+\.(?:go|py|js|jsx|ts|tsx|rs|java|c|cc|cpp|h|hpp|sql|json|ya?ml|toml|md|txt|sh)\b`,
+	)
 )
+
 var codeSymbolPattern = regexp.MustCompile(
 	`\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+\b|\b[A-Za-z][A-Za-z0-9_]*[a-z][A-Z][A-Za-z0-9_]*\b`,
 )
+
 var errorPhrasePattern = regexp.MustCompile(
 	"(?i)\\b(?:error|failure|panic|exception):\\s*" +
 		"([A-Za-z][A-Za-z0-9 _.-]{2,80}?)(?:[.;,)\\]}`\"'\\n]|$)",
 )
+
 var quotedPhrasePattern = regexp.MustCompile(
 	"`([^`]+)`|(?:^|\\s)'([^']+)'|\"([^\"]+)\"",
 )
+
 var scoringQuotedTextPattern = regexp.MustCompile(
 	"`([^`]+)`|'([^']+)'|\"([^\"]+)\"",
 )
@@ -758,8 +764,10 @@ var rankPhraseStopwords = map[string]bool{
 
 func structuredEntityValues(m Entry) []rankEntity {
 	entities := []rankEntity{
-		{value: m.Project}, {value: m.CWD},
-		{value: m.GitBranch}, {value: m.Agent},
+		{value: m.Project},
+		{value: m.CWD},
+		{value: m.GitBranch},
+		{value: m.Agent},
 	}
 	if base := pathBase(m.CWD); base != "" {
 		entities = append(entities, rankEntity{value: base})

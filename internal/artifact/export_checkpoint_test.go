@@ -114,6 +114,8 @@ func TestExportCheckpointBootstrapSkipsNoncanonicalJSON(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			database := testExportDB(t)
 			store := newTestArtifactStore(t)
 			createCheckpointBody(t, store, 1, []byte(tt.body))
@@ -218,6 +220,8 @@ func TestExportCheckpointBootstrapDefersOnlyValidFutureCheckpoint(t *testing.T) 
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			database := testExportDB(t)
 			baseStore := newTestArtifactStore(t)
 			createCheckpointBody(t, baseStore, 1, []byte(tt.body))
@@ -320,6 +324,7 @@ func TestDecodeSegmentRejectsAggregateNestedLimitsWithSmallLimits(t *testing.T) 
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			limits := productionArtifactLimits()
 			tt.configure(&limits)
 			data := nestedSegmentData(t, tt.records...)
@@ -345,6 +350,7 @@ func TestDecodeSegmentAcceptsCanonicalTrailingNewlineAndEmptySession(t *testing.
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			msgs, err := decodeSegment(tt.data)
 			require.NoError(t, err)
 			assert.Len(t, msgs, tt.want)

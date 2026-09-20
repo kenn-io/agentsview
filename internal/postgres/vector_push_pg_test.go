@@ -116,7 +116,7 @@ func newVectorPushTestSync(
 		t.Skip("pgvector extension unavailable")
 	}
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	t.Cleanup(func() { _ = localDB.Close() })
 
@@ -134,7 +134,7 @@ func newVectorPushTestSync(
 // creates a PG sessions row carrying this pusher's owner marker.
 func seedVectorSession(t *testing.T, localDB *db.DB, id string) {
 	t.Helper()
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID:               id,
 		Project:          "proj",
 		Machine:          "test-machine",
@@ -143,7 +143,7 @@ func seedVectorSession(t *testing.T, localDB *db.DB, id string) {
 		UserMessageCount: 1,
 		CreatedAt:        "2026-01-01T00:00:00Z",
 	}), "UpsertSession "+id)
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     id,
 		Ordinal:       0,
 		Role:          "user",
@@ -156,7 +156,7 @@ func seedVectorSession(t *testing.T, localDB *db.DB, id string) {
 // the PG sessions row carries a project the vector push filter can scope on.
 func seedVectorSessionProject(t *testing.T, localDB *db.DB, id, project string) {
 	t.Helper()
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID:               id,
 		Project:          project,
 		Machine:          "test-machine",
@@ -165,7 +165,7 @@ func seedVectorSessionProject(t *testing.T, localDB *db.DB, id, project string) 
 		UserMessageCount: 1,
 		CreatedAt:        "2026-01-01T00:00:00Z",
 	}), "UpsertSession "+id)
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     id,
 		Ordinal:       0,
 		Role:          "user",
@@ -254,7 +254,7 @@ VALUES ($1, 'orphan', 'stale')`, genID)
 
 	// A changes relationally and in the vector source; B changes only in
 	// the vector source (e.g. an embeddings build finishing later).
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID:               "A",
 		Project:          "proj",
 		Machine:          "test-machine",
@@ -263,7 +263,7 @@ VALUES ($1, 'orphan', 'stale')`, genID)
 		UserMessageCount: 2,
 		CreatedAt:        "2026-01-01T00:00:00Z",
 	}), "reupsert A")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     "A",
 		Ordinal:       1,
 		Role:          "user",
@@ -273,7 +273,7 @@ VALUES ($1, 'orphan', 'stale')`, genID)
 	// InsertMessages touches no sync_marker signal, so advance A's marker
 	// the way real ingestion does for a relational change; without this A
 	// stays below the baseline watermark and the scoped push selects nothing.
-	require.NoError(t, localDB.BumpLocalModifiedAt("A"), "advance A sync marker")
+	require.NoError(t, localDB.BumpLocalModifiedAt(t.Context(), "A"), "advance A sync marker")
 	src.hashes = map[string]string{"A": "ha2", "B": "hb2"}
 	src.docs = map[string][]VectorPushDoc{
 		"A": {vdoc("A", "A#0", 0, "c1b", "ha2", []float32{0, 0, 1, 0})},
@@ -788,7 +788,7 @@ func TestVectorPushDeferredFullPassDoesNotRecordMachineWitness(t *testing.T) {
 	require.NoError(t, err, "baseline Push")
 	genID := res.Vectors.GenerationID
 	require.NotZero(t, genID)
-	witnessKey, err := sync.vectorGenerationWitnessKey()
+	witnessKey, err := sync.vectorGenerationWitnessKey(t.Context())
 	require.NoError(t, err, "vectorGenerationWitnessKey")
 	_, err = pg.Exec(
 		`DELETE FROM vector_generation_machines WHERE generation_id = $1`, genID,
@@ -958,7 +958,7 @@ func TestVectorPushFullRechecksGenerationBeforeRecordingWitness(t *testing.T) {
 	require.NoError(t, pg.QueryRow(
 		`SELECT id FROM vector_generations WHERE fingerprint = $1`, "fp-full-race",
 	).Scan(&gen1), "gen1 id")
-	witnessKey, err := sync.vectorGenerationWitnessKey()
+	witnessKey, err := sync.vectorGenerationWitnessKey(ctx)
 	require.NoError(t, err, "vectorGenerationWitnessKey")
 
 	src.genScopes = nil
@@ -1066,7 +1066,7 @@ func TestVectorPushRoundTrip(t *testing.T) {
 	require.NoError(t, err, "LookupVectorGeneration")
 	require.True(t, ok, "generation registered")
 	assert.Equal(t, 4, dim)
-	witnessKey, err := sync.vectorGenerationWitnessKey()
+	witnessKey, err := sync.vectorGenerationWitnessKey(ctx)
 	require.NoError(t, err, "vectorGenerationWitnessKey")
 
 	assert.Equal(t, 3,
@@ -1847,7 +1847,7 @@ func TestVectorPushLocalProjectMoveOutOfScope(t *testing.T) {
 
 	// The session moves to beta locally, but its PG sessions.project stays alpha
 	// (a filtered session push skips it). The local doc content also changes.
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID:               "mover",
 		Project:          "beta",
 		Machine:          "test-machine",
@@ -2207,13 +2207,13 @@ func TestVectorPushFilteredEvictionScopesByLocalProject(t *testing.T) {
 	// "moved" changes project locally (alpha -> beta) — its PG project stays
 	// alpha because a filtered session push skips it. The others vanish from
 	// the local archive entirely. All three drop out of the embedded set.
-	require.NoError(t, localDB.UpsertSession(db.Session{
+	require.NoError(t, localDB.UpsertSession(t.Context(), db.Session{
 		ID: "moved", Project: "beta", Machine: "test-machine",
 		Agent: "claude", MessageCount: 1, UserMessageCount: 1,
 		CreatedAt: "2026-01-01T00:00:00Z",
 	}), "move session to beta")
-	require.NoError(t, localDB.DeleteSession("gone-out"))
-	require.NoError(t, localDB.DeleteSession("gone-in"))
+	require.NoError(t, localDB.DeleteSession(t.Context(), "gone-out"))
+	require.NoError(t, localDB.DeleteSession(t.Context(), "gone-in"))
 	fake.hashes = map[string]string{}
 	fake.docs = map[string][]VectorPushDoc{}
 
@@ -2300,7 +2300,7 @@ func TestVectorPushSkipsOnInsufficientPrivilege(t *testing.T) {
 	require.NoError(t, err, "Open restricted")
 	t.Cleanup(func() { _ = restricted.Close() })
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	t.Cleanup(func() { _ = localDB.Close() })
 
@@ -2385,7 +2385,7 @@ func TestUsageOnlyPushEvictsDeletedSessionVectors(t *testing.T) {
 			_, err := pg.Exec(`UPDATE sessions SET owner_marker = 'another-archive' WHERE id = 'other-owner'`)
 			require.NoError(t, err)
 			for _, id := range []string{"removed", "other-owner"} {
-				require.NoError(t, local.DeleteSession(id))
+				require.NoError(t, local.DeleteSession(t.Context(), id))
 			}
 			local.SetArchiveContent(config.ArchiveContentUsage)
 			sync.vectorSource = nil // Usage-only CLI pushes do not open the local vector index.

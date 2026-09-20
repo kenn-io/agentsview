@@ -44,8 +44,10 @@ const (
 	defaultStartProbeTick  = 250 * time.Millisecond
 )
 
-var startProbeTickNanos int64 = int64(defaultStartProbeTick)
-var tryAcquireStartLock = daemon.RuntimeStore.TryAcquireStartLock
+var (
+	startProbeTickNanos int64 = int64(defaultStartProbeTick)
+	tryAcquireStartLock       = daemon.RuntimeStore.TryAcquireStartLock
+)
 
 func startProbeTick() time.Duration {
 	return time.Duration(atomic.LoadInt64(&startProbeTickNanos))

@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -198,11 +199,11 @@ func runServeStatus(cfg config.Config) {
 // serveStatusLines renders the human-readable status of a discovered daemon.
 func serveStatusLines(rt *DaemonRuntime) []string {
 	lines := []string{
-		fmt.Sprintf("agentsview running at %s", urlFromDaemonRuntime(rt)),
+		"agentsview running at " + urlFromDaemonRuntime(rt),
 		fmt.Sprintf("  pid:     %d", rt.Record.PID),
 	}
 	if rt.Record.Version != "" {
-		lines = append(lines, fmt.Sprintf("  version: %s", rt.Record.Version))
+		lines = append(lines, "  version: "+rt.Record.Version)
 	}
 	if !rt.Record.StartedAt.IsZero() {
 		uptime := time.Since(rt.Record.StartedAt).Round(time.Second)
@@ -312,7 +313,7 @@ func runServeStop(cfg config.Config) {
 	}
 }
 
-func stopDaemonRuntimeForUpgradeImpl(
+func stopDaemonRuntimeForUpgradeImpl(ctx context.Context,
 	cfg config.Config, rt *DaemonRuntime,
 ) error {
 	if rt == nil {
@@ -339,7 +340,7 @@ func stopDaemonRuntimeForUpgradeImpl(
 		}
 		// A wider bind may also overlap an unrelated listener on the same port.
 		if !reusesEndpoint {
-			if _, err := prepareServeRuntimeConfig(cfg, serveRuntimeOptions{}); err != nil {
+			if _, err := prepareServeRuntimeConfig(ctx, cfg, serveRuntimeOptions{}); err != nil {
 				return err
 			}
 		}
@@ -351,7 +352,7 @@ func stopDaemonRuntimeForUpgradeImpl(
 	return nil
 }
 
-func stopWritableDaemonsForUpdate(
+func stopWritableDaemonsForUpdate(ctx context.Context,
 	cfg config.Config,
 ) (updateDaemonStopResult, error) {
 	records, _ := localWritableDaemonRecordsWithFallback(
@@ -376,15 +377,13 @@ func stopWritableDaemonsForUpdate(
 			result.RequireAuthKnown = rt.RequireAuthKnown
 			result.NoSync = rt.NoSync
 		}
-		if err := stopDaemonRuntimeForUpgrade(cfg, rt); err != nil {
+		if err := stopDaemonRuntimeForUpgrade(ctx, cfg, rt); err != nil {
 			return result, err
 		}
 		result.Stopped = true
 	}
 	if !result.Stopped && IsDaemonStarting(cfg.DataDir) {
-		return result, fmt.Errorf(
-			"agentsview server is starting; retry the update once it is ready",
-		)
+		return result, errors.New("agentsview server is starting; retry the update once it is ready")
 	}
 	return result, nil
 }
@@ -470,7 +469,7 @@ func stopOrphanedCaddyChildWithWriter(
 	}
 	pid, err := strconv.Atoi(raw)
 	if err != nil || pid <= 0 {
-		return nil
+		return nil //nolint:nilerr // Invalid optional PID metadata cannot identify a process to stop.
 	}
 	if !daemon.ProcessAlive(pid) {
 		return nil

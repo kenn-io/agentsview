@@ -110,7 +110,7 @@ func (s *vectorPushSource) BeginExport(
 	exp, ok, err := ix.BeginExport(ctx, sessionIDs)
 	if err != nil {
 		if errors.Is(err, vector.ErrExportNotReady) {
-			return nil, false, fmt.Errorf("%w: %v", postgres.ErrVectorSourceNotReady, err)
+			return nil, false, fmt.Errorf("%w: %w", postgres.ErrVectorSourceNotReady, err)
 		}
 		return nil, false, fmt.Errorf("beginning vector export: %w", err)
 	}

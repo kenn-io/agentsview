@@ -30,7 +30,7 @@ func TestMachineAliasesOnPostgresHTTP(t *testing.T) {
 		s.UserMessageCount = 3
 		s.MessageCount = 5
 	})
-	require.NoError(t, local.SetSyncState("artifact_local_machine_name", "old-owner"))
+	require.NoError(t, local.SetSyncState(t.Context(), "artifact_local_machine_name", "old-owner"))
 	const schema = pgE2ESchema
 	store, err := postgres.NewStore(pgURL, schema, true)
 	require.NoError(t, err)

@@ -14,13 +14,13 @@ import (
 func TestDBAdoptMachineRepairsSelectedHistoryAndBareCodebuffLookup(t *testing.T) {
 	isolateDirectCLISources(t)
 	dir := testDataDir(t)
-	database, err := db.Open(filepath.Join(dir, "sessions.db"))
+	database, err := db.Open(t.Context(), filepath.Join(dir, "sessions.db"))
 	require.NoError(t, err)
 	const sessionID = "codebuff:project:1704067200"
 	for id, machine := range map[string]string{
 		sessionID: "oldhost.example", "older-session": "olderhost.example", "peer-session": "peer.example",
 	} {
-		require.NoError(t, database.UpsertSession(db.Session{
+		require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 			ID: id, Machine: machine, Project: "project", Agent: "codebuff", UserMessageCount: 2,
 		}))
 	}
@@ -28,7 +28,7 @@ func TestDBAdoptMachineRepairsSelectedHistoryAndBareCodebuffLookup(t *testing.T)
 	cfg, err := config.LoadMinimal()
 	require.NoError(t, err)
 	// Startup records the installation without claiming unowned history.
-	database, err = openDB(cfg)
+	database, err = openDB(t.Context(), cfg)
 	require.NoError(t, err)
 	history, err := database.GetSession(t.Context(), sessionID)
 	require.NoError(t, err)
@@ -42,7 +42,7 @@ func TestDBAdoptMachineRepairsSelectedHistoryAndBareCodebuffLookup(t *testing.T)
 	require.ErrorContains(t, err, "not recorded")
 	_, err = executeCommand(newRootCommand(), "db", "adopt-machine", "oldhost.example", "olderhost.example")
 	require.NoError(t, err)
-	database, err = openDB(cfg)
+	database, err = openDB(t.Context(), cfg)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	for _, id := range []string{sessionID, "older-session"} {

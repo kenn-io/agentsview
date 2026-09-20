@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -741,10 +742,10 @@ func (s *Store) GetAnalyticsSummary(
 	if err != nil {
 		return db.AnalyticsSummary{}, fmt.Errorf("querying clickhouse analytics summary: %w", err)
 	}
+	defer rows.Close()
 	resp := db.AnalyticsSummary{Agents: map[string]*db.AgentSummary{}}
 	if !rows.Next() {
-		rows.Close()
-		return resp, nil
+		return resp, rows.Err()
 	}
 	if err := rows.Scan(
 		&resp.TotalSessions,
@@ -759,11 +760,9 @@ func (s *Store) GetAnalyticsSummary(
 		&resp.MostActive,
 		&resp.Concentration,
 	); err != nil {
-		rows.Close()
 		return db.AnalyticsSummary{}, fmt.Errorf("scanning clickhouse analytics summary: %w", err)
 	}
 	if err := rows.Err(); err != nil {
-		rows.Close()
 		return db.AnalyticsSummary{}, fmt.Errorf("iterating clickhouse analytics summary: %w", err)
 	}
 	if err := rows.Close(); err != nil {
@@ -2386,7 +2385,7 @@ func (s *Store) GetAnalyticsTopSessions(
 				COALESCE(sum(
 					CASE
 						WHEN delta_ms <= 0 THEN 0
-						WHEN delta_ms > ` + fmt.Sprintf("%d", db.ActiveGapCapMs) + ` THEN ` + fmt.Sprintf("%d", db.ActiveGapCapMs) + `
+						WHEN delta_ms > ` + strconv.Itoa(db.ActiveGapCapMs) + ` THEN ` + strconv.Itoa(db.ActiveGapCapMs) + `
 						ELSE delta_ms
 					END
 				), 0) / 60000.0 AS active_duration_min
@@ -2621,10 +2620,10 @@ func (s *Store) chSignalMessages(
 		return out, nil
 	}
 	placeholders := make([]string, len(rows))
-	args := make([]any, len(rows))
+	args := make([]any, 0, len(rows))
 	for i, r := range rows {
 		placeholders[i] = "?"
-		args[i] = r.ID
+		args = append(args, r.ID)
 	}
 	filterModels := chAnalyticsCSVValues(f.Model)
 	q := `SELECT session_id, ordinal, role, content,

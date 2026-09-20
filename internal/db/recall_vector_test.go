@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"strings"
@@ -38,13 +37,13 @@ func TestScanRecallEmbeddingUnitsIncludesCompleteServedCorpus(t *testing.T) {
 			SourceSessionID: "s1", SourceRunID: "extract-fp-active",
 		},
 	} {
-		_, err := d.InsertRecallEntry(entry)
+		_, err := d.InsertRecallEntry(t.Context(), entry)
 		require.NoError(t, err)
 	}
 
 	var units []EmbeddableUnit
 	watermark, err := d.ScanRecallEmbeddingUnits(
-		context.Background(), "",
+		t.Context(), "",
 		func(unit EmbeddableUnit) error {
 			units = append(units, unit)
 			return nil
@@ -53,14 +52,12 @@ func TestScanRecallEmbeddingUnitsIncludesCompleteServedCorpus(t *testing.T) {
 
 	require.NoError(t, err)
 	require.Len(t, units, 3)
-	assert.Equal(t,
-		[]string{"active-entry", "human-import", "other-generation"},
+	assert.Equal(t, []string{"active-entry", "human-import", "other-generation"},
 		[]string{units[0].SessionID, units[1].SessionID, units[2].SessionID},
 	)
 	assert.Equal(t, "active-entry", units[0].SourceUUID)
 	assert.Equal(t, "user", units[0].Kind)
-	assert.Equal(t,
-		"Database pool\n\nReuse idle connections.\n\nconnection storm",
+	assert.Equal(t, "Database pool\n\nReuse idle connections.\n\nconnection storm",
 		units[0].Content)
 	assert.NotEmpty(t, watermark)
 }
@@ -68,12 +65,12 @@ func TestScanRecallEmbeddingUnitsIncludesCompleteServedCorpus(t *testing.T) {
 func TestScanRecallEmbeddingUnitsFullSupportsArchiveWithoutDeletionJournal(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 		ID: "legacy-entry", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "Legacy archive", Body: "Still available.", SourceSessionID: "s1",
 	})
 	require.NoError(t, err)
-	require.NoError(t, d.Update(func(tx *sql.Tx) error {
+	require.NoError(t, d.Update(t.Context(), func(tx *sql.Tx) error {
 		for _, trigger := range []string{
 			"trg_recall_embedding_deletion",
 			"trg_recall_embedding_reinsert",
@@ -81,24 +78,24 @@ func TestScanRecallEmbeddingUnitsFullSupportsArchiveWithoutDeletionJournal(t *te
 			"trg_recall_corpus_update",
 			"trg_recall_corpus_delete",
 		} {
-			if _, err := tx.Exec("DROP TRIGGER " + trigger); err != nil {
+			if _, err := tx.ExecContext(t.Context(), "DROP TRIGGER "+trigger); err != nil {
 				return err
 			}
 		}
-		_, err := tx.Exec("DROP TABLE recall_embedding_deletions")
+		_, err := tx.ExecContext(t.Context(), "DROP TABLE recall_embedding_deletions")
 		if err != nil {
 			return err
 		}
-		if _, err = tx.Exec("DROP TABLE recall_embedding_changes"); err != nil {
+		if _, err = tx.ExecContext(t.Context(), "DROP TABLE recall_embedding_changes"); err != nil {
 			return err
 		}
-		_, err = tx.Exec("DROP TABLE recall_corpus_state")
+		_, err = tx.ExecContext(t.Context(), "DROP TABLE recall_corpus_state")
 		return err
 	}))
 
 	var ids []string
 	watermark, err := d.ScanRecallEmbeddingUnits(
-		context.Background(), "",
+		t.Context(), "",
 		func(unit EmbeddableUnit) error {
 			ids = append(ids, unit.SessionID)
 			return nil
@@ -108,7 +105,7 @@ func TestScanRecallEmbeddingUnitsFullSupportsArchiveWithoutDeletionJournal(t *te
 	require.NoError(t, err)
 	assert.Equal(t, []string{"legacy-entry"}, ids)
 	assert.NotEmpty(t, watermark)
-	revision, err := d.RecallCorpusRevision(context.Background())
+	revision, err := d.RecallCorpusRevision(t.Context())
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(revision, "watermark-v1:"))
 }
@@ -117,38 +114,38 @@ func TestRecallCorpusRevisionTracksServedEntryMutations(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 
-	revision, err := d.RecallCorpusRevision(context.Background())
+	revision, err := d.RecallCorpusRevision(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "counter-v1:0", revision)
 
-	_, err = d.InsertRecallEntry(RecallEntry{
+	_, err = d.InsertRecallEntry(t.Context(), RecallEntry{
 		ID: "entry-1", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "Initial", Body: "Body", SourceSessionID: "s1",
 	})
 	require.NoError(t, err)
-	revision, err = d.RecallCorpusRevision(context.Background())
+	revision, err = d.RecallCorpusRevision(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "counter-v1:1", revision)
 
-	_, err = d.getWriter().Exec(`
+	_, err = d.getWriter().Exec(t.Context(), `
 		UPDATE recall_entries SET updated_at = '2026-01-01T00:00:00Z'
 		WHERE id = 'entry-1'`)
 	require.NoError(t, err)
-	revision, err = d.RecallCorpusRevision(context.Background())
+	revision, err = d.RecallCorpusRevision(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "counter-v1:1", revision,
 		"non-embedded metadata does not require a vector refresh")
 
-	_, err = d.getWriter().Exec(`
+	_, err = d.getWriter().Exec(t.Context(), `
 		UPDATE recall_entries SET title = 'Edited' WHERE id = 'entry-1'`)
 	require.NoError(t, err)
-	revision, err = d.RecallCorpusRevision(context.Background())
+	revision, err = d.RecallCorpusRevision(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "counter-v1:2", revision)
 
-	_, err = d.getWriter().Exec("DELETE FROM recall_entries WHERE id = 'entry-1'")
+	_, err = d.getWriter().Exec(t.Context(), "DELETE FROM recall_entries WHERE id = 'entry-1'")
 	require.NoError(t, err)
-	revision, err = d.RecallCorpusRevision(context.Background())
+	revision, err = d.RecallCorpusRevision(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "counter-v1:3", revision)
 }
@@ -157,18 +154,18 @@ func TestRecallCorpusRevisionIgnoresUnservedEntryMutations(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 		ID: "staging-entry", Type: "fact", Scope: "project", Status: "archived",
 		Title: "Draft", Body: "Not served", SourceSessionID: "s1",
 	})
 	require.NoError(t, err)
-	_, err = d.getWriter().Exec(`
+	_, err = d.getWriter().Exec(t.Context(), `
 		UPDATE recall_entries SET title = 'Edited draft' WHERE id = 'staging-entry'`)
 	require.NoError(t, err)
-	_, err = d.getWriter().Exec(`DELETE FROM recall_entries WHERE id = 'staging-entry'`)
+	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM recall_entries WHERE id = 'staging-entry'`)
 	require.NoError(t, err)
 
-	revision, err := d.RecallCorpusRevision(context.Background())
+	revision, err := d.RecallCorpusRevision(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "counter-v1:0", revision,
 		"archived staging changes do not alter the served embedding corpus")
@@ -177,29 +174,29 @@ func TestRecallCorpusRevisionIgnoresUnservedEntryMutations(t *testing.T) {
 func TestRecallCorpusRevisionTracksServedStatusBoundary(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 		ID: "promoted-entry", Type: "fact", Scope: "project", Status: "archived",
 		Title: "Draft", Body: "Promote later", SourceSessionID: "s1",
 	})
 	require.NoError(t, err)
 
-	_, err = d.getWriter().Exec(`
+	_, err = d.getWriter().Exec(t.Context(), `
 		UPDATE recall_entries SET status = 'accepted' WHERE id = 'promoted-entry'`)
 	require.NoError(t, err)
-	revision, err := d.RecallCorpusRevision(context.Background())
+	revision, err := d.RecallCorpusRevision(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "counter-v1:1", revision)
 
-	_, err = d.getWriter().Exec(`
+	_, err = d.getWriter().Exec(t.Context(), `
 		UPDATE recall_entries SET status = 'archived' WHERE id = 'promoted-entry'`)
 	require.NoError(t, err)
-	revision, err = d.RecallCorpusRevision(context.Background())
+	revision, err = d.RecallCorpusRevision(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "counter-v1:2", revision)
 
-	_, err = d.getWriter().Exec(`DELETE FROM recall_entries WHERE id = 'promoted-entry'`)
+	_, err = d.getWriter().Exec(t.Context(), `DELETE FROM recall_entries WHERE id = 'promoted-entry'`)
 	require.NoError(t, err)
-	revision, err = d.RecallCorpusRevision(context.Background())
+	revision, err = d.RecallCorpusRevision(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "counter-v1:2", revision,
 		"deleting an already-unserved entry does not advance the corpus")
@@ -208,19 +205,19 @@ func TestRecallCorpusRevisionTracksServedStatusBoundary(t *testing.T) {
 func TestScanRecallEmbeddingUnitsFindsBackdatedMutationByRevision(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 		ID: "backdated", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "Initial", Body: "Body", SourceSessionID: "s1",
 	})
 	require.NoError(t, err)
 
 	watermark, err := d.ScanRecallEmbeddingUnits(
-		context.Background(), "", func(EmbeddableUnit) error { return nil },
+		t.Context(), "", func(EmbeddableUnit) error { return nil },
 	)
 	require.NoError(t, err)
 	require.True(t, strings.HasPrefix(watermark, "counter-v1:"))
 
-	_, err = d.getWriter().Exec(`
+	_, err = d.getWriter().Exec(t.Context(), `
 		UPDATE recall_entries
 		SET title = 'Backdated edit', updated_at = '2000-01-01T00:00:00Z'
 		WHERE id = 'backdated'`)
@@ -228,7 +225,7 @@ func TestScanRecallEmbeddingUnitsFindsBackdatedMutationByRevision(t *testing.T) 
 
 	var units []EmbeddableUnit
 	next, err := d.ScanRecallEmbeddingUnits(
-		context.Background(), watermark,
+		t.Context(), watermark,
 		func(unit EmbeddableUnit) error {
 			units = append(units, unit)
 			return nil
@@ -248,9 +245,9 @@ func TestRecallEmbeddingIncrementalPlanStaysBoundedAcrossCorpusSizes(t *testing.
 		t.Run(fmt.Sprintf("entries_%d", size), func(t *testing.T) {
 			d := testDB(t)
 			insertSession(t, d, "s1", "agentsview")
-			tx, err := d.getWriter().Begin()
+			tx, err := d.getWriter().Begin(t.Context())
 			require.NoError(t, err)
-			stmt, err := tx.Prepare(`
+			stmt, err := tx.PrepareContext(t.Context(), `
 				INSERT INTO recall_entries
 					(id, type, scope, status, title, body, source_session_id, updated_at)
 				VALUES (?, 'fact', 'project', 'accepted', 'title', 'body', 's1', ?)`)
@@ -260,16 +257,16 @@ func TestRecallEmbeddingIncrementalPlanStaysBoundedAcrossCorpusSizes(t *testing.
 				if i == size-1 {
 					updatedAt = "2026-03-01T00:00:00.000Z"
 				}
-				_, err = stmt.Exec(fmt.Sprintf("entry-%05d", i), updatedAt)
+				_, err = stmt.ExecContext(t.Context(), fmt.Sprintf("entry-%05d", i), updatedAt)
 				require.NoError(t, err)
 			}
-			require.NoError(t, stmt.Close())
+			defer stmt.Close()
 			require.NoError(t, tx.Commit())
-			_, err = d.getWriter().Exec("ANALYZE recall_embedding_changes")
+			_, err = d.getWriter().Exec(t.Context(), "ANALYZE recall_embedding_changes")
 			require.NoError(t, err)
 
 			query, args := recallEmbeddingRevisionScanSQL(int64(size-1), false)
-			rows, err := d.getReader().Query("EXPLAIN QUERY PLAN "+query, args...)
+			rows, err := d.getReader().Query(t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
 			require.NoError(t, err)
 			var plan strings.Builder
 			for rows.Next() {
@@ -279,7 +276,7 @@ func TestRecallEmbeddingIncrementalPlanStaysBoundedAcrossCorpusSizes(t *testing.
 				plan.WriteString(detail)
 			}
 			require.NoError(t, rows.Err())
-			require.NoError(t, rows.Close())
+			defer rows.Close()
 			assert.Contains(t, plan.String(), "idx_recall_embedding_changes_revision")
 			assert.Contains(t, plan.String(), "revision>?")
 			plans = append(plans, plan.String())
@@ -294,7 +291,7 @@ func TestScanRecallEmbeddingUnitsHonorsUpdatedWatermark(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
 	for _, id := range []string{"older", "newer"} {
-		_, err := d.InsertRecallEntry(RecallEntry{
+		_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 			ID: id, Type: "fact", Scope: "project", Status: "accepted",
 			Title: id, Body: "body", SourceSessionID: "s1",
 			SourceRunID: "extract-fp",
@@ -302,10 +299,10 @@ func TestScanRecallEmbeddingUnitsHonorsUpdatedWatermark(t *testing.T) {
 		require.NoError(t, err)
 	}
 	watermark, err := d.ScanRecallEmbeddingUnits(
-		context.Background(), "", func(EmbeddableUnit) error { return nil },
+		t.Context(), "", func(EmbeddableUnit) error { return nil },
 	)
 	require.NoError(t, err)
-	_, err = d.getWriter().Exec(`
+	_, err = d.getWriter().Exec(t.Context(), `
 		UPDATE recall_entries
 		SET title = 'changed', updated_at = '2000-01-01T00:00:00Z'
 		WHERE id = 'newer'`)
@@ -313,7 +310,7 @@ func TestScanRecallEmbeddingUnitsHonorsUpdatedWatermark(t *testing.T) {
 
 	var ids []string
 	next, err := d.ScanRecallEmbeddingUnits(
-		context.Background(), watermark,
+		t.Context(), watermark,
 		func(unit EmbeddableUnit) error {
 			ids = append(ids, unit.SessionID)
 			return nil
@@ -342,19 +339,19 @@ func TestScanRecallEmbeddingUnitsFullWatermarkSkipsOlderChangesIncrementally(t *
 			Title: "Deleted entry", Body: "Removed permanently.", SourceSessionID: "s1",
 		},
 	} {
-		_, err := d.InsertRecallEntry(entry)
+		_, err := d.InsertRecallEntry(t.Context(), entry)
 		require.NoError(t, err)
 	}
-	_, err := d.getWriter().Exec(`
+	_, err := d.getWriter().Exec(t.Context(), `
 		UPDATE recall_entries SET updated_at = CASE id
 			WHEN 'accepted-old' THEN '2026-01-01T00:00:00.000Z'
 			WHEN 'archived-newer' THEN '2026-02-01T00:00:00.000Z'
 			WHEN 'deleted-newest' THEN '2026-03-01T00:00:00.000Z'
 		END`)
 	require.NoError(t, err)
-	_, err = d.getWriter().Exec("DELETE FROM recall_entries WHERE id = 'deleted-newest'")
+	_, err = d.getWriter().Exec(t.Context(), "DELETE FROM recall_entries WHERE id = 'deleted-newest'")
 	require.NoError(t, err)
-	_, err = d.getWriter().Exec(`
+	_, err = d.getWriter().Exec(t.Context(), `
 		UPDATE recall_embedding_deletions
 		SET deleted_at = '2026-03-01T00:00:00.000Z'
 		WHERE entry_id = 'deleted-newest'`)
@@ -362,7 +359,7 @@ func TestScanRecallEmbeddingUnitsFullWatermarkSkipsOlderChangesIncrementally(t *
 
 	var fullIDs []string
 	watermark, err := d.ScanRecallEmbeddingUnits(
-		context.Background(), "",
+		t.Context(), "",
 		func(unit EmbeddableUnit) error {
 			fullIDs = append(fullIDs, unit.SessionID)
 			return nil
@@ -374,7 +371,7 @@ func TestScanRecallEmbeddingUnitsFullWatermarkSkipsOlderChangesIncrementally(t *
 
 	var incrementalIDs []string
 	_, err = d.ScanRecallEmbeddingUnits(
-		context.Background(), watermark,
+		t.Context(), watermark,
 		func(unit EmbeddableUnit) error {
 			incrementalIDs = append(incrementalIDs, unit.SessionID)
 			return nil
@@ -388,16 +385,16 @@ func TestScanRecallEmbeddingUnitsFullWatermarkSkipsOlderChangesIncrementally(t *
 func TestScanRecallEmbeddingUnitsEmitsChangedArchivedEntryAsTombstone(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 		ID: "archived", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "Old entry", Body: "Initially served.", SourceSessionID: "s1",
 	})
 	require.NoError(t, err)
 	watermark, err := d.ScanRecallEmbeddingUnits(
-		context.Background(), "", func(EmbeddableUnit) error { return nil },
+		t.Context(), "", func(EmbeddableUnit) error { return nil },
 	)
 	require.NoError(t, err)
-	_, err = d.getWriter().Exec(`
+	_, err = d.getWriter().Exec(t.Context(), `
 		UPDATE recall_entries
 		SET status = 'archived', updated_at = '2000-01-01T00:00:00.000Z'
 		WHERE id = 'archived'`)
@@ -405,7 +402,7 @@ func TestScanRecallEmbeddingUnitsEmitsChangedArchivedEntryAsTombstone(t *testing
 
 	var units []EmbeddableUnit
 	next, err := d.ScanRecallEmbeddingUnits(
-		context.Background(), watermark,
+		t.Context(), watermark,
 		func(unit EmbeddableUnit) error {
 			units = append(units, unit)
 			return nil
@@ -422,23 +419,23 @@ func TestScanRecallEmbeddingUnitsEmitsChangedArchivedEntryAsTombstone(t *testing
 func TestScanRecallEmbeddingUnitsTracksDeleteAndReinsert(t *testing.T) {
 	d := testDB(t)
 	insertSession(t, d, "s1", "agentsview")
-	_, err := d.InsertRecallEntry(RecallEntry{
+	_, err := d.InsertRecallEntry(t.Context(), RecallEntry{
 		ID: "retracted", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "Private entry", Body: "Must leave semantic search.",
 		SourceSessionID: "s1",
 	})
 	require.NoError(t, err)
 	watermark, err := d.ScanRecallEmbeddingUnits(
-		context.Background(), "", func(EmbeddableUnit) error { return nil },
+		t.Context(), "", func(EmbeddableUnit) error { return nil },
 	)
 	require.NoError(t, err)
-	_, err = d.getWriter().Exec(
+	_, err = d.getWriter().Exec(t.Context(),
 		"DELETE FROM recall_entries WHERE id = 'retracted'")
 	require.NoError(t, err)
 
 	var units []EmbeddableUnit
 	watermark, err = d.ScanRecallEmbeddingUnits(
-		context.Background(), watermark,
+		t.Context(), watermark,
 		func(unit EmbeddableUnit) error {
 			units = append(units, unit)
 			return nil
@@ -450,7 +447,7 @@ func TestScanRecallEmbeddingUnitsTracksDeleteAndReinsert(t *testing.T) {
 	assert.Equal(t, "retracted", units[0].SessionID)
 	assert.True(t, units[0].Deleted)
 
-	_, err = d.InsertRecallEntry(RecallEntry{
+	_, err = d.InsertRecallEntry(t.Context(), RecallEntry{
 		ID: "retracted", Type: "fact", Scope: "project", Status: "accepted",
 		Title: "Restored entry", Body: "This identity serves again.",
 		SourceSessionID: "s1",
@@ -458,7 +455,7 @@ func TestScanRecallEmbeddingUnitsTracksDeleteAndReinsert(t *testing.T) {
 	require.NoError(t, err)
 	units = nil
 	_, err = d.ScanRecallEmbeddingUnits(
-		context.Background(), watermark,
+		t.Context(), watermark,
 		func(unit EmbeddableUnit) error {
 			units = append(units, unit)
 			return nil

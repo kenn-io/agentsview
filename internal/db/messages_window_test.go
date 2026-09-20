@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,9 +23,18 @@ func seedWindowMessages(t *testing.T, d *DB, sessionID string) {
 	t.Helper()
 	insertSession(t, d, sessionID, "proj")
 	specs := []windowMsgSpec{
-		{0, "user"}, {1, "assistant"}, {2, "user"}, {3, "assistant"},
-		{4, "system"}, {5, "user"}, {6, "assistant"}, {7, "user"},
-		{8, "assistant"}, {9, "system"}, {10, "user"}, {11, "assistant"},
+		{0, "user"},
+		{1, "assistant"},
+		{2, "user"},
+		{3, "assistant"},
+		{4, "system"},
+		{5, "user"},
+		{6, "assistant"},
+		{7, "user"},
+		{8, "assistant"},
+		{9, "system"},
+		{10, "user"},
+		{11, "assistant"},
 	}
 	msgs := make([]Message, 0, len(specs))
 	for _, sp := range specs {
@@ -53,7 +61,7 @@ func ordinalsOf(msgs []Message) []int {
 
 func TestGetMessagesWindow_AroundMidSession(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedWindowMessages(t, d, "sMid")
 
 	anchor := 6
@@ -67,7 +75,7 @@ func TestGetMessagesWindow_AroundMidSession(t *testing.T) {
 
 func TestGetMessagesWindow_RoleFilterCountsFilteredMessages(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedWindowMessages(t, d, "sRoleCount")
 
 	anchor := 6
@@ -84,7 +92,7 @@ func TestGetMessagesWindow_RoleFilterCountsFilteredMessages(t *testing.T) {
 
 func TestGetMessagesWindow_AnchorIncludedEvenWhenRoleFiltered(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedWindowMessages(t, d, "sAnchorFiltered")
 
 	anchor := 4 // role "system", excluded by the role filter
@@ -100,7 +108,7 @@ func TestGetMessagesWindow_AnchorIncludedEvenWhenRoleFiltered(t *testing.T) {
 
 func TestGetMessagesWindow_AroundOrdinalZeroHasNoBefore(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedWindowMessages(t, d, "sFirst")
 
 	anchor := 0
@@ -114,7 +122,7 @@ func TestGetMessagesWindow_AroundOrdinalZeroHasNoBefore(t *testing.T) {
 
 func TestGetMessagesWindow_AroundLastOrdinalHasNoAfter(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedWindowMessages(t, d, "sLast")
 
 	anchor := 11
@@ -128,7 +136,7 @@ func TestGetMessagesWindow_AroundLastOrdinalHasNoAfter(t *testing.T) {
 
 func TestGetMessagesWindow_LinearModeWithRoles(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedWindowMessages(t, d, "sLinearRoles")
 
 	msgs, err := d.GetMessagesWindow(ctx, "sLinearRoles", MessageWindow{
@@ -141,7 +149,7 @@ func TestGetMessagesWindow_LinearModeWithRoles(t *testing.T) {
 
 func TestGetMessagesWindow_EmptyRolesEquivalentToGetMessages(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedWindowMessages(t, d, "sEquiv")
 
 	direct, err := d.GetMessages(ctx, "sEquiv", 3, 5, true)

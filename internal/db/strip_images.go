@@ -151,6 +151,7 @@ func (db *DB) rewriteStoredToolResultRows(
 	if err != nil {
 		return false, fmt.Errorf("reading tool calls: %w", err)
 	}
+	defer callRows.Close()
 	for callRows.Next() {
 		var update contentUpdate
 		if err := callRows.Scan(
@@ -186,6 +187,7 @@ func (db *DB) rewriteStoredToolResultRows(
 	if err != nil {
 		return false, fmt.Errorf("reading tool result events: %w", err)
 	}
+	defer eventRows.Close()
 	events := make([]contentUpdate, 0)
 	for eventRows.Next() {
 		var update contentUpdate
@@ -293,7 +295,7 @@ func (db *DB) rewriteStoredToolResultRows(
 	if err := replaceSecretFindingsTx(tx, sessionID, findings, leakCount, secrets.RulesVersion()); err != nil {
 		return false, err
 	}
-	if err := invalidateSessionSignalsTx(tx, sessionID); err != nil {
+	if err := invalidateSessionSignalsTx(ctx, tx, sessionID); err != nil {
 		return false, err
 	}
 	if err := enqueueArtifactExportIfGenerationUnchangedTx(
@@ -460,6 +462,8 @@ func (db *DB) ProjectToolImagesForSessions(ctx context.Context, sessionIDs []str
 		return nil
 	}
 	switch db.ToolResultImages() {
+	case config.ToolResultImagesKeep:
+		return nil
 	case config.ToolResultImagesDrop:
 		return db.StripToolImagesForSessions(ctx, sessionIDs)
 	case config.ToolResultImagesOffload:

@@ -88,7 +88,7 @@ func dialLoopbackDaemon(
 
 func validateArtifactSyncConfig(cfg SyncConfig) error {
 	if cfg.Target != "" && cfg.Host != "" {
-		return fmt.Errorf("--target cannot be combined with --host")
+		return errors.New("--target cannot be combined with --host")
 	}
 	return nil
 }

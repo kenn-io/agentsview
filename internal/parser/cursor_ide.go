@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"os"
@@ -87,7 +88,7 @@ func beginCursorIDESnapshot(
 
 // CursorIDEComposerExists reports whether a composerData row with the given
 // composer ID exists in state.vscdb.
-func CursorIDEComposerExists(dbPath, composerID string) bool {
+func CursorIDEComposerExists(ctx context.Context, dbPath, composerID string) bool {
 	if dbPath == "" || composerID == "" || !IsValidSessionID(composerID) {
 		return false
 	}
@@ -97,7 +98,7 @@ func CursorIDEComposerExists(dbPath, composerID string) bool {
 	}
 	defer conn.Close()
 	var one int
-	err = conn.QueryRow(
+	err = conn.QueryRowContext(ctx,
 		`SELECT 1 FROM cursorDiskKV WHERE key = ? LIMIT 1`,
 		cursorIDEComposerKeyPrefix+composerID,
 	).Scan(&one)
@@ -206,7 +207,7 @@ func loadCursorIDEComposerMeta(
 		`SELECT value FROM cursorDiskKV WHERE key = ?`,
 		cursorIDEComposerKeyPrefix+composerID,
 	).Scan(&raw)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return cursorIDEComposerMeta{}, false, nil
 	}
 	if err != nil {
@@ -439,7 +440,7 @@ func parseCursorIDEComposer(
 		`SELECT value FROM cursorDiskKV WHERE key = ?`,
 		cursorIDEComposerKeyPrefix+composerID,
 	).Scan(&raw)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

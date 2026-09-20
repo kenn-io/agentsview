@@ -3,7 +3,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -12,17 +11,18 @@ import (
 
 func TestSessionDeletionJournalRecordsHardDeletes(t *testing.T) {
 	database := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, id := range []string{"del-1", "del-2", "keep-1"} {
-		require.NoError(t, database.UpsertSession(Session{
+		require.NoError(t, database.UpsertSession(ctx, Session{
 			ID: id, Project: "p", Machine: "m", Agent: "a",
-			CreatedAt: "2026-07-01T10:00:00.000Z"}))
+			CreatedAt: "2026-07-01T10:00:00.000Z",
+		}))
 	}
 	before, err := database.SessionDeletionPublicationRevision(ctx)
 	require.NoError(t, err)
 
-	require.NoError(t, database.DeleteSession("del-1"))
-	_, err = database.DeleteSessions([]string{"del-2"})
+	require.NoError(t, database.DeleteSession(ctx, "del-1"))
+	_, err = database.DeleteSessions(ctx, []string{"del-2"})
 	require.NoError(t, err)
 
 	after, err := database.SessionDeletionPublicationRevision(ctx)
@@ -51,16 +51,17 @@ func TestSessionDeletionJournalRecordsHardDeletes(t *testing.T) {
 
 func TestSessionDeletionJournalIgnoresSoftDeleteAndClearsOnReinsert(t *testing.T) {
 	database := testDB(t)
-	ctx := context.Background()
-	require.NoError(t, database.UpsertSession(Session{
+	ctx := t.Context()
+	require.NoError(t, database.UpsertSession(ctx, Session{
 		ID: "sd-1", Project: "p", Machine: "m", Agent: "a",
-		CreatedAt: "2026-07-01T10:00:00.000Z"}))
+		CreatedAt: "2026-07-01T10:00:00.000Z",
+	}))
 	before, err := database.SessionDeletionPublicationRevision(ctx)
 	require.NoError(t, err)
 
 	// Soft delete must not create a tombstone (soft-deleted sessions stay
 	// live in the mirror; see deleteHardDeletedMirrorSessions semantics).
-	require.NoError(t, database.SoftDeleteSession("sd-1"))
+	require.NoError(t, database.SoftDeleteSession(ctx, "sd-1"))
 	after, err := database.SessionDeletionPublicationRevision(ctx)
 	require.NoError(t, err)
 	delta, err := database.LoadSessionDeletionDelta(ctx, before, after, nil, nil)
@@ -69,19 +70,20 @@ func TestSessionDeletionJournalIgnoresSoftDeleteAndClearsOnReinsert(t *testing.T
 
 	// Hard delete then re-insert: the re-insert flips the journal row back
 	// to deleted=0, so a delta spanning both events yields no tombstone.
-	n, err := database.DeleteSessionIfTrashed("sd-1")
+	n, err := database.DeleteSessionIfTrashed(ctx, "sd-1")
 	require.NoError(t, err)
 	require.Equal(t, int64(1), n)
 	// DeleteSessionIfTrashed permanently excludes the id, which is a
 	// business-level gate in UpsertSession unrelated to the deletion
 	// journal under test here. Clear it directly so the re-insert below
 	// exercises the journal's insert trigger.
-	_, err = database.getWriter().Exec(
+	_, err = database.getWriter().Exec(ctx,
 		"DELETE FROM excluded_sessions WHERE id = ?", "sd-1")
 	require.NoError(t, err)
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(t, database.UpsertSession(ctx, Session{
 		ID: "sd-1", Project: "p", Machine: "m", Agent: "a",
-		CreatedAt: "2026-07-01T11:00:00.000Z"}))
+		CreatedAt: "2026-07-01T11:00:00.000Z",
+	}))
 	final, err := database.SessionDeletionPublicationRevision(ctx)
 	require.NoError(t, err)
 	delta, err = database.LoadSessionDeletionDelta(ctx, before, final, nil, nil)

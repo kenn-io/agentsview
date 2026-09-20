@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -22,21 +21,23 @@ func TestStoredSecretScansRespectArchiveContent(t *testing.T) {
 		} {
 			t.Run(operation+"/"+string(tc.policy), func(t *testing.T) {
 				fx := newEngineFixture(t)
-				ctx := context.Background()
+				ctx := t.Context()
 				const id = "archive-policy"
 				const accessKey = "AKIA" + "7QHWN2DKR4FYPLJM"
-				require.NoError(t, fx.db.UpsertSession(db.Session{
+				require.NoError(t, fx.db.UpsertSession(ctx, db.Session{
 					ID: id, Project: "proj", Machine: "local", Agent: "claude",
 					MessageCount: 2, UserMessageCount: 1,
 				}))
-				require.NoError(t, fx.db.ReplaceSessionMessages(id, []db.Message{
+				require.NoError(t, fx.db.ReplaceSessionMessages(ctx, id, []db.Message{
 					{SessionID: id, Ordinal: 0, Role: "user", Content: "aws " + accessKey},
-					{SessionID: id, Ordinal: 1, Role: "assistant", Content: "Checking credentials.",
+					{
+						SessionID: id, Ordinal: 1, Role: "assistant", Content: "Checking credentials.",
 						ToolCalls: []db.ToolCall{{
 							ToolName: "Bash", ToolUseID: "tool-1",
 							InputJSON:     `{"command":"echo ` + accessKey + `"}`,
 							ResultContent: accessKey,
-						}}},
+						}},
+					},
 				}))
 				// Model a full archive opened under a stricter policy before
 				// its old message payloads have been resynchronized.

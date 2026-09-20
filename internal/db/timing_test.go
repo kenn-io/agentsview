@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"encoding/json/v2"
 	"strings"
 	"testing"
@@ -27,22 +26,20 @@ func TestAssembleTiming_HermesBackfilledEndedAtStopsReportingRunning(t *testing.
 	liveTiming := AssembleTiming(live, nil, nil, now)
 	assert.True(t, liveTiming.Running,
 		"today's shape: a nil EndedAt reports Running true")
-	assert.Equal(t,
-		millisBetween(startedAt, now.Format(time.RFC3339)),
+	assert.Equal(t, millisBetween(startedAt, now.Format(time.RFC3339)),
 		liveTiming.TotalDurationMs)
 
 	backfilled := &Session{ID: "hermes:open1", StartedAt: &startedAt, EndedAt: &newestMessage}
 	backfilledTiming := AssembleTiming(backfilled, nil, nil, now)
 	assert.False(t, backfilledTiming.Running,
 		"head's shape: EndedAt back-filled to the newest message time reports Running false")
-	assert.Equal(t,
-		millisBetween(startedAt, newestMessage),
+	assert.Equal(t, millisBetween(startedAt, newestMessage),
 		backfilledTiming.TotalDurationMs)
 }
 
 func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	timingInsertSession(t, d, "solo",
 		"2026-04-26T10:00:00Z", "2026-04-26T10:00:30Z")
@@ -250,7 +247,7 @@ func TestGetSessionTiming_ReadOnlyFixture(t *testing.T) {
 
 func TestGetSessionTiming_LegacyPrefixAndChildPrecedence(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	timingInsertSession(t, d, "prefix-child",
 		"2026-04-26T10:00:00Z", "2026-04-26T10:00:06Z")
 	timingInsertSession(t, d, "prefix-child-child",
@@ -390,7 +387,7 @@ func timingInsertSession(t *testing.T, d *DB, id, started, ended string) {
 	if ended != "" {
 		endedAt = ended
 	}
-	_, err := d.getWriter().ExecContext(context.Background(), `
+	_, err := d.getWriter().ExecContext(t.Context(), `
 		INSERT INTO sessions
 			(id, project, machine, agent, message_count,
 			 started_at, ended_at)
@@ -409,7 +406,7 @@ func timingInsertMessage(
 	if hasToolUse {
 		flag = 1
 	}
-	_, err := d.getWriter().ExecContext(context.Background(), `
+	_, err := d.getWriter().ExecContext(t.Context(), `
 		INSERT INTO messages
 			(session_id, ordinal, role, content, timestamp,
 			 has_tool_use, content_length)
@@ -423,7 +420,7 @@ func timingMsgID(
 ) int64 {
 	t.Helper()
 	var id int64
-	err := d.getReader().QueryRowContext(context.Background(),
+	err := d.getReader().QueryRowContext(t.Context(),
 		`SELECT id FROM messages
 		 WHERE session_id = ? AND ordinal = ?`,
 		sessionID, ordinal,
@@ -442,7 +439,7 @@ func timingInsertToolCall(
 	if subagentSessionID != "" {
 		sub = subagentSessionID
 	}
-	_, err := d.getWriter().ExecContext(context.Background(), `
+	_, err := d.getWriter().ExecContext(t.Context(), `
 		INSERT INTO tool_calls
 			(session_id, message_id, tool_use_id, tool_name,
 			 category, input_json, subagent_session_id, call_index)
@@ -456,7 +453,7 @@ func timingInsertToolResultEvent(
 	toolUseID, status, timestamp string, eventIndex int,
 ) {
 	t.Helper()
-	_, err := d.getWriter().ExecContext(context.Background(), `
+	_, err := d.getWriter().ExecContext(t.Context(), `
 		INSERT INTO tool_result_events
 			(session_id, tool_call_message_ordinal, call_index,
 			 tool_use_id, source, status, content, timestamp, event_index)

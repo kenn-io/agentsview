@@ -46,7 +46,7 @@ func TestBrowserURLWithPlatformKeepsLoopbackOutsideWSL(t *testing.T) {
 		cfg,
 		func() bool { return false },
 		func(string) (string, bool) {
-			t.Fatal("interface lookup should not run outside WSL")
+			assert.Fail(t, "interface lookup should not run outside WSL")
 			return "", false
 		},
 	)
@@ -307,7 +307,7 @@ func TestWaitForLocalPortReturnsEarlyOnErrorChannel(t *testing.T) {
 	errCh := make(chan error, 1)
 	errCh <- errors.New("backend failed")
 	err := waitForLocalPort(
-		context.Background(),
+		t.Context(),
 		"127.0.0.1",
 		65535,
 		5*time.Second,
@@ -318,7 +318,7 @@ func TestWaitForLocalPortReturnsEarlyOnErrorChannel(t *testing.T) {
 }
 
 func TestWaitForLocalPortHonorsContextCancellation(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	err := waitForLocalPort(
 		ctx,
@@ -331,7 +331,7 @@ func TestWaitForLocalPortHonorsContextCancellation(t *testing.T) {
 }
 
 func TestWaitForLocalPortPrefersContextCancellationOverError(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	errCh := make(chan error, 1)
 	errCh <- errors.New("caddy exited")

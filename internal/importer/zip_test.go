@@ -12,6 +12,7 @@ import (
 
 func createTestZip(t *testing.T, files map[string]string) string {
 	t.Helper()
+
 	zipPath := filepath.Join(t.TempDir(), "test.zip")
 	f, err := os.Create(zipPath)
 	require.NoError(t, err)

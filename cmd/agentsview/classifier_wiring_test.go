@@ -66,12 +66,7 @@ func TestEveryStoreOpenPathIsWired(t *testing.T) {
 	}
 	if len(violations) > 0 {
 		sort.Strings(violations)
-		t.Fatalf(
-			"functions or closures missing %s before "+
-				"opening a store:\n  %s",
-			wiringHelper,
-			strings.Join(violations, "\n  "),
-		)
+		require.FailNowf(t, "functions or closures missing %s before opening a store", "%s", wiringHelper+":\n  "+strings.Join(violations, "\n  "))
 	}
 }
 

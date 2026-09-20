@@ -1,7 +1,6 @@
 package config
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -65,7 +64,7 @@ func TestPiDirectoryOverrides(t *testing.T) {
 				Roots: cfg.ResolveDirs(parser.AgentPi), Machine: "host-a",
 			})
 			require.True(t, ok)
-			sources, err := provider.Discover(context.Background())
+			sources, err := provider.Discover(t.Context())
 			require.NoError(t, err)
 			require.Len(t, sources, 1)
 			assert.Equal(t, sessionPath, sources[0].DisplayPath)

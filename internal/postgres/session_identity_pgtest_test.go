@@ -27,7 +27,7 @@ func TestPGClaudeProvenanceVisibleInReadPaths(t *testing.T) {
 	require.NoError(t, err, "drop schema")
 	require.NoError(t, EnsureSchema(ctx, pg, schema), "EnsureSchema")
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err, "db.Open")
 	defer localDB.Close()
 
@@ -47,8 +47,8 @@ func TestPGClaudeProvenanceVisibleInReadPaths(t *testing.T) {
 		EndedAt:          strPtr("2026-01-01T01:00:00Z"),
 		FilePath:         &filePath,
 	}
-	require.NoError(t, localDB.UpsertSession(sess), "UpsertSession")
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess), "UpsertSession")
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     sess.ID,
 		Ordinal:       0,
 		Role:          "user",

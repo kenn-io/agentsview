@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -53,13 +52,13 @@ func TestKiloProviderParseRelabelsOpenCodeSession(t *testing.T) {
 		Machine: "testmachine",
 	})
 	require.True(t, ok)
-	source, found, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, found, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "kilo:ses_kilo",
 	})
 	require.NoError(t, err)
 	require.True(t, found)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  source,
 		Machine: "testmachine",
 	})
@@ -92,7 +91,7 @@ func TestKiloProviderDiscoversSessions(t *testing.T) {
 
 	provider, ok := NewProvider(AgentKilo, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
@@ -124,14 +123,14 @@ func TestKiloSQLiteProjectionWithoutSequence(t *testing.T) {
 			seed.AddProject("project-a", "/workspace/project-a")
 			seed.AddSession("ses_kilo", "project-a", "", "", 1700000000000, 1700000060000)
 			// Released Kilo schema before the projection-order migration.
-			_, err := writer.Exec(`CREATE TABLE session_message (
+			_, err := writer.ExecContext(t.Context(), `CREATE TABLE session_message (
  id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL,
  time_created INTEGER NOT NULL, time_updated INTEGER NOT NULL, data TEXT NOT NULL);
  INSERT INTO message VALUES ('msg_legacy', 'ses_kilo', 1700000000000, 1700000000000, '{"role":"user"}');
  INSERT INTO part VALUES ('part_legacy', 'msg_legacy', 'ses_kilo', 1700000000000, 1700000000000, '{"type":"text","text":"Earlier question"}');`)
 			require.NoError(t, err)
 			if projection {
-				_, err = writer.Exec(`INSERT INTO session_message VALUES
+				_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES
  ('msg_z', 'ses_kilo', 'user', 1700000001000, 1700000001000, '{"text":"Next question"}'),
  ('msg_b', 'ses_kilo', 'assistant', 1700000002000, 1700000002000, '{"content":[{"type":"text","text":"Second answer"}]}'),
  ('msg_a', 'ses_kilo', 'assistant', 1700000002000, 1700000002000, '{"content":[{"type":"text","text":"First answer"}]}');`)
@@ -151,12 +150,12 @@ func TestKiloSQLiteProjectionWithoutSequence(t *testing.T) {
 				return
 			}
 			assert.Equal(t, []string{"Earlier question", "Next question", "First answer", "Second answer"}, content)
-			_, before, _, err := openCodeSessionCompositeMtime(writer, path, "ses_kilo")
+			_, before, _, err := openCodeSessionCompositeMtime(t.Context(), writer, path, "ses_kilo")
 			require.NoError(t, err)
 			// Same row count and update-time maximum, but a different ordering key.
-			_, err = writer.Exec(`UPDATE session_message SET time_created = 1700000003000 WHERE id = 'msg_a'`)
+			_, err = writer.ExecContext(t.Context(), `UPDATE session_message SET time_created = 1700000003000 WHERE id = 'msg_a'`)
 			require.NoError(t, err)
-			_, after, _, err := openCodeSessionCompositeMtime(writer, path, "ses_kilo")
+			_, after, _, err := openCodeSessionCompositeMtime(t.Context(), writer, path, "ses_kilo")
 			require.NoError(t, err)
 			assert.NotEqual(t, before, after)
 			_, messages, err = parseOpenCodeDBSession(path, "ses_kilo", "testmachine")

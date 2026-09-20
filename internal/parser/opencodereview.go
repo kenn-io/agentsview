@@ -3,13 +3,12 @@ package parser
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"os"
 	"slices"
 	"time"
-
-	"encoding/json/jsontext"
 )
 
 type openCodeReviewRecord struct {
@@ -156,7 +155,7 @@ func parseOpenCodeReviewFile(
 	if state.endedAt.IsZero() {
 		state.endedAt = lastOpenCodeReviewTimestamp(state.messages, state.startedAt)
 	}
-	status := TerminationStatus("")
+	var status TerminationStatus
 	if state.truncated {
 		status = TerminationTruncated
 	} else if state.ended {

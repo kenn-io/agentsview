@@ -29,7 +29,7 @@ func TestSyncCodeBuddySameSizeSameMtimeRewrite(t *testing.T) {
 					require.NoError(t, os.WriteFile(path, []byte(content), 0o600))
 				}
 				database := openTestDB(t)
-				engine := NewEngine(database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodeBuddy: {root}}, Machine: "test"})
+				engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodeBuddy: {root}}, Machine: "test"})
 				t.Cleanup(engine.Close)
 				require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 				if warmCache {
@@ -47,7 +47,7 @@ func TestSyncCodeBuddySameSizeSameMtimeRewrite(t *testing.T) {
 				}
 				before, err := os.Stat(path)
 				require.NoError(t, err)
-				require.EqualValues(t, before.Size(), len(replacement))
+				require.Len(t, replacement, int(before.Size()))
 				require.NoError(t, os.WriteFile(path, []byte(replacement), 0o600))
 				require.NoError(t, os.Chtimes(path, before.ModTime(), before.ModTime()))
 				after, err := os.Stat(path)
@@ -96,7 +96,7 @@ func TestSyncCodeBuddyEmptyReplacement(t *testing.T) {
 			require.NoError(t, os.WriteFile(index, []byte(`{"messages":[{"id":"u1"}]}`), 0o600))
 			require.NoError(t, os.WriteFile(message, []byte(`{"role":"user","message":{"content":[{"type":"text","text":"keep until cleared"}]}}`), 0o600))
 			database := openTestDB(t)
-			engine := NewEngine(database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodeBuddy: {root}}, Machine: "test"})
+			engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCodeBuddy: {root}}, Machine: "test"})
 			t.Cleanup(engine.Close)
 			require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 			engine.SyncAll(t.Context(), nil)

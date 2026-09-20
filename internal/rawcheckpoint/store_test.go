@@ -264,7 +264,7 @@ func TestStoreConcurrentAdvanceHeadReturnsCASResults(t *testing.T) {
 		case errors.Is(err, ErrHeadConflict):
 			conflicts++
 		default:
-			assert.NoError(t, err, "concurrent writers must return a CAS result")
+			require.NoError(t, err, "concurrent writers must return a CAS result")
 		}
 	}
 	assert.Equal(t, 1, successes)

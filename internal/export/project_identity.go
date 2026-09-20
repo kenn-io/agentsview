@@ -3,7 +3,7 @@ package export
 import (
 	"crypto/sha256"
 	"encoding/binary"
-	"fmt"
+	"encoding/hex"
 	"net"
 	"net/url"
 	"os"
@@ -430,7 +430,7 @@ func scopedProjectKey(prefix string, parts ...string) string {
 		_, _ = h.Write(size[:])
 		_, _ = h.Write([]byte(part))
 	}
-	return prefix + ":sha256:" + fmt.Sprintf("%x", h.Sum(nil))
+	return prefix + ":sha256:" + hex.EncodeToString(h.Sum(nil))
 }
 
 func projectLabelKey(scope IdentityScope, label string) string {
@@ -633,11 +633,11 @@ func ProjectCatalogIdentity(identity *ProjectIdentity) *ProjectIdentity {
 	if identity == nil {
 		return nil
 	}
-	copy := *identity
-	if copy.Kind == ProjectKindGitRemote {
-		copy.RootKey = ""
+	copied := *identity
+	if copied.Kind == ProjectKindGitRemote {
+		copied.RootKey = ""
 	}
-	return &copy
+	return &copied
 }
 
 func BuildProjectsMapWithScope(
@@ -729,7 +729,7 @@ func BuildProjectsMapWithScope(
 
 func projectIdentityKey(source, normalized string) string {
 	sum := sha256.Sum256([]byte(source + "\n" + normalized))
-	return "sha256:" + fmt.Sprintf("%x", sum)
+	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
 func looksRemotePrefixed(path string) bool {

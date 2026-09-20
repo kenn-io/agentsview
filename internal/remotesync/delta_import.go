@@ -2,6 +2,7 @@ package remotesync
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -74,7 +75,7 @@ type PreparedDeltaImport struct {
 	requiredDataVersion int
 	progress            syncpkg.ProgressFunc
 	save                func(*db.DB, *syncpkg.Engine, remotePathMap) error
-	apply               func(string, []string, map[string]int64) error
+	apply               func(context.Context, string, []string, map[string]int64) error
 }
 
 func (im Importer) PreparePending(
@@ -134,7 +135,7 @@ func (im Importer) PreparePending(
 		physicalPaths = append(physicalPaths, path)
 	}
 	planningStart := time.Now()
-	planningEngine := syncpkg.NewEngine(im.DB, config)
+	planningEngine := syncpkg.NewEngine(ctx, im.DB, config)
 	plan, err := planningEngine.PlanChangedPathsContext(ctx, physicalPaths)
 	planningEngine.Close()
 	stats.PlanningDuration = time.Since(planningStart)
@@ -148,7 +149,7 @@ func (im Importer) PreparePending(
 	))
 
 	full := request.Journal.FullImport || request.FullReason != "" || im.Full
-	ensureVisualStudioCopilotRemoteSkipMigration(im.DB, im.Host)
+	ensureVisualStudioCopilotRemoteSkipMigration(ctx, im.DB, im.Host)
 	remoteCache, err := loadPlannedRemoteSkipCache(
 		ctx, im.DB, im.Host, layout, plan, request.Journal, full,
 	)
@@ -186,9 +187,9 @@ func (im Importer) PreparePending(
 	var persistErr error
 	if len(deleted) > 0 {
 		if request.Journal.InvalidateAll || request.ResetAttemptCache {
-			persistErr = replace(im.Host, pruned)
+			persistErr = replace(ctx, im.Host, pruned)
 		} else {
-			persistErr = apply(im.Host, deleted, nil)
+			persistErr = apply(ctx, im.Host, deleted, nil)
 		}
 	}
 	if persistErr != nil {
@@ -247,10 +248,10 @@ func (pending *PreparedDeltaImport) Execute(
 	ctx context.Context,
 ) (SyncStats, error) {
 	if pending == nil {
-		return SyncStats{}, fmt.Errorf("execute nil pending delta import")
+		return SyncStats{}, errors.New("execute nil pending delta import")
 	}
 	stats := pending.Stats
-	engine := syncpkg.NewEngine(pending.database, pending.config)
+	engine := syncpkg.NewEngine(ctx, pending.database, pending.config)
 	defer engine.Close()
 	engine.InjectSkipCache(pending.cache)
 	processingStart := time.Now()
@@ -289,9 +290,12 @@ func (pending *PreparedDeltaImport) Execute(
 	stats.incomplete = !engineStats.ProcessingComplete()
 
 	cachePersistStart := time.Now()
-	if err := pending.persistSkipCache(pending.database, engine); err != nil {
+	if err := pending.persistSkipCache(ctx, pending.database, engine); err != nil {
 		stats.CachePersistDuration += time.Since(cachePersistStart)
 		stats.JournalOutcome = JournalCachePersistFailed
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			stats.JournalOutcome = JournalCancelled
+		}
 		pending.Stats = stats
 		return stats, err
 	}
@@ -351,7 +355,7 @@ func (pending *PreparedDeltaImport) persistImportDataVersion(
 	return nil
 }
 
-func (pending *PreparedDeltaImport) persistSkipCache(
+func (pending *PreparedDeltaImport) persistSkipCache(ctx context.Context,
 	database *db.DB,
 	engine *syncpkg.Engine,
 ) error {
@@ -359,12 +363,12 @@ func (pending *PreparedDeltaImport) persistSkipCache(
 		return pending.save(database, engine, pending.layout.paths)
 	}
 	if pending.full {
-		return saveEngineSkipCache(database, engine, pending.layout.paths)
+		return saveEngineSkipCache(ctx, database, engine, pending.layout.paths)
 	}
 	current := remoteEngineSkipCache(engine, pending.layout.paths)
 	deletes, upserts := diffRemoteSkipCache(pending.remoteCache, current)
 	if database != pending.database {
-		merged, err := pending.database.LoadRemoteSkippedFiles(
+		merged, err := pending.database.LoadRemoteSkippedFiles(ctx,
 			pending.layout.paths.host,
 		)
 		if err != nil {
@@ -374,14 +378,14 @@ func (pending *PreparedDeltaImport) persistSkipCache(
 			delete(merged, key)
 		}
 		maps.Copy(merged, upserts)
-		if err := database.ReplaceRemoteSkippedFiles(
+		if err := database.ReplaceRemoteSkippedFiles(ctx,
 			pending.layout.paths.host, merged,
 		); err != nil {
 			return fmt.Errorf("save rebuilt skip cache: %w", err)
 		}
 		return nil
 	}
-	if err := pending.apply(
+	if err := pending.apply(ctx,
 		pending.layout.paths.host, deletes, upserts,
 	); err != nil {
 		return fmt.Errorf("save scoped skip cache: %w", err)
@@ -389,12 +393,12 @@ func (pending *PreparedDeltaImport) persistSkipCache(
 	return nil
 }
 
-func (pending *PreparedDeltaImport) persistRetrySafeSkipCache(
+func (pending *PreparedDeltaImport) persistRetrySafeSkipCache(ctx context.Context,
 	database *db.DB,
 	engine *syncpkg.Engine,
 ) error {
 	remoteCache := remoteRetrySafeEngineSkipCache(engine, pending.layout.paths)
-	if err := database.ReplaceRemoteSkippedFiles(
+	if err := database.ReplaceRemoteSkippedFiles(ctx,
 		pending.layout.paths.host, remoteCache,
 	); err != nil {
 		return fmt.Errorf("save retry-safe skip cache: %w", err)
@@ -417,7 +421,7 @@ func loadPlannedRemoteSkipCache(
 	full bool,
 ) (map[string]int64, error) {
 	if full {
-		return database.LoadRemoteSkippedFiles(host)
+		return database.LoadRemoteSkippedFiles(ctx, host)
 	}
 	scope := plannedRemoteSkipScope(layout, plan, journal)
 	exactPaths := make([]string, 0, len(scope.exact))

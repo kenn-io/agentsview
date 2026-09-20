@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"testing"
@@ -42,11 +43,11 @@ type WarpSeeder struct {
 	t  *testing.T
 }
 
-func (s *WarpSeeder) AddConversation(
+func (s *WarpSeeder) AddConversation(ctx context.Context,
 	conversationID, conversationData, lastModified string,
 ) {
 	s.t.Helper()
-	_, err := s.db.Exec(
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO agent_conversations
 		 (conversation_id, conversation_data, last_modified_at)
 		 VALUES (?, ?, ?)`,
@@ -55,12 +56,12 @@ func (s *WarpSeeder) AddConversation(
 	require.NoError(s.t, err, "add conversation")
 }
 
-func (s *WarpSeeder) AddExchange(
+func (s *WarpSeeder) AddExchange(ctx context.Context,
 	exchangeID, conversationID, startTS, input,
 	workingDir, outputStatus, modelID string,
 ) {
 	s.t.Helper()
-	_, err := s.db.Exec(
+	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO ai_queries
 		 (exchange_id, conversation_id, start_ts, input,
 		  working_directory, output_status, model_id)
@@ -76,7 +77,7 @@ func newWarpTestDB(t *testing.T) (string, *WarpSeeder, *sql.DB) {
 	dbPath := filepath.Join(t.TempDir(), "warp.sqlite")
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err, "open test db")
-	_, err = db.Exec(warpSchema)
+	_, err = db.ExecContext(t.Context(), warpSchema)
 	require.NoError(t, err, "create schema")
 	seeder := &WarpSeeder{db: db, t: t}
 	return dbPath, seeder, db
@@ -108,12 +109,12 @@ func seedWarpConversation(t *testing.T, seeder *WarpSeeder) {
 		}
 	}`
 
-	seeder.AddConversation(
+	seeder.AddConversation(t.Context(),
 		"conv-001", convData, "2026-04-07 10:00:00",
 	)
 
 	// User message with query text
-	seeder.AddExchange(
+	seeder.AddExchange(t.Context(),
 		"ex-001", "conv-001",
 		"2026-04-07 09:50:00.000000",
 		`[{"Query":{"text":"Fix the JSON parsing bug in parser.go","context":[]}}]`,
@@ -121,7 +122,7 @@ func seedWarpConversation(t *testing.T, seeder *WarpSeeder) {
 		`"Completed"`, "auto-genius",
 	)
 	// Intermediate exchange (tool call, no user input)
-	seeder.AddExchange(
+	seeder.AddExchange(t.Context(),
 		"ex-002", "conv-001",
 		"2026-04-07 09:50:05.000000",
 		`[]`,
@@ -129,7 +130,7 @@ func seedWarpConversation(t *testing.T, seeder *WarpSeeder) {
 		`"Completed"`, "auto-genius",
 	)
 	// Follow-up user message
-	seeder.AddExchange(
+	seeder.AddExchange(t.Context(),
 		"ex-003", "conv-001",
 		"2026-04-07 09:51:00.000000",
 		`[{"Query":{"text":"Now add a test for that fix","context":[]}}]`,
@@ -218,7 +219,7 @@ func TestParseWarpDB_EmptyConversation(t *testing.T) {
 	dbPath, seeder, db := newWarpTestDB(t)
 	defer db.Close()
 
-	seeder.AddConversation(
+	seeder.AddConversation(t.Context(),
 		"conv-empty", "{}", "2026-04-07 10:00:00",
 	)
 
@@ -231,11 +232,11 @@ func TestParseWarpDB_NoQueryText(t *testing.T) {
 	dbPath, seeder, db := newWarpTestDB(t)
 	defer db.Close()
 
-	seeder.AddConversation(
+	seeder.AddConversation(t.Context(),
 		"conv-notext", "{}", "2026-04-07 10:00:00",
 	)
 	// Only empty exchanges
-	seeder.AddExchange(
+	seeder.AddExchange(t.Context(),
 		"ex-x1", "conv-notext",
 		"2026-04-07 09:50:00",
 		`[]`, "/tmp", `"Completed"`, "auto",
@@ -306,7 +307,7 @@ func TestWarpDBPath(t *testing.T) {
 	// Create the file (sql.Open is lazy; Ping forces creation)
 	db, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	require.NoError(t, db.Ping())
+	require.NoError(t, db.PingContext(t.Context()))
 	db.Close()
 
 	assert.Equal(t, dbPath, warpDBPath(dir), "found")

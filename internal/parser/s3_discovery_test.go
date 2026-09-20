@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,7 +42,7 @@ func TestClaudeSourceSetDiscoversS3Sessions(t *testing.T) {
 		}, nil
 	}
 
-	sources, err := newClaudeSourceSet([]string{root}).Discover(context.Background())
+	sources, err := newClaudeSourceSet([]string{root}).Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
@@ -92,7 +91,7 @@ func TestClaudeSourceSetMixedLocalAndS3Roots(t *testing.T) {
 	}
 
 	sources, err := newClaudeSourceSet([]string{localRoot, s3Root}).
-		Discover(context.Background())
+		Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
 
@@ -130,7 +129,7 @@ func TestCodexSourceSetDiscoversS3Sessions(t *testing.T) {
 		}}, nil
 	}
 
-	sources, err := newCodexSourceSet(AgentCodex, []string{root}).Discover(context.Background())
+	sources, err := newCodexSourceSet(AgentCodex, []string{root}).Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
@@ -164,7 +163,7 @@ func TestS3CapableWatchPlansExcludeS3Roots(t *testing.T) {
 			})
 			require.True(t, ok)
 
-			plan, err := provider.WatchPlan(context.Background())
+			plan, err := provider.WatchPlan(t.Context())
 			require.NoError(t, err)
 			foundLocal := false
 			for _, root := range plan.Roots {
@@ -205,7 +204,7 @@ func TestCursorSourceSetDiscoversS3Sessions(t *testing.T) {
 		}, nil
 	}
 
-	sources, err := newCursorSourceSet([]string{root}).Discover(context.Background())
+	sources, err := newCursorSourceSet([]string{root}).Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 2)
 
@@ -242,7 +241,7 @@ func TestCursorSourceSetDiscoverEachYieldsS3Sessions(t *testing.T) {
 
 	var got []SourceRef
 	err := newCursorSourceSet([]string{root}).DiscoverEach(
-		context.Background(),
+		t.Context(),
 		func(src SourceRef) error {
 			got = append(got, src)
 			return nil
@@ -259,7 +258,7 @@ func TestCursorWatchPlanSkipsS3Roots(t *testing.T) {
 	plan, err := newCursorSourceSet([]string{
 		local,
 		"s3://bucket/laptop/raw/cursor",
-	}).WatchPlan(context.Background())
+	}).WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, local, plan.Roots[0].Path)

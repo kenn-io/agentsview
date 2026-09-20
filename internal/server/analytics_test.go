@@ -35,6 +35,19 @@ type seedStats struct {
 	TopSessionOutputTokens int
 }
 
+var serverAnalyticsFixtureRoot string
+
+func TestMain(m *testing.M) {
+	var err error
+	serverAnalyticsFixtureRoot, err = os.MkdirTemp("", "agentsview-server-fixtures-*")
+	if err != nil {
+		panic(err)
+	}
+	code := m.Run()
+	_ = os.RemoveAll(serverAnalyticsFixtureRoot)
+	os.Exit(code)
+}
+
 // seedAnalyticsEnv populates the test env with sessions and
 // messages suitable for analytics endpoint tests. Some messages
 // include tool_calls for tool analytics testing.
@@ -106,7 +119,7 @@ func seedAnalyticsEnv(t *testing.T, te *testEnv) seedStats {
 			Messages: msgs,
 		})
 	}
-	result, err := te.db.WriteSessionBatchAtomic(writes)
+	result, err := te.db.WriteSessionBatchAtomic(t.Context(), writes)
 	require.NoError(t, err)
 	require.Equal(t, len(entries), result.WrittenSessions)
 	require.Equal(t, stats.TotalMessages, result.WrittenMessages)
@@ -173,7 +186,7 @@ func seedAnalyticsTokenEnv(t *testing.T, te *testEnv) seedStats {
 			}
 		}
 	}
-	result, err := te.db.WriteSessionBatchAtomic(writes)
+	result, err := te.db.WriteSessionBatchAtomic(t.Context(), writes)
 	require.NoError(t, err)
 	require.Equal(t, stats.TotalSessions, result.WrittenSessions)
 	require.Equal(t, stats.TotalMessages, result.WrittenMessages)
@@ -189,11 +202,11 @@ type analyticsDBFixture struct {
 var (
 	analyticsFixtureOnce sync.Once
 	analyticsFixture     analyticsDBFixture
-	analyticsFixtureErr  error
+	errAnalyticsFixture  error
 
 	analyticsTokenFixtureOnce sync.Once
 	analyticsTokenFixture     analyticsDBFixture
-	analyticsTokenFixtureErr  error
+	errAnalyticsTokenFixture  error
 )
 
 func setupAnalyticsEnv(t *testing.T) (*testEnv, seedStats) {
@@ -201,7 +214,7 @@ func setupAnalyticsEnv(t *testing.T) (*testEnv, seedStats) {
 	fixture := analyticsFixtureFor(t,
 		&analyticsFixtureOnce,
 		&analyticsFixture,
-		&analyticsFixtureErr,
+		&errAnalyticsFixture,
 		"analytics",
 		seedAnalyticsEnv,
 	)
@@ -213,7 +226,7 @@ func setupAnalyticsTokenEnv(t *testing.T) (*testEnv, seedStats) {
 	fixture := analyticsFixtureFor(t,
 		&analyticsTokenFixtureOnce,
 		&analyticsTokenFixture,
-		&analyticsTokenFixtureErr,
+		&errAnalyticsTokenFixture,
 		"analytics-token",
 		seedAnalyticsTokenEnv,
 	)
@@ -242,24 +255,21 @@ func buildAnalyticsDBFixture(
 	seed func(*testing.T, *testEnv) seedStats,
 ) (analyticsDBFixture, error) {
 	t.Helper()
-	dir, err := os.MkdirTemp("", "agentsview-server-"+name+"-*")
-	if err != nil {
-		return analyticsDBFixture{}, fmt.Errorf(
-			"creating analytics fixture dir: %w", err,
-		)
+	dir := filepath.Join(serverAnalyticsFixtureRoot, name)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return analyticsDBFixture{}, fmt.Errorf("creating analytics fixture dir: %w", err)
 	}
-	defer os.RemoveAll(dir)
 
 	path := filepath.Join(dir, "test.db")
 	dbtest.EnsureTestDBAt(t, path)
-	database, err := db.Open(path)
+	database, err := db.Open(t.Context(), path)
 	if err != nil {
 		return analyticsDBFixture{}, fmt.Errorf(
 			"opening analytics fixture db: %w", err,
 		)
 	}
 	stats := seed(t, &testEnv{db: database})
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	checkpointErr := database.CheckpointWALTruncate(ctx)
 	closeErr := database.Close()
@@ -340,8 +350,7 @@ func TestAnalyticsSummary(t *testing.T) {
 		assert.Equal(t, stats.TotalMessages, resp.TotalMessages)
 		assert.Equal(t, stats.ActiveProjects, resp.ActiveProjects)
 		assert.Equal(t, stats.ActiveDays, resp.ActiveDays)
-		assert.Equal(t,
-			[]string{"claude-3-5-sonnet", "gpt-4o"},
+		assert.Equal(t, []string{"claude-3-5-sonnet", "gpt-4o"},
 			resp.Models,
 		)
 	})

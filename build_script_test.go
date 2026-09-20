@@ -472,7 +472,7 @@ func runInWorkspace(
 ) ([]byte, error) {
 	t.Helper()
 
-	cmd := exec.Command(name, args...)
+	cmd := exec.CommandContext(t.Context(), name, args...)
 	cmd.Dir = root
 	cmd.Env = env
 	return cmd.CombinedOutput()

@@ -93,6 +93,7 @@ func (s *RawIngestStore) ClaimRawParseJobs(
 	if err != nil {
 		return nil, fmt.Errorf("claiming raw parse jobs: %w", err)
 	}
+	defer rows.Close()
 	leasing := make([]rawderive.JobLease, 0, limit)
 	for rows.Next() {
 		var lease rawderive.JobLease

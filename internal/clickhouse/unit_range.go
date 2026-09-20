@@ -11,9 +11,11 @@ import (
 
 var _ db.UnitBoundsQuerier = (*Store)(nil)
 
-const unitSessionChunk = 200
-const unitExtentChunk = 80
-const unitAnchorMetaChunk = 200
+const (
+	unitSessionChunk    = 200
+	unitExtentChunk     = 80
+	unitAnchorMetaChunk = 200
+)
 
 func clickhouseEmbeddableUserSQL(alias string) string {
 	return fmt.Sprintf("%[1]s.role = 'user' AND %[1]s.is_system = false AND %[2]s",

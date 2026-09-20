@@ -25,7 +25,7 @@ import (
 func TestSourceMtimeRooCodeUsesCompositeStat(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentRooCode: {root},
 		},
@@ -67,7 +67,7 @@ func TestSourceMtimeRooCodeUsesCompositeStat(t *testing.T) {
 	assert.Equal(
 		t,
 		messagesTime.UnixNano(),
-		engine.SourceMtime("roocode:"+rawID),
+		engine.SourceMtime(t.Context(), "roocode:"+rawID),
 		"SourceMtime must return the newer ui_messages.json mtime",
 	)
 }

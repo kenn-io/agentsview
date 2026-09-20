@@ -156,7 +156,7 @@ func TestScanRedactedNeverEqualsFullSecret(t *testing.T) {
 	for _, text := range samples {
 		matches := Scan(text)
 		if len(matches) == 0 {
-			t.Errorf("no matches for sample %q", text)
+			assert.Failf(t, "no matches", "sample %q", text)
 			continue
 		}
 		for _, m := range matches {

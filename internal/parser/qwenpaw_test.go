@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -47,7 +46,7 @@ func discoverQwenPawTestSessions(
 		return nil
 	}
 	provider := newQwenPawTestProvider(t, root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	if len(sources) == 0 {
 		return nil
@@ -122,12 +121,12 @@ func TestParseQwenPawTimestamp(t *testing.T) {
 		{
 			"milliseconds",
 			"2026-04-19 22:37:34.004",
-			time.Date(2026, 4, 19, 22, 37, 34, 4_000_000, time.Local),
+			time.Date(2026, 4, 19, 22, 37, 34, 4_000_000, time.Local), //nolint:forbidigo // Exercise parsing of source timestamps recorded in local wall-clock time.
 		},
 		{
 			"no fractional",
 			"2026-04-19 22:37:34",
-			time.Date(2026, 4, 19, 22, 37, 34, 0, time.Local),
+			time.Date(2026, 4, 19, 22, 37, 34, 0, time.Local), //nolint:forbidigo // Exercise parsing of source timestamps recorded in local wall-clock time.
 		},
 		{"empty", "", time.Time{}},
 		{"invalid", "not-a-timestamp", time.Time{}},
@@ -165,15 +164,15 @@ func TestParseQwenPawSession_BasicUserAssistant(t *testing.T) {
 	assert.Equal(t, 1, sess.UserMessageCount)
 
 	wantStart := time.Date(
-		2026, 4, 19, 22, 37, 34, 4_000_000, time.Local,
+		2026, 4, 19, 22, 37, 34, 4_000_000, time.Local, //nolint:forbidigo // Exercise parsing of source timestamps recorded in local wall-clock time.
 	)
 	assertTimestamp(t, sess.StartedAt, wantStart)
 	wantEnd := time.Date(
-		2026, 4, 19, 22, 37, 35, 123_000_000, time.Local,
+		2026, 4, 19, 22, 37, 35, 123_000_000, time.Local, //nolint:forbidigo // Exercise parsing of source timestamps recorded in local wall-clock time.
 	)
 	assertTimestamp(t, sess.EndedAt, wantEnd)
 
-	require.Equal(t, 2, len(msgs))
+	require.Len(t, msgs, 2)
 	assert.Equal(t, RoleUser, msgs[0].Role)
 	assert.Equal(t, "你好", msgs[0].Content)
 	assert.Equal(t, RoleAssistant, msgs[1].Role)
@@ -189,7 +188,7 @@ func TestParseQwenPawSession_ThinkingExtracted(t *testing.T) {
 	)
 	_, msgs, err := parseQwenPawTestSession(t, path, "default", "local")
 	require.NoError(t, err)
-	require.Equal(t, 2, len(msgs))
+	require.Len(t, msgs, 2)
 
 	assert.True(t, msgs[1].HasThinking, "HasThinking flag")
 	assert.Equal(t, "我应该先思考一下", msgs[1].ThinkingText)
@@ -208,12 +207,12 @@ func TestParseQwenPawSession_ToolUseAndResult(t *testing.T) {
 	sess, msgs, err := parseQwenPawTestSession(t, path, "default", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
-	require.Equal(t, 4, len(msgs))
+	require.Len(t, msgs, 4)
 
 	aMsg := msgs[1]
 	assert.Equal(t, RoleAssistant, aMsg.Role)
 	assert.True(t, aMsg.HasToolUse, "HasToolUse flag")
-	require.Equal(t, 1, len(aMsg.ToolCalls), "tool call count")
+	require.Len(t, aMsg.ToolCalls, 1, "tool call count")
 	assert.Equal(t, "call_abc", aMsg.ToolCalls[0].ToolUseID)
 	assert.Equal(t, "read_file", aMsg.ToolCalls[0].ToolName)
 	assert.Contains(t, aMsg.ToolCalls[0].InputJSON, "foo.txt")
@@ -221,7 +220,7 @@ func TestParseQwenPawSession_ToolUseAndResult(t *testing.T) {
 	sMsg := msgs[2]
 	assert.Equal(t, RoleUser, sMsg.Role)
 	assert.True(t, sMsg.IsSystem, "IsSystem on tool_result carrier")
-	require.Equal(t, 1, len(sMsg.ToolResults), "tool result count")
+	require.Len(t, sMsg.ToolResults, 1, "tool result count")
 	assert.Equal(t, "call_abc", sMsg.ToolResults[0].ToolUseID)
 	assert.Equal(t, len("file contents here"),
 		sMsg.ToolResults[0].ContentLength,
@@ -236,8 +235,8 @@ func TestParseQwenPawSession_MultipleToolUsesInOneMessage(t *testing.T) {
 	)
 	_, msgs, err := parseQwenPawTestSession(t, path, "default", "local")
 	require.NoError(t, err)
-	require.Equal(t, 1, len(msgs))
-	require.Equal(t, 2, len(msgs[0].ToolCalls))
+	require.Len(t, msgs, 1)
+	require.Len(t, msgs[0].ToolCalls, 2)
 	assert.Equal(t, "call_1", msgs[0].ToolCalls[0].ToolUseID)
 	assert.Equal(t, "call_2", msgs[0].ToolCalls[1].ToolUseID)
 }
@@ -252,8 +251,8 @@ func TestParseQwenPawSession_EmptyContentArray(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assertMessageCount(t, sess.MessageCount, 1)
-	require.Equal(t, 1, len(msgs))
-	assert.Equal(t, "", msgs[0].Content)
+	require.Len(t, msgs, 1)
+	assert.Empty(t, msgs[0].Content)
 }
 
 func TestParseQwenPawSession_MissingTimestamp(t *testing.T) {
@@ -267,7 +266,7 @@ func TestParseQwenPawSession_MissingTimestamp(t *testing.T) {
 	require.NotNil(t, sess)
 	assertZeroTimestamp(t, sess.StartedAt, "StartedAt")
 	assertZeroTimestamp(t, sess.EndedAt, "EndedAt")
-	require.Equal(t, 1, len(msgs))
+	require.Len(t, msgs, 1)
 	assertZeroTimestamp(t, msgs[0].Timestamp, "msg timestamp")
 }
 
@@ -304,7 +303,7 @@ func TestParseQwenPawSession_SystemTextMessage(t *testing.T) {
 	sess, msgs, err := parseQwenPawTestSession(t, path, "default", "local")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
-	require.Equal(t, 2, len(msgs))
+	require.Len(t, msgs, 2)
 	assert.Equal(t, RoleUser, msgs[1].Role)
 	assert.True(t, msgs[1].IsSystem)
 	assert.Equal(t, "system notice", msgs[1].Content)
@@ -384,7 +383,7 @@ func TestParseQwenPawSession_SkipsNonMessageEntries(t *testing.T) {
 	require.NotNil(t, sess)
 	assert.Equal(t, 1, sess.MalformedLines)
 	assertMessageCount(t, sess.MessageCount, 2)
-	require.Equal(t, 2, len(msgs))
+	require.Len(t, msgs, 2)
 }
 
 func TestDiscoverQwenPawSessions(t *testing.T) {
@@ -405,7 +404,7 @@ func TestDiscoverQwenPawSessions(t *testing.T) {
 	))
 
 	files := discoverQwenPawTestSessions(t, root)
-	require.Equal(t, 3, len(files))
+	require.Len(t, files, 3)
 	for _, f := range files {
 		assert.Equal(t, AgentQwenPaw, f.Agent)
 	}
@@ -427,7 +426,7 @@ func TestDiscoverQwenPawSessions_IncludesConsoleSubdir(t *testing.T) {
 	))
 
 	files := discoverQwenPawTestSessions(t, root)
-	require.Equal(t, 1, len(files))
+	require.Len(t, files, 1)
 	assert.Equal(t, "default", files[0].Project)
 }
 
@@ -468,7 +467,7 @@ func TestDiscoverQwenPawSessions_FiltersNonSessionFiles(t *testing.T) {
 	))
 
 	files := discoverQwenPawTestSessions(t, root)
-	require.Equal(t, 1, len(files))
+	require.Len(t, files, 1)
 }
 
 func TestDiscoverQwenPawSessions_EmptyAndMissing(t *testing.T) {
@@ -531,16 +530,11 @@ func TestFindQwenPawSourceFile(t *testing.T) {
 
 	assert.Equal(t, path,
 		findQwenPawTestSourceFile(t, root, "default:default_1776607601691"))
-	assert.Equal(t, "",
-		findQwenPawTestSourceFile(t, root, "default:does_not_exist"))
-	assert.Equal(t, "",
-		findQwenPawTestSourceFile(t, root, "ghost:default_1"))
-	assert.Equal(t, "",
-		findQwenPawTestSourceFile(t, root, "invalid"))
-	assert.Equal(t, "",
-		findQwenPawTestSourceFile(t, root, "bad/workspace:default_1"))
-	assert.Equal(t, "",
-		findQwenPawTestSourceFile(t, "", "default:default_1"))
+	assert.Empty(t, findQwenPawTestSourceFile(t, root, "default:does_not_exist"))
+	assert.Empty(t, findQwenPawTestSourceFile(t, root, "ghost:default_1"))
+	assert.Empty(t, findQwenPawTestSourceFile(t, root, "invalid"))
+	assert.Empty(t, findQwenPawTestSourceFile(t, root, "bad/workspace:default_1"))
+	assert.Empty(t, findQwenPawTestSourceFile(t, "", "default:default_1"))
 }
 
 func TestFindQwenPawSourceFile_ConsoleSubdir(t *testing.T) {
@@ -659,7 +653,7 @@ func TestFindQwenPawSourceFile_RejectsTraversal(t *testing.T) {
 		".:default_1",
 		"default:.",
 	} {
-		assert.Equal(t, "", findQwenPawTestSourceFile(t, root, rawID),
+		assert.Empty(t, findQwenPawTestSourceFile(t, root, rawID),
 			"rawID %q must not resolve", rawID)
 	}
 	for _, bad := range []string{".", ".."} {

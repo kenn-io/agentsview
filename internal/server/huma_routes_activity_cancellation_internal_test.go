@@ -68,9 +68,9 @@ func TestActivityReportPropagatesRequestCancellationToStore(t *testing.T) {
 		canceled: make(chan struct{}),
 	}
 	server := newRoutedTestServerWithStore(t, store)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	t.Cleanup(cancel)
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(ctx,
 		http.MethodGet,
 		"/api/v1/activity/report?preset=day&date=2026-07-14&timezone=UTC",
 		nil,
@@ -113,7 +113,7 @@ func TestActivityReportRedactsBuildErrors(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			store := &failingActivityReportStore{buildErr: errors.New(privateDetail)}
 			server := newRoutedTestServerWithStore(t, store)
-			req := httptest.NewRequest(http.MethodGet,
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodGet,
 				"/api/v1/activity/report?preset=day&date=2026-07-14&timezone=UTC",
 				nil)
 			req.Header.Set("Accept", test.accept)

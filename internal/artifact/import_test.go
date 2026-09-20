@@ -22,7 +22,7 @@ func TestArtifactImportEndToEndAndReplay(t *testing.T) {
 	seedSession(t, source, "one", "project")
 	seedSession(t, source, "two", "project")
 	cost := &money.Money{Microdollars: 12_345}
-	require.NoError(t, source.ReplaceSessionUsageEvents("one", []db.UsageEvent{{
+	require.NoError(t, source.ReplaceSessionUsageEvents(t.Context(), "one", []db.UsageEvent{{
 		SessionID: "one", Source: "provider", Model: "model",
 		Cost: cost, CostStatus: "known", CostSource: "provider",
 		DedupKey: "usage-one",
@@ -73,8 +73,7 @@ func TestArtifactImportEndToEndAndReplay(t *testing.T) {
 	)
 	sequence, err := checkpointSequence(checkpointEntry.Ref.Name)
 	require.NoError(t, err)
-	landing, sessionMap, found, err :=
-		destination.GetArtifactCheckpointLanding(t.Context(), contractOrigin)
+	landing, sessionMap, found, err := destination.GetArtifactCheckpointLanding(t.Context(), contractOrigin)
 	require.NoError(t, err)
 	require.True(t, found)
 	assert.Equal(t, sequence, landing.Sequence)
@@ -138,7 +137,7 @@ func TestStoreImportCoordinatorRejectsOutOfRangeCheckpointWithoutAdvancingHead(
 	}
 
 	err := coordinator.RecordChanged(t.Context(), outOfRange)
-	assert.ErrorIs(t, err, ErrArtifactInvalid)
+	require.ErrorIs(t, err, ErrArtifactInvalid)
 	_, found, err := destination.GetArtifactPeerCheckpointHead(
 		t.Context(), contractOrigin,
 	)
@@ -225,6 +224,8 @@ func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T)
 		{
 			name: "future manifest",
 			prepare: func(t *testing.T, store ArtifactStore) string {
+				t.Helper()
+
 				return createHashedImportArtifact(
 					t, store, KindManifests, ".json",
 					[]byte(`{"origin":"contract-a1b2c3","v":5}`),
@@ -241,6 +242,8 @@ func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T)
 		{
 			name: "future segment",
 			prepare: func(t *testing.T, store ArtifactStore) string {
+				t.Helper()
+
 				segment := []byte(fmt.Sprintf(
 					"{\"content\":\"future\",\"ordinal\":0,\"role\":\"user\",\"v\":%d}\n",
 					messageSegmentFormatVersion+1,
@@ -263,6 +266,8 @@ func TestStoreImportCoordinatorTracksIndependentFutureRequirements(t *testing.T)
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			store := newTestArtifactStore(t)
 			manifestHash := tc.prepare(t, store)
 			checkpointEntry := createImportTestCheckpoint(
@@ -304,8 +309,7 @@ func TestStoreImportCoordinatorDefersLargeFutureCheckpointBeforeValidClaim(
 	store := newTestArtifactStore(t)
 	futureSessions := make(map[string]string, futureSessionCount)
 	for i := range futureSessionCount {
-		futureSessions[fmt.Sprintf("%s~future-%03d", contractOrigin, i)] =
-			fmt.Sprintf("%064x", i+1)
+		futureSessions[fmt.Sprintf("%s~future-%03d", contractOrigin, i)] = fmt.Sprintf("%064x", i+1)
 	}
 	futureBody, err := canonicalJSON(checkpoint{
 		Version: checkpointFormatVersion + 1,
@@ -468,7 +472,7 @@ func TestStoreImportCoordinatorQuarantinesInvalidCheckpointAndContinues(
 	assert.Equal(t, 1, result.Quarantined)
 	assert.Equal(t, 1, result.Sessions)
 	_, err = store.Stat(t.Context(), invalidRef)
-	assert.ErrorIs(t, err, ErrArtifactNotFound)
+	require.ErrorIs(t, err, ErrArtifactNotFound)
 	session, err := destination.GetSessionFull(
 		t.Context(), contractOrigin+"~valid",
 	)
@@ -531,8 +535,7 @@ func TestStoreImportCoordinatorDiscardsPartialStageAfterQuarantineCrash(
 	base := newTestArtifactStore(t)
 	sessionMap := make(map[string]string, artifactImportDrainLimit+1)
 	for i := range artifactImportDrainLimit {
-		sessionMap[fmt.Sprintf("%s~valid-%03d", contractOrigin, i)] =
-			fmt.Sprintf("%064x", i+1)
+		sessionMap[fmt.Sprintf("%s~valid-%03d", contractOrigin, i)] = fmt.Sprintf("%064x", i+1)
 	}
 	sessionMap[contractOrigin+"~zzz-invalid"] = "invalid"
 	checkpointEntry := createImportTestCheckpoint(
@@ -629,9 +632,9 @@ func TestStoreImportCoordinatorSuppressesExcludedAndTrashedSessions(t *testing.T
 	excludedID := contractOrigin + "~excluded"
 	trashedID := contractOrigin + "~trashed"
 	seedSession(t, destination, excludedID, "local")
-	require.NoError(t, destination.DeleteSession(excludedID))
+	require.NoError(t, destination.DeleteSession(t.Context(), excludedID))
 	seedSession(t, destination, trashedID, "local")
-	require.NoError(t, destination.SoftDeleteSession(trashedID))
+	require.NoError(t, destination.SoftDeleteSession(t.Context(), trashedID))
 
 	coordinator := NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
@@ -685,7 +688,7 @@ func TestStoreImportCoordinatorRetriesTrashedManifestAfterRestore(t *testing.T) 
 	require.NoError(t, coordinator.RecordChanged(t.Context(), first))
 	_, err := coordinator.Finalize(t.Context())
 	require.NoError(t, err)
-	require.NoError(t, destination.SoftDeleteSession(gid))
+	require.NoError(t, destination.SoftDeleteSession(t.Context(), gid))
 
 	secondManifest := importTestManifest("session")
 	secondHash := createImportTestClosure(
@@ -721,7 +724,7 @@ func TestStoreImportCoordinatorRetriesTrashedManifestAfterRestore(t *testing.T) 
 	coordinator = NewStoreImportCoordinator(
 		destination, store, importLocalOrigin,
 	)
-	restored, err := destination.RestoreSession(gid)
+	restored, err := destination.RestoreSession(t.Context(), gid)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, restored)
 	require.NoError(t, coordinator.RecordChanged(t.Context(), second))
@@ -977,12 +980,14 @@ func TestStoreImportCoordinatorCrashWindowsConverge(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			root := t.TempDir()
 			databasePath := filepath.Join(root, "archive.db")
 			storeRoot := filepath.Join(root, "artifacts")
 			store, err := newProtocolTestStore(storeRoot)
 			require.NoError(t, err)
-			database, err := db.Open(databasePath)
+			database, err := db.Open(t.Context(), databasePath)
 			require.NoError(t, err)
 
 			ordinal := 0
@@ -1022,7 +1027,7 @@ func TestStoreImportCoordinatorCrashWindowsConverge(t *testing.T) {
 			require.NoError(t, database.Close())
 			require.NoError(t, store.Close())
 
-			database, err = db.Open(databasePath)
+			database, err = db.Open(t.Context(), databasePath)
 			require.NoError(t, err)
 			store, err = newProtocolTestStore(storeRoot)
 			require.NoError(t, err)
@@ -1041,10 +1046,9 @@ func TestStoreImportCoordinatorCrashWindowsConverge(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, found)
 			assert.Equal(t, 1, head.Sequence)
-			landing, _, found, err :=
-				database.GetArtifactCheckpointLanding(
-					t.Context(), contractOrigin,
-				)
+			landing, _, found, err := database.GetArtifactCheckpointLanding(
+				t.Context(), contractOrigin,
+			)
 			require.NoError(t, err)
 			require.True(t, found)
 			assert.Equal(t, 1, landing.Sequence)
@@ -1160,8 +1164,7 @@ func TestStoreImportCoordinatorPagesLargeChangedCheckpointAcrossDrains(
 	base := newTestArtifactStore(t)
 	sessionMap := make(map[string]string, changedSessions)
 	for i := range changedSessions {
-		sessionMap[fmt.Sprintf("%s~missing-%03d", contractOrigin, i)] =
-			fmt.Sprintf("%064x", i+1)
+		sessionMap[fmt.Sprintf("%s~missing-%03d", contractOrigin, i)] = fmt.Sprintf("%064x", i+1)
 	}
 	checkpointEntry := createImportTestCheckpoint(
 		t, base, contractOrigin, 1, sessionMap,
@@ -1221,8 +1224,7 @@ func TestStoreImportCoordinatorPreservesSignalsDuringActiveAttempt(
 	sessionMap := make(map[string]string, sessionCount)
 	sessionMap[contractOrigin+"~000-arrived"] = arrivedIdentity.SHA256
 	for i := 1; i < sessionCount; i++ {
-		sessionMap[fmt.Sprintf("%s~missing-%03d", contractOrigin, i)] =
-			fmt.Sprintf("%064x", i+1)
+		sessionMap[fmt.Sprintf("%s~missing-%03d", contractOrigin, i)] = fmt.Sprintf("%064x", i+1)
 	}
 	checkpointEntry := createImportTestCheckpoint(
 		t, store, contractOrigin, 1, sessionMap,
@@ -1304,8 +1306,7 @@ func TestStoreImportCoordinatorRereadsCheckpointOnceAfterRestart(t *testing.T) {
 	base := newTestArtifactStore(t)
 	sessionMap := make(map[string]string, changedSessions)
 	for i := range changedSessions {
-		sessionMap[fmt.Sprintf("%s~missing-%03d", contractOrigin, i)] =
-			fmt.Sprintf("%064x", i+1)
+		sessionMap[fmt.Sprintf("%s~missing-%03d", contractOrigin, i)] = fmt.Sprintf("%064x", i+1)
 	}
 	checkpointEntry := createImportTestCheckpoint(
 		t, base, contractOrigin, 1, sessionMap,
@@ -1345,7 +1346,7 @@ func TestStoreImportCoordinatorRecoversTerminalCheckpointPage(t *testing.T) {
 	storeRoot := filepath.Join(root, "artifacts")
 	store, err := newProtocolTestStore(storeRoot)
 	require.NoError(t, err)
-	destination, err := db.Open(databasePath)
+	destination, err := db.Open(t.Context(), databasePath)
 	require.NoError(t, err)
 	body, err := canonicalJSON(checkpoint{
 		Version:  checkpointFormatVersion,
@@ -1388,7 +1389,7 @@ func TestStoreImportCoordinatorRecoversTerminalCheckpointPage(t *testing.T) {
 	require.NoError(t, destination.Close())
 	require.NoError(t, store.Close())
 
-	destination, err = db.Open(databasePath)
+	destination, err = db.Open(t.Context(), databasePath)
 	require.NoError(t, err)
 	defer destination.Close()
 	store, err = newProtocolTestStore(storeRoot)
@@ -1567,6 +1568,7 @@ func latestImportCheckpointEntry(
 	t *testing.T, store ArtifactStore, origin string,
 ) Entry {
 	t.Helper()
+
 	entries := listAllContractEntries(
 		t, store, origin, KindCheckpoints, maxArtifactListPageSize,
 	)

@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +21,8 @@ func TestExtractProjectFromCwd_Git(t *testing.T) {
 		{
 			name: "GitRepoRoot",
 			setup: func(t *testing.T, root string) string {
+				t.Helper()
+
 				repo := filepath.Join(root, "my-app")
 				subdir := filepath.Join(repo, "internal", "sync")
 
@@ -34,6 +35,8 @@ func TestExtractProjectFromCwd_Git(t *testing.T) {
 		{
 			name: "SupersetStandaloneBranchRepoUsesAnchoredProject",
 			setup: func(t *testing.T, root string) string {
+				t.Helper()
+
 				branchRepo := filepath.Join(
 					root, ".superset", "worktrees",
 					"sample-service", "feature-branch",
@@ -48,6 +51,8 @@ func TestExtractProjectFromCwd_Git(t *testing.T) {
 		{
 			name: "GitWorktree",
 			setup: func(t *testing.T, root string) string {
+				t.Helper()
+
 				mainRepo := filepath.Join(root, "agentsview")
 				worktree := filepath.Join(root, "agentsview-worktree-tool-calls")
 				worktreeGitDir := filepath.Join(mainRepo, ".git", "worktrees", "feature")
@@ -68,6 +73,8 @@ func TestExtractProjectFromCwd_Git(t *testing.T) {
 		{
 			name: "GitWorktreeFallbackWithoutCommondir",
 			setup: func(t *testing.T, root string) string {
+				t.Helper()
+
 				mainRepo := filepath.Join(root, "my-repo")
 				worktree := filepath.Join(root, "my-repo-experiment")
 				worktreeGitDir := filepath.Join(mainRepo, ".git", "worktrees", "exp")
@@ -86,6 +93,8 @@ func TestExtractProjectFromCwd_Git(t *testing.T) {
 		{
 			name: "CodexCustomNamedWorktreeUsesLinkedGitIdentity",
 			setup: func(t *testing.T, root string) string {
+				t.Helper()
+
 				mainRepo := filepath.Join(root, "sample-service")
 				worktree := filepath.Join(
 					root, ".codex", "worktrees",
@@ -199,7 +208,7 @@ func TestExtractProjectFromCwdWithBranchContext_GitWorktreeMainRoot(t *testing.T
 	mustMkdirAll(t, subdir)
 
 	got := ExtractProjectFromCwdWithBranchContext(
-		context.Background(), subdir, "feature",
+		t.Context(), subdir, "feature",
 	)
 	assert.Equal(t, "agentsview", got,
 		"kit-backed worktree resolution should use the main repo name")
@@ -308,7 +317,7 @@ func TestExtractProjectFromCwdNoGitInvocationWhenLocalWalkMisses(t *testing.T) {
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	assert.Equal(t, "parser",
-		ExtractProjectFromCwdWithBranchContext(context.Background(), cwd, ""))
+		ExtractProjectFromCwdWithBranchContext(t.Context(), cwd, ""))
 	assert.NoFileExists(t, gitLog,
 		"passive discovery must not invoke git when the local walk misses")
 }
@@ -352,7 +361,7 @@ func TestExtractProjectFromCwdConservativeGitFileRootWithoutGit(
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	assert.Equal(t, "feature_worktree",
-		ExtractProjectFromCwdWithBranchContext(context.Background(), cwd, ""))
+		ExtractProjectFromCwdWithBranchContext(t.Context(), cwd, ""))
 	assert.NoFileExists(t, gitLog,
 		"passive discovery must not invoke git for a conservative gitfile root")
 }
@@ -1010,7 +1019,7 @@ func skipIfNoGit(t *testing.T) {
 
 func gitRun(t *testing.T, dir string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git %s: %s", strings.Join(args, " "), out)

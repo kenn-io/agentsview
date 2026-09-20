@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,7 +21,7 @@ func TestProviderSourceFreshBeforeFingerprintRejectsUnverifiedStatDigest(
 	require.NoError(t, os.WriteFile(path, []byte("unchanged\n"), 0o644))
 	info, err := os.Stat(path)
 	require.NoError(t, err)
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:        "session",
 		Agent:     string(parser.AgentClaude),
 		Project:   "project-a",
@@ -31,7 +30,7 @@ func TestProviderSourceFreshBeforeFingerprintRejectsUnverifiedStatDigest(
 		FileSize:  int64Ptr(info.Size()),
 		FileMtime: int64Ptr(info.ModTime().UnixNano()),
 	}))
-	require.NoError(t, database.SetSessionDataVersion(
+	require.NoError(t, database.SetSessionDataVersion(t.Context(),
 		"session", db.CurrentDataVersion(),
 	))
 	require.NoError(t, database.UpsertProviderStatHash(
@@ -70,14 +69,14 @@ func TestClaudeIncrementalWritePersistsCompleteSourceStatHash(t *testing.T) {
 		)
 	require.NoError(t, os.WriteFile(path, []byte(builder.String()), 0o644))
 
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {root},
 		},
 		Machine: "local",
 	})
 	t.Cleanup(engine.Close)
-	initial := engine.SyncAll(context.Background(), nil)
+	initial := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, initial.Synced)
 	require.Zero(t, initial.Failed)
 	hasher := engine.providerStatHashers[parser.AgentClaude]
@@ -97,7 +96,7 @@ func TestClaudeIncrementalWritePersistsCompleteSourceStatHash(t *testing.T) {
 	require.NoError(t, os.WriteFile(
 		path, []byte(builder.String()+`{"type":"assistant"`), 0o644,
 	))
-	partial := engine.SyncAll(context.Background(), nil)
+	partial := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, partial.Synced)
 	require.Zero(t, partial.Failed)
 	partialDigest, ok, err := database.GetProviderStatHash(
@@ -115,7 +114,7 @@ func TestClaudeIncrementalWritePersistsCompleteSourceStatHash(t *testing.T) {
 		"2024-01-01T10:00:03Z", "done", "d", "c",
 	)
 	require.NoError(t, os.WriteFile(path, []byte(builder.String()), 0o644))
-	complete := engine.SyncAll(context.Background(), nil)
+	complete := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, complete.Synced)
 	require.Zero(t, complete.Failed)
 	completeDigest, ok, err := database.GetProviderStatHash(

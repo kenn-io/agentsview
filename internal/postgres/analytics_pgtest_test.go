@@ -90,8 +90,8 @@ func TestRankTopSessions_NearTiePrecision(t *testing.T) {
 	got := rankTopSessions(sessions, true)
 	require.Len(t, got, 2)
 	assert.Equal(t, "b", got[0].ID, "10.06 > 10.04")
-	assert.Equal(t, 10.1, got[0].ActiveDurationMin)
-	assert.Equal(t, 10.0, got[1].ActiveDurationMin)
+	assert.InDelta(t, 10.1, got[0].ActiveDurationMin, 1e-9)
+	assert.InDelta(t, 10.0, got[1].ActiveDurationMin, 1e-9)
 }
 
 func TestRankTopSessions_TruncatesTo10(t *testing.T) {
@@ -104,7 +104,7 @@ func TestRankTopSessions_TruncatesTo10(t *testing.T) {
 	}
 	got := rankTopSessions(sessions, true)
 	require.Len(t, got, 10)
-	assert.Equal(t, 14.0, got[0].ActiveDurationMin)
+	assert.InDelta(t, 14.0, got[0].ActiveDurationMin, 1e-9)
 }
 
 func TestRankTopSessions_UsesActiveDurationForSort(t *testing.T) {
@@ -115,8 +115,8 @@ func TestRankTopSessions_UsesActiveDurationForSort(t *testing.T) {
 	got := rankTopSessions(sessions, true)
 	require.Len(t, got, 2)
 	assert.Equal(t, "active", got[0].ID)
-	assert.Equal(t, 15.0, got[0].ActiveDurationMin)
-	assert.Equal(t, 120.0, got[1].DurationMin)
+	assert.InDelta(t, 15.0, got[0].ActiveDurationMin, 1e-9)
+	assert.InDelta(t, 120.0, got[1].DurationMin, 1e-9)
 }
 
 func TestRankTopSessions_NoSortForMessages(t *testing.T) {
@@ -145,6 +145,6 @@ func TestRankTopSessions_RoundsForDisplay(t *testing.T) {
 	}
 	got := rankTopSessions(sessions, true)
 	require.Len(t, got, 2)
-	assert.Equal(t, 12.4, got[0].ActiveDurationMin)
-	assert.Equal(t, 12.3, got[1].ActiveDurationMin)
+	assert.InDelta(t, 12.4, got[0].ActiveDurationMin, 1e-9)
+	assert.InDelta(t, 12.3, got[1].ActiveDurationMin, 1e-9)
 }

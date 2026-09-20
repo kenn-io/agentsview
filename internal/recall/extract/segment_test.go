@@ -4,6 +4,9 @@ import (
 	"encoding/json/v2"
 	"os"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type goldenFixture struct {
@@ -29,14 +32,14 @@ type goldenFixture struct {
 func TestTurnsV1GoldenParity(t *testing.T) {
 	raw, err := os.ReadFile("testdata/turnsv1_golden.json")
 	if err != nil {
-		t.Fatalf("reading golden fixtures: %v", err)
+		require.FailNowf(t, "test failed", "reading golden fixtures: %v", err)
 	}
 	var fixtures map[string]goldenFixture
 	if err := json.Unmarshal(raw, &fixtures); err != nil {
-		t.Fatalf("parsing golden fixtures: %v", err)
+		require.FailNowf(t, "test failed", "parsing golden fixtures: %v", err)
 	}
 	if len(fixtures) == 0 {
-		t.Fatal("no fixtures found")
+		require.FailNow(t, "no fixtures found")
 	}
 	for name, fixture := range fixtures {
 		t.Run(name, func(t *testing.T) {
@@ -52,18 +55,18 @@ func TestTurnsV1GoldenParity(t *testing.T) {
 			}
 			units := segmenter.Units(messages)
 			if len(units) != len(fixture.Units) {
-				t.Fatalf("unit count = %d, want %d", len(units), len(fixture.Units))
+				require.FailNowf(t, "test failed", "unit count = %d, want %d", len(units), len(fixture.Units))
 			}
 			for i, want := range fixture.Units {
 				got := units[i]
 				if string(got.Role) != roleForKind(t, want.Kind) {
-					t.Errorf("unit %d role = %q, want kind %q", i, got.Role, want.Kind)
+					assert.Failf(t, "test failed", "unit %d role = %q, want kind %q", i, got.Role, want.Kind)
 				}
 				if got.Text != want.Text {
-					t.Errorf("unit %d text mismatch:\ngot:  %q\nwant: %q", i, got.Text, want.Text)
+					assert.Failf(t, "test failed", "unit %d text mismatch:\ngot:  %q\nwant: %q", i, got.Text, want.Text)
 				}
 				if got.OrdinalStart != want.OrdinalStart || got.OrdinalEnd != want.OrdinalEnd {
-					t.Errorf("unit %d ordinals = (%d,%d), want (%d,%d)",
+					assert.Failf(t, "test failed", "unit %d ordinals = (%d,%d), want (%d,%d)",
 						i, got.OrdinalStart, got.OrdinalEnd, want.OrdinalStart, want.OrdinalEnd)
 				}
 			}
@@ -79,7 +82,7 @@ func roleForKind(t *testing.T, kind string) string {
 	case "action_run":
 		return string(RoleAction)
 	default:
-		t.Fatalf("unknown fixture unit kind %q", kind)
+		require.FailNowf(t, "test failed", "unknown fixture unit kind %q", kind)
 		return ""
 	}
 }
@@ -87,25 +90,25 @@ func roleForKind(t *testing.T, kind string) string {
 func TestTurnsV1Identity(t *testing.T) {
 	segmenter := TurnsV1{MaxWindowChars: 50000}
 	if segmenter.Name() != "turns-v1" {
-		t.Errorf("Name() = %q, want turns-v1", segmenter.Name())
+		assert.Failf(t, "test failed", "Name() = %q, want turns-v1", segmenter.Name())
 	}
 	params := segmenter.Params()
 	if params["max_window_chars"] != 50000 {
-		t.Errorf("Params()[max_window_chars] = %v, want 50000", params["max_window_chars"])
+		assert.Failf(t, "test failed", "Params()[max_window_chars] = %v, want 50000", params["max_window_chars"])
 	}
 }
 
 func TestTurnsV1PromptRoles(t *testing.T) {
 	roles := TurnsV1{MaxWindowChars: 50000}.PromptRoles()
 	if len(roles) != 2 || roles[0] != RoleIntent || roles[1] != RoleAction {
-		t.Errorf("PromptRoles() = %v, want [intent action]", roles)
+		assert.Failf(t, "test failed", "PromptRoles() = %v, want [intent action]", roles)
 	}
 }
 
 func TestTurnsV1EmptySession(t *testing.T) {
 	units := TurnsV1{MaxWindowChars: 50000}.Units(nil)
 	if len(units) != 0 {
-		t.Errorf("Units(nil) = %d units, want 0", len(units))
+		assert.Failf(t, "test failed", "Units(nil) = %d units, want 0", len(units))
 	}
 }
 
@@ -121,16 +124,16 @@ func TestTurnsV1SplitsActionRunsAtOrdinalGaps(t *testing.T) {
 		{Ordinal: 3, Role: "assistant", Content: "second step"},
 	})
 	if len(units) != 3 {
-		t.Fatalf("unit count = %d, want 3 (intent + one action unit per "+
+		require.FailNowf(t, "test failed", "unit count = %d, want 3 (intent + one action unit per "+
 			"side of the gap)", len(units))
 	}
 	first, second := units[1], units[2]
 	if first.Role != RoleAction || first.OrdinalStart != 1 || first.OrdinalEnd != 1 {
-		t.Errorf("unit 1 = %s (%d,%d), want action (1,1)",
+		assert.Failf(t, "test failed", "unit 1 = %s (%d,%d), want action (1,1)",
 			first.Role, first.OrdinalStart, first.OrdinalEnd)
 	}
 	if second.Role != RoleAction || second.OrdinalStart != 3 || second.OrdinalEnd != 3 {
-		t.Errorf("unit 2 = %s (%d,%d), want action (3,3)",
+		assert.Failf(t, "test failed", "unit 2 = %s (%d,%d), want action (3,3)",
 			second.Role, second.OrdinalStart, second.OrdinalEnd)
 	}
 }
@@ -147,11 +150,11 @@ func TestTurnsV1PacksRunsAcrossSkippedRows(t *testing.T) {
 		{Ordinal: 3, Role: "assistant", Content: "b"},
 	})
 	if len(units) != 1 {
-		t.Fatalf("unit count = %d, want 1 (skipped rows keep the run "+
+		require.FailNowf(t, "test failed", "unit count = %d, want 1 (skipped rows keep the run "+
 			"contiguous)", len(units))
 	}
 	if units[0].OrdinalStart != 0 || units[0].OrdinalEnd != 3 {
-		t.Errorf("unit range = (%d,%d), want (0,3)",
+		assert.Failf(t, "test failed", "unit range = (%d,%d), want (0,3)",
 			units[0].OrdinalStart, units[0].OrdinalEnd)
 	}
 }

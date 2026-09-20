@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -125,9 +127,7 @@ var validIdentifier = regexp.MustCompile(
 // to prevent injection.
 func quoteIdentifier(name string) (string, error) {
 	if name == "" {
-		return "", fmt.Errorf(
-			"schema name must not be empty",
-		)
+		return "", errors.New("schema name must not be empty")
 	}
 	if !validIdentifier.MatchString(name) {
 		return "", fmt.Errorf(
@@ -147,7 +147,7 @@ func Open(
 	dsn, schema string, allowInsecure bool,
 ) (*sql.DB, error) {
 	if dsn == "" {
-		return nil, fmt.Errorf("postgres URL is required")
+		return nil, errors.New("postgres URL is required")
 	}
 	quoted, err := quoteIdentifier(schema)
 	if err != nil {
@@ -201,7 +201,7 @@ func Open(
 
 func pgTargetFingerprint(dsn, schema string) (string, error) {
 	if dsn == "" {
-		return "", fmt.Errorf("postgres URL is required")
+		return "", errors.New("postgres URL is required")
 	}
 	cfg, err := pgconn.ParseConfig(dsn)
 	if err != nil {
@@ -218,7 +218,7 @@ func pgTargetFingerprint(dsn, schema string) (string, error) {
 		if host != "" && !strings.HasPrefix(host, "/") {
 			host = strings.ToLower(host)
 		}
-		fields = append(fields, host, fmt.Sprintf("%d", port))
+		fields = append(fields, host, strconv.FormatUint(uint64(port), 10))
 	}
 	appendTargetEndpoint(cfg.Host, cfg.Port)
 	for _, fallback := range cfg.Fallbacks {

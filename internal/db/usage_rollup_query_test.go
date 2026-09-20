@@ -3,10 +3,10 @@
 package db
 
 import (
-	"context"
 	"math/rand"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -21,10 +21,14 @@ func TestUsageRollupDailyMatchesFacts(t *testing.T) {
 	database := openDailyUsageFixtureDB(t)
 	for _, filter := range []UsageFilter{
 		{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC"},
-		{From: "2024-06-01", To: "2024-07-31", Timezone: "UTC",
-			Project: "proj-a", Model: "model-a"},
-		{From: "2024-06-01", To: "2024-06-30", Timezone: "America/Chicago",
-			ExcludeAgent: "codex"},
+		{
+			From: "2024-06-01", To: "2024-07-31", Timezone: "UTC",
+			Project: "proj-a", Model: "model-a",
+		},
+		{
+			From: "2024-06-01", To: "2024-06-30", Timezone: "America/Chicago",
+			ExcludeAgent: "codex",
+		},
 	} {
 		facts := getDailyUsageLegacyForRollupTest(t, database, filter)
 		rollup := getDailyUsageRollupForTest(t, database, filter)
@@ -42,7 +46,7 @@ func seedUsageSnapshotSession(
 		session.StartedAt = &started
 		session.Agent = "claude"
 	})
-	require.NoError(t, database.InsertMessages([]Message{{
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
 		SessionID: id, Ordinal: ordinal, Role: "assistant", Timestamp: timestamp,
 		Model: model, TokenUsage: []byte(
 			`{"output_tokens":` + strconv.Itoa(output) + `}`),
@@ -58,10 +62,14 @@ func TestUsageRollupDailyMatchesFactsForCrossSessionSnapshots(t *testing.T) {
 		"2026-08-10T10:00:00Z", 0, 20, "model-a")
 	for _, filter := range []UsageFilter{
 		{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"},
-		{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
-			Project: "project-a"},
-		{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
-			Project: "project-b"},
+		{
+			From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
+			Project: "project-a",
+		},
+		{
+			From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
+			Project: "project-b",
+		},
 	} {
 		facts := getDailyUsageLegacyForRollupTest(t, database, filter)
 		rollup := getDailyUsageRollupForTest(t, database, filter)
@@ -71,7 +79,7 @@ func TestUsageRollupDailyMatchesFactsForCrossSessionSnapshots(t *testing.T) {
 
 func TestUsageRollupDailyMatchesCursorAutomatedScope(t *testing.T) {
 	database := testDB(t)
-	require.NoError(t, database.InsertCursorUsageEvents([]CursorUsageEvent{
+	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{
 		{
 			OccurredAt: "2026-08-10T09:00:00Z", Model: "model-a",
 			InputTokens: 10, Charged: money.MustParseDollars("0.10"),
@@ -85,10 +93,14 @@ func TestUsageRollupDailyMatchesCursorAutomatedScope(t *testing.T) {
 	}))
 
 	for _, filter := range []UsageFilter{
-		{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
-			ExcludeAutomated: true},
-		{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
-			AutomatedScope: "automated"},
+		{
+			From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
+			ExcludeAutomated: true,
+		},
+		{
+			From: "2026-08-10", To: "2026-08-10", Timezone: "UTC",
+			AutomatedScope: "automated",
+		},
 	} {
 		legacy := getDailyUsageLegacyForRollupTest(t, database, filter)
 		rollup := getDailyUsageRollupForTest(t, database, filter)
@@ -104,7 +116,7 @@ func TestUsageRollupDailyMatchesLastCopilotReportedCost(t *testing.T) {
 	})
 	first := money.MustParseDollars("5.00")
 	last := money.MustParseDollars("3.00")
-	require.NoError(t, database.ReplaceSessionUsageEvents(
+	require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(),
 		"copilot:reported", []UsageEvent{
 			{
 				Source: "shutdown", Model: "model-a", InputTokens: 10,
@@ -130,13 +142,14 @@ func TestUsageRollupDailyMatchesLastCopilotReportedCost(t *testing.T) {
 
 func countUsageRollupExceptionRows(t *testing.T, database *DB) int {
 	t.Helper()
+
 	snapshot, err := database.captureUsageQuery(
 		t.Context(), UsageFilter{}, usageQueryKindToken)
 	require.NoError(t, err)
 	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
 	require.NoError(t, err)
 	var count int
-	require.NoError(t, cache.db.QueryRow(
+	require.NoError(t, cache.db.QueryRowContext(t.Context(),
 		`SELECT COUNT(*) FROM usage_rollup_exceptions`).Scan(&count))
 	return count
 }
@@ -158,7 +171,7 @@ func TestUsageRollupUniqueClaudeSessionStoresNoExceptions(t *testing.T) {
 			ClaudeRequestID: "request-" + strconv.Itoa(index),
 		})
 	}
-	require.NoError(t, database.InsertMessages(messages))
+	require.NoError(t, database.InsertMessages(t.Context(), messages))
 	filter := UsageFilter{From: "2026-08-10", To: "2026-08-10", Timezone: "UTC"}
 
 	legacy := getDailyUsageLegacyForRollupTest(t, database, filter)
@@ -174,7 +187,7 @@ func TestUsageRollupSameDaySnapshotDuplicateAggregates(t *testing.T) {
 	database := testDB(t)
 	seedUsageSnapshotSession(t, database, "same-day", "project",
 		"2026-08-10T09:00:00Z", 0, 10, "model-a")
-	require.NoError(t, database.InsertMessages([]Message{{
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{{
 		SessionID: "same-day", Ordinal: 1, Role: "assistant",
 		Timestamp: "2026-08-10T09:05:00Z", Model: "model-a",
 		TokenUsage:      []byte(`{"output_tokens":25}`),
@@ -222,7 +235,7 @@ func TestUsageRollupSiblingRemovalRestoresFinalizedAggregate(t *testing.T) {
 	require.Equal(t, 20, warm.Totals.OutputTokens)
 	require.Positive(t, countUsageRollupExceptionRows(t, database))
 
-	require.NoError(t, database.ReplaceSessionMessages("sibling", []Message{{
+	require.NoError(t, database.ReplaceSessionMessages(t.Context(), "sibling", []Message{{
 		SessionID: "sibling", Ordinal: 0, Role: "assistant",
 		Timestamp: "2026-08-10T10:00:00Z", Model: "model-a",
 		TokenUsage:      []byte(`{"output_tokens":20}`),
@@ -248,7 +261,7 @@ func TestUsageRollupSessionDeletionRestoresFinalizedAggregate(t *testing.T) {
 	warm := getDailyUsageRollupForTest(t, database, filter)
 	require.Equal(t, 20, warm.Totals.OutputTokens)
 
-	require.NoError(t, database.DeleteSession("sibling"))
+	require.NoError(t, database.DeleteSession(t.Context(), "sibling"))
 
 	legacy := getDailyUsageLegacyForRollupTest(t, database, filter)
 	rollup := getDailyUsageRollupForTest(t, database, filter)
@@ -271,7 +284,7 @@ func TestUsageRollupWarmReadDoesNotScanFacts(t *testing.T) {
 	require.NoError(t, err)
 	cache, err := database.usageCache.Generation(t.Context(), snapshot.DatabaseID)
 	require.NoError(t, err)
-	_, err = cache.db.Exec(`DROP TABLE usage_facts`)
+	_, err = cache.db.ExecContext(t.Context(), `DROP TABLE usage_facts`)
 	require.NoError(t, err, "make any facts access fail")
 
 	got, err := database.GetDailyUsage(t.Context(), filter)
@@ -355,10 +368,14 @@ func TestUsageRollupCrossIdentityQueriesUseIndexes(t *testing.T) {
 func TestUsageRollupSeededRandomParitySweep(t *testing.T) {
 	database := testDB(t)
 	require.NoError(t, database.UpsertModelPricing([]ModelPricing{
-		{ModelPattern: "model-a", InputPerMTok: money.MustParseDollars("2"),
-			OutputPerMTok: money.MustParseDollars("8")},
-		{ModelPattern: "model-b", InputPerMTok: money.MustParseDollars("3"),
-			OutputPerMTok: money.MustParseDollars("12")},
+		{
+			ModelPattern: "model-a", InputPerMTok: money.MustParseDollars("2"),
+			OutputPerMTok: money.MustParseDollars("8"),
+		},
+		{
+			ModelPattern: "model-b", InputPerMTok: money.MustParseDollars("3"),
+			OutputPerMTok: money.MustParseDollars("12"),
+		},
 	}))
 
 	type seededSession struct {
@@ -393,15 +410,15 @@ func TestUsageRollupSeededRandomParitySweep(t *testing.T) {
 		case "codex":
 			message.SourceUUID = "cross-session-source"
 		}
-		require.NoError(t, database.InsertMessages([]Message{message}))
+		require.NoError(t, database.InsertMessages(t.Context(), []Message{message}))
 	}
 	// Keep automation deterministic regardless of transcript classifier rules.
-	_, err := database.getWriter().Exec(`
+	_, err := database.getWriter().Exec(t.Context(), `
 		UPDATE sessions SET is_automated = CASE id
 			WHEN 'claude-b' THEN 1 WHEN 'codex-b' THEN 1 ELSE 0 END`)
 	require.NoError(t, err)
 	reported := money.MustParseDollars("0.25")
-	require.NoError(t, database.ReplaceSessionUsageEvents("plain-a", []UsageEvent{{
+	require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "plain-a", []UsageEvent{{
 		Source: "provider", Model: "model-b", InputTokens: 50,
 		Cost: &reported, CostStatus: "exact", CostSource: "provider",
 		OccurredAt: "2026-11-01T05:30:00Z", DedupKey: "event-one",
@@ -421,7 +438,7 @@ func TestUsageRollupSeededRandomParitySweep(t *testing.T) {
 			ClaudeMessageID: messageID, ClaudeRequestID: "same-day-request",
 		}
 	}
-	require.NoError(t, database.InsertMessages([]Message{
+	require.NoError(t, database.InsertMessages(t.Context(), []Message{
 		sameDayMessage(0, 11, "same-day-message"),
 		sameDayMessage(1, 44, "same-day-message"),
 		sameDayMessage(2, 7, "same-day-unique"),
@@ -433,26 +450,36 @@ func TestUsageRollupSeededRandomParitySweep(t *testing.T) {
 	})
 	firstShutdown := money.MustParseDollars("4.00")
 	lastShutdown := money.MustParseDollars("6.50")
-	require.NoError(t, database.ReplaceSessionUsageEvents("copilot-a", []UsageEvent{
-		{Source: "shutdown", Model: "model-a", InputTokens: 15,
+	require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "copilot-a", []UsageEvent{
+		{
+			Source: "shutdown", Model: "model-a", InputTokens: 15,
 			Cost: &firstShutdown, CostStatus: "exact",
 			CostSource: CopilotReportedCostSource,
-			OccurredAt: "2026-11-01T11:00:00Z", DedupKey: "shutdown-one"},
-		{Source: "shutdown", Model: "model-b", InputTokens: 25,
+			OccurredAt: "2026-11-01T11:00:00Z", DedupKey: "shutdown-one",
+		},
+		{
+			Source: "shutdown", Model: "model-b", InputTokens: 25,
 			Cost: &lastShutdown, CostStatus: "exact",
 			CostSource: CopilotReportedCostSource,
-			OccurredAt: "2026-11-02T11:00:00Z", DedupKey: "shutdown-two"},
+			OccurredAt: "2026-11-02T11:00:00Z", DedupKey: "shutdown-two",
+		},
 	}))
-	require.NoError(t, database.InsertCursorUsageEvents([]CursorUsageEvent{
-		{OccurredAt: "2026-11-01T06:15:00Z", Model: "model-a",
-			InputTokens: 30, DedupKey: "cursor-human", IsHeadless: false},
-		{OccurredAt: "2026-11-01T07:15:00Z", Model: "model-b",
-			InputTokens: 40, DedupKey: "cursor-headless", IsHeadless: true},
+	require.NoError(t, database.InsertCursorUsageEvents(t.Context(), []CursorUsageEvent{
+		{
+			OccurredAt: "2026-11-01T06:15:00Z", Model: "model-a",
+			InputTokens: 30, DedupKey: "cursor-human", IsHeadless: false,
+		},
+		{
+			OccurredAt: "2026-11-01T07:15:00Z", Model: "model-b",
+			InputTokens: 40, DedupKey: "cursor-headless", IsHeadless: true,
+		},
 	}))
 	for _, filter := range []UsageFilter{
 		{From: "2026-11-01", To: "2026-11-01", Timezone: "America/Chicago"},
-		{From: "2026-10-31", To: "2026-11-02", Timezone: "UTC",
-			Project: "project-a", Model: "model-a"},
+		{
+			From: "2026-10-31", To: "2026-11-02", Timezone: "UTC",
+			Project: "project-a", Model: "model-a",
+		},
 	} {
 		legacy := getDailyUsageLegacyForRollupTest(t, database, filter)
 		rollup := getDailyUsageRollupForTest(t, database, filter)
@@ -502,19 +529,19 @@ func TestUsageRollupQueryRejectsDifferentInstallOrPricing(t *testing.T) {
 	installs, _, err := cache.rollup.Ensure(t.Context(), snapshot, fills, resolver)
 	require.NoError(t, err)
 	required := installs["session-a"]
-	_, err = cache.db.Exec(`UPDATE usage_rollup_installs
+	_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_installs
 		SET install_revision = install_revision + 1 WHERE id = ?`, required.ID)
 	require.NoError(t, err)
 
 	_, err = cache.usageRollupQuery(t.Context(), snapshot, filter, installs, resolver)
-	assert.ErrorIs(t, err, errUsageCacheSourceChanged)
-	_, err = cache.db.Exec(`UPDATE usage_rollup_installs
+	require.ErrorIs(t, err, errUsageCacheSourceChanged)
+	_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_installs
 		SET install_revision = ? WHERE id = ?`,
 		required.InstallRevision-1, required.ID)
 	require.NoError(t, err)
 	_, err = cache.usageRollupQuery(t.Context(), snapshot, filter, installs, resolver)
-	assert.ErrorIs(t, err, errUsageCacheSourceChanged)
-	_, err = cache.db.Exec(`UPDATE usage_rollup_installs
+	require.ErrorIs(t, err, errUsageCacheSourceChanged)
+	_, err = cache.db.ExecContext(t.Context(), `UPDATE usage_rollup_installs
 		SET install_revision = ?, pricing_hash = 'changed' WHERE id = ?`,
 		required.InstallRevision, required.ID)
 	require.NoError(t, err)
@@ -535,6 +562,7 @@ func getDailyUsageRollupForTest(
 	t *testing.T, database *DB, filter UsageFilter,
 ) DailyUsageResult {
 	t.Helper()
+
 	snapshot, err := database.captureUsageQuery(
 		t.Context(), filter, usageQueryKindToken)
 	require.NoError(t, err)
@@ -559,7 +587,7 @@ func getDailyUsageRollupForTest(
 
 func TestUsageRollupInstallWaitsForHeldCacheWriteLock(t *testing.T) {
 	database := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, database.UpsertModelPricing([]ModelPricing{{
 		ModelPattern:  "model-a",
 		InputPerMTok:  money.MustParseDollars("1.0"),
@@ -583,23 +611,40 @@ func TestUsageRollupInstallWaitsForHeldCacheWriteLock(t *testing.T) {
 	require.NoError(t, err)
 	cache, err := database.usageCache.Generation(ctx, databaseID)
 	require.NoError(t, err)
+	baselineInUse := cache.db.Stats().InUse
 
 	// Hold the cache write lock on a separate connection while the
 	// query runs: the rollup install must wait it out through the busy
 	// timeout instead of failing with a stale-snapshot write error.
 	held := openRawUsageCacheTestDB(t, cache.path)
 	t.Cleanup(func() { require.NoError(t, held.Close()) })
-	_, err = held.Exec(`BEGIN IMMEDIATE`)
+	_, err = held.ExecContext(ctx, `BEGIN IMMEDIATE`)
 	require.NoError(t, err)
-	released := make(chan struct{})
+	rollupStarted := make(chan struct{})
+	var rollupOnce sync.Once
+	filter.Progress = func(message string) {
+		if strings.HasPrefix(message, "Calculating daily totals") {
+			rollupOnce.Do(func() { close(rollupStarted) })
+		}
+	}
+	type usageResult struct {
+		result DailyUsageResult
+		err    error
+	}
+	done := make(chan usageResult, 1)
 	go func() {
-		defer close(released)
-		time.Sleep(300 * time.Millisecond)
-		_, _ = held.Exec(`COMMIT`)
+		result, err := database.GetDailyUsage(ctx, filter)
+		done <- usageResult{result: result, err: err}
 	}()
-
-	result, err := database.GetDailyUsage(ctx, filter)
-	<-released
+	<-rollupStarted
+	require.Eventually(t, func() bool {
+		return cache.db.Stats().InUse > baselineInUse
+	}, time.Second, time.Millisecond,
+		"rollup query did not acquire a cache connection")
+	_, err = held.ExecContext(ctx, `COMMIT`)
+	require.NoError(t, err)
+	completed := <-done
+	result, err := completed.result, completed.err
 	require.NoError(t, err,
 		"rollup install must wait for the held cache write lock")
 	require.Len(t, result.Daily, 1)

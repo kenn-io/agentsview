@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -149,24 +150,25 @@ type openRequest struct {
 	OpenerID string `json:"opener_id"`
 }
 
-func launchOpener(o Opener, dir string) error {
+func launchOpener(ctx context.Context, o Opener, dir string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	// The opened application belongs to the user after this request returns.
+	ctx = context.WithoutCancel(ctx)
 	var cmd *exec.Cmd
 
 	switch o.Kind {
 	case "files":
 		if runtime.GOOS == "darwin" {
-			cmd = exec.Command("open", dir)
+			cmd = exec.CommandContext(ctx, "open", dir)
 		} else {
-			cmd = exec.Command(o.Bin, dir)
+			cmd = exec.CommandContext(ctx, o.Bin, dir)
 		}
 	case "editor":
-		if runtime.GOOS == "darwin" && o.ID == "xcode" {
-			cmd = exec.Command(o.Bin, dir)
-		} else {
-			cmd = exec.Command(o.Bin, dir)
-		}
+		cmd = exec.CommandContext(ctx, o.Bin, dir)
 	case "terminal":
-		cmd = launchTerminalInDir(o, dir)
+		cmd = launchTerminalInDir(ctx, o, dir)
 	default:
 		return fmt.Errorf("unsupported opener kind: %s", o.Kind)
 	}
@@ -195,16 +197,16 @@ func isAppBundle(bin string) bool {
 // bundle it wraps with `open -na`; otherwise executes the binary
 // directly. This keeps detection and launch consistent regardless
 // of whether the opener was found via app bundle or PATH.
-func macExecCommand(bin string, args ...string) *exec.Cmd {
+func macExecCommand(ctx context.Context, bin string, args ...string) *exec.Cmd {
 	if isAppBundle(bin) {
 		openArgs := []string{"-na", bin, "--args"}
 		openArgs = append(openArgs, args...)
-		return exec.Command("open", openArgs...)
+		return exec.CommandContext(ctx, "open", openArgs...)
 	}
-	return exec.Command(bin, args...)
+	return exec.CommandContext(ctx, bin, args...)
 }
 
-func launchTerminalInDir(o Opener, dir string) *exec.Cmd {
+func launchTerminalInDir(ctx context.Context, o Opener, dir string) *exec.Cmd {
 	if runtime.GOOS == "darwin" {
 		switch o.ID {
 		case "iterm2":
@@ -217,9 +219,9 @@ func launchTerminalInDir(o Opener, dir string) *exec.Cmd {
 				end tell`,
 				escapeForAppleScript(shellCmd),
 			)
-			return exec.Command("osascript", "-e", script)
+			return exec.CommandContext(ctx, "osascript", "-e", script)
 		case "terminal":
-			shellCmd := fmt.Sprintf("cd %s", shellQuote(dir))
+			shellCmd := "cd " + shellQuote(dir)
 			script := fmt.Sprintf(
 				`tell application "Terminal"
 					activate
@@ -227,17 +229,17 @@ func launchTerminalInDir(o Opener, dir string) *exec.Cmd {
 				end tell`,
 				escapeForAppleScript(shellCmd),
 			)
-			return exec.Command("osascript", "-e", script)
+			return exec.CommandContext(ctx, "osascript", "-e", script)
 		case "ghostty":
-			return macExecCommand(o.Bin,
+			return macExecCommand(ctx, o.Bin,
 				"--working-directory="+dir)
 		case "kitty":
-			return macExecCommand(o.Bin, "-d", dir)
+			return macExecCommand(ctx, o.Bin, "-d", dir)
 		case "alacritty":
-			return macExecCommand(o.Bin,
+			return macExecCommand(ctx, o.Bin,
 				"--working-directory", dir)
 		case "wezterm":
-			return macExecCommand(o.Bin,
+			return macExecCommand(ctx, o.Bin,
 				"start", "--cwd", dir)
 		}
 	}
@@ -245,24 +247,24 @@ func launchTerminalInDir(o Opener, dir string) *exec.Cmd {
 	// Linux: launch via CLI binary directly.
 	switch o.ID {
 	case "kitty":
-		return exec.Command(o.Bin, "--directory", dir)
+		return exec.CommandContext(ctx, o.Bin, "--directory", dir)
 	case "alacritty":
-		return exec.Command(o.Bin, "--working-directory", dir)
+		return exec.CommandContext(ctx, o.Bin, "--working-directory", dir)
 	case "wezterm":
-		return exec.Command(o.Bin, "start", "--cwd", dir)
+		return exec.CommandContext(ctx, o.Bin, "start", "--cwd", dir)
 	case "gnome-terminal":
-		return exec.Command(o.Bin, "--working-directory="+dir)
+		return exec.CommandContext(ctx, o.Bin, "--working-directory="+dir)
 	case "konsole":
-		return exec.Command(o.Bin, "--workdir", dir)
+		return exec.CommandContext(ctx, o.Bin, "--workdir", dir)
 	case "xfce4-terminal":
-		return exec.Command(o.Bin,
+		return exec.CommandContext(ctx, o.Bin,
 			"--default-working-directory="+dir)
 	case "tilix":
-		return exec.Command(o.Bin, "--working-directory="+dir)
+		return exec.CommandContext(ctx, o.Bin, "--working-directory="+dir)
 	case "ghostty":
-		return exec.Command(o.Bin, "--working-directory="+dir)
+		return exec.CommandContext(ctx, o.Bin, "--working-directory="+dir)
 	default:
-		cmd := exec.Command(o.Bin)
+		cmd := exec.CommandContext(ctx, o.Bin)
 		cmd.Dir = dir
 		return cmd
 	}

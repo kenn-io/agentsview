@@ -331,6 +331,7 @@ func newRootCoverageFailure(
 	t *testing.T, maxOutboxBytes int64,
 ) (string, *rawcheckpoint.Store, string) {
 	t.Helper()
+
 	root := t.TempDir()
 	require.NoError(t, os.WriteFile(
 		filepath.Join(root, "session.jsonl"), []byte("session"), 0o600,
@@ -406,7 +407,7 @@ func TestAuditorFullReconciliationPreservesDegradedRootCoverageFailure(t *testin
 	blocker, err := store.ReserveCapture(t.Context(), rootID, maxOutboxBytes)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, store.ReleaseReservation(context.Background(), blocker.ID))
+		require.NoError(t, store.ReleaseReservation(context.WithoutCancel(t.Context()), blocker.ID))
 	})
 
 	result, err := NewAuditor(store, rawcapture.New(store), 1).

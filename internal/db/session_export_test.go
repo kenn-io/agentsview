@@ -34,7 +34,7 @@ func TestAllSessionExportKeepsTerminationCutoffAcrossPages(t *testing.T) {
 				ID: id, Project: "termination", StartedAt: &ts, EndedAt: &ts,
 			})
 		}
-		pages, err := d.exportAllSessionSummaries(context.Background(), SessionExportOptions{
+		pages, err := d.exportAllSessionSummaries(t.Context(), SessionExportOptions{
 			Filter: SessionFilter{Project: "termination", Termination: "active"},
 			Limit:  1,
 		}, func(page int, _ *sql.Tx) error {
@@ -57,7 +57,7 @@ func TestAllSessionExportKeepsTerminationCutoffAcrossPages(t *testing.T) {
 
 func TestSessionSummaryExportRowsAreContentFreeAndMetadataScoped(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedSessionExportPricing(t, d)
 	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
@@ -147,7 +147,7 @@ func TestSessionSummaryExportRowsAreContentFreeAndMetadataScoped(t *testing.T) {
 		Cwd:              "/repo/alpha/worktrees/feature/sub",
 	})
 	reported := money.MustParseDollars("0.0123")
-	require.NoError(t, d.ReplaceSessionUsageEvents("alpha-child", []UsageEvent{{
+	require.NoError(t, d.ReplaceSessionUsageEvents(ctx, "alpha-child", []UsageEvent{{
 		Source:          "provider",
 		Model:           "model-reported",
 		InputTokens:     200,
@@ -265,7 +265,7 @@ func TestSessionSummaryExportRowsAreContentFreeAndMetadataScoped(t *testing.T) {
 
 func TestSessionSummaryExportKeepsFirstConclusiveProjectIdentity(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	insertExportSession(t, d, Session{
 		ID:               "stable-project-session",
 		Project:          "/Users/alice/private/project",
@@ -334,7 +334,7 @@ func TestSessionSummaryExportCatalogMarksConflictingSessionIdentitiesAmbiguous(
 	t *testing.T,
 ) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	for i, remote := range []string{
 		"https://github.com/acme/first.git",
 		"https://github.com/acme/second.git",
@@ -374,7 +374,7 @@ func TestSessionSummaryExportCatalogMarksConflictingSessionIdentitiesAmbiguous(
 
 func TestSessionSummaryExportKeepsConclusiveMachineRootSnapshot(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	insertExportSession(t, d, Session{
 		ID: "machine-root-session", Project: "local-app", Machine: "laptop",
 		Agent: "codex", Cwd: "/workspace/local-app",
@@ -413,7 +413,7 @@ func TestSessionSummaryExportWithoutSnapshotDoesNotDeriveFromCWD(t *testing.T) {
 	})
 
 	result, err := d.ExportSessionSummaries(
-		context.Background(), SessionExportOptions{Limit: 10},
+		t.Context(), SessionExportOptions{Limit: 10},
 	)
 	require.NoError(t, err)
 	require.Len(t, result.Rows, 1)
@@ -424,7 +424,7 @@ func TestSessionSummaryExportWithoutSnapshotDoesNotDeriveFromCWD(t *testing.T) {
 
 func TestSessionSummaryExportIncludesReasoningOnlyUsageRows(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedSessionExportPricing(t, d)
 	insertExportSession(t, d, Session{
@@ -435,7 +435,7 @@ func TestSessionSummaryExportIncludesReasoningOnlyUsageRows(t *testing.T) {
 		StartedAt: Ptr("2026-05-01T10:00:00Z"),
 		EndedAt:   Ptr("2026-05-01T10:01:00Z"),
 	})
-	require.NoError(t, d.ReplaceSessionUsageEvents("reasoning-only", []UsageEvent{{
+	require.NoError(t, d.ReplaceSessionUsageEvents(ctx, "reasoning-only", []UsageEvent{{
 		Source:          "provider",
 		Model:           "model-computed",
 		ReasoningTokens: 25,
@@ -471,7 +471,7 @@ func TestSessionSummaryExportIncludesReasoningOnlyUsageRows(t *testing.T) {
 
 func TestSessionSummaryExportIncludesMessageReasoningTokens(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedSessionExportPricing(t, d)
 	insertExportSession(t, d, Session{
@@ -524,13 +524,13 @@ func TestSessionSummaryExportRequiresExistingDatabaseID(t *testing.T) {
 		MessageCount:     1,
 		UserMessageCount: 1,
 	})
-	_, err := d.rawWriter().Exec(`
+	_, err := d.rawWriter().ExecContext(t.Context(), `
 		DELETE FROM archive_metadata WHERE key = ?`,
 		archiveMetadataDatabaseIDKey,
 	)
 	require.NoError(t, err)
 
-	_, err = d.ExportSessionSummaries(context.Background(), SessionExportOptions{
+	_, err = d.ExportSessionSummaries(t.Context(), SessionExportOptions{
 		Limit: 10,
 	})
 	require.ErrorIs(t, err, ErrDatabaseIDMissing)
@@ -548,7 +548,7 @@ func TestSessionSummaryExportIdentitySurvivesRebuild(t *testing.T) {
 	before, err := source.ExportSessionSummaries(ctx, SessionExportOptions{})
 	require.NoError(t, err)
 	require.Len(t, before.Rows, 1)
-	require.NoError(t, source.CloseConnections())
+	require.NoError(t, source.CloseConnections(ctx))
 
 	rebuilt := testDB(t)
 	require.NoError(t, rebuilt.SetDatabaseIDForTest(ctx, "generation-two"))
@@ -570,12 +570,12 @@ func TestSessionSummaryExportIdentitySurvivesRebuild(t *testing.T) {
 
 func TestSessionSummaryExportEmptyArchiveRequiresIdentity(t *testing.T) {
 	d := testDB(t)
-	_, err := d.rawWriter().Exec(`DELETE FROM archive_metadata WHERE key = ?`, archiveMetadataArchiveIDKey)
+	_, err := d.rawWriter().ExecContext(t.Context(), `DELETE FROM archive_metadata WHERE key = ?`, archiveMetadataArchiveIDKey)
 	require.NoError(t, err)
 	_, err = d.ExportSessionSummaries(t.Context(), SessionExportOptions{})
 	require.ErrorIs(t, err, ErrArchiveIDMissing)
 	var count int
-	require.NoError(t, d.rawWriter().QueryRow(`SELECT count(*) FROM archive_metadata WHERE key = ?`,
+	require.NoError(t, d.rawWriter().QueryRowContext(t.Context(), `SELECT count(*) FROM archive_metadata WHERE key = ?`,
 		archiveMetadataArchiveIDKey).Scan(&count))
 	assert.Zero(t, count, "export must not initialize missing identity")
 }
@@ -591,12 +591,12 @@ func TestAllSessionExportIdentityUsesRowSnapshot(t *testing.T) {
 			EndedAt: Ptr("2026-05-01T10:00:00Z"),
 		})
 	}
-	_, err := d.getWriter().Exec(`UPDATE sessions
+	_, err := d.getWriter().Exec(ctx, `UPDATE sessions
 		SET transcript_revision = '7', local_modified_at = '2026-05-01T10:01:00Z'`)
 	require.NoError(t, err)
 	pages, err := d.exportAllSessionSummaries(ctx, SessionExportOptions{Limit: 1}, func(page int, _ *sql.Tx) error {
 		if page == 1 {
-			if _, err := d.getWriter().Exec(`UPDATE sessions
+			if _, err := d.getWriter().Exec(ctx, `UPDATE sessions
 				SET transcript_revision = '8', local_modified_at = '2026-05-01T10:02:00Z'`); err != nil {
 				return err
 			}
@@ -630,7 +630,7 @@ func TestAllSessionExportIdentityUsesRowSnapshot(t *testing.T) {
 
 func TestAllSessionExportMaterializesActivitySort(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	d.rawReader().SetMaxOpenConns(1)
 	d.rawReader().SetMaxIdleConns(1)
 
@@ -715,9 +715,9 @@ func TestAllSessionExportMaterializesActivitySort(t *testing.T) {
 	} {
 		insertExportSession(t, d, session)
 	}
-	require.NoError(t, d.SoftDeleteSession("trashed"), "soft-delete trashed session")
-	require.NoError(t, d.DeleteSession("tombstoned"), "tombstone session")
-	_, err := d.getWriter().Exec(
+	require.NoError(t, d.SoftDeleteSession(ctx, "trashed"), "soft-delete trashed session")
+	require.NoError(t, d.DeleteSession(ctx, "tombstoned"), "tombstone session")
+	_, err := d.getWriter().Exec(ctx,
 		`UPDATE sessions SET source_missing_at = ? WHERE id = ?`,
 		"2026-05-01T19:00:00Z", "source-missing",
 	)
@@ -975,7 +975,7 @@ func TestAllSessionExportMaterializesActivitySort(t *testing.T) {
 
 func TestSessionSummaryExportUsesMessageActivityForOpenSessions(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertExportSession(t, d, Session{
 		ID:               "open-active",
@@ -1038,7 +1038,7 @@ func TestSessionSummaryExportUsesMessageActivityForOpenSessions(t *testing.T) {
 
 func TestSessionSummaryExportOrdersLastActivityByParsedInstant(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertExportSession(t, d, Session{
 		ID:               "whole-second",
@@ -1082,7 +1082,7 @@ func TestSessionSummaryExportOrdersLastActivityByParsedInstant(t *testing.T) {
 
 func TestSessionSummaryExportClosedSessionActivityPrefersEndedAt(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertExportSession(t, d, Session{
 		ID:               "closed-with-late-message",
@@ -1123,7 +1123,7 @@ func TestSessionSummaryExportClosedSessionActivityPrefersEndedAt(t *testing.T) {
 
 func TestSessionSummaryExportActiveSinceUsesMessageAwareActivity(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertExportSession(t, d, Session{
 		ID:               "open-active-after-cutoff",
@@ -1172,7 +1172,7 @@ func TestSessionSummaryExportActiveSinceUsesMessageAwareActivity(t *testing.T) {
 
 func TestSessionSummaryExportActiveSinceIncludeChildrenKeepsOlderChildrenOfActiveRoot(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertExportSession(t, d, Session{
 		ID:               "active-root",
@@ -1225,7 +1225,7 @@ func TestSessionSummaryExportActiveSinceIncludeChildrenKeepsOlderChildrenOfActiv
 
 func TestSessionSummaryExportActiveSinceIncludeChildrenDoesNotPromoteActiveChildOfInactiveRoot(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertExportSession(t, d, Session{
 		ID:               "inactive-root",
@@ -1276,7 +1276,7 @@ func TestSessionSummaryExportActiveSinceIncludeChildrenDoesNotPromoteActiveChild
 
 func TestSessionSummaryExportDoesNotFallbackWorktreeWithoutPathMatch(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, d.UpsertProjectIdentityObservation(ctx,
 		export.ProjectIdentityObservation{
 			Project:          "alpha",
@@ -1324,7 +1324,7 @@ func TestSessionSummaryExportDefaultLimitIsMaxSessionLimit(t *testing.T) {
 		})
 	}
 
-	result, err := d.ExportSessionSummaries(context.Background(), SessionExportOptions{})
+	result, err := d.ExportSessionSummaries(t.Context(), SessionExportOptions{})
 	require.NoError(t, err, "ExportSessionSummaries")
 	assert.Len(t, result.Rows, MaxSessionLimit)
 	assert.NotEmpty(t, result.NextCursor)
@@ -1332,7 +1332,7 @@ func TestSessionSummaryExportDefaultLimitIsMaxSessionLimit(t *testing.T) {
 
 func TestSessionExportCursorEmbedsSnapshotAndPaginatesStably(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, d.SetDatabaseIDForTest(ctx, "cursor-db"),
 		"set database id")
 
@@ -1425,13 +1425,13 @@ func TestSessionExportCursorEmbedsSnapshotAndPaginatesStably(t *testing.T) {
 		Format: "json",
 	})
 	require.Error(t, err, "changed watermarked set should reset cursor")
-	assert.True(t, errors.Is(err, ErrSessionExportCursorReset),
+	assert.ErrorIs(t, err, ErrSessionExportCursorReset,
 		"expected reset error, got %v", err)
 }
 
 func TestSessionExportCursorPrefixUsesSameSnapshotAsPageQuery(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	for _, row := range []struct {
 		id, ended string
@@ -1505,7 +1505,7 @@ func TestSessionExportCursorPrefixUsesSameSnapshotAsPageQuery(t *testing.T) {
 
 func TestSessionExportUsageUsesPageReadSnapshot(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedSessionExportPricing(t, d)
 	insertExportSession(t, d, Session{
 		ID: "usage-snapshot", Project: "alpha", Machine: "local",
@@ -1543,7 +1543,7 @@ func TestSessionExportUsageUsesPageReadSnapshot(t *testing.T) {
 
 func TestSessionSummaryExportSelectsCompleteClaudeSnapshotBeforeDedup(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedSessionExportPricing(t, d)
 	for _, session := range []Session{
 		{
@@ -1602,7 +1602,7 @@ func TestSessionSummaryExportSelectsCompleteClaudeSnapshotBeforeDedup(t *testing
 
 func TestSessionSummaryExportSelectsClaudeSnapshotFromExcludedSubagent(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedSessionExportPricing(t, d)
 	parentID := "snapshot-parent"
 	insertExportSession(t, d, Session{
@@ -1652,7 +1652,7 @@ func TestSessionSummaryExportSelectsClaudeSnapshotFromExcludedSubagent(t *testin
 
 func TestSessionSummaryExportSelectsClaudeSnapshotAcrossPages(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	seedSessionExportPricing(t, d)
 	for _, session := range []Session{
 		{
@@ -1739,7 +1739,7 @@ func (c *sessionExportQueryCapture) QueryRowContext(
 
 func TestSessionExportClaudeSnapshotPeersUsesSnapshotIndex(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const pairCount = maxSQLVars/2 + 1
 
 	pageRows := make([]usageScanRow, 0, pairCount)
@@ -1832,7 +1832,7 @@ func TestSessionExportClaudeSnapshotPeersUsesSnapshotIndex(t *testing.T) {
 
 func TestSessionExportCopilotReportedCostReplacesSessionEstimates(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{
 		{ModelPattern: "copilot-model-a", InputPerMTok: money.MustParseDollars("10")},
 		{ModelPattern: "copilot-model-b", InputPerMTok: money.MustParseDollars("20")},
@@ -1843,7 +1843,7 @@ func TestSessionExportCopilotReportedCostReplacesSessionEstimates(t *testing.T) 
 		EndedAt: Ptr("2026-06-16T10:10:00Z"), UserMessageCount: 1,
 	})
 	reportedCost := money.MustParseDollars("0.03")
-	require.NoError(t, d.ReplaceSessionUsageEvents(
+	require.NoError(t, d.ReplaceSessionUsageEvents(ctx,
 		"copilot:export-authoritative",
 		[]UsageEvent{
 			{
@@ -1888,7 +1888,7 @@ func TestSessionExportCopilotReportedCostReplacesSessionEstimates(t *testing.T) 
 
 func TestAllSessionExportKeepsOnePricingSnapshotAcrossPages(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, d.UpsertModelPricing([]ModelPricing{{
 		ModelPattern: "snapshot-model", InputPerMTok: money.MustParseDollars("1"),
 	}}))
@@ -1939,7 +1939,7 @@ func TestAllSessionExportKeepsOnePricingSnapshotAcrossPages(t *testing.T) {
 
 func TestAllSessionExportHonorsCancellation(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	_, err := d.ExportAllSessionSummaries(ctx, SessionExportOptions{Limit: 1})
@@ -1949,7 +1949,7 @@ func TestAllSessionExportHonorsCancellation(t *testing.T) {
 
 func TestSessionExportCursorResetsWhenRowMovesBeforeCursor(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, d.SetDatabaseIDForTest(ctx, "cursor-db"),
 		"set database id")
 
@@ -1997,13 +1997,13 @@ func TestSessionExportCursorResetsWhenRowMovesBeforeCursor(t *testing.T) {
 		Format: "json",
 	})
 	require.Error(t, err, "moved row should reset cursor")
-	assert.True(t, errors.Is(err, ErrSessionExportCursorReset),
+	assert.ErrorIs(t, err, ErrSessionExportCursorReset,
 		"expected reset error, got %v", err)
 }
 
 func TestSessionExportCursorResetsWhenUnemittedRowMovesAboveWatermark(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	require.NoError(t, d.SetDatabaseIDForTest(ctx, "cursor-db"),
 		"set database id")
 
@@ -2047,12 +2047,12 @@ func TestSessionExportCursorResetsWhenUnemittedRowMovesAboveWatermark(t *testing
 		Format: "json",
 	})
 	require.Error(t, err, "moved suffix row should reset cursor")
-	assert.True(t, errors.Is(err, ErrSessionExportCursorReset),
+	assert.ErrorIs(t, err, ErrSessionExportCursorReset,
 		"expected reset error, got %v", err)
 }
 
 func TestSessionExportCursorRejectsWrongDatabaseAndChangedFilters(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d1 := testDB(t)
 	d2 := testDB(t)
 	require.NoError(t, d1.SetDatabaseIDForTest(ctx, "db-one"), "set db one")
@@ -2100,7 +2100,7 @@ func TestSessionExportCursorRejectsWrongDatabaseAndChangedFilters(t *testing.T) 
 		Format: "json",
 	})
 	require.Error(t, err, "wrong database cursor")
-	assert.True(t, errors.Is(err, ErrSessionExportCursorReset),
+	require.ErrorIs(t, err, ErrSessionExportCursorReset,
 		"expected reset error, got %v", err)
 
 	_, err = d1.ExportSessionSummaries(ctx, SessionExportOptions{
@@ -2110,7 +2110,7 @@ func TestSessionExportCursorRejectsWrongDatabaseAndChangedFilters(t *testing.T) 
 		Format: "json",
 	})
 	require.Error(t, err, "changed filter cursor")
-	assert.True(t, errors.Is(err, ErrSessionExportCursorConflict),
+	require.ErrorIs(t, err, ErrSessionExportCursorConflict,
 		"expected conflict error, got %v", err)
 
 	formatChanged, err := d1.ExportSessionSummaries(ctx, SessionExportOptions{
@@ -2125,7 +2125,7 @@ func TestSessionExportCursorRejectsWrongDatabaseAndChangedFilters(t *testing.T) 
 
 func TestSessionExportCursorAllowsEquivalentFilters(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, row := range []struct {
 		id, machine, outcome, ended string
 	}{
@@ -2144,7 +2144,7 @@ func TestSessionExportCursorAllowsEquivalentFilters(t *testing.T) {
 			Outcome:          row.outcome,
 			HealthGrade:      Ptr("A"),
 		})
-		require.NoError(t, d.UpdateSessionSignals(row.id, SessionSignalUpdate{
+		require.NoError(t, d.UpdateSessionSignals(ctx, row.id, SessionSignalUpdate{
 			Outcome:     row.outcome,
 			HealthGrade: Ptr("A"),
 		}), "update filter signals %s", row.id)
@@ -2180,7 +2180,7 @@ func TestSessionExportCursorAllowsEquivalentFilters(t *testing.T) {
 
 func TestSessionExportCursorPreservesTimezoneFilter(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, row := range []struct {
 		id, started, ended string
 	}{
@@ -2256,7 +2256,7 @@ func TestSessionExportCursorPreservesTimezoneFilter(t *testing.T) {
 
 func TestSessionExportCursorTreatsDefaultAndExplicitUTCAsEquivalent(t *testing.T) {
 	d := testSessionExportDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, row := range []struct {
 		id, started, ended string
 	}{
@@ -2290,7 +2290,7 @@ func TestSessionExportCursorTreatsDefaultAndExplicitUTCAsEquivalent(t *testing.T
 }
 
 func TestSessionExportCursorTamperingReturnsInvalidCursor(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d := testSessionExportDB(t)
 	require.NoError(t, d.SetDatabaseIDForTest(ctx, "tamper-db"), "set database id")
 	for _, row := range []struct {
@@ -2322,14 +2322,14 @@ func TestSessionExportCursorTamperingReturnsInvalidCursor(t *testing.T) {
 		Limit:  1,
 	})
 	require.Error(t, err, "tampered cursor")
-	assert.True(t, errors.Is(err, ErrInvalidCursor),
+	require.ErrorIs(t, err, ErrInvalidCursor,
 		"expected invalid cursor, got %v", err)
-	assert.False(t, errors.Is(err, ErrSessionExportCursorReset),
+	assert.NotErrorIs(t, err, ErrSessionExportCursorReset,
 		"tampered cursor must not be treated as a valid wrong-database cursor")
 }
 
 func TestSessionExportCursorRejectsForgeryWithKnownKey(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	d := testSessionExportDB(t)
 	require.NoError(t, d.SetDatabaseIDForTest(ctx, "forge-db"), "set database id")
 	for _, row := range []struct {
@@ -2380,7 +2380,7 @@ func TestSessionExportCursorRejectsForgeryWithKnownKey(t *testing.T) {
 		Limit:           1,
 	})
 	require.Error(t, err, "forged cursor")
-	assert.True(t, errors.Is(err, ErrInvalidCursor),
+	assert.ErrorIs(t, err, ErrInvalidCursor,
 		"expected invalid cursor, got %v", err)
 }
 
@@ -2388,7 +2388,7 @@ func testSessionExportDB(t *testing.T) *DB {
 	t.Helper()
 	d := testDB(t)
 	require.NoError(t, d.SetDatabaseIDForTest(
-		context.Background(), "session-export-db"),
+		t.Context(), "session-export-db"),
 		"set session export database id")
 	return d
 }
@@ -2431,7 +2431,7 @@ func insertExportSession(t *testing.T, d *DB, s Session) {
 	if s.MessageCount == 0 {
 		s.MessageCount = 1
 	}
-	require.NoError(t, d.UpsertSession(s), "upsert export session %s", s.ID)
+	require.NoError(t, d.UpsertSession(t.Context(), s), "upsert export session %s", s.ID)
 }
 
 func sessionExportRowsByID(rows []SessionSummaryRow) map[string]SessionSummaryRow {
@@ -2463,6 +2463,7 @@ func tamperSessionExportCursorDatabaseID(
 	t *testing.T, cursor, databaseID string,
 ) string {
 	t.Helper()
+
 	parts := strings.Split(cursor, ".")
 	require.Len(t, parts, 2, "cursor parts")
 	data, err := base64.RawURLEncoding.DecodeString(parts[0])

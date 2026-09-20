@@ -319,6 +319,7 @@ func (db *DB) loadReportingUsageCandidates(
 	}
 	return candidates, pricing, nil
 }
+
 func reportingCreatedAtFrom(
 	ctx context.Context,
 	q sessionExportQuerier,

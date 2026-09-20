@@ -18,6 +18,7 @@ import (
 // against one transcript store.
 func aliasedCodexHomes(t *testing.T) (primary, alias string) {
 	t.Helper()
+
 	base := t.TempDir()
 	primary = filepath.Join(base, "codex")
 	alias = filepath.Join(base, "codex-alt")

@@ -206,7 +206,7 @@ func TestClinePrimarySymlinksAreRejected(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotContains(t, paths, metaPath)
 		_, err = clineFingerprintSource(metaPath)
-		assert.Error(t, err)
+		require.Error(t, err)
 		require.NoError(t, os.Remove(msgPath))
 	})
 
@@ -230,7 +230,7 @@ func TestClinePrimarySymlinksAreRejected(t *testing.T) {
 	_, ok := clineClassifyPath(root, msgPath, false)
 	assert.False(t, ok)
 	_, err := clineFingerprintSource(metaPath)
-	assert.Error(t, err)
+	require.Error(t, err)
 	require.NoError(t, os.Remove(msgPath))
 	// Changing the former symlink target must not make the source fingerprint
 	// readable through the link.
@@ -316,7 +316,7 @@ func TestClineFingerprint_Teammates(t *testing.T) {
 	fp2, err := clineFingerprintSource(metaPath)
 	require.NoError(t, err)
 	assert.NotEqual(t, fp1.Hash, fp2.Hash)
-	assert.True(t, fp2.Size > fp1.Size)
+	assert.Greater(t, fp2.Size, fp1.Size)
 
 	// Modifying teammate file must invalidate fingerprint again
 	require.NoError(t, os.WriteFile(teammatePath, []byte(`{"messages":[{"id":"m1"},{"id":"m2"}]}`), 0o644))

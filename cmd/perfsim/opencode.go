@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -54,7 +55,7 @@ CREATE INDEX part_message_id_id_idx ON part(message_id, id);
 CREATE INDEX part_session_idx ON part(session_id);
 `
 
-func openCodeCorpus(dir string, o options) ([]source, map[parser.AgentType][]string, error) {
+func openCodeCorpus(ctx context.Context, dir string, o options) ([]source, map[parser.AgentType][]string, error) {
 	root := filepath.Join(dir, "opencode")
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return nil, nil, err
@@ -77,17 +78,17 @@ func openCodeCorpus(dir string, o options) ([]source, map[parser.AgentType][]str
 		schema = openCodeV2Schema
 		sessionTable = "session_v2"
 	}
-	if _, err := store.Exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;" + schema); err != nil {
+	if _, err := store.ExecContext(ctx, "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;"+schema); err != nil {
 		return nil, nil, err
 	}
-	tx, err := store.Begin()
+	tx, err := store.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
 	start := time.Date(2026, 6, 1, 10, 0, 0, 0, time.UTC)
 	for i := range 20 {
-		if _, err := tx.Exec(`INSERT INTO project
+		if _, err := tx.ExecContext(ctx, `INSERT INTO project
  (id, worktree, time_created, time_updated, sandboxes) VALUES (?, ?, ?, ?, '[]')`,
 			fmt.Sprintf("project-%02d", i), fmt.Sprintf("/workspace/project-%02d", i), start.UnixMilli(), start.UnixMilli()); err != nil {
 			return nil, nil, err
@@ -96,7 +97,7 @@ func openCodeCorpus(dir string, o options) ([]source, map[parser.AgentType][]str
 	sources := make([]source, 0, o.Sessions)
 	for i := range o.Sessions {
 		s := source{V2: o.SourceFormat == "opencode-v2", Path: path, ID: fmt.Sprintf("ses_%012d", i+1), Agent: parser.AgentOpenCode, Store: store, Start: start.AddDate(0, 0, i%28)}
-		if _, err := tx.Exec(`INSERT INTO `+sessionTable+`
+		if _, err := tx.ExecContext(ctx, `INSERT INTO `+sessionTable+`
  (id, project_id, slug, directory, title, version, time_created, time_updated)
  VALUES (?, ?, ?, ?, ?, 'simulation', ?, ?)`, s.ID, fmt.Sprintf("project-%02d", i%20), s.ID,
 			fmt.Sprintf("/workspace/project-%02d", i%20), "Investigate query latency", s.Start.UnixMilli(), s.Start.UnixMilli()); err != nil {
@@ -106,7 +107,7 @@ func openCodeCorpus(dir string, o options) ([]source, map[parser.AgentType][]str
 		if i < o.Active && o.ActiveTurns > 0 {
 			turns = o.ActiveTurns
 		}
-		if err := s.writeSQLiteTurns(tx, turns, o.ContentBytes); err != nil {
+		if err := s.writeSQLiteTurns(ctx, tx, turns, o.ContentBytes); err != nil {
 			return nil, nil, err
 		}
 		s.Turns = turns
@@ -119,9 +120,9 @@ func openCodeCorpus(dir string, o options) ([]source, map[parser.AgentType][]str
 	return sources, map[parser.AgentType][]string{parser.AgentOpenCode: {root}}, nil
 }
 
-func (s *source) writeSQLiteTurns(tx *sql.Tx, n, contentBytes int) error {
+func (s *source) writeSQLiteTurns(ctx context.Context, tx *sql.Tx, n, contentBytes int) error {
 	if s.V2 {
-		return s.writeSQLiteV2Turns(tx, n, contentBytes)
+		return s.writeSQLiteV2Turns(ctx, tx, n, contentBytes)
 	}
 	for j := range n {
 		turn := s.Turns + j
@@ -141,7 +142,7 @@ func (s *source) writeSQLiteTurns(tx *sql.Tx, n, contentBytes int) error {
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(`INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`, id, s.ID, stamp, stamp, string(encoded)); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO message (id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?)`, id, s.ID, stamp, stamp, string(encoded)); err != nil {
 				return err
 			}
 			text := fmt.Sprintf("Investigate query latency in module %d. ", turn) + strings.Repeat("sample code and context ", contentBytes/24)
@@ -149,20 +150,20 @@ func (s *source) writeSQLiteTurns(tx *sql.Tx, n, contentBytes int) error {
 			if err != nil {
 				return err
 			}
-			if _, err := tx.Exec(`INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`, "prt_"+id, id, s.ID, stamp, stamp, string(encoded)); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?, ?, ?, ?, ?, ?)`, "prt_"+id, id, s.ID, stamp, stamp, string(encoded)); err != nil {
 				return err
 			}
 		}
 	}
-	_, err := tx.Exec("UPDATE session SET time_updated = ? WHERE id = ?", s.Start.Add(time.Duration(s.Turns+n-1)*time.Minute).UnixMilli()+2, s.ID)
+	_, err := tx.ExecContext(ctx, "UPDATE session SET time_updated = ? WHERE id = ?", s.Start.Add(time.Duration(s.Turns+n-1)*time.Minute).UnixMilli()+2, s.ID)
 	return err
 }
 
 const sqliteEditedText = "Streaming part finalized after session metadata update."
 
-func (s *source) editSQLitePart() error {
+func (s *source) editSQLitePart(ctx context.Context) error {
 	if s.V2 {
-		_, err := s.Store.Exec(`UPDATE session_message SET data = json_set(data, '$.content[0].text', ?), time_updated = ? WHERE id = ?`, sqliteEditedText, s.Start.Add(time.Duration(s.Turns-1)*time.Minute).UnixMilli()+10, fmt.Sprintf("msg_%s_%08d_1", s.ID, s.Turns-1))
+		_, err := s.Store.ExecContext(ctx, `UPDATE session_message SET data = json_set(data, '$.content[0].text', ?), time_updated = ? WHERE id = ?`, sqliteEditedText, s.Start.Add(time.Duration(s.Turns-1)*time.Minute).UnixMilli()+10, fmt.Sprintf("msg_%s_%08d_1", s.ID, s.Turns-1))
 		return err
 	}
 	encoded, err := json.Marshal(map[string]string{"type": "text", "text": sqliteEditedText})
@@ -170,20 +171,20 @@ func (s *source) editSQLitePart() error {
 		return err
 	}
 	// Only the part watermark advances, exercising the active-session poll.
-	_, err = s.Store.Exec("UPDATE part SET data = ?, time_updated = ? WHERE id = ?", string(encoded),
+	_, err = s.Store.ExecContext(ctx, "UPDATE part SET data = ?, time_updated = ? WHERE id = ?", string(encoded),
 		s.Start.Add(time.Duration(s.Turns-1)*time.Minute).UnixMilli()+10, fmt.Sprintf("prt_msg_%s_%08d_1", s.ID, s.Turns-1))
 	return err
 }
 
-func pollSQLiteSessions(sources []source) ([]int64, error) {
+func pollSQLiteSessions(ctx context.Context, sources []source) ([]int64, error) {
 	watermarks := make([]int64, len(sources))
 	for i, s := range sources {
-		mtime, err := parser.OpenCodeSourceMtime(parser.OpenCodeSQLiteVirtualPath(s.Path, s.ID))
+		mtime, err := parser.OpenCodeSourceMtime(ctx, parser.OpenCodeSQLiteVirtualPath(s.Path, s.ID))
 		if err != nil {
 			return nil, err
 		}
 		if mtime == 0 {
-			return nil, fmt.Errorf("active SQLite session missing a watermark")
+			return nil, errors.New("active SQLite session missing a watermark")
 		}
 		watermarks[i] = mtime
 	}
@@ -213,26 +214,26 @@ func measureSQLiteScans(ctx context.Context, r *report, sources []source, active
 		}
 	}
 	return r.measure("warm", "session_poll", func() error {
-		_, err := pollSQLiteSessions(sources[:active])
+		_, err := pollSQLiteSessions(ctx, sources[:active])
 		return err
 	})
 }
 
 func syncSQLiteChildEdits(ctx context.Context, r *report, engine *syncengine.Engine, database *db.DB, sources []source) error {
-	before, err := pollSQLiteSessions(sources)
+	before, err := pollSQLiteSessions(ctx, sources)
 	if err != nil {
 		return err
 	}
 	var virtualPaths []string
 	for j := range sources {
 		s := &sources[j]
-		if err := s.editSQLitePart(); err != nil {
+		if err := s.editSQLitePart(ctx); err != nil {
 			return err
 		}
 		virtualPaths = append(virtualPaths, parser.OpenCodeSQLiteVirtualPath(s.Path, s.ID))
 	}
 	if err := r.measure("active", "session_poll", func() error {
-		after, err := pollSQLiteSessions(sources)
+		after, err := pollSQLiteSessions(ctx, sources)
 		if err != nil {
 			return err
 		}

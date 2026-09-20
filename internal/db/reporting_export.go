@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -161,7 +162,7 @@ func (db *DB) ExportReportingDigest(
 		return nil, err
 	}
 	if from.After(to) {
-		return nil, fmt.Errorf("reporting date range must not be reversed")
+		return nil, errors.New("reporting date range must not be reversed")
 	}
 	now := opts.Now
 	if now.IsZero() {
@@ -172,11 +173,10 @@ func (db *DB) ExportReportingDigest(
 	dates := make([]resolvedReportingDate, 0, int(to.Sub(from)/(24*time.Hour))+1)
 	unionEnd := from
 	for date := from; !date.After(to); date = date.Add(24 * time.Hour) {
-		resolvedDate, _, hourCount, complete, resolveErr :=
-			resolveReportingExportRange(ReportingExportOptions{
-				Date: date,
-				Now:  now,
-			})
+		resolvedDate, _, hourCount, complete, resolveErr := resolveReportingExportRange(ReportingExportOptions{
+			Date: date,
+			Now:  now,
+		})
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
@@ -258,7 +258,7 @@ func normalizeReportingDate(date time.Time) (time.Time, error) {
 	_, offset := date.Zone()
 	if offset != 0 || date.Hour() != 0 || date.Minute() != 0 ||
 		date.Second() != 0 || date.Nanosecond() != 0 {
-		return time.Time{}, fmt.Errorf("reporting date must be UTC midnight")
+		return time.Time{}, errors.New("reporting date must be UTC midnight")
 	}
 	return date.UTC(), nil
 }
@@ -505,7 +505,7 @@ func (db *DB) reportingStandaloneUsageCandidatesFrom(
 		`SELECT 1 FROM sqlite_master
 		 WHERE type = 'table' AND name = 'cursor_usage_events'`,
 	).Scan(&tableExists)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return []activity.UsageRow{}, nil
 	}
 	if err != nil {
@@ -1329,7 +1329,7 @@ func resolveReportingExportRange(
 		date.Minute() != 0 ||
 		date.Second() != 0 ||
 		date.Nanosecond() != 0 {
-		err = fmt.Errorf("reporting date must be UTC midnight")
+		err = errors.New("reporting date must be UTC midnight")
 		return
 	}
 	date = date.UTC()
@@ -1341,7 +1341,7 @@ func resolveReportingExportRange(
 	now = now.UTC()
 	closedThrough := now.Truncate(time.Hour)
 	if date.After(closedThrough) {
-		err = fmt.Errorf("reporting date is in the future")
+		err = errors.New("reporting date is in the future")
 		return
 	}
 
@@ -1351,7 +1351,7 @@ func resolveReportingExportRange(
 	}
 	hourCount = int(closedThrough.Sub(date) / time.Hour)
 	if hourCount < 0 {
-		err = fmt.Errorf("reporting date is in the future")
+		err = errors.New("reporting date is in the future")
 	}
 	return
 }

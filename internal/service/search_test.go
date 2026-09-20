@@ -1,8 +1,6 @@
 package service_test
 
 import (
-	"context"
-	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -29,20 +27,20 @@ func seedSearchSession(t *testing.T, d *db.DB, id, project, content string) {
 		dbtest.UserMsg(id, 0, content),
 		dbtest.AsstMsg(id, 1, "understood"),
 	}
-	require.NoError(t, d.InsertMessages(msgs))
+	require.NoError(t, d.InsertMessages(t.Context(), msgs))
 }
 
 func TestDirectBackend_Search_Roundtrip(t *testing.T) {
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("FTS not available in this build")
 	}
 	seedSearchSession(t, d, "s1", "proj-a", "the quick brown fox jumped")
 	seedSearchSession(t, d, "s2", "proj-b", "lazy dogs sleep")
 	be := service.NewDirectBackend(d, nil)
 
-	res, err := be.Search(context.Background(), service.SearchRequest{
+	res, err := be.Search(t.Context(), service.SearchRequest{
 		Query: "fox",
 		Limit: 10,
 	})
@@ -53,7 +51,7 @@ func TestDirectBackend_Search_Roundtrip(t *testing.T) {
 	assert.Equal(t, "proj-a", res.Results[0].Project)
 
 	// Project filter restricts results.
-	none, err := be.Search(context.Background(), service.SearchRequest{
+	none, err := be.Search(t.Context(), service.SearchRequest{
 		Query:   "fox",
 		Project: "proj-b",
 		Limit:   10,
@@ -67,10 +65,10 @@ func TestDirectBackend_Search_EmptyQuery(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	be := service.NewDirectBackend(d, nil)
 
-	_, err := be.Search(context.Background(), service.SearchRequest{Query: "   "})
+	_, err := be.Search(t.Context(), service.SearchRequest{Query: "   "})
 	require.Error(t, err)
 	var inputErr *db.SearchInputError
-	assert.True(t, errors.As(err, &inputErr),
+	assert.ErrorAs(t, err, &inputErr,
 		"empty query should be a SearchInputError, got %T", err)
 }
 
@@ -80,13 +78,13 @@ func TestDirectBackend_Search_EmptyQuery(t *testing.T) {
 func TestDirectBackend_Search_PunctuationIsLiteral(t *testing.T) {
 	t.Parallel()
 	d := dbtest.OpenTestDB(t)
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("FTS not available in this build")
 	}
 	seedSearchSession(t, d, "s1", "proj", "deploying agentsview-mcp today")
 	be := service.NewDirectBackend(d, nil)
 
-	res, err := be.Search(context.Background(), service.SearchRequest{
+	res, err := be.Search(t.Context(), service.SearchRequest{
 		Query: "agentsview-mcp",
 		Limit: 10,
 	})
@@ -99,13 +97,13 @@ func TestHTTPBackend_Search_Roundtrip(t *testing.T) {
 	t.Parallel()
 	env := newHTTPBackendEnv(t)
 	d := env.DB
-	if !d.HasFTS() {
+	if !d.HasFTS(t.Context()) {
 		t.Skip("FTS not available in this build")
 	}
 	seedSearchSession(t, d, "s1", "proj-a", "the quick brown fox jumped")
 	svc := env.Backend("", false)
 
-	res, err := svc.Search(context.Background(), service.SearchRequest{
+	res, err := svc.Search(t.Context(), service.SearchRequest{
 		Query: "fox",
 		Limit: 10,
 	})
@@ -129,7 +127,7 @@ func TestHTTPBackend_Search_SendsParams(t *testing.T) {
 	t.Cleanup(srv.Close)
 	svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
 
-	_, err := svc.Search(context.Background(), service.SearchRequest{
+	_, err := svc.Search(t.Context(), service.SearchRequest{
 		Query: "needle", Project: "proj", Sort: "recency", Cursor: 7, Limit: 5,
 	})
 	require.NoError(t, err)
@@ -151,9 +149,9 @@ func TestHTTPBackend_Search_Unavailable(t *testing.T) {
 	t.Cleanup(srv.Close)
 	svc := servicehttp.NewHTTPBackend(srv.URL, "", true, "")
 
-	_, err := svc.Search(context.Background(), service.SearchRequest{Query: "fox"})
+	_, err := svc.Search(t.Context(), service.SearchRequest{Query: "fox"})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, service.ErrSearchUnavailable),
+	assert.ErrorIs(t, err, service.ErrSearchUnavailable,
 		"501 should map to ErrSearchUnavailable, got %v", err)
 }
 
@@ -165,11 +163,11 @@ func TestDirectBackend_SearchContent_SemanticUnavailable(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	be := service.NewDirectBackend(d, nil)
 
-	_, err := be.SearchContent(context.Background(), service.ContentSearchRequest{
+	_, err := be.SearchContent(t.Context(), service.ContentSearchRequest{
 		Pattern: "fox", Mode: "semantic",
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, service.ErrSemanticUnavailable),
+	assert.ErrorIs(t, err, service.ErrSemanticUnavailable,
 		"expected ErrSemanticUnavailable, got %v", err)
 }
 
@@ -185,10 +183,10 @@ func TestHTTPBackend_SearchContent_SemanticUnavailable(t *testing.T) {
 	t.Cleanup(srv.Close)
 	svc := servicehttp.NewHTTPBackend(srv.URL, "", true, "")
 
-	_, err := svc.SearchContent(context.Background(), service.ContentSearchRequest{
+	_, err := svc.SearchContent(t.Context(), service.ContentSearchRequest{
 		Pattern: "fox", Mode: "semantic",
 	})
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, service.ErrSemanticUnavailable),
+	assert.ErrorIs(t, err, service.ErrSemanticUnavailable,
 		"501 should map to ErrSemanticUnavailable, got %v", err)
 }

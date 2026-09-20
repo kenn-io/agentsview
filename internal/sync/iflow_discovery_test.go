@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -46,7 +45,7 @@ func TestIflowProviderDiscoversProjects(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	assert.Len(t, sources, 3)
 
@@ -94,7 +93,7 @@ func TestIflowProviderFindsSourceFile(t *testing.T) {
 	require.True(t, ok)
 
 	// Test finding the file
-	found, ok, err := provider.FindSource(context.Background(), parser.FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), parser.FindSourceRequest{
 		RawSessionID: sessionID,
 	})
 	require.NoError(t, err)
@@ -102,7 +101,7 @@ func TestIflowProviderFindsSourceFile(t *testing.T) {
 	assert.Equal(t, sessionFile, found.DisplayPath)
 
 	// Test finding a non-existent file
-	_, ok, err = provider.FindSource(context.Background(), parser.FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), parser.FindSourceRequest{
 		RawSessionID: "nonexistent",
 	})
 	require.NoError(t, err)
@@ -117,7 +116,7 @@ func TestIflowProviderFindsSourceFile(t *testing.T) {
 	require.NoError(t, os.WriteFile(forkSessionFile, []byte(`{"test":"fork"}`), 0o644))
 
 	// Test finding the fork session - should find the base file
-	foundFork, ok, err := provider.FindSource(context.Background(), parser.FindSourceRequest{
+	foundFork, ok, err := provider.FindSource(t.Context(), parser.FindSourceRequest{
 		RawSessionID: forkSessionID,
 	})
 	require.NoError(t, err)

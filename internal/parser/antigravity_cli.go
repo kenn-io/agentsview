@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -121,7 +122,7 @@ func (p *antigravityCLIProvider) parseSessionWithStatus(
 	// is available, so SourceVersion is never fabricated.
 	var sourceVersion string
 	if ext == ".db" {
-		dbResult, dbErr := loadAntigravityCLIDBSteps(path)
+		dbResult, dbErr := loadAntigravityCLIDBSteps(ctx, path)
 		sourceVersion = dbResult.sourceVersion
 		hasGenMetadata = dbResult.hasGenMetadata
 		// gen_metadata token usage describes the session's actual
@@ -379,7 +380,7 @@ func normalizeAntigravityCLIWorkspace(workspace string) string {
 	return ""
 }
 
-func loadAntigravityCLIDBSteps(
+func loadAntigravityCLIDBSteps(ctx context.Context,
 	path string,
 ) (antigravityStepLoadResult, error) {
 	db, err := openSQLiteReadOnly(path, sqliteReadOptions{})
@@ -395,8 +396,8 @@ func loadAntigravityCLIDBSteps(
 	// agy-schema marker even when the step query fails and the parser falls
 	// back to the trajectory sidecar (antigravitySourceVersion returns "" when
 	// the schema itself is unreadable, so an undecodable .db is never labeled).
-	sourceVersion := antigravitySourceVersion(db)
-	result, err := loadAntigravityStepsWithRawCount(db)
+	sourceVersion := antigravitySourceVersion(ctx, db)
+	result, err := loadAntigravityStepsWithRawCount(ctx, db)
 	result.sourceVersion = sourceVersion
 	if err != nil {
 		return result, err
@@ -940,7 +941,7 @@ func antigravityCompositeHashWithExtra(
 			return "", err
 		}
 	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func antigravityCLICompositeHash(path, id, workspace string) (string, error) {
@@ -1152,7 +1153,7 @@ func (c *agyTokenCount) UnmarshalJSON(data []byte) error {
 	if err != nil || n < 0 {
 		// Negative counts are garbage too: emitting them would
 		// subtract from session and daily usage totals.
-		return nil
+		return nil //nolint:nilerr // Malformed optional token counts do not invalidate the transcript.
 	}
 	*c = agyTokenCount(n)
 	return nil
@@ -1622,7 +1623,7 @@ func parseAntigravityCLITrajectory(
 				}
 			case "CORTEX_STEP_TYPE_LIST_DIRECTORY":
 				if step.ListDirectory != nil {
-					resultText = fmt.Sprintf("List directory: %s", step.ListDirectory.DirectoryPathURI)
+					resultText = "List directory: " + step.ListDirectory.DirectoryPathURI
 				}
 			case "CORTEX_STEP_TYPE_ERROR_MESSAGE":
 				if step.ErrorMessage != nil {
@@ -1670,7 +1671,7 @@ func parseAntigravityCLITrajectory(
 			cp := step.Checkpoint
 			var parts []string
 			if len(cp.UserRequests) > 0 {
-				parts = append(parts, fmt.Sprintf("User Requests: %s", strings.Join(cp.UserRequests, ", ")))
+				parts = append(parts, "User Requests: "+strings.Join(cp.UserRequests, ", "))
 			}
 			if cp.SessionSummary != "" {
 				parts = append(parts, cp.SessionSummary)

@@ -69,7 +69,7 @@ func (m *systemdManager) lingerEnabled(ctx context.Context) bool {
 }
 
 func (m *systemdManager) enableLingerCmd() string {
-	return fmt.Sprintf("loginctl enable-linger %s", m.user)
+	return "loginctl enable-linger " + m.user
 }
 
 func (m *systemdManager) install(
@@ -86,12 +86,12 @@ func (m *systemdManager) install(
 	if out, err := m.run(
 		ctx, "systemctl", "--user", "daemon-reload",
 	); err != nil {
-		return fmt.Errorf("systemctl daemon-reload: %v: %s", err, out)
+		return fmt.Errorf("systemctl daemon-reload: %w: %s", err, out)
 	}
 	if out, err := m.run(
 		ctx, "systemctl", "--user", "enable", "--now", m.kind.UnitName,
 	); err != nil {
-		return fmt.Errorf("systemctl enable: %v: %s", err, out)
+		return fmt.Errorf("systemctl enable: %w: %s", err, out)
 	}
 	return nil
 }
@@ -111,7 +111,7 @@ func (m *systemdManager) start(ctx context.Context) error {
 	if out, err := m.run(
 		ctx, "systemctl", "--user", "start", m.kind.UnitName,
 	); err != nil {
-		return fmt.Errorf("systemctl start: %v: %s", err, out)
+		return fmt.Errorf("systemctl start: %w: %s", err, out)
 	}
 	return nil
 }
@@ -120,7 +120,7 @@ func (m *systemdManager) stop(ctx context.Context) error {
 	if out, err := m.run(
 		ctx, "systemctl", "--user", "stop", m.kind.UnitName,
 	); err != nil {
-		return fmt.Errorf("systemctl stop: %v: %s", err, out)
+		return fmt.Errorf("systemctl stop: %w: %s", err, out)
 	}
 	return nil
 }

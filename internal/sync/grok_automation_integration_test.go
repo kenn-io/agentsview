@@ -33,7 +33,7 @@ func TestGrokPromptContextAutomationSurvivesResyncAndAudit(t *testing.T) {
 	))
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentGrok: {root}},
 		Machine:   "local",
 	})
@@ -59,7 +59,7 @@ func TestGrokPromptContextAutomationSurvivesResyncAndAudit(t *testing.T) {
 	assert.Equal(t, "non-interactive", after.SessionKind)
 	require.True(t, after.IsAutomated)
 
-	require.NoError(t, database.ForceBackfillIsAutomated())
+	require.NoError(t, database.ForceBackfillIsAutomated(t.Context()))
 	afterAudit, err := database.GetSession(t.Context(), "grok:sess-1")
 	require.NoError(t, err)
 	require.NotNil(t, afterAudit)

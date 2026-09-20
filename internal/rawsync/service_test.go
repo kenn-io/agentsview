@@ -89,7 +89,7 @@ func TestServiceFinalizeObjectOrdersCustodyBeforeRegistration(t *testing.T) {
 		_, err := service.FinalizeObject(
 			t.Context(), identity, parser.AgentCodex, object.Objects[0], bytes.NewBufferString("body"),
 		)
-		assert.ErrorIs(t, err, putErr)
+		require.ErrorIs(t, err, putErr)
 		assert.Equal(t, []string{"put-object"}, events)
 	})
 
@@ -105,7 +105,7 @@ func TestServiceFinalizeObjectOrdersCustodyBeforeRegistration(t *testing.T) {
 		_, err := service.FinalizeObject(
 			t.Context(), identity, parser.AgentCodex, manifest.Objects[0], bytes.NewBufferString("body"),
 		)
-		assert.ErrorIs(t, err, metadataErr)
+		require.ErrorIs(t, err, metadataErr)
 		assert.Equal(t, []string{"put-object", "record-object"}, events)
 	})
 }
@@ -124,9 +124,9 @@ func TestServiceRejectsExcludedProvidersBeforeCustody(t *testing.T) {
 			_, err := service.FinalizeObject(
 				t.Context(), identity, provider, manifest.Objects[0], bytes.NewBufferString("body"),
 			)
-			assert.ErrorIs(t, err, ErrInvalid)
+			require.ErrorIs(t, err, ErrInvalid)
 			_, err = service.MissingObjects(t.Context(), identity, provider, manifest.Objects)
-			assert.ErrorIs(t, err, ErrInvalid)
+			require.ErrorIs(t, err, ErrInvalid)
 			assert.Empty(t, events, "excluded providers must never reach custody")
 		})
 	}
@@ -146,9 +146,9 @@ func TestServiceRejectsObjectsLargerThanAnyManifestFile(t *testing.T) {
 	_, err := service.FinalizeObject(
 		t.Context(), identity, parser.AgentCodex, oversized, bytes.NewBufferString("body"),
 	)
-	assert.ErrorIs(t, err, ErrInvalid)
+	require.ErrorIs(t, err, ErrInvalid)
 	_, err = service.MissingObjects(t.Context(), identity, parser.AgentCodex, []ObjectRef{oversized})
-	assert.ErrorIs(t, err, ErrInvalid)
+	require.ErrorIs(t, err, ErrInvalid)
 	assert.Empty(t, events, "unreferenceable objects must never reach custody")
 }
 
@@ -255,7 +255,7 @@ func TestServiceCommitRejectsBeforeAcceptanceBoundary(t *testing.T) {
 		)
 
 		_, err := service.CommitManifest(t.Context(), identity, manifest.Manifest)
-		assert.ErrorIs(t, err, ErrInvalid)
+		require.ErrorIs(t, err, ErrInvalid)
 		assert.Empty(t, events)
 	})
 
@@ -267,7 +267,7 @@ func TestServiceCommitRejectsBeforeAcceptanceBoundary(t *testing.T) {
 		service := newTestService(t, objects, &recordingMetadataStore{events: &events})
 
 		_, err := service.CommitManifest(t.Context(), identity, manifest.Manifest)
-		assert.ErrorIs(t, err, ErrMissingObject)
+		require.ErrorIs(t, err, ErrMissingObject)
 		assert.Equal(t, []string{"verify-objects"}, events)
 	})
 
@@ -279,7 +279,7 @@ func TestServiceCommitRejectsBeforeAcceptanceBoundary(t *testing.T) {
 		service := newTestService(t, objects, &recordingMetadataStore{events: &events})
 
 		_, err := service.CommitManifest(t.Context(), identity, manifest.Manifest)
-		assert.ErrorIs(t, err, ErrConflict)
+		require.ErrorIs(t, err, ErrConflict)
 		assert.Equal(t, []string{"verify-objects"}, events)
 	})
 
@@ -292,7 +292,7 @@ func TestServiceCommitRejectsBeforeAcceptanceBoundary(t *testing.T) {
 		service := newTestService(t, objects, &recordingMetadataStore{events: &events})
 
 		_, err := service.CommitManifest(t.Context(), identity, manifest.Manifest)
-		assert.ErrorIs(t, err, verifyErr)
+		require.ErrorIs(t, err, verifyErr)
 		assert.Equal(t, []string{"verify-objects"}, events)
 	})
 
@@ -305,7 +305,7 @@ func TestServiceCommitRejectsBeforeAcceptanceBoundary(t *testing.T) {
 		service := newTestService(t, objects, &recordingMetadataStore{events: &events})
 
 		_, err := service.CommitManifest(t.Context(), identity, manifest.Manifest)
-		assert.ErrorIs(t, err, putErr)
+		require.ErrorIs(t, err, putErr)
 		assert.Equal(t, []string{
 			"verify-objects", "record-objects", "put-manifest",
 		}, events)
@@ -324,7 +324,7 @@ func TestServiceCommitRejectsBeforeAcceptanceBoundary(t *testing.T) {
 		service := newTestService(t, objects, &recordingMetadataStore{events: &events})
 
 		_, err := service.CommitManifest(t.Context(), identity, manifest.Manifest)
-		assert.ErrorIs(t, err, ErrConflict)
+		require.ErrorIs(t, err, ErrConflict)
 		assert.Equal(t, []string{
 			"verify-objects", "record-objects", "put-manifest",
 		}, events)
@@ -342,9 +342,9 @@ func TestServiceCommitPreservesMetadataConflictAfterManifestCustody(t *testing.T
 	service := newTestService(t, objects, metadata)
 
 	_, err := service.CommitManifest(t.Context(), identity, manifest.Manifest)
-	assert.ErrorIs(t, err, ErrConflict)
+	require.ErrorIs(t, err, ErrConflict)
 	var headConflict *HeadConflictError
-	assert.ErrorAs(t, err, &headConflict)
+	require.ErrorAs(t, err, &headConflict)
 	assert.Equal(t, int64(4), headConflict.CurrentGeneration)
 	assert.Equal(t, []string{
 		"verify-objects", "record-objects", "put-manifest", "commit",
@@ -367,7 +367,7 @@ func TestServiceCommitStopsBetweenBoundedObjectChecks(t *testing.T) {
 	service := newTestService(t, objects, metadata)
 
 	_, err = service.CommitManifest(ctx, identity, canonical.Manifest)
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	assert.Equal(t, []string{"verify-objects", "record-objects"}, events)
 }
 

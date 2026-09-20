@@ -45,14 +45,14 @@ func TestClaudeProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
 	assert.True(t, plan.Roots[0].Recursive)
 	assert.Equal(t, []string{"*.jsonl"}, plan.Roots[0].IncludeGlobs)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 2)
 	assert.ElementsMatch(t, []string{sourcePath, subagentPath}, []string{
@@ -64,21 +64,21 @@ func TestClaudeProviderSourceMethods(t *testing.T) {
 		assert.Equal(t, projectDir, source.ProjectHint)
 	}
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "remote~" + sessionID,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, sourcePath, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "agent-worker",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, subagentPath, found.DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, subagentPath, fingerprint.Key)
 	assert.Positive(t, fingerprint.Size)
@@ -86,7 +86,7 @@ func TestClaudeProviderSourceMethods(t *testing.T) {
 	assert.NotEmpty(t, fingerprint.Hash)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: subagentPath, EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -95,7 +95,7 @@ func TestClaudeProviderSourceMethods(t *testing.T) {
 
 	require.NoError(t, os.Remove(sourcePath))
 	changed, err = provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -104,7 +104,7 @@ func TestClaudeProviderSourceMethods(t *testing.T) {
 
 	require.NoError(t, os.Remove(subagentPath))
 	changed, err = provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: subagentPath, EventKind: "rename", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -112,7 +112,7 @@ func TestClaudeProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, subagentPath, changed[0].DisplayPath)
 
 	ignored, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:      filepath.Join(root, projectDir, "agent-root.jsonl"),
 			EventKind: "write",
@@ -171,19 +171,19 @@ func TestClaudeProviderDiscoversSymlinkedProjectDirectory(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 2)
 	assert.ElementsMatch(t, []string{sourcePath, subagentPath}, sourceDisplayPaths(discovered))
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: sessionID,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, sourcePath, found.DisplayPath)
 
-	found, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "agent-linked",
 	})
 	require.NoError(t, err)
@@ -229,9 +229,9 @@ func TestClaudeProviderStreamingDiscoveryPropagatesProjectSymlinkErrors(t *testi
 		yielded, err := discoverEach(t, root)
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, os.ErrNotExist)
+		require.ErrorIs(t, err, os.ErrNotExist)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(t, err, &incomplete)
+		require.ErrorAs(t, err, &incomplete)
 		// The walker records the failure and continues with healthy siblings.
 		assert.Equal(t, []string{healthyPath(root)}, yielded)
 
@@ -262,9 +262,9 @@ func TestClaudeProviderStreamingDiscoveryPropagatesProjectSymlinkErrors(t *testi
 		yielded, err := discoverEach(t, root)
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, os.ErrPermission)
+		require.ErrorIs(t, err, os.ErrPermission)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(t, err, &incomplete)
+		require.ErrorAs(t, err, &incomplete)
 		assert.Equal(t, []string{healthyPath(root)}, yielded)
 
 		require.NoError(t, os.Chmod(targetParent, 0o755))
@@ -311,9 +311,9 @@ func TestClaudeRawCaptureRootReplacementIsIncomplete(t *testing.T) {
 	result := <-resultCh
 
 	require.Error(t, result.err)
-	assert.ErrorIs(t, result.err, errStreamingDirectoryChanged)
+	require.ErrorIs(t, result.err, errStreamingDirectoryChanged)
 	var incomplete DiscoveryIncompleteError
-	assert.ErrorAs(t, result.err, &incomplete)
+	require.ErrorAs(t, result.err, &incomplete)
 	assert.False(t, result.discovery.Complete)
 }
 
@@ -352,11 +352,11 @@ func TestClaudeProviderParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: SourceFingerprint{Key: sourcePath, Hash: "abc123"},
 	})
@@ -401,10 +401,10 @@ func TestClaudeProviderParseAdoptsAITitle(t *testing.T) {
 			writeSourceFile(t, path, strings.Join(lines, "\n")+"\n")
 			provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}, Machine: "devbox"})
 			require.True(t, ok)
-			sources, err := provider.Discover(context.Background())
+			sources, err := provider.Discover(t.Context())
 			require.NoError(t, err)
 			require.Len(t, sources, 1)
-			outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+			outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 			require.NoError(t, err)
 			require.Len(t, outcome.Results, 1)
 			assert.Equal(t, tt.want, outcome.Results[0].Result.Session.SessionName)
@@ -442,10 +442,10 @@ func TestClaudeProviderParseAdoptsAITitle(t *testing.T) {
 		writeSourceFile(t, path, strings.Join(lines, "\n")+"\n")
 		provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
 		require.True(t, ok)
-		sources, err := provider.Discover(context.Background())
+		sources, err := provider.Discover(t.Context())
 		require.NoError(t, err)
 		require.Len(t, sources, 1)
-		outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+		outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 		require.NoError(t, err)
 		require.Len(t, outcome.Results, 2)
 		for _, result := range outcome.Results {
@@ -576,10 +576,10 @@ func TestClaudeProviderIncrementalAITitleEscalation(t *testing.T) {
 			require.NoError(t, err)
 			provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
 			require.True(t, ok)
-			source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{RawSessionID: "incremental"})
+			source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{RawSessionID: "incremental"})
 			require.NoError(t, err)
 			require.True(t, ok)
-			outcome, status, err := provider.ParseIncremental(context.Background(), IncrementalRequest{
+			outcome, status, err := provider.ParseIncremental(t.Context(), IncrementalRequest{
 				Source: source, Fingerprint: SourceFingerprint{Key: path, Size: current.Size()},
 				SessionID: "incremental", Offset: info.Size(), StartOrdinal: 2,
 				StoredSessionName: tt.storedName,
@@ -627,11 +627,11 @@ func TestClaudeProviderParseResolvesPersistedToolResultsThroughStoredPathResolve
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      sources[0],
 		Fingerprint: SourceFingerprint{Key: sourcePath, Hash: "abc123"},
 		Machine:     "devbox",
@@ -675,7 +675,7 @@ func TestClaudePlanRawCaptureCarriesLineageSiblingInputs(t *testing.T) {
 
 	provider, ok := NewProvider(AgentClaude, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 4)
 	findSource := func(suffix string) SourceRef {
@@ -684,14 +684,14 @@ func TestClaudePlanRawCaptureCarriesLineageSiblingInputs(t *testing.T) {
 				return source
 			}
 		}
-		t.Fatalf("source %s not discovered", suffix)
+		require.FailNowf(t, "test failed", "source %s not discovered", suffix)
 		return SourceRef{}
 	}
 
 	// The bg fork replays the original's chain, so its capture plan must carry
 	// the original transcript as an appendable lineage input: the original
 	// can keep growing independently of the fork.
-	forkPlan, supported, err := ResolveRawCapturePlan(context.Background(), provider, findSource("fork-2222.jsonl"))
+	forkPlan, supported, err := ResolveRawCapturePlan(t.Context(), provider, findSource("fork-2222.jsonl"))
 	require.NoError(t, err)
 	require.True(t, supported)
 	require.Len(t, forkPlan.Entries, 2)
@@ -716,7 +716,7 @@ func TestClaudePlanRawCaptureCarriesLineageSiblingInputs(t *testing.T) {
 	// The interactive original never trims, so its plan must not carry
 	// siblings; the unrelated-root transcript and subagent transcripts never
 	// participate in lineage either.
-	origPlan, supported, err := ResolveRawCapturePlan(context.Background(), provider, findSource("orig-1111.jsonl"))
+	origPlan, supported, err := ResolveRawCapturePlan(t.Context(), provider, findSource("orig-1111.jsonl"))
 	require.NoError(t, err)
 	require.True(t, supported)
 	require.Len(t, origPlan.Entries, 1)
@@ -724,7 +724,7 @@ func TestClaudePlanRawCaptureCarriesLineageSiblingInputs(t *testing.T) {
 	assert.True(t, origPlan.Entries[0].Appendable)
 
 	subagentPlan, supported, err := ResolveRawCapturePlan(
-		context.Background(), provider, findSource("agent-4444.jsonl"))
+		t.Context(), provider, findSource("agent-4444.jsonl"))
 	require.NoError(t, err)
 	require.True(t, supported)
 	require.Len(t, subagentPlan.Entries, 1)
@@ -759,14 +759,14 @@ func TestClaudeProviderParseIncremental(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "inc",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 
 	outcome, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:       source,
 			Fingerprint:  SourceFingerprint{Key: sourcePath, Size: currentInfo.Size()},
@@ -821,14 +821,14 @@ func TestClaudeProviderParseIncrementalWebSearchResultNeedsFullParse(t *testing.
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "inc-web-search",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 
 	outcome, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source: source,
 			Fingerprint: SourceFingerprint{
@@ -865,14 +865,14 @@ func TestClaudeProviderParseIncrementalPreservesLinkWithoutMessage(t *testing.T)
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "inc-link-only",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 
 	outcome, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source: source,
 			Fingerprint: SourceFingerprint{
@@ -905,14 +905,14 @@ func TestClaudeProviderParseIncrementalTruncatedNeedsFullParse(t *testing.T) {
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "truncated",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 
 	outcome, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:      source,
 			Fingerprint: SourceFingerprint{Key: sourcePath, Size: int64(len(initial) / 2)},
@@ -936,14 +936,14 @@ func TestClaudeProviderParseIncrementalEmptyTruncationNeedsFullParse(t *testing.
 		Machine: "devbox",
 	})
 	require.True(t, ok)
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "empty-truncated",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 
 	outcome, status, err := provider.ParseIncremental(
-		context.Background(),
+		t.Context(),
 		IncrementalRequest{
 			Source:      source,
 			Fingerprint: SourceFingerprint{Key: sourcePath, Size: 0},

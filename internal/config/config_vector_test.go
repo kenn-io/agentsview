@@ -297,10 +297,10 @@ func TestVectorConfigDefaults(t *testing.T) {
 
 func TestVectorConfigAPIKeyEnv(t *testing.T) {
 	server := VectorEmbeddingsServerConfig{}
-	assert.Equal(t, "", server.APIKey(), "no env var configured")
+	assert.Empty(t, server.APIKey(), "no env var configured")
 
 	server.APIKeyEnv = "AGENTSVIEW_TEST_VECTOR_API_KEY"
-	assert.Equal(t, "", server.APIKey(), "configured env var not set in environment")
+	assert.Empty(t, server.APIKey(), "configured env var not set in environment")
 
 	t.Setenv("AGENTSVIEW_TEST_VECTOR_API_KEY", "secret-123")
 	assert.Equal(t, "secret-123", server.APIKey())

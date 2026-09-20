@@ -22,28 +22,48 @@ func TestGetProjectName(t *testing.T) {
 		want string
 	}{
 		{"simple name", "my-project", "my_project"},
-		{"encoded path with code",
-			"-Users-alice-code-my-app", "my_app"},
-		{"encoded path with projects",
-			"-Users-alice-projects-api-server", "api_server"},
-		{"encoded path with repos",
-			"-home-user-repos-frontend", "frontend"},
-		{"encoded path without marker",
-			"-Users-alice", "alice"},
+		{
+			"encoded path with code",
+			"-Users-alice-code-my-app", "my_app",
+		},
+		{
+			"encoded path with projects",
+			"-Users-alice-projects-api-server", "api_server",
+		},
+		{
+			"encoded path with repos",
+			"-home-user-repos-frontend", "frontend",
+		},
+		{
+			"encoded path without marker",
+			"-Users-alice", "alice",
+		},
 		{"empty", "", ""},
 		{"no prefix", "plain_name", "plain_name"},
-		{"with src marker",
-			"-Users-alice-src-my-lib", "my_lib"},
-		{"multi-word after marker",
-			"-Users-alice-code-my-cool-project", "my_cool_project"},
-		{"deeply nested",
-			"-Users-alice-code-org-team-repo", "org_team_repo"},
-		{"unicode components",
-			"-Users-alice-code-café-app", "café_app"},
-		{"trailing dash",
-			"-Users-alice-code-myapp-", "myapp_"},
-		{"double dashes",
-			"-Users-alice-code--my-app", "_my_app"},
+		{
+			"with src marker",
+			"-Users-alice-src-my-lib", "my_lib",
+		},
+		{
+			"multi-word after marker",
+			"-Users-alice-code-my-cool-project", "my_cool_project",
+		},
+		{
+			"deeply nested",
+			"-Users-alice-code-org-team-repo", "org_team_repo",
+		},
+		{
+			"unicode components",
+			"-Users-alice-code-café-app", "café_app",
+		},
+		{
+			"trailing dash",
+			"-Users-alice-code-myapp-", "myapp_",
+		},
+		{
+			"double dashes",
+			"-Users-alice-code--my-app", "_my_app",
+		},
 	}
 
 	for _, tt := range tests {
@@ -213,8 +233,7 @@ func TestExtractTextContent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := gjson.Parse(tt.json)
-			text, _, hasThinking, hasToolUse, tcs, _ :=
-				ExtractTextContent(t.Context(), result)
+			text, _, hasThinking, hasToolUse, tcs, _ := ExtractTextContent(t.Context(), result)
 			assert.Equal(t, tt.wantText, text, "text")
 			assert.Equal(t, tt.wantThink, hasThinking, "hasThinking")
 			assert.Equal(t, tt.wantToolUse, hasToolUse, "hasToolUse")
@@ -228,8 +247,7 @@ func TestExtractTextContent_AmpSkillNameExtraction(t *testing.T) {
 		`[{"type":"tool_use","id":"toolu_amp_skill","name":"skill","input":{"name":"walkthrough"}}]`,
 	)
 
-	text, _, hasThinking, hasToolUse, toolCalls, toolResults :=
-		ExtractTextContent(t.Context(), result)
+	text, _, hasThinking, hasToolUse, toolCalls, toolResults := ExtractTextContent(t.Context(), result)
 
 	require.Equal(t, "[Skill: walkthrough]", text, "text")
 	require.False(t, hasThinking, "hasThinking")
@@ -824,57 +842,97 @@ func TestIsClaudeSystemMessage(t *testing.T) {
 		content string
 		want    bool
 	}{
-		{"context continuation",
+		{
+			"context continuation",
 			"This session is being continued from a previous conversation.",
-			true},
-		{"request interrupted",
-			"[Request interrupted by user]", true},
-		{"task-notification",
+			true,
+		},
+		{
+			"request interrupted",
+			"[Request interrupted by user]", true,
+		},
+		{
+			"task-notification",
 			"<task-notification>some data</task-notification>",
-			true},
-		{"system-reminder",
-			"<system-reminder>some data</system-reminder>", true},
-		{"system-reminder plus prompt",
-			"<system-reminder>some data</system-reminder>\n\nreal prompt", false},
-		{"task-notification-status",
-			"<task-notification-status>some data", false},
-		{"command-message is not system",
-			"<command-message>foo</command-message>", false},
-		{"command-name is not system",
-			"<command-name>commit</command-name>", false},
-		{"command-message with args is not system",
+			true,
+		},
+		{
+			"system-reminder",
+			"<system-reminder>some data</system-reminder>", true,
+		},
+		{
+			"system-reminder plus prompt",
+			"<system-reminder>some data</system-reminder>\n\nreal prompt", false,
+		},
+		{
+			"task-notification-status",
+			"<task-notification-status>some data", false,
+		},
+		{
+			"command-message is not system",
+			"<command-message>foo</command-message>", false,
+		},
+		{
+			"command-name is not system",
+			"<command-name>commit</command-name>", false,
+		},
+		{
+			"command-message with args is not system",
 			"<command-message>roborev-fix</command-message>\n<command-name>/roborev-fix</command-name>\n<command-args>450</command-args>",
-			false},
-		{"local-command tag",
+			false,
+		},
+		{
+			"local-command tag",
 			"<local-command-result>ok</local-command-result>",
-			true},
-		{"stop hook feedback",
-			"Stop hook feedback: rejected by policy", true},
-		{"leading whitespace trimmed",
+			true,
+		},
+		{
+			"stop hook feedback",
+			"Stop hook feedback: rejected by policy", true,
+		},
+		{
+			"leading whitespace trimmed",
 			"  \n This session is being continued...",
-			true},
-		{"leading tabs trimmed",
+			true,
+		},
+		{
+			"leading tabs trimmed",
 			"\t<task-notification>data</task-notification>",
-			true},
-		{"BOM prefix trimmed",
+			true,
+		},
+		{
+			"BOM prefix trimmed",
 			"\uFEFFThis session is being continued...",
-			true},
-		{"BOM plus whitespace trimmed",
+			true,
+		},
+		{
+			"BOM plus whitespace trimmed",
 			"\uFEFF \t<task-notification>data</task-notification>",
-			true},
-		{"whitespace before BOM trimmed",
+			true,
+		},
+		{
+			"whitespace before BOM trimmed",
 			" \uFEFFThis session is being continued...",
-			true},
-		{"normal user message",
-			"Fix the login bug", false},
-		{"implement plan is not filtered",
+			true,
+		},
+		{
+			"normal user message",
+			"Fix the login bug", false,
+		},
+		{
+			"implement plan is not filtered",
 			"Implement the following plan:\n## Steps",
-			false},
+			false,
+		},
 		{"empty string", "", false},
-		{"partial prefix mismatch",
-			"This session was great", false},
-		{"assistant-like content not matched",
-			"Looking at the auth module...", false},
+		{
+			"partial prefix mismatch",
+			"This session was great", false,
+		},
+		{
+			"assistant-like content not matched",
+			"Looking at the auth module...", false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -887,6 +945,7 @@ func TestIsClaudeSystemMessage(t *testing.T) {
 }
 
 func TestExtractCommandText(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		content string
@@ -957,6 +1016,7 @@ func TestExtractCommandText(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, ok := extractCommandText(tt.content)
 			assert.Equalf(t, tt.ok, ok,
 				"extractCommandText(%q) ok", tt.content)
@@ -992,6 +1052,7 @@ func TestPreprocessClaudeUserText(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, skip := preprocessClaudeUserText(tt.in)
 			assert.Equal(t, tt.want, got)
 			assert.Equal(t, tt.skip, skip)

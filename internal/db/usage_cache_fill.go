@@ -17,10 +17,12 @@ import (
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
 
-const usageFillMaxAttempts = 3
-const usageFillInstallBatchSize = 256
-const usageCursorCopyBatchSize = 1_000
-const usageFillNotificationDebounce = 100 * time.Millisecond
+const (
+	usageFillMaxAttempts          = 3
+	usageFillInstallBatchSize     = 256
+	usageCursorCopyBatchSize      = 1_000
+	usageFillNotificationDebounce = 100 * time.Millisecond
+)
 
 var errUsageCacheSourceChanged = errors.New("usage cache source archive changed")
 
@@ -107,7 +109,7 @@ func (c *usageFillCoordinator) Ensure(
 	waiting := make(map[string]*usageFillCall)
 	owned := make([]usageSourceVersion, 0, len(versions))
 	for _, version := range versions {
-		cached, ok, err := c.cachedSession(version.SessionID)
+		cached, ok, err := c.cachedSession(ctx, version.SessionID)
 		if err != nil {
 			return nil, err
 		}
@@ -165,11 +167,11 @@ func usageFillCallKey(version usageSourceVersion) string {
 	}, "\x00")
 }
 
-func (c *usageFillCoordinator) cachedSession(
+func (c *usageFillCoordinator) cachedSession(ctx context.Context,
 	sessionID string,
 ) (usageFillResult, bool, error) {
 	var result usageFillResult
-	err := c.cache.db.QueryRow(`
+	err := c.cache.db.QueryRowContext(ctx, `
 		SELECT source_sync_marker, source_transcript_rev,
 		       usage_event_fingerprint, install_revision
 		FROM usage_cached_sessions WHERE session_id = ?`, sessionID).Scan(
@@ -222,7 +224,7 @@ func (c *usageFillCoordinator) fillSessionsDetached(
 	}
 	pending := slices.Clone(versions)
 	for sourceAttempt := 1; sourceAttempt <= usageFillMaxAttempts; sourceAttempt++ {
-		expected, err := c.captureFillInstallExpectations(pending)
+		expected, err := c.captureFillInstallExpectations(ctx, pending)
 		if err != nil {
 			return nil, err
 		}
@@ -289,12 +291,12 @@ func (c *usageFillCoordinator) fillSessionsDetached(
 		errUsageCacheSourceChanged)
 }
 
-func (c *usageFillCoordinator) captureFillInstallExpectations(
+func (c *usageFillCoordinator) captureFillInstallExpectations(ctx context.Context,
 	versions []usageSourceVersion,
 ) (map[string]usageFillInstallExpectation, error) {
 	expected := make(map[string]usageFillInstallExpectation, len(versions))
 	for _, version := range versions {
-		cached, ok, err := c.cachedSession(version.SessionID)
+		cached, ok, err := c.cachedSession(ctx, version.SessionID)
 		if err != nil {
 			return nil, err
 		}
@@ -316,7 +318,7 @@ func (c *usageFillCoordinator) FillBackground(
 	results := make(map[string]usageFillResult, len(versions))
 	pending := make([]usageSourceVersion, 0, len(versions))
 	for _, version := range versions {
-		cached, ok, err := c.cachedSession(version.SessionID)
+		cached, ok, err := c.cachedSession(ctx, version.SessionID)
 		if err != nil {
 			return nil, err
 		}
@@ -354,7 +356,7 @@ type usageFactSpool struct {
 	path string
 }
 
-func newUsageFactSpool() (*usageFactSpool, error) {
+func newUsageFactSpool(ctx context.Context) (*usageFactSpool, error) {
 	file, err := os.CreateTemp("", "agentsview-usage-facts-spool-*.db")
 	if err != nil {
 		return nil, fmt.Errorf("creating usage fact spool: %w", err)
@@ -375,7 +377,7 @@ func newUsageFactSpool() (*usageFactSpool, error) {
 		return nil, err
 	}
 	database.SetMaxOpenConns(1)
-	if _, err := database.Exec(`
+	if _, err := database.ExecContext(ctx, `
 		PRAGMA journal_mode=MEMORY;
 		PRAGMA synchronous=OFF;
 		PRAGMA temp_store=MEMORY`); err != nil {
@@ -383,7 +385,7 @@ func newUsageFactSpool() (*usageFactSpool, error) {
 		_ = removeUsageCacheFiles(path)
 		return nil, fmt.Errorf("configuring usage fact spool: %w", err)
 	}
-	if _, err := database.Exec(`
+	if _, err := database.ExecContext(ctx, `
 		CREATE TABLE facts (
 			session_id TEXT NOT NULL, fact_index INTEGER NOT NULL,
 			source TEXT NOT NULL, message_ordinal INTEGER,
@@ -422,7 +424,7 @@ func (s *usageFactSpool) Close() error {
 func (c *usageFillCoordinator) extractSessions(
 	ctx context.Context, versions []usageSourceVersion,
 ) (*usageFactSpool, map[string]usageSourceVersion, error) {
-	spool, err := newUsageFactSpool()
+	spool, err := newUsageFactSpool(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -473,6 +475,7 @@ func (c *usageFillCoordinator) extractSessions(
 	if err != nil {
 		return nil, nil, err
 	}
+	defer insert.Close()
 	for _, id := range ids {
 		if _, ok := extracted[id]; !ok {
 			continue
@@ -1238,6 +1241,7 @@ func (c *usageFillCoordinator) readCursorBatch(
 	if err != nil {
 		return nil, false, fmt.Errorf("extracting Cursor usage facts: %w", err)
 	}
+	defer rows.Close()
 	installs := make([]usageCursorInstall, 0, usageCursorCopyBatchSize)
 	for rows.Next() {
 		var install usageCursorInstall

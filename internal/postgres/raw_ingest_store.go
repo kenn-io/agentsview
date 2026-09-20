@@ -181,7 +181,7 @@ func (s *RawIngestStore) CommitManifest(
 		}
 	}
 	if head.Generation == math.MaxInt64 {
-		return rawsync.CommitResult{}, fmt.Errorf("raw source generation exhausted")
+		return rawsync.CommitResult{}, errors.New("raw source generation exhausted")
 	}
 	generation := head.Generation + 1
 	receipt, err := s.newReceipt()
@@ -383,49 +383,52 @@ func lockRawIngestHead(
 	return head, nil
 }
 
-type rawObjectQueryer interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-}
-
 func loadPresentRawObjects(
 	ctx context.Context,
-	queryer rawObjectQueryer,
+	queryer pgSessionQueryer,
 	tenantID string,
 	objects []rawsync.ObjectRef,
 ) (map[rawsync.ObjectRef]bool, error) {
 	present := make(map[rawsync.ObjectRef]bool, len(objects))
 	for start := 0; start < len(objects); start += rawIngestBatchRows {
-		end := min(start+rawIngestBatchRows, len(objects))
-		var query strings.Builder
-		query.WriteString(`SELECT sha256, size_bytes FROM raw_objects WHERE tenant_id = $1 AND (sha256, size_bytes) IN (`)
-		args := make([]any, 1, 1+2*(end-start))
-		args[0] = tenantID
-		for i, object := range objects[start:end] {
-			if i > 0 {
-				query.WriteByte(',')
+		if err := func() error {
+			end := min(start+rawIngestBatchRows, len(objects))
+			var query strings.Builder
+			query.WriteString(`SELECT sha256, size_bytes FROM raw_objects WHERE tenant_id = $1 AND (sha256, size_bytes) IN (`)
+			args := make([]any, 1, 1+2*(end-start))
+			args[0] = tenantID
+			for i, object := range objects[start:end] {
+				if i > 0 {
+					query.WriteByte(',')
+				}
+				argument := 2 + i*2
+				fmt.Fprintf(&query, "($%d,$%d)", argument, argument+1)
+				args = append(args, object.SHA256, object.Length)
 			}
-			argument := 2 + i*2
-			fmt.Fprintf(&query, "($%d,$%d)", argument, argument+1)
-			args = append(args, object.SHA256, object.Length)
-		}
-		query.WriteByte(')')
-		rows, err := queryer.QueryContext(ctx, query.String(), args...)
-		if err != nil {
-			return nil, err
-		}
-		for rows.Next() {
-			var object rawsync.ObjectRef
-			if err := rows.Scan(&object.SHA256, &object.Length); err != nil {
+			query.WriteByte(')')
+			rows, err := queryer.QueryContext(ctx, query.String(), args...)
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var object rawsync.ObjectRef
+				if err := rows.Scan(&object.SHA256, &object.Length); err != nil {
+					_ = rows.Close()
+					return err
+				}
+				present[object] = true
+			}
+			if err := rows.Err(); err != nil {
 				_ = rows.Close()
-				return nil, err
+				return err
 			}
-			present[object] = true
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return nil, err
-		}
-		if err := rows.Close(); err != nil {
+			if err := rows.Close(); err != nil {
+				return err
+			}
+
+			return nil
+		}(); err != nil {
 			return nil, err
 		}
 	}

@@ -511,6 +511,7 @@ func invalidateUsageDedupSharers(
 	if err != nil {
 		return fmt.Errorf("finding usage dedup sharers: %w", err)
 	}
+	defer sharerRows.Close()
 	var sharers []string
 	for sharerRows.Next() {
 		var sessionID string

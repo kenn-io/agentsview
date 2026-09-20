@@ -63,7 +63,7 @@ func parseNonNegativeIntParam(
 	}
 	if v < 0 {
 		writeError(w, http.StatusBadRequest,
-			fmt.Sprintf("%s must not be negative", name))
+			name+" must not be negative")
 		return 0, false
 	}
 	return v, true

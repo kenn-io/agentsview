@@ -408,7 +408,7 @@ func TestRejectsRepeatingBlockPlaceholders(t *testing.T) {
 			for _, m := range Scan(text) {
 				if m.Rule == "github-pat" || m.Rule == "stripe-secret" ||
 					m.Rule == "google-api-key" {
-					t.Errorf("%s matched repeating-block placeholder %q (mask=%q)",
+					assert.Failf(t, "repeating-block placeholder matched", "%s matched %q (mask=%q)",
 						m.Rule, p, m.Redacted)
 				}
 			}
@@ -431,7 +431,7 @@ func TestRejectsSequentialRunPlaceholders(t *testing.T) {
 			text := "TOKEN=" + p + " end"
 			for _, m := range Scan(text) {
 				if m.Rule == "aws-access-key" || m.Rule == "slack-token" {
-					t.Errorf("%s matched sequential-run placeholder %q (mask=%q)",
+					assert.Failf(t, "sequential-run placeholder matched", "%s matched %q (mask=%q)",
 						m.Rule, p, m.Redacted)
 				}
 			}

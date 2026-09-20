@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"time"
@@ -52,13 +51,13 @@ func TestRecomputeHeapBytesCountsLoadedText(t *testing.T) {
 
 func TestBackfillSignalComputerReleasesAccumulatedHeap(t *testing.T) {
 	fx := newEngineFixture(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const id = "s1"
-	require.NoError(t, fx.db.UpsertSession(db.Session{
+	require.NoError(t, fx.db.UpsertSession(ctx, db.Session{
 		ID: id, Project: "proj", Machine: "m", Agent: "claude",
 		MessageCount: 1, UserMessageCount: 1,
 	}))
-	require.NoError(t, fx.db.ReplaceSessionMessages(id, []db.Message{{
+	require.NoError(t, fx.db.ReplaceSessionMessages(ctx, id, []db.Message{{
 		SessionID: id,
 		Ordinal:   0,
 		Role:      "user",
@@ -85,13 +84,13 @@ func TestBackfillSignalComputerReleasesAccumulatedHeap(t *testing.T) {
 
 func TestRecomputeSignalsDoesNotReleaseHeapDirectly(t *testing.T) {
 	fx := newEngineFixture(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const id = "s1"
-	require.NoError(t, fx.db.UpsertSession(db.Session{
+	require.NoError(t, fx.db.UpsertSession(ctx, db.Session{
 		ID: id, Project: "proj", Machine: "m", Agent: "claude",
 		MessageCount: 1, UserMessageCount: 1,
 	}))
-	require.NoError(t, fx.db.ReplaceSessionMessages(id, []db.Message{{
+	require.NoError(t, fx.db.ReplaceSessionMessages(ctx, id, []db.Message{{
 		SessionID: id,
 		Ordinal:   0,
 		Role:      "user",
@@ -117,22 +116,22 @@ func TestRecomputeSignalsDoesNotReleaseHeapDirectly(t *testing.T) {
 
 func TestBackfillSignalsRecomputesVersion2TerminalAPIErrorSession(t *testing.T) {
 	fx := newEngineFixture(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const id = "api-stale"
 	endedAt := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339Nano)
 
-	require.NoError(t, fx.db.UpsertSession(db.Session{
+	require.NoError(t, fx.db.UpsertSession(ctx, db.Session{
 		ID: id, Project: "proj", Machine: "m", Agent: "claude",
 		MessageCount: 2, UserMessageCount: 1, EndedAt: &endedAt,
 	}))
-	require.NoError(t, fx.db.ReplaceSessionMessages(id, []db.Message{
+	require.NoError(t, fx.db.ReplaceSessionMessages(ctx, id, []db.Message{
 		{SessionID: id, Ordinal: 0, Role: "user", Content: "hello"},
 		{
 			SessionID: id, Ordinal: 1, Role: "assistant",
 			Content: "API Error: Unable to connect to API (ConnectionRefused)",
 		},
 	}))
-	require.NoError(t, fx.db.UpdateSessionSignals(id, db.SessionSignalUpdate{
+	require.NoError(t, fx.db.UpdateSessionSignals(ctx, id, db.SessionSignalUpdate{
 		Outcome:           "completed",
 		OutcomeConfidence: "medium",
 		QualitySignals: db.QualitySignals{
@@ -140,8 +139,7 @@ func TestBackfillSignalsRecomputesVersion2TerminalAPIErrorSession(t *testing.T) 
 		},
 	}))
 
-	require.NoError(t,
-		fx.db.BackfillSignals(ctx, fx.engine.BackfillSignalComputer()))
+	require.NoError(t, fx.db.BackfillSignals(ctx, fx.engine.BackfillSignalComputer()))
 
 	sess, err := fx.db.GetSessionFull(ctx, id)
 	require.NoError(t, err)

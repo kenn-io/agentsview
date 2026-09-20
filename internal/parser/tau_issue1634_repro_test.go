@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -28,15 +27,15 @@ func TestTauIssue1634ArtifactReproduction(t *testing.T) {
 	provider := factory.NewProvider(ProviderConfig{
 		Roots: []string{root}, Machine: "test-machine",
 	})
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: sources[0]})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: sources[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0].Result
 	assert.Equal(t, "tau:issue-session", result.Session.ID)
-	assert.Equal(t, 33, len(dataLines(data)))
+	assert.Len(t, dataLines(data), 33)
 	assert.Equal(t, 14, result.Session.MessageCount)
 	assert.Equal(t, 4, result.Session.UserMessageCount)
 	assert.Equal(t, 3, countTauToolCalls(result.Messages))

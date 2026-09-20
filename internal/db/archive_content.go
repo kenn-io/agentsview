@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/config"
@@ -499,7 +500,7 @@ func dropCopiedToolContentTx(
 		return ` IN (SELECT s.id FROM sessions s
 			WHERE s.id` + inCopied + `
 			  AND s.data_version < ` +
-			fmt.Sprint(toolOutputMarkerDataVersion) + `
+			strconv.Itoa(toolOutputMarkerDataVersion) + `
 			  AND s.agent IN (` + agents + `))`
 	}
 	statements := []struct {
@@ -696,6 +697,7 @@ func redactCopiedToolUseRenderingsTx(
 	if err != nil {
 		return fmt.Errorf("listing copied tool renderings: %w", err)
 	}
+	defer rows.Close()
 	type pending struct {
 		id      int64
 		content string

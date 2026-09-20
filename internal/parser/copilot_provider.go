@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -89,10 +90,10 @@ func (p *copilotProvider) Parse(
 	}
 	path, ok := p.sources.pathFromSource(req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("copilot source path unavailable")
+		return ParseOutcome{}, errors.New("copilot source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	sess, msgs, usage, err := p.parseSessionWithStore(path, machine, filepath.Join(copilotRootForEventsPath(path), "session-store.db"))
+	sess, msgs, usage, err := p.parseSessionWithStore(ctx, path, machine, filepath.Join(copilotRootForEventsPath(path), "session-store.db"))
 	if err != nil {
 		return ParseOutcome{}, err
 	}
@@ -353,7 +354,7 @@ func (s copilotSourceSet) fingerprint(ctx context.Context, source SourceRef, loa
 	}
 	path, ok := s.pathFromSource(source)
 	if !ok {
-		return SourceFingerprint{}, fmt.Errorf("copilot source path unavailable")
+		return SourceFingerprint{}, errors.New("copilot source path unavailable")
 	}
 	info, err := os.Stat(path)
 	if err != nil {

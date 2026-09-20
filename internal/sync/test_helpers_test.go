@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
@@ -35,7 +34,7 @@ const (
 
 func assertSessionState(t *testing.T, database *db.DB, sessionID string, check func(*db.Session)) {
 	t.Helper()
-	sess, err := database.GetSession(context.Background(), sessionID)
+	sess, err := database.GetSession(t.Context(), sessionID)
 	require.NoError(t, err, "GetSession(%q)", sessionID)
 	require.NotNil(t, sess, "Session %q not found", sessionID)
 	if check != nil {
@@ -69,7 +68,7 @@ func assertSessionProjectAndCwd(
 
 func runSyncAndAssert(t *testing.T, engine *sync.Engine, want sync.SyncStats) sync.SyncStats {
 	t.Helper()
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	diff := cmp.Diff(want, stats,
 		cmpopts.IgnoreUnexported(sync.SyncStats{}),
 	)
@@ -86,8 +85,8 @@ func (e *testEnv) assertResyncRoundTrip(
 	t.Helper()
 
 	// Clear mtime to force resync on next check.
-	err := e.db.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(
+	err := e.db.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(),
 			"UPDATE sessions SET file_mtime = NULL"+
 				" WHERE id = ?",
 			sessionID,
@@ -98,7 +97,7 @@ func (e *testEnv) assertResyncRoundTrip(
 
 	require.NoError(t, e.engine.SyncSingleSession(sessionID))
 
-	_, mtime, ok := e.db.GetSessionFileInfo(sessionID)
+	_, mtime, ok := e.db.GetSessionFileInfo(t.Context(), sessionID)
 	require.True(t, ok, "session file info not found")
 	assert.NotZero(t, mtime, "SyncSingleSession did not store mtime")
 
@@ -107,7 +106,7 @@ func (e *testEnv) assertResyncRoundTrip(
 
 func fetchMessages(t *testing.T, database *db.DB, sessionID string) []db.Message {
 	t.Helper()
-	msgs, err := database.GetAllMessages(context.Background(), sessionID)
+	msgs, err := database.GetAllMessages(t.Context(), sessionID)
 	require.NoError(t, err, "GetAllMessages(%q)", sessionID)
 	return msgs
 }
@@ -148,7 +147,7 @@ func assertToolCallCount(
 ) {
 	t.Helper()
 	var got int
-	err := database.Reader().QueryRow(
+	err := database.Reader().QueryRow(t.Context(),
 		"SELECT COUNT(*) FROM tool_calls"+
 			" WHERE session_id = ?",
 		sessionID,
@@ -164,13 +163,14 @@ func (e *testEnv) updateSessionProject(
 	t *testing.T, sessionID, project string,
 ) {
 	t.Helper()
+
 	sess, err := e.db.GetSessionFull(
-		context.Background(), sessionID,
+		t.Context(), sessionID,
 	)
 	require.NoError(t, err, "GetSessionFull")
 	require.NotNil(t, sess, "session %q not found", sessionID)
 	sess.Project = project
-	require.NoError(t, e.db.UpsertSession(*sess), "UpsertSession")
+	require.NoError(t, e.db.UpsertSession(t.Context(), *sess), "UpsertSession")
 }
 
 // openCodeTestDB manages an OpenCode SQLite database for tests.
@@ -192,27 +192,27 @@ type kiroSQLiteTestDB struct {
 var (
 	openCodeLikeSchemaOnce  stdsync.Once
 	openCodeLikeSchemaBytes []byte
-	openCodeLikeSchemaErr   error
+	errOpenCodeLikeSchema   error
 
 	kiroSQLiteSchemaOnce  stdsync.Once
 	kiroSQLiteSchemaBytes []byte
-	kiroSQLiteSchemaErr   error
+	errKiroSQLiteSchema   error
 
 	antigravityCLISchemaOnce  stdsync.Once
 	antigravityCLISchemaBytes []byte
-	antigravityCLISchemaErr   error
+	errAntigravityCLISchema   error
 
 	piebaldSchemaOnce  stdsync.Once
 	piebaldSchemaBytes []byte
-	piebaldSchemaErr   error
+	errPiebaldSchema   error
 
 	shelleySchemaOnce  stdsync.Once
 	shelleySchemaBytes []byte
-	shelleySchemaErr   error
+	errShelleySchema   error
 
 	zedSchemaOnce  stdsync.Once
 	zedSchemaBytes []byte
-	zedSchemaErr   error
+	errZedSchema   error
 
 	kiroSQLiteFixtureCache stdsync.Map
 )
@@ -291,7 +291,7 @@ func createOpenCodeLikeDB(
 	t.Helper()
 	copySQLiteSchemaTemplate(
 		t, path, label, &openCodeLikeSchemaOnce,
-		&openCodeLikeSchemaBytes, &openCodeLikeSchemaErr,
+		&openCodeLikeSchemaBytes, &errOpenCodeLikeSchema,
 		openCodeLikeSchema,
 	)
 	d, err := sql.Open("sqlite3", path)
@@ -305,7 +305,7 @@ func createKiroSQLiteDB(t *testing.T, dir string) *kiroSQLiteTestDB {
 	path := filepath.Join(dir, "data.sqlite3")
 	copySQLiteSchemaTemplate(
 		t, path, "kiro sqlite", &kiroSQLiteSchemaOnce,
-		&kiroSQLiteSchemaBytes, &kiroSQLiteSchemaErr,
+		&kiroSQLiteSchemaBytes, &errKiroSQLiteSchema,
 		kiroSQLiteSchema,
 	)
 	d, err := sql.Open("sqlite3", path)
@@ -351,12 +351,7 @@ func sqliteSchemaTemplateBytes(
 ) []byte {
 	t.Helper()
 	once.Do(func() {
-		dir, err := os.MkdirTemp("", "agentsview-"+label+"-schema-*")
-		if err != nil {
-			*templateErr = fmt.Errorf("create %s schema template dir: %w", label, err)
-			return
-		}
-		defer os.RemoveAll(dir)
+		dir := t.TempDir()
 
 		path := filepath.Join(dir, "template.db")
 		d, err := sql.Open("sqlite3", path)
@@ -364,7 +359,7 @@ func sqliteSchemaTemplateBytes(
 			*templateErr = fmt.Errorf("open %s schema template: %w", label, err)
 			return
 		}
-		if _, err = d.Exec(schema); err != nil {
+		if _, err = d.ExecContext(t.Context(), schema); err != nil {
 			_ = d.Close()
 			*templateErr = fmt.Errorf("create %s schema template: %w", label, err)
 			return
@@ -403,7 +398,7 @@ func (ks *kiroSQLiteTestDB) addSession(
 	createdAt, updatedAt int64,
 ) {
 	t.Helper()
-	_, err := ks.db.Exec(
+	_, err := ks.db.ExecContext(t.Context(),
 		`INSERT INTO conversations_v2
 			(key, conversation_id, value, created_at, updated_at)
 		 VALUES (?, ?, ?, ?, ?)`,
@@ -416,7 +411,7 @@ func (ks *kiroSQLiteTestDB) updateSession(
 	t *testing.T, id, payload string, updatedAt int64,
 ) {
 	t.Helper()
-	_, err := ks.db.Exec(
+	_, err := ks.db.ExecContext(t.Context(),
 		`UPDATE conversations_v2
 		    SET value = ?, updated_at = ?
 		  WHERE conversation_id = ?`,
@@ -461,7 +456,7 @@ func (oc *openCodeTestDB) inTransaction(
 	seed func(*openCodeTestDB),
 ) {
 	t.Helper()
-	tx, err := oc.db.Begin()
+	tx, err := oc.db.BeginTx(t.Context(), nil)
 	require.NoError(t, err, "begin OpenCode seed transaction")
 	defer func() { _ = tx.Rollback() }()
 
@@ -623,8 +618,8 @@ func (oc *openCodeTestDB) replaceTextContent(
 	oc.deleteMessages(t, sessionID)
 	oc.deleteParts(t, sessionID)
 
-	umID := fmt.Sprintf("%s-msg-user-v2", sessionID)
-	amID := fmt.Sprintf("%s-msg-asst-v2", sessionID)
+	umID := sessionID + "-msg-user-v2"
+	amID := sessionID + "-msg-asst-v2"
 	oc.addMessage(t, umID, sessionID, "user", timeCreated)
 	oc.addMessage(
 		t, amID, sessionID, "assistant", timeCreated+1,
@@ -665,6 +660,7 @@ func (oc *openCodeStorageFixture) writeJSON(
 	t *testing.T, path string, data any,
 ) string {
 	t.Helper()
+
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755), "mkdir %s", filepath.Dir(path))
 	raw, err := json.Marshal(data)
 	require.NoError(t, err, "marshal %s", path)

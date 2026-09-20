@@ -2,7 +2,6 @@ package config
 
 import (
 	"bytes"
-	"context"
 	"flag"
 	"log"
 	"os"
@@ -552,7 +551,7 @@ func TestLoadEnv_GoosePathRootUsesProducerLayout(t *testing.T) {
 			})
 			require.True(t, ok)
 
-			plan, err := provider.WatchPlan(context.Background())
+			plan, err := provider.WatchPlan(t.Context())
 			require.NoError(t, err)
 			require.Len(t, plan.Roots, 1)
 			assert.Equal(t,
@@ -2519,7 +2518,7 @@ func TestLoadFile_CustomModelPricing(t *testing.T) {
 			for model, wantRate := range tt.want {
 				got, ok := cfg.CustomModelPricing[model]
 				if !ok {
-					t.Errorf("missing model %q", model)
+					assert.Failf(t, "test failed", "missing model %q", model)
 					continue
 				}
 				assert.Equal(t, wantRate, got, "model %q", model)
@@ -2647,6 +2646,7 @@ func TestLoadFile_RemoteHostsAbsentIsNil(t *testing.T) {
 }
 
 func TestValidateRemoteHosts(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name    string
 		hosts   []RemoteHost
@@ -2682,6 +2682,7 @@ func TestValidateRemoteHosts(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			err := Config{RemoteHosts: tt.hosts}.ValidateRemoteHosts()
 			if len(tt.wantErr) == 0 {
 				require.NoError(t, err)
@@ -2817,6 +2818,7 @@ func TestIsDefaultAgentsviewDBPath(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			assert.Equal(t, tc.want, IsDefaultAgentsviewDBPath(tc.dbPath))
 		})
 	}
@@ -2976,8 +2978,7 @@ func TestDisabledAgentsNormalizeWithoutHidingConfiguredDirs(t *testing.T) {
 disabled_agents = [" gemini ", "claude", "gemini"]
 `))
 
-	assert.Equal(t,
-		[]parser.AgentType{parser.AgentClaude, parser.AgentGemini},
+	assert.Equal(t, []parser.AgentType{parser.AgentClaude, parser.AgentGemini},
 		cfg.DisabledAgents,
 	)
 	assert.Equal(t, geminiDirs, cfg.ResolveDirs(parser.AgentGemini))

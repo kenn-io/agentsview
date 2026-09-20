@@ -11,11 +11,11 @@ import (
 
 func TestSignalSchedulerRetriesExhaustedSnapshotConflicts(t *testing.T) {
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{})
+	engine := NewEngine(t.Context(), database, EngineConfig{})
 	t.Cleanup(engine.Close)
 	const sessionID = "snapshot-retry"
 	session := db.Session{ID: sessionID, Agent: "claude", Project: "project", Machine: "local", MessageCount: 1}
-	_, err := database.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := database.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
 		Session: session, ReplaceMessages: true,
 		Messages: []db.Message{{SessionID: sessionID, Ordinal: 0, Role: "assistant", Content: "initial"}},
 	}}, nil)
@@ -31,7 +31,7 @@ func TestSignalSchedulerRetriesExhaustedSnapshotConflicts(t *testing.T) {
 			}
 			conflicts++
 			// Session uploads use this same database boundary without the engine lock.
-			_, writeErr := database.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+			_, writeErr := database.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
 				Session: session, ReplaceMessages: true,
 				Messages: []db.Message{{SessionID: sessionID, Ordinal: 0, Role: "assistant", Content: fmt.Sprintf("replacement %d", conflicts), IsCompactBoundary: conflicts == 3}},
 			}}, nil)

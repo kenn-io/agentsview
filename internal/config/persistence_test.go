@@ -114,8 +114,7 @@ func TestSaveSettingsPersistsDisabledAgents(t *testing.T) {
 		},
 	}))
 
-	assert.Equal(t,
-		[]parser.AgentType{parser.AgentClaude, parser.AgentGemini},
+	assert.Equal(t, []parser.AgentType{parser.AgentClaude, parser.AgentGemini},
 		cfg.DisabledAgents,
 	)
 	fileCfg := readConfigFile(t, dir)

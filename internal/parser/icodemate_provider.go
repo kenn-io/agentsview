@@ -2,7 +2,7 @@ package parser
 
 import (
 	"context"
-	"fmt"
+	"errors"
 )
 
 // Icodemate hosts two storage families under one provider and one agent ID:
@@ -222,7 +222,7 @@ func (p *icodemateProvider) Fingerprint(
 	case claudeSource, *claudeSource, MaterializedFileSource:
 		return p.cli.Fingerprint(ctx, source)
 	default:
-		return SourceFingerprint{}, fmt.Errorf("icodemate source path unavailable")
+		return SourceFingerprint{}, errors.New("icodemate source path unavailable")
 	}
 }
 
@@ -237,7 +237,7 @@ func (p *icodemateProvider) Parse(
 		req.Machine = firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 		return p.cli.Parse(ctx, req)
 	default:
-		return ParseOutcome{}, fmt.Errorf("icodemate source path unavailable")
+		return ParseOutcome{}, errors.New("icodemate source path unavailable")
 	}
 }
 
@@ -273,16 +273,16 @@ func (p *icodemateProvider) SourceForReconciliationWithState(
 	)
 }
 
-func (p *icodemateProvider) ReconciliationSourceState(
+func (p *icodemateProvider) ReconciliationSourceState(ctx context.Context,
 	source SourceRef,
 ) (ReconciliationSourceState, bool) {
-	return p.allSources.ReconciliationSourceState(source)
+	return p.allSources.ReconciliationSourceState(ctx, source)
 }
 
-func (p *icodemateProvider) ApplyReconciliationSourceState(
+func (p *icodemateProvider) ApplyReconciliationSourceState(ctx context.Context,
 	source *SourceRef, state ReconciliationSourceState,
 ) error {
-	return p.allSources.ApplyReconciliationSourceState(source, state)
+	return p.allSources.ApplyReconciliationSourceState(ctx, source, state)
 }
 
 // ResolveReconciliationScopes preserves the OpenCode container topology for

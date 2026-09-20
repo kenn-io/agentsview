@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -18,7 +17,7 @@ func scanUnits(
 	t.Helper()
 	var got []EmbeddableUnit
 	maxEnded, err := d.ScanEmbeddableUnits(
-		context.Background(), since, includeAutomated,
+		t.Context(), since, includeAutomated,
 		func(u EmbeddableUnit) error {
 			got = append(got, u)
 			return nil
@@ -296,8 +295,7 @@ func TestScanEmbeddableUnitsOffsetsMultiByteContent(t *testing.T) {
 		unit.Content[unit.Offsets[1].ByteStart:], second,
 	))
 
-	assert.Equal(t,
-		utf8.RuneCountInString(unit.Content[:unit.Offsets[1].ByteStart]),
+	assert.Equal(t, utf8.RuneCountInString(unit.Content[:unit.Offsets[1].ByteStart]),
 		unit.Offsets[1].RuneStart,
 		"RuneStart must equal the rune count of everything preceding it in Content")
 }
@@ -649,7 +647,7 @@ func TestScanEmbeddableUnitsExcludesTrashedSessions(t *testing.T) {
 		Content: "trashed content", ContentLength: len("trashed content"),
 		Timestamp: tsZero,
 	})
-	require.NoError(t, d.SoftDeleteSession("trashed-sess"))
+	require.NoError(t, d.SoftDeleteSession(t.Context(), "trashed-sess"))
 
 	insertSession(t, d, "live-sess", "proj", func(s *Session) {
 		s.EndedAt = Ptr(tsHour1)

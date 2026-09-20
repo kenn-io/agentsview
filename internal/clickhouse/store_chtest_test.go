@@ -61,7 +61,7 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 		orphan := fixtureSession(orphanID, "alpha", "orphan first", "2026-01-10T00:06:00.000Z", 1)
 		orphan.RelationshipType = "subagent"
 		orphan.ParentSessionID = nil
-		_, err := local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+		_, err := local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
 			Session: orphan,
 			Messages: []db.Message{
 				fixtureMessage(orphanID, 0, "user", "orphan first", "2026-01-10T00:06:00.000Z"),
@@ -214,24 +214,24 @@ func TestStoreSessionsMessagesAndSearch(t *testing.T) {
 	})
 
 	t.Run("writes_are_read_only", func(t *testing.T) {
-		ok, err := store.StarSession(fixtureBetaID)
+		ok, err := store.StarSession(t.Context(), fixtureBetaID)
 		require.ErrorIs(t, err, db.ErrReadOnly)
 		assert.False(t, ok)
-		require.ErrorIs(t, store.UnstarSession(fixtureAlphaID), db.ErrReadOnly)
-		require.ErrorIs(t, store.BulkStarSessions([]string{fixtureBetaID}), db.ErrReadOnly)
-		pinID, err := store.PinMessage(fixtureAlphaID, 1, nil)
+		require.ErrorIs(t, store.UnstarSession(t.Context(), fixtureAlphaID), db.ErrReadOnly)
+		require.ErrorIs(t, store.BulkStarSessions(t.Context(), []string{fixtureBetaID}), db.ErrReadOnly)
+		pinID, err := store.PinMessage(t.Context(), fixtureAlphaID, 1, nil)
 		require.ErrorIs(t, err, db.ErrReadOnly)
 		assert.Zero(t, pinID)
-		require.ErrorIs(t, store.UnpinMessage(fixtureAlphaID, 1), db.ErrReadOnly)
-		require.ErrorIs(t, store.RenameSession(fixtureAlphaID, nil), db.ErrReadOnly)
-		require.ErrorIs(t, store.SoftDeleteSession(fixtureAlphaID), db.ErrReadOnly)
-		_, err = store.RestoreSession(fixtureAlphaID)
+		require.ErrorIs(t, store.UnpinMessage(t.Context(), fixtureAlphaID, 1), db.ErrReadOnly)
+		require.ErrorIs(t, store.RenameSession(t.Context(), fixtureAlphaID, nil), db.ErrReadOnly)
+		require.ErrorIs(t, store.SoftDeleteSession(t.Context(), fixtureAlphaID), db.ErrReadOnly)
+		_, err = store.RestoreSession(t.Context(), fixtureAlphaID)
 		require.ErrorIs(t, err, db.ErrReadOnly)
-		_, err = store.DeleteSessionIfTrashed(fixtureAlphaID)
+		_, err = store.DeleteSessionIfTrashed(t.Context(), fixtureAlphaID)
 		require.ErrorIs(t, err, db.ErrReadOnly)
-		_, err = store.EmptyTrash()
+		_, err = store.EmptyTrash(t.Context())
 		require.ErrorIs(t, err, db.ErrReadOnly)
-		_, err = store.InsertInsight(db.Insight{})
+		_, err = store.InsertInsight(t.Context(), db.Insight{})
 		require.ErrorIs(t, err, db.ErrReadOnly)
 	})
 }
@@ -276,7 +276,7 @@ func TestGetSessionFullReturnsFilePath(t *testing.T) {
 func TestStoreGetSessionHidesTrash(t *testing.T) {
 	ctx := context.Background()
 	store, syncer, local := newPushedStore(t)
-	require.NoError(t, local.SoftDeleteSession(fixtureBetaID))
+	require.NoError(t, local.SoftDeleteSession(t.Context(), fixtureBetaID))
 	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 
@@ -294,7 +294,7 @@ func TestStoreGetSessionHidesTrash(t *testing.T) {
 func TestStoreGetSessionVersionChangesAfterPush(t *testing.T) {
 	ctx := context.Background()
 	store, syncer, local := newPushedStore(t)
-	count, version, ok := store.GetSessionVersion(fixtureAlphaID)
+	count, version, ok := store.GetSessionVersion(t.Context(), fixtureAlphaID)
 	require.True(t, ok)
 	assert.Equal(t, 2, count)
 
@@ -302,7 +302,7 @@ func TestStoreGetSessionVersionChangesAfterPush(t *testing.T) {
 	_, err := syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
 
-	count2, version2, ok := store.GetSessionVersion(fixtureAlphaID)
+	count2, version2, ok := store.GetSessionVersion(t.Context(), fixtureAlphaID)
 	require.True(t, ok)
 	assert.Equal(t, 3, count2)
 	assert.NotEqual(t, version, version2)

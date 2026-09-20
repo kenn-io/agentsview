@@ -274,9 +274,9 @@ func TestProviderCapabilitiesRequireWatchRootPlanner(t *testing.T) {
 		plan: WatchPlan{Roots: []WatchRoot{{Path: "/fallback"}}},
 	}
 
-	_, err := ResolveWatchRoots(context.Background(), provider)
+	_, err := ResolveWatchRoots(t.Context(), provider)
 	require.Error(t, err)
-	assert.ErrorIs(t, err, ErrUnsupportedProviderFeature)
+	require.ErrorIs(t, err, ErrUnsupportedProviderFeature)
 	assert.Zero(t, provider.watchPlanCalls,
 		"a false capability advertisement must not silently take the legacy path")
 }
@@ -293,7 +293,7 @@ func TestProviderCapabilitiesFallbackWatchPlanRetainsOnlyRootMetadata(t *testing
 		}}},
 	}
 
-	roots, err := ResolveWatchRoots(context.Background(), provider)
+	roots, err := ResolveWatchRoots(t.Context(), provider)
 	require.NoError(t, err)
 	assert.Equal(t, []WatchRoot{{
 		Path:        "/sessions",
@@ -317,7 +317,7 @@ func TestProviderCapabilitiesSourceSetAdapterImplementsWatchRootPlanner(t *testi
 	assert.Equal(t, CapabilitySupported, provider.Capabilities().Source.WatchRoots)
 	planner, ok := provider.(WatchRootPlanner)
 	require.True(t, ok)
-	roots, err := planner.WatchRoots(context.Background())
+	roots, err := planner.WatchRoots(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, []WatchRoot{{
 		Path:        root,
@@ -339,7 +339,8 @@ type streamingWithoutExactFactory struct{ testProviderFactory }
 
 func (factory streamingWithoutExactFactory) NewProvider(cfg ProviderConfig) Provider {
 	return &streamingWithoutExactProvider{
-		Def: factory.def, Caps: factory.caps, Config: cfg.Clone()}
+		Def: factory.def, Caps: factory.caps, Config: cfg.Clone(),
+	}
 }
 
 type streamingWithoutExactProvider struct{ testProvider }

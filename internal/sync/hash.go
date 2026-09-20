@@ -2,6 +2,7 @@ package sync
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -13,7 +14,7 @@ func ComputeHash(r io.Reader) (string, error) {
 	if _, err := io.Copy(h, r); err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // ComputeFileHash returns the SHA-256 hex digest of the file at path.
@@ -60,5 +61,5 @@ func ComputeFileHashPrefix(path string, size int64) (string, error) {
 			"hashing first %d bytes of %s: %w", size, path, err,
 		)
 	}
-	return fmt.Sprintf("%x", h.Sum(nil)), nil
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

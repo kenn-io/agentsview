@@ -1,10 +1,12 @@
 package sync_test
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -38,14 +40,14 @@ func TestCopilotStoreChangesPassIncrementalCutoff(t *testing.T) {
 			store, err := sql.Open("sqlite3", storePath)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
-			_, err = store.Exec(`PRAGMA journal_mode=` + tc.journal + `;
+			_, err = store.ExecContext(t.Context(), `PRAGMA journal_mode=`+tc.journal+`;
 CREATE TABLE assistant_usage_events(id INTEGER PRIMARY KEY, session_id TEXT,
 model TEXT,input_tokens INTEGER,output_tokens INTEGER,cache_read_tokens INTEGER,
 cache_write_tokens INTEGER,reasoning_tokens INTEGER,created_at TEXT);
 INSERT INTO assistant_usage_events VALUES(1,'usage','gpt-5.4',100,7,0,0,0,'2026-09-08T12:00:02Z');`)
 			require.NoError(t, err)
 			archive := dbtest.OpenTestDB(t)
-			engine := agentsync.NewEngine(archive, agentsync.EngineConfig{
+			engine := agentsync.NewEngine(t.Context(), archive, agentsync.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentCopilot: {root}}, Machine: "local",
 			})
 			t.Cleanup(engine.Close)
@@ -62,7 +64,7 @@ INSERT INTO assistant_usage_events VALUES(1,'usage','gpt-5.4',100,7,0,0,0,'2026-
 				require.NoError(t, store.Close())
 				require.NoError(t, os.Remove(storePath))
 			} else {
-				_, err = store.Exec(`UPDATE assistant_usage_events SET output_tokens=11 WHERE id=1`)
+				_, err = store.ExecContext(t.Context(), `UPDATE assistant_usage_events SET output_tokens=11 WHERE id=1`)
 				require.NoError(t, err)
 				if tc.change == "replace" {
 					require.NoError(t, store.Close())
@@ -102,11 +104,11 @@ func TestCopilotStoreStatErrorsSurviveIncrementalCutoff(t *testing.T) {
 			store, err := sql.Open("sqlite3", storePath)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
-			_, err = store.Exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY)`)
+			_, err = store.ExecContext(t.Context(), `CREATE TABLE sessions(id TEXT PRIMARY KEY)`)
 			require.NoError(t, err)
 			require.NoError(t, store.Close())
 			archive := dbtest.OpenTestDB(t)
-			engine := agentsync.NewEngine(archive, agentsync.EngineConfig{
+			engine := agentsync.NewEngine(t.Context(), archive, agentsync.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentCopilot: {root}}, Machine: "local",
 			})
 			t.Cleanup(engine.Close)
@@ -138,29 +140,29 @@ func TestCopilotStoreReadFailurePreservesUsageAndRetries(t *testing.T) {
 	require.NoError(t, err)
 	store.SetMaxOpenConns(1)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	_, err = store.Exec(`PRAGMA journal_mode=DELETE;
+	_, err = store.ExecContext(t.Context(), `PRAGMA journal_mode=DELETE;
 CREATE TABLE assistant_usage_events(id INTEGER PRIMARY KEY, session_id TEXT,
 model TEXT,input_tokens INTEGER,output_tokens INTEGER,cache_read_tokens INTEGER,
 cache_write_tokens INTEGER,reasoning_tokens INTEGER,created_at TEXT);
 INSERT INTO assistant_usage_events VALUES(1,'locked','gpt-5.4',100,7,0,0,0,'2026-09-08T12:00:02Z');`)
 	require.NoError(t, err)
 	archive := dbtest.OpenTestDB(t)
-	engine := agentsync.NewEngine(archive, agentsync.EngineConfig{
+	engine := agentsync.NewEngine(t.Context(), archive, agentsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentCopilot: {root}}, Machine: "local",
 	})
 	t.Cleanup(engine.Close)
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
-	_, err = store.Exec(`UPDATE assistant_usage_events SET output_tokens=11 WHERE id=1;
+	_, err = store.ExecContext(t.Context(), `UPDATE assistant_usage_events SET output_tokens=11 WHERE id=1;
 BEGIN EXCLUSIVE`)
 	require.NoError(t, err)
-	t.Cleanup(func() { _, _ = store.Exec("ROLLBACK") })
+	t.Cleanup(func() { _, _ = store.ExecContext(context.WithoutCancel(t.Context()), "ROLLBACK") })
 
-	assert.Error(t, engine.SyncPathsContext(t.Context(), []string{storePath}))
+	require.Error(t, engine.SyncPathsContext(t.Context(), []string{storePath}))
 	usage, err := archive.GetSessionUsage(t.Context(), "copilot:locked", true)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
 	assert.Equal(t, 7, usage.TotalOutputTokens, "a failed read must preserve the stored usage")
-	_, err = store.Exec("ROLLBACK")
+	_, err = store.ExecContext(t.Context(), "ROLLBACK")
 	require.NoError(t, err)
 
 	// Releasing the lock changes no store bytes or fingerprint. A retry must
@@ -184,7 +186,7 @@ func TestCopilotStoreGapAndRecoveryDoNotDoubleCount(t *testing.T) {
 	store, err := sql.Open("sqlite3", storePath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	_, err = store.Exec(`PRAGMA journal_mode=WAL;
+	_, err = store.ExecContext(t.Context(), `PRAGMA journal_mode=WAL;
 CREATE TABLE sessions(id TEXT PRIMARY KEY);
 INSERT INTO sessions VALUES('gap');
 CREATE TABLE assistant_usage_events(id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -194,7 +196,7 @@ CREATE INDEX idx_assistant_usage_events_session ON assistant_usage_events(sessio
 INSERT INTO assistant_usage_events VALUES(1,'gap','gpt-5.4',100,7,0,0,0,'2026-09-08T12:00:03Z');`)
 	require.NoError(t, err)
 	archive := dbtest.OpenTestDB(t)
-	engine := agentsync.NewEngine(archive, agentsync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCopilot: {root}}, Machine: "local"})
+	engine := agentsync.NewEngine(t.Context(), archive, agentsync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCopilot: {root}}, Machine: "local"})
 	t.Cleanup(engine.Close)
 	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 	usage, err := archive.GetSessionUsage(t.Context(), "copilot:gap", true)
@@ -207,7 +209,7 @@ INSERT INTO assistant_usage_events VALUES(1,'gap','gpt-5.4',100,7,0,0,0,'2026-09
 		total += entry.OutputTokens
 	}
 	assert.Equal(t, 10, total, "usage reports include the remainder exactly once")
-	_, err = store.Exec(`INSERT INTO assistant_usage_events VALUES(2,'gap','gpt-5.4',100,3,0,0,0,'2026-09-08T12:00:01Z')`)
+	_, err = store.ExecContext(t.Context(), `INSERT INTO assistant_usage_events VALUES(2,'gap','gpt-5.4',100,3,0,0,0,'2026-09-08T12:00:01Z')`)
 	require.NoError(t, err)
 	require.NoError(t, engine.SyncPathsContext(t.Context(), []string{storePath + "-wal"}))
 	usage, err = archive.GetSessionUsage(t.Context(), "copilot:gap", true)
@@ -222,13 +224,13 @@ INSERT INTO assistant_usage_events VALUES(1,'gap','gpt-5.4',100,7,0,0,0,'2026-09
 
 func TestCopilotStoreUpdateOnlySyncsChangedSession(t *testing.T) {
 	for _, count := range []int{8, 800} {
-		t.Run(fmt.Sprint(count), func(t *testing.T) {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
 			root := t.TempDir()
 			storePath := filepath.Join(root, "session-store.db")
 			store, err := sql.Open("sqlite3", storePath)
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
-			_, err = store.Exec(`PRAGMA journal_mode=WAL;
+			_, err = store.ExecContext(t.Context(), `PRAGMA journal_mode=WAL;
 CREATE TABLE sessions (id TEXT PRIMARY KEY);
 CREATE TABLE assistant_usage_events (
 id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, model TEXT,
@@ -236,11 +238,11 @@ input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER,
 cache_write_tokens INTEGER, reasoning_tokens INTEGER, created_at TEXT);
 CREATE INDEX idx_assistant_usage_events_session ON assistant_usage_events(session_id,id);`)
 			require.NoError(t, err)
-			tx, err := store.Begin()
+			tx, err := store.BeginTx(t.Context(), nil)
 			require.NoError(t, err)
 			for i := range count {
 				id := fmt.Sprintf("session-%04d", i)
-				_, err = tx.Exec(`INSERT INTO sessions VALUES (?);
+				_, err = tx.ExecContext(t.Context(), `INSERT INTO sessions VALUES (?);
 INSERT INTO assistant_usage_events(session_id,model,input_tokens,output_tokens,created_at)
 VALUES (?,'gpt-5.4',100,3,'2026-09-04T17:00:02Z')`, id, id)
 				require.NoError(t, err)
@@ -255,10 +257,10 @@ VALUES (?,'gpt-5.4',100,3,'2026-09-04T17:00:02Z')`, id, id)
 			require.NoError(t, tx.Commit())
 			archive := dbtest.OpenTestDB(t)
 			cfg := agentsync.EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentCopilot: {root}}, Machine: "local"}
-			engine := agentsync.NewEngine(archive, cfg)
+			engine := agentsync.NewEngine(t.Context(), archive, cfg)
 			t.Cleanup(engine.Close)
 			require.Equal(t, count, engine.SyncAll(t.Context(), nil).Synced)
-			_, err = store.Exec(`INSERT INTO assistant_usage_events(session_id,model,input_tokens,output_tokens,created_at)
+			_, err = store.ExecContext(t.Context(), `INSERT INTO assistant_usage_events(session_id,model,input_tokens,output_tokens,created_at)
 VALUES ('session-0000','gpt-5.4',100,7,'2026-09-04T17:00:03Z')`)
 			require.NoError(t, err)
 			require.NoError(t, engine.SyncPathsContext(t.Context(), []string{storePath + "-wal"}))
@@ -277,7 +279,7 @@ VALUES ('session-0000','gpt-5.4',100,7,'2026-09-04T17:00:03Z')`)
 
 			// Rebuilding the transient producer cache must still honor archive fingerprints.
 			engine.Close()
-			restarted := agentsync.NewEngine(archive, cfg)
+			restarted := agentsync.NewEngine(t.Context(), archive, cfg)
 			t.Cleanup(restarted.Close)
 			bytesBefore := parser.CopilotTranscriptBytesRead()
 			stats = restarted.SyncAll(t.Context(), nil)
@@ -285,7 +287,7 @@ VALUES ('session-0000','gpt-5.4',100,7,'2026-09-04T17:00:03Z')`)
 			assert.Zero(t, stats.Synced)
 			assert.Equal(t, count, stats.Skipped)
 
-			_, err = store.Exec(`DELETE FROM assistant_usage_events WHERE id=(SELECT MAX(id) FROM assistant_usage_events)`)
+			_, err = store.ExecContext(t.Context(), `DELETE FROM assistant_usage_events WHERE id=(SELECT MAX(id) FROM assistant_usage_events)`)
 			require.NoError(t, err)
 			require.NoError(t, restarted.SyncPathsContext(t.Context(), []string{storePath + "-wal"}))
 			assert.Equal(t, 1, restarted.LastSyncStats().Synced)
@@ -319,15 +321,15 @@ func TestCopilotStoreWithoutUsageSchemaSkipsUnchangedSessions(t *testing.T) {
 				require.NoError(t, err)
 				store.SetMaxOpenConns(1)
 				t.Cleanup(func() { require.NoError(t, store.Close()) })
-				_, err = store.Exec(`CREATE TABLE sessions(id TEXT PRIMARY KEY, summary TEXT)`)
+				_, err = store.ExecContext(t.Context(), `CREATE TABLE sessions(id TEXT PRIMARY KEY, summary TEXT)`)
 				require.NoError(t, err)
 				if incomplete {
-					_, err = store.Exec(`CREATE TABLE assistant_usage_events(id INTEGER PRIMARY KEY, session_id TEXT, model TEXT)`)
+					_, err = store.ExecContext(t.Context(), `CREATE TABLE assistant_usage_events(id INTEGER PRIMARY KEY, session_id TEXT, model TEXT)`)
 					require.NoError(t, err)
 				}
 				for i := range count {
 					id := fmt.Sprintf("session-%04d", i)
-					_, err = store.Exec(`INSERT INTO sessions VALUES (?, 'before')`, id)
+					_, err = store.ExecContext(t.Context(), `INSERT INTO sessions VALUES (?, 'before')`, id)
 					require.NoError(t, err)
 					path := filepath.Join(root, "session-state", id, "events.jsonl")
 					require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
@@ -337,13 +339,13 @@ func TestCopilotStoreWithoutUsageSchemaSkipsUnchangedSessions(t *testing.T) {
 					require.NoError(t, os.WriteFile(path, []byte(transcript), 0o644))
 				}
 				archive := dbtest.OpenTestDB(t)
-				engine := agentsync.NewEngine(archive, agentsync.EngineConfig{
+				engine := agentsync.NewEngine(t.Context(), archive, agentsync.EngineConfig{
 					AgentDirs: map[parser.AgentType][]string{parser.AgentCopilot: {root}}, Machine: "local",
 				})
 				t.Cleanup(engine.Close)
 				require.Equal(t, count, engine.SyncAll(t.Context(), nil).Synced)
 
-				_, err = store.Exec(`UPDATE sessions SET summary='after' WHERE id='session-0000'`)
+				_, err = store.ExecContext(t.Context(), `UPDATE sessions SET summary='after' WHERE id='session-0000'`)
 				require.NoError(t, err)
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{storePath}))
 				stats := engine.LastSyncStats()
@@ -352,19 +354,19 @@ func TestCopilotStoreWithoutUsageSchemaSkipsUnchangedSessions(t *testing.T) {
 
 				// Taking a lock without writing leaves the SQLite state unchanged.
 				// Reusing the cached no-usage result must not query the locked store.
-				_, err = store.Exec(`BEGIN EXCLUSIVE`)
+				_, err = store.ExecContext(t.Context(), `BEGIN EXCLUSIVE`)
 				require.NoError(t, err)
-				t.Cleanup(func() { _, _ = store.Exec("ROLLBACK") })
+				t.Cleanup(func() { _, _ = store.ExecContext(context.WithoutCancel(t.Context()), "ROLLBACK") })
 				require.NoError(t, engine.SyncPathsContext(t.Context(), []string{storePath}))
 				assert.Equal(t, count, engine.LastSyncStats().Skipped)
-				_, err = store.Exec(`ROLLBACK`)
+				_, err = store.ExecContext(t.Context(), `ROLLBACK`)
 				require.NoError(t, err)
 
 				if !incomplete {
-					_, err = store.Exec(`CREATE TABLE assistant_usage_events(id INTEGER PRIMARY KEY, session_id TEXT, model TEXT)`)
+					_, err = store.ExecContext(t.Context(), `CREATE TABLE assistant_usage_events(id INTEGER PRIMARY KEY, session_id TEXT, model TEXT)`)
 					require.NoError(t, err)
 				}
-				_, err = store.Exec(`ALTER TABLE assistant_usage_events ADD COLUMN input_tokens INTEGER;
+				_, err = store.ExecContext(t.Context(), `ALTER TABLE assistant_usage_events ADD COLUMN input_tokens INTEGER;
 ALTER TABLE assistant_usage_events ADD COLUMN output_tokens INTEGER;
 ALTER TABLE assistant_usage_events ADD COLUMN cache_read_tokens INTEGER;
 ALTER TABLE assistant_usage_events ADD COLUMN cache_write_tokens INTEGER;

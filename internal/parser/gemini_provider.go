@@ -3,6 +3,7 @@ package parser
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"hash"
@@ -95,7 +96,7 @@ func (p *geminiProvider) Parse(
 	}
 	path, ok := p.sources.pathFromSource(req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("gemini source path unavailable")
+		return ParseOutcome{}, errors.New("gemini source path unavailable")
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
 	sess, msgs, err := p.parseSession(path, req.Source.ProjectHint, machine)
@@ -450,7 +451,7 @@ func (s geminiSourceSet) Fingerprint(
 	}
 	root, path, ok := s.rootPathFromSource(source)
 	if !ok {
-		return SourceFingerprint{}, fmt.Errorf("gemini source path unavailable")
+		return SourceFingerprint{}, errors.New("gemini source path unavailable")
 	}
 	info, err := os.Stat(path)
 	if err != nil {
@@ -474,7 +475,7 @@ func (s geminiSourceSet) Fingerprint(
 	); err != nil {
 		return SourceFingerprint{}, err
 	}
-	fingerprint.Hash = fmt.Sprintf("%x", h.Sum(nil))
+	fingerprint.Hash = hex.EncodeToString(h.Sum(nil))
 	return fingerprint, nil
 }
 

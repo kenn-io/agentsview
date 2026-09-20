@@ -44,7 +44,7 @@ func TestRegisterRootsChargesSharedNativeWatchesOnce(t *testing.T) {
 		"reuse still reports the directory as covered")
 	assert.False(t, results[1].BudgetExhausted,
 		"a root that installs nothing cannot exhaust the budget")
-	assert.NoError(t, results[1].Err)
+	require.NoError(t, results[1].Err)
 	assert.Contains(t, backend.watcher.WatchList(), nested)
 }
 

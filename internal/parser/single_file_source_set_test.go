@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -62,7 +61,7 @@ func TestSingleFileFindSourceRejectsStaleStoredPath(t *testing.T) {
 
 	s := newShapeOnlyTestSingleFileSourceSet(root, livePath)
 
-	src, ok, err := s.FindSource(context.Background(), FindSourceRequest{
+	src, ok, err := s.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath:     stalePath,
 		FingerprintKey:     stalePath,
 		RawSessionID:       "sess",
@@ -73,7 +72,7 @@ func TestSingleFileFindSourceRejectsStaleStoredPath(t *testing.T) {
 	assert.Equal(t, livePath, src.DisplayPath,
 		"a stale stored path must re-resolve to the live file under RequireFreshSource")
 
-	src2, ok2, err := s.FindSource(context.Background(), FindSourceRequest{
+	src2, ok2, err := s.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: stalePath,
 		FingerprintKey: stalePath,
 		RawSessionID:   "sess",
@@ -117,11 +116,11 @@ func TestSingleFileWatchRootsDropsParserOnlyGlobs(t *testing.T) {
 		}),
 	)
 
-	roots, err := set.WatchRoots(context.Background())
+	roots, err := set.WatchRoots(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, []WatchRoot{want}, roots)
 
-	plan, err := set.WatchPlan(context.Background())
+	plan, err := set.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, []string{"*.jsonl", "*.meta"}, plan.Roots[0].IncludeGlobs,

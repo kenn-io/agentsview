@@ -26,7 +26,7 @@ func TestPushSessionTranscriptRevisionRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
 
-	localDB, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	localDB, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
 	defer localDB.Close()
 	syncer := &Sync{
@@ -39,8 +39,8 @@ func TestPushSessionTranscriptRevisionRoundTrip(t *testing.T) {
 		Agent: "claude", MessageCount: 1, UserMessageCount: 1,
 		CreatedAt: "2026-07-12T12:00:00Z", LocalModifiedAt: &modified,
 	}
-	require.NoError(t, localDB.UpsertSession(sess))
-	require.NoError(t, localDB.InsertMessages([]db.Message{{
+	require.NoError(t, localDB.UpsertSession(t.Context(), sess))
+	require.NoError(t, localDB.InsertMessages(t.Context(), []db.Message{{
 		SessionID: sess.ID, Ordinal: 0, Role: "user",
 		Content: "hello", ContentLength: len("hello"),
 	}}))
@@ -55,7 +55,7 @@ func TestPushSessionTranscriptRevisionRoundTrip(t *testing.T) {
 		`UPDATE sessions SET transcript_revision = '0' WHERE id = $1`, sess.ID,
 	)
 	require.NoError(t, err)
-	require.NoError(t, localDB.SetSyncState(
+	require.NoError(t, localDB.SetSyncState(t.Context(),
 		transcriptRevisionBackfillStateKey, "",
 	))
 	result, err = syncer.Push(ctx, false, nil)

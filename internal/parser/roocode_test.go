@@ -24,7 +24,7 @@ func jsonNumberPtr(value string) *jsontext.Value {
 func TestParseRooCodeSession(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-123")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	// Create history_item.json
 	historyItem := rooCodeHistoryItem{
@@ -43,7 +43,7 @@ func TestParseRooCodeSession(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Create ui_messages.json matching real RooCode format:
@@ -81,7 +81,7 @@ func TestParseRooCodeSession(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	// Parse
@@ -119,7 +119,7 @@ func TestParseRooCodeSession(t *testing.T) {
 func TestParseRooCodeSessionWithPartialMessages(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-456")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	// Create history_item.json
 	historyItem := rooCodeHistoryItem{
@@ -136,7 +136,7 @@ func TestParseRooCodeSessionWithPartialMessages(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Create ui_messages.json with partial messages
@@ -165,7 +165,7 @@ func TestParseRooCodeSessionWithPartialMessages(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	// Parse
@@ -182,7 +182,7 @@ func TestParseRooCodeSessionWithPartialMessages(t *testing.T) {
 func TestParseRooCodeSessionWithReasoning(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-789")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-789",
@@ -197,7 +197,7 @@ func TestParseRooCodeSessionWithReasoning(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Message with reasoning text.
@@ -220,7 +220,7 @@ func TestParseRooCodeSessionWithReasoning(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -238,7 +238,7 @@ func TestParseRooCodeSessionWithReasoning(t *testing.T) {
 func TestParseRooCodeSessionWithAPIConfigModel(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-model")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:            "test-task-model",
@@ -257,7 +257,7 @@ func TestParseRooCodeSessionWithAPIConfigModel(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -278,7 +278,7 @@ func TestParseRooCodeSessionWithAPIConfigModel(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -337,7 +337,7 @@ func TestParseRooCodeSessionCostPresence(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
 			taskDir := filepath.Join(tmpDir, "tasks", "test-cost")
-			require.NoError(t, os.MkdirAll(taskDir, 0755))
+			require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 			historyItem := rooCodeHistoryItem{
 				ID:            "test-cost",
@@ -354,7 +354,7 @@ func TestParseRooCodeSessionCostPresence(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(
 				filepath.Join(taskDir, "history_item.json"),
-				historyJSON, 0644,
+				historyJSON, 0o644,
 			))
 
 			messages := []rooCodeMessage{
@@ -375,7 +375,7 @@ func TestParseRooCodeSessionCostPresence(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(
 				filepath.Join(taskDir, "ui_messages.json"),
-				messagesJSON, 0644,
+				messagesJSON, 0o644,
 			))
 
 			sess, _, err := parseRooCodeSession(taskDir, "", "")
@@ -402,7 +402,7 @@ func TestParseRooCodeSessionCostPresence(t *testing.T) {
 func TestParseRooCodeSessionWithoutAPIConfigName(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-no-config")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-no-config",
@@ -417,7 +417,7 @@ func TestParseRooCodeSessionWithoutAPIConfigName(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -438,14 +438,14 @@ func TestParseRooCodeSessionWithoutAPIConfigName(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, _, err := parseRooCodeSession(taskDir, "", "")
 	require.NoError(t, err)
 
 	require.Len(t, sess.UsageEvents, 1)
-	assert.Equal(t, "", sess.UsageEvents[0].Model)
+	assert.Empty(t, sess.UsageEvents[0].Model)
 	assert.Equal(t, "session", sess.UsageEvents[0].Source)
 	assert.Equal(t, 500, sess.UsageEvents[0].InputTokens)
 	assert.Equal(t, 150, sess.UsageEvents[0].OutputTokens)
@@ -456,7 +456,7 @@ func TestParseRooCodeSessionWithoutAPIConfigName(t *testing.T) {
 func TestParseRooCodeSessionWithProjectExtraction(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-proj")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	// Workspace points to a real git repo-like path.
 	historyItem := rooCodeHistoryItem{
@@ -472,7 +472,7 @@ func TestParseRooCodeSessionWithProjectExtraction(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -487,7 +487,7 @@ func TestParseRooCodeSessionWithProjectExtraction(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, _, err := parseRooCodeSession(taskDir, "", "")
@@ -500,7 +500,7 @@ func TestParseRooCodeSessionWithProjectExtraction(t *testing.T) {
 func TestParseRooCodeSessionWithoutMessages(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-empty")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-empty",
@@ -516,7 +516,7 @@ func TestParseRooCodeSessionWithoutMessages(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// No ui_messages.json - should still parse successfully.
@@ -531,7 +531,7 @@ func TestParseRooCodeSessionWithoutMessages(t *testing.T) {
 func TestParseRooCodeSessionSkipsMetadataMessages(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-meta")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-meta",
@@ -546,7 +546,7 @@ func TestParseRooCodeSessionSkipsMetadataMessages(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Include api_req_started and checkpoint_saved which should be skipped.
@@ -580,7 +580,7 @@ func TestParseRooCodeSessionSkipsMetadataMessages(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -596,7 +596,7 @@ func TestParseRooCodeSessionSkipsMetadataMessages(t *testing.T) {
 func TestParseRooCodeSessionToolCalls(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-tools")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:            "test-task-tools",
@@ -612,7 +612,7 @@ func TestParseRooCodeSessionToolCalls(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Realistic RooCode interaction with tool calls.
@@ -652,7 +652,7 @@ func TestParseRooCodeSessionToolCalls(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -681,7 +681,7 @@ func TestParseRooCodeSessionToolCalls(t *testing.T) {
 func TestParseRooCodeSessionRepeatedToolUseIDsUnique(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-repeat")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:            "test-task-repeat",
@@ -698,7 +698,7 @@ func TestParseRooCodeSessionRepeatedToolUseIDsUnique(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Repeated readFile calls interleaved with other tools. Each
@@ -745,7 +745,7 @@ func TestParseRooCodeSessionRepeatedToolUseIDsUnique(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -778,7 +778,7 @@ func TestParseRooCodeSessionRepeatedToolUseIDsUnique(t *testing.T) {
 func TestParseRooCodeSessionCommandOutput(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-cmd")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-cmd",
@@ -793,7 +793,7 @@ func TestParseRooCodeSessionCommandOutput(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -814,7 +814,7 @@ func TestParseRooCodeSessionCommandOutput(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -841,7 +841,7 @@ func TestParseRooCodeSessionCommandOutput(t *testing.T) {
 func TestParseRooCodeSessionEmptyCommandOutputCompletes(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-emptycmd")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-emptycmd",
@@ -854,7 +854,7 @@ func TestParseRooCodeSessionEmptyCommandOutputCompletes(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -881,7 +881,7 @@ func TestParseRooCodeSessionEmptyCommandOutputCompletes(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -894,13 +894,13 @@ func TestParseRooCodeSessionEmptyCommandOutputCompletes(t *testing.T) {
 	require.Len(t, msgs[1].ToolCalls, 1)
 	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
 	assert.Equal(t, "completed", msgs[1].ToolCalls[0].ResultEvents[0].Status)
-	assert.Equal(t, "", msgs[1].ToolCalls[0].ResultEvents[0].Content)
+	assert.Empty(t, msgs[1].ToolCalls[0].ResultEvents[0].Content)
 }
 
 func TestParseRooCodeSessionResultTimestampExtendsEndedAt(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-rests")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-rests",
@@ -913,7 +913,7 @@ func TestParseRooCodeSessionResultTimestampExtendsEndedAt(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	const toolTs = 1688836860000
@@ -942,7 +942,7 @@ func TestParseRooCodeSessionResultTimestampExtendsEndedAt(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -952,8 +952,7 @@ func TestParseRooCodeSessionResultTimestampExtendsEndedAt(t *testing.T) {
 	require.Len(t, msgs, 2)
 	require.Len(t, msgs[1].ToolCalls, 1)
 	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
-	assert.Equal(t,
-		time.UnixMilli(resultTs),
+	assert.Equal(t, time.UnixMilli(resultTs),
 		msgs[1].ToolCalls[0].ResultEvents[0].Timestamp,
 	)
 
@@ -966,7 +965,7 @@ func TestParseRooCodeSessionResultTimestampExtendsEndedAt(t *testing.T) {
 func TestParseRooCodeSessionEmptyReadFileResult(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-emptyread")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-emptyread",
@@ -979,7 +978,7 @@ func TestParseRooCodeSessionEmptyReadFileResult(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1000,7 +999,7 @@ func TestParseRooCodeSessionEmptyReadFileResult(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -1013,13 +1012,13 @@ func TestParseRooCodeSessionEmptyReadFileResult(t *testing.T) {
 	require.Len(t, msgs[1].ToolCalls, 1)
 	require.Len(t, msgs[1].ToolCalls[0].ResultEvents, 1)
 	assert.Equal(t, "completed", msgs[1].ToolCalls[0].ResultEvents[0].Status)
-	assert.Equal(t, "", msgs[1].ToolCalls[0].ResultEvents[0].Content)
+	assert.Empty(t, msgs[1].ToolCalls[0].ResultEvents[0].Content)
 }
 
 func TestParseRooCodeSessionWithCommandAsk(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-askcmd")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-askcmd",
@@ -1034,7 +1033,7 @@ func TestParseRooCodeSessionWithCommandAsk(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1055,7 +1054,7 @@ func TestParseRooCodeSessionWithCommandAsk(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -1077,7 +1076,7 @@ func TestParseRooCodeSessionWithCommandAsk(t *testing.T) {
 func TestParseRooCodeSessionReasoningSay(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-reasoning-say")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:            "test-task-reasoning-say",
@@ -1093,7 +1092,7 @@ func TestParseRooCodeSessionReasoningSay(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Real RooCode pattern: reasoning text is in the text field
@@ -1122,7 +1121,7 @@ func TestParseRooCodeSessionReasoningSay(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -1145,7 +1144,7 @@ func TestParseRooCodeSessionReasoningSay(t *testing.T) {
 func TestParseRooCodeSessionSubtaskTree(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-child")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:           "test-task-child",
@@ -1162,7 +1161,7 @@ func TestParseRooCodeSessionSubtaskTree(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1177,7 +1176,7 @@ func TestParseRooCodeSessionSubtaskTree(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, _, err := parseRooCodeSession(taskDir, "", "")
@@ -1191,7 +1190,7 @@ func TestParseRooCodeSessionSubtaskTree(t *testing.T) {
 func TestParseRooCodeSessionWithoutParentTask(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-root")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-root",
@@ -1206,7 +1205,7 @@ func TestParseRooCodeSessionWithoutParentTask(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1221,21 +1220,21 @@ func TestParseRooCodeSessionWithoutParentTask(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, _, err := parseRooCodeSession(taskDir, "", "")
 	require.NoError(t, err)
 
 	// No parent — should not have a relationship.
-	assert.Equal(t, "", sess.ParentSessionID)
+	assert.Empty(t, sess.ParentSessionID)
 	assert.Equal(t, RelNone, sess.RelationshipType)
 }
 
 func TestParseRooCodeSessionNewSayTypes(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-new-says")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-new-says",
@@ -1250,7 +1249,7 @@ func TestParseRooCodeSessionNewSayTypes(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1289,7 +1288,7 @@ func TestParseRooCodeSessionNewSayTypes(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -1313,7 +1312,7 @@ func TestParseRooCodeSessionNewSayTypes(t *testing.T) {
 func TestParseRooCodeSessionSkillTool(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-skill")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-skill",
@@ -1328,7 +1327,7 @@ func TestParseRooCodeSessionSkillTool(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1349,7 +1348,7 @@ func TestParseRooCodeSessionSkillTool(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -1369,7 +1368,7 @@ func TestParseRooCodeSessionSkillTool(t *testing.T) {
 func TestParseRooCodeSessionSkillToolFallbackName(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-skill-name")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-skill-name",
@@ -1384,7 +1383,7 @@ func TestParseRooCodeSessionSkillToolFallbackName(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Uses "name" field instead of "skill".
@@ -1406,7 +1405,7 @@ func TestParseRooCodeSessionSkillToolFallbackName(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -1419,7 +1418,7 @@ func TestParseRooCodeSessionSkillToolFallbackName(t *testing.T) {
 func TestParseRooCodeSessionSkillFromReadFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-skill-read")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-skill-read",
@@ -1434,7 +1433,7 @@ func TestParseRooCodeSessionSkillFromReadFile(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1455,7 +1454,7 @@ func TestParseRooCodeSessionSkillFromReadFile(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -1472,7 +1471,7 @@ func TestParseRooCodeSessionSkillFromReadFile(t *testing.T) {
 func TestParseRooCodeSessionMCPServerTool(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-mcp")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-mcp",
@@ -1487,7 +1486,7 @@ func TestParseRooCodeSessionMCPServerTool(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1508,7 +1507,7 @@ func TestParseRooCodeSessionMCPServerTool(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -1529,7 +1528,7 @@ func TestParseRooCodeSessionMCPServerTool(t *testing.T) {
 func TestParseRooCodeSessionNewTaskSubagentLink(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-parent")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	childID1 := "child-task-uuid-1111"
 	childID2 := "child-task-uuid-2222"
@@ -1548,7 +1547,7 @@ func TestParseRooCodeSessionNewTaskSubagentLink(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Messages: user task, assistant text, newTask tool call 1,
@@ -1602,14 +1601,14 @@ func TestParseRooCodeSessionNewTaskSubagentLink(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
 	require.NoError(t, err)
 
 	// No parent — this is the orchestrator.
-	assert.Equal(t, "", sess.ParentSessionID)
+	assert.Empty(t, sess.ParentSessionID)
 
 	// Find the two newTask tool call messages.
 	var newTaskCalls []ParsedToolCall
@@ -1630,14 +1629,12 @@ func TestParseRooCodeSessionNewTaskSubagentLink(t *testing.T) {
 		"newTask should have Category=Task")
 
 	// First newTask should link to first child.
-	assert.Equal(t,
-		"roocode:"+childID1,
+	assert.Equal(t, "roocode:"+childID1,
 		newTaskCalls[0].SubagentSessionID,
 		"first newTask should link to first childId",
 	)
 	// Second newTask should link to second child.
-	assert.Equal(t,
-		"roocode:"+childID2,
+	assert.Equal(t, "roocode:"+childID2,
 		newTaskCalls[1].SubagentSessionID,
 		"second newTask should link to second childId",
 	)
@@ -1646,7 +1643,7 @@ func TestParseRooCodeSessionNewTaskSubagentLink(t *testing.T) {
 func TestParseRooCodeSessionSubtaskResultResolvesNewTask(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-subtask-end")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	childID := "child-task-uuid-9999"
 	historyItem := rooCodeHistoryItem{
@@ -1664,7 +1661,7 @@ func TestParseRooCodeSessionSubtaskResultResolvesNewTask(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// The session ends immediately after the child completes:
@@ -1693,7 +1690,7 @@ func TestParseRooCodeSessionSubtaskResultResolvesNewTask(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -1731,7 +1728,7 @@ func TestParseRooCodeSessionSubtaskResultResolvesNewTask(t *testing.T) {
 func TestParseRooCodeSessionCompletedByChildResolvesNewTask(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-completedby")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	childID := "child-task-uuid-8888"
 	historyItem := rooCodeHistoryItem{
@@ -1750,7 +1747,7 @@ func TestParseRooCodeSessionCompletedByChildResolvesNewTask(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// No subtask_result message; completion is recorded only via
@@ -1773,7 +1770,7 @@ func TestParseRooCodeSessionCompletedByChildResolvesNewTask(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -1799,7 +1796,7 @@ func TestParseRooCodeSessionCompletedByChildResolvesNewTask(t *testing.T) {
 func TestParseRooCodeSessionNewTaskNoChildren(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-no-children")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-no-children",
@@ -1815,7 +1812,7 @@ func TestParseRooCodeSessionNewTaskNoChildren(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1836,7 +1833,7 @@ func TestParseRooCodeSessionNewTaskNoChildren(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -1846,7 +1843,7 @@ func TestParseRooCodeSessionNewTaskNoChildren(t *testing.T) {
 	for _, msg := range msgs {
 		for _, tc := range msg.ToolCalls {
 			if tc.ToolName == "newTask" {
-				assert.Equal(t, "", tc.SubagentSessionID,
+				assert.Empty(t, tc.SubagentSessionID,
 					"no childIds means no subagent link")
 			}
 		}
@@ -1856,7 +1853,7 @@ func TestParseRooCodeSessionNewTaskNoChildren(t *testing.T) {
 func TestParseRooCodeSessionNewTaskBoundsCheck(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-bounds")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	// Only one childId but two newTask calls — second should not crash.
 	historyItem := rooCodeHistoryItem{
@@ -1873,7 +1870,7 @@ func TestParseRooCodeSessionNewTaskBoundsCheck(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -1900,7 +1897,7 @@ func TestParseRooCodeSessionNewTaskBoundsCheck(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -1917,14 +1914,14 @@ func TestParseRooCodeSessionNewTaskBoundsCheck(t *testing.T) {
 	}
 	require.Len(t, newTaskCalls, 2)
 	assert.Equal(t, "roocode:only-child", newTaskCalls[0].SubagentSessionID)
-	assert.Equal(t, "", newTaskCalls[1].SubagentSessionID,
+	assert.Empty(t, newTaskCalls[1].SubagentSessionID,
 		"second newTask with no remaining childIds should have empty link")
 }
 
 func TestParseRooCodeSessionPeakContextFromApiReqStarted(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-peakctx")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	// history_item has cumulative tokensIn (sum across all requests).
 	historyItem := rooCodeHistoryItem{
@@ -1941,7 +1938,7 @@ func TestParseRooCodeSessionPeakContextFromApiReqStarted(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// ui_messages.json with api_req_started entries that have
@@ -1988,7 +1985,7 @@ func TestParseRooCodeSessionPeakContextFromApiReqStarted(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, _, err := parseRooCodeSession(taskDir, "", "")
@@ -2010,7 +2007,7 @@ func TestParseRooCodeSessionPeakContextFromApiReqStarted(t *testing.T) {
 func TestParseRooCodeSessionPeakContextNoApiReqs(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-noapi")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-noapi",
@@ -2025,7 +2022,7 @@ func TestParseRooCodeSessionPeakContextNoApiReqs(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// No api_req_started messages at all.
@@ -2041,7 +2038,7 @@ func TestParseRooCodeSessionPeakContextNoApiReqs(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, _, err := parseRooCodeSession(taskDir, "", "")
@@ -2055,7 +2052,7 @@ func TestParseRooCodeSessionPeakContextNoApiReqs(t *testing.T) {
 func TestParseRooCodeSessionPeakContextIncludesCacheWrites(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-cachewrites")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-cachewrites",
@@ -2069,7 +2066,7 @@ func TestParseRooCodeSessionPeakContextIncludesCacheWrites(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2090,7 +2087,7 @@ func TestParseRooCodeSessionPeakContextIncludesCacheWrites(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, _, err := parseRooCodeSession(taskDir, "", "")
@@ -2105,7 +2102,7 @@ func TestParseRooCodeSessionPeakContextIncludesCacheWrites(t *testing.T) {
 func TestParseRooCodeSessionCommandOutputPairing(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-cmdpair")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-cmdpair",
@@ -2120,7 +2117,7 @@ func TestParseRooCodeSessionCommandOutputPairing(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2153,7 +2150,7 @@ func TestParseRooCodeSessionCommandOutputPairing(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -2175,7 +2172,7 @@ func TestParseRooCodeSessionCommandOutputPairing(t *testing.T) {
 func TestParseRooCodeSessionCommandOutputError(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-cmderr")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-cmderr",
@@ -2190,7 +2187,7 @@ func TestParseRooCodeSessionCommandOutputError(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2217,7 +2214,7 @@ func TestParseRooCodeSessionCommandOutputError(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -2240,7 +2237,7 @@ func TestParseRooCodeSessionCommandOutputError(t *testing.T) {
 func TestParseRooCodeSessionMultiPartCommandOutput(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-cmdmulti")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-cmdmulti",
@@ -2255,7 +2252,7 @@ func TestParseRooCodeSessionMultiPartCommandOutput(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2306,7 +2303,7 @@ func TestParseRooCodeSessionMultiPartCommandOutput(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -2339,7 +2336,7 @@ func TestParseRooCodeSessionMultiPartCommandOutput(t *testing.T) {
 func TestParseRooCodeSessionCommandOutputErrorSticky(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-cmdsticky")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-cmdsticky",
@@ -2354,7 +2351,7 @@ func TestParseRooCodeSessionCommandOutputErrorSticky(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2389,7 +2386,7 @@ func TestParseRooCodeSessionCommandOutputErrorSticky(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -2410,7 +2407,7 @@ func TestParseRooCodeSessionCommandOutputErrorSticky(t *testing.T) {
 func TestParseRooCodeSessionFileToolResult(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-fileresult")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-fileresult",
@@ -2425,7 +2422,7 @@ func TestParseRooCodeSessionFileToolResult(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2446,7 +2443,7 @@ func TestParseRooCodeSessionFileToolResult(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -2502,7 +2499,7 @@ func TestParseRooCodeSessionResultBearingReadToolsComplete(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
 			taskDir := filepath.Join(tmpDir, "tasks", "test-"+tt.name)
-			require.NoError(t, os.MkdirAll(taskDir, 0755))
+			require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 			historyItem := rooCodeHistoryItem{
 				ID:        "test-" + tt.name,
@@ -2515,7 +2512,7 @@ func TestParseRooCodeSessionResultBearingReadToolsComplete(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(
 				filepath.Join(taskDir, "history_item.json"),
-				historyJSON, 0644,
+				historyJSON, 0o644,
 			))
 
 			messages := []rooCodeMessage{
@@ -2536,7 +2533,7 @@ func TestParseRooCodeSessionResultBearingReadToolsComplete(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(
 				filepath.Join(taskDir, "ui_messages.json"),
-				messagesJSON, 0644,
+				messagesJSON, 0o644,
 			))
 
 			_, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -2563,7 +2560,7 @@ func TestParseRooCodeSessionResultBearingReadToolsComplete(t *testing.T) {
 func TestParseRooCodeSessionWriteToolContentNotResult(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-writenoresult")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-writenoresult",
@@ -2578,7 +2575,7 @@ func TestParseRooCodeSessionWriteToolContentNotResult(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2599,7 +2596,7 @@ func TestParseRooCodeSessionWriteToolContentNotResult(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -2621,7 +2618,7 @@ func TestParseRooCodeSessionWriteToolContentNotResult(t *testing.T) {
 func TestParseRooCodeSessionNewTaskContentNotResult(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-newtask-noresult")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-newtask-noresult",
@@ -2636,7 +2633,7 @@ func TestParseRooCodeSessionNewTaskContentNotResult(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2657,7 +2654,7 @@ func TestParseRooCodeSessionNewTaskContentNotResult(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -2695,8 +2692,10 @@ func TestRooCommandOutputIsError(t *testing.T) {
 		{"exit code colon 1", "exit code: 1", true},
 		{"exit status colon 2", "Exit Status: 2", true},
 		{"parens exit status colon", "(exit status: 1)", true},
-		{"multiline exit status colon",
-			"Building project...\nError in src/main.ts\n(exit status: 1)", true},
+		{
+			"multiline exit status colon",
+			"Building project...\nError in src/main.ts\n(exit status: 1)", true,
+		},
 
 		// Prefix patterns (first line).
 		{"error colon", "Error: file not found", true},
@@ -2706,14 +2705,20 @@ func TestRooCommandOutputIsError(t *testing.T) {
 
 		// Anywhere patterns (npm ERR! in multi-line output).
 		{"npm ERR basic", "npm ERR! code ELIFECYCLE", true},
-		{"npm ERR multiline",
-			"> todoseq@0.10.0 test\n> jest\n\nnpm ERR! code ELIFECYCLE", true},
+		{
+			"npm ERR multiline",
+			"> todoseq@0.10.0 test\n> jest\n\nnpm ERR! code ELIFECYCLE", true,
+		},
 
 		// Error at start of line in multi-line output.
-		{"error colon multiline",
-			"Compiling project...\nError: Cannot find module 'foo'\nBuild failed.", true},
-		{"fatal multiline",
-			"Running setup...\nFatal: unable to access repo", true},
+		{
+			"error colon multiline",
+			"Compiling project...\nError: Cannot find module 'foo'\nBuild failed.", true,
+		},
+		{
+			"fatal multiline",
+			"Running setup...\nFatal: unable to access repo", true,
+		},
 	}
 	for _, tt := range tests {
 		got := rooCommandOutputIsError(tt.output)
@@ -2726,7 +2731,7 @@ func TestRooCommandOutputIsError(t *testing.T) {
 func TestParseRooCodeSessionErrorTypes(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-errors")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-errors",
@@ -2741,7 +2746,7 @@ func TestParseRooCodeSessionErrorTypes(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2786,7 +2791,7 @@ func TestParseRooCodeSessionErrorTypes(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -2849,7 +2854,7 @@ func TestParseRooCodeSessionToolSpecificErrorPairing(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
 			taskDir := filepath.Join(tmpDir, "tasks", "test-toolerr")
-			require.NoError(t, os.MkdirAll(taskDir, 0755))
+			require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 			historyItem := rooCodeHistoryItem{
 				ID:        "test-toolerr",
@@ -2863,7 +2868,7 @@ func TestParseRooCodeSessionToolSpecificErrorPairing(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(
 				filepath.Join(taskDir, "history_item.json"),
-				historyJSON, 0644,
+				historyJSON, 0o644,
 			))
 
 			messages := []rooCodeMessage{
@@ -2890,7 +2895,7 @@ func TestParseRooCodeSessionToolSpecificErrorPairing(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(
 				filepath.Join(taskDir, "ui_messages.json"),
-				messagesJSON, 0644,
+				messagesJSON, 0o644,
 			))
 
 			sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -2944,7 +2949,7 @@ func TestParseRooCodeSessionToolSpecificErrorPairing(t *testing.T) {
 func TestParseRooCodeSessionUserFeedbackIsUserRole(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-feedback")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-feedback",
@@ -2956,7 +2961,7 @@ func TestParseRooCodeSessionUserFeedbackIsUserRole(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -2989,7 +2994,7 @@ func TestParseRooCodeSessionUserFeedbackIsUserRole(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -3007,7 +3012,7 @@ func TestParseRooCodeSessionUserFeedbackIsUserRole(t *testing.T) {
 func TestParseRooCodeSessionCompletionResultAskIsAssistant(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-completion-ask")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-completion-ask",
@@ -3019,7 +3024,7 @@ func TestParseRooCodeSessionCompletionResultAskIsAssistant(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -3040,7 +3045,7 @@ func TestParseRooCodeSessionCompletionResultAskIsAssistant(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -3057,7 +3062,7 @@ func TestParseRooCodeSessionCompletionResultAskIsAssistant(t *testing.T) {
 func TestParseRooCodeSessionErrorSayTypePairing(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-errsay")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-errsay",
@@ -3072,7 +3077,7 @@ func TestParseRooCodeSessionErrorSayTypePairing(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Sequence: user task, command ask, error say (no command_output).
@@ -3101,7 +3106,7 @@ func TestParseRooCodeSessionErrorSayTypePairing(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -3125,7 +3130,7 @@ func TestParseRooCodeSessionErrorSayTypePairing(t *testing.T) {
 func TestParseRooCodeSessionErrorSayTypeNoPendingCommand(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-errsay-nopending")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-errsay-nopending",
@@ -3140,7 +3145,7 @@ func TestParseRooCodeSessionErrorSayTypeNoPendingCommand(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// Error arrives with no preceding command — should be a
@@ -3163,7 +3168,7 @@ func TestParseRooCodeSessionErrorSayTypeNoPendingCommand(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -3183,7 +3188,7 @@ func TestParseRooCodeSessionErrorEmptyText(t *testing.T) {
 	// (no content, no tool calls/results → filtered out).
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-err-empty")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-err-empty",
@@ -3198,7 +3203,7 @@ func TestParseRooCodeSessionErrorEmptyText(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -3225,7 +3230,7 @@ func TestParseRooCodeSessionErrorEmptyText(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -3435,7 +3440,7 @@ func TestRooCodeIsMetadataSay(t *testing.T) {
 func TestParseRooCodeSessionImageOnlyMessages(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-images")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-images",
@@ -3448,7 +3453,7 @@ func TestParseRooCodeSessionImageOnlyMessages(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// The initial prompt and a feedback message carry only images
@@ -3483,7 +3488,7 @@ func TestParseRooCodeSessionImageOnlyMessages(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -3508,7 +3513,7 @@ func TestParseRooCodeSessionImageOnlyMessages(t *testing.T) {
 func TestParseRooCodeSessionEmptySubtaskResultResolvesNewTask(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-emptysubtask")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	// No CompletedByChildID: pairing must work from the transcript
 	// alone.
@@ -3524,7 +3529,7 @@ func TestParseRooCodeSessionEmptySubtaskResultResolvesNewTask(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// A child task that reports completion with no result text must
@@ -3553,7 +3558,7 @@ func TestParseRooCodeSessionEmptySubtaskResultResolvesNewTask(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	sess, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -3568,7 +3573,7 @@ func TestParseRooCodeSessionEmptySubtaskResultResolvesNewTask(t *testing.T) {
 	assert.Equal(t, "newTask", tc.ToolName)
 	require.Len(t, tc.ResultEvents, 1)
 	assert.Equal(t, "completed", tc.ResultEvents[0].Status)
-	assert.Equal(t, "", tc.ResultEvents[0].Content)
+	assert.Empty(t, tc.ResultEvents[0].Content)
 
 	// The resolved delegation must not read as orphaned.
 	assert.Equal(t, TerminationClean, sess.TerminationStatus)
@@ -3600,7 +3605,7 @@ func TestParseRooCodeSessionMultibyteSessionName(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			tmpDir := t.TempDir()
 			taskDir := filepath.Join(tmpDir, "tasks", "test-task-utf8name")
-			require.NoError(t, os.MkdirAll(taskDir, 0755))
+			require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 			historyItem := rooCodeHistoryItem{
 				ID:        "test-task-utf8name",
@@ -3613,7 +3618,7 @@ func TestParseRooCodeSessionMultibyteSessionName(t *testing.T) {
 			require.NoError(t, err)
 			require.NoError(t, os.WriteFile(
 				filepath.Join(taskDir, "history_item.json"),
-				historyJSON, 0644,
+				historyJSON, 0o644,
 			))
 
 			sess, _, err := parseRooCodeSession(taskDir, "", "")
@@ -3629,7 +3634,7 @@ func TestParseRooCodeSessionMultibyteSessionName(t *testing.T) {
 func TestParseRooCodeSessionSubtaskResultNotPairedToFailedNewTask(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-failed-newtask")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	historyItem := rooCodeHistoryItem{
 		ID:        "test-task-failed-newtask",
@@ -3642,7 +3647,7 @@ func TestParseRooCodeSessionSubtaskResultNotPairedToFailedNewTask(t *testing.T) 
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	// The delegation fails; a stray subtask_result arriving later
@@ -3677,7 +3682,7 @@ func TestParseRooCodeSessionSubtaskResultNotPairedToFailedNewTask(t *testing.T) 
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -3699,7 +3704,7 @@ func TestParseRooCodeSessionSubtaskResultNotPairedToFailedNewTask(t *testing.T) 
 func TestParseRooCodeSessionChildIDsSkipFailedNewTask(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-childskip")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	// Only one child exists: the first delegation failed before
 	// spawning, so the single child ID belongs to the second call.
@@ -3715,7 +3720,7 @@ func TestParseRooCodeSessionChildIDsSkipFailedNewTask(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		historyJSON, 0644,
+		historyJSON, 0o644,
 	))
 
 	messages := []rooCodeMessage{
@@ -3754,7 +3759,7 @@ func TestParseRooCodeSessionChildIDsSkipFailedNewTask(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "ui_messages.json"),
-		messagesJSON, 0644,
+		messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")
@@ -3772,19 +3777,19 @@ func TestParseRooCodeSessionChildIDsSkipFailedNewTask(t *testing.T) {
 
 	// The failed first delegation gets no child link; the second
 	// call receives the only child ID.
-	assert.Equal(t, "", newTasks[0].SubagentSessionID)
+	assert.Empty(t, newTasks[0].SubagentSessionID)
 	assert.Equal(t, "roocode:child-b", newTasks[1].SubagentSessionID)
 }
 
 func TestParseRooCodeSessionEmptyHistoryIDFallsBackToDirName(t *testing.T) {
 	tmpDir := t.TempDir()
 	taskDir := filepath.Join(tmpDir, "tasks", "test-task-noid")
-	require.NoError(t, os.MkdirAll(taskDir, 0755))
+	require.NoError(t, os.MkdirAll(taskDir, 0o755))
 
 	// Legacy or incomplete history items can omit the id entirely.
 	require.NoError(t, os.WriteFile(
 		filepath.Join(taskDir, "history_item.json"),
-		[]byte(`{"ts":1688836851000,"task":"No ID recorded"}`), 0644,
+		[]byte(`{"ts":1688836851000,"task":"No ID recorded"}`), 0o644,
 	))
 
 	sess, _, err := parseRooCodeSession(taskDir, "", "")
@@ -3803,17 +3808,19 @@ func TestParseRooCodeSessionMarksSearchResultsAsToolOutput(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
-		filepath.Join(taskDir, "history_item.json"), historyJSON, 0644,
+		filepath.Join(taskDir, "history_item.json"), historyJSON, 0o644,
 	))
 	messages := []rooCodeMessage{
 		{Timestamp: 1688836851000, Type: "say", Say: "text", Text: "find callers"},
-		{Timestamp: 1688836852000, Type: "say", Say: "codebase_search_result",
-			Text: `{"query":"callers","results":[{"path":"secret.go"}]}`},
+		{
+			Timestamp: 1688836852000, Type: "say", Say: "codebase_search_result",
+			Text: `{"query":"callers","results":[{"path":"secret.go"}]}`,
+		},
 	}
 	messagesJSON, err := json.Marshal(messages)
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(
-		filepath.Join(taskDir, "ui_messages.json"), messagesJSON, 0644,
+		filepath.Join(taskDir, "ui_messages.json"), messagesJSON, 0o644,
 	))
 
 	_, msgs, err := parseRooCodeSession(taskDir, "", "")

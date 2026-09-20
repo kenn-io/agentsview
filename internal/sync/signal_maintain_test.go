@@ -2,9 +2,9 @@ package sync
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -161,7 +161,7 @@ func TestIncrementalMaintainerDeclinesStaleVersions(t *testing.T) {
 				hasState: true,
 				revision: "rev",
 			}
-			delta, err := m.MaintainTx(context.Background(), q)
+			delta, err := m.MaintainTx(t.Context(), q)
 			require.NoError(t, err)
 			assert.Nil(t, delta, "stale versions must decline")
 		})
@@ -185,7 +185,7 @@ func TestIncrementalMaintainerProceedsCurrentVersions(t *testing.T) {
 		hasState: true,
 		revision: "rev",
 	}
-	delta, err := m.MaintainTx(context.Background(), q)
+	delta, err := m.MaintainTx(t.Context(), q)
 	require.NoError(t, err)
 	require.NotNil(t, delta,
 		"current versions with a matching revision must proceed")
@@ -254,7 +254,7 @@ func TestIncrementalMaintainerScansOnlyInsertedResultEvents(t *testing.T) {
 	}
 
 	scanBytesBefore := SecretScanBytes()
-	delta, err := m.MaintainTx(context.Background(), q)
+	delta, err := m.MaintainTx(t.Context(), q)
 	require.NoError(t, err)
 	require.NotNil(t, delta)
 	scanned := SecretScanBytes() - scanBytesBefore
@@ -334,7 +334,7 @@ func TestIncrementalMaintainerTargetsDuplicateCallIDOccurrence(t *testing.T) {
 		},
 	}
 
-	delta, err := m.MaintainTx(context.Background(), q)
+	delta, err := m.MaintainTx(t.Context(), q)
 	require.NoError(t, err)
 	require.NotNil(t, delta)
 	assert.Equal(t, []db.ToolCallPosition{second}, q.requestedPositions)
@@ -347,12 +347,18 @@ func TestIncrementalMaintainerTargetsDuplicateCallIDOccurrence(t *testing.T) {
 // an explicit compact boundary suppresses token-drop compactions, so a
 // session with both must count only the boundary.
 func TestIncrementalMaintainerCompactionExplicitBoundaryParity(t *testing.T) {
-	boundary := db.Message{SessionID: "s1", Ordinal: 0, Role: "assistant",
-		IsCompactBoundary: true}
-	preCtx := db.Message{SessionID: "s1", Ordinal: 1, Role: "assistant",
-		HasContextTokens: true, ContextTokens: 1000}
-	drop := db.Message{SessionID: "s1", Ordinal: 2, Role: "assistant",
-		HasContextTokens: true, ContextTokens: 500}
+	boundary := db.Message{
+		SessionID: "s1", Ordinal: 0, Role: "assistant",
+		IsCompactBoundary: true,
+	}
+	preCtx := db.Message{
+		SessionID: "s1", Ordinal: 1, Role: "assistant",
+		HasContextTokens: true, ContextTokens: 1000,
+	}
+	drop := db.Message{
+		SessionID: "s1", Ordinal: 2, Role: "assistant",
+		HasContextTokens: true, ContextTokens: 500,
+	}
 
 	t.Run("explicit boundary suppresses token drop", func(t *testing.T) {
 		full := computeSignalsFromMessages(
@@ -380,7 +386,7 @@ func TestIncrementalMaintainerCompactionExplicitBoundaryParity(t *testing.T) {
 			hasState: true,
 			revision: "rev",
 		}
-		delta, err := m.MaintainTx(context.Background(), q)
+		delta, err := m.MaintainTx(t.Context(), q)
 		require.NoError(t, err)
 		require.NotNil(t, delta)
 		assert.Equal(t, full.CompactionCount, delta.Update.CompactionCount,
@@ -412,7 +418,7 @@ func TestIncrementalMaintainerCompactionExplicitBoundaryParity(t *testing.T) {
 			hasState: true,
 			revision: "rev",
 		}
-		delta, err := m.MaintainTx(context.Background(), q)
+		delta, err := m.MaintainTx(t.Context(), q)
 		require.NoError(t, err)
 		require.NotNil(t, delta)
 		assert.Equal(t, full.CompactionCount, delta.Update.CompactionCount,
@@ -432,7 +438,7 @@ func TestIncrementalMaintainerCompactionExplicitBoundaryParity(t *testing.T) {
 // must decline (nil, nil) so the caller falls back to a full recompute.
 func TestIncrementalMaintainerDeclinesOutOfOrderLateUsage(t *testing.T) {
 	for _, tokens := range []int{0, 1000} {
-		t.Run(fmt.Sprint(tokens), func(t *testing.T) {
+		t.Run(strconv.Itoa(tokens), func(t *testing.T) {
 			state := signals.SeedIncrementalState(
 				nil, nil, "", "", nil, nil, 0, tokens, 5,
 			)
@@ -456,7 +462,7 @@ func TestIncrementalMaintainerDeclinesOutOfOrderLateUsage(t *testing.T) {
 				revision:            "rev",
 				updatedUsageOrdinal: map[int]bool{3: true},
 			}
-			delta, err := m.MaintainTx(context.Background(), q)
+			delta, err := m.MaintainTx(t.Context(), q)
 			require.NoError(t, err)
 			assert.Nil(t, delta,
 				"a late usage update targeting an ordinal at or before the "+
@@ -493,7 +499,7 @@ func TestIncrementalMaintainerAppliesInOrderLateUsage(t *testing.T) {
 		revision:            "rev",
 		updatedUsageOrdinal: map[int]bool{5: true},
 	}
-	delta, err := m.MaintainTx(context.Background(), q)
+	delta, err := m.MaintainTx(t.Context(), q)
 	require.NoError(t, err)
 	require.NotNil(t, delta,
 		"a late usage update after the recorded last measurement must fold")
@@ -543,7 +549,7 @@ func TestIncrementalMaintainerContextPressureSessionPeakParity(t *testing.T) {
 		hasState: true,
 		revision: "rev",
 	}
-	delta, err := m.MaintainTx(context.Background(), q)
+	delta, err := m.MaintainTx(t.Context(), q)
 	require.NoError(t, err)
 	require.NotNil(t, delta)
 	require.NotNil(t, delta.Update.ContextPressureMax)
@@ -642,7 +648,7 @@ func TestIncrementalSignalMaintainerParityWithFullResync(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -650,11 +656,11 @@ func TestIncrementalSignalMaintainerParityWithFullResync(t *testing.T) {
 	})
 	t.Cleanup(engine.Close)
 
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 	sessionID := "codex:" + signalMaintainUUID
 
 	// Baseline: the full sync seeded the compact state.
-	_, ok, err := database.GetSessionSignalState(sessionID)
+	_, ok, err := database.GetSessionSignalState(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.True(t, ok, "full sync must seed the compact signal state")
 
@@ -676,7 +682,7 @@ func TestIncrementalSignalMaintainerParityWithFullResync(t *testing.T) {
 
 	loadsBefore := database.MessagesLoadCount()
 	scanBytesBefore := SecretScanBytes()
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 
 	// Delta gates: the maintained append must not load session history,
 	// and the secret scan must stay within the delta's own content.
@@ -686,7 +692,7 @@ func TestIncrementalSignalMaintainerParityWithFullResync(t *testing.T) {
 		int64(len(appended)),
 		"secret scan bytes must not exceed the delta content")
 
-	sess, err := database.GetSessionFull(context.Background(), sessionID)
+	sess, err := database.GetSessionFull(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.True(t, sess.LastWriteIncremental,
@@ -695,7 +701,7 @@ func TestIncrementalSignalMaintainerParityWithFullResync(t *testing.T) {
 		"maintenance must keep the signal version current")
 
 	findings, err := database.SessionSecretFindings(
-		context.Background(), sessionID,
+		t.Context(), sessionID,
 	)
 	require.NoError(t, err)
 	require.Len(t, findings, 1, "the AWS key in the output must be found")
@@ -729,22 +735,22 @@ func TestIncrementalSignalMaintainerParityWithFullResync(t *testing.T) {
 			"2024-01-01T10:00:05Z",
 		),
 	)
-	require.Equal(t, len(initial)+len(appended), len(rewritten))
-	require.NoError(t, database.DeleteParserCheckpoint(sessionID))
+	require.Len(t, rewritten, len(initial)+len(appended))
+	require.NoError(t, database.DeleteParserCheckpoint(t.Context(), sessionID))
 	require.NoError(t, os.WriteFile(path, []byte(rewritten), 0o644))
 	future := time.Now().Add(2 * time.Minute)
 	require.NoError(t, os.Chtimes(path, future, future))
 
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 
-	sess, err = database.GetSessionFull(context.Background(), sessionID)
+	sess, err = database.GetSessionFull(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.False(t, sess.LastWriteIncremental,
 		"the same-size rewrite must take the full replacement path")
 
 	fullFindings, err := database.SessionSecretFindings(
-		context.Background(), sessionID,
+		t.Context(), sessionID,
 	)
 	require.NoError(t, err)
 	assert.Equal(t, findings, fullFindings,
@@ -763,10 +769,10 @@ func TestIncrementalSignalMaintainerParityWithFullResync(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, f.Close())
 	loadsBefore = database.MessagesLoadCount()
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 	assert.Equal(t, loadsBefore, database.MessagesLoadCount(),
 		"post-resync append must fold incrementally")
-	sess, err = database.GetSessionFull(context.Background(), sessionID)
+	sess, err = database.GetSessionFull(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.Equal(t, db.CurrentQualitySignalVersion, sess.QualitySignalVersion)
 }
@@ -811,7 +817,7 @@ func TestIncrementalSignalMaintainerHandlesCommittedUsageUpdate(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -866,7 +872,7 @@ func TestIncrementalSignalMaintainerHandlesCommittedUsageUpdate(t *testing.T) {
 	// A fresh authoritative import of the complete file must produce the
 	// same observable signal state and message token metadata.
 	fullDatabase := openTestDB(t)
-	fullEngine := NewEngine(fullDatabase, EngineConfig{
+	fullEngine := NewEngine(t.Context(), fullDatabase, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -905,14 +911,14 @@ func TestIncrementalSignalMaintainerDeclinesForUserMessage(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
 		Machine: "local",
 	})
 	t.Cleanup(engine.Close)
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 	sessionID := "codex:" + signalMaintainUUID
 
 	appended := testjsonl.JoinJSONL(testjsonl.CodexMsgJSON(
@@ -925,10 +931,10 @@ func TestIncrementalSignalMaintainerDeclinesForUserMessage(t *testing.T) {
 	require.NoError(t, f.Close())
 
 	loadsBefore := database.MessagesLoadCount()
-	require.Equal(t, 1, engine.SyncAll(context.Background(), nil).Synced)
+	require.Equal(t, 1, engine.SyncAll(t.Context(), nil).Synced)
 	assert.Greater(t, database.MessagesLoadCount(), loadsBefore,
 		"a user-message delta must fall back to the full recompute")
-	sess, err := database.GetSessionFull(context.Background(), sessionID)
+	sess, err := database.GetSessionFull(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.Equal(t, db.CurrentQualitySignalVersion, sess.QualitySignalVersion,
@@ -959,7 +965,7 @@ func TestFullSignalRecomputeRetriesWhenTranscriptRevisionChanges(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -996,7 +1002,7 @@ func TestFullSignalRecomputeRetriesWhenTranscriptRevisionChanges(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	require.NotNil(t, sess.TranscriptRevision)
-	stored, ok, err := database.GetSessionSignalState(sessionID)
+	stored, ok, err := database.GetSessionSignalState(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, *sess.TranscriptRevision, stored.TranscriptRevision)
@@ -1030,7 +1036,7 @@ func TestFullSignalRecomputeRetriesWhenMetadataChanges(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -1063,7 +1069,7 @@ func TestFullSignalRecomputeRetriesWhenMetadataChanges(t *testing.T) {
 			current.MessageCount = 7
 			current.PeakContextTokens = 12345
 			current.HasPeakContextTokens = true
-			require.NoError(t, database.UpsertSession(*current))
+			require.NoError(t, database.UpsertSession(t.Context(), *current))
 			afterMetadata, loadErr := database.GetSessionFull(
 				t.Context(), sessionID,
 			)
@@ -1086,7 +1092,7 @@ func TestFullSignalRecomputeRetriesWhenMetadataChanges(t *testing.T) {
 	require.Equal(t, 7, after.MessageCount)
 	require.True(t, after.IsAutomated)
 	require.Equal(t, 12345, after.PeakContextTokens)
-	stored, ok, err := database.GetSessionSignalState(sessionID)
+	stored, ok, err := database.GetSessionSignalState(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, originalRevision, stored.TranscriptRevision)

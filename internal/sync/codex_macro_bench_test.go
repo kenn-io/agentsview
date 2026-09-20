@@ -76,9 +76,9 @@ func TestMacroCodexRealSession(t *testing.T) {
 		t.Fatalf("copying snapshot prefix: %v", err)
 	}
 
-	database, err := db.Open(filepath.Join(t.TempDir(), "macro.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "macro.db"))
 	require.NoError(t, err)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -119,7 +119,7 @@ func TestMacroCodexRealSession(t *testing.T) {
 	require.Equal(t, 1, stats.Synced)
 
 	sessionID := func() string {
-		inc, ok := database.GetSessionForIncremental(
+		inc, ok := database.GetSessionForIncremental(t.Context(),
 			dst, string(parser.AgentCodex),
 		)
 		require.True(t, ok, "the snapshot session must be incremental-tracked")
@@ -222,9 +222,9 @@ func TestMacroCodexStreamingMemoryGates(t *testing.T) {
 			root, _, _, _ := writeCodexStreamingBenchmarkTranscript(
 				t, size.turns, size.outBytes,
 			)
-			database, err := db.Open(filepath.Join(t.TempDir(), "macro.db"))
+			database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "macro.db"))
 			require.NoError(t, err)
-			engine := NewEngine(database, EngineConfig{
+			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{
 					parser.AgentCodex: {root},
 				},
@@ -449,7 +449,7 @@ func TestMacroCodexStagedParseMemoryGates(t *testing.T) {
 
 			peak := pollPeakLiveHeap()
 			start := time.Now()
-			staged, err := newCodexStagingSink("", nil)
+			staged, err := newCodexStagingSink(t.Context(), "", nil)
 			require.NoError(t, err)
 			sess, msgs, _, _, _, _, err := parser.ParseCodexSessionStreaming(
 				context.Background(), cfg, source, staged,
@@ -457,7 +457,7 @@ func TestMacroCodexStagedParseMemoryGates(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, sess)
 
-			database, err := db.Open(filepath.Join(t.TempDir(), "macro.db"))
+			database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "macro.db"))
 			require.NoError(t, err)
 			t.Cleanup(func() { _ = database.Close() })
 			row := db.Session{
@@ -468,7 +468,7 @@ func TestMacroCodexStagedParseMemoryGates(t *testing.T) {
 				MessageCount:     sess.MessageCount,
 				UserMessageCount: sess.UserMessageCount,
 			}
-			require.NoError(t, database.UpsertSession(row))
+			require.NoError(t, database.UpsertSession(t.Context(), row))
 			dbMsgs := toDBMessages(pendingWrite{
 				sess: *sess, msgs: msgs,
 			}, nil)
@@ -479,16 +479,14 @@ func TestMacroCodexStagedParseMemoryGates(t *testing.T) {
 				func(verdicts map[string]bool) (
 					db.SessionSignalUpdate, []db.SecretFinding, error,
 				) {
-					update, findings :=
-						computeSignalsAndSecretsWithContentFailures(
-							row, dbMsgs, verdicts,
-						)
+					update, findings := computeSignalsAndSecretsWithContentFailures(
+						row, dbMsgs, verdicts,
+					)
 					combined := append(
 						append([]db.SecretFinding(nil), findings...),
 						staged.Findings(row.ID, positions)...,
 					)
-					update.SecretLeakCount =
-						definiteFindingCount(combined)
+					update.SecretLeakCount = definiteFindingCount(combined)
 					return update, combined, nil
 				},
 			))
@@ -539,7 +537,7 @@ func TestMacroCodexEngineStagedFullParse(t *testing.T) {
 	)
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -606,7 +604,7 @@ func TestMacroCodexStaged64MBLine(t *testing.T) {
 	require.True(t, found)
 
 	peak := pollPeakLiveHeap()
-	staged, err := newCodexStagingSink("", nil)
+	staged, err := newCodexStagingSink(t.Context(), "", nil)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, staged.Close()) }()
 	sess, msgs, _, _, _, _, err := parser.ParseCodexSessionStreaming(
@@ -615,7 +613,7 @@ func TestMacroCodexStaged64MBLine(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
-	database, err := db.Open(filepath.Join(t.TempDir(), "macro.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "macro.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = database.Close() })
 	row := db.Session{
@@ -626,7 +624,7 @@ func TestMacroCodexStaged64MBLine(t *testing.T) {
 		MessageCount:     sess.MessageCount,
 		UserMessageCount: sess.UserMessageCount,
 	}
-	require.NoError(t, database.UpsertSession(row))
+	require.NoError(t, database.UpsertSession(t.Context(), row))
 	dbMsgs := toDBMessages(pendingWrite{
 		sess: *sess, msgs: msgs,
 	}, nil)
@@ -637,10 +635,9 @@ func TestMacroCodexStaged64MBLine(t *testing.T) {
 		func(verdicts map[string]bool) (
 			db.SessionSignalUpdate, []db.SecretFinding, error,
 		) {
-			update, findings :=
-				computeSignalsAndSecretsWithContentFailures(
-					row, dbMsgs, verdicts,
-				)
+			update, findings := computeSignalsAndSecretsWithContentFailures(
+				row, dbMsgs, verdicts,
+			)
 			combined := append(
 				append([]db.SecretFinding(nil), findings...),
 				staged.Findings(row.ID, positions)...,
@@ -671,7 +668,7 @@ func TestMacroCodexEngineTwoLargeStagedSources(t *testing.T) {
 	)
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {rootA, rootB},
 		},
@@ -734,7 +731,7 @@ func TestMacroCodexRealArchiveResyncColdSync(t *testing.T) {
 	require.NoError(t, out.Close())
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},
@@ -813,10 +810,10 @@ func TestMacroCodexRealArchiveColdSync(t *testing.T) {
 	require.NoError(t, out.Close())
 
 	dbPath := filepath.Join(t.TempDir(), "macro.db")
-	database, err := db.Open(dbPath)
+	database, err := db.Open(t.Context(), dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = database.Close() })
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {root},
 		},

@@ -47,8 +47,7 @@ var (
 func ComputeToolHealth(calls []ToolCallRow) ToolHealthSignals {
 	var s ToolHealthSignals
 
-	s.FailureSignalCount, s.ConsecutiveFailureMax =
-		countFailures(calls)
+	s.FailureSignalCount, s.ConsecutiveFailureMax = countFailures(calls)
 	s.RetryCount = countRetries(calls)
 	s.EditChurnCount = countEditChurn(calls)
 

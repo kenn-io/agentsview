@@ -475,7 +475,7 @@ func (b *copilotSessionBuilder) markUsageCoveredAt(occurredAt time.Time) {
 
 // loadCopilotStoreUsage reads the CLI's observed per-request token data when
 // available. Billing semantics for this undocumented store are not assumed.
-func loadCopilotStoreUsage(
+func loadCopilotStoreUsage(ctx context.Context,
 	storePath, rawSessionID string,
 ) ([]ParsedUsageEvent, error) {
 	if storePath == "" || rawSessionID == "" {
@@ -493,7 +493,7 @@ func loadCopilotStoreUsage(
 	}
 	defer store.Close()
 
-	rows, err := store.Query(`
+	rows, err := store.QueryContext(ctx, `
 		SELECT id, model, input_tokens, output_tokens, cache_read_tokens,
 		       cache_write_tokens, reasoning_tokens, created_at
 		FROM assistant_usage_events
@@ -504,7 +504,7 @@ func loadCopilotStoreUsage(
 		// Older stores need not contain usage data. Confirm a missing schema
 		// before falling back; operational read failures must remain retryable.
 		if sqliteErr, ok := errors.AsType[sqlite3.Error](err); ok && sqliteErr.Code == sqlite3.ErrError {
-			hasUsage, schemaErr := copilotStoreHasUsageSchema(context.Background(), store.QueryRowContext)
+			hasUsage, schemaErr := copilotStoreHasUsageSchema(ctx, store.QueryRowContext)
 			if schemaErr == nil && !hasUsage {
 				return nil, nil
 			}
@@ -613,13 +613,13 @@ func readCopilotWorkspaceName(eventsPath string) string {
 // file doesn't exist or contains no user/assistant messages. This is the
 // provider-owned parse entrypoint; the package-level free function was folded
 // onto the provider.
-func (p *copilotProvider) parseSession(
+func (p *copilotProvider) parseSession(ctx context.Context,
 	path, machine string,
 ) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
-	return p.parseSessionWithStore(path, machine, "")
+	return p.parseSessionWithStore(ctx, path, machine, "")
 }
 
-func (p *copilotProvider) parseSessionWithStore(
+func (p *copilotProvider) parseSessionWithStore(ctx context.Context,
 	path, machine, storePath string,
 ) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
 	info, err := os.Stat(path)
@@ -673,7 +673,7 @@ func (p *copilotProvider) parseSessionWithStore(
 	}
 	usesStoreUsage := false
 	if !b.startedAt.Before(copilotUsageBasedPricingStartedAt) {
-		storeUsage, err := loadCopilotStoreUsage(storePath, rawSessionID)
+		storeUsage, err := loadCopilotStoreUsage(ctx, storePath, rawSessionID)
 		if err != nil {
 			return nil, nil, nil, err
 		}

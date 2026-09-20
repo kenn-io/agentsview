@@ -242,10 +242,10 @@ func TestRecallExtractConfigValidate(t *testing.T) {
 
 func TestRecallExtractServerConfigAPIKeyEnv(t *testing.T) {
 	var server RecallExtractServerConfig
-	assert.Equal(t, "", server.APIKey(), "no env var configured")
+	assert.Empty(t, server.APIKey(), "no env var configured")
 
 	server.APIKeyEnv = "AGENTSVIEW_TEST_RECALL_API_KEY"
-	assert.Equal(t, "", server.APIKey(), "configured env var not set in environment")
+	assert.Empty(t, server.APIKey(), "configured env var not set in environment")
 
 	t.Setenv("AGENTSVIEW_TEST_RECALL_API_KEY", "secret-123")
 	assert.Equal(t, "secret-123", server.APIKey())
@@ -456,7 +456,7 @@ func TestRecallExtractConfigTOMLLoad(t *testing.T) {
 	assert.Equal(t, "qwen", extract.Prompts.Profile)
 	assert.Equal(t, "/etc/agentsview/prompts", extract.Prompts.Dir)
 	require.NotNil(t, extract.Request.Temperature)
-	assert.Equal(t, 0.2, *extract.Request.Temperature)
+	assert.InDelta(t, 0.2, *extract.Request.Temperature, 0)
 	kwargs, ok := extract.Request.ExtraBody["chat_template_kwargs"].(map[string]any)
 	require.True(t, ok, "extra_body nested tables decode as maps")
 	assert.Equal(t, false, kwargs["enable_thinking"])

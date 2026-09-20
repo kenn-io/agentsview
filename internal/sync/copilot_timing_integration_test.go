@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -26,16 +25,16 @@ func TestCopilotBlockedResultPreservesExecutionTiming(t *testing.T) {
 	require.NoError(t, os.WriteFile(eventsPath, []byte(initialEvents), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCopilot: {root},
 		},
 		Machine:                 "local",
 		BlockedResultCategories: []string{"Read", "Glob"},
 	})
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Synced)
-	beforeCompletion, err := database.GetMessages(context.Background(), "copilot:timing", 0, 100, true)
+	beforeCompletion, err := database.GetMessages(t.Context(), "copilot:timing", 0, 100, true)
 	require.NoError(t, err)
 	require.Len(t, beforeCompletion, 2)
 	require.Len(t, beforeCompletion[1].ToolCalls, 1)
@@ -52,10 +51,10 @@ func TestCopilotBlockedResultPreservesExecutionTiming(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, file.Close())
 
-	stats = engine.SyncAll(context.Background(), nil)
+	stats = engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Synced)
 
-	messages, err := database.GetMessages(context.Background(), "copilot:timing", 0, 100, true)
+	messages, err := database.GetMessages(t.Context(), "copilot:timing", 0, 100, true)
 	require.NoError(t, err)
 	require.Len(t, messages, 3)
 	require.Len(t, messages[1].ToolCalls, 1)
@@ -66,7 +65,7 @@ func TestCopilotBlockedResultPreservesExecutionTiming(t *testing.T) {
 	assert.Equal(t, "completed", call.ResultEvents[1].Status)
 	assert.Equal(t, "2026-04-26T10:00:04.825Z", call.ResultEvents[1].Timestamp)
 
-	timing, err := database.GetSessionTiming(context.Background(), "copilot:timing")
+	timing, err := database.GetSessionTiming(t.Context(), "copilot:timing")
 	require.NoError(t, err)
 	require.NotNil(t, timing)
 	require.Len(t, timing.Turns, 1)

@@ -38,20 +38,20 @@ func TestOpenCodeV2ToolFilesSurviveSync(t *testing.T) {
 			writer, err := sql.Open("sqlite3", filepath.Join(root, "opencode.db"))
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, writer.Close()) })
-			_, err = writer.Exec(string(schema))
+			_, err = writer.ExecContext(t.Context(), string(schema))
 			require.NoError(t, err)
-			_, err = writer.Exec(`INSERT INTO session_v2
+			_, err = writer.ExecContext(t.Context(), `INSERT INTO session_v2
  (id, project_id, slug, directory, version, time_created, time_updated, time_idle)
  SELECT 'ses_files', id, 'tool-files', '/workspace/project-a', '0.0.0-beta-19381',
  1700000000000, 1700000002000, 1700000002000 FROM project LIMIT 1`)
 			require.NoError(t, err)
-			_, err = writer.Exec(`INSERT INTO session_message VALUES
+			_, err = writer.ExecContext(t.Context(), `INSERT INTO session_message VALUES
  ('msg_files', 'ses_files', 'assistant', 1, 1700000000000, 1700000002000, ?)`, string(raw))
 			require.NoError(t, err)
 
 			database := dbtest.OpenTestDB(t)
 			database.SetToolResultImages(policy)
-			engine := syncengine.NewEngine(database, syncengine.EngineConfig{
+			engine := syncengine.NewEngine(t.Context(), database, syncengine.EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentOpenCode: {root}},
 				Machine:   "local", Ephemeral: true, ToolResultImages: policy,
 				DisableFilesystemProjectDiscovery: true,
@@ -83,7 +83,7 @@ func TestOpenCodeV2ToolFilesSurviveSync(t *testing.T) {
 						assert.Equal(t, imageURI, blocks[1]["image_url"])
 					} else {
 						assert.Equal(t, "agentsview_image", blocks[1]["type"])
-						assert.Equal(t, float64(68), blocks[1]["byte_size"])
+						assert.InDelta(t, 68, blocks[1]["byte_size"], 0)
 						assert.Equal(t, "plot.png", blocks[1]["name"])
 						assert.NotContains(t, stored, imageURI)
 					}

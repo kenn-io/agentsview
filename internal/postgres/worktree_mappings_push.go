@@ -42,7 +42,7 @@ func (s *Sync) syncWorktreeMappings(ctx context.Context, force bool) error {
 	}
 	state := s.effectiveSyncState()
 	stateKey := worktreeMappingPublicationStateKey + ":" + databaseGeneration
-	publishedValue, err := state.GetSyncState(stateKey)
+	publishedValue, err := state.GetSyncState(ctx, stateKey)
 	if err != nil {
 		return fmt.Errorf("reading mapping publication cursor: %w", err)
 	}
@@ -80,7 +80,7 @@ func (s *Sync) syncWorktreeMappings(ctx context.Context, force bool) error {
 	); err != nil {
 		return err
 	}
-	if err := state.SetSyncState(
+	if err := state.SetSyncState(ctx,
 		stateKey, strconv.FormatInt(revision, 10),
 	); err != nil {
 		return fmt.Errorf("advancing mapping publication cursor: %w", err)

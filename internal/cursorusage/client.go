@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -97,10 +98,10 @@ func (c *Client) ListUsageEvents(
 	ctx context.Context, q Query,
 ) (Page, error) {
 	if c == nil {
-		return Page{}, fmt.Errorf("nil client")
+		return Page{}, errors.New("nil client")
 	}
 	if strings.TrimSpace(c.APIKey) == "" {
-		return Page{}, fmt.Errorf("missing Cursor admin API key")
+		return Page{}, errors.New("missing Cursor admin API key")
 	}
 	if q.Page <= 0 {
 		q.Page = 1
@@ -312,7 +313,7 @@ func parseOptionalCents(value jsontext.Value) (money.Money, error) {
 func parseCursorTimestamp(raw string) (time.Time, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return time.Time{}, fmt.Errorf("empty timestamp")
+		return time.Time{}, errors.New("empty timestamp")
 	}
 	if ms, err := strconv.ParseInt(raw, 10, 64); err == nil {
 		return time.Unix(0, ms*int64(time.Millisecond)).UTC(), nil

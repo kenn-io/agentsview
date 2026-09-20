@@ -192,7 +192,7 @@ func (id vectorOwnerIdentity) owns(ownerMarker, machine string) bool {
 func (s *Sync) vectorOwnerIdentity(
 	ctx context.Context,
 ) (vectorOwnerIdentity, error) {
-	markerID, err := s.pushMarkerID()
+	markerID, err := s.pushMarkerID(ctx)
 	if err != nil {
 		return vectorOwnerIdentity{}, err
 	}
@@ -254,7 +254,7 @@ func (s *Sync) pushVectors(
 		return res, nil
 	}
 	if export == nil {
-		return res, fmt.Errorf("resolving local vector generation: BeginExport returned a nil export")
+		return res, errors.New("resolving local vector generation: BeginExport returned a nil export")
 	}
 	defer func() {
 		if export != nil {
@@ -273,7 +273,7 @@ func (s *Sync) pushVectors(
 		res.Skipped, res.SkippedReason = true, unavailable
 		return res, nil
 	}
-	witnessKey, err := s.vectorGenerationWitnessKey()
+	witnessKey, err := s.vectorGenerationWitnessKey(ctx)
 	if err != nil {
 		return res, err
 	}
@@ -357,9 +357,7 @@ func (s *Sync) pushVectors(
 			return res, nil
 		}
 		if export == nil {
-			return res, fmt.Errorf(
-				"rechecking local vector generation after scoped promotion: BeginExport returned a nil export",
-			)
+			return res, errors.New("rechecking local vector generation after scoped promotion: BeginExport returned a nil export")
 		}
 		gen = export.Generation()
 	}
@@ -515,7 +513,7 @@ func (s *Sync) lookupVectorGeneration(
 		`SELECT id, created_at FROM vector_generations WHERE fingerprint = $1`,
 		fingerprint,
 	).Scan(&genID, &createdAt)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return vectorGeneration{}, false, nil
 	}
 	if isUndefinedTable(err) {
@@ -910,8 +908,8 @@ SELECT EXISTS (
 	}, nil
 }
 
-func (s *Sync) vectorGenerationWitnessKey() (string, error) {
-	markerID, err := s.pushMarkerID()
+func (s *Sync) vectorGenerationWitnessKey(ctx context.Context) (string, error) {
+	markerID, err := s.pushMarkerID(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -1416,9 +1414,7 @@ func deleteOrphanVectorDocs(
 			" AND NOT EXISTS (SELECT 1 FROM %s c WHERE c.doc_key = d.doc_key)",
 			vectorChunkTable(id))
 	}
-	stmt := fmt.Sprintf(
-		`DELETE FROM vector_documents d WHERE d.session_id = $1%s`,
-		conds.String())
+	stmt := "DELETE FROM vector_documents d WHERE d.session_id = $1" + conds.String()
 	result, err := tx.ExecContext(ctx, stmt, sessionID)
 	if err != nil {
 		return 0, fmt.Errorf("pruning orphan docs for session %s: %w", sessionID, err)
@@ -1478,6 +1474,7 @@ func (s *Sync) clearUsageOnlyVectorSessions(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("listing usage-only vector sessions: %w", err)
 	}
+	defer rows.Close()
 	var ids []string
 	for rows.Next() {
 		var id string

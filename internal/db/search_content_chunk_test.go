@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"testing"
 
@@ -20,14 +19,15 @@ import (
 // filter-passing sessions.
 func TestSemanticAllowedSessionIDsOverSQLiteVarLimit(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	forceReaderVarLimit(t, d, 999)
 
 	// Guard: prove the lowered limit is live on the pool, so a setup that
 	// failed to constrain it cannot mask the regression checked below.
 	overLimitPh, overLimitArgs := inPlaceholders(make([]string, 1001))
-	_, probeErr := d.getReader().QueryContext(
-		ctx, "SELECT 1 WHERE '' IN "+overLimitPh, overLimitArgs...)
+	var probe int
+	probeErr := d.getReader().QueryRowContext(
+		ctx, "SELECT 1 WHERE '' IN "+overLimitPh, overLimitArgs...).Scan(&probe)
 	require.Error(t, probeErr, "reader variable limit was not constrained")
 
 	insertSession(t, d, "real-1", "proj")
@@ -54,12 +54,13 @@ func TestSemanticAllowedSessionIDsOverSQLiteVarLimit(t *testing.T) {
 // resolve exactly the hits with a real backing message/session row.
 func TestEnrichSemanticHitsOverSQLiteVarLimit(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	forceReaderVarLimit(t, d, 999)
 
 	overLimitPh, overLimitArgs := inPlaceholders(make([]string, 1001))
-	_, probeErr := d.getReader().QueryContext(
-		ctx, "SELECT 1 WHERE '' IN "+overLimitPh, overLimitArgs...)
+	var probe int
+	probeErr := d.getReader().QueryRowContext(
+		ctx, "SELECT 1 WHERE '' IN "+overLimitPh, overLimitArgs...).Scan(&probe)
 	require.Error(t, probeErr, "reader variable limit was not constrained")
 
 	insertSession(t, d, "real-sess", "proj")

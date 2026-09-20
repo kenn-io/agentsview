@@ -87,7 +87,7 @@ func (s *Server) humaScanSecrets(
 		stream, ok := newHumaSSEStream(hctx)
 		if !ok {
 			writeHumaJSON(hctx, http.StatusInternalServerError,
-				apiErrorResponse{Message: "streaming not supported"})
+				apiResponseError{Message: "streaming not supported"})
 			return
 		}
 		summary, err := s.sessions.ScanSecrets(ctx, service.SecretScanInput{

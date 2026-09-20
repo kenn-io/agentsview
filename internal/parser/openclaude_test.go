@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -14,11 +13,11 @@ import (
 
 func TestOpenClaudeProviderCapabilities(t *testing.T) {
 	caps := openClaudeProviderCapabilities()
-	require.True(t, caps.Source.DiscoverSources == CapabilitySupported)
-	require.True(t, caps.Source.WatchSources == CapabilitySupported)
-	require.True(t, caps.Source.ClassifyChangedPath == CapabilitySupported)
-	require.True(t, caps.Source.FindSource == CapabilitySupported)
-	require.True(t, caps.Source.ForceReplaceOnParse == CapabilitySupported)
+	require.Equal(t, CapabilitySupported, caps.Source.DiscoverSources)
+	require.Equal(t, CapabilitySupported, caps.Source.WatchSources)
+	require.Equal(t, CapabilitySupported, caps.Source.ClassifyChangedPath)
+	require.Equal(t, CapabilitySupported, caps.Source.FindSource)
+	require.Equal(t, CapabilitySupported, caps.Source.ForceReplaceOnParse)
 
 	def, ok := AgentByType(AgentOpenClaude)
 	require.True(t, ok, "AgentOpenClaude missing from Registry")
@@ -101,20 +100,20 @@ func TestOpenClaudeDiscoverParseAndFindSource(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, path, discovered[0].Key)
 	assert.Equal(t, "my-project", discovered[0].ProjectHint)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "openclaude:session-123",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, path, found.Key)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      discovered[0],
 		Fingerprint: SourceFingerprint{Hash: "hash-123"},
 		Machine:     "devbox",
@@ -187,11 +186,11 @@ func TestOpenClaudeTerminationUsesSystemToolResults(t *testing.T) {
 
 	provider, ok := NewProvider(AgentOpenClaude, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: discovered[0]})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: discovered[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0].Result
@@ -236,11 +235,11 @@ func TestOpenClaudeTerminationCompactBoundaryDoesNotResolveToolCall(t *testing.T
 
 	provider, ok := NewProvider(AgentOpenClaude, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{Source: discovered[0]})
+	outcome, err := provider.Parse(t.Context(), ParseRequest{Source: discovered[0]})
 	require.NoError(t, err)
 	require.Len(t, outcome.Results, 1)
 	result := outcome.Results[0].Result
@@ -338,11 +337,11 @@ func TestOpenClaudeQueuedCommandAttachment(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: discovered[0],
 	})
 	require.NoError(t, err)
@@ -416,11 +415,11 @@ func TestOpenClaudeSkipsMetaUserMessages(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: discovered[0],
 	})
 	require.NoError(t, err)
@@ -477,11 +476,11 @@ func TestOpenClaudeDiscoverParseSubagentRelationship(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  discovered[0],
 		Machine: "devbox",
 	})
@@ -538,10 +537,10 @@ func TestOpenClaudeDiscoverEachFollowsSymlinkedProjectDirectory(t *testing.T) {
 		Roots: []string{root},
 	})
 	require.True(t, ok)
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
-	require.ElementsMatch(
-		t, []string{linkedPath, regularPath}, sourceDisplayPaths(discovered),
+	require.ElementsMatch(t,
+		[]string{linkedPath, regularPath}, sourceDisplayPaths(discovered),
 	)
 
 	streamed, err := openClaudeDiscoverEach(t, root)
@@ -578,9 +577,9 @@ func TestOpenClaudeStreamingDiscoveryPropagatesProjectSymlinkErrors(
 		yielded, err := openClaudeDiscoverEach(t, root)
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, os.ErrNotExist)
+		require.ErrorIs(t, err, os.ErrNotExist)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(t, err, &incomplete)
+		require.ErrorAs(t, err, &incomplete)
 		// The walker records the failure and continues with healthy siblings.
 		assert.Equal(t, []string{healthyPath(root)}, yielded)
 
@@ -613,9 +612,9 @@ func TestOpenClaudeStreamingDiscoveryPropagatesProjectSymlinkErrors(
 		yielded, err := openClaudeDiscoverEach(t, root)
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, os.ErrPermission)
+		require.ErrorIs(t, err, os.ErrPermission)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(t, err, &incomplete)
+		require.ErrorAs(t, err, &incomplete)
 		assert.Equal(t, []string{healthyPath(root)}, yielded)
 
 		require.NoError(t, os.Chmod(targetParent, 0o755))

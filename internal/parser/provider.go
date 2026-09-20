@@ -209,9 +209,9 @@ type ReconciliationSourceState struct {
 // A provider may ignore state when source resolution promotes a candidate to a
 // different representation, such as a storage shadow.
 type ReconciliationSourceStateProvider interface {
-	ReconciliationSourceState(SourceRef) (ReconciliationSourceState, bool)
+	ReconciliationSourceState(context.Context, SourceRef) (ReconciliationSourceState, bool)
 	ApplyReconciliationSourceState(
-		*SourceRef, ReconciliationSourceState,
+		context.Context, *SourceRef, ReconciliationSourceState,
 	) error
 }
 
@@ -1128,9 +1128,7 @@ const (
 // appended tail and the caller must fall back to a full parse that
 // replaces stored rows. It is provider-agnostic; parser-internal
 // fallbacks (Claude, Codex) are mapped to it at the provider seam.
-var ErrIncrementalNeedsFullParse = fmt.Errorf(
-	"incremental parse: appended lines require a replacing full parse",
-)
+var ErrIncrementalNeedsFullParse = errors.New("incremental parse: appended lines require a replacing full parse")
 
 // ProviderFactories returns one provider factory for every registered agent.
 func ProviderFactories() []ProviderFactory {

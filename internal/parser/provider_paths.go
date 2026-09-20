@@ -25,11 +25,11 @@ func cloneMetadataDirs(dirs map[string][]string) map[string][]string {
 	if dirs == nil {
 		return nil
 	}
-	copy := make(map[string][]string, len(dirs))
+	copied := make(map[string][]string, len(dirs))
 	for root, list := range dirs {
-		copy[root] = append([]string(nil), list...)
+		copied[root] = append([]string(nil), list...)
 	}
-	return copy
+	return copied
 }
 
 type configuredProviderFactory struct {

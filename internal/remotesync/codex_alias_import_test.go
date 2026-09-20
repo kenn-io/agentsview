@@ -56,7 +56,7 @@ func TestRemoteCodexAliasTitleSurvivesArchiveImport(t *testing.T) {
 	var request ArchiveRequest
 	require.NoError(t, json.Unmarshal(requestJSON, &request))
 	targets = request.TargetSet
-	manifest, err := BuildManifest(targets)
+	manifest, err := BuildManifest(t.Context(), targets)
 	require.NoError(t, err)
 	var paths []string
 	for _, entry := range manifest.Files {
@@ -68,11 +68,11 @@ func TestRemoteCodexAliasTitleSurvivesArchiveImport(t *testing.T) {
 	selected, ok := SelectAllowedTargets(targets, dirScoped)
 	require.True(t, ok)
 	var archive bytes.Buffer
-	require.NoError(t, WriteArchive(&archive, selected))
+	require.NoError(t, WriteArchive(t.Context(), &archive, selected))
 	extracted := t.TempDir()
 	_, err = ExtractTarStream(t.Context(), &archive, extracted)
 	require.NoError(t, err)
-	database, err := db.Open(filepath.Join(t.TempDir(), "archive.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "archive.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	localProvider, ok := parser.NewProvider(parser.AgentCodex, parser.ProviderConfig{
@@ -107,7 +107,6 @@ func TestRemoteCodexAliasTitleSurvivesArchiveImport(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Nil(t, session.SessionName)
-
 }
 
 func TestHTTPMirrorCodexIndexRemoval(t *testing.T) {

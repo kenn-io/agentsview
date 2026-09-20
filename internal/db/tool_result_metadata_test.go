@@ -30,7 +30,7 @@ func TestLateResultBatchWithinSQLiteVariableLimit(t *testing.T) {
 	for i := range events {
 		events[i] = ToolResultEvent{Content: fmt.Sprintf("result %d", i), Source: "function_call_output"}
 	}
-	_, err = d.WriteSessionIncremental("s1", nil, IncrementalSessionUpdate{
+	_, err = d.WriteSessionIncremental(t.Context(), "s1", nil, IncrementalSessionUpdate{
 		MsgCount: 1, NextOrdinal: 1,
 		ToolCallResultUpdates: []ToolCallResultUpdate{{
 			ToolUseID: "call", Position: ToolCallPosition{}, Events: events,
@@ -45,7 +45,7 @@ func TestLateResultBatchWithinSQLiteVariableLimit(t *testing.T) {
 	assert.Len(t, call.ResultEvents, 350)
 	assert.Equal(t, "result 349", call.ResultContent)
 	var first, latest int
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `
 		SELECT first_event_index, latest_event_index
 		FROM tool_call_occurrence_agent_state
 		WHERE session_id = 's1' AND message_ordinal = 0 AND call_index = 0 AND agent_id = ''`,
@@ -77,7 +77,7 @@ func TestLateResultAgentBackfillWithinSQLiteVariableLimit(t *testing.T) {
 	}))
 	require.NoError(t, conn.Close())
 
-	_, err = d.WriteSessionIncremental("s1", nil, IncrementalSessionUpdate{
+	_, err = d.WriteSessionIncremental(t.Context(), "s1", nil, IncrementalSessionUpdate{
 		MsgCount: 1, NextOrdinal: 1,
 		ToolCallResultUpdates: []ToolCallResultUpdate{{
 			ToolUseID: "call", Position: ToolCallPosition{},
@@ -93,12 +93,12 @@ func TestLateResultAgentBackfillWithinSQLiteVariableLimit(t *testing.T) {
 	assert.Len(t, call.ResultEvents, 351)
 	assert.Contains(t, call.ResultContent, "agent-000:\nupdated\n\nagent-001:\noriginal")
 	var first, latest, participants int
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `
 		SELECT first_event_index, latest_event_index
 		FROM tool_call_occurrence_agent_state
 		WHERE session_id = 's1' AND message_ordinal = 0 AND call_index = 0 AND agent_id = 'agent-000'`,
 	).Scan(&first, &latest))
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `
 		SELECT COUNT(*) FROM tool_call_occurrence_agent_state WHERE session_id = 's1'`,
 	).Scan(&participants))
 	assert.Equal(t, 0, first)
@@ -125,12 +125,13 @@ func TestWriteSessionIncrementalPreservesRawResultContract(t *testing.T) {
 			insertSession(t, d, "s1", "proj")
 			insertMessages(t, d, Message{
 				SessionID: "s1", Ordinal: 0, Role: "assistant",
-				HasToolUse: true, ToolCalls: []ToolCall{{SessionID: "s1",
-					ToolName: "exec_command", Category: "Bash", ToolUseID: "call",
+				HasToolUse: true, ToolCalls: []ToolCall{{
+					SessionID: "s1",
+					ToolName:  "exec_command", Category: "Bash", ToolUseID: "call",
 				}},
 			})
 			for _, content := range tt.contents {
-				_, err := d.WriteSessionIncremental("s1", nil, IncrementalSessionUpdate{
+				_, err := d.WriteSessionIncremental(t.Context(), "s1", nil, IncrementalSessionUpdate{
 					MsgCount: 1, NextOrdinal: 1,
 					BlockedResultCategories: map[string]bool{"Bash": tt.blocked},
 					ToolCallResultUpdates: []ToolCallResultUpdate{{
@@ -157,12 +158,13 @@ func TestLateResultKeepsRawAnonymousParticipation(t *testing.T) {
 	insertSession(t, d, "s1", "proj")
 	insertMessages(t, d, Message{
 		SessionID: "s1", Ordinal: 0, Role: "assistant",
-		HasToolUse: true, ToolCalls: []ToolCall{{SessionID: "s1",
-			ToolName: "exec_command", Category: "Bash", ToolUseID: "call",
+		HasToolUse: true, ToolCalls: []ToolCall{{
+			SessionID: "s1",
+			ToolName:  "exec_command", Category: "Bash", ToolUseID: "call",
 		}},
 	})
 	for _, event := range []ToolResultEvent{{AgentID: "a", Content: "named"}, {Content: "\x01"}} {
-		_, err := d.WriteSessionIncremental("s1", nil, IncrementalSessionUpdate{
+		_, err := d.WriteSessionIncremental(t.Context(), "s1", nil, IncrementalSessionUpdate{
 			MsgCount: 1, NextOrdinal: 1,
 			ToolCallResultUpdates: []ToolCallResultUpdate{{
 				ToolUseID: "call", Position: ToolCallPosition{},
@@ -184,8 +186,9 @@ func TestLateResultRequiresMetadataForArchivedEvents(t *testing.T) {
 	insertSession(t, d, "s1", "proj")
 	insertMessages(t, d, Message{
 		SessionID: "s1", Ordinal: 0, Role: "assistant",
-		HasToolUse: true, ToolCalls: []ToolCall{{SessionID: "s1",
-			ToolName: "exec_command", Category: "Bash", ToolUseID: "call",
+		HasToolUse: true, ToolCalls: []ToolCall{{
+			SessionID: "s1",
+			ToolName:  "exec_command", Category: "Bash", ToolUseID: "call",
 			ResultContent: "old",
 			ResultEvents:  []ToolResultEvent{{ToolUseID: "call", Content: "old", ContentLength: 3}},
 		}},
@@ -196,7 +199,7 @@ func TestLateResultRequiresMetadataForArchivedEvents(t *testing.T) {
 	missing, err = d.HasMissingToolResultMetadata(t.Context(), "s1", []ToolCallPosition{{MessageOrdinal: 1}})
 	require.NoError(t, err)
 	assert.False(t, missing, "other call occurrences do not force a reparse")
-	_, err = d.WriteSessionIncremental("s1", nil, IncrementalSessionUpdate{
+	_, err = d.WriteSessionIncremental(t.Context(), "s1", nil, IncrementalSessionUpdate{
 		MsgCount: 1, NextOrdinal: 1,
 		ToolCallResultUpdates: []ToolCallResultUpdate{{
 			ToolUseID: "call", Position: ToolCallPosition{},
@@ -217,13 +220,14 @@ func TestLateResultIdentitySurvivesTranscriptReplacement(t *testing.T) {
 	insertSession(t, d, "s1", "proj")
 	event := ToolResultEvent{ToolUseID: "call", Content: "x\x01", ContentLength: 2}
 	PrepareToolResultEvent(&event)
-	call := ToolCall{SessionID: "s1",
-		ToolName: "exec_command", Category: "Bash", ToolUseID: "call",
+	call := ToolCall{
+		SessionID: "s1",
+		ToolName:  "exec_command", Category: "Bash", ToolUseID: "call",
 		ResultContent: "x\x01", ResultContentLength: 2,
 		ResultEvents: []ToolResultEvent{event},
 	}
 	SanitizeToolCall(&call)
-	require.NoError(t, d.ReplaceSessionContent("s1", []Message{{
+	require.NoError(t, d.ReplaceSessionContent(t.Context(), "s1", []Message{{
 		SessionID: "s1", Ordinal: 0, Role: "assistant",
 		HasToolUse: true, ToolCalls: []ToolCall{call},
 	}}, SessionSignalUpdate{}, nil))
@@ -232,14 +236,14 @@ func TestLateResultIdentitySurvivesTranscriptReplacement(t *testing.T) {
 	assert.False(t, missing, "known raw metadata allows incremental append")
 	msgs, err := d.GetAllMessages(t.Context(), "s1")
 	require.NoError(t, err)
-	rev, err := d.TranscriptRevision("s1")
+	rev, err := d.TranscriptRevision(t.Context(), "s1")
 	require.NoError(t, err)
-	require.NoError(t, d.ReplaceSessionContent("s1", msgs, SessionSignalUpdate{}, nil))
-	after, err := d.TranscriptRevision("s1")
+	require.NoError(t, d.ReplaceSessionContent(t.Context(), "s1", msgs, SessionSignalUpdate{}, nil))
+	after, err := d.TranscriptRevision(t.Context(), "s1")
 	require.NoError(t, err)
 	assert.Equal(t, rev, after, "replacing the same stored transcript preserves revision")
 	for _, content := range []string{"x\x02", "x\x01"} {
-		_, err = d.WriteSessionIncremental("s1", nil, IncrementalSessionUpdate{
+		_, err = d.WriteSessionIncremental(t.Context(), "s1", nil, IncrementalSessionUpdate{
 			MsgCount: 1, NextOrdinal: 1,
 			ToolCallResultUpdates: []ToolCallResultUpdate{{
 				ToolUseID: "call", Position: ToolCallPosition{},

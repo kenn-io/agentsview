@@ -1451,7 +1451,6 @@
   "recall_page_generation_retire_message": "要停用 {model}（{fingerprint}）嗎？其自動項目將維持封存狀態。",
   "recall_page_generation_action_error": "無法更新擷取代次：{error}",
   "session_vitals_title": "分析",
-  "session_vitals_subtitle": "對話指標",
   "session_vitals_close": "關閉對話分析",
   "session_vitals_resize": "調整對話分析面板大小",
   "session_vitals_session": "對話",

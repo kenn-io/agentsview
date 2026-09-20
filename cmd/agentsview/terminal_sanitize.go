@@ -58,7 +58,7 @@ func sanitizeTerminal(s string) string {
 // UTF-8 range pass in sanitizeTerminal handles rune boundaries.
 // Keep the preserved set here in sync with sanitizeTerminal.
 func hasControlBytes(s string) bool {
-	for i := 0; i < len(s); i++ {
+	for i := range len(s) {
 		c := s[i]
 		switch {
 		case c == '\n' || c == '\t':

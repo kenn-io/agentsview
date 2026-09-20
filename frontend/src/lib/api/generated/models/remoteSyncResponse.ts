@@ -6,6 +6,7 @@ import type { SyncSyncStats } from "./syncSyncStats.ts";
 
 export interface RemoteSyncResponse {
   error?: string;
+  error_code?: string;
   failures?: RemoteSyncFailure[];
   local_stats?: SyncSyncStats;
 }

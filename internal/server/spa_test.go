@@ -32,7 +32,7 @@ func newSPATestServer(t *testing.T, opts ...Option) *Server {
 func TestSPAIndexRequiresRevalidation(t *testing.T) {
 	s := newSPATestServer(t)
 
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, req)
 
@@ -44,7 +44,7 @@ func TestSPAIndexRequiresRevalidation(t *testing.T) {
 func TestSPAFingerprintedAssetIsImmutable(t *testing.T) {
 	s := newSPATestServer(t)
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodGet, "/assets/index-abc123.js", nil,
 	)
 	w := httptest.NewRecorder()
@@ -59,7 +59,7 @@ func TestSPAFingerprintedAssetIsImmutable(t *testing.T) {
 func TestSPAMissingAssetReturnsNotFound(t *testing.T) {
 	s := newSPATestServer(t)
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodGet, "/assets/obsolete.js", nil,
 	)
 	w := httptest.NewRecorder()
@@ -72,7 +72,7 @@ func TestSPAMissingAssetReturnsNotFound(t *testing.T) {
 func TestSPAClientRouteFallsBackToRevalidatedIndex(t *testing.T) {
 	s := newSPATestServer(t, WithBasePath("/viewer"))
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodGet, "/viewer/sessions/example", nil,
 	)
 	w := httptest.NewRecorder()

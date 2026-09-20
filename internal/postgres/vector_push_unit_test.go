@@ -53,7 +53,7 @@ func (notReadyVectorSource) BeginExport(
 func TestPushVectorsSkipsWhenSourceNotReady(t *testing.T) {
 	sync := &Sync{vectorSource: notReadyVectorSource{}}
 
-	res, err := sync.pushVectors(context.Background(), false, nil, 0, nil, nil)
+	res, err := sync.pushVectors(t.Context(), false, nil, 0, nil, nil)
 
 	require.NoError(t, err)
 	assert.True(t, res.Skipped)
@@ -66,7 +66,7 @@ func TestPushVectorsSkipsWhenSourceNotReady(t *testing.T) {
 type spyVectorSource struct{ t *testing.T }
 
 func (s spyVectorSource) BeginExport(context.Context, []string) (VectorExport, bool, error) {
-	s.t.Fatal("BeginExport must not be called for an empty scope")
+	require.FailNow(s.t, "BeginExport must not be called for an empty scope")
 	return nil, false, nil
 }
 
@@ -78,7 +78,7 @@ func TestPushVectorsEmptyScopeReadsNothing(t *testing.T) {
 	sync := &Sync{vectorSource: spyVectorSource{t: t}}
 
 	res, err := sync.pushVectors(
-		context.Background(), false, []string{}, 0, nil, nil,
+		t.Context(), false, []string{}, 0, nil, nil,
 	)
 
 	require.NoError(t, err)

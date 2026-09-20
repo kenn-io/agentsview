@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"os"
@@ -39,7 +38,7 @@ func parseVibeTestSession(t *testing.T, path string, fileInfo FileInfo) (ParseRe
 func discoverVibeTestSessions(t *testing.T, root string) []DiscoveredFile {
 	t.Helper()
 	provider := newVibeTestProvider(t, root)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	if len(sources) == 0 {
 		return nil
@@ -73,11 +72,11 @@ func TestDiscoverVibeSessions(t *testing.T) {
 
 	// Create invalid directory (no messages.jsonl)
 	invalidDir := filepath.Join(tmpDir, "session_invalid")
-	require.NoError(t, os.MkdirAll(invalidDir, 0755))
+	require.NoError(t, os.MkdirAll(invalidDir, 0o755))
 
 	// Create directory without session prefix
 	otherDir := filepath.Join(tmpDir, "other_dir")
-	require.NoError(t, os.MkdirAll(otherDir, 0755))
+	require.NoError(t, os.MkdirAll(otherDir, 0o755))
 
 	// Run discovery
 	discovered := discoverVibeTestSessions(t, tmpDir)
@@ -101,7 +100,7 @@ func TestDiscoverVibeSessionsMultiple(t *testing.T) {
 
 	// Create a directory without messages.jsonl
 	invalidDir := filepath.Join(tmpDir, "session_20260613_130000_ddd")
-	require.NoError(t, os.MkdirAll(invalidDir, 0755))
+	require.NoError(t, os.MkdirAll(invalidDir, 0o755))
 
 	// Run discovery
 	discovered := discoverVibeTestSessions(t, tmpDir)
@@ -123,7 +122,7 @@ func TestDiscoverVibeSessionsEmptyDir(t *testing.T) {
 	files := discoverVibeTestSessions(t, tmpDir)
 
 	// Should return empty slice
-	assert.Len(t, files, 0)
+	assert.Empty(t, files)
 }
 
 func TestDiscoverVibeSessionsNonExistentDir(t *testing.T) {
@@ -131,7 +130,7 @@ func TestDiscoverVibeSessionsNonExistentDir(t *testing.T) {
 	files := discoverVibeTestSessions(t, "/nonexistent/path")
 
 	// Should return empty slice without error
-	assert.Len(t, files, 0)
+	assert.Empty(t, files)
 }
 
 func TestFindVibeSourceFile(t *testing.T) {
@@ -191,11 +190,11 @@ func TestParseVibeSession(t *testing.T) {
 	// Verify session metadata
 	assert.Equal(t, AgentVibe, result.Session.Agent)
 	assert.NotEmpty(t, result.Session.ID)
-	assert.True(t, len(result.Session.ID) > 0)
+	assert.NotEmpty(t, result.Session.ID)
 
 	// Verify messages
 	require.NotEmpty(t, result.Messages)
-	assert.Equal(t, 5, len(result.Messages))
+	assert.Len(t, result.Messages, 5)
 
 	// Verify first message is user
 	assert.Equal(t, RoleUser, result.Messages[0].Role)
@@ -231,8 +230,8 @@ func TestParseVibeSession(t *testing.T) {
 	assert.Equal(t, 0, usageEvent.CacheReadInputTokens)
 	assert.Equal(t, 0, usageEvent.ReasoningTokens)
 	assert.Nil(t, usageEvent.Cost)
-	assert.Equal(t, "", usageEvent.CostStatus)
-	assert.Equal(t, "", usageEvent.CostSource)
+	assert.Empty(t, usageEvent.CostStatus)
+	assert.Empty(t, usageEvent.CostSource)
 	assert.Equal(t, "session:vibe:abc123def-0000-0000-0000-000000000000", usageEvent.DedupKey)
 }
 
@@ -248,14 +247,14 @@ func TestParseVibeSessionWithTools(t *testing.T) {
 
 	// Verify messages
 	require.NotEmpty(t, result.Messages)
-	assert.Equal(t, 4, len(result.Messages))
+	assert.Len(t, result.Messages, 4)
 
 	// Verify tool calls were parsed
 	hasToolCalls := false
 	for _, msg := range result.Messages {
 		if len(msg.ToolCalls) > 0 {
 			hasToolCalls = true
-			assert.Equal(t, 1, len(msg.ToolCalls))
+			assert.Len(t, msg.ToolCalls, 1)
 			assert.Equal(t, "call_001", msg.ToolCalls[0].ToolUseID)
 			assert.Equal(t, "read_file", msg.ToolCalls[0].ToolName)
 			assert.Equal(t, "Read", msg.ToolCalls[0].Category)
@@ -272,15 +271,15 @@ func TestParseVibeSessionWithTools(t *testing.T) {
 		if len(msg.ToolResults) > 0 {
 			hasToolResults = true
 			assert.Equal(t, RoleUser, msg.Role)
-			assert.Equal(t, "", msg.Content)
-			assert.Equal(t, 1, len(msg.ToolResults))
+			assert.Empty(t, msg.Content)
+			assert.Len(t, msg.ToolResults, 1)
 			assert.Equal(t, "call_001", msg.ToolResults[0].ToolUseID)
 
 			// ContentRaw must be valid JSON (a quoted string) so
 			// DecodeContent can surface the plain-text tool output.
 			var decoded string
-			require.NoError(
-				t, json.Unmarshal(
+			require.NoError(t,
+				json.Unmarshal(
 					[]byte(msg.ToolResults[0].ContentRaw), &decoded,
 				),
 			)
@@ -291,8 +290,8 @@ func TestParseVibeSessionWithTools(t *testing.T) {
 	assert.True(t, hasToolResults, "Expected tool results to be linked")
 
 	for _, msg := range result.Messages {
-		assert.NotEqual(
-			t, RoleType("tool"), msg.Role,
+		assert.NotEqual(t,
+			RoleType("tool"), msg.Role,
 			"raw tool-result records must not appear as standalone messages",
 		)
 	}
@@ -309,7 +308,7 @@ func TestParseVibeSessionEmpty(t *testing.T) {
 	require.NoError(t, err)
 
 	// Empty file should have no messages
-	assert.Len(t, result.Messages, 0)
+	assert.Empty(t, result.Messages)
 	assert.Equal(t, 0, result.Session.MessageCount)
 }
 
@@ -751,11 +750,11 @@ func TestParseRealVibeSession(t *testing.T) {
 	// Verify basic session metadata
 	assert.Equal(t, AgentVibe, result.Session.Agent)
 	assert.NotEmpty(t, result.Session.ID)
-	assert.True(t, len(result.Session.ID) > 0)
+	assert.NotEmpty(t, result.Session.ID)
 
 	// Should have parsed messages
 	require.NotEmpty(t, result.Messages)
-	assert.Greater(t, len(result.Messages), 0)
+	assert.NotEmpty(t, result.Messages)
 
 	// Verify timestamps from meta.json
 	assert.False(t, result.Session.StartedAt.IsZero())

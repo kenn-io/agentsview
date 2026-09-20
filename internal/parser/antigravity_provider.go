@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -85,7 +86,7 @@ func (p *antigravityProvider) Parse(
 	}
 	src, ok := p.sources.sourceFromRef(req.Source)
 	if !ok {
-		return ParseOutcome{}, fmt.Errorf("antigravity source path unavailable")
+		return ParseOutcome{}, errors.New("antigravity source path unavailable")
 	}
 	if _, err := os.Stat(src.Path); err != nil {
 		if os.IsNotExist(err) {
@@ -98,7 +99,7 @@ func (p *antigravityProvider) Parse(
 		return ParseOutcome{}, fmt.Errorf("stat %s: %w", src.Path, err)
 	}
 	machine := firstNonEmptyJSONLString(req.Machine, p.Config.Machine)
-	sess, msgs, usageEvents, err := p.parseSession(
+	sess, msgs, usageEvents, err := p.parseSession(ctx,
 		src.Path,
 		req.Source.ProjectHint,
 		machine,
@@ -331,7 +332,7 @@ func (s antigravitySourceSet) Fingerprint(
 	}
 	src, ok := s.sourceFromRef(source)
 	if !ok {
-		return SourceFingerprint{}, fmt.Errorf("antigravity source path unavailable")
+		return SourceFingerprint{}, errors.New("antigravity source path unavailable")
 	}
 	key := firstNonEmptyJSONLString(source.FingerprintKey, source.Key, src.Path)
 	info, err := AntigravityFileInfo(src.Path)

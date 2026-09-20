@@ -466,10 +466,10 @@ var mirrorTables = []tableSpec{
 	{
 		name: "genai_pricing",
 		create: `CREATE TABLE IF NOT EXISTS genai_pricing (
-			singleton SMALLINT PRIMARY KEY CHECK (singleton = 1),
+			singleton SMALLINT PRIMARY KEY,
 			version TEXT NOT NULL,
 			source_ref TEXT NOT NULL DEFAULT '',
-			source TEXT NOT NULL CHECK (source IN ('embedded', 'fetched')),
+			source TEXT NOT NULL,
 			data_json BLOB NOT NULL,
 			updated_at TEXT NOT NULL DEFAULT ''
 		)`,

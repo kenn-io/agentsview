@@ -13,14 +13,18 @@ import (
 func TestScanSecretsFromMessages(t *testing.T) {
 	sess := db.Session{ID: "s1"}
 	msgs := []db.Message{
-		{SessionID: "s1", Ordinal: 0, Role: "user",
-			Content: "my key AKIA7QHWN2DKR4FYPLJM here"},
-		{SessionID: "s1", Ordinal: 1, Role: "assistant", Content: "running",
+		{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "my key AKIA7QHWN2DKR4FYPLJM here",
+		},
+		{
+			SessionID: "s1", Ordinal: 1, Role: "assistant", Content: "running",
 			ToolCalls: []db.ToolCall{{
 				ToolName: "Bash", ToolUseID: "tu1",
 				InputJSON:     `{"command":"printenv"}`,
 				ResultContent: "AWS_SECRET=sk-ant-api03-Xa9Kd03Lm5Qp7Rt2Vw8Zb4",
-			}}},
+			}},
+		},
 	}
 	findings, leak := scanSecretsFromMessages(sess, msgs, secrets.Scan)
 	require.GreaterOrEqual(t, leak, 1, "expected >=1 definite finding, got leak=%d", leak)
@@ -121,15 +125,17 @@ func TestComputeSignalsAndSecretsDefiniteOnly(t *testing.T) {
 // a no-op).
 func TestInlineScanThenBackfillStoresCandidates(t *testing.T) {
 	fx := newEngineFixture(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const id = "s1"
-	require.NoError(t, fx.db.UpsertSession(db.Session{
+	require.NoError(t, fx.db.UpsertSession(ctx, db.Session{
 		ID: id, Project: "proj", Machine: "m", Agent: "claude",
 		MessageCount: 1, UserMessageCount: 1,
 	}))
-	require.NoError(t, fx.db.ReplaceSessionMessages(id, []db.Message{
-		{SessionID: id, Ordinal: 0, Role: "user",
-			Content: "aws AKIA7QHWN2DKR4FYPLJM and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6"},
+	require.NoError(t, fx.db.ReplaceSessionMessages(ctx, id, []db.Message{
+		{
+			SessionID: id, Ordinal: 0, Role: "user",
+			Content: "aws AKIA7QHWN2DKR4FYPLJM and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6",
+		},
 	}))
 
 	// Inline sync path: definite-only findings, definite version.
@@ -158,40 +164,42 @@ func TestInlineScanThenBackfillStoresCandidates(t *testing.T) {
 // WithSecrets semantic (sessions with ≥1 definite finding).
 func TestScanSecretsBreakdown(t *testing.T) {
 	fx := newEngineFixture(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const id = "s1"
-	if err := fx.db.UpsertSession(db.Session{
+	if err := fx.db.UpsertSession(ctx, db.Session{
 		ID: id, Project: "proj", Machine: "m", Agent: "claude",
 		MessageCount: 1, UserMessageCount: 1,
 	}); err != nil {
-		t.Fatalf("UpsertSession: %v", err)
+		require.FailNowf(t, "test failed", "UpsertSession: %v", err)
 	}
 	// One message containing both a definite AWS key and a candidate
 	// high-entropy assignment.
-	if err := fx.db.ReplaceSessionMessages(id, []db.Message{
-		{SessionID: id, Ordinal: 0, Role: "user",
-			Content: "aws AKIA7QHWN2DKR4FYPLJM and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6"},
+	if err := fx.db.ReplaceSessionMessages(ctx, id, []db.Message{
+		{
+			SessionID: id, Ordinal: 0, Role: "user",
+			Content: "aws AKIA7QHWN2DKR4FYPLJM and SECRET=Xa9Kd03Lm5Qp7Rt2Vw8Zb4Nc6",
+		},
 	}); err != nil {
-		t.Fatalf("ReplaceSessionMessages: %v", err)
+		require.FailNowf(t, "test failed", "ReplaceSessionMessages: %v", err)
 	}
 	sum, err := fx.engine.ScanSecrets(ctx, SecretScanInput{Backfill: true}, nil)
 	if err != nil {
-		t.Fatalf("ScanSecrets: %v", err)
+		require.FailNowf(t, "test failed", "ScanSecrets: %v", err)
 	}
 	if sum.Scanned != 1 {
-		t.Fatalf("Scanned = %d, want 1", sum.Scanned)
+		require.FailNowf(t, "test failed", "Scanned = %d, want 1", sum.Scanned)
 	}
 	if sum.DefiniteFindings != 1 {
-		t.Errorf("DefiniteFindings = %d, want 1", sum.DefiniteFindings)
+		assert.Failf(t, "test failed", "DefiniteFindings = %d, want 1", sum.DefiniteFindings)
 	}
 	if sum.CandidateFindings != 1 {
-		t.Errorf("CandidateFindings = %d, want 1", sum.CandidateFindings)
+		assert.Failf(t, "test failed", "CandidateFindings = %d, want 1", sum.CandidateFindings)
 	}
 	if sum.TotalFindings != 2 {
-		t.Errorf("TotalFindings = %d, want 2", sum.TotalFindings)
+		assert.Failf(t, "test failed", "TotalFindings = %d, want 2", sum.TotalFindings)
 	}
 	if sum.WithSecrets != 1 {
-		t.Errorf("WithSecrets = %d, want 1 (session has ≥1 definite finding)", sum.WithSecrets)
+		assert.Failf(t, "test failed", "WithSecrets = %d, want 1 (session has ≥1 definite finding)", sum.WithSecrets)
 	}
 }
 
@@ -204,14 +212,18 @@ func TestScanSecretsBreakdown(t *testing.T) {
 func TestScanSecretsFromMessagesStampsRulesVersion(t *testing.T) {
 	sess := db.Session{ID: "s1"}
 	msgs := []db.Message{
-		{SessionID: "s1", Ordinal: 0, Role: "user",
-			Content: "AKIA7QHWN2DKR4FYPLJM"},
-		{SessionID: "s1", Ordinal: 1, Role: "assistant",
+		{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "AKIA7QHWN2DKR4FYPLJM",
+		},
+		{
+			SessionID: "s1", Ordinal: 1, Role: "assistant",
 			ToolCalls: []db.ToolCall{{
 				ToolName: "Bash", ToolUseID: "tu1",
 				InputJSON:     `{"command":"x"}`,
 				ResultContent: "AKIA7QHWN2DKR4FYPLJM",
-			}}},
+			}},
+		},
 	}
 	findings, _ := scanSecretsFromMessages(
 		sess, msgs, secrets.ScanDefinite,
@@ -235,17 +247,19 @@ func countConfidence(findings []db.SecretFinding, confidence string) int {
 
 func TestEngineScanSecretsBackfillResumable(t *testing.T) {
 	fx := newEngineFixture(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	// Seed two sessions with secret-bearing content directly, bypassing the
 	// sync scan path, so secrets_rules_version stays "" (unscanned).
 	for _, id := range []string{"s1", "s2"} {
-		require.NoError(t, fx.db.UpsertSession(db.Session{
+		require.NoError(t, fx.db.UpsertSession(ctx, db.Session{
 			ID: id, Project: "proj", Machine: "m", Agent: "claude",
 			MessageCount: 1, UserMessageCount: 1,
 		}))
-		require.NoError(t, fx.db.ReplaceSessionMessages(id, []db.Message{
-			{SessionID: id, Ordinal: 0, Role: "user",
-				Content: "my key AKIA7QHWN2DKR4FYPLJM here"},
+		require.NoError(t, fx.db.ReplaceSessionMessages(ctx, id, []db.Message{
+			{
+				SessionID: id, Ordinal: 0, Role: "user",
+				Content: "my key AKIA7QHWN2DKR4FYPLJM here",
+			},
 		}))
 	}
 	ticks := 0
@@ -272,19 +286,21 @@ func TestEngineScanSecretsBackfillResumable(t *testing.T) {
 // partial scan as success, and must persist nothing.
 func TestScanSecretsCanceledContextReturnsError(t *testing.T) {
 	fx := newEngineFixture(t)
-	require.NoError(t, fx.db.UpsertSession(db.Session{
+	require.NoError(t, fx.db.UpsertSession(t.Context(), db.Session{
 		ID: "s1", Project: "proj", Machine: "m", Agent: "claude",
 		MessageCount: 1, UserMessageCount: 1,
 	}))
-	require.NoError(t, fx.db.ReplaceSessionMessages("s1", []db.Message{
-		{SessionID: "s1", Ordinal: 0, Role: "user",
-			Content: "my key AKIA7QHWN2DKR4FYPLJM here"},
+	require.NoError(t, fx.db.ReplaceSessionMessages(t.Context(), "s1", []db.Message{
+		{
+			SessionID: "s1", Ordinal: 0, Role: "user",
+			Content: "my key AKIA7QHWN2DKR4FYPLJM here",
+		},
 	}))
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, err := fx.engine.ScanSecrets(ctx, SecretScanInput{Backfill: true}, nil)
 	require.ErrorIs(t, err, context.Canceled)
-	s, err := fx.db.GetSession(context.Background(), "s1")
+	s, err := fx.db.GetSession(t.Context(), "s1")
 	require.NoError(t, err)
 	require.NotNil(t, s)
 	assert.Zero(t, s.SecretLeakCount, "SecretLeakCount = %d, want 0 (canceled scan persisted nothing)", s.SecretLeakCount)

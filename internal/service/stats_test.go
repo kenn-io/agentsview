@@ -1,7 +1,6 @@
 package service_test
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -33,7 +32,7 @@ func TestHTTPBackendStats(t *testing.T) {
 	t.Cleanup(srv.Close)
 	svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
 
-	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+	stats, err := svc.Stats(t.Context(), service.StatsFilter{
 		Since:                 "2026-04-01",
 		Until:                 "2026-04-15",
 		Agent:                 "codex",
@@ -74,7 +73,7 @@ func TestHTTPBackendStatsDisablesDefaultVisibilityWithExplicitIncludes(t *testin
 	t.Cleanup(srv.Close)
 	svc := servicehttp.NewHTTPBackend(srv.URL, "", false, "")
 
-	stats, err := svc.Stats(context.Background(), service.StatsFilter{
+	stats, err := svc.Stats(t.Context(), service.StatsFilter{
 		Since: "28d",
 		Agent: "all",
 	})

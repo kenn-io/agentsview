@@ -10,13 +10,13 @@ import (
 func TestMachineLabelsPersistUpdatesAndSurviveResync(t *testing.T) {
 	ctx := t.Context()
 	source := testDB(t)
-	require.NoError(t, source.SetSyncState("last_push_at", "unrelated metadata"))
-	require.NoError(t, source.SetSyncState("machineXlabel:other", "not a label"))
-	require.NoError(t, source.SetSyncState("machine_label:installation-a", "Laptop"))
-	require.NoError(t, source.SetSyncState("machine_label:installation-b", "Desktop"))
-	require.NoError(t, source.SetSyncState("machine_label:installation-a", "Work laptop"))
+	require.NoError(t, source.SetSyncState(ctx, "last_push_at", "unrelated metadata"))
+	require.NoError(t, source.SetSyncState(ctx, "machineXlabel:other", "not a label"))
+	require.NoError(t, source.SetSyncState(ctx, "machine_label:installation-a", "Laptop"))
+	require.NoError(t, source.SetSyncState(ctx, "machine_label:installation-b", "Desktop"))
+	require.NoError(t, source.SetSyncState(ctx, "machine_label:installation-a", "Work laptop"))
 
-	require.NoError(t, source.SetSyncState("machine_alias:oldhost.example", "installation-a"))
+	require.NoError(t, source.SetSyncState(ctx, "machine_alias:oldhost.example", "installation-a"))
 	labels, err := source.GetMachineLabels(ctx)
 	require.NoError(t, err)
 	want := map[string]string{

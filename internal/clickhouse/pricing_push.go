@@ -3,6 +3,7 @@ package clickhouse
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strconv"
 	"time"
@@ -192,7 +193,7 @@ func scanGenAIPricing(row genAIPricingRow) (*db.GenAIPricingDocument, error) {
 		&document.Version, &document.SourceRef, &document.Source,
 		&data, &document.UpdatedAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

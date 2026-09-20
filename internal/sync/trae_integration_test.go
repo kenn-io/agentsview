@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json/v2"
 	"os"
@@ -18,29 +17,31 @@ import (
 
 func writeTraeSyncDB(t *testing.T, path, reply string) {
 	t.Helper()
+
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	defer db.Close()
-	require.NoError(t, db.Ping())
-	_, err = db.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
+	require.NoError(t, db.PingContext(t.Context()))
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
 	require.NoError(t, err)
 	value, err := json.Marshal(map[string]any{"list": []any{traeSyncSession("rewrite", reply)}}, json.Deterministic(true))
 	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO ItemTable(key, value) VALUES (?, ?)`, "memento/icube-ai-agent-storage", value)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO ItemTable(key, value) VALUES (?, ?)`, "memento/icube-ai-agent-storage", value)
 	require.NoError(t, err)
 }
 
 func writeTraeSyncDBWithoutStorageKey(t *testing.T, path string) {
 	t.Helper()
+
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	defer db.Close()
-	require.NoError(t, db.Ping())
-	_, err = db.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
+	require.NoError(t, db.PingContext(t.Context()))
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
 	require.NoError(t, err)
-	_, err = db.Exec(`INSERT INTO ItemTable(key, value) VALUES (?, ?)`, "memento/unrelated-chat-storage", `{"list":[{"sessionId":"ignored","messages":[{"role":"user","content":"wrong"}]}]}`)
+	_, err = db.ExecContext(t.Context(), `INSERT INTO ItemTable(key, value) VALUES (?, ?)`, "memento/unrelated-chat-storage", `{"list":[{"sessionId":"ignored","messages":[{"role":"user","content":"wrong"}]}]}`)
 	require.NoError(t, err)
 }
 
@@ -53,11 +54,12 @@ func writeTraeSyncModularData(t *testing.T, root string) {
 
 func rewriteTraeSyncDB(t *testing.T, path, reply string, mtime time.Time) {
 	t.Helper()
+
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	value, err := json.Marshal(map[string]any{"list": []any{traeSyncSession("rewrite", reply)}}, json.Deterministic(true))
 	require.NoError(t, err)
-	_, err = db.Exec(`UPDATE ItemTable SET value = ? WHERE key = ?`, value, "memento/icube-ai-agent-storage")
+	_, err = db.ExecContext(t.Context(), `UPDATE ItemTable SET value = ? WHERE key = ?`, value, "memento/icube-ai-agent-storage")
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 	require.NoError(t, os.Chtimes(path, mtime, mtime))
@@ -65,11 +67,12 @@ func rewriteTraeSyncDB(t *testing.T, path, reply string, mtime time.Time) {
 
 func setTraeSyncDBSessions(t *testing.T, path string, sessions []any, mtime time.Time) {
 	t.Helper()
+
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	value, err := json.Marshal(map[string]any{"list": sessions}, json.Deterministic(true))
 	require.NoError(t, err)
-	_, err = db.Exec(`UPDATE ItemTable SET value = ? WHERE key = ?`, value, "memento/icube-ai-agent-storage")
+	_, err = db.ExecContext(t.Context(), `UPDATE ItemTable SET value = ? WHERE key = ?`, value, "memento/icube-ai-agent-storage")
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 	require.NoError(t, os.Chtimes(path, mtime, mtime))
@@ -77,21 +80,22 @@ func setTraeSyncDBSessions(t *testing.T, path string, sessions []any, mtime time
 
 func seedTraeSyncWALDB(t *testing.T, path string, sessions []any) {
 	t.Helper()
+
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	db, err := sql.Open("sqlite3", path)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	require.NoError(t, db.Ping())
+	require.NoError(t, db.PingContext(t.Context()))
 	var journalMode string
-	require.NoError(t, db.QueryRow("PRAGMA journal_mode=WAL").Scan(&journalMode))
+	require.NoError(t, db.QueryRowContext(t.Context(), "PRAGMA journal_mode=WAL").Scan(&journalMode))
 	require.Equal(t, "wal", journalMode)
-	_, err = db.Exec("PRAGMA wal_autocheckpoint=0")
+	_, err = db.ExecContext(t.Context(), "PRAGMA wal_autocheckpoint=0")
 	require.NoError(t, err)
-	_, err = db.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
+	_, err = db.ExecContext(t.Context(), `CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
 	require.NoError(t, err)
 	value, err := json.Marshal(map[string]any{"list": sessions}, json.Deterministic(true))
 	require.NoError(t, err)
-	_, err = db.Exec(
+	_, err = db.ExecContext(t.Context(),
 		`INSERT INTO ItemTable(key, value) VALUES (?, ?)`,
 		"memento/icube-ai-agent-storage", value,
 	)
@@ -116,24 +120,28 @@ func TestTraeEncryptedLayoutReportsUnsupportedSource(t *testing.T) {
 		{
 			name: "empty stub",
 			setup: func(t *testing.T, path string) {
+				t.Helper()
+
 				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 				db, err := sql.Open("sqlite3", path)
 				require.NoError(t, err)
 				defer db.Close()
-				_, err = db.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
+				_, err = db.ExecContext(t.Context(), `CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
 				require.NoError(t, err)
 				value, err := json.Marshal(map[string]any{"list": []any{map[string]any{
 					"sessionId": "stub",
 					"messages":  []any{},
 				}}}, json.Deterministic(true))
 				require.NoError(t, err)
-				_, err = db.Exec(`INSERT INTO ItemTable(key, value) VALUES (?, ?)`, "memento/icube-ai-agent-storage", value)
+				_, err = db.ExecContext(t.Context(), `INSERT INTO ItemTable(key, value) VALUES (?, ?)`, "memento/icube-ai-agent-storage", value)
 				require.NoError(t, err)
 			},
 		},
 		{
 			name: "missing storage key",
 			setup: func(t *testing.T, path string) {
+				t.Helper()
+
 				writeTraeSyncDBWithoutStorageKey(t, path)
 			},
 		},
@@ -146,11 +154,11 @@ func TestTraeEncryptedLayoutReportsUnsupportedSource(t *testing.T) {
 			writeTraeSyncModularData(t, root)
 
 			database := dbtest.OpenTestDB(t)
-			engine := NewEngine(database, EngineConfig{
+			engine := NewEngine(t.Context(), database, EngineConfig{
 				AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
 				Machine:   "devbox",
 			})
-			res := engine.processFile(context.Background(), parser.DiscoveredFile{
+			res := engine.processFile(t.Context(), parser.DiscoveredFile{
 				Path:  path,
 				Agent: parser.AgentTrae,
 			})
@@ -182,7 +190,7 @@ func TestReconcileTraeUnsupportedSiblingPreservesArchiveAuthority(t *testing.T) 
 		traeSyncSession("unsupported", "unsupported reply"),
 	}, workspaceInfo.ModTime())
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
 		Machine:   "devbox",
 	})
@@ -244,7 +252,7 @@ func TestReconcileTraeUnsupportedContainerRemovalPreservesArchive(t *testing.T) 
 		traeSyncSession("unsupported", "unsupported reply"),
 	}, workspaceInfo.ModTime())
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
 		Machine:   "devbox",
 	})
@@ -275,7 +283,7 @@ func TestWatchBatchTraeMissingContainerPreservesArchive(t *testing.T) {
 	path := filepath.Join(root, "globalStorage", "state.vscdb")
 	writeTraeSyncDB(t, path, "archived reply")
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
 		Machine:   "devbox",
 	})
@@ -313,7 +321,7 @@ func TestReconcileTraeCompleteContainerTombstonesRemovedMember(t *testing.T) {
 		traeSyncSession("kept", "second reply"),
 	}, info.ModTime())
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
 		Machine:   "devbox",
 	})
@@ -350,7 +358,7 @@ func TestReconcileTraeEmptyContainerTombstonesLastMember(t *testing.T) {
 	path := filepath.Join(root, "globalStorage", "state.vscdb")
 	writeTraeSyncDB(t, path, "last reply")
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
 		Machine:   "devbox",
 	})
@@ -384,8 +392,8 @@ func TestProcessFileProviderTraeSameSizeSameMtimeRewriteReparses(t *testing.T) {
 			path := filepath.Join(root, "globalStorage", "state.vscdb")
 			writeTraeSyncDB(t, path, "initial reply")
 			database := dbtest.OpenTestDB(t)
-			engine := NewEngine(database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}}, Machine: "devbox"})
-			first := engine.processFile(context.Background(), parser.DiscoveredFile{Path: path, Agent: parser.AgentTrae})
+			engine := NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}}, Machine: "devbox"})
+			first := engine.processFile(t.Context(), parser.DiscoveredFile{Path: path, Agent: parser.AgentTrae})
 			require.NoError(t, first.err)
 			require.Len(t, first.results, 1)
 			initialHash := first.results[0].Session.File.Hash
@@ -398,9 +406,9 @@ func TestProcessFileProviderTraeSameSizeSameMtimeRewriteReparses(t *testing.T) {
 			if seedCache {
 				engine.cacheSkip(first.cacheKey, first.results[0].Session.File.Mtime)
 			} else {
-				engine = NewEngine(database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}}, Machine: "devbox"})
+				engine = NewEngine(t.Context(), database, EngineConfig{AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}}, Machine: "devbox"})
 			}
-			second := engine.processFile(context.Background(), parser.DiscoveredFile{Path: path, Agent: parser.AgentTrae})
+			second := engine.processFile(t.Context(), parser.DiscoveredFile{Path: path, Agent: parser.AgentTrae})
 			require.NoError(t, second.err)
 			assert.False(t, second.skip)
 			require.Len(t, second.results, 1)
@@ -415,12 +423,12 @@ func TestProcessFileProviderTraeUnchangedSecondSyncDropsStoredVirtualResults(t *
 	path := filepath.Join(root, "globalStorage", "state.vscdb")
 	writeTraeSyncDB(t, path, "steady reply")
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
 		Machine:   "devbox",
 	})
 
-	first := engine.processFile(context.Background(), parser.DiscoveredFile{
+	first := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  path,
 		Agent: parser.AgentTrae,
 	})
@@ -435,7 +443,7 @@ func TestProcessFileProviderTraeUnchangedSecondSyncDropsStoredVirtualResults(t *
 	require.Equal(t, 1, written)
 	require.Equal(t, 0, failed)
 
-	second := engine.processFile(context.Background(), parser.DiscoveredFile{
+	second := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  path,
 		Agent: parser.AgentTrae,
 	})
@@ -456,11 +464,11 @@ func TestProcessFileProviderTraeChangedContainerDropsUnchangedSibling(t *testing
 	}, info.ModTime())
 
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
 		Machine:   "devbox",
 	})
-	first := engine.processFile(context.Background(), parser.DiscoveredFile{
+	first := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  path,
 		Agent: parser.AgentTrae,
 	})
@@ -486,7 +494,7 @@ func TestProcessFileProviderTraeChangedContainerDropsUnchangedSibling(t *testing
 		traeSyncSession("steady", "steady reply"),
 	}, info.ModTime())
 
-	second := engine.processFile(context.Background(), parser.DiscoveredFile{
+	second := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  path,
 		Agent: parser.AgentTrae,
 	})
@@ -505,11 +513,11 @@ func TestProcessFileProviderTraeWALWatcherEventDropsUnchangedSibling(t *testing.
 	})
 
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
 		Machine:   "devbox",
 	})
-	first := engine.processFile(context.Background(), parser.DiscoveredFile{
+	first := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  path,
 		Agent: parser.AgentTrae,
 	})
@@ -536,7 +544,7 @@ func TestProcessFileProviderTraeWALWatcherEventDropsUnchangedSibling(t *testing.
 	}, info.ModTime())
 
 	classified, err := engine.classifyPaths(
-		context.Background(), []string{path + "-wal"},
+		t.Context(), []string{path + "-wal"},
 	)
 	require.NoError(t, err)
 	require.Len(t, classified, 1)
@@ -544,7 +552,7 @@ func TestProcessFileProviderTraeWALWatcherEventDropsUnchangedSibling(t *testing.
 	assert.Equal(t, parser.AgentTrae, classified[0].Agent)
 	assert.False(t, classified[0].ForceParse)
 
-	second := engine.processFile(context.Background(), classified[0])
+	second := engine.processFile(t.Context(), classified[0])
 	require.NoError(t, second.err)
 	require.Len(t, second.results, 1)
 	assert.Equal(t, "trae:rewrite", second.results[0].Session.ID)
@@ -557,11 +565,11 @@ func TestProcessFileProviderTraeRemovedWALSidecarDoesNotForceParse(t *testing.T)
 	writeTraeSyncDB(t, path, "steady reply")
 
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentTrae: {root}},
 		Machine:   "devbox",
 	})
-	first := engine.processFile(context.Background(), parser.DiscoveredFile{
+	first := engine.processFile(t.Context(), parser.DiscoveredFile{
 		Path:  path,
 		Agent: parser.AgentTrae,
 	})
@@ -577,14 +585,14 @@ func TestProcessFileProviderTraeRemovedWALSidecarDoesNotForceParse(t *testing.T)
 	require.Equal(t, 0, failed)
 
 	classified, err := engine.classifyPaths(
-		context.Background(), []string{path + "-wal"},
+		t.Context(), []string{path + "-wal"},
 	)
 	require.NoError(t, err)
 	require.Len(t, classified, 1)
 	assert.Equal(t, path, classified[0].Path)
 	assert.False(t, classified[0].ForceParse)
 
-	engine.SyncPathsContext(context.Background(), []string{path + "-wal"})
+	engine.SyncPathsContext(t.Context(), []string{path + "-wal"})
 	stats := engine.LastSyncStats()
 	assert.Equal(t, 0, stats.Synced)
 	assert.Equal(t, 0, stats.Failed)

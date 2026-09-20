@@ -1,8 +1,8 @@
 package parser
 
 import (
-	"context"
 	"database/sql"
+	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
 	"os"
@@ -50,7 +50,7 @@ func parseHermesTestArchive(
 	t *testing.T, root, project, machine string,
 ) ([]ParseResult, error) {
 	t.Helper()
-	return newHermesTestProvider(t).parseArchive(root, project, machine)
+	return newHermesTestProvider(t).parseArchive(t.Context(), root, project, machine)
 }
 
 // discoverHermesTestSessions discovers Hermes sources under root through the
@@ -107,7 +107,7 @@ func createHermesStateDB(t *testing.T, root string) {
 	// cleanup. Tests delete state.db mid-run to exercise deletion handling, and
 	// Windows refuses to remove a file still held open by this process.
 	defer func() { _ = db.Close() }()
-	_, err = db.Exec(`
+	_, err = db.ExecContext(t.Context(), `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
 			source TEXT NOT NULL,
@@ -199,10 +199,11 @@ func createHermesTestStateDB(
 	sessions []hermesTestSessionRow, messages []hermesTestMessageRow,
 ) {
 	t.Helper()
+
 	db, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
-	_, err = db.Exec(`
+	_, err = db.ExecContext(t.Context(), `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
 			source TEXT NOT NULL,
@@ -256,7 +257,7 @@ func createHermesTestStateDB(
 		if s.parentSessionID != "" {
 			parent = s.parentSessionID
 		}
-		_, err = db.Exec(`
+		_, err = db.ExecContext(t.Context(), `
 			INSERT INTO sessions (
 				id, source, model, parent_session_id, started_at, ended_at,
 				message_count, input_tokens, output_tokens, cache_read_tokens,
@@ -268,7 +269,7 @@ func createHermesTestStateDB(
 		require.NoError(t, err)
 	}
 	for _, m := range messages {
-		_, err = db.Exec(`
+		_, err = db.ExecContext(t.Context(), `
 			INSERT INTO messages (session_id, role, content, timestamp)
 			VALUES (?, ?, ?, ?)`,
 			m.sessionID, m.role, m.content, m.timestamp,
@@ -418,7 +419,7 @@ func TestHermesParseStateMemberMatchesContainerPathForOpenSession(t *testing.T) 
 
 	provider := newHermesTestProvider(t, root)
 	outcome, err := provider.parseStateMember(
-		context.Background(),
+		t.Context(),
 		hermesSource{
 			Root:      root,
 			Path:      VirtualSourcePath(stateDB, "open-member"),
@@ -564,7 +565,7 @@ func TestWriteHermesSessionJSONL_UsesMatchingProfileStateDB(t *testing.T) {
 	defaultDB, err := sql.Open("sqlite3", filepath.Join(defaultRoot, "state.db"))
 	require.NoError(t, err)
 	defer func() { _ = defaultDB.Close() }()
-	_, err = defaultDB.Exec(`
+	_, err = defaultDB.ExecContext(t.Context(), `
 		DELETE FROM messages;
 		DELETE FROM sessions;
 		INSERT INTO sessions (
@@ -589,7 +590,7 @@ func TestWriteHermesSessionJSONL_UsesMatchingProfileStateDB(t *testing.T) {
 	profileDB, err := sql.Open("sqlite3", filepath.Join(profileRoot, "state.db"))
 	require.NoError(t, err)
 	defer func() { _ = profileDB.Close() }()
-	_, err = profileDB.Exec(`
+	_, err = profileDB.ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, source, model, started_at, ended_at, message_count, title
 		) VALUES (
@@ -605,7 +606,7 @@ func TestWriteHermesSessionJSONL_UsesMatchingProfileStateDB(t *testing.T) {
 	require.NoError(t, err)
 
 	var buf strings.Builder
-	require.NoError(t, WriteHermesSessionJSONL(
+	require.NoError(t, WriteHermesSessionJSONL(t.Context(),
 		&buf,
 		filepath.Join(profileRoot, "state.db"),
 		[]string{defaultSessions, profileSessions},
@@ -620,7 +621,7 @@ func TestWriteHermesSessionJSONL_UsesMatchingProfileStateDB(t *testing.T) {
 	assert.NotContains(t, out, "sibling message")
 
 	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
-		assert.JSONEq(t, line, line)
+		assert.True(t, jsontext.Value(line).IsValid(), "emitted line must be valid JSON")
 	}
 }
 
@@ -640,7 +641,7 @@ func TestWriteHermesSessionJSONL_TranscriptSourceCopiesFile(t *testing.T) {
 	))
 
 	var buf strings.Builder
-	require.NoError(t, WriteHermesSessionJSONL(
+	require.NoError(t, WriteHermesSessionJSONL(t.Context(),
 		&buf, filepath.Join(root, "state.db"), []string{sessionsDir}, "child",
 	))
 	assert.Equal(t, body, buf.String())
@@ -658,7 +659,7 @@ func TestWriteHermesSessionJSONL_FallsBackWhenStoredStateDBMissesSession(t *test
 	createHermesStateDB(t, profileRoot)
 
 	var buf strings.Builder
-	require.NoError(t, WriteHermesSessionJSONL(
+	require.NoError(t, WriteHermesSessionJSONL(t.Context(),
 		&buf,
 		filepath.Join(defaultRoot, "state.db"),
 		[]string{defaultSessions, profileSessions},
@@ -677,7 +678,7 @@ func TestWriteHermesSessionJSONL_FallsBackToStateMemberWhenStoredSourceMissing(
 	createHermesStateDB(t, fallbackRoot)
 
 	var buf strings.Builder
-	require.NoError(t, WriteHermesSessionJSONL(
+	require.NoError(t, WriteHermesSessionJSONL(t.Context(),
 		&buf,
 		VirtualSourcePath(filepath.Join(missingRoot, "state.db"), "child"),
 		[]string{fallbackSessions},
@@ -709,7 +710,7 @@ func TestWriteHermesSessionJSONL_PreservesHashInTranscriptPath(t *testing.T) {
 	))
 
 	var buf strings.Builder
-	require.NoError(t, WriteHermesSessionJSONL(
+	require.NoError(t, WriteHermesSessionJSONL(t.Context(),
 		&buf,
 		VirtualSourcePath(filepath.Join(t.TempDir(), "state.db"), "child"),
 		[]string{sessionsDir},
@@ -728,9 +729,9 @@ func TestWriteHermesSessionJSONL_FallsBackToTranscriptWhenStateDBMissesSessionIn
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
-	_, err = conn.Exec(`DELETE FROM messages WHERE session_id = 'child'`)
+	_, err = conn.ExecContext(t.Context(), `DELETE FROM messages WHERE session_id = 'child'`)
 	require.NoError(t, err)
-	_, err = conn.Exec(`DELETE FROM sessions WHERE id = 'child'`)
+	_, err = conn.ExecContext(t.Context(), `DELETE FROM sessions WHERE id = 'child'`)
 	require.NoError(t, err)
 
 	body := strings.Join([]string{
@@ -745,7 +746,7 @@ func TestWriteHermesSessionJSONL_FallsBackToTranscriptWhenStateDBMissesSessionIn
 	))
 
 	var buf strings.Builder
-	require.NoError(t, WriteHermesSessionJSONL(
+	require.NoError(t, WriteHermesSessionJSONL(t.Context(),
 		&buf,
 		dbPath,
 		[]string{sessionsDir},
@@ -775,7 +776,7 @@ func TestWriteHermesSessionJSONL_FallsBackWhenStoredStateDBUnreadable(t *testing
 	))
 
 	var buf strings.Builder
-	require.NoError(t, WriteHermesSessionJSONL(
+	require.NoError(t, WriteHermesSessionJSONL(t.Context(),
 		&buf,
 		filepath.Join(root, "state.db"),
 		[]string{sessionsDir},
@@ -828,7 +829,7 @@ func TestWriteHermesSessionJSONL_PrioritizesAdjacentTranscriptBeforeRoots(t *tes
 			createHermesStateDB(t, otherRoot)
 
 			var buf strings.Builder
-			require.NoError(t, WriteHermesSessionJSONL(
+			require.NoError(t, WriteHermesSessionJSONL(t.Context(),
 				&buf,
 				filepath.Join(storedRoot, "state.db"),
 				[]string{otherSessions, storedSessions},
@@ -857,7 +858,7 @@ func TestWriteHermesSessionJSONL_PrefersTranscriptWhenQualityWins(t *testing.T) 
 	))
 
 	var buf strings.Builder
-	require.NoError(t, WriteHermesSessionJSONL(
+	require.NoError(t, WriteHermesSessionJSONL(t.Context(),
 		&buf,
 		filepath.Join(root, "state.db"),
 		[]string{sessionsDir},
@@ -1324,8 +1325,7 @@ func TestParseHermesSession_JSONL_ToolCalls(t *testing.T) {
 	assert.Equal(t, RoleUser, msgs[2].Role)
 	require.Len(t, msgs[2].ToolResults, 1)
 	assert.Equal(t, "tc1", msgs[2].ToolResults[0].ToolUseID)
-	assert.Equal(t,
-		"package main\n",
+	assert.Equal(t, "package main\n",
 		DecodeContent(msgs[2].ToolResults[0].ContentRaw),
 	)
 }
@@ -1368,7 +1368,7 @@ func TestParseHermesSkillViewSetsSkillName(t *testing.T) {
 
 		db, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
 		require.NoError(t, err)
-		_, err = db.Exec(`
+		_, err = db.ExecContext(t.Context(), `
 			INSERT INTO messages (
 				session_id, role, content, tool_calls, timestamp
 			) VALUES (
@@ -1553,10 +1553,10 @@ func TestParseHermesSession_JSONL_Timestamps(t *testing.T) {
 	require.NotNil(t, sess)
 
 	wantStart := time.Date(
-		2026, 4, 3, 10, 0, 0, 0, time.Local,
+		2026, 4, 3, 10, 0, 0, 0, time.Local, //nolint:forbidigo // Exercise parsing of source timestamps recorded in local wall-clock time.
 	)
 	wantEnd := time.Date(
-		2026, 4, 3, 10, 5, 0, 0, time.Local,
+		2026, 4, 3, 10, 5, 0, 0, time.Local, //nolint:forbidigo // Exercise parsing of source timestamps recorded in local wall-clock time.
 	)
 	assertTimestamp(t, sess.StartedAt, wantStart)
 	assertTimestamp(t, sess.EndedAt, wantEnd)
@@ -1572,7 +1572,7 @@ func TestParseHermesSession_JSONL_FirstMessageTruncation(t *testing.T) {
 	sess, _ := runHermesJSONLTest(t, "", content)
 	require.NotNil(t, sess)
 	// truncate clips at 300 + 3 ellipsis = 303.
-	assert.Equal(t, 303, len(sess.FirstMessage))
+	assert.Len(t, sess.FirstMessage, 303)
 }
 
 func TestParseHermesSession_JSONL_Errors(t *testing.T) {
@@ -1695,10 +1695,10 @@ func TestParseHermesSession_JSON_MessageTimestampsExtendBounds(
 	require.NotNil(t, sess)
 
 	wantStart := time.Date(
-		2026, 4, 3, 14, 50, 0, 0, time.Local,
+		2026, 4, 3, 14, 50, 0, 0, time.Local, //nolint:forbidigo // Exercise parsing of source timestamps recorded in local wall-clock time.
 	)
 	wantEnd := time.Date(
-		2026, 4, 3, 15, 10, 0, 0, time.Local,
+		2026, 4, 3, 15, 10, 0, 0, time.Local, //nolint:forbidigo // Exercise parsing of source timestamps recorded in local wall-clock time.
 	)
 	assertTimestamp(t, sess.StartedAt, wantStart)
 	assertTimestamp(t, sess.EndedAt, wantEnd)
@@ -1717,7 +1717,7 @@ func TestParseHermesSession_JSON_Errors(t *testing.T) {
 			t, "session_bad.json", `"just a string"`,
 		)
 		_, _, err := parseHermesTestSession(t, path, "", "local")
-		assert.Error(t, err)
+		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid JSON")
 	})
 }
@@ -1772,7 +1772,7 @@ func TestHermesSessionID(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := HermesSessionID(tt.name)
 			if got != tt.want {
-				t.Errorf(
+				assert.Failf(t, "test failed",
 					"HermesSessionID(%q) = %q, want %q",
 					tt.name, got, tt.want,
 				)
@@ -1794,7 +1794,7 @@ func TestParseHermesTimestamp(t *testing.T) {
 			"2026-04-03T15:27:21.014566",
 			time.Date(
 				2026, 4, 3, 15, 27, 21, 14566000,
-				time.Local,
+				time.Local, //nolint:forbidigo // Exercise parsing of source timestamps recorded in local wall-clock time.
 			),
 		},
 		{
@@ -1802,7 +1802,7 @@ func TestParseHermesTimestamp(t *testing.T) {
 			"2026-04-03T15:27:21",
 			time.Date(
 				2026, 4, 3, 15, 27, 21, 0,
-				time.Local,
+				time.Local, //nolint:forbidigo // Exercise parsing of source timestamps recorded in local wall-clock time.
 			),
 		},
 		{
@@ -2033,7 +2033,7 @@ func TestFindHermesSourceFile(t *testing.T) {
 				want = filepath.Join(dir, tt.wantFile)
 			}
 			if got != want {
-				t.Errorf("got %q, want %q", got, want)
+				assert.Failf(t, "test failed", "got %q, want %q", got, want)
 			}
 		})
 	}
@@ -2046,7 +2046,7 @@ func TestFindHermesSourceFile(t *testing.T) {
 		for _, id := range []string{"", "../etc/passwd", "a/b", "a b"} {
 			got := findHermesTestSourceFile(t, dir, id)
 			if got != "" {
-				t.Errorf(
+				assert.Failf(t, "test failed",
 					"FindHermesSourceFile(%q) = %q, want empty",
 					id, got,
 				)
@@ -2087,7 +2087,7 @@ func TestHermesToolTaxonomy(t *testing.T) {
 		t.Run(tt.tool, func(t *testing.T) {
 			got := NormalizeToolCategory(tt.tool)
 			if got != tt.category {
-				t.Errorf(
+				assert.Failf(t, "test failed",
 					"NormalizeToolCategory(%q) = %q, want %q",
 					tt.tool, got, tt.category,
 				)

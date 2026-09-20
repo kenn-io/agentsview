@@ -96,7 +96,7 @@ func TestLiveActivityIndexedLookupReturnsExactStoredMetadata(t *testing.T) {
 	mtime := int64(456)
 	inode := int64(789)
 	device := int64(1011)
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:         "codex:exact-id",
 		Project:    "project",
 		Machine:    "local",
@@ -131,7 +131,7 @@ func TestLiveActivityIndexedLookupReturnsExactStoredMetadata(t *testing.T) {
 func TestLiveActivityIndexedLookupSchedulesRowsWithoutCompleteStat(t *testing.T) {
 	database := dbtest.OpenTestDB(t)
 	path := filepath.Join(t.TempDir(), "rollout.jsonl")
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID:       "codex:no-stat",
 		Project:  "project",
 		Machine:  "local",

@@ -2,6 +2,7 @@ package remotesync
 
 import (
 	"archive/tar"
+	"context"
 	"fmt"
 	"io"
 	"io/fs"
@@ -12,7 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/parser"
 )
 
-func WriteArchive(w io.Writer, targets TargetSet) error {
+func WriteArchive(ctx context.Context, w io.Writer, targets TargetSet) error {
 	tw := tar.NewWriter(w)
 	forbidden := newForbiddenRootMatcher(targets.ForbiddenRoots)
 	snapshotSQLite := make(map[string]string)
@@ -32,7 +33,7 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 				return nil
 			}
 			writtenSnapshots[stateDB] = struct{}{}
-			return writeSQLiteStateDBSnapshot(tw, stateDB)
+			return writeSQLiteStateDBSnapshot(ctx, tw, stateDB)
 		}
 		if optional {
 			return writeOptionalArchiveFile(tw, path)
@@ -57,7 +58,7 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 			continue
 		}
 		if agent == parser.AgentWindsurf {
-			if err := writeWindsurfArchiveFiles(tw, files, forbidden); err != nil {
+			if err := writeWindsurfArchiveFiles(ctx, tw, files, forbidden); err != nil {
 				return err
 			}
 			continue
@@ -83,8 +84,8 @@ func WriteArchive(w io.Writer, targets TargetSet) error {
 	return nil
 }
 
-func writeSQLiteStateDBSnapshot(tw *tar.Writer, stateDB string) error {
-	_, modTime, exists := sqliteSnapshotIdentity(stateDB)
+func writeSQLiteStateDBSnapshot(ctx context.Context, tw *tar.Writer, stateDB string) error {
+	_, modTime, exists := sqliteSnapshotIdentity(ctx, stateDB)
 	if !exists {
 		return nil
 	}
@@ -101,7 +102,7 @@ func writeSQLiteStateDBSnapshot(tw *tar.Writer, stateDB string) error {
 		// had failed first, so the next manifest evicts the mirror's
 		// stale copy. A still-usable source means the failure was local
 		// (temp dir, destination write) and must propagate.
-		if _, _, stillUsable := sqliteSnapshotIdentity(stateDB); !stillUsable {
+		if _, _, stillUsable := sqliteSnapshotIdentity(ctx, stateDB); !stillUsable {
 			return nil
 		}
 		return fmt.Errorf("snapshot sqlite database %q: %w", stateDB, err)
@@ -118,7 +119,7 @@ func writeSQLiteStateDBSnapshot(tw *tar.Writer, stateDB string) error {
 
 var writeSQLiteSnapshotFile = writeSQLiteSnapshot
 
-func writeWindsurfArchiveFiles(
+func writeWindsurfArchiveFiles(ctx context.Context,
 	tw *tar.Writer, files []string, forbidden forbiddenRootMatcher,
 ) error {
 	seen := make(map[string]struct{}, len(files))
@@ -132,7 +133,7 @@ func writeWindsurfArchiveFiles(
 		seen[path] = struct{}{}
 		switch filepath.Base(path) {
 		case parser.WindsurfStateDBName:
-			if err := writeSanitizedWindsurfStateDB(tw, path); err != nil {
+			if err := writeSanitizedWindsurfStateDB(ctx, tw, path); err != nil {
 				return err
 			}
 		case parser.WindsurfStateDBName + "-wal",
@@ -149,7 +150,7 @@ func writeWindsurfArchiveFiles(
 	return nil
 }
 
-func writeSanitizedWindsurfStateDB(tw *tar.Writer, dbPath string) error {
+func writeSanitizedWindsurfStateDB(ctx context.Context, tw *tar.Writer, dbPath string) error {
 	info, err := os.Stat(dbPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -166,7 +167,7 @@ func writeSanitizedWindsurfStateDB(tw *tar.Writer, dbPath string) error {
 	}
 	defer os.RemoveAll(tmpDir)
 	tmpPath := filepath.Join(tmpDir, parser.WindsurfStateDBName)
-	if err := parser.WriteSanitizedWindsurfStateDB(tmpPath, dbPath); err != nil {
+	if err := parser.WriteSanitizedWindsurfStateDB(ctx, tmpPath, dbPath); err != nil {
 		return fmt.Errorf("sanitize windsurf state db %q: %w", dbPath, err)
 	}
 	mtime := windsurfArchiveModTime(info, dbPath)
@@ -370,7 +371,7 @@ func writeArchiveHeader(
 // validated relative component, so a client-supplied string can never
 // escape the resolved targets, even if a future caller forgets to
 // validate.
-func WriteArchiveFiles(w io.Writer, allowed TargetSet, files []string) error {
+func WriteArchiveFiles(ctx context.Context, w io.Writer, allowed TargetSet, files []string) error {
 	tw := tar.NewWriter(w)
 	forbidden := newForbiddenRootMatcher(allowed.ForbiddenRoots)
 	allowedRoots := allowed.DeltaAllowedRoots()
@@ -386,7 +387,7 @@ func WriteArchiveFiles(w io.Writer, allowed TargetSet, files []string) error {
 			if _, allowed := snapshotDBs[stateDB]; allowed {
 				if _, written := writtenSnapshots[stateDB]; !written {
 					writtenSnapshots[stateDB] = struct{}{}
-					if err := writeSQLiteStateDBSnapshot(tw, stateDB); err != nil {
+					if err := writeSQLiteStateDBSnapshot(ctx, tw, stateDB); err != nil {
 						return err
 					}
 				}

@@ -25,9 +25,9 @@ func TestDirectMachineAliases(t *testing.T) {
 			s.EndedAt = new("2024-06-01T09:00:00Z")
 		})
 	}
-	require.NoError(t, d.SetSyncState("machine_alias:old-owner", "installation-a"))
-	require.NoError(t, d.SetSyncState("artifact_local_installation_id", "installation-a"))
-	require.NoError(t, d.SetSyncState("machine_label:installation-a", "Laptop"))
+	require.NoError(t, d.SetSyncState(t.Context(), "machine_alias:old-owner", "installation-a"))
+	require.NoError(t, d.SetSyncState(t.Context(), "artifact_local_installation_id", "installation-a"))
+	require.NoError(t, d.SetSyncState(t.Context(), "machine_label:installation-a", "Laptop"))
 	backend := service.NewDirectBackend(d, nil)
 	for _, tt := range []struct {
 		machine string

@@ -444,7 +444,7 @@ func confirmFullRebuild(
 func countEmbeddingStoreUnits(
 	ctx context.Context, cfg config.Config, includeAutomated bool, store string,
 ) (int, error) {
-	archiveDB, err := openReadOnlyDB(cfg)
+	archiveDB, err := openReadOnlyDB(ctx, cfg)
 	if err != nil {
 		return 0, err
 	}
@@ -478,7 +478,7 @@ func runEmbeddingsBuildDirect(
 	}
 	defer lock.Close()
 
-	archiveDB, err := openReadOnlyDB(cfg)
+	archiveDB, err := openReadOnlyDB(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("opening archive database: %w", err)
 	}
@@ -637,8 +637,8 @@ func buildViaDaemon(
 	ctx context.Context, out io.Writer, client embeddingsDaemonClient, req vector.BuildRequest,
 ) error {
 	if err := client.startBuild(ctx, req); err != nil {
-		var apiErr *daemonAPIError
-		if errors.As(err, &apiErr) && apiErr.status == http.StatusConflict {
+		apiErr, hasApiErr := errors.AsType[*daemonAPIError](err)
+		if hasApiErr && apiErr.status == http.StatusConflict {
 			fmt.Fprintln(out, "a build is already running (daemon)")
 		} else {
 			return err

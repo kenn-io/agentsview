@@ -158,7 +158,7 @@ func TestRefreshIfStaleFetchFailureRecordsAttempt(t *testing.T) {
 		database, fetcher.fetch, time.Hour, now,
 	)
 
-	assert.ErrorIs(t, err, wantErr)
+	require.ErrorIs(t, err, wantErr)
 	assert.False(t, refreshed)
 	assertPricingAttemptMeta(t, database, now.Format(time.RFC3339))
 
@@ -186,7 +186,7 @@ func TestRefreshIfStaleStoresDegradedCatalog(t *testing.T) {
 		database, fetcher.fetch, time.Hour, pricingTestNow(),
 	)
 
-	assert.ErrorIs(t, err, wantErr,
+	require.ErrorIs(t, err, wantErr,
 		"the degradation is reported alongside the refresh")
 	assert.True(t, refreshed)
 	stored, priceErr := database.GetModelPricing("degraded-model")
@@ -218,9 +218,9 @@ func TestRefreshIfStaleStoresGenAIDocumentWhenLiteLLMFails(t *testing.T) {
 		return pricing.Catalog{GenAI: &document}, wantErr
 	}, time.Hour, pricingTestNow())
 
-	assert.ErrorIs(t, err, wantErr)
+	require.ErrorIs(t, err, wantErr)
 	assert.True(t, refreshed)
-	stored, readErr := database.GetGenAIPricing(context.Background())
+	stored, readErr := database.GetGenAIPricing(t.Context())
 	require.NoError(t, readErr)
 	require.NotNil(t, stored)
 	assert.Equal(t, document.Version, stored.Version)
@@ -238,7 +238,7 @@ func TestEnsureFetchFailurePreservesFallback(t *testing.T) {
 		database, false, fetcher.fetch, pricingTestNow(),
 	)
 
-	assert.ErrorIs(t, err, wantErr)
+	require.ErrorIs(t, err, wantErr)
 	assert.False(t, refreshed)
 	fallback, priceErr := database.GetModelPricing("gpt-5.5")
 	require.NoError(t, priceErr)
@@ -271,7 +271,7 @@ func TestEnsureSkipsFetchWithinCooldown(t *testing.T) {
 func TestEnsureOfflineSeedsFallbackWithoutFetch(t *testing.T) {
 	database := testDB(t)
 	fetch := func() (pricing.Catalog, error) {
-		t.Fatal("offline ensure must not fetch")
+		require.FailNow(t, "offline ensure must not fetch")
 		return pricing.Catalog{}, nil
 	}
 
@@ -383,7 +383,7 @@ func TestEnsureCurrentCancellationAllowsImmediateRetry(t *testing.T) {
 	database := testDB(t)
 	now := pricingTestNow()
 	previous := seedPricingAttempt(t, database, now, 2*time.Hour)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	err := ensureCurrent(ctx, database, func(
 		context.Context,
@@ -392,10 +392,10 @@ func TestEnsureCurrentCancellationAllowsImmediateRetry(t *testing.T) {
 		return pricing.Catalog{}, ctx.Err()
 	}, now)
 
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	assertPricingAttemptMeta(t, database, previous)
 	retryCalls := 0
-	err = ensureCurrent(context.Background(), database, func(
+	err = ensureCurrent(t.Context(), database, func(
 		context.Context,
 	) (pricing.Catalog, error) {
 		retryCalls++
@@ -411,7 +411,7 @@ func TestRefreshCurrentFetchesDespiteRecentAttempt(t *testing.T) {
 	now := pricingTestNow()
 	seedPricingAttempt(t, database, now, 10*time.Minute)
 
-	err := refreshCurrent(context.Background(), database, func(
+	err := refreshCurrent(t.Context(), database, func(
 		context.Context,
 	) (pricing.Catalog, error) {
 		return pricing.Catalog{LiteLLM: []pricing.ModelPricing{{
@@ -435,7 +435,7 @@ func TestRefreshCurrentSkipsWhileEnsureCurrentInFlight(t *testing.T) {
 		ensureDone := make(chan error, 1)
 
 		go func() {
-			ensureDone <- ensureCurrent(context.Background(), database, func(
+			ensureDone <- ensureCurrent(t.Context(), database, func(
 				context.Context,
 			) (pricing.Catalog, error) {
 				close(ensureFetchStarted)
@@ -460,7 +460,7 @@ func TestRefreshCurrentSkipsWhileEnsureCurrentInFlight(t *testing.T) {
 		refreshDone := make(chan error, 1)
 		go func() {
 			refreshDone <- refreshCurrent(
-				context.Background(), database, func(
+				t.Context(), database, func(
 					context.Context,
 				) (pricing.Catalog, error) {
 					refreshFetchCalls.Add(1)

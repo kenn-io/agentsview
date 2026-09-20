@@ -57,7 +57,7 @@ func TestJointReportingRejectsInconsistentResolution(t *testing.T) {
 	}
 	hour.Joint.Cells[0].BucketStart = "2026-07-29T13:01:00Z"
 	_, _, err := FinalizeReportingHour(hour)
-	assert.ErrorContains(t, err, "invalid bucket")
+	require.ErrorContains(t, err, "invalid bucket")
 	// The same timestamp is valid at one-minute precision.
 	hour.BucketSeconds = 60
 	hour.Activity.Buckets = make([]ReportingActivityBucket, 60)

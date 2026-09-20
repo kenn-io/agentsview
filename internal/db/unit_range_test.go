@@ -35,7 +35,7 @@ func asSystem(m Message) Message {
 func messageIsSidechain(t *testing.T, d *DB, sessionID string, ordinal int) bool {
 	t.Helper()
 	var sidechain bool
-	err := d.getReader().QueryRowContext(context.Background(),
+	err := d.getReader().QueryRowContext(t.Context(),
 		"SELECT is_sidechain FROM messages WHERE session_id = ? AND ordinal = ?",
 		sessionID, ordinal).Scan(&sidechain)
 	require.NoError(t, err)
@@ -304,7 +304,7 @@ func TestDeriveUnitRangesReducerEquivalence(t *testing.T) {
 	units, _ := scanUnits(t, d, "", true)
 	require.Len(t, units, wantUnits, "corpus produced an unexpected unit count")
 
-	ctx := context.Background()
+	ctx := t.Context()
 	var anchors []UnitAnchor
 	var want [][2]int
 	for _, u := range units {
@@ -348,7 +348,7 @@ func TestDeriveUnitRangesReducerEquivalenceDenseFlow(t *testing.T) {
 	seedUnitRangeCorpus(t, d)
 	units, _ := scanUnits(t, d, "", true)
 
-	ctx := context.Background()
+	ctx := t.Context()
 	var anchors []UnitAnchor
 	var want [][2]int
 	for _, u := range units {
@@ -412,7 +412,7 @@ func TestDeriveUnitRangesLocalAnchors(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := DeriveUnitRanges(
-				context.Background(), noQueryUnitQuerier{},
+				t.Context(), noQueryUnitQuerier{},
 				[]UnitAnchor{tt.anchor},
 			)
 			require.NoError(t, err)
@@ -426,7 +426,7 @@ func TestDeriveUnitRangesLocalAnchors(t *testing.T) {
 // empty result without backend calls.
 func TestDeriveUnitRangesEmptyAnchors(t *testing.T) {
 	got, err := DeriveUnitRanges(
-		context.Background(), noQueryUnitQuerier{}, nil,
+		t.Context(), noQueryUnitQuerier{}, nil,
 	)
 	require.NoError(t, err)
 	assert.Empty(t, got)
@@ -466,7 +466,7 @@ func TestDeriveUnitRangesBatchesRunAnchors(t *testing.T) {
 	anchors = append(anchors, anchors[0])
 
 	q := &countingUnitQuerier{inner: d}
-	got, err := DeriveUnitRanges(context.Background(), q, anchors)
+	got, err := DeriveUnitRanges(t.Context(), q, anchors)
 	require.NoError(t, err)
 	require.Len(t, got, len(anchors))
 	for i := range got {
@@ -510,7 +510,7 @@ func TestDeriveUnitRangesSecondRoundAcrossFlip(t *testing.T) {
 	require.Less(t, len(anchors), UnitBoundsFlowFactor,
 		"across-flip page must stay sparse; restructure the test if the flow factor shrinks")
 	q := &countingUnitQuerier{inner: d}
-	got, err := DeriveUnitRanges(context.Background(), q, anchors)
+	got, err := DeriveUnitRanges(t.Context(), q, anchors)
 	require.NoError(t, err)
 	require.Len(t, got, len(anchors))
 	assert.Equal(t, [2]int{1, 2}, got[0], "run 1 anchor 1")
@@ -546,7 +546,7 @@ func TestDeriveUnitRangesNonMemberSpan(t *testing.T) {
 	)
 
 	for _, ordinal := range []int{5, 7} {
-		got, err := DeriveUnitRanges(context.Background(), d, []UnitAnchor{{
+		got, err := DeriveUnitRanges(t.Context(), d, []UnitAnchor{{
 			SessionID: "s-span", Ordinal: ordinal, Role: "assistant",
 			Embeddable: true,
 		}})
@@ -575,7 +575,7 @@ func TestNearestUserBoundariesSentinels(t *testing.T) {
 		unitMsg("s-b", 6, "assistant", "a6"),
 	)
 
-	got, err := d.NearestUserBoundaries(context.Background(), []UnitProbe{
+	got, err := d.NearestUserBoundaries(t.Context(), []UnitProbe{
 		{SessionID: "s-b", Ordinal: 0},
 		{SessionID: "s-b", Ordinal: 2},
 		{SessionID: "s-b", Ordinal: 4},
@@ -612,7 +612,7 @@ func TestNearestUserBoundariesSentinels(t *testing.T) {
 // that specific session.
 func TestUnitBoundsQuerierChunkingAlignment(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	// >1 chunk boundary crossed for both methods (unitExtentChunk is the
 	// smaller of the two).
 	const n = max(unitSessionChunk, unitExtentChunk) + 20
@@ -675,7 +675,7 @@ func TestUnitBoundsQuerierChunkingAlignment(t *testing.T) {
 // not exist), instead of silently returning a zero range.
 func TestRunExtentsAnchorRowMissingErrors(t *testing.T) {
 	d := testDB(t)
-	_, err := d.RunExtents(context.Background(), []ExtentProbe{{
+	_, err := d.RunExtents(t.Context(), []ExtentProbe{{
 		SessionID: "no-such-session", Ordinal: 3,
 		Lo: -1, Hi: UnitOrdinalMax,
 	}})

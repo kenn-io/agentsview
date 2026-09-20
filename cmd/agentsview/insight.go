@@ -140,8 +140,8 @@ func newInsightGetCommand() *cobra.Command {
 				"/api/v1/insights/"+strconv.FormatInt(id, 10), nil, nil,
 			)
 			if err != nil {
-				var httpErr *insightHTTPError
-				if errors.As(err, &httpErr) &&
+				httpErr, hasHttpErr := errors.AsType[*insightHTTPError](err)
+				if hasHttpErr &&
 					httpErr.status == http.StatusNotFound {
 					return fmt.Errorf("insight %d not found", id)
 				}
@@ -278,7 +278,7 @@ func doInsightRequest(
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := (&http.Client{Timeout: 0}).Do(req)
 	if err != nil {
 		return nil, err
 	}

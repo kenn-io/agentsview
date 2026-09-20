@@ -141,6 +141,7 @@ func (r *testVerifiedReader) Close() error {
 
 func canonicalTestManifest(t *testing.T) (rawsync.AuthIdentity, rawsync.CanonicalManifest) {
 	t.Helper()
+
 	identity, err := rawsync.NewAuthIdentity("tenant-a", "device-a")
 	require.NoError(t, err)
 	object, err := rawsync.NewObjectRef(

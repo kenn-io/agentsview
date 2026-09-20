@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
@@ -49,7 +48,7 @@ func TestVSCodeCopilotDiscoverReadsWorkspaceManifestOncePerDir(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	srcs, err := provider.Discover(context.Background())
+	srcs, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, srcs, 3)
 	for _, s := range srcs {
@@ -72,7 +71,7 @@ func TestPositronDiscoverReadsWorkspaceManifestOncePerDir(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	srcs, err := provider.Discover(context.Background())
+	srcs, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, srcs, 3)
 	for _, s := range srcs {

@@ -1,15 +1,15 @@
 package main
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
-	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -79,8 +79,8 @@ func TestParseDaemonPushSSE(t *testing.T) {
 func TestPostDaemonPushConsumesSSE(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(
 		func(w http.ResponseWriter, r *http.Request) {
-			require.Equal(t, "/api/v1/push/pg", r.URL.Path)
-			require.Contains(t, r.Header.Get("Accept"), "text/event-stream")
+			assert.Equal(t, "/api/v1/push/pg", r.URL.Path)
+			assert.Contains(t, r.Header.Get("Accept"), "text/event-stream")
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = w.Write([]byte(
 				"event: progress\ndata: {\"SessionsDone\":1,\"SessionsTotal\":2}\n\n" +
@@ -90,7 +90,7 @@ func TestPostDaemonPushConsumesSSE(t *testing.T) {
 
 	var progress []postgres.PushProgress
 	result, err := postDaemonPush[postgres.PushResult](
-		context.Background(), transport{URL: ts.URL}, "", daemonPushPG,
+		t.Context(), transport{URL: ts.URL}, "", daemonPushPG,
 		apiclient.DaemonPushRequest{},
 		func(p postgres.PushProgress) { progress = append(progress, p) },
 	)
@@ -111,7 +111,7 @@ func TestPostDaemonPushJSONFallback(t *testing.T) {
 	t.Cleanup(ts.Close)
 
 	result, err := postDaemonPush[postgres.PushResult, postgres.PushProgress](
-		context.Background(), transport{URL: ts.URL}, "", daemonPushPG,
+		t.Context(), transport{URL: ts.URL}, "", daemonPushPG,
 		apiclient.DaemonPushRequest{}, nil,
 	)
 	require.NoError(t, err)
@@ -123,7 +123,9 @@ func TestDaemonPushWatchTransportRetriesWithoutScopeForOlderSchema(t *testing.T)
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
 		var body map[string]jsontext.Value
-		require.NoError(t, json.UnmarshalRead(r.Body, &body))
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
+			return
+		}
 		if attempts == 1 {
 			assert.Contains(t, body, "watch_batch")
 			assert.Contains(t, body, "watch_recovery")
@@ -159,7 +161,9 @@ func TestDaemonPushWatchTransportOmitsScopeForKnownOlderDaemon(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts++
 		var body map[string]jsontext.Value
-		require.NoError(t, json.UnmarshalRead(r.Body, &body))
+		if !assert.NoError(t, json.UnmarshalRead(r.Body, &body)) {
+			return
+		}
 		assert.NotContains(t, body, "watch_batch")
 		assert.NotContains(t, body, "watch_recovery")
 		w.Header().Set("Content-Type", "application/json")

@@ -217,7 +217,7 @@ func runWithHooks(
 	}
 
 	streams := defaultStreams(opts.Streams)
-	child := runCaptureChild(state, opts, prepared, streams)
+	child := runCaptureChild(ctx, state, opts, prepared, streams)
 	result, reportErr := reportRun(
 		ctx, state, opts, child.execution,
 		child.preReportErr, child.preReportReason)
@@ -227,7 +227,7 @@ func runWithHooks(
 		result, reportErr)
 }
 
-func runCaptureChild(
+func runCaptureChild(ctx context.Context,
 	state *captureState,
 	opts RunOptions,
 	prepared preparedRun,
@@ -241,7 +241,7 @@ func runCaptureChild(
 	if opts.Provider == ProviderCodex {
 		marker = newCodexThreadMarker(state, prepared.limits.MaxLineBytes)
 	}
-	execution, childExitCode, started, childRunErr := runChild(
+	execution, childExitCode, started, childRunErr := runChild(ctx,
 		prepared.argv, env, prepared.childWorkDir, streams, marker)
 	state.manifest.Execution = execution
 	var preReportErr error
@@ -1129,14 +1129,14 @@ func parseTime(value *string) *time.Time {
 	return &parsed
 }
 
-func bounded(value string, max int) string {
-	if len(value) <= max {
+func bounded(value string, maximum int) string {
+	if len(value) <= maximum {
 		return value
 	}
-	for max > 0 && !utf8.ValidString(value[:max]) {
-		max--
+	for maximum > 0 && !utf8.ValidString(value[:maximum]) {
+		maximum--
 	}
-	return value[:max]
+	return value[:maximum]
 }
 
 func executionExitCode(outcome ExecutionOutcome, childExitCode int) int {

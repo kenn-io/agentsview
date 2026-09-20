@@ -132,7 +132,7 @@ func newChangedPathPlanEngine(
 		modes[factory.agent] = parser.ProviderMigrationProviderAuthoritative
 		providerFactories = append(providerFactories, factory)
 	}
-	return NewEngine(dbtest.OpenTestDB(t), EngineConfig{
+	return NewEngine(t.Context(), dbtest.OpenTestDB(t), EngineConfig{
 		AgentDirs:              roots,
 		Machine:                "remote",
 		ProviderFactories:      providerFactories,
@@ -289,7 +289,7 @@ func TestPlanChangedPathsClaudeProcessesOnlyChangedSession(t *testing.T) {
 		}
 	}
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentClaude: {root}},
 		Machine:   "remote",
 	})
@@ -356,11 +356,11 @@ func TestPlanChangedPathsCodexIndexUsesStoredArchivedDuplicate(t *testing.T) {
 	}
 	storedPath := toStoredPath(archivePath)
 	oldName := "Old title"
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "remote~codex:" + uuid, Agent: string(parser.AgentCodex),
 		Machine: "remote", FilePath: &storedPath, SessionName: &oldName,
 	}))
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {liveRoot, archiveRoot},
 		},
@@ -402,7 +402,7 @@ func TestSyncChangedPathPlanPrefersLiveCodexDuplicate(t *testing.T) {
 		require.NoError(t, os.WriteFile(path, []byte(body), 0o600))
 	}
 	database := dbtest.OpenTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCodex: {liveRoot, archiveRoot},
 		},
@@ -448,11 +448,11 @@ func TestPlanChangedPathsOmnigentIncludesStoredDescendants(t *testing.T) {
 	storedParent := parser.VirtualSourcePath(storedContainer, "parent")
 	storedChild := parser.VirtualSourcePath(storedContainer, "child")
 	parentID := "remote~omnigent:parent"
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: parentID, Agent: string(parser.AgentOmnigent), Machine: "remote",
 		FilePath: &storedParent,
 	}))
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "remote~omnigent:child", Agent: string(parser.AgentOmnigent),
 		Machine: "remote", ParentSessionID: &parentID, FilePath: &storedChild,
 	}))
@@ -510,7 +510,7 @@ func TestPlanChangedPathsOmnigentIncludesStoredDescendants(t *testing.T) {
 			parseRequests: &parseRequests,
 		}
 	}
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentOmnigent: {physicalRoot},
 		},
@@ -595,14 +595,14 @@ func TestPlanChangedPathsExactUsesPreferredClaudeDuplicate(t *testing.T) {
 	require.NoError(t, err)
 	liveSize := liveInfo.Size()
 	liveMtime := liveInfo.ModTime().UnixNano()
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "exact-duplicate", Agent: string(parser.AgentClaude), Machine: "remote",
 		FilePath: &livePath, FileSize: &liveSize, FileMtime: &liveMtime,
 	}))
-	require.NoError(t, database.SetSessionDataVersion(
+	require.NoError(t, database.SetSessionDataVersion(t.Context(),
 		"exact-duplicate", db.CurrentDataVersion(),
 	))
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {liveRoot, archiveRoot},
 		},
@@ -690,11 +690,11 @@ func TestPlanChangedPathsTranslatesStoredHintsOrFallsBack(t *testing.T) {
 		}
 	}
 	database := dbtest.OpenTestDB(t)
-	require.NoError(t, database.UpsertSession(db.Session{
+	require.NoError(t, database.UpsertSession(t.Context(), db.Session{
 		ID: "plan-hints:member", Agent: string(factory.agent), Machine: "remote",
 		Project: "fixture", FilePath: &storedPath,
 	}))
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{factory.agent: {root}},
 		Machine:   "remote", ProviderFactories: []parser.ProviderFactory{factory},
 		ProviderMigrationModes: map[parser.AgentType]parser.ProviderMigrationMode{

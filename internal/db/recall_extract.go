@@ -130,13 +130,13 @@ func (db *DB) EnsureExtractGeneration(
 	}
 	gen.Fingerprint = strings.TrimSpace(gen.Fingerprint)
 	if gen.Fingerprint == "" {
-		return zero, fmt.Errorf("extract generation fingerprint is required")
+		return zero, errors.New("extract generation fingerprint is required")
 	}
 	if strings.TrimSpace(gen.Model) == "" {
-		return zero, fmt.Errorf("extract generation model is required")
+		return zero, errors.New("extract generation model is required")
 	}
 	if strings.TrimSpace(gen.Segmenter) == "" {
-		return zero, fmt.Errorf("extract generation segmenter is required")
+		return zero, errors.New("extract generation segmenter is required")
 	}
 	if gen.ParamsJSON == "" {
 		gen.ParamsJSON = "{}"
@@ -642,7 +642,7 @@ func (db *DB) UpsertExtractProgress(
 	if unitsTotal == 0 {
 		initialState = ExtractProgressDone
 	}
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return zero, fmt.Errorf(
 			"begin extract progress upsert for session %s: %w",
@@ -968,8 +968,7 @@ func (db *DB) ListExtractProgress(
 		return result, fmt.Errorf("invalid extract progress state %q", q.State)
 	}
 	if (q.CursorUpdatedAt == "") != (q.CursorSessionID == "") {
-		return result, fmt.Errorf(
-			"extract progress cursor requires updated_at and session_id")
+		return result, errors.New("extract progress cursor requires updated_at and session_id")
 	}
 	limit := q.Limit
 	if limit <= 0 {
@@ -1220,13 +1219,11 @@ const extractEligibleSessionSQL = `s.deleted_at IS NULL
 // on every pass.
 func extractCandidateSQL(q ExtractCandidateQuery) (string, []any, error) {
 	if strings.TrimSpace(q.Fingerprint) == "" {
-		return "", nil, fmt.Errorf(
-			"extract candidate query requires a fingerprint")
+		return "", nil, errors.New("extract candidate query requires a fingerprint")
 	}
 	if len(q.ScanVersions) == 0 {
-		return "", nil, fmt.Errorf(
-			"extract candidate query requires the current secret-scan " +
-				"versions: without them unscanned sessions would count as clean")
+		return "", nil, errors.New("extract candidate query requires the current secret-scan " +
+			"versions: without them unscanned sessions would count as clean")
 	}
 	limit := q.Limit
 	if limit <= 0 {
@@ -1387,7 +1384,7 @@ func (db *DB) InsertExtractedRecallEntries(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("begin extracted entries insert: %w", err)
 	}
@@ -1408,7 +1405,7 @@ func insertExtractedRecallEntriesTx(
 	inserted := 0
 	for _, entry := range entries {
 		if entry.ID == "" {
-			return 0, fmt.Errorf("extracted recall entry id is required")
+			return 0, errors.New("extracted recall entry id is required")
 		}
 		var exists int
 		err := tx.QueryRowContext(ctx,
@@ -1422,7 +1419,7 @@ func insertExtractedRecallEntriesTx(
 				"checking extracted entry %s: %w", entry.ID, err,
 			)
 		}
-		if err := insertRecallEntryTx(tx, entry); err != nil {
+		if err := insertRecallEntryTx(ctx, tx, entry); err != nil {
 			return 0, err
 		}
 		inserted++
@@ -1475,7 +1472,7 @@ func (db *DB) CommitExtractedUnit(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("begin extracted unit commit: %w", err)
 	}
@@ -1674,10 +1671,8 @@ func bindExtractedEvidenceTx(
 				bound[key] = metadata
 			}
 			entry.Evidence[j].ContentDigest = metadata.ContentDigest
-			entry.Evidence[j].MessageStartSourceUUID =
-				metadata.MessageStartSourceUUID
-			entry.Evidence[j].MessageEndSourceUUID =
-				metadata.MessageEndSourceUUID
+			entry.Evidence[j].MessageStartSourceUUID = metadata.MessageStartSourceUUID
+			entry.Evidence[j].MessageEndSourceUUID = metadata.MessageEndSourceUUID
 		}
 		entries[i] = entry
 	}
@@ -1725,7 +1720,7 @@ func (db *DB) ReconcileIneligibleExtractSessions(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return 0, 0, fmt.Errorf("begin extract reconcile: %w", err)
 	}
@@ -1789,7 +1784,7 @@ func (db *DB) DiscardExtractedSessionOutput(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin extract discard: %w", err)
 	}
@@ -1900,6 +1895,7 @@ func rebindExtractedSessionEvidenceTx(
 		return 0, fmt.Errorf(
 			"reading evidence for session %s: %w", sessionID, err)
 	}
+	defer rows.Close()
 	type evidenceRow struct {
 		id         int64
 		entryID    string
@@ -2031,7 +2027,7 @@ func (db *DB) RefreshExtractedSessionCoverage(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return zero, fmt.Errorf("begin coverage refresh: %w", err)
 	}

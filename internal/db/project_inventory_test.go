@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"sort"
 	"strings"
@@ -16,7 +15,7 @@ import (
 
 func TestGetProjectInventoryAggregates(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "alpha-1", "alpha", func(s *Session) {
 		s.Machine = "m1"
@@ -45,7 +44,7 @@ func TestGetProjectInventoryAggregates(t *testing.T) {
 		s.StartedAt = Ptr("2020-01-01T00:00:00Z")
 		s.EndedAt = Ptr("2020-01-02T00:00:00Z")
 	})
-	require.NoError(t, d.SoftDeleteSession("alpha-trashed"))
+	require.NoError(t, d.SoftDeleteSession(ctx, "alpha-trashed"))
 
 	insertSession(t, d, "beta-1", "beta", func(s *Session) {
 		s.Machine = "m3"
@@ -98,7 +97,7 @@ func TestGetProjectInventoryAggregates(t *testing.T) {
 
 func TestProjectDateFilterScopesInventoryAndFolders(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	for _, fixture := range []struct{ id, project, cwd, start, end string }{
 		{"august", "alpha", "/work/august", "2026-08-15T12:00:00Z", "2026-08-15T13:00:00Z"},
 		{"september", "alpha", "/work/september", "2026-09-01T00:00:00Z", "2026-09-01T01:00:00Z"},
@@ -133,7 +132,7 @@ func TestProjectDateFilterScopesInventoryAndFolders(t *testing.T) {
 
 func TestGetProjectInventoryKeepsSanitizedLabelCollisionsDistinct(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "private-a-1", "/private/repos/alpha")
 	insertSession(t, d, "private-b-1", "/private/repos/beta")
@@ -160,7 +159,7 @@ func TestGetProjectInventoryKeepsSanitizedLabelCollisionsDistinct(t *testing.T) 
 
 func TestGetProjectInventoryIgnoresEmptyTimestampStrings(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "legacy-1", "alpha", func(s *Session) {
 		s.StartedAt = Ptr("2024-01-05T00:00:00Z")
@@ -169,7 +168,7 @@ func TestGetProjectInventoryIgnoresEmptyTimestampStrings(t *testing.T) {
 	// Legacy rows can hold '' instead of NULL in the TEXT timestamp
 	// columns; an empty string sorts before every real timestamp and would
 	// corrupt MIN(started_at) without the NULLIF guard.
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(ctx,
 		`UPDATE sessions SET started_at = '', ended_at = '' WHERE id = 'legacy-2'`)
 	require.NoError(t, err)
 
@@ -189,7 +188,7 @@ func TestGetProjectInventoryIgnoresEmptyTimestampStrings(t *testing.T) {
 
 func TestGetProjectInventoryCwdNormalization(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "win-1", "winproj", func(s *Session) {
 		s.Cwd = `C:\w\repo`
@@ -211,7 +210,7 @@ func TestGetProjectInventoryCwdNormalization(t *testing.T) {
 
 func TestGetProjectInventoryAnnotations(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	insertSession(t, d, "alpha-1", "alpha", func(s *Session) {
 		s.StartedAt = Ptr("2024-01-01T00:00:00Z")
@@ -296,7 +295,7 @@ func TestGetProjectInventoryAnnotations(t *testing.T) {
 // must use the sessions machine index rather than a full table scan.
 func TestGetProjectInventoryManyDistinctProjects(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	// Exceed SQLite's bind-variable budget (32766) with distinct visible
 	// project labels: the inventory feeds every raw label to
 	// BuildProjectIdentityMap at once, so the identity-observation lookup
@@ -315,8 +314,8 @@ func TestGetProjectInventoryManyDistinctProjects(t *testing.T) {
 func TestProjectInventorySingleAggregationPass(t *testing.T) {
 	t.Run("aggregation query is a single sessions scan", func(t *testing.T) {
 		d := testDB(t)
-		rows, err := d.getReader().Query(
-			"EXPLAIN QUERY PLAN " + projectInventoryAggregateQuery(),
+		rows, err := d.getReader().Query(t.Context(),
+			"EXPLAIN QUERY PLAN "+projectInventoryAggregateQuery(),
 		)
 		require.NoError(t, err)
 		defer rows.Close()
@@ -336,7 +335,7 @@ func TestProjectInventorySingleAggregationPass(t *testing.T) {
 	t.Run("candidate query uses the sessions machine index", func(t *testing.T) {
 		d := testDB(t)
 		query, args := projectInventoryCandidateQuery([]string{"ws"})
-		rows, err := d.getReader().Query("EXPLAIN QUERY PLAN "+query, args...)
+		rows, err := d.getReader().Query(t.Context(), "EXPLAIN QUERY PLAN "+query, args...)
 		require.NoError(t, err)
 		defer rows.Close()
 

@@ -96,7 +96,7 @@ func TestManifestQualitySignalsMatchesDBWireFormat(t *testing.T) {
 // deterministic non-zero value so field transpositions are detectable.
 func populateWireFixture(t *testing.T, v reflect.Value, seed int) {
 	t.Helper()
-	for i := 0; i < v.NumField(); i++ {
+	for i := range v.NumField() {
 		field := v.Field(i)
 		if !field.CanSet() {
 			continue
@@ -125,6 +125,6 @@ func setWireFixtureValue(t *testing.T, field reflect.Value, n int) {
 	case reflect.Struct:
 		populateWireFixture(t, field, n*10)
 	default:
-		t.Fatalf("populateWireFixture: unhandled field kind %s; teach the fixture about it", field.Kind())
+		require.Failf(t, "populateWireFixture", "unhandled field kind %s; teach the fixture about it", field.Kind())
 	}
 }

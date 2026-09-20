@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -16,7 +15,7 @@ import (
 func TestEngineSyncPrimeAgentLateAttributionForceReplacesUsage(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentPrimeAgent: {root},
 		},
@@ -37,10 +36,10 @@ func TestEngineSyncPrimeAgentLateAttributionForceReplacesUsage(t *testing.T) {
 `
 	require.NoError(t, os.WriteFile(path, []byte(initial), 0o600))
 
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	require.False(t, stats.Aborted)
 	messages, err := database.GetAllMessages(
-		context.Background(), "prime-agent:session-header-id",
+		t.Context(), "prime-agent:session-header-id",
 	)
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
@@ -57,7 +56,7 @@ func TestEngineSyncPrimeAgentLateAttributionForceReplacesUsage(t *testing.T) {
 
 	engine.SyncPaths([]string{path})
 	messages, err = database.GetAllMessages(
-		context.Background(), "prime-agent:session-header-id",
+		t.Context(), "prime-agent:session-header-id",
 	)
 	require.NoError(t, err)
 	require.Len(t, messages, 2)
@@ -70,14 +69,14 @@ func TestEngineSyncPrimeAgentLateAttributionForceReplacesUsage(t *testing.T) {
 		"cache_creation_input_tokens": 2
 	}`, string(messages[1].TokenUsage))
 	session, err := database.GetSessionFull(
-		context.Background(), "prime-agent:session-header-id",
+		t.Context(), "prime-agent:session-header-id",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, 37, session.PeakContextTokens)
 	assert.Equal(t, 7, session.TotalOutputTokens)
 	usage, err := database.GetSessionUsage(
-		context.Background(), "prime-agent:session-header-id", true,
+		t.Context(), "prime-agent:session-header-id", true,
 	)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
@@ -88,7 +87,7 @@ func TestEngineSyncPrimeAgentLateAttributionForceReplacesUsage(t *testing.T) {
 func TestEngineSyncPrimeAgentStoresForkRelationship(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentPrimeAgent: {root},
 		},
@@ -120,7 +119,7 @@ func TestEngineSyncPrimeAgentStoresForkRelationship(t *testing.T) {
 func TestEngineSyncPrimeAgentSingleSessionResyncsResolvedPath(t *testing.T) {
 	database := openTestDB(t)
 	root := t.TempDir()
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentPrimeAgent: {root},
 		},

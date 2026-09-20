@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -232,7 +233,7 @@ func recallScorePolicyVersion(mode string) string {
 
 func NormalizeRecallContextMaxBytes(maxBytes int) (int, error) {
 	if maxBytes < 0 {
-		return 0, fmt.Errorf("context_max_bytes must be non-negative")
+		return 0, errors.New("context_max_bytes must be non-negative")
 	}
 	if maxBytes == 0 {
 		return defaultRecallContextMaxBytes, nil
@@ -242,7 +243,7 @@ func NormalizeRecallContextMaxBytes(maxBytes int) (int, error) {
 
 func ValidateRecallEntryLimit(limit int) error {
 	if limit < 0 {
-		return fmt.Errorf("limit must be non-negative")
+		return errors.New("limit must be non-negative")
 	}
 	return nil
 }
@@ -388,20 +389,14 @@ func ValidateRecallContextEntries(
 		if len(meta.IncludedIDs) == 0 {
 			return nil
 		}
-		return fmt.Errorf(
-			"context_entries ids must match context_meta.included_ids",
-		)
+		return errors.New("context_entries ids must match context_meta.included_ids")
 	}
 	if len(contextEntries) != len(meta.IncludedIDs) {
-		return fmt.Errorf(
-			"context_entries ids must match context_meta.included_ids",
-		)
+		return errors.New("context_entries ids must match context_meta.included_ids")
 	}
 	for i, recall := range contextEntries {
 		if recall.ID != meta.IncludedIDs[i] {
-			return fmt.Errorf(
-				"context_entries ids must match context_meta.included_ids",
-			)
+			return errors.New("context_entries ids must match context_meta.included_ids")
 		}
 	}
 	return nil

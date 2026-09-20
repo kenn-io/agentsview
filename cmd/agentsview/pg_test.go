@@ -128,8 +128,7 @@ func TestPGServeConfigAcceptsManagedCaddyFlags(t *testing.T) {
 	require.NoError(t, err, "loadPGServeConfigForTest")
 	assert.Equal(t, "caddy", cfg.Proxy.Mode)
 	assert.Equal(t, "https://viewer.example.test:8443", cfg.PublicURL)
-	assert.Equal(t,
-		"https://app.example.test,https://viewer.example.test:8443",
+	assert.Equal(t, "https://app.example.test,https://viewer.example.test:8443",
 		strings.Join(cfg.PublicOrigins, ","))
 	assert.Equal(t, "/usr/local/bin/caddy", cfg.Proxy.Bin)
 	assert.Equal(t, "0.0.0.0", cfg.Proxy.BindHost)
@@ -189,7 +188,7 @@ machine_name = "workbox"
 url = "postgres://archive"
 `)
 
-	err := runPGStatus("archive", PGStatusConfig{})
+	err := runPGStatus(t.Context(), "archive", PGStatusConfig{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pg connection to archive permits plaintext")
 	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
@@ -215,7 +214,7 @@ url = "postgres://archive"
 		0o600,
 	))
 
-	err := runPGStatus("archive", PGStatusConfig{})
+	err := runPGStatus(t.Context(), "archive", PGStatusConfig{})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "pg connection to archive permits plaintext")
 	assert.Contains(t, err.Error(), "allow_insecure = true under [pg] or [pg.NAME]")
@@ -268,7 +267,7 @@ machine_name = "workbox"
 url = "postgres://archive"
 `)
 
-	err := runPGStatus("", PGStatusConfig{AllTargets: true})
+	err := runPGStatus(t.Context(), "", PGStatusConfig{AllTargets: true})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "2 pg target(s) failed")
 	assert.Contains(t, err.Error(), "work (default): expanding url: environment variable(s) not set: BROKEN_WORK_TARGET")
@@ -322,7 +321,7 @@ url = "postgres://archive"
 func TestRunPGServeRejectsInvalidManagedCaddyConfigBeforePGSetup(t *testing.T) {
 	dataDir := t.TempDir()
 
-	cmd := exec.Command(os.Args[0], "-test.run=TestRunPGServeHelperProcess", "--",
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=TestRunPGServeHelperProcess", "--",
 		"--host", "0.0.0.0",
 		"--public-url", "https://viewer.example.test",
 		"--proxy", "caddy",
@@ -341,7 +340,7 @@ func TestRunPGServeRejectsInvalidManagedCaddyConfigBeforePGSetup(t *testing.T) {
 func TestRunPGServeNonLoopbackWithoutProxyFallsThroughToPGConfig(t *testing.T) {
 	dataDir := t.TempDir()
 
-	cmd := exec.Command(os.Args[0], "-test.run=TestRunPGServeHelperProcess", "--",
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=TestRunPGServeHelperProcess", "--",
 		"--host", "0.0.0.0",
 		"--port", "8081",
 	)
@@ -550,19 +549,19 @@ func TestWritePGPushSummaryReportsErrorCount(t *testing.T) {
 // the scrollback instead of being overwritten by the next stage.
 func TestPGPushProgressPrinterKeepsCompletedStages(t *testing.T) {
 	out := captureStdout(t, func() {
-		print := newPGPushProgressPrinter()
-		print(postgres.PushProgress{Phase: "preparing"})
-		print(postgres.PushProgress{Phase: "preparing"})
-		print(postgres.PushProgress{
+		writeProgress := newPGPushProgressPrinter()
+		writeProgress(postgres.PushProgress{Phase: "preparing"})
+		writeProgress(postgres.PushProgress{Phase: "preparing"})
+		writeProgress(postgres.PushProgress{
 			Phase: "preparing", SessionsDone: 500, SessionsTotal: 1000,
 		})
-		print(postgres.PushProgress{
+		writeProgress(postgres.PushProgress{
 			Phase: "preparing", SessionsDone: 1000, SessionsTotal: 1000,
 		})
-		print(postgres.PushProgress{
+		writeProgress(postgres.PushProgress{
 			SessionsDone: 1, SessionsTotal: 9, MessagesDone: 5,
 		})
-		print(postgres.PushProgress{
+		writeProgress(postgres.PushProgress{
 			Phase: "vectors", VectorSessionsDone: 1,
 			VectorSessionsTotal: 2, VectorChunksPushed: 3,
 		})

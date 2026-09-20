@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -34,7 +33,7 @@ func TestOpenCodeWatchPlanKeepsTheContainerOffTheRecursiveBudget(t *testing.T) {
 		filepath.Join(root, "storage", "session", "project"), 0o755,
 	))
 
-	plan, err := openCodeUnitProvider(t, root).WatchPlan(context.Background())
+	plan, err := openCodeUnitProvider(t, root).WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 2)
 
@@ -67,7 +66,7 @@ func TestOpenCodeWatchPlanStaysWholeWhileStorageIsAbsent(t *testing.T) {
 	))
 	require.NoDirExists(t, filepath.Join(root, "storage"))
 
-	plan, err := openCodeUnitProvider(t, root).WatchPlan(context.Background())
+	plan, err := openCodeUnitProvider(t, root).WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
@@ -82,7 +81,7 @@ func TestOpenCodeWatchPlanNamesNoAbsentRootForAnUninstalledAgent(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "not-installed")
 	require.NoDirExists(t, root)
 
-	plan, err := openCodeUnitProvider(t, root).WatchPlan(context.Background())
+	plan, err := openCodeUnitProvider(t, root).WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
@@ -103,7 +102,7 @@ func TestOpenCodeWatchPlanKeepsASymlinkedRootRecursive(t *testing.T) {
 		t.Skipf("symlink creation unavailable: %v", err)
 	}
 
-	plan, err := openCodeUnitProvider(t, link).WatchPlan(context.Background())
+	plan, err := openCodeUnitProvider(t, link).WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, link, plan.Roots[0].Path)
@@ -167,7 +166,7 @@ func TestOpenCodeChangedPathClaimedByExactlyOneUnit(t *testing.T) {
 	require.NoError(t, os.WriteFile(sessionPath, []byte(`{"id":"ses_unit"}`), 0o600))
 
 	provider := openCodeUnitProvider(t, root)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	walPath := filepath.Join(root, "opencode.db-wal")
 	require.NoError(t, os.WriteFile(walPath, make([]byte, 4096), 0o600))
@@ -209,7 +208,7 @@ func TestOpenCodeStorageSessionSurvivesAStaleDispatchSet(t *testing.T) {
 
 	// The dispatch set the engine caches: storage does not exist yet, so the
 	// plan is the single recursive unit at the configured root.
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	cachedWatchRoot := plan.Roots[0].Path
@@ -219,12 +218,12 @@ func TestOpenCodeStorageSessionSurvivesAStaleDispatchSet(t *testing.T) {
 	sessionPath := filepath.Join(sessionDir, "ses_skew.json")
 	require.NoError(t, os.WriteFile(sessionPath, []byte(`{"id":"ses_skew"}`), 0o600))
 
-	refreshed, err := provider.WatchPlan(context.Background())
+	refreshed, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, refreshed.Roots, 2, "the live plan has split by now")
 
 	sources, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path: sessionPath, EventKind: "write", WatchRoot: cachedWatchRoot,
 		},
@@ -251,7 +250,7 @@ func TestOpenCodeUnscopedChangedPathStaysUnfiltered(t *testing.T) {
 	))
 
 	sources, err := openCodeUnitProvider(t, root).SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sessionPath, EventKind: "write"},
 	)
 	require.NoError(t, err)

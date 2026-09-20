@@ -278,7 +278,7 @@ func TestQueueTombstoneReplacesPermanentlyRejectedTombstone(t *testing.T) {
 	assert.Equal(t, rawsync.ManifestTombstone, replacement.Kind)
 	assert.Equal(t, snapshotCommit.Receipt, replacement.ExpectedParentReceipt)
 	var rejectedRows int
-	require.NoError(t, store.db.QueryRow(
+	require.NoError(t, store.db.QueryRowContext(t.Context(),
 		`SELECT count(*) FROM outbox_generations WHERE capture_id = ?`, rejectedID,
 	).Scan(&rejectedRows))
 	assert.Zero(t, rejectedRows)
@@ -324,12 +324,18 @@ func TestAcknowledgeGenerationRejectsStaleInputsWithoutAdvancing(t *testing.T) {
 	}{
 		{name: "foreign device", deviceID: "device-b", captureID: generation.CaptureID, commit: valid},
 		{name: "foreign capture", deviceID: "device-a", captureID: "missing", commit: valid},
-		{name: "wrong generation", deviceID: "device-a", captureID: generation.CaptureID,
-			commit: rawsync.CommitResult{ManifestID: valid.ManifestID, Receipt: valid.Receipt, Generation: 2}},
-		{name: "wrong manifest", deviceID: "device-a", captureID: generation.CaptureID,
-			commit: rawsync.CommitResult{ManifestID: validCheckpointDigest(9), Receipt: valid.Receipt, Generation: 1}},
-		{name: "invalid receipt", deviceID: "device-a", captureID: generation.CaptureID,
-			commit: rawsync.CommitResult{ManifestID: valid.ManifestID, Receipt: "bad", Generation: 1}},
+		{
+			name: "wrong generation", deviceID: "device-a", captureID: generation.CaptureID,
+			commit: rawsync.CommitResult{ManifestID: valid.ManifestID, Receipt: valid.Receipt, Generation: 2},
+		},
+		{
+			name: "wrong manifest", deviceID: "device-a", captureID: generation.CaptureID,
+			commit: rawsync.CommitResult{ManifestID: validCheckpointDigest(9), Receipt: valid.Receipt, Generation: 1},
+		},
+		{
+			name: "invalid receipt", deviceID: "device-a", captureID: generation.CaptureID,
+			commit: rawsync.CommitResult{ManifestID: valid.ManifestID, Receipt: "bad", Generation: 1},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := store.AcknowledgeGeneration(
@@ -450,7 +456,7 @@ func TestAcknowledgedGenerationCompactsToBoundedHeadReplayState(t *testing.T) {
 	require.NoError(t, err)
 	assert.Zero(t, usage.UsedBytes)
 	var generations int
-	require.NoError(t, store.db.QueryRow(
+	require.NoError(t, store.db.QueryRowContext(t.Context(),
 		`SELECT count(*) FROM outbox_generations`,
 	).Scan(&generations))
 	assert.Zero(t, generations)
@@ -540,7 +546,7 @@ func TestParentConflictBlocksOnlyItsSourceChain(t *testing.T) {
 	assert.Equal(t, second.CaptureID, next.CaptureID)
 	var errorClass string
 	var blocked int
-	require.NoError(t, store.db.QueryRow(`SELECT error_class, blocked
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT error_class, blocked
 		FROM outbox_generations WHERE capture_id = ?`, first.CaptureID,
 	).Scan(&errorClass, &blocked))
 	assert.Equal(t, string(GenerationFailureParentReceiptConflict), errorClass)
@@ -581,21 +587,21 @@ func TestPermanentReplacementRecyclesCapacityAndCollectsRejectedObjects(t *testi
 	require.NoError(t, err)
 
 	var rejectedRows int
-	require.NoError(t, store.db.QueryRow(`SELECT count(*) FROM outbox_objects
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT count(*) FROM outbox_objects
 		WHERE sha256 = ? AND length = ?`, rejectedRef.SHA256, rejectedRef.Length,
 	).Scan(&rejectedRows))
 	assert.Zero(t, rejectedRows)
 	assert.NoFileExists(t, store.ObjectPath(rejectedRef))
 	var replacementRefs int
 	var replacementState string
-	require.NoError(t, store.db.QueryRow(`SELECT ref_count, state FROM outbox_objects
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT ref_count, state FROM outbox_objects
 		WHERE sha256 = ? AND length = ?`, replacementRef.SHA256, replacementRef.Length,
 	).Scan(&replacementRefs, &replacementState))
 	assert.Equal(t, 1, replacementRefs)
 	assert.Equal(t, "live", replacementState)
 	assert.FileExists(t, store.ObjectPath(replacementRef))
 	var generations int
-	require.NoError(t, store.db.QueryRow(
+	require.NoError(t, store.db.QueryRowContext(t.Context(),
 		`SELECT count(*) FROM outbox_generations`,
 	).Scan(&generations))
 	assert.Equal(t, 1, generations)
@@ -657,7 +663,7 @@ func TestParentConflictCannotBeClearedByLateTransientFailure(t *testing.T) {
 	require.ErrorIs(t, err, ErrGenerationFailureConflict)
 	var class string
 	var blocked int
-	require.NoError(t, store.db.QueryRow(`SELECT error_class, blocked
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT error_class, blocked
 		FROM outbox_generations WHERE capture_id = ?`, generation.CaptureID,
 	).Scan(&class, &blocked))
 	assert.Equal(t, string(GenerationFailureParentReceiptConflict), class)
@@ -695,11 +701,11 @@ func TestResumeGenerationRequeuesAgainstReconciledServerHead(t *testing.T) {
 	assert.Equal(t, generation.CaptureID, retried.CaptureID)
 	assert.Equal(t, reconciled.Receipt, retried.ExpectedParentReceipt)
 	var state, expectedParent, manifestID string
-	require.NoError(t, store.db.QueryRow(`SELECT state, expected_parent_receipt,
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT state, expected_parent_receipt,
 		manifest_id FROM outbox_generations WHERE capture_id = ?`, generation.CaptureID,
 	).Scan(&state, &expectedParent, &manifestID))
 	assert.Equal(t, "finalized", state)
-	assert.Equal(t, reconciled.Receipt, expectedParent)
+	assert.Equal(t, expectedParent, reconciled.Receipt)
 	assert.Empty(t, manifestID)
 }
 
@@ -730,7 +736,7 @@ func TestResumeGenerationAtomicallyReconcilesUnblockedConflict(t *testing.T) {
 	assert.Equal(t, reconciled.Receipt, retried.ExpectedParentReceipt)
 	var failureClass string
 	var blocked int
-	require.NoError(t, store.db.QueryRow(`SELECT error_class, blocked
+	require.NoError(t, store.db.QueryRowContext(t.Context(), `SELECT error_class, blocked
 		FROM outbox_generations WHERE capture_id = ?`, generation.CaptureID,
 	).Scan(&failureClass, &blocked))
 	assert.Empty(t, failureClass)

@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -19,8 +18,8 @@ func TestGenAIPricingPreservesUpstreamJSON(t *testing.T) {
 ]`),
 	}
 
-	require.NoError(t, database.UpsertGenAIPricing(context.Background(), want))
-	got, err := database.GetGenAIPricing(context.Background())
+	require.NoError(t, database.UpsertGenAIPricing(t.Context(), want))
+	got, err := database.GetGenAIPricing(t.Context())
 	require.NoError(t, err)
 	require.NotNil(t, got)
 
@@ -69,13 +68,13 @@ func TestInsertMissingGenAIPricingRefreshesEmbeddedDocument(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			database := testDB(t)
 			require.NoError(t, database.InsertMissingGenAIPricing(
-				context.Background(), initial,
+				t.Context(), initial,
 			))
 			require.NoError(t, database.InsertMissingGenAIPricing(
-				context.Background(), tt.next,
+				t.Context(), tt.next,
 			))
 
-			got, err := database.GetGenAIPricing(context.Background())
+			got, err := database.GetGenAIPricing(t.Context())
 			require.NoError(t, err)
 			require.NotNil(t, got)
 			assert.Equal(t, tt.next.Version, got.Version)
@@ -95,10 +94,10 @@ func TestInsertMissingGenAIPricingPreservesFetchedDocument(t *testing.T) {
 		Data:      []byte(`[{"id":"fetched"}]`),
 	}
 	require.NoError(t, database.UpsertGenAIPricing(
-		context.Background(), fetched,
+		t.Context(), fetched,
 	))
 	require.NoError(t, database.InsertMissingGenAIPricing(
-		context.Background(), GenAIPricingDocument{
+		t.Context(), GenAIPricingDocument{
 			Version:   "embedded-version",
 			SourceRef: "embedded-ref",
 			Source:    GenAIPricingSourceEmbedded,
@@ -106,7 +105,7 @@ func TestInsertMissingGenAIPricingPreservesFetchedDocument(t *testing.T) {
 		},
 	))
 
-	got, err := database.GetGenAIPricing(context.Background())
+	got, err := database.GetGenAIPricing(t.Context())
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, fetched.Version, got.Version)

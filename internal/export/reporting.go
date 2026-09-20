@@ -1,6 +1,7 @@
 package export
 
 import (
+	"errors"
 	"fmt"
 	"sort"
 	"time"
@@ -283,7 +284,7 @@ func FinalizeReportingDay(day ReportingDay) (ReportingDay, []byte, error) {
 	hasData := false
 	for i := range hours {
 		if hours[i].SchemaVersion != day.SchemaVersion || hours[i].BucketSeconds != day.BucketSeconds {
-			return ReportingDay{}, nil, fmt.Errorf("reporting date hours must share its schema and bucket resolution")
+			return ReportingDay{}, nil, errors.New("reporting date hours must share its schema and bucket resolution")
 		}
 		wantPeriod := fmt.Sprintf("%s-%02d", day.Date, i)
 		if hours[i].Period != wantPeriod {

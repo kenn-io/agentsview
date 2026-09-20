@@ -25,11 +25,11 @@ func TestActivityReportTerminalLookupIndex(t *testing.T) {
 					"call", status, "2026-06-16T00:01:00Z", 0)
 			}
 			if upgrade {
-				_, err := d.getWriter().Exec("DROP INDEX IF EXISTS idx_tool_result_events_terminal")
+				_, err := d.getWriter().Exec(t.Context(), "DROP INDEX IF EXISTS idx_tool_result_events_terminal")
 				require.NoError(t, err)
 				path := d.Path()
 				require.NoError(t, d.Close())
-				d, err = OpenIsolated(path)
+				d, err = OpenIsolated(t.Context(), path)
 				require.NoError(t, err)
 				t.Cleanup(func() { require.NoError(t, d.Close()) })
 			}
@@ -52,7 +52,7 @@ func TestActivityReportTerminalLookupIndex(t *testing.T) {
 				details = append(details, detail)
 			}
 			require.NoError(t, rows.Err())
-			require.NoError(t, rows.Close())
+			defer rows.Close()
 			assert.Contains(t, strings.Join(details, "\n"), "(session_id=? AND timestamp>?)")
 
 			_, ids, err := d.activityReportSessions(t.Context(), AnalyticsFilter{},

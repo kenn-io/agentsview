@@ -81,14 +81,13 @@ func TestScheduledReconcileDefersUnavailableOptedInRoots(t *testing.T) {
 					session.Agent = string(tc.agent)
 					session.FilePath = &sourcePath
 				})
-			require.NoError(t,
-				database.SetSessionDataVersion(sessionID, db.CurrentDataVersion()))
+			require.NoError(t, database.SetSessionDataVersion(t.Context(), sessionID, db.CurrentDataVersion()))
 			require.NoError(t, database.BaselineActiveSessionSourcePaths(
 				t.Context(), "local", []db.SessionSourcePath{{
 					Agent: string(tc.agent), FilePath: sourcePath,
 				}},
 			))
-			engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+			engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 				AgentDirs: cfg.AgentDirs,
 				Machine:   "local",
 			})
@@ -125,14 +124,13 @@ func TestScheduledReconcileDefersNestedUnavailableRoots(t *testing.T) {
 			session.Agent = string(parser.AgentAider)
 			session.FilePath = &sourcePath
 		})
-	require.NoError(t,
-		database.SetSessionDataVersion(sessionID, db.CurrentDataVersion()))
+	require.NoError(t, database.SetSessionDataVersion(t.Context(), sessionID, db.CurrentDataVersion()))
 	require.NoError(t, database.BaselineActiveSessionSourcePaths(
 		t.Context(), "local", []db.SessionSourcePath{{
 			Agent: string(parser.AgentAider), FilePath: sourcePath,
 		}},
 	))
-	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 		AgentDirs: cfg.AgentDirs,
 		Machine:   "local",
 	})
@@ -205,11 +203,11 @@ func (f *fakeRemoteSourceSyncEngine) SyncRootsSince(
 
 func TestRunRemoteSourceSyncPassSyncsConfiguredRemoteRoots(t *testing.T) {
 	engine := &fakeRemoteSourceSyncEngine{}
-	runRemoteSourceSyncPass(context.Background(), engine, nil)
+	runRemoteSourceSyncPass(t.Context(), engine, nil)
 	assert.Empty(t, engine.calls, "no remote roots -> no scoped sync")
 
 	roots := []string{"s3://bucket/machine/raw/claude"}
-	runRemoteSourceSyncPass(context.Background(), engine, roots)
+	runRemoteSourceSyncPass(t.Context(), engine, roots)
 	require.Len(t, engine.calls, 1)
 	assert.Equal(t, roots, engine.calls[0])
 	assert.True(t, engine.since[0].IsZero(),
@@ -218,10 +216,10 @@ func TestRunRemoteSourceSyncPassSyncsConfiguredRemoteRoots(t *testing.T) {
 
 func TestRunScheduledSyncPassCallsPerAgent(t *testing.T) {
 	engine := &fakeScheduledEngine{}
-	runScheduledSyncPass(context.Background(), engine, nil)
+	runScheduledSyncPass(t.Context(), engine, nil)
 	assert.Empty(t, engine.calls, "no targets -> no reconciliation")
 
-	runScheduledSyncPass(context.Background(), engine,
+	runScheduledSyncPass(t.Context(), engine,
 		[]scheduledReconcileTarget{{Agent: parser.AgentAider, Roots: []string{"/a"}}})
 	require.Len(t, engine.calls, 1)
 	assert.Equal(t, parser.AgentAider, engine.calls[0].Agent)
@@ -242,7 +240,7 @@ func TestRunScheduledSyncPassLogsLifecycle(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			logs := captureLogOutput(t)
 			engine := &fakeScheduledEngine{err: tc.err}
-			runScheduledSyncPass(context.Background(), engine,
+			runScheduledSyncPass(t.Context(), engine,
 				[]scheduledReconcileTarget{{
 					Agent: parser.AgentAider, Roots: []string{"/a"},
 				}},

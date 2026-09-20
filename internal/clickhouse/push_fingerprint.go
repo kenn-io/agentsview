@@ -43,7 +43,7 @@ func (s *Sync) sessionFingerprints(
 		if err != nil {
 			return nil, fmt.Errorf("pin fingerprint %s: %w", sess.ID, err)
 		}
-		toolCalls, err := s.local.ToolCallFingerprint(sess.ID)
+		toolCalls, err := s.local.ToolCallFingerprint(ctx, sess.ID)
 		if err != nil {
 			return nil, fmt.Errorf("tool call fingerprint %s: %w", sess.ID, err)
 		}

@@ -171,7 +171,7 @@ func scanRecallEvidenceRow(rs rowScanner) (RecallEvidence, error) {
 	return e, err
 }
 
-func (db *DB) InsertRecallEntry(m RecallEntry) (string, error) {
+func (db *DB) InsertRecallEntry(ctx context.Context, m RecallEntry) (string, error) {
 	if err := db.requireDerivedTextStorage("recall entries"); err != nil {
 		return "", err
 	}
@@ -182,19 +182,19 @@ func (db *DB) InsertRecallEntry(m RecallEntry) (string, error) {
 	defer db.mu.Unlock()
 
 	if m.ID == "" {
-		return "", fmt.Errorf("recall entry id is required")
+		return "", errors.New("recall entry id is required")
 	}
 	if m.Status == "" {
 		m.Status = corerecall.StatusAccepted
 	}
 
-	tx, err := db.getWriter().Begin()
+	tx, err := db.getWriter().Begin(ctx)
 	if err != nil {
 		return "", fmt.Errorf("begin recall insert: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	if err := insertRecallEntryTx(tx, m); err != nil {
+	if err := insertRecallEntryTx(ctx, tx, m); err != nil {
 		return "", err
 	}
 
@@ -472,6 +472,7 @@ func revokeRecallEntriesWithDroppedEvidenceTx(
 	if err != nil {
 		return fmt.Errorf("querying recall with dropped evidence: %w", err)
 	}
+	defer rows.Close()
 	type droppedEvidenceEntry struct {
 		id        string
 		sessionID string
@@ -516,13 +517,13 @@ func (db *DB) SupersedeRecallEntry(
 	}
 	oldID = strings.TrimSpace(oldID)
 	if oldID == "" {
-		return "", fmt.Errorf("superseded entry id is required")
+		return "", errors.New("superseded entry id is required")
 	}
 	if replacement.ID == "" {
-		return "", fmt.Errorf("replacement entry id is required")
+		return "", errors.New("replacement entry id is required")
 	}
 	if replacement.ID == oldID {
-		return "", fmt.Errorf("replacement entry id must differ from superseded entry id")
+		return "", errors.New("replacement entry id must differ from superseded entry id")
 	}
 	if err := normalizeRecallEntryReviewState(&replacement); err != nil {
 		return "", err
@@ -567,7 +568,7 @@ func supersedeRecallEntryTx(
 		return err
 	}
 
-	if err := insertRecallEntryTx(tx, replacement); err != nil {
+	if err := insertRecallEntryTx(ctx, tx, replacement); err != nil {
 		return err
 	}
 	result, err := tx.ExecContext(ctx, `
@@ -615,14 +616,14 @@ func requireActiveRecallSupersessionTarget(
 	return nil
 }
 
-func insertRecallEntryTx(tx *sql.Tx, m RecallEntry) error {
+func insertRecallEntryTx(ctx context.Context, tx *sql.Tx, m RecallEntry) error {
 	if err := normalizeRecallEntryReviewState(&m); err != nil {
 		return err
 	}
 	if err := validateRecallEvidenceOwnership(m); err != nil {
 		return err
 	}
-	_, err := tx.Exec(`
+	_, err := tx.ExecContext(ctx, `
 		INSERT INTO recall_entries (
 			id, type, scope, status, review_state, title, body, trigger,
 			confidence, uncertainty, project, cwd, git_branch, agent,
@@ -641,7 +642,7 @@ func insertRecallEntryTx(tx *sql.Tx, m RecallEntry) error {
 	}
 
 	for _, e := range m.Evidence {
-		_, err = tx.Exec(`
+		_, err = tx.ExecContext(ctx, `
 			INSERT INTO recall_evidence (
 				entry_id, session_id, message_start_ordinal,
 				message_end_ordinal, message_start_source_uuid,
@@ -694,7 +695,7 @@ func (db *DB) GetRecallEntry(ctx context.Context, id string) (*RecallEntry, erro
 		id,
 	)
 	m, err := scanRecallEntryRow(row)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -1382,7 +1383,7 @@ func (db *DB) listRecallEntriesByIDs(
 	err := queryChunked(ids, func(chunk []string) error {
 		where, filterArgs := buildRecallEntryWhere(q, false)
 		placeholders, idArgs := inPlaceholders(chunk)
-		args := append(idArgs, filterArgs...)
+		args := slices.Concat(idArgs, filterArgs)
 		rows, err := db.getReader().QueryContext(ctx,
 			"SELECT "+recallBaseCols+" FROM recall_entries WHERE id IN "+
 				placeholders+" AND "+where,

@@ -13,6 +13,7 @@ import (
 	"os"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -73,13 +74,13 @@ type Store struct {
 // the connection serves the old generation while fileInfo describes the
 // new one, so the watcher never sees a change and the Store serves stale
 // data until the next rebuild.
-func NewStore(path string) (*Store, error) {
+func NewStore(ctx context.Context, path string) (*Store, error) {
 	info, err := os.Stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("statting duckdb mirror %s: %w", path, err)
 	}
 	PrimeFileIdentity(info)
-	conn, err := OpenReadOnly(path)
+	conn, err := OpenReadOnly(ctx, path)
 	if err != nil {
 		return nil, err
 	}
@@ -141,7 +142,8 @@ func (s *Store) queryContext(
 ) (*sql.Rows, error) {
 	s.handleMu.RLock()
 	defer s.handleMu.RUnlock()
-	return queryDuckDBContext(ctx, s.duck, s.connectionKind, s.quack, query, args...)
+	rows, err := queryDuckDBContext(ctx, s.duck, s.connectionKind, s.quack, query, args...)
+	return rows, err
 }
 
 // queryRowContext holds the read lock across the query start for the same
@@ -254,7 +256,7 @@ func (s *Store) RecordRecallQueryEvent(
 	return "", db.ErrReadOnly
 }
 
-func (s *Store) InsertRecallEntry(_ db.RecallEntry) (string, error) {
+func (s *Store) InsertRecallEntry(ctx context.Context, _ db.RecallEntry) (string, error) {
 	return "", db.ErrReadOnly
 }
 
@@ -492,11 +494,11 @@ func (s *Store) DecodeCursor(raw string) (db.SessionCursor, error) {
 	if len(parts) == 1 {
 		data, err := base64.RawURLEncoding.DecodeString(parts[0])
 		if err != nil {
-			return db.SessionCursor{}, fmt.Errorf("%w: %v", db.ErrInvalidCursor, err)
+			return db.SessionCursor{}, fmt.Errorf("%w: %w", db.ErrInvalidCursor, err)
 		}
 		var c db.SessionCursor
 		if err := json.Unmarshal(data, &c); err != nil {
-			return db.SessionCursor{}, fmt.Errorf("%w: %v", db.ErrInvalidCursor, err)
+			return db.SessionCursor{}, fmt.Errorf("%w: %w", db.ErrInvalidCursor, err)
 		}
 		c.Total = 0
 		return c, nil
@@ -506,11 +508,11 @@ func (s *Store) DecodeCursor(raw string) (db.SessionCursor, error) {
 	}
 	data, err := base64.RawURLEncoding.DecodeString(parts[0])
 	if err != nil {
-		return db.SessionCursor{}, fmt.Errorf("%w: invalid payload: %v", db.ErrInvalidCursor, err)
+		return db.SessionCursor{}, fmt.Errorf("%w: invalid payload: %w", db.ErrInvalidCursor, err)
 	}
 	sig, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return db.SessionCursor{}, fmt.Errorf("%w: invalid signature: %v", db.ErrInvalidCursor, err)
+		return db.SessionCursor{}, fmt.Errorf("%w: invalid signature: %w", db.ErrInvalidCursor, err)
 	}
 	s.cursorMu.RLock()
 	secret := append([]byte(nil), s.cursorSecret...)
@@ -522,7 +524,7 @@ func (s *Store) DecodeCursor(raw string) (db.SessionCursor, error) {
 	}
 	var c db.SessionCursor
 	if err := json.Unmarshal(data, &c); err != nil {
-		return db.SessionCursor{}, fmt.Errorf("%w: invalid json: %v", db.ErrInvalidCursor, err)
+		return db.SessionCursor{}, fmt.Errorf("%w: invalid json: %w", db.ErrInvalidCursor, err)
 	}
 	return c, nil
 }
@@ -755,12 +757,12 @@ func (s *Store) GetChildSessions(ctx context.Context, parentID string) ([]db.Ses
 	return scanSessionRows(rows)
 }
 
-func (s *Store) GetSessionVersion(id string) (int, int64, bool) {
+func (s *Store) GetSessionVersion(ctx context.Context, id string) (int, int64, bool) {
 	var count int
 	var fileMtime sql.NullInt64
 	var fileHash sql.NullString
 	var updated any
-	err := s.queryRowContext(context.Background(),
+	err := s.queryRowContext(ctx,
 		`SELECT message_count, file_mtime, file_hash,
 		        COALESCE(local_modified_at, ended_at, started_at, created_at)
 		 FROM sessions WHERE id = ?`,
@@ -771,7 +773,7 @@ func (s *Store) GetSessionVersion(id string) (int, int64, bool) {
 	}
 	fileMtimePart := ""
 	if fileMtime.Valid {
-		fileMtimePart = fmt.Sprintf("%d", fileMtime.Int64)
+		fileMtimePart = strconv.FormatInt(fileMtime.Int64, 10)
 	}
 	fileHashPart := ""
 	if fileHash.Valid {
@@ -786,16 +788,7 @@ func (s *Store) GetSessionVersion(id string) (int, int64, bool) {
 
 func (s *Store) GetStats(ctx context.Context, excludeOneShot, excludeAutomated bool) (db.Stats, error) {
 	filter := rootSessionWhere(excludeOneShot, excludeAutomated)
-	query := fmt.Sprintf(`
-		SELECT
-			COUNT(*),
-			COALESCE(SUM(message_count), 0),
-			COUNT(DISTINCT project),
-			COUNT(DISTINCT machine),
-			MIN(COALESCE(started_at, created_at))
-		FROM sessions
-		WHERE %s`,
-		filter)
+	query := "\n\t\tSELECT\n\t\t\tCOUNT(*),\n\t\t\tCOALESCE(SUM(message_count), 0),\n\t\t\tCOUNT(DISTINCT project),\n\t\t\tCOUNT(DISTINCT machine),\n\t\t\tMIN(COALESCE(started_at, created_at))\n\t\tFROM sessions\n\t\tWHERE " + filter
 	var stats db.Stats
 	var earliest any
 	if err := s.queryRowContext(ctx, query).Scan(
@@ -934,7 +927,7 @@ func rootSessionWhere(excludeOneShot, excludeAutomated bool) string {
 	return filter
 }
 
-func (s *Store) HasFTS() bool { return true }
+func (s *Store) HasFTS(ctx context.Context) bool { return true }
 
 // HasSemantic returns false: the DuckDB store has no VectorSearcher seam
 // yet, so SearchContent rejects "semantic"/"hybrid" modes up front with
@@ -985,10 +978,14 @@ func (s *Store) Search(ctx context.Context, f db.SearchFilter) (db.SearchPage, e
 		nameProject = "AND s.project = ?"
 	}
 	dateBuilder := db.NewQueryBuilder(db.DuckDBQueryDialect(), 0)
+	var nameProjectSb988 strings.Builder
+	var projectSb988 strings.Builder
 	for _, pred := range dateBuilder.SessionDateRangePredicates(f.DateFrom, f.DateTo, "", func(col string) string { return "s." + col }) {
-		project += " AND " + pred
-		nameProject += " AND " + pred
+		projectSb988.WriteString(" AND " + pred)
+		nameProjectSb988.WriteString(" AND " + pred)
 	}
+	nameProject += nameProjectSb988.String()
+	project += projectSb988.String()
 	args = append(args, dateBuilder.Args()...)
 	args = append(args, namePattern, namePattern, namePattern, namePattern)
 	if f.Project != "" {

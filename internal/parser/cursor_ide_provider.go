@@ -2,6 +2,7 @@ package parser
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -76,12 +77,12 @@ func cursorIDEClassifyPath(
 	)
 }
 
-func cursorIDEFindMember(root, rawID string) (multiSessionMatch, bool) {
+func cursorIDEFindMember(ctx context.Context, root, rawID string) (multiSessionMatch, bool) {
 	if root == "" || !IsValidSessionID(rawID) {
 		return multiSessionMatch{}, false
 	}
 	dbPath := filepath.Join(root, CursorIDEDBRelPath)
-	if !CursorIDEComposerExists(dbPath, rawID) {
+	if !CursorIDEComposerExists(ctx, dbPath, rawID) {
 		return multiSessionMatch{}, false
 	}
 	return multiSessionMatch{
@@ -178,7 +179,7 @@ func cursorIDESQLiteStateHash(dbPath string) (string, error) {
 	_, _ = fmt.Fprintf(h, "%d|%d|", id, volume)
 	header := make([]byte, 100)
 	n, err := io.ReadFull(f, header)
-	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) && !errors.Is(err, io.EOF) {
 		return "", fmt.Errorf("reading cursor IDE db header %s: %w", dbPath, err)
 	}
 	_, _ = h.Write(header[:n])
@@ -212,11 +213,11 @@ func IsCursorIDEContainerSource(source SourceRef) bool {
 	return !virtual
 }
 
-func cursorIDEMemberPresent(src multiSessionSource) bool {
+func cursorIDEMemberPresent(ctx context.Context, src multiSessionSource) bool {
 	if src.MemberID == "" {
 		return IsRegularFile(src.Container)
 	}
-	return CursorIDEComposerExists(src.Container, src.MemberID)
+	return CursorIDEComposerExists(ctx, src.Container, src.MemberID)
 }
 
 // cursorIDEBatchMemberPresent reports current composer membership for the
@@ -224,7 +225,7 @@ func cursorIDEMemberPresent(src multiSessionSource) bool {
 // instead of one CursorIDEComposerExists database open per member. On any
 // failure it reports every member present, so a transiently unreadable
 // database never tombstones archived sessions.
-func cursorIDEBatchMemberPresent(
+func cursorIDEBatchMemberPresent(ctx context.Context,
 	container multiSessionSource, members []multiSessionSource,
 ) map[string]bool {
 	present := make(map[string]bool, len(members))
@@ -232,7 +233,7 @@ func cursorIDEBatchMemberPresent(
 	conn, err := openCursorIDEDB(container.Container)
 	if err == nil {
 		defer conn.Close()
-		ids, listErr := listCursorIDEComposerIDs(context.Background(), conn)
+		ids, listErr := listCursorIDEComposerIDs(ctx, conn)
 		err = listErr
 		for _, id := range ids {
 			existing[id] = struct{}{}

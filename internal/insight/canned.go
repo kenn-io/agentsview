@@ -419,6 +419,8 @@ func writeCannedKindRules(
 			b.WriteString("- Context pressure coverage is present; pressure conclusions must cite the aggregate pressure fields and stay proportional to the covered session count.\n")
 		}
 		b.WriteString("\n")
+	default:
+		// Other templates need no context-setup rules.
 	}
 }
 

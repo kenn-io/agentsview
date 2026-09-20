@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -15,7 +14,7 @@ import (
 // TestDuckPushReplicatesWorktreeMappings verifies that a push publishes a
 // worktree mapping to the DuckDB mirror.
 func TestDuckPushReplicatesWorktreeMappings(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
 
 	_, err := local.CreateWorktreeProjectMapping(ctx,
@@ -31,7 +30,7 @@ func TestDuckPushReplicatesWorktreeMappings(t *testing.T) {
 
 	archiveID, err := local.GetArchiveID(ctx)
 	require.NoError(t, err, "GetArchiveID")
-	conn, err := Open(path)
+	conn, err := Open(ctx, path)
 	require.NoError(t, err)
 	defer conn.Close()
 	var project string
@@ -44,7 +43,7 @@ func TestDuckPushReplicatesWorktreeMappings(t *testing.T) {
 }
 
 func TestDuckFilteredMappingPublicationOmitsOutOfScopeMetadata(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
 
 	inScope, err := local.CreateWorktreeProjectMapping(
@@ -82,7 +81,7 @@ func TestDuckFilteredMappingPublicationOmitsOutOfScopeMetadata(t *testing.T) {
 	_, err = Push(ctx, path, local, "m", opts, false, nil)
 	require.NoError(t, err, "initial filtered Push")
 
-	conn, err := Open(path)
+	conn, err := Open(ctx, path)
 	require.NoError(t, err)
 	var count int
 	require.NoError(t, conn.QueryRowContext(ctx, `
@@ -115,7 +114,7 @@ func TestDuckFilteredMappingPublicationOmitsOutOfScopeMetadata(t *testing.T) {
 	require.NoError(t, err, "incremental filtered Push")
 	assert.False(t, result.Diagnostics.Full)
 
-	conn, err = Open(path)
+	conn, err = Open(ctx, path)
 	require.NoError(t, err)
 	defer conn.Close()
 	require.NoError(t, conn.QueryRowContext(ctx, `
@@ -129,7 +128,7 @@ func TestDuckFilteredMappingPublicationOmitsOutOfScopeMetadata(t *testing.T) {
 // clears only this archive's stale rows in the mirror, leaving other
 // archives' rows under the same natural key untouched.
 func TestDuckFullPublicationClearsOnlyOwnArchive(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
 
 	_, err := local.CreateWorktreeProjectMapping(ctx,
@@ -144,7 +143,7 @@ func TestDuckFullPublicationClearsOnlyOwnArchive(t *testing.T) {
 
 	archiveID, err := local.GetArchiveID(ctx)
 	require.NoError(t, err, "GetArchiveID")
-	conn, err := Open(path)
+	conn, err := Open(ctx, path)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(ctx, `
 		INSERT INTO source_worktree_project_mappings
@@ -174,7 +173,7 @@ func TestDuckFullPublicationClearsOnlyOwnArchive(t *testing.T) {
 		"push must stay incremental so the full publication path, not a "+
 			"mirror rebuild, clears the stale rows")
 
-	conn, err = Open(path)
+	conn, err = Open(ctx, path)
 	require.NoError(t, err)
 	defer conn.Close()
 	var count int
@@ -203,7 +202,7 @@ func TestDuckFullPublicationClearsOnlyOwnArchive(t *testing.T) {
 // full archive-scoped republication would clear the sentinel, while the
 // per-key delta leaves it untouched.
 func TestDuckMappingDeleteTombstones(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	local, path := newPushFixture(t, 1)
 
 	created, err := local.CreateWorktreeProjectMapping(ctx,
@@ -224,7 +223,7 @@ func TestDuckMappingDeleteTombstones(t *testing.T) {
 
 	archiveID, err := local.GetArchiveID(ctx)
 	require.NoError(t, err, "GetArchiveID")
-	conn, err := Open(path)
+	conn, err := Open(ctx, path)
 	require.NoError(t, err)
 	_, err = conn.ExecContext(ctx, `
 		INSERT INTO source_worktree_project_mappings
@@ -249,7 +248,7 @@ func TestDuckMappingDeleteTombstones(t *testing.T) {
 	assert.False(t, result.Diagnostics.Full,
 		"second push must be incremental to exercise the delta path")
 
-	conn, err = Open(path)
+	conn, err = Open(ctx, path)
 	require.NoError(t, err)
 	defer conn.Close()
 	var deletedCount int

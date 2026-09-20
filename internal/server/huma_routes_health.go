@@ -2,8 +2,9 @@ package server
 
 import (
 	"context"
-	"github.com/danielgtaylor/huma/v2"
 	"os"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	syncpkg "go.kenn.io/agentsview/internal/sync"
 )

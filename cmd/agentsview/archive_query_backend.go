@@ -3,9 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"go.kenn.io/agentsview/internal/apiclient"
 	"os"
 	"time"
+
+	"go.kenn.io/agentsview/internal/apiclient"
 
 	"go.kenn.io/agentsview/internal/activity"
 	"go.kenn.io/agentsview/internal/config"
@@ -175,7 +176,7 @@ func openArchiveQueryDB(
 	readOnly bool,
 ) (*db.DB, *writeOwnerLock, error) {
 	if readOnly {
-		database, err := openReadOnlyDB(cfg)
+		database, err := openReadOnlyDB(ctx, cfg)
 		if err != nil {
 			return nil, nil, fmt.Errorf("opening database: %w", err)
 		}
@@ -302,7 +303,7 @@ func (b localArchiveQueryBackend) SessionUsage(
 	)
 
 	if known && !b.skipFreshData && !query.NoSync {
-		engine := sync.NewEngine(b.database, sync.EngineConfig{
+		engine := sync.NewEngine(ctx, b.database, sync.EngineConfig{
 			AgentDirs:               b.cfg.AgentDirs,
 			SourceMachines:          b.cfg.SourceMachines,
 			ProviderMetadata:        b.cfg.ProviderMetadata,

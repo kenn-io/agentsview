@@ -1,7 +1,6 @@
 package sync_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -53,7 +52,7 @@ func TestSyncRooCodeLateCommandResultUpdatesStoredToolCall(t *testing.T) {
 
 	rooDir := t.TempDir()
 	testDB := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), testDB, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentRooCode: {rooDir},
 		},
@@ -67,11 +66,11 @@ func TestSyncRooCodeLateCommandResultUpdatesStoredToolCall(t *testing.T) {
 		base,
 	)
 
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Synced)
 
 	sessionID := "roocode:task-late-result"
-	msgs, err := testDB.GetAllMessages(context.Background(), sessionID)
+	msgs, err := testDB.GetAllMessages(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 	require.Len(t, msgs[1].ToolCalls, 1)
@@ -91,10 +90,10 @@ func TestSyncRooCodeLateCommandResultUpdatesStoredToolCall(t *testing.T) {
 	later := base.Add(time.Minute)
 	require.NoError(t, os.Chtimes(messagesPath, later, later))
 
-	stats = engine.SyncAll(context.Background(), nil)
+	stats = engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Synced)
 
-	msgs, err = testDB.GetAllMessages(context.Background(), sessionID)
+	msgs, err = testDB.GetAllMessages(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.Len(t, msgs, 2,
 		"the paired output must not appear as an extra message")
@@ -124,7 +123,7 @@ func TestSyncAllSinceRooCodeCutoffIsStatOnly(t *testing.T) {
 
 	rooDir := t.TempDir()
 	testDB := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), testDB, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentRooCode: {rooDir},
 		},
@@ -137,7 +136,7 @@ func TestSyncAllSinceRooCodeCutoffIsStatOnly(t *testing.T) {
 		base,
 	)
 
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Synced)
 
 	require.NoError(t, os.Chmod(historyPath, 0o000))
@@ -148,7 +147,7 @@ func TestSyncAllSinceRooCodeCutoffIsStatOnly(t *testing.T) {
 	})
 
 	cutoff := base.Add(time.Hour)
-	stats = engine.SyncAllSince(context.Background(), cutoff, nil)
+	stats = engine.SyncAllSince(t.Context(), cutoff, nil)
 	assert.Equal(t, 0, stats.Synced)
 	assert.Equal(t, 0, stats.Failed)
 	assert.Equal(t, 0, stats.Skipped,
@@ -166,7 +165,7 @@ func TestSyncAllSinceRooCodeCutoffIsStatOnly(t *testing.T) {
 	appended := cutoff.Add(time.Minute)
 	require.NoError(t, os.Chtimes(messagesPath, appended, appended))
 
-	stats = engine.SyncAllSince(context.Background(), cutoff, nil)
+	stats = engine.SyncAllSince(t.Context(), cutoff, nil)
 	assert.Equal(t, 1, stats.Synced,
 		"a transcript append past the cutoff must re-sync the task")
 }
@@ -182,7 +181,7 @@ func TestSyncRooCodeMissingTranscriptPreservesArchive(t *testing.T) {
 
 	rooDir := t.TempDir()
 	testDB := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(testDB, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), testDB, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentRooCode: {rooDir},
 		},
@@ -196,11 +195,11 @@ func TestSyncRooCodeMissingTranscriptPreservesArchive(t *testing.T) {
 		base,
 	)
 
-	stats := engine.SyncAll(context.Background(), nil)
+	stats := engine.SyncAll(t.Context(), nil)
 	require.Equal(t, 1, stats.Synced)
 
 	sessionID := "roocode:task-vanish"
-	msgs, err := testDB.GetAllMessages(context.Background(), sessionID)
+	msgs, err := testDB.GetAllMessages(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.Len(t, msgs, 2)
 
@@ -210,13 +209,13 @@ func TestSyncRooCodeMissingTranscriptPreservesArchive(t *testing.T) {
 	later := base.Add(time.Minute)
 	require.NoError(t, os.Chtimes(historyPath, later, later))
 
-	engine.SyncAll(context.Background(), nil)
+	engine.SyncAll(t.Context(), nil)
 
-	msgs, err = testDB.GetAllMessages(context.Background(), sessionID)
+	msgs, err = testDB.GetAllMessages(t.Context(), sessionID)
 	require.NoError(t, err)
 	assert.Len(t, msgs, 2,
 		"the archived transcript must survive the missing ui_messages.json")
-	sess, err := testDB.GetSessionFull(context.Background(), sessionID)
+	sess, err := testDB.GetSessionFull(t.Context(), sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 	assert.Equal(t, 2, sess.MessageCount,
@@ -228,9 +227,9 @@ func TestSyncRooCodeMissingTranscriptPreservesArchive(t *testing.T) {
 	_, newMessagesPath := writeRooCodeSyncFixture(t, rooDir,
 		"task-metadata-only", `[]`, base.Add(2*time.Minute))
 	require.NoError(t, os.Remove(newMessagesPath))
-	engine.SyncAll(context.Background(), nil)
+	engine.SyncAll(t.Context(), nil)
 	newSess, err := testDB.GetSessionFull(
-		context.Background(), "roocode:task-metadata-only",
+		t.Context(), "roocode:task-metadata-only",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, newSess, "metadata-only tasks must still sync")

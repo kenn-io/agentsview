@@ -67,17 +67,17 @@ func TestEnsureSchemaIdempotent(t *testing.T) {
 
 func TestSyncEffectiveSyncStateFallsBackToLocalDB(t *testing.T) {
 	local := testDB(t)
-	require.NoError(t, local.SetSyncState(
+	require.NoError(t, local.SetSyncState(t.Context(),
 		"last_push_at",
 		"2026-03-11T12:34:56.123456789Z",
 	))
 
 	sync := &Sync{local: local}
 	require.NoError(t, NormalizeLocalSyncStateTimestamps(
-		sync.effectiveSyncState(),
+		t.Context(), sync.effectiveSyncState(),
 	))
 
-	got, err := sync.effectiveSyncState().GetSyncState("last_push_at")
+	got, err := sync.effectiveSyncState().GetSyncState(t.Context(), "last_push_at")
 	require.NoError(t, err)
 	assert.Equal(t, "2026-03-11T12:34:56.123Z", got)
 }
@@ -103,7 +103,7 @@ func TestSyncScopedStateUsesTargetKeys(t *testing.T) {
 	require.NoError(t, ps.EnsureSchema(ctx), "ensure schema")
 
 	started := "2026-03-11T12:00:00Z"
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 		ID:           "sess-scoped-001",
 		Project:      "test-project",
 		Machine:      "local",
@@ -111,7 +111,7 @@ func TestSyncScopedStateUsesTargetKeys(t *testing.T) {
 		StartedAt:    &started,
 		MessageCount: 1,
 	}), "upsert session")
-	require.NoError(t, local.InsertMessages([]db.Message{{
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{
 		SessionID: "sess-scoped-001",
 		Ordinal:   0,
 		Role:      "user",
@@ -121,22 +121,22 @@ func TestSyncScopedStateUsesTargetKeys(t *testing.T) {
 	_, err = ps.Push(ctx, false, nil)
 	require.NoError(t, err, "push")
 
-	scopedLastPush, err := local.GetSyncState("last_push_at:work")
+	scopedLastPush, err := local.GetSyncState(t.Context(), "last_push_at:work")
 	require.NoError(t, err)
 	assert.NotEmpty(t, scopedLastPush)
 
-	legacyLastPush, err := local.GetSyncState("last_push_at")
+	legacyLastPush, err := local.GetSyncState(t.Context(), "last_push_at")
 	require.NoError(t, err)
 	assert.Empty(t, legacyLastPush)
 
-	scopedBoundary, err := local.GetSyncState(
-		lastPushBoundaryStateKey + ":work",
+	scopedBoundary, err := local.GetSyncState(t.Context(),
+		lastPushBoundaryStateKey+":work",
 	)
 	require.NoError(t, err)
 	assert.NotEmpty(t, scopedBoundary)
 
-	scopedFingerprint, err := local.GetSyncState(
-		lastPushTargetFingerprintKey + ":work",
+	scopedFingerprint, err := local.GetSyncState(t.Context(),
+		lastPushTargetFingerprintKey+":work",
 	)
 	require.NoError(t, err)
 	assert.NotEmpty(t, scopedFingerprint)
@@ -288,8 +288,8 @@ func TestPushSingleSession(t *testing.T) {
 		StartedAt:    &started,
 		MessageCount: 1,
 	}
-	require.NoError(t, local.UpsertSession(sess), "upsert session")
-	require.NoError(t, local.InsertMessages([]db.Message{
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert session")
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
 		{
 			SessionID: "sess-001",
 			Ordinal:   0,
@@ -347,7 +347,7 @@ func TestPushIdempotent(t *testing.T) {
 		StartedAt:    &started,
 		MessageCount: 0,
 	}
-	require.NoError(t, local.UpsertSession(sess), "upsert session")
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert session")
 
 	result1, err := ps.Push(ctx, false, nil)
 	require.NoError(t, err, "first push")
@@ -384,8 +384,8 @@ func TestPushWithToolCalls(t *testing.T) {
 		StartedAt:    &started,
 		MessageCount: 1,
 	}
-	require.NoError(t, local.UpsertSession(sess), "upsert session")
-	require.NoError(t, local.InsertMessages([]db.Message{
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert session")
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
 		{
 			SessionID:  "sess-tc-001",
 			Ordinal:    0,
@@ -445,8 +445,8 @@ func TestPushWithToolResultEvents(t *testing.T) {
 		Agent:        "codex",
 		MessageCount: 1,
 	}
-	require.NoError(t, local.UpsertSession(sess), "upsert session")
-	require.NoError(t, local.InsertMessages([]db.Message{
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert session")
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
 		{
 			SessionID:  "sess-events-001",
 			Ordinal:    0,
@@ -587,7 +587,7 @@ func TestPushUpdatedAtFormat(t *testing.T) {
 		Agent:     "claude",
 		StartedAt: &started,
 	}
-	require.NoError(t, local.UpsertSession(sess), "upsert session")
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert session")
 
 	_, err = ps.Push(ctx, false, nil)
 	require.NoError(t, err, "push")
@@ -637,7 +637,7 @@ func TestPushBumpsUpdatedAtOnMessageRewrite(
 		StartedAt:    &started,
 		MessageCount: 1,
 	}
-	require.NoError(t, local.UpsertSession(sess), "upsert session")
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert session")
 	msg := db.Message{
 		SessionID:     "sess-bump-001",
 		Ordinal:       0,
@@ -645,7 +645,7 @@ func TestPushBumpsUpdatedAtOnMessageRewrite(
 		Content:       "hello",
 		ContentLength: 5,
 	}
-	require.NoError(t, local.ReplaceSessionMessages(
+	require.NoError(t, local.ReplaceSessionMessages(t.Context(),
 		"sess-bump-001", []db.Message{msg},
 	), "replace messages")
 
@@ -701,8 +701,8 @@ func TestPushFullBypassesHeuristic(t *testing.T) {
 		StartedAt:    &started,
 		MessageCount: 1,
 	}
-	require.NoError(t, local.UpsertSession(sess), "upsert session")
-	require.NoError(t, local.InsertMessages([]db.Message{
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert session")
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
 		{
 			SessionID: "sess-full-001",
 			Ordinal:   0,
@@ -714,7 +714,7 @@ func TestPushFullBypassesHeuristic(t *testing.T) {
 	_, err = ps.Push(ctx, false, nil)
 	require.NoError(t, err, "first push")
 
-	require.NoError(t, local.SetSyncState(
+	require.NoError(t, local.SetSyncState(t.Context(),
 		"last_push_at", "",
 	), "resetting watermark")
 
@@ -751,8 +751,8 @@ func TestPushDetectsSchemaReset(t *testing.T) {
 		StartedAt:    &started,
 		MessageCount: 1,
 	}
-	require.NoError(t, local.UpsertSession(sess), "upsert session")
-	require.NoError(t, local.InsertMessages([]db.Message{{
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert session")
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     "sess-reset-001",
 		Ordinal:       0,
 		Role:          "user",
@@ -791,7 +791,7 @@ func TestPushDetectsPGTargetChange(t *testing.T) {
 	ctx := context.Background()
 
 	insertSession := func(id, createdAt string) {
-		require.NoError(t, local.UpsertSession(db.Session{
+		require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 			ID:           id,
 			Project:      "target-change",
 			Machine:      "local",
@@ -799,7 +799,7 @@ func TestPushDetectsPGTargetChange(t *testing.T) {
 			CreatedAt:    createdAt,
 			MessageCount: 1,
 		}), "upsert session %s", id)
-		require.NoError(t, local.InsertMessages([]db.Message{{
+		require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{
 			SessionID:     id,
 			Ordinal:       0,
 			Role:          "user",
@@ -868,7 +868,7 @@ func TestPushDetectsPGTargetChangeAfterFilteredPush(t *testing.T) {
 
 	const project = "alpha"
 	const createdAt = "2026-03-11T12:00:00Z"
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 		ID:           "sess-filtered-target-001",
 		Project:      project,
 		Machine:      "local",
@@ -876,7 +876,7 @@ func TestPushDetectsPGTargetChangeAfterFilteredPush(t *testing.T) {
 		CreatedAt:    createdAt,
 		MessageCount: 1,
 	}), "upsert session")
-	require.NoError(t, local.InsertMessages([]db.Message{{
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{
 		SessionID:     "sess-filtered-target-001",
 		Ordinal:       0,
 		Role:          "user",
@@ -905,17 +905,17 @@ func TestPushDetectsPGTargetChangeAfterFilteredPush(t *testing.T) {
 	require.NoError(t, err, "filtered push to schema A")
 	require.Equal(t, 1, r1.SessionsPushed)
 
-	lastPush, err := local.GetSyncState("last_push_at")
+	lastPush, err := local.GetSyncState(t.Context(), "last_push_at")
 	require.NoError(t, err, "reading filtered watermark")
 	assert.Empty(t, lastPush,
 		"filtered push should keep global last_push_at empty")
 
-	scopedLastPush, err := filteredA.effectiveSyncState().GetSyncState("last_push_at")
+	scopedLastPush, err := filteredA.effectiveSyncState().GetSyncState(t.Context(), "last_push_at")
 	require.NoError(t, err, "reading filtered scoped watermark")
 	assert.NotEmpty(t, scopedLastPush,
 		"filtered push should advance scoped last_push_at")
 
-	boundaryState, err := filteredA.effectiveSyncState().GetSyncState(lastPushBoundaryStateKey)
+	boundaryState, err := filteredA.effectiveSyncState().GetSyncState(t.Context(), lastPushBoundaryStateKey)
 	require.NoError(t, err, "reading filtered boundary state")
 	require.NotEmpty(t, boundaryState,
 		"filtered push should persist boundary fingerprints")
@@ -956,7 +956,7 @@ func TestPushFullAfterSchemaDropRecreatesSchema(
 		Agent:     "claude",
 		CreatedAt: "2026-03-11T12:00:00.000Z",
 	}
-	require.NoError(t, local.UpsertSession(sess), "upsert session")
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert session")
 
 	r1, err := ps.Push(ctx, false, nil)
 	require.NoError(t, err, "initial push")
@@ -996,7 +996,7 @@ func TestScopedPushFullAfterSchemaDropRecreatesSchema(
 		Agent:     "claude",
 		CreatedAt: "2026-03-11T12:00:00.000Z",
 	}
-	require.NoError(t, local.UpsertSession(sess), "upsert session")
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert session")
 
 	r1, err := ps.Push(ctx, false, nil)
 	require.NoError(t, err, "initial push")
@@ -1039,9 +1039,9 @@ func TestPushBatchesMultipleSessions(t *testing.T) {
 			StartedAt:    &started,
 			MessageCount: 2,
 		}
-		require.NoError(t, local.UpsertSession(sess),
+		require.NoError(t, local.UpsertSession(t.Context(), sess),
 			"upsert session %d", i)
-		require.NoError(t, local.InsertMessages([]db.Message{
+		require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
 			{
 				SessionID:     id,
 				Ordinal:       0,
@@ -1106,7 +1106,7 @@ func TestPushBulkInsertManyMessages(t *testing.T) {
 		StartedAt:    &started,
 		MessageCount: msgCount,
 	}
-	require.NoError(t, local.UpsertSession(sess), "upsert session")
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "upsert session")
 	msgs := make([]db.Message, msgCount)
 	for i := range msgs {
 		role := "user"
@@ -1132,7 +1132,7 @@ func TestPushBulkInsertManyMessages(t *testing.T) {
 			}}
 		}
 	}
-	require.NoError(t, local.InsertMessages(msgs), "insert messages")
+	require.NoError(t, local.InsertMessages(t.Context(), msgs), "insert messages")
 
 	result, err := ps.Push(ctx, false, nil)
 	require.NoError(t, err, "push")
@@ -1229,8 +1229,8 @@ func TestPushFilteredByProject(t *testing.T) {
 			MessageCount: 1,
 		},
 	} {
-		require.NoError(t, local.UpsertSession(s), "upsert %s", s.ID)
-		require.NoError(t, local.InsertMessages([]db.Message{
+		require.NoError(t, local.UpsertSession(t.Context(), s), "upsert %s", s.ID)
+		require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
 			{
 				SessionID: s.ID, Ordinal: 0,
 				Role: "user", Content: "msg " + s.ID,
@@ -1318,8 +1318,8 @@ func TestFilteredPushAfterResetDoesNotMaskUnfilteredResetRecovery(t *testing.T) 
 			MessageCount: 1,
 		},
 	} {
-		require.NoError(t, local.UpsertSession(s), "upsert %s", s.ID)
-		require.NoError(t, local.InsertMessages([]db.Message{{
+		require.NoError(t, local.UpsertSession(t.Context(), s), "upsert %s", s.ID)
+		require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{
 			SessionID: s.ID,
 			Ordinal:   0,
 			Role:      "user",
@@ -1402,8 +1402,8 @@ func TestFilteredPartialPushDetectsResetWithEmptyWatermark(t *testing.T) {
 			MessageCount: 1,
 		},
 	} {
-		require.NoError(t, local.UpsertSession(s), "upsert %s", s.ID)
-		require.NoError(t, local.InsertMessages([]db.Message{{
+		require.NoError(t, local.UpsertSession(t.Context(), s), "upsert %s", s.ID)
+		require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{
 			SessionID: s.ID,
 			Ordinal:   0,
 			Role:      "user",
@@ -1453,10 +1453,10 @@ func TestFilteredPartialPushDetectsResetWithEmptyWatermark(t *testing.T) {
 	).Scan(&identityCount))
 	assert.Zero(t, identityCount)
 
-	scopedLastPush, err := filtered.effectiveSyncState().GetSyncState("last_push_at")
+	scopedLastPush, err := filtered.effectiveSyncState().GetSyncState(t.Context(), "last_push_at")
 	require.NoError(t, err, "reading scoped watermark")
 	require.Empty(t, scopedLastPush)
-	boundaryState, err := filtered.effectiveSyncState().GetSyncState(lastPushBoundaryStateKey)
+	boundaryState, err := filtered.effectiveSyncState().GetSyncState(t.Context(), lastPushBoundaryStateKey)
 	require.NoError(t, err, "reading scoped boundary state")
 	require.NotEmpty(t, boundaryState)
 
@@ -1501,8 +1501,8 @@ func TestPushExcludeProject(t *testing.T) {
 			MessageCount: 1,
 		},
 	} {
-		require.NoError(t, local.UpsertSession(s), "upsert %s", s.ID)
-		require.NoError(t, local.InsertMessages([]db.Message{
+		require.NoError(t, local.UpsertSession(t.Context(), s), "upsert %s", s.ID)
+		require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
 			{
 				SessionID: s.ID, Ordinal: 0,
 				Role: "user", Content: "msg",
@@ -1540,12 +1540,12 @@ func TestPushFilteredFullIsIncremental(t *testing.T) {
 
 	local := testDB(t)
 
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 		ID: "s1", Project: "alpha",
 		Machine: "local", Agent: "claude",
 		MessageCount: 1,
 	}), "upsert")
-	require.NoError(t, local.InsertMessages([]db.Message{
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{
 		{
 			SessionID: "s1", Ordinal: 0,
 			Role: "user", Content: "hello",
@@ -1569,16 +1569,16 @@ func TestPushFilteredFullIsIncremental(t *testing.T) {
 	require.Equal(t, 1, r1.SessionsPushed)
 
 	// Filtered --full must not advance the global watermark.
-	wm, err := local.GetSyncState("last_push_at")
+	wm, err := local.GetSyncState(t.Context(), "last_push_at")
 	require.NoError(t, err, "reading watermark")
 	assert.Empty(t, wm, "watermark after filtered --full")
 
-	scopedWM, err := ps.effectiveSyncState().GetSyncState("last_push_at")
+	scopedWM, err := ps.effectiveSyncState().GetSyncState(t.Context(), "last_push_at")
 	require.NoError(t, err, "reading scoped watermark")
 	assert.NotEmpty(t, scopedWM, "scoped watermark after filtered --full")
 
 	// Boundary fingerprints must have been written.
-	bs, err := ps.effectiveSyncState().GetSyncState(lastPushBoundaryStateKey)
+	bs, err := ps.effectiveSyncState().GetSyncState(t.Context(), lastPushBoundaryStateKey)
 	require.NoError(t, err, "reading boundary state")
 	require.NotEmpty(t, bs, "boundary state empty after filtered --full")
 

@@ -165,7 +165,7 @@ func checkCodexStagingSpace(dir string, sourceBytes int64) error {
 	if err != nil || !ok {
 		// Filesystems without a capacity query fail open here; CreateTemp and
 		// SQLite report concrete write errors without changing the archive.
-		return nil
+		return nil //nolint:nilerr // Unsupported capacity probes defer failure reporting to actual staging writes.
 	}
 	const (
 		stagedScratchMinFree  = int64(256 << 20)
@@ -265,7 +265,7 @@ ON stage_events(call_key, agent_id, status, raw_content_digest);`
 // parse. The caller must Close it once the staged write has published.
 // dir selects the scratch directory; empty means the system temporary
 // directory.
-func newCodexStagingSink(
+func newCodexStagingSink(ctx context.Context,
 	dir string,
 	blocked map[string]bool,
 	sourceSize ...int64,
@@ -301,13 +301,13 @@ func newCodexStagingSink(
 		"PRAGMA synchronous=OFF",
 		"PRAGMA temp_store=FILE",
 	} {
-		if _, err := scratch.Exec(pragma); err != nil {
+		if _, err := scratch.ExecContext(ctx, pragma); err != nil {
 			scratch.Close()
 			os.Remove(path)
 			return nil, fmt.Errorf("configuring codex staging db: %w", err)
 		}
 	}
-	if _, err := scratch.Exec(codexStagingSchema); err != nil {
+	if _, err := scratch.ExecContext(ctx, codexStagingSchema); err != nil {
 		scratch.Close()
 		os.Remove(path)
 		return nil, fmt.Errorf("creating codex staging schema: %w", err)
@@ -350,8 +350,7 @@ func stagedCodexParseOutcome(
 	fingerprint parser.SourceFingerprint,
 	sink *codexStagingSink,
 ) (parser.ParseOutcome, error) {
-	sess, msgs, cursor, hashState, anchorDigest, retryReason, err :=
-		parser.ParseCodexSessionStreaming(ctx, cfg, source, sink)
+	sess, msgs, cursor, hashState, anchorDigest, retryReason, err := parser.ParseCodexSessionStreaming(ctx, cfg, source, sink)
 	if err != nil {
 		return parser.ParseOutcome{}, err
 	}
@@ -452,7 +451,7 @@ func (s *codexStagingSink) AppendMessage(m parser.ParsedMessage) int {
 // AppendToolResultEvent stages the full event row and the per-call summary
 // state, then records a contentless placeholder in the in-memory model so
 // downstream conversions stay shape-compatible without retaining content.
-func (s *codexStagingSink) AppendToolResultEvent(
+func (s *codexStagingSink) AppendToolResultEvent(ctx context.Context,
 	callID string, target *parser.ParsedToolCallPosition,
 	ev parser.ParsedToolResultEvent,
 ) {
@@ -485,7 +484,8 @@ func (s *codexStagingSink) AppendToolResultEvent(
 	// defeating the staged sink's bounded-memory guarantee on large
 	// orphan outputs. Late outputs still merge through the incremental
 	// append path on later syncs, unchanged.
-	stageKey, ok := "", false
+	var stageKey string
+	var ok bool
 	if target != nil {
 		stageKey, ok = s.callKeyByPosition[*target]
 	} else {
@@ -503,7 +503,7 @@ func (s *codexStagingSink) AppendToolResultEvent(
 	db.PrepareToolResultEvent(&rawEvent)
 	rawContentDigest := rawEvent.RawContentDigest
 	var exists int
-	err := s.scratch.QueryRow(
+	err := s.scratch.QueryRowContext(ctx,
 		`SELECT 1 FROM stage_events
 		 WHERE call_key = ? AND agent_id = ? AND status = ?
 		   AND raw_content_digest = ? LIMIT 1`,
@@ -569,7 +569,7 @@ func (s *codexStagingSink) AppendToolResultEvent(
 		// deduplication and result_content_length parity without storing bytes.
 		ev.Content = ""
 	}
-	if _, err := s.scratch.Exec(
+	if _, err := s.scratch.ExecContext(ctx,
 		`INSERT INTO stage_events (
 		     seq, call_key, tool_use_id, agent_id, subagent_session_id,
 		     source, status, content, raw_content_digest, content_length,
@@ -622,12 +622,12 @@ func (s *codexStagingSink) AppendToolResultEvent(
 }
 
 // PublishToolResultImages moves staged inline images after session acceptance.
-func (s *codexStagingSink) PublishToolResultImages() error {
+func (s *codexStagingSink) PublishToolResultImages(ctx context.Context) error {
 	if s.toolResultImages != config.ToolResultImagesOffload ||
 		s.database == nil || s.database.ArchiveContent().OmitsToolContent() {
 		return nil
 	}
-	rows, err := s.scratch.Query(`
+	rows, err := s.scratch.QueryContext(ctx, `
 		SELECT seq
 		FROM stage_events
 		ORDER BY seq`)
@@ -635,6 +635,7 @@ func (s *codexStagingSink) PublishToolResultImages() error {
 		s.fail(err)
 		return s.stageErr
 	}
+	defer rows.Close()
 	var seqs []int64
 	for rows.Next() {
 		var seq int64
@@ -659,7 +660,7 @@ func (s *codexStagingSink) PublishToolResultImages() error {
 	for _, seq := range seqs {
 		var content string
 		var contentLength int
-		if err := s.scratch.QueryRow(
+		if err := s.scratch.QueryRowContext(ctx,
 			`SELECT content, content_length FROM stage_events WHERE seq = ?`,
 			seq,
 		).Scan(&content, &contentLength); err != nil {
@@ -673,7 +674,7 @@ func (s *codexStagingSink) PublishToolResultImages() error {
 		if projected == content && length == contentLength {
 			continue
 		}
-		if _, err := s.scratch.Exec(
+		if _, err := s.scratch.ExecContext(ctx,
 			`UPDATE stage_events SET content = ?, content_length = ? WHERE seq = ?`,
 			projected, length, seq,
 		); err != nil {
@@ -692,7 +693,7 @@ func (s *codexStagingSink) PublishToolResultImages() error {
 		failure bool
 	}
 	candidates := make(map[string]singleSummaryCandidate)
-	rows, err = s.scratch.Query(`
+	rows, err = s.scratch.QueryContext(ctx, `
 		SELECT call_key, content, content_length, blanked,
 		       summary_participates
 		FROM stage_events
@@ -701,6 +702,7 @@ func (s *codexStagingSink) PublishToolResultImages() error {
 		s.fail(err)
 		return s.stageErr
 	}
+	defer rows.Close()
 	for rows.Next() {
 		var callKey, content string
 		var contentLength, blanked, participates int

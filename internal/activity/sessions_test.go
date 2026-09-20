@@ -35,18 +35,24 @@ func TestSanitizeProjectLabelsSanitizesSessionTitles(t *testing.T) {
 func TestSessionsTable_TimedAndUntimed(t *testing.T) {
 	p := baseParams(t, "2026-06-16", "UTC")
 	sessions := []SessionMeta{
-		{SessionID: "a", Title: "Fix bug", Project: "proj1", Agent: "claude",
-			StartedAt: "2026-06-16T10:00:00Z"},
-		{SessionID: "u", Title: "Imported", Project: "proj2", Agent: "codex",
-			StartedAt: "2026-06-16T09:00:00Z"}, // no activity, no usage
+		{
+			SessionID: "a", Title: "Fix bug", Project: "proj1", Agent: "claude",
+			StartedAt: "2026-06-16T10:00:00Z",
+		},
+		{
+			SessionID: "u", Title: "Imported", Project: "proj2", Agent: "codex",
+			StartedAt: "2026-06-16T09:00:00Z",
+		}, // no activity, no usage
 	}
 	act := []ActivityEvent{
 		{SessionID: "a", Ordinal: 1, Timestamp: "2026-06-16T10:00:00Z", Role: "user"},
 		{SessionID: "a", Ordinal: 2, Timestamp: "2026-06-16T10:04:00Z", Role: "assistant", Model: "opus"},
 	}
 	usage := []UsageRow{
-		{SessionID: "a", Model: "opus", Timestamp: "2026-06-16T10:03:00Z",
-			OutputTokens: 50, Cost: money.MustParseDollars("0.5"), UsageDedupKey: "k1"},
+		{
+			SessionID: "a", Model: "opus", Timestamp: "2026-06-16T10:03:00Z",
+			OutputTokens: 50, Cost: money.MustParseDollars("0.5"), UsageDedupKey: "k1",
+		},
 	}
 	r := mustAggregate(t, p, sessions, act, usage)
 
@@ -81,8 +87,10 @@ func TestSessionsTable_UntimedKeepsCost(t *testing.T) {
 		{SessionID: "u", Title: "Imported", Project: "proj1", Agent: "codex"},
 	}
 	usage := []UsageRow{
-		{SessionID: "u", Model: "sonnet", Timestamp: "2026-06-16T11:00:00Z",
-			OutputTokens: 30, Cost: money.MustParseDollars("0.25"), UsageDedupKey: "k1"},
+		{
+			SessionID: "u", Model: "sonnet", Timestamp: "2026-06-16T11:00:00Z",
+			OutputTokens: 30, Cost: money.MustParseDollars("0.25"), UsageDedupKey: "k1",
+		},
 	}
 	r := mustAggregate(t, p, sessions, nil, usage)
 

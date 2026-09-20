@@ -1,6 +1,7 @@
 package sync
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"hash/fnv"
@@ -237,7 +238,7 @@ func (e *Engine) verifiedProviderSourceState(
 // below the verified-source fast path. A matching filesystem signature cannot
 // hide a missing active row, forced file-metadata reset, old parser data
 // version, or project value that the current parser knows how to repair.
-func (e *Engine) verifiedProviderSourceFreshInDB(
+func (e *Engine) verifiedProviderSourceFreshInDB(ctx context.Context,
 	agent parser.AgentType,
 	source parser.SourceRef,
 	wantSize, wantMtime int64,
@@ -246,8 +247,7 @@ func (e *Engine) verifiedProviderSourceFreshInDB(
 	if path == "" {
 		return false
 	}
-	project, dataVersion, storedSize, storedMtime, ok :=
-		e.db.GetSourceRepairStateByAgentPath(path, string(agent))
+	project, dataVersion, storedSize, storedMtime, ok := e.db.GetSourceRepairStateByAgentPath(ctx, path, string(agent))
 	if !ok || parser.NeedsProjectReparse(project) {
 		return false
 	}

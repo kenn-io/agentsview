@@ -82,7 +82,7 @@ machine = %q
 	assert.NotContains(t, targets.Dirs[parser.AgentCopilot], foreignRoot,
 		"a source attributed to another machine must not be re-exported as local")
 	assert.Contains(t, targets.ForbiddenRoots, foreignRoot)
-	manifest, err := remotesync.BuildManifest(targets)
+	manifest, err := remotesync.BuildManifest(t.Context(), targets)
 	require.NoError(t, err)
 	var manifestPaths []string
 	for _, file := range manifest.Files {
@@ -594,7 +594,7 @@ func TestResolveTargetsMatchesSSHResolverForRepresentativeHome(t *testing.T) {
 	codexIndex := filepath.Join(home, ".codex", parser.CodexSessionIndexFilename)
 	require.NoError(t, os.WriteFile(codexIndex, []byte("{}\n"), 0o644))
 
-	cmd := exec.Command("sh")
+	cmd := exec.CommandContext(t.Context(), "sh")
 	cmd.Stdin = strings.NewReader(ssh.BuildResolveScriptForTest())
 	cmd.Env = []string{"HOME=" + home, "AIDER_DIR=" + aiderRoot, "DEVIN_DIR=" + devinDir}
 	out, err := cmd.CombinedOutput()
@@ -831,7 +831,7 @@ func TestRooCodeRemoteSyncExportsOnlySessionFiles(t *testing.T) {
 	// Full transfer: the archive must contain the session files and
 	// nothing else from the RooCode tree.
 	var buf bytes.Buffer
-	require.NoError(t, remotesync.WriteArchive(&buf, targets))
+	require.NoError(t, remotesync.WriteArchive(t.Context(), &buf, targets))
 	names := []string{}
 	tr := tar.NewReader(&buf)
 	for {
@@ -862,7 +862,7 @@ func TestRooCodeRemoteSyncExportsOnlySessionFiles(t *testing.T) {
 	// manifest/delta path: the manifest lists exactly them, they are
 	// valid delta requests and delta roots, and no separate per-sync
 	// full archive remains (the file-scoped split is empty).
-	manifest, err := remotesync.BuildManifest(targets)
+	manifest, err := remotesync.BuildManifest(t.Context(), targets)
 	require.NoError(t, err)
 	manifestPaths := make([]string, 0, len(manifest.Files))
 	for _, entry := range manifest.Files {
@@ -882,7 +882,7 @@ func TestRooCodeRemoteSyncExportsOnlySessionFiles(t *testing.T) {
 	files, ok := remotesync.SelectAllowedFiles(targets, []string{task1Messages})
 	require.True(t, ok, "a curated transcript must validate as a delta request")
 	var delta bytes.Buffer
-	require.NoError(t, remotesync.WriteArchiveFiles(
+	require.NoError(t, remotesync.WriteArchiveFiles(t.Context(),
 		&delta, targets, files))
 	deltaNames := []string{}
 	dr := tar.NewReader(&delta)
@@ -945,7 +945,7 @@ func TestRooCodeRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
 	require.True(t, ok,
 		"a vanished session file must not fail the whole request")
 	var buf bytes.Buffer
-	require.NoError(t, remotesync.WriteArchive(&buf, selected))
+	require.NoError(t, remotesync.WriteArchive(t.Context(), &buf, selected))
 	names := []string{}
 	tr := tar.NewReader(&buf)
 	for {
@@ -961,7 +961,7 @@ func TestRooCodeRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
 	assert.NotContains(t, joined, "task-1")
 
 	// The manifest tolerates the vanished entries the same way.
-	manifest, err := remotesync.BuildManifest(selected)
+	manifest, err := remotesync.BuildManifest(t.Context(), selected)
 	require.NoError(t, err)
 	require.Len(t, manifest.Files, 1)
 	assert.Equal(t, task2History, manifest.Files[0].Path)
@@ -973,7 +973,7 @@ func TestRooCodeRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
 	require.True(t, ok,
 		"a vanished session file must validate as a delta request")
 	var delta bytes.Buffer
-	require.NoError(t, remotesync.WriteArchiveFiles(
+	require.NoError(t, remotesync.WriteArchiveFiles(t.Context(),
 		&delta, freshServerTargets, files))
 	dr := tar.NewReader(&delta)
 	_, err = dr.Next()
@@ -1060,7 +1060,7 @@ func TestClineRemoteSyncExportsOnlySessionFiles(t *testing.T) {
 	}, targets.Files[parser.AgentCline])
 
 	var buf bytes.Buffer
-	require.NoError(t, remotesync.WriteArchive(&buf, targets))
+	require.NoError(t, remotesync.WriteArchive(t.Context(), &buf, targets))
 	names := []string{}
 	tr := tar.NewReader(&buf)
 	for {
@@ -1123,7 +1123,7 @@ func TestClineRemoteSyncArchiveRejectsBackslashSessionIDs(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	require.NoError(t, remotesync.WriteArchive(&buf, targets))
+	require.NoError(t, remotesync.WriteArchive(t.Context(), &buf, targets))
 	tr := tar.NewReader(&buf)
 	var names []string
 	for {
@@ -1178,7 +1178,7 @@ func TestClineRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
 	)
 	require.True(t, ok, "a vanished session file under configured root must not fail request")
 	var buf bytes.Buffer
-	require.NoError(t, remotesync.WriteArchive(&buf, selected))
+	require.NoError(t, remotesync.WriteArchive(t.Context(), &buf, selected))
 	names := []string{}
 	tr := tar.NewReader(&buf)
 	for {
@@ -1198,7 +1198,7 @@ func TestClineRemoteSyncToleratesVanishedSessionFile(t *testing.T) {
 	)
 	require.True(t, ok, "vanished session and teammate files must validate as delta request")
 	var delta bytes.Buffer
-	require.NoError(t, remotesync.WriteArchiveFiles(&delta, freshServerTargets, files))
+	require.NoError(t, remotesync.WriteArchiveFiles(t.Context(), &delta, freshServerTargets, files))
 	dr := tar.NewReader(&delta)
 	_, err := dr.Next()
 	assert.Equal(t, io.EOF, err, "vanished file streams nothing")
@@ -1445,7 +1445,7 @@ func TestClineRootSymlinkParity(t *testing.T) {
 	assert.Empty(t, goTargets1.Dirs[parser.AgentCline])
 	assert.Empty(t, goTargets1.Files[parser.AgentCline])
 
-	cmd1 := exec.Command("sh")
+	cmd1 := exec.CommandContext(t.Context(), "sh")
 	cmd1.Stdin = strings.NewReader(ssh.BuildResolveScriptForTest())
 	cmd1.Env = []string{"HOME=" + home1}
 	out1, err := cmd1.CombinedOutput()
@@ -1470,7 +1470,7 @@ func TestClineRootSymlinkParity(t *testing.T) {
 	assert.Empty(t, goTargets2.Dirs[parser.AgentCline])
 	assert.Empty(t, goTargets2.Files[parser.AgentCline])
 
-	cmd2 := exec.Command("sh")
+	cmd2 := exec.CommandContext(t.Context(), "sh")
 	cmd2.Stdin = strings.NewReader(ssh.BuildResolveScriptForTest())
 	cmd2.Env = []string{"HOME=" + home2, "CLINE_DIR=" + symlinkedDirect}
 	out2, err := cmd2.CombinedOutput()
@@ -1531,7 +1531,7 @@ func TestClineLeafSymlinkParity(t *testing.T) {
 	expectedFiles := []string{validMeta, validMsgs, validTm}
 	assert.ElementsMatch(t, expectedFiles, goTargets.Files[parser.AgentCline])
 
-	cmd := exec.Command("sh")
+	cmd := exec.CommandContext(t.Context(), "sh")
 	cmd.Stdin = strings.NewReader(ssh.BuildResolveScriptForTest())
 	cmd.Env = []string{"HOME=" + home}
 	out, err := cmd.CombinedOutput()

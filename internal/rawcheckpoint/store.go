@@ -135,7 +135,7 @@ func (s *Store) Close() error {
 // starts from an empty chain; recording the same device again is a no-op.
 func (s *Store) SetDevice(ctx context.Context, deviceID string) error {
 	if deviceID == "" {
-		return fmt.Errorf("rawcheckpoint: device ID is required")
+		return errors.New("rawcheckpoint: device ID is required")
 	}
 	reset := false
 	err := s.withImmediateWrite(ctx, "set device", func(conn *sql.Conn) error {
@@ -195,7 +195,7 @@ func (s *Store) SetDevice(ctx context.Context, deviceID string) error {
 // reprovisions or clears durable transport state on a mismatch.
 func (s *Store) EnsureDevice(ctx context.Context, deviceID string) error {
 	if deviceID == "" {
-		return fmt.Errorf("rawcheckpoint: device ID is required")
+		return errors.New("rawcheckpoint: device ID is required")
 	}
 	return s.withImmediateWrite(ctx, "ensure device", func(conn *sql.Conn) error {
 		var current string

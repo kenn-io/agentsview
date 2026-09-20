@@ -17,10 +17,9 @@ func TestWorkBuddyRegistryUsesRecursiveWatch(t *testing.T) {
 }
 
 func TestEngineClassifyWorkBuddyPaths(t *testing.T) {
-
 	db := openTestDB(t)
 	root := t.TempDir()
-	engine := NewEngine(db, EngineConfig{
+	engine := NewEngine(t.Context(), db, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentWorkBuddy: {root},
 		},
@@ -56,7 +55,7 @@ func TestEngineClassifyWorkBuddyPaths(t *testing.T) {
 func TestEngineClassifyWorkBuddyProjectNamedSubagentsAsMainSession(t *testing.T) {
 	db := openTestDB(t)
 	root := t.TempDir()
-	engine := NewEngine(db, EngineConfig{
+	engine := NewEngine(t.Context(), db, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentWorkBuddy: {root},
 		},

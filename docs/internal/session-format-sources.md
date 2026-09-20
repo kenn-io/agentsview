@@ -423,6 +423,19 @@ add an archived or maintained mirror without replacing the original identity.
   legacy fallback, and `session_id` identifies the root or tree rather than
   the parent.
 
+- **Automation (reverified 2026-09-19):** `session_meta.payload.originator` of
+  `codex_exec` is durable producer evidence of a non-interactive `codex exec`
+  invocation. Agentsview persists that as `session_kind = non-interactive` so
+  every exec session is automated, including one-shots whose first message
+  does not match a built-in prefix. When `thread_source` is `roborev` (from
+  `codex exec --thread-source roborev`), Agentsview stores
+  `session_kind = roborev` instead so roborev reviews stay identifiable as
+  code review while remaining automated. Native `spawn_agent` children still
+  use `source.subagent` plus `parent_thread_id` for
+  `relationship_type = subagent`; do not pass `--thread-source subagent` from
+  roborev. Reverified against an isolated
+  `codex-proxy exec --thread-source roborev` rollout.
+
 - **Evidence:** `source`.
 
 - **Upstream:** Clone `https://github.com/openai/codex.git` at
@@ -647,12 +660,12 @@ add an archived or maintained mirror without replacing the original identity.
 ## Augure Code (`augure-code`)
 
 - **Format:** Codex-compatible rollout JSONL under a dated `YYYY/MM/DD` tree at
-  `~/.augure/sessions` (one home-relative root on all platforms). Newer rollouts
-  add a top-level `ordinal` on every record; older files omit it. The
+  `~/.augure/sessions` (one home-relative root on all platforms). Newer
+  rollouts add a top-level `ordinal` on every record; older files omit it. The
   `event_msg:thread_settings_applied` record carries the applied
   `model`/`reasoning_effort`/provider id, while `turn_context` remains the
-  parser's model source. No `archived_sessions/` directory, `history.jsonl`, or
-  `session_index.jsonl` sidecar has been observed under `~/.augure`.
+  parser's model source. No `archived_sessions/` directory, `history.jsonl`,
+  or `session_index.jsonl` sidecar has been observed under `~/.augure`.
 - **Evidence:** `no-public-source`.
 - **Upstream:** Augure publishes no producer source; https://augureai.ca was
   checked 2026-09-11 and offers no public repo. The equivalence to Codex rests
@@ -667,9 +680,10 @@ add an archived or maintained mirror without replacing the original identity.
   are deliberately not consumed; their `_sqlx_migrations` bookkeeping tables
   are not format markers.
 - **Usage and cost:** `token_count` records carry the Codex fields, so
-  normalization follows the Codex entry. Models observed are proprietary Augure
-  slugs (`ossington-5`, `ossington-4-1`, `rosedale-1`) absent from the pricing
-  catalog, so their events price as unpriced until catalog coverage appears.
+  normalization follows the Codex entry. Models observed are proprietary
+  Augure slugs (`ossington-5`, `ossington-4-1`, `rosedale-1`) absent from the
+  pricing catalog, so their events price as unpriced until catalog coverage
+  appears.
 - **Agentsview:** `internal/parser/augure.go` relabels the shared Codex parser
   (`internal/parser/codex.go`, `internal/parser/codex_provider.go`) onto the
   `augure-code:` ID namespace, and `internal/sync` gates the format-shaped

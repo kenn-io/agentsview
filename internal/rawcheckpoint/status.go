@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -123,14 +124,9 @@ func (s *Store) ClientStatus(ctx context.Context) (ClientStatus, error) {
 	return status, nil
 }
 
-type statusQueryer interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}
-
 func clientStatusOutboxUsage(
 	ctx context.Context,
-	query statusQueryer,
+	query checkpointQueryer,
 	configuredLimit int64,
 ) (OutboxUsage, error) {
 	usage := OutboxUsage{LimitBytes: configuredLimit}
@@ -161,7 +157,7 @@ func clientStatusOutboxUsage(
 
 func clientSourceStatuses(
 	ctx context.Context,
-	query statusQueryer,
+	query checkpointQueryer,
 ) ([]ClientSourceStatus, error) {
 	rows, err := query.QueryContext(ctx, `SELECT provider, configured_root_id,
 		source_key, latest_capture_id, head_manifest_id, head_receipt,
@@ -199,7 +195,7 @@ func clientSourceStatuses(
 
 func clientVersionOneSourceStatuses(
 	ctx context.Context,
-	query statusQueryer,
+	query checkpointQueryer,
 ) ([]ClientSourceStatus, error) {
 	rows, err := query.QueryContext(ctx, `SELECT provider, configured_root_id,
 		source_key, head_manifest_id, head_receipt, head_generation, updated_at
@@ -241,12 +237,12 @@ func opaqueSourceStatusID(
 	digest := sha256.Sum256([]byte(
 		string(provider) + "\x00" + configuredRootID + "\x00" + sourceKey,
 	))
-	return fmt.Sprintf("%x", digest[:16])
+	return hex.EncodeToString(digest[:16])
 }
 
 func clientCoverageStatuses(
 	ctx context.Context,
-	query statusQueryer,
+	query checkpointQueryer,
 ) ([]CoverageState, error) {
 	rows, err := query.QueryContext(ctx, `SELECT provider, configured_root_id,
 		state, reason, degraded_at, recovered_at, updated_at FROM raw_coverage

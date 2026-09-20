@@ -58,7 +58,7 @@ func newReasonixSessionBuilder() *reasonixSessionBuilder {
 func (b *reasonixSessionBuilder) processLine(line string) error {
 	var msg reasonixMessage
 	if err := json.Unmarshal([]byte(line), &msg); err != nil {
-		return nil // skip invalid lines silently
+		return nil //nolint:nilerr // Malformed provider records are skipped without discarding the transcript.
 	}
 
 	if msg.Role == "" {
@@ -147,7 +147,7 @@ func (b *reasonixSessionBuilder) processToolResult(
 	content := msg.Content
 	quoted, err := json.Marshal(content)
 	if err != nil {
-		return nil
+		return nil //nolint:nilerr // Malformed provider records are skipped without discarding the transcript.
 	}
 
 	b.messages = append(b.messages, ParsedMessage{

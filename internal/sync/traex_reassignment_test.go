@@ -26,6 +26,7 @@ type traexRepairFixture struct {
 
 func newTraeXRepairFixture(t *testing.T) traexRepairFixture {
 	t.Helper()
+
 	root := t.TempDir()
 	sessionsRoot := filepath.Join(root, "sessions")
 	const uuid = "019fbcca-9fd4-7d20-83dc-0762b2f839b3"
@@ -41,7 +42,7 @@ func newTraeXRepairFixture(t *testing.T) traexRepairFixture {
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 
 	database := dbtest.OpenTestDB(t)
-	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentTraeX: {sessionsRoot},
 		},
@@ -61,14 +62,15 @@ func seedSharedPathProjectRepairConflict(
 	fx traexRepairFixture,
 ) {
 	t.Helper()
+
 	traexID := "traex:" + fx.uuid
 	traex, err := fx.database.GetSessionFull(t.Context(), traexID)
 	require.NoError(t, err)
 	require.NotNil(t, traex)
 	require.NotNil(t, traex.FileMtime)
 	traex.Project = "roborev_ci_28293_3831737461"
-	require.NoError(t, fx.database.UpsertSession(*traex))
-	require.NoError(t, fx.database.SetSessionDataVersion(
+	require.NoError(t, fx.database.UpsertSession(t.Context(), *traex))
+	require.NoError(t, fx.database.SetSessionDataVersion(t.Context(),
 		traexID, db.CurrentDataVersion(),
 	))
 
@@ -78,16 +80,16 @@ func seedSharedPathProjectRepairConflict(
 	codex.Project = "project"
 	newerMtime := *traex.FileMtime + 1
 	codex.FileMtime = &newerMtime
-	require.NoError(t, fx.database.UpsertSession(codex))
-	require.NoError(t, fx.database.SetSessionDataVersion(
+	require.NoError(t, fx.database.UpsertSession(t.Context(), codex))
+	require.NoError(t, fx.database.SetSessionDataVersion(t.Context(),
 		codex.ID, db.CurrentDataVersion(),
 	))
 
-	project, ok := fx.database.GetProjectByPath(fx.path)
+	project, ok := fx.database.GetProjectByPath(t.Context(), fx.path)
 	require.True(t, ok)
 	require.Equal(t, "project", project,
 		"path-only lookup precondition must select the newer Codex row")
-	project, ok = fx.database.GetProjectByAgentPath(
+	project, ok = fx.database.GetProjectByAgentPath(t.Context(),
 		fx.path, string(parser.AgentTraeX),
 	)
 	require.True(t, ok)
@@ -99,9 +101,9 @@ func TestTraeXRepeatSyncSkipsUnchangedRollout(t *testing.T) {
 		t.Skip("skipping integration test")
 	}
 	fx := newTraeXRepairFixture(t)
-	require.NoError(t, fx.database.ReplaceSkippedFiles(map[string]int64{}))
+	require.NoError(t, fx.database.ReplaceSkippedFiles(t.Context(), map[string]int64{}))
 
-	repeat := agentsync.NewEngine(fx.database, agentsync.EngineConfig{
+	repeat := agentsync.NewEngine(t.Context(), fx.database, agentsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentTraeX: {fx.sessionsRoot},
 		},
@@ -210,7 +212,7 @@ func TestTraeXIncrementalSyncStoresTranscriptMtime(t *testing.T) {
 	require.NoError(t, os.Chtimes(indexPath, indexTime, indexTime))
 
 	database := dbtest.OpenTestDB(t)
-	engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+	engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentTraeX: {sessionsRoot},
 		},
@@ -265,7 +267,7 @@ func TestTraeXReassignsCodexPathWithoutCrossAgentFreshness(t *testing.T) {
 
 	database := dbtest.OpenTestDB(t)
 	newEngine := func(agent parser.AgentType) *agentsync.Engine {
-		engine := agentsync.NewEngine(database, agentsync.EngineConfig{
+		engine := agentsync.NewEngine(t.Context(), database, agentsync.EngineConfig{
 			AgentDirs: map[parser.AgentType][]string{agent: {root}},
 			Machine:   "local",
 		})
@@ -276,7 +278,7 @@ func TestTraeXReassignsCodexPathWithoutCrossAgentFreshness(t *testing.T) {
 	codexEngine := newEngine(parser.AgentCodex)
 	stats := codexEngine.SyncAll(t.Context(), nil)
 	require.Zero(t, stats.Failed)
-	require.Equal(t, path, database.GetSessionFilePath("codex:"+uuid))
+	require.Equal(t, path, database.GetSessionFilePath(t.Context(), "codex:"+uuid))
 
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	require.NoError(t, err)

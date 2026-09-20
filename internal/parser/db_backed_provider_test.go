@@ -81,12 +81,12 @@ func TestForgeProviderSourceMethodsAndParse(t *testing.T) {
 		t, provider, root, dbPath, "conv-001",
 	)
 
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "conv-001",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: source,
 	})
 	require.NoError(t, err)
@@ -100,17 +100,11 @@ func TestForgeProviderSourceMethodsAndParse(t *testing.T) {
 	assert.Len(t, result.Result.Messages, 4)
 }
 
-type rawCaptureSourceDiscoverer interface {
-	RawCaptureSourcesForChangedPath(
-		context.Context, ChangedPathRequest,
-	) ([]SourceRef, error)
-}
-
 func TestDBBackedProviderRawCaptureUsesOnePhysicalDatabaseSource(t *testing.T) {
 	dbPath, seeder, db := newForgeTestDB(t)
 	defer db.Close()
 	seedForgeConversation(t, seeder)
-	seeder.AddConversation(
+	seeder.AddConversation(t.Context(),
 		"conv-002", "Second", 123,
 		`{"conversation_id":"conv-002","messages":[]}`,
 		"2026-05-03 09:58:15.000000000",
@@ -120,7 +114,7 @@ func TestDBBackedProviderRawCaptureUsesOnePhysicalDatabaseSource(t *testing.T) {
 	provider, ok := NewProvider(AgentForge, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
 
-	discoverer, ok := provider.(rawCaptureSourceDiscoverer)
+	discoverer, ok := provider.(RawCaptureSourceProvider)
 	require.True(t, ok, "db-backed providers must expose physical raw sources")
 	discovery, err := DiscoverRawCaptureSources(t.Context(), provider)
 	require.NoError(t, err)
@@ -252,7 +246,7 @@ func TestDBBackedProviderRawSnapshotSessionsFanOutLogicalSessions(t *testing.T) 
 	dbPath, seeder, db := newForgeTestDB(t)
 	defer db.Close()
 	seedForgeConversation(t, seeder)
-	seeder.AddConversation(
+	seeder.AddConversation(t.Context(),
 		"conv-002", "Second", 123,
 		`{"conversation_id":"conv-002","messages":[]}`,
 		"2026-05-03 09:58:15.000000000",
@@ -275,8 +269,7 @@ func TestDBBackedProviderRawSnapshotSessionsFanOutLogicalSessions(t *testing.T) 
 	assert.Equal(t, dbPath+"#conv-001", sessions[0].Key)
 	assert.Equal(t, dbPath+"#conv-001", sessions[0].DisplayPath)
 	assert.Equal(t, dbPath+"#conv-002", sessions[1].Key)
-	assert.Equal(t,
-		time.Date(2026, 5, 2, 10, 0, 16, 848497543, time.UTC).UnixNano(),
+	assert.Equal(t, time.Date(2026, 5, 2, 10, 0, 16, 848497543, time.UTC).UnixNano(),
 		sessions[0].DiscoveryMTimeNS)
 
 	// The ordinary per-session contract must accept each enumerated session.
@@ -334,19 +327,19 @@ func TestPiebaldProviderSourceMethodsAndParse(t *testing.T) {
 		t, provider, root, dbPath, "42",
 	)
 
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~piebald:42",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
-	forkSource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	forkSource, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "42-7",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, source.DisplayPath, forkSource.DisplayPath)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: source,
 	})
 	require.NoError(t, err)
@@ -377,12 +370,12 @@ func TestWarpProviderSourceMethodsAndParse(t *testing.T) {
 		t, provider, root, dbPath, "conv-001",
 	)
 
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "warp:conv-001",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: source,
 	})
 	require.NoError(t, err)
@@ -404,20 +397,20 @@ func TestDBBackedProviderFingerprintIgnoresUnrelatedRows(t *testing.T) {
 
 	provider, ok := NewProvider(AgentForge, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "conv-001",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	before, err := provider.Fingerprint(context.Background(), source)
+	before, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	assert.Equal(t, dbPath+"#conv-001", before.Key)
 	assert.NotZero(t, before.MTimeNS)
 	assert.Zero(t, before.Size)
 	assert.Empty(t, before.Hash)
 
-	seeder.AddConversation(
+	seeder.AddConversation(t.Context(),
 		"conv-002",
 		"Unrelated",
 		123,
@@ -427,7 +420,7 @@ func TestDBBackedProviderFingerprintIgnoresUnrelatedRows(t *testing.T) {
 		"",
 	)
 
-	after, err := provider.Fingerprint(context.Background(), source)
+	after, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	assert.Equal(t, before, after)
 }
@@ -445,14 +438,14 @@ func TestDBBackedProviderIgnoresBareShmSiblingEvents(t *testing.T) {
 	require.True(t, ok)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: dbPath + "-shm", EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
 	assert.Empty(t, changed)
 
 	changed, err = provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: dbPath + "-wal", EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -467,17 +460,17 @@ func TestDBBackedProviderDeletedRowFingerprintsTombstoneAndSkips(t *testing.T) {
 
 	provider, ok := NewProvider(AgentForge, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "conv-001",
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, dbPath+"#conv-001", source.DisplayPath)
-	_, err = db.Exec(`DELETE FROM conversations WHERE conversation_id = ?`, "conv-001")
+	_, err = db.ExecContext(t.Context(), `DELETE FROM conversations WHERE conversation_id = ?`, "conv-001")
 	require.NoError(t, err)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:              dbPath,
 			EventKind:         "write",
@@ -489,11 +482,11 @@ func TestDBBackedProviderDeletedRowFingerprintsTombstoneAndSkips(t *testing.T) {
 	require.Len(t, changed, 1)
 	source = changed[0]
 
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	assert.Equal(t, SourceFingerprint{Key: dbPath + "#conv-001"}, fingerprint)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: source,
 	})
 	require.NoError(t, err)
@@ -511,7 +504,7 @@ func TestDBBackedProviderStoredVirtualPathFreshness(t *testing.T) {
 
 	provider, ok := NewProvider(AgentForge, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath:     virtualPath,
 		RequireFreshSource: true,
 	})
@@ -519,22 +512,22 @@ func TestDBBackedProviderStoredVirtualPathFreshness(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, virtualPath, found.DisplayPath)
 
-	_, err = db.Exec(`DELETE FROM conversations WHERE conversation_id = ?`, "conv-001")
+	_, err = db.ExecContext(t.Context(), `DELETE FROM conversations WHERE conversation_id = ?`, "conv-001")
 	require.NoError(t, err)
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath:     virtualPath,
 		RequireFreshSource: true,
 	})
 	require.NoError(t, err)
 	assert.False(t, ok, "fresh lookup must reject a deleted DB row")
 
-	staleSource, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	staleSource, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: virtualPath,
 	})
 	require.NoError(t, err)
 	require.True(t, ok, "non-fresh lookup keeps virtual tombstone identity")
 	assert.Equal(t, virtualPath, staleSource.DisplayPath)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: staleSource,
 	})
 	require.NoError(t, err)
@@ -545,7 +538,7 @@ func TestDBBackedProviderStoredVirtualPathFreshness(t *testing.T) {
 
 	require.NoError(t, db.Close())
 	require.NoError(t, os.Remove(dbPath))
-	_, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	_, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath:     virtualPath,
 		RequireFreshSource: true,
 	})
@@ -560,7 +553,7 @@ func TestDBBackedProviderRejectsInvalidStoredVirtualPaths(t *testing.T) {
 	root := filepath.Dir(dbPath)
 	virtualPath := dbPath + "#conv-001"
 	otherPath := dbPath + "#conv-002"
-	seeder.AddConversation(
+	seeder.AddConversation(t.Context(),
 		"conv-002",
 		"Other",
 		123,
@@ -577,7 +570,7 @@ func TestDBBackedProviderRejectsInvalidStoredVirtualPaths(t *testing.T) {
 		filepath.Join(root, "forge-copy.db") + "#conv-001",
 		filepath.Join(root, "nested", ForgeDBFilename) + "#conv-001",
 	} {
-		_, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+		_, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 			StoredFilePath:     path,
 			RequireFreshSource: true,
 		})
@@ -585,7 +578,7 @@ func TestDBBackedProviderRejectsInvalidStoredVirtualPaths(t *testing.T) {
 		assert.False(t, ok, "stored path %q", path)
 	}
 
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID:       "conv-001",
 		StoredFilePath:     otherPath,
 		RequireFreshSource: true,
@@ -595,7 +588,7 @@ func TestDBBackedProviderRejectsInvalidStoredVirtualPaths(t *testing.T) {
 	assert.Equal(t, virtualPath, source.DisplayPath,
 		"raw session identity must remain authoritative when a stored-path hint is stale")
 
-	source, ok, err = provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err = provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: virtualPath,
 	})
 	require.NoError(t, err)
@@ -611,7 +604,7 @@ func TestDBBackedProviderMissingDBSkipsAndPreservesSessions(t *testing.T) {
 
 	provider, ok := NewProvider(AgentForge, ProviderConfig{Roots: []string{root}})
 	require.True(t, ok)
-	source, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	source, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: virtualPath,
 	})
 	require.NoError(t, err)
@@ -622,7 +615,7 @@ func TestDBBackedProviderMissingDBSkipsAndPreservesSessions(t *testing.T) {
 	require.NoError(t, os.Remove(dbPath))
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{
 			Path:              dbPath,
 			EventKind:         "remove",
@@ -634,11 +627,11 @@ func TestDBBackedProviderMissingDBSkipsAndPreservesSessions(t *testing.T) {
 	require.Len(t, changed, 1)
 	source = changed[0]
 
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	assert.Equal(t, SourceFingerprint{Key: virtualPath}, fingerprint)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: source,
 	})
 	require.NoError(t, err)
@@ -658,7 +651,8 @@ func assertDBBackedWatchPlan(
 	dbName string,
 ) {
 	t.Helper()
-	plan, err := provider.WatchPlan(context.Background())
+
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 1)
 	assert.Equal(t, root, plan.Roots[0].Path)
@@ -673,15 +667,16 @@ func assertDBBackedDiscoverFindFingerprint(
 	root, dbPath, rawID string,
 ) {
 	t.Helper()
+
 	virtualPath := dbPath + "#" + rawID
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, virtualPath, discovered[0].DisplayPath)
 	assert.Equal(t, virtualPath, discovered[0].FingerprintKey)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: dbPath + "-wal", EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -689,20 +684,20 @@ func assertDBBackedDiscoverFindFingerprint(
 	assert.Equal(t, virtualPath, changed[0].DisplayPath)
 
 	unrelated, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: dbPath + "-backup", EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
 	assert.Empty(t, unrelated)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		StoredFilePath: virtualPath,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, virtualPath, found.DisplayPath)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, virtualPath, fingerprint.Key)
 	assert.NotZero(t, fingerprint.MTimeNS)
@@ -758,7 +753,7 @@ func TestDBBackedSQLiteReadModes(t *testing.T) {
 					var seeder *ForgeSeeder
 					dbPath, seeder, database = newForgeTestDB(t)
 					insert = func() {
-						seeder.AddConversation("wal-session", "WAL session", 1,
+						seeder.AddConversation(t.Context(), "wal-session", "WAL session", 1,
 							`{"messages":[{"message":{"text":{"role":"User","content":"WAL session"}}}]}`,
 							"2026-05-01T10:00:00Z", "2026-05-01T10:01:00Z", "")
 					}
@@ -766,8 +761,8 @@ func TestDBBackedSQLiteReadModes(t *testing.T) {
 					var seeder *WarpSeeder
 					dbPath, seeder, database = newWarpTestDB(t)
 					insert = func() {
-						seeder.AddConversation("wal-session", `{}`, "2026-05-01 10:01:00")
-						seeder.AddExchange("ex-1", "wal-session", "2026-05-01 10:00:00",
+						seeder.AddConversation(t.Context(), "wal-session", `{}`, "2026-05-01 10:01:00")
+						seeder.AddExchange(t.Context(), "ex-1", "wal-session", "2026-05-01 10:00:00",
 							`[{"Query":{"text":"WAL session","context":[]}}]`, "/work/app", `"Completed"`, "")
 					}
 				case AgentPiebald:
@@ -785,9 +780,11 @@ func TestDBBackedSQLiteReadModes(t *testing.T) {
                             VALUES (100, 42, 'user', '', '2026-05-01T10:00:00Z', '2026-05-01T10:01:00Z', 'completed')`)
 						seedPiebaldTextPart(t, dbPath, 200, 100, 0, "WAL session", false)
 					}
+				default:
+					require.FailNowf(t, "unsupported provider fixture", "%s", agent)
 				}
 				t.Cleanup(func() { require.NoError(t, database.Close()) })
-				_, err := database.Exec("PRAGMA journal_mode=WAL")
+				_, err := database.ExecContext(t.Context(), "PRAGMA journal_mode=WAL")
 				require.NoError(t, err)
 				insert()
 				root := filepath.Dir(dbPath)

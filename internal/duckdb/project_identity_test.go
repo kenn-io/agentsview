@@ -3,7 +3,6 @@
 package duckdb
 
 import (
-	"context"
 	"fmt"
 	"slices"
 	"strings"
@@ -15,7 +14,7 @@ import (
 )
 
 func TestDuckListProjectIdentityObservationsChunksLargeLabelLists(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	database := openTestDuckDB(t)
 	require.NoError(t, EnsureSchema(ctx, database))
 

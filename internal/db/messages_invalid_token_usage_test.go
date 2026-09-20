@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"encoding/json/jsontext"
 	json "encoding/json/v2"
 	"testing"
@@ -15,7 +14,7 @@ import (
 // database can genuinely hold; the read path is what has to cope with it.
 func corruptTokenUsage(t *testing.T, d *DB, sessionID string, ordinal int, raw string) {
 	t.Helper()
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(t.Context(),
 		`UPDATE messages SET token_usage = ? WHERE session_id = ? AND ordinal = ?`,
 		raw, sessionID, ordinal,
 	)
@@ -52,7 +51,8 @@ func TestReadPathDropsInvalidTokenUsage(t *testing.T) {
 		{
 			name: "GetMessages",
 			read: func(t *testing.T, d *DB) []Message {
-				got, err := d.GetMessages(context.Background(), "s1", 0, 100, true)
+				t.Helper()
+				got, err := d.GetMessages(t.Context(), "s1", 0, 100, true)
 				require.NoError(t, err)
 				return got
 			},
@@ -60,7 +60,8 @@ func TestReadPathDropsInvalidTokenUsage(t *testing.T) {
 		{
 			name: "GetAllMessages",
 			read: func(t *testing.T, d *DB) []Message {
-				got, err := d.GetAllMessages(context.Background(), "s1")
+				t.Helper()
+				got, err := d.GetAllMessages(t.Context(), "s1")
 				require.NoError(t, err)
 				return got
 			},
@@ -68,8 +69,9 @@ func TestReadPathDropsInvalidTokenUsage(t *testing.T) {
 		{
 			name: "GetMessagesWindow",
 			read: func(t *testing.T, d *DB) []Message {
+				t.Helper()
 				from := 0
-				got, err := d.GetMessagesWindow(context.Background(), "s1",
+				got, err := d.GetMessagesWindow(t.Context(), "s1",
 					MessageWindow{Limit: 100, Asc: true, From: &from})
 				require.NoError(t, err)
 				return got
@@ -104,7 +106,7 @@ func TestReadPathPreservesValidTokenUsage(t *testing.T) {
 	d := testDB(t)
 	seedMessageWithUsage(t, d)
 
-	got, err := d.GetAllMessages(context.Background(), "s1")
+	got, err := d.GetAllMessages(t.Context(), "s1")
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	assert.JSONEq(t, `{"input_tokens":50}`, string(got[0].TokenUsage))

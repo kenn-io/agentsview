@@ -30,7 +30,7 @@ type serveRuntime struct {
 	Caddy      *managedCaddy
 }
 
-func prepareRunServeRuntimeConfig(
+func prepareRunServeRuntimeConfig(ctx context.Context,
 	cfg config.Config,
 	restartPort int,
 	onCaddyStarted func(int),
@@ -41,11 +41,11 @@ func prepareRunServeRuntimeConfig(
 		RequestedPort:  requestedPort,
 		OnCaddyStarted: onCaddyStarted,
 	}
-	prepared, err := prepareServeRuntimeConfig(cfg, opts)
+	prepared, err := prepareServeRuntimeConfig(ctx, cfg, opts)
 	return prepared, opts, err
 }
 
-func prepareServeRuntimeConfig(
+func prepareServeRuntimeConfig(ctx context.Context,
 	cfg config.Config,
 	opts serveRuntimeOptions,
 ) (config.Config, error) {
@@ -54,7 +54,7 @@ func prepareServeRuntimeConfig(
 		requestedPort = cfg.Port
 	}
 
-	port, err := server.FindAvailablePort(cfg.Host, cfg.Port)
+	port, err := server.FindAvailablePort(ctx, cfg.Host, cfg.Port)
 	if err != nil {
 		return cfg, err
 	}
@@ -273,7 +273,7 @@ func waitForServerRuntime(
 
 	select {
 	case err := <-rt.ServeErrCh:
-		if err != nil && err != http.ErrServerClosed {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			if rt.Caddy != nil {
 				rt.Caddy.Stop()
 			}
@@ -291,7 +291,7 @@ func waitForServerRuntime(
 		_ = srv.Shutdown(shutdownCtx)
 		if ctx.Err() != nil {
 			if serveErr := <-rt.ServeErrCh; serveErr != nil &&
-				serveErr != http.ErrServerClosed {
+				!errors.Is(serveErr, http.ErrServerClosed) {
 				return fmt.Errorf("server error: %w", serveErr)
 			}
 			return nil
@@ -299,7 +299,7 @@ func waitForServerRuntime(
 		if err != nil {
 			return fmt.Errorf("managed caddy error: %w", err)
 		}
-		return fmt.Errorf("managed caddy exited unexpectedly")
+		return errors.New("managed caddy exited unexpectedly")
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(
 			context.Background(), 5*time.Second,
@@ -309,11 +309,11 @@ func waitForServerRuntime(
 			rt.Caddy.Stop()
 		}
 		if err := srv.Shutdown(shutdownCtx); err != nil &&
-			err != http.ErrServerClosed {
+			!errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("server shutdown error: %w", err)
 		}
 		if err := <-rt.ServeErrCh; err != nil &&
-			err != http.ErrServerClosed {
+			!errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("server error: %w", err)
 		}
 		return nil

@@ -50,7 +50,7 @@ func TestHandleImportClaudeAI(t *testing.T) {
 	_, _ = part.Write([]byte(conversations))
 	writer.Close()
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost,
 		"/api/v1/import/claude-ai",
 		&body,
@@ -95,7 +95,7 @@ func TestHandleImportRejectsWriterClosedBeforeStream(t *testing.T) {
 			_, _ = part.Write([]byte("[]"))
 			writer.Close()
 
-			req := httptest.NewRequest(http.MethodPost, tt.path, &body)
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, tt.path, &body)
 			req.Header.Set("Content-Type", writer.FormDataContentType())
 			req.Header.Set("Accept", "text/event-stream")
 			rec := httptest.NewRecorder()
@@ -121,7 +121,7 @@ func TestHandleImportChatGPT_RequiresZip(t *testing.T) {
 	_, _ = part.Write([]byte("[]"))
 	writer.Close()
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost,
 		"/api/v1/import/chatgpt",
 		&body,
@@ -160,7 +160,7 @@ func TestHandleImportClaudeAI_SSE(t *testing.T) {
 	_, _ = part.Write([]byte(conversations))
 	writer.Close()
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost,
 		"/api/v1/import/claude-ai",
 		&body,
@@ -198,7 +198,7 @@ func TestHandleImportClaudeAI_NoFile(t *testing.T) {
 	writer := multipart.NewWriter(&body)
 	writer.Close()
 
-	req := httptest.NewRequest(
+	req := httptest.NewRequestWithContext(t.Context(),
 		http.MethodPost,
 		"/api/v1/import/claude-ai",
 		&body,

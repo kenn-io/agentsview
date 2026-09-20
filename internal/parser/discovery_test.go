@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,7 +40,7 @@ func assertDiscoveredFiles(t *testing.T, got []DiscoveredFile, wantFilenames []s
 		assert.Equalf(t, wantAgent, f.Agent, "file %q: agent", base)
 	}
 
-	assert.Equal(t, len(want), len(got), "files total")
+	assert.Len(t, got, len(want), "files total")
 
 	for file := range want {
 		assert.Truef(t, gotMap[file], "missing expected file: %q", file)
@@ -68,7 +67,7 @@ func assertSourceRefs(t *testing.T, got []SourceRef, wantFilenames []string, wan
 		assert.Equalf(t, wantAgent, f.Provider, "file %q: provider", base)
 	}
 
-	assert.Equal(t, len(want), len(got), "files total")
+	assert.Len(t, got, len(want), "files total")
 
 	for file := range want {
 		assert.Truef(t, gotMap[file], "missing expected file: %q", file)
@@ -237,7 +236,7 @@ func TestAmpProviderDiscoversSessions(t *testing.T) {
 				Machine: "local",
 			})
 			require.True(t, ok)
-			files, err := provider.Discover(context.Background())
+			files, err := provider.Discover(t.Context())
 			require.NoError(t, err)
 			assertSourceRefs(t, files, tt.wantFiles, AgentAmp)
 		})
@@ -250,7 +249,7 @@ func TestAmpProviderDiscoversSessions(t *testing.T) {
 			Machine: "local",
 		})
 		require.True(t, ok)
-		files, err := provider.Discover(context.Background())
+		files, err := provider.Discover(t.Context())
 		require.NoError(t, err)
 		assert.Empty(t, files, "expected empty")
 	})
@@ -335,7 +334,7 @@ func TestAmpProviderFindsSourceFile(t *testing.T) {
 		})
 		require.True(t, ok)
 		got, ok, err := provider.FindSource(
-			context.Background(),
+			t.Context(),
 			FindSourceRequest{
 				RawSessionID: "T-019ca26f-aaaa-bbbb-cccc-dddddddddddd",
 			},
@@ -354,7 +353,7 @@ func TestAmpProviderFindsSourceFile(t *testing.T) {
 		})
 		require.True(t, ok)
 		_, ok, err := provider.FindSource(
-			context.Background(),
+			t.Context(),
 			FindSourceRequest{
 				RawSessionID: "T-019ca26f-aaaa-bbbb-cccc-dddddddddddd",
 			},
@@ -379,7 +378,7 @@ func TestAmpProviderFindsSourceFile(t *testing.T) {
 		}
 		for _, id := range tests {
 			_, ok, err := provider.FindSource(
-				context.Background(),
+				t.Context(),
 				FindSourceRequest{RawSessionID: id},
 			)
 			require.NoError(t, err)

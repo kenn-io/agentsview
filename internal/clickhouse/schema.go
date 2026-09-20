@@ -600,6 +600,7 @@ func writeMetadataVersion(
 		_ = tx.Rollback()
 		return fmt.Errorf("preparing clickhouse metadata batch: %w", err)
 	}
+	defer stmt.Close()
 	keys := make([]string, 0, len(values))
 	for k := range values {
 		keys = append(keys, k)

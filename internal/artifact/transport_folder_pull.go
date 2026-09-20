@@ -162,7 +162,7 @@ func (t *folderTransport) pullRootEntryLocked(
 	}
 	if err := validateOriginID(entry.Name()); err != nil {
 		return fmt.Errorf(
-			"%w: invalid artifact origin directory: %v",
+			"%w: invalid artifact origin directory: %w",
 			ErrArtifactInvalid,
 			err,
 		)
@@ -173,7 +173,7 @@ func (t *folderTransport) pullRootEntryLocked(
 		"origin",
 	)
 	if err != nil {
-		return fmt.Errorf("%w: invalid artifact origin entry: %v", ErrArtifactInvalid, err)
+		return fmt.Errorf("%w: invalid artifact origin entry: %w", ErrArtifactInvalid, err)
 	}
 	pullErr := t.pullOriginLocked(
 		ctx,

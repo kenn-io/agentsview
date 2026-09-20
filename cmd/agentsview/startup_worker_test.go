@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"testing"
 	"time"
 
@@ -30,7 +31,7 @@ func engineWithDispatchHandler(
 ) *syncpkg.Engine {
 	t.Helper()
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{
 		AgentDirs: cfg.AgentDirs,
 		Machine:   "local",
 		OnStartupReconciled: newStartupReconciliationHandler(
@@ -112,7 +113,7 @@ func TestCompleteWorkerStartupReconciliationLogsLifecycle(t *testing.T) {
 
 			output := logs.String()
 			assert.Contains(t, output,
-				"startup gap reconciliation started: roots="+fmt.Sprint(len(tc.roots)))
+				"startup gap reconciliation started: roots="+strconv.Itoa(len(tc.roots)))
 			assert.Contains(t, output, "startup gap reconciliation finished:")
 			assert.Contains(t, output, "duration=")
 			assert.Contains(t, output, "outcome="+tc.wantOutcome)
@@ -131,7 +132,7 @@ func TestCompleteWorkerStartupReconciliationLogsLifecycle(t *testing.T) {
 func TestStartupWorkerPathDefersMaintenanceUntilReconciled(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	database := dbtest.OpenTestDBAt(t, cfg.DBPath)
-	engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{
+	engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{
 		AgentDirs: cfg.AgentDirs,
 		Machine:   "local",
 		DeferStartupMaintenance: deferStartupMaintenance(
@@ -150,8 +151,7 @@ func TestStartupWorkerPathDefersMaintenanceUntilReconciled(t *testing.T) {
 
 	select {
 	case <-maintenanceRan:
-		require.FailNow(t,
-			"startup maintenance must wait for the deferred gap reconciliation")
+		require.FailNow(t, "startup maintenance must wait for the deferred gap reconciliation")
 	case <-time.After(150 * time.Millisecond):
 	}
 
@@ -167,8 +167,7 @@ func TestStartupWorkerPathDefersMaintenanceUntilReconciled(t *testing.T) {
 	select {
 	case <-maintenanceRan:
 	case <-time.After(2 * time.Second):
-		require.FailNow(t,
-			"maintenance never released after RecordStartupReconciled")
+		require.FailNow(t, "maintenance never released after RecordStartupReconciled")
 	}
 }
 
@@ -234,8 +233,7 @@ func TestStartupWorkerPublishesEnrichedResyncProgress(t *testing.T) {
 		state = readStartupState(cfg.DataDir)
 		require.NotNil(t, state)
 		assert.Equal(t, "full resync", state.Phase)
-		assert.Equal(t,
-			"Syncing sessions into rebuilt database: 25/100 sessions (25%) · 800 messages",
+		assert.Equal(t, "Syncing sessions into rebuilt database: 25/100 sessions (25%) · 800 messages",
 			state.Detail,
 		)
 
@@ -252,14 +250,14 @@ func TestStartupWorkerPublishesEnrichedResyncProgress(t *testing.T) {
 
 func TestStartupWorkerReportsDatabaseUpgradeBeforeSync(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	require.NoError(t, database.Close())
 	// Reproduce the archive shape before reasoning effort and result indexes.
 	archive, err := sql.Open("sqlite3", cfg.DBPath)
 	require.NoError(t, err)
 	defer archive.Close()
-	_, err = archive.Exec(`ALTER TABLE messages DROP COLUMN reasoning_effort;
+	_, err = archive.ExecContext(t.Context(), `ALTER TABLE messages DROP COLUMN reasoning_effort;
 		DROP INDEX idx_tool_result_events_summary; PRAGMA user_version = 96;`)
 	require.NoError(t, err)
 
@@ -298,7 +296,7 @@ func TestStartupWorkerReportsDatabaseUpgradeBeforeSync(t *testing.T) {
 			assert.Contains(t, string(output), p.Detail, "log the stage before doing its work")
 			if p.Detail == "Updating database schema and indexes" {
 				var count int
-				require.NoError(t, archive.QueryRow(`SELECT count(*) FROM sqlite_master
+				require.NoError(t, archive.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master
 					WHERE name = 'idx_tool_result_events_summary'`).Scan(&count))
 				assert.Zero(t, count, "announce index construction before it runs")
 			}
@@ -404,7 +402,7 @@ func TestStartupWorkerRanFailedSurfacedWithoutResync(t *testing.T) {
 		t.Context(), cfg, newStartupStateWriter(cfg.DataDir, time.Now),
 	)
 	require.Error(t, syncErr)
-	require.False(t, errors.Is(syncErr, errWorkerSpawn),
+	require.NotErrorIs(t, syncErr, errWorkerSpawn,
 		"ran-and-failed must be distinct from spawn failure")
 
 	carried, done := startupWorkerOutcome(result, syncErr)
@@ -468,7 +466,7 @@ func TestSyncWorkerRealSpawnEmitsTerminalResult(t *testing.T) {
 	cfg := testConfigWithClaudeFixture(t)
 	claudeDir := cfg.AgentDirs[parser.AgentClaude][0]
 
-	cmd := exec.Command(
+	cmd := exec.CommandContext(t.Context(),
 		os.Args[0],
 		"-test.run=^TestSyncWorkerMainHelperProcess$",
 		"--",
@@ -535,5 +533,5 @@ func TestSyncWorkerMainHelperProcess(t *testing.T) {
 			os.Exit(0)
 		}
 	}
-	t.Fatal("missing helper args")
+	require.FailNow(t, "missing helper args")
 }

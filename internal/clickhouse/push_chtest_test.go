@@ -25,6 +25,9 @@ func TestEnsureSchemaCreatesMissingDatabase(t *testing.T) {
 	parsed.Path = "/" + database
 	missingDSN := parsed.String()
 	admin := chtest.Open(t, dsn, "default")
+	status, err := ReadStatus(ctx, Target{URL: missingDSN}, fixtureMachine, "", nil, nil)
+	require.NoError(t, err)
+	assert.True(t, status.SchemaMissing)
 	require.NoError(t, EnsureSchema(ctx, Target{URL: missingDSN}))
 	t.Cleanup(func() {
 		_, _ = admin.ExecContext(context.Background(),
@@ -137,8 +140,8 @@ func TestPushRemovesHardDeletedSessions(t *testing.T) {
 	_, err := s.Push(ctx, false, nil)
 	require.NoError(t, err)
 
-	require.NoError(t, local.SoftDeleteSession(fixtureBetaID))
-	deleted, err := local.DeleteSessionIfTrashed(fixtureBetaID)
+	require.NoError(t, local.SoftDeleteSession(t.Context(), fixtureBetaID))
+	deleted, err := local.DeleteSessionIfTrashed(t.Context(), fixtureBetaID)
 	require.NoError(t, err)
 	require.EqualValues(t, 1, deleted)
 
@@ -213,7 +216,7 @@ func TestPushHonorsProjectScopeAndRemovesMovedSessions(t *testing.T) {
 	child.LocalModifiedAt = &moved
 	msgs, err := local.GetAllMessages(ctx, fixtureChildID)
 	require.NoError(t, err)
-	_, err = local.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err = local.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
 		Session: *child, Messages: msgs, DataVersion: 1, ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
@@ -243,8 +246,8 @@ func TestPushRefreshesCurationWithoutContentChange(t *testing.T) {
 	conn := chtest.Open(t, target.URL, target.Database)
 	assert.Equal(t, 1, chtest.Count(t, conn, "starred_sessions", ""))
 
-	require.NoError(t, local.UnstarSession(fixtureAlphaID))
-	ok, err := local.StarSession(fixtureBetaID)
+	require.NoError(t, local.UnstarSession(t.Context(), fixtureAlphaID))
+	ok, err := local.StarSession(t.Context(), fixtureBetaID)
 	require.NoError(t, err)
 	require.True(t, ok)
 

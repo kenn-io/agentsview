@@ -105,7 +105,7 @@ func (m *launchdManager) install(
 	if out, err := m.run(
 		ctx, "launchctl", "bootstrap", m.domain(), m.unitPath(),
 	); err != nil {
-		return fmt.Errorf("launchctl bootstrap: %v: %s", err, out)
+		return fmt.Errorf("launchctl bootstrap: %w: %s", err, out)
 	}
 	return nil
 }
@@ -125,7 +125,7 @@ func (m *launchdManager) start(ctx context.Context) error {
 	if out, err := m.run(
 		ctx, "launchctl", "bootstrap", m.domain(), m.unitPath(),
 	); err != nil {
-		return fmt.Errorf("launchctl bootstrap: %v: %s", err, out)
+		return fmt.Errorf("launchctl bootstrap: %w: %s", err, out)
 	}
 	return nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -104,7 +105,7 @@ func newRecallListCommand() *cobra.Command {
 				return err
 			}
 			defer cleanup()
-			if err := applyRecallEntryCurrentScope(
+			if err := applyRecallEntryCurrentScope(cmd.Context(),
 				&f.CWD, &f.GitBranch, currentCWD, currentGitBranch,
 				currentWorktree,
 			); err != nil {
@@ -165,7 +166,7 @@ func newRecallStatsCommand() *cobra.Command {
 				return err
 			}
 			defer cleanup()
-			if err := applyRecallEntryCurrentScope(
+			if err := applyRecallEntryCurrentScope(cmd.Context(),
 				&f.CWD, &f.GitBranch, currentCWD, currentGitBranch,
 				currentWorktree,
 			); err != nil {
@@ -367,7 +368,7 @@ func newRecallQueryCommand() *cobra.Command {
 			defer cleanup()
 			req.Query = args[0]
 			req.Surface = db.RecallQuerySurfaceQuery
-			if err := applyRecallEntryCurrentScope(
+			if err := applyRecallEntryCurrentScope(cmd.Context(),
 				&req.CWD, &req.GitBranch, currentCWD, currentGitBranch,
 				currentWorktree,
 			); err != nil {
@@ -532,7 +533,7 @@ func newRecallBriefCommand() *cobra.Command {
 			req.Query = args[0]
 			req.Surface = db.RecallQuerySurfaceBrief
 			req.IncludeContext = true
-			if err := applyRecallEntryCurrentScope(
+			if err := applyRecallEntryCurrentScope(cmd.Context(),
 				&req.CWD, &req.GitBranch, currentCWD, currentGitBranch,
 				currentWorktree,
 			); err != nil {
@@ -889,7 +890,7 @@ func newRecallImportCommand() *cobra.Command {
 	var yes bool
 	var allowRemoteImport bool
 	var allowProductionImport bool
-	var requireExistingSessions = true
+	requireExistingSessions := true
 	var allowPlaceholderSessions bool
 	cmd := &cobra.Command{
 		Use:          "import <accepted-recall.jsonl>",
@@ -898,17 +899,15 @@ func newRecallImportCommand() *cobra.Command {
 		SilenceUsage: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if !dryRun && !yes {
-				return fmt.Errorf(
-					"recall import writes to the active agentsview database; " +
-						"run --dry-run first, then pass --yes to import",
+				return errors.New("recall import writes to the active agentsview database; " +
+					"run --dry-run first, then pass --yes to import",
 				)
 			}
 			remote, _ := cmd.Flags().GetString("server")
 			if strings.TrimSpace(remote) != "" && !dryRun && !allowRemoteImport {
-				return fmt.Errorf(
-					"recall import --server writes to a remote daemon; " +
-						"run --dry-run first, then pass --yes " +
-						"--allow-remote-import to import",
+				return errors.New("recall import --server writes to a remote daemon; " +
+					"run --dry-run first, then pass --yes " +
+					"--allow-remote-import to import",
 				)
 			}
 			if strings.TrimSpace(remote) == "" && !allowProductionImport {
@@ -1158,7 +1157,7 @@ func addRecallEntryCurrentWorktreeFlag(cmd *cobra.Command, currentWorktree *bool
 	)
 }
 
-func applyRecallEntryCurrentScope(
+func applyRecallEntryCurrentScope(ctx context.Context,
 	cwd *string,
 	gitBranch *string,
 	currentCWD bool,
@@ -1170,16 +1169,15 @@ func applyRecallEntryCurrentScope(
 			strings.TrimSpace(*cwd) != "" ||
 			currentGitBranch ||
 			strings.TrimSpace(*gitBranch) != "" {
-			return fmt.Errorf(
-				"use --current-worktree without --cwd, --current-cwd, " +
-					"--git-branch, or --current-git-branch",
+			return errors.New("use --current-worktree without --cwd, --current-cwd, " +
+				"--git-branch, or --current-git-branch",
 			)
 		}
-		root, err := currentGitRoot()
+		root, err := currentGitRoot(ctx)
 		if err != nil {
 			return err
 		}
-		branch, err := currentGitBranchName()
+		branch, err := currentGitBranchName(ctx)
 		if err != nil {
 			return err
 		}
@@ -1190,7 +1188,7 @@ func applyRecallEntryCurrentScope(
 	if err := applyRecallEntryCurrentCWD(cwd, currentCWD); err != nil {
 		return err
 	}
-	return applyRecallEntryCurrentGitBranch(gitBranch, currentGitBranch)
+	return applyRecallEntryCurrentGitBranch(ctx, gitBranch, currentGitBranch)
 }
 
 func applyRecallEntryCurrentCWD(cwd *string, currentCWD bool) error {
@@ -1198,7 +1196,7 @@ func applyRecallEntryCurrentCWD(cwd *string, currentCWD bool) error {
 		return nil
 	}
 	if strings.TrimSpace(*cwd) != "" {
-		return fmt.Errorf("use either --cwd or --current-cwd, not both")
+		return errors.New("use either --cwd or --current-cwd, not both")
 	}
 	wd, err := os.Getwd()
 	if err != nil {
@@ -1208,14 +1206,14 @@ func applyRecallEntryCurrentCWD(cwd *string, currentCWD bool) error {
 	return nil
 }
 
-func applyRecallEntryCurrentGitBranch(gitBranch *string, currentGitBranch bool) error {
+func applyRecallEntryCurrentGitBranch(ctx context.Context, gitBranch *string, currentGitBranch bool) error {
 	if !currentGitBranch {
 		return nil
 	}
 	if strings.TrimSpace(*gitBranch) != "" {
-		return fmt.Errorf("use either --git-branch or --current-git-branch, not both")
+		return errors.New("use either --git-branch or --current-git-branch, not both")
 	}
-	branch, err := currentGitBranchName()
+	branch, err := currentGitBranchName(ctx)
 	if err != nil {
 		return err
 	}
@@ -1223,25 +1221,25 @@ func applyRecallEntryCurrentGitBranch(gitBranch *string, currentGitBranch bool) 
 	return nil
 }
 
-func currentGitBranchName() (string, error) {
-	cmd := exec.Command("git", "symbolic-ref", "--quiet", "--short", "HEAD")
+func currentGitBranchName(ctx context.Context) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", "symbolic-ref", "--quiet", "--short", "HEAD")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("resolving current git branch: %w", err)
 	}
 	branch := strings.TrimSpace(string(out))
 	if branch == "" {
-		return "", fmt.Errorf("resolving current git branch: empty branch name")
+		return "", errors.New("resolving current git branch: empty branch name")
 	}
 	return branch, nil
 }
 
-func currentGitRoot() (string, error) {
+func currentGitRoot(ctx context.Context) (string, error) {
 	wd, err := os.Getwd()
 	if err != nil {
 		return "", fmt.Errorf("resolving current git root: %w", err)
 	}
-	cmd := exec.Command("git", "rev-parse", "--show-prefix")
+	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--show-prefix")
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("resolving current git root: %w", err)

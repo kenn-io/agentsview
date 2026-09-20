@@ -1528,7 +1528,6 @@
   "recall_page_generation_retire_message": "Retire {model} ({fingerprint})? Its automatic entries will remain archived.",
   "recall_page_generation_action_error": "Could not update the extraction generation: {error}",
   "session_vitals_title": "Analysis",
-  "session_vitals_subtitle": "Session vital signs",
   "session_vitals_close": "Close session analysis",
   "session_vitals_resize": "Resize session analysis panel",
   "session_vitals_session": "Session",

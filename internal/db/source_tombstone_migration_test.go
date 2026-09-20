@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"path/filepath"
 	"strings"
@@ -14,7 +13,7 @@ import (
 func TestSourceBaselineSchemaUsesLocalCompanionTable(t *testing.T) {
 	d := testDB(t)
 	var sessionColumns int
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `
 		SELECT count(*) FROM pragma_table_info('sessions')
 		WHERE name = 'source_baseline_path'`,
 	).Scan(&sessionColumns))
@@ -22,13 +21,13 @@ func TestSourceBaselineSchemaUsesLocalCompanionTable(t *testing.T) {
 		"machine-local watcher proof must not expand the shared session model")
 
 	var baselineTables int
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `
 		SELECT count(*) FROM sqlite_master
 		WHERE type = 'table' AND name = 'local_session_source_baselines'`,
 	).Scan(&baselineTables))
 	assert.Equal(t, 1, baselineTables)
 	var indexSQL string
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `
 		SELECT sql FROM sqlite_master
 		WHERE type = 'index' AND name = 'idx_local_source_baselines_ownership'`,
 	).Scan(&indexSQL))
@@ -51,26 +50,26 @@ func TestSourceMissingSchemaStartsAndMigratesWithoutDataLoss(t *testing.T) {
 
 		conn, err := sql.Open("sqlite3", path)
 		require.NoError(t, err)
-		_, err = conn.Exec("DROP INDEX IF EXISTS idx_sessions_agent_file_path_active")
+		_, err = conn.ExecContext(t.Context(), "DROP INDEX IF EXISTS idx_sessions_agent_file_path_active")
 		require.NoError(t, err)
-		_, err = conn.Exec("DROP TABLE IF EXISTS local_session_source_baselines")
+		_, err = conn.ExecContext(t.Context(), "DROP TABLE IF EXISTS local_session_source_baselines")
 		require.NoError(t, err)
-		_, err = conn.Exec("ALTER TABLE sessions DROP COLUMN source_missing_at")
+		_, err = conn.ExecContext(t.Context(), "ALTER TABLE sessions DROP COLUMN source_missing_at")
 		require.NoError(t, err)
-		_, err = conn.Exec(`
+		_, err = conn.ExecContext(t.Context(), `
 			UPDATE sessions
 			SET deleted_at = '2026-08-01T00:00:00Z',
 			    deletion_cause = 'source_missing'
 			WHERE id = 'legacy-missing'`)
 		require.NoError(t, err)
-		_, err = conn.Exec(`
+		_, err = conn.ExecContext(t.Context(), `
 			CREATE INDEX idx_sessions_agent_file_path_active
 			ON sessions(agent, file_path)
 			WHERE file_path IS NOT NULL AND deleted_at IS NULL`)
 		require.NoError(t, err)
 		require.NoError(t, conn.Close())
 
-		migrated, err := Open(path)
+		migrated, err := Open(t.Context(), path)
 		require.NoError(t, err)
 		defer migrated.Close()
 		assertSourceTombstoneSchema(t, migrated)
@@ -78,7 +77,7 @@ func TestSourceMissingSchemaStartsAndMigratesWithoutDataLoss(t *testing.T) {
 		require.NoError(t, err)
 		assert.NotNil(t, preserved, "schema migration must preserve archive rows")
 		var baselines int
-		require.NoError(t, migrated.getReader().QueryRow(
+		require.NoError(t, migrated.getReader().QueryRow(t.Context(),
 			"SELECT count(*) FROM local_session_source_baselines WHERE session_id = ?", "preserved",
 		).Scan(&baselines))
 		assert.Zero(t, baselines,
@@ -93,26 +92,27 @@ func TestSourceMissingSchemaStartsAndMigratesWithoutDataLoss(t *testing.T) {
 
 func assertSourceTombstoneSchema(t *testing.T, d *DB) {
 	t.Helper()
+
 	var causeColumns int
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `
 		SELECT count(*) FROM pragma_table_info('sessions')
 		WHERE name = 'deletion_cause'`,
 	).Scan(&causeColumns))
 	assert.Equal(t, 1, causeColumns)
 	var sourceMissingColumns int
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `
 		SELECT count(*) FROM pragma_table_info('sessions')
 		WHERE name = 'source_missing_at'`,
 	).Scan(&sourceMissingColumns))
 	assert.Equal(t, 1, sourceMissingColumns)
 	var baselineColumns int
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `
 		SELECT count(*) FROM pragma_table_info('sessions')
 		WHERE name = 'source_baseline_path'`,
 	).Scan(&baselineColumns))
 	assert.Zero(t, baselineColumns)
 
-	rows, err := d.getReader().Query(
+	rows, err := d.getReader().Query(t.Context(),
 		"SELECT name FROM pragma_index_info('idx_sessions_agent_file_path_active') ORDER BY seqno",
 	)
 	require.NoError(t, err)
@@ -126,7 +126,7 @@ func assertSourceTombstoneSchema(t *testing.T, d *DB) {
 	require.NoError(t, rows.Err())
 	assert.Equal(t, []string{"agent", "file_path", "id"}, columns)
 	var indexSQL string
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `
 		SELECT sql FROM sqlite_master
 		WHERE type = 'index' AND name = 'idx_sessions_agent_file_path_active'
 	`).Scan(&indexSQL))
@@ -134,12 +134,11 @@ func assertSourceTombstoneSchema(t *testing.T, d *DB) {
 	assert.Contains(t, normalizedIndexSQL,
 		"where file_path is not null and deleted_at is null")
 	var baselineIndexSQL string
-	require.NoError(t, d.getReader().QueryRow(`
+	require.NoError(t, d.getReader().QueryRow(t.Context(), `
 		SELECT sql FROM sqlite_master
 		WHERE type = 'index' AND name = 'idx_local_source_baselines_ownership'
 	`).Scan(&baselineIndexSQL))
-	assert.Contains(t,
-		strings.ToLower(strings.Join(strings.Fields(baselineIndexSQL), " ")),
+	assert.Contains(t, strings.ToLower(strings.Join(strings.Fields(baselineIndexSQL), " ")),
 		"machine, agent, file_path, session_id",
 	)
 }
@@ -214,7 +213,7 @@ func TestRebuildMetadataDoesNotRehideReappearedSource(t *testing.T) {
 	insertSessionWithSourcePath(t, destination, "session", "claude", physicalPath)
 	require.NoError(t, destination.CopySessionMetadataFrom(sourcePath))
 	assertSessionState(t, destination, "session", false, false)
-	active, err := destination.GetSession(context.Background(), "session")
+	active, err := destination.GetSession(t.Context(), "session")
 	require.NoError(t, err)
 	assert.NotNil(t, active)
 }
@@ -223,8 +222,9 @@ func assertSessionState(
 	t *testing.T, d *DB, id string, wantDeleted, wantSourceMissing bool,
 ) {
 	t.Helper()
+
 	var deletedAt, cause, sourceMissingAt sql.NullString
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		"SELECT deleted_at, deletion_cause, source_missing_at "+
 			"FROM sessions WHERE id = ?", id,
 	).Scan(&deletedAt, &cause, &sourceMissingAt))

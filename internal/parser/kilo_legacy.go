@@ -22,6 +22,7 @@ package parser
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"fmt"
@@ -331,8 +332,7 @@ func parseKiloLegacySession(
 		parsedMessages, totalOutputTok, totalInputTok, peakContextTok,
 			totalCost, hasCost, totalRequests, requestsWithCost,
 			provider, minTS, maxTS,
-			totalCacheReads, totalCacheWrites, parseErr =
-			parseKiloLegacyMessages(msgsBytes, apiModels)
+			totalCacheReads, totalCacheWrites, parseErr = parseKiloLegacyMessages(msgsBytes, apiModels)
 		if parseErr != nil {
 			return nil, nil, fmt.Errorf(
 				"parsing ui_messages.json: %w", parseErr,
@@ -595,8 +595,7 @@ func parseKiloLegacyMessages(
 		// accounting for peak context and aggregate totals.
 		if kiloIsMetadataSay(msg.Say) {
 			if msg.Say == "api_req_started" && msg.Text != "" {
-				ctx, in, out, cost, costPresent, prov, cr, cw, valid :=
-					kiloExtractAPIRequestStats(msg.Text)
+				ctx, in, out, cost, costPresent, prov, cr, cw, valid := kiloExtractAPIRequestStats(msg.Text)
 				if ctx > peakContext {
 					peakContext = ctx
 				}
@@ -1839,6 +1838,6 @@ func kiloLegacyFingerprintSource(path string) (SourceFingerprint, error) {
 			return SourceFingerprint{}, err
 		}
 	}
-	fp.Hash = fmt.Sprintf("%x", h.Sum(nil))
+	fp.Hash = hex.EncodeToString(h.Sum(nil))
 	return fp, nil
 }

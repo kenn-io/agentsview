@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -21,7 +22,7 @@ func (s *Store) ListArchiveWorktreeCandidates(
 	request db.ArchiveWorktreeCandidateRequest,
 ) ([]db.WorktreeReclassificationCandidate, error) {
 	if strings.TrimSpace(request.ProjectKey) == "" {
-		return nil, fmt.Errorf("project_key is required")
+		return nil, errors.New("project_key is required")
 	}
 	sessions, err := s.archiveWorktreeCandidateSessions(ctx, request.ProjectDateFilter)
 	if err != nil {
@@ -146,29 +147,33 @@ func (s *Store) loadWorktreeCandidateSessions(
 		queryArgs := make([]any, 0, len(args)*2)
 		queryArgs = append(queryArgs, args...)
 		queryArgs = append(queryArgs, args...)
-		rows, err := s.queryContext(ctx, query, queryArgs...)
-		if err != nil {
-			return nil, fmt.Errorf("querying clickhouse worktree candidate sessions: %w", err)
-		}
-		for rows.Next() {
-			var session db.WorktreeCandidateSession
-			var snapshotSessionID string
-			if err := rows.Scan(
-				&session.ID, &session.Project, &session.Machine, &session.Cwd,
-				&snapshotSessionID, &session.Snapshot.Project,
-				&session.Snapshot.Machine, &session.Snapshot.RootPath,
-				&session.Snapshot.WorktreeRootPath, &session.Snapshot.KeySource,
-			); err != nil {
-				rows.Close()
-				return nil, fmt.Errorf("scanning clickhouse worktree candidate session: %w", err)
+		if err := func() error {
+			rows, err := s.queryContext(ctx, query, queryArgs...)
+			if err != nil {
+				return fmt.Errorf("querying clickhouse worktree candidate sessions: %w", err)
 			}
-			session.HasSnapshot = snapshotSessionID != ""
-			byID[session.ID] = session
-		}
-		err = rows.Err()
-		rows.Close()
-		if err != nil {
-			return nil, fmt.Errorf("iterating clickhouse worktree candidate sessions: %w", err)
+			defer rows.Close()
+			for rows.Next() {
+				var session db.WorktreeCandidateSession
+				var snapshotSessionID string
+				if err := rows.Scan(
+					&session.ID, &session.Project, &session.Machine, &session.Cwd,
+					&snapshotSessionID, &session.Snapshot.Project,
+					&session.Snapshot.Machine, &session.Snapshot.RootPath,
+					&session.Snapshot.WorktreeRootPath, &session.Snapshot.KeySource,
+				); err != nil {
+					return fmt.Errorf("scanning clickhouse worktree candidate session: %w", err)
+				}
+				session.HasSnapshot = snapshotSessionID != ""
+				byID[session.ID] = session
+			}
+			err = rows.Err()
+			if err != nil {
+				return fmt.Errorf("iterating clickhouse worktree candidate sessions: %w", err)
+			}
+			return nil
+		}(); err != nil {
+			return nil, err
 		}
 	}
 	result := make([]db.WorktreeCandidateSession, 0, len(byID))

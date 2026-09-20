@@ -26,7 +26,7 @@ func TestPGParserParentProvenanceRoundTripsAndRepushes(t *testing.T) {
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
 
-	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
 	defer local.Close()
 
@@ -39,9 +39,9 @@ func TestPGParserParentProvenanceRoundTripsAndRepushes(t *testing.T) {
 			ParentSessionID: &parserParent, RelationshipType: "subagent",
 		},
 	} {
-		require.NoError(t, local.UpsertSession(sess))
+		require.NoError(t, local.UpsertSession(t.Context(), sess))
 	}
-	require.NoError(t, local.InsertMessages([]db.Message{{
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{
 		SessionID: "parent-a", Ordinal: 0, Role: "assistant",
 		Content: "spawn child", HasToolUse: true,
 		ToolCalls: []db.ToolCall{{
@@ -66,13 +66,13 @@ func TestPGParserParentProvenanceRoundTripsAndRepushes(t *testing.T) {
 	// Re-parsing changes only the immutable parser provenance: the spawn edge
 	// immediately restores the effective parent to parent-a.
 	parserParent = "parent-b"
-	require.NoError(t, local.UpsertSession(db.Session{
+	require.NoError(t, local.UpsertSession(t.Context(), db.Session{
 		ID: "child", Project: "project", Machine: "machine", Agent: "claude",
 		ParentSessionID: &parserParent, RelationshipType: "subagent",
 	}))
 	require.NoError(t, local.LinkSubagentSessions())
-	require.NoError(t, local.SetSyncState("last_push_at", ""))
-	require.NoError(t, local.SetSyncState(lastPushBoundaryStateKey, ""))
+	require.NoError(t, local.SetSyncState(t.Context(), "last_push_at", ""))
+	require.NoError(t, local.SetSyncState(t.Context(), lastPushBoundaryStateKey, ""))
 
 	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)
@@ -91,7 +91,7 @@ func TestPGParserParentBackfillIgnoresLegacyProvenanceMarker(t *testing.T) {
 	defer pg.Close()
 	require.NoError(t, EnsureSchema(ctx, pg, schema))
 
-	local, err := db.Open(filepath.Join(t.TempDir(), "local.db"))
+	local, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "local.db"))
 	require.NoError(t, err)
 	defer local.Close()
 	parentID := "parent"
@@ -102,7 +102,7 @@ func TestPGParserParentBackfillIgnoresLegacyProvenanceMarker(t *testing.T) {
 			ParentSessionID: &parentID, RelationshipType: "subagent",
 		},
 	} {
-		require.NoError(t, local.UpsertSession(sess))
+		require.NoError(t, local.UpsertSession(t.Context(), sess))
 	}
 
 	syncer := &Sync{
@@ -113,8 +113,8 @@ func TestPGParserParentBackfillIgnoresLegacyProvenanceMarker(t *testing.T) {
 	_, err = pg.ExecContext(ctx, `
 		UPDATE sessions SET parser_parent_session_id = NULL WHERE id = 'child'`)
 	require.NoError(t, err)
-	require.NoError(t, local.DeleteSyncState(sessionProvenanceBackfillStateKey))
-	require.NoError(t, local.SetSyncState("pg_session_provenance_backfill_v1", "1"))
+	require.NoError(t, local.DeleteSyncState(t.Context(), sessionProvenanceBackfillStateKey))
+	require.NoError(t, local.SetSyncState(t.Context(), "pg_session_provenance_backfill_v1", "1"))
 
 	_, err = syncer.Push(ctx, false, nil)
 	require.NoError(t, err)

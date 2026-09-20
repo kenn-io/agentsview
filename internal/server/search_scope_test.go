@@ -81,10 +81,14 @@ func TestSearchContentScopeFiltersSemanticResults(t *testing.T) {
 		m.Content = "zebra inside the subagent"
 	})
 	te.db.SetVectorSearcher(fakeHitsVectorSearcher{hits: []db.VectorHit{
-		{SessionID: "sub-sess", Ordinal: 0, Subordinate: true, Score: 0.9,
-			Snippet: "zebra inside the subagent"},
-		{SessionID: "top-sess", Ordinal: 0, Score: 0.5,
-			Snippet: "zebra at top level"},
+		{
+			SessionID: "sub-sess", Ordinal: 0, Subordinate: true, Score: 0.9,
+			Snippet: "zebra inside the subagent",
+		},
+		{
+			SessionID: "top-sess", Ordinal: 0, Score: 0.5,
+			Snippet: "zebra at top level",
+		},
 	}})
 
 	search := func(t *testing.T, scope string) []string {
@@ -138,10 +142,14 @@ func TestSearchContentSemanticResponseCarriesUnitRangeAndLineage(t *testing.T) {
 		}
 	})
 	te.db.SetVectorSearcher(fakeHitsVectorSearcher{hits: []db.VectorHit{
-		{SessionID: "sub-sess", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
-			Subordinate: true, Score: 0.9, Snippet: "zebra step inside the subagent"},
-		{SessionID: "top-sess", Ordinal: 0, Score: 0.5,
-			Snippet: "zebra at top level"},
+		{
+			SessionID: "sub-sess", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
+			Subordinate: true, Score: 0.9, Snippet: "zebra step inside the subagent",
+		},
+		{
+			SessionID: "top-sess", Ordinal: 0, Score: 0.5,
+			Snippet: "zebra at top level",
+		},
 	}})
 
 	w := te.wrappedRequest(http.MethodGet,

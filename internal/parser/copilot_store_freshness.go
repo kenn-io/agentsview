@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json/v2"
 	"fmt"
 	"hash"
@@ -149,9 +150,11 @@ func (c *copilotSourceCache) transcript(ctx context.Context, path string, info o
 		h.Write(data)
 	}
 	size, mtime := CopilotCompositeFileStat(path, info)
-	result := copilotTranscriptFingerprint{Stat: stat, Size: size, Mtime: mtime,
-		Hash: fmt.Sprintf("%x", h.Sum(nil)), SessionID: sessionID,
-		UsesStore: !started.Before(copilotUsageBasedPricingStartedAt)}
+	result := copilotTranscriptFingerprint{
+		Stat: stat, Size: size, Mtime: mtime,
+		Hash: hex.EncodeToString(h.Sum(nil)), SessionID: sessionID,
+		UsesStore: !started.Before(copilotUsageBasedPricingStartedAt),
+	}
 	c.transcripts[path] = result
 	return result, nil
 }
@@ -199,6 +202,7 @@ func (c *copilotSourceCache) usageHash(ctx context.Context, path, sessionID stri
    COALESCE((SELECT MAX(id) FROM assistant_usage_events WHERE session_id = sessions.id), 0)
    FROM sessions`)
 		if err == nil {
+			defer rows.Close()
 			for rows.Next() {
 				var id string
 				var lastID int64
@@ -257,7 +261,7 @@ func (c *copilotSourceCache) readUsageHashes(ctx context.Context, tx *sql.Tx, wh
 	var lastID int64
 	finish := func() {
 		if h != nil {
-			result[current] = copilotStoreMember{lastID, fmt.Sprintf("%x", h.Sum(nil))}
+			result[current] = copilotStoreMember{lastID, hex.EncodeToString(h.Sum(nil))}
 		}
 	}
 	for rows.Next() {

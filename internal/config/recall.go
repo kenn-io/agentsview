@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -164,13 +165,11 @@ func (c RecallExtractConfig) Validate() error {
 		return nil
 	}
 	if strings.TrimSpace(c.Model) == "" {
-		return fmt.Errorf(
-			"[recall.extract] model is required when extraction is enabled")
+		return errors.New("[recall.extract] model is required when extraction is enabled")
 	}
 	if len(c.Servers) == 0 {
-		return fmt.Errorf(
-			"[recall.extract] at least one server is required; define one " +
-				"under [recall.extract.servers.<name>]")
+		return errors.New("[recall.extract] at least one server is required; define one " +
+			"under [recall.extract.servers.<name>]")
 	}
 	if c.Server == "" && len(c.Servers) > 1 {
 		return fmt.Errorf(
@@ -218,9 +217,8 @@ func (c RecallExtractConfig) Validate() error {
 			c.BackstopInterval, err)
 	}
 	if backstop == 0 {
-		return fmt.Errorf(
-			"[recall.extract] backstop_interval must not be zero; " +
-				"use a negative value to disable or omit for the 1h default")
+		return errors.New("[recall.extract] backstop_interval must not be zero; " +
+			"use a negative value to disable or omit for the 1h default")
 	}
 	backoff, err := time.ParseDuration(c.FailureBackoff)
 	if err != nil {
@@ -234,10 +232,9 @@ func (c RecallExtractConfig) Validate() error {
 			c.FailureBackoff)
 	}
 	if backoff == 0 {
-		return fmt.Errorf(
-			"[recall.extract] failure_backoff must not be zero; a failed " +
-				"session would retry a model call on every pass — omit it " +
-				"for the 1h default")
+		return errors.New("[recall.extract] failure_backoff must not be zero; a failed " +
+			"session would retry a model call on every pass — omit it " +
+			"for the 1h default")
 	}
 	return nil
 }

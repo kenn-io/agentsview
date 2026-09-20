@@ -209,15 +209,10 @@ func TestRestoreSnapshotFileRestoresPinnedArtifact(t *testing.T) {
 	runGit(t, repo, "commit", "-m", "snapshot")
 	ref := runGit(t, repo, "rev-parse", "HEAD")
 
-	cwd, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(repo))
-	defer func() {
-		require.NoError(t, os.Chdir(cwd))
-	}()
+	t.Chdir(repo)
 
 	out := filepath.Join(repo, "out", "snapshot.json.gz")
-	require.NoError(t, restoreSnapshotFile(
+	require.NoError(t, restoreSnapshotFile(t.Context(),
 		out,
 		ref,
 		"litellm_snapshot.json.gz",
@@ -260,15 +255,10 @@ func TestRestoreSnapshotFileFetchesPinnedArtifactAfterBranchAdvances(t *testing.
 
 	clone := filepath.Join(t.TempDir(), "clone")
 	runGit(t, "", "clone", "--depth=1", fileURLForPath(remote), clone)
-	cwd, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(clone))
-	t.Cleanup(func() {
-		require.NoError(t, os.Chdir(cwd))
-	})
+	t.Chdir(clone)
 
 	out := filepath.Join(clone, "out", "snapshot.json.gz")
-	require.NoError(t, restoreSnapshotFile(
+	require.NoError(t, restoreSnapshotFile(t.Context(),
 		out,
 		oldRef,
 		"litellm_snapshot.json.gz",
@@ -296,15 +286,10 @@ func TestRestoreSnapshotFileDownloadsPinnedArtifactWithoutGitCheckout(t *testing
 	t.Cleanup(server.Close)
 
 	workspace := t.TempDir()
-	cwd, err := os.Getwd()
-	require.NoError(t, err)
-	require.NoError(t, os.Chdir(workspace))
-	t.Cleanup(func() {
-		require.NoError(t, os.Chdir(cwd))
-	})
+	t.Chdir(workspace)
 
 	out := filepath.Join(workspace, "snapshot", "litellm_snapshot.json.gz")
-	require.NoError(t, restoreSnapshotFile(
+	require.NoError(t, restoreSnapshotFile(t.Context(),
 		out,
 		"deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
 		"litellm_snapshot.json.gz",
@@ -339,7 +324,7 @@ func gzipSnapshot(t *testing.T, data []byte) []byte {
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 
-	cmd := exec.Command("git", args...)
+	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = dir
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "git %v failed:\n%s", args, out)

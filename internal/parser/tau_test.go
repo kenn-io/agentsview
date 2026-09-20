@@ -2,7 +2,6 @@ package parser
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,15 +24,16 @@ func writeTauTestSource(t *testing.T, name, content string) (string, string) {
 
 func parseTauTestSource(t *testing.T, name, content string) ParseResult {
 	t.Helper()
+
 	root, path := writeTauTestSource(t, name, content)
 	provider, ok := NewProvider(AgentTau, ProviderConfig{
 		Roots: []string{root}, Machine: "test-machine",
 	})
 	require.True(t, ok)
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source: sources[0], Fingerprint: SourceFingerprint{Key: path},
 	})
 	require.NoError(t, err)
@@ -315,11 +315,11 @@ func TestTauDefaultIdentityAndCapabilities(t *testing.T) {
 func TestTauCancellation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cancel.jsonl")
 	require.NoError(t, os.WriteFile(path, []byte(`{"type":"session_info"}`), 0o644))
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	_, err := readTauEntries(ctx, path)
-	assert.ErrorIs(t, err, context.Canceled)
-	assert.False(t, errors.Is(err, os.ErrNotExist))
+	require.ErrorIs(t, err, context.Canceled)
+	assert.NotErrorIs(t, err, os.ErrNotExist)
 }
 
 func TestTauSessionInfoCreatedAtUsesFractionalSeconds(t *testing.T) {

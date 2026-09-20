@@ -298,10 +298,7 @@
 
 <div class="vital">
   <header class="vital-titlebar">
-    <div>
-      <div class="vital-title">{m.session_vitals_title()}</div>
-      <div class="vital-subtitle">{m.session_vitals_subtitle()}</div>
-    </div>
+    <div class="vital-title">{m.session_vitals_title()}</div>
     <button
       type="button"
       class="vital-close"
@@ -736,13 +733,6 @@
     font-size: 12px;
     font-weight: 650;
     line-height: 1.2;
-  }
-
-  .vital-subtitle {
-    color: var(--text-muted);
-    font-size: 10px;
-    line-height: 1.2;
-    margin-top: 1px;
   }
 
   .vital-close {

@@ -2,11 +2,10 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -136,16 +135,16 @@ func TestDBStripAndMigratePartialFailureReportsCommittedWork(t *testing.T) {
 			testDataDir(t)
 			cfg, err := config.LoadReadOnly()
 			require.NoError(t, err)
-			database, err := db.Open(cfg.DBPath)
+			database, err := db.Open(t.Context(), cfg.DBPath)
 			require.NoError(t, err)
 			for _, id := range []string{"mig-pf-a", "mig-pf-b"} {
 				insertSessionForStripTest(t, database, id)
-				require.NoError(t, database.InsertMessages([]db.Message{commandImageMessage(id)}))
+				require.NoError(t, database.InsertMessages(t.Context(), []db.Message{commandImageMessage(id)}))
 			}
 			// Sessions run in id order, one transaction each. Aborting the second
 			// session's revision bump commits the first and stops the run mid-selection.
-			require.NoError(t, database.Update(func(tx *sql.Tx) error {
-				_, err := tx.Exec(`
+			require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(t.Context(), `
 					CREATE TRIGGER fail_mig_pf_b
 					AFTER UPDATE OF transcript_revision ON sessions
 					WHEN NEW.id = 'mig-pf-b'
@@ -170,7 +169,7 @@ func TestDBStripAndMigratePartialFailureReportsCommittedWork(t *testing.T) {
 			assert.NotContains(t, errOutput.String(), "Run db compact separately")
 			assert.NotContains(t, output.String(), tt.title+" completed.")
 			t.Logf("partial report:\n%s", errOutput.String())
-			database, err = db.Open(cfg.DBPath)
+			database, err = db.Open(cmd.Context(), cfg.DBPath)
 			require.NoError(t, err)
 			defer func() { require.NoError(t, database.Close()) }()
 			committed, err := database.GetAllMessages(t.Context(), "mig-pf-a")
@@ -208,7 +207,7 @@ func TestDBMigrateReferenceMatchesAssetsPut(t *testing.T) {
 	stored, err := os.ReadFile(filepath.Join(assetsDir, entries[0].Name()))
 	require.NoError(t, err)
 	sum := sha256.Sum256(stored)
-	assert.Equal(t, fmt.Sprintf("%x", sum[:]), sha256Hex,
+	assert.Equal(t, hex.EncodeToString(sum[:]), sha256Hex,
 		"sha256 must be the digest of the bytes assets.Put stored")
 	assert.Equal(t, "asset://"+entries[0].Name(), ref)
 	assert.Equal(t, sha256Hex+".png", entries[0].Name())
@@ -221,24 +220,24 @@ func TestDBMigrateReachesTrashedAndOrphanRows(t *testing.T) {
 	dataDir := testDataDir(t)
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 
 	// Session A: active.
 	insertSessionForStripTest(t, database, "mig-active")
-	require.NoError(t, database.InsertMessages([]db.Message{commandImageMessage("mig-active")}))
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{commandImageMessage("mig-active")}))
 
 	// Session B: trashed (soft-deleted).
 	insertSessionForStripTest(t, database, "mig-trashed")
-	require.NoError(t, database.InsertMessages([]db.Message{commandImageMessage("mig-trashed")}))
-	require.NoError(t, database.SoftDeleteSession("mig-trashed"))
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{commandImageMessage("mig-trashed")}))
+	require.NoError(t, database.SoftDeleteSession(t.Context(), "mig-trashed"))
 
 	// Session C: a true orphan tool_result_events row with no matching tool_calls row.
 	// This exercises the UNION ALL branch that reads tool_result_events directly.
 	insertSessionForStripTest(t, database, "mig-orphan")
 	orphanContent := `[{"type":"input_image","image_url":"data:image/gif;base64,AAEC"}]`
-	require.NoError(t, database.Update(func(tx *sql.Tx) error {
-		_, err := tx.Exec(`
+	require.NoError(t, database.Update(t.Context(), func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(t.Context(), `
 			INSERT INTO tool_result_events
 				(session_id, tool_call_message_ordinal, call_index,
 				 tool_use_id, agent_id, subagent_session_id,
@@ -269,11 +268,11 @@ func TestDBMigrateReachesTrashedAndOrphanRows(t *testing.T) {
 	require.NoError(t, err)
 	assert.Len(t, entries, 2)
 
-	database2, err := db.Open(cfg.DBPath)
+	database2, err := db.Open(cmd.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, database2.Close()) }()
 	for _, id := range []string{"mig-active", "mig-trashed"} {
-		messages, err := database2.GetAllMessages(context.Background(), id)
+		messages, err := database2.GetAllMessages(t.Context(), id)
 		require.NoError(t, err)
 		require.Len(t, messages, 1)
 		assert.NotContains(t, messages[0].ToolCalls[0].ResultContent, "input_image")
@@ -282,7 +281,7 @@ func TestDBMigrateReachesTrashedAndOrphanRows(t *testing.T) {
 
 	// True orphan event row is migrated.
 	var orphanStored string
-	require.NoError(t, database2.Reader().QueryRow(
+	require.NoError(t, database2.Reader().QueryRow(cmd.Context(),
 		"SELECT content FROM tool_result_events WHERE session_id = ?", "mig-orphan",
 	).Scan(&orphanStored))
 	assert.Contains(t, orphanStored, "image_ref")
@@ -291,7 +290,7 @@ func TestDBMigrateReachesTrashedAndOrphanRows(t *testing.T) {
 
 	// Count trashed-session event rows that were migrated.
 	var trashedMigrated int
-	require.NoError(t, database2.Reader().QueryRow(`
+	require.NoError(t, database2.Reader().QueryRow(cmd.Context(), `
 		SELECT COUNT(*) FROM tool_result_events e
 		JOIN sessions s ON s.id = e.session_id
 		WHERE s.deleted_at IS NOT NULL AND e.content LIKE '%image_ref%'`).Scan(&trashedMigrated))
@@ -300,23 +299,25 @@ func TestDBMigrateReachesTrashedAndOrphanRows(t *testing.T) {
 
 func seedMigrateCommandArchive(t *testing.T) {
 	t.Helper()
+
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, database.Close()) }()
 	insertSessionForStripTest(t, database, "mig-cmd")
-	require.NoError(t, database.InsertMessages([]db.Message{commandImageMessage("mig-cmd")}))
+	require.NoError(t, database.InsertMessages(t.Context(), []db.Message{commandImageMessage("mig-cmd")}))
 }
 
 func assertMigrateCommandArchiveStillContainsImage(t *testing.T) {
 	t.Helper()
+
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, database.Close()) }()
-	messages, err := database.GetAllMessages(context.Background(), "mig-cmd")
+	messages, err := database.GetAllMessages(t.Context(), "mig-cmd")
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Contains(t, messages[0].ToolCalls[0].ResultContent, "input_image")
@@ -326,12 +327,13 @@ func assertMigrateCommandArchiveStillContainsImage(t *testing.T) {
 // rewritten to use an asset:// reference.
 func assertMigrateCommandArchiveHasAssetRef(t *testing.T) {
 	t.Helper()
+
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, database.Close()) }()
-	messages, err := database.GetAllMessages(context.Background(), "mig-cmd")
+	messages, err := database.GetAllMessages(t.Context(), "mig-cmd")
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	content := messages[0].ToolCalls[0].ResultContent
@@ -344,12 +346,13 @@ func assertMigrateCommandArchiveHasAssetRef(t *testing.T) {
 // mig-cmd session.
 func migrateCommandImageBlock(t *testing.T) map[string]json.RawMessage {
 	t.Helper()
+
 	cfg, err := config.LoadReadOnly()
 	require.NoError(t, err)
-	database, err := db.Open(cfg.DBPath)
+	database, err := db.Open(t.Context(), cfg.DBPath)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, database.Close()) }()
-	messages, err := database.GetAllMessages(context.Background(), "mig-cmd")
+	messages, err := database.GetAllMessages(t.Context(), "mig-cmd")
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 
@@ -366,6 +369,6 @@ func migrateCommandImageBlock(t *testing.T) map[string]json.RawMessage {
 			return fields
 		}
 	}
-	t.Fatal("session mig-cmd carries no migrated image block")
+	require.FailNow(t, "session mig-cmd carries no migrated image block")
 	return nil
 }

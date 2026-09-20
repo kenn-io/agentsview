@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/stretchr/testify/assert"
@@ -50,6 +51,8 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 		{Path: skippedFile, Size: int64(len(usageBody)), MtimeNS: mtime.UnixNano()},
 	}}
 	archive := func(t *testing.T) []byte {
+		t.Helper()
+
 		t.Helper()
 		var buf bytes.Buffer
 		tw := tar.NewWriter(&buf)
@@ -90,26 +93,26 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	database, err := db.Open(filepath.Join(t.TempDir(), "active.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "active.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	require.NoError(t, database.ReplaceRemoteSkippedFiles("devbox", map[string]int64{
+	require.NoError(t, database.ReplaceRemoteSkippedFiles(t.Context(), "devbox", map[string]int64{
 		remoteFile: mtime.UnixNano(),
 	}))
 	hs := HTTPSync{
 		Host: "devbox", URL: server.URL, DataDir: t.TempDir(), DB: database,
 	}
-	prepared, err := hs.Prepare(context.Background())
+	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
 	assert.FileExists(t, remappedRemotePath(prepared.Root(), remoteFile))
-	contributor, err := prepared.RebuildContributor()
+	contributor, err := prepared.RebuildContributor(t.Context())
 	require.NoError(t, err)
 
-	localEngine := syncpkg.NewEngine(database, syncpkg.EngineConfig{})
+	localEngine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{})
 	t.Cleanup(localEngine.Close)
 	stats, err := localEngine.ResyncAllWithOptions(
-		context.Background(), nil,
+		t.Context(), nil,
 		syncpkg.RebuildOptions{Contributors: []syncpkg.RebuildContributor{contributor}},
 	)
 	require.NoError(t, err)
@@ -123,25 +126,25 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	assert.NoFileExists(t, journalPath)
 	require.NoError(t, prepared.Commit(), "post-swap commit is idempotent")
 
-	full, err := database.GetSessionFull(context.Background(), "devbox~"+sessionID)
+	full, err := database.GetSessionFull(t.Context(), "devbox~"+sessionID)
 	require.NoError(t, err)
 	require.NotNil(t, full)
 	assert.Equal(t, "devbox", full.Machine)
 	require.NotNil(t, full.FilePath)
 	assert.Equal(t, "devbox:"+remoteFile, *full.FilePath)
 	messages, err := database.GetMessages(
-		context.Background(), "devbox~"+sessionID, 0, 10, true,
+		t.Context(), "devbox~"+sessionID, 0, 10, true,
 	)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, "remote rebuild searchable", messages[0].Content)
-	search, err := database.SearchContent(context.Background(), db.ContentSearchFilter{
+	search, err := database.SearchContent(t.Context(), db.ContentSearchFilter{
 		Pattern: "searchable", Limit: 10, IncludeOneShot: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, search.Matches, 1)
 	assert.Equal(t, "devbox~"+sessionID, search.Matches[0].SessionID)
-	remoteCache, err := database.LoadRemoteSkippedFiles("devbox")
+	remoteCache, err := database.LoadRemoteSkippedFiles(t.Context(), "devbox")
 	require.NoError(t, err)
 	require.Len(t, remoteCache, 1)
 	for cachedPath := range remoteCache {
@@ -155,7 +158,7 @@ func TestPreparedHTTPSyncRebuildContributor(t *testing.T) {
 	prepared.targets = TargetSet{Dirs: map[parser.AgentType][]string{
 		parser.AgentClaude: {skippedDir},
 	}}
-	activeStats, err := prepared.ImportActive(context.Background())
+	activeStats, err := prepared.ImportActive(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 0, activeStats.Failed)
 	assert.Equal(t, 0, activeStats.Skipped,
@@ -181,14 +184,14 @@ func TestPreparedHTTPSyncRebuildOutcomeClassification(t *testing.T) {
 			prepared, err := hs.Prepare(t.Context())
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, prepared.Close()) })
-			contributor, err := prepared.RebuildContributor()
+			contributor, err := prepared.RebuildContributor(t.Context())
 			require.NoError(t, err)
 
 			outcomeErr := tc.err
 			if tc.cachePersist {
-				engine := syncpkg.NewEngine(database, syncpkg.EngineConfig{})
+				engine := syncpkg.NewEngine(t.Context(), database, syncpkg.EngineConfig{})
 				t.Cleanup(engine.Close)
-				replacement, openErr := db.Open(filepath.Join(t.TempDir(), "replacement.db"))
+				replacement, openErr := db.Open(t.Context(), filepath.Join(t.TempDir(), "replacement.db"))
 				require.NoError(t, openErr)
 				require.NoError(t, replacement.Close())
 				outcomeErr = contributor.AfterSync(engine, replacement)
@@ -209,7 +212,7 @@ func TestPreparedHTTPSyncDeferredRebuildIsNotCommitReady(t *testing.T) {
 	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
-	contributor, err := prepared.RebuildContributor()
+	contributor, err := prepared.RebuildContributor(t.Context())
 	require.NoError(t, err)
 
 	contributor.Finished(syncpkg.SyncStats{Deferred: 1}, nil)
@@ -228,14 +231,16 @@ func TestPreparedHTTPSyncRebuildRetirementFailureRecordsDuration(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
 	prepared.commitReady = true
-	prepared.retireJournal = func(string) error {
-		time.Sleep(time.Millisecond)
-		return errors.New("retirement sentinel")
-	}
+	synctest.Test(t, func(t *testing.T) {
+		prepared.retireJournal = func(string) error {
+			time.Sleep(time.Second)
+			return errors.New("retirement sentinel")
+		}
 
-	require.ErrorContains(t, prepared.Commit(), "retirement sentinel")
-	assert.Equal(t, JournalRetirementFailed, prepared.mirrorImport.outcome)
-	assert.Positive(t, prepared.mirrorImport.pending.Stats.RetirementDuration)
+		require.ErrorContains(t, prepared.Commit(), "retirement sentinel")
+		assert.Equal(t, JournalRetirementFailed, prepared.mirrorImport.outcome)
+		assert.Equal(t, time.Second, prepared.mirrorImport.pending.Stats.RetirementDuration)
+	})
 }
 
 func TestPreparedHTTPSyncImportActiveImportsPreparedRoot(t *testing.T) {
@@ -244,24 +249,24 @@ func TestPreparedHTTPSyncImportActiveImportsPreparedRoot(t *testing.T) {
 		time.Date(2026, 7, 8, 10, 0, 0, 0, time.UTC), "prepared import")
 	database, hs := newMirrorSync(t, remote, t.TempDir())
 
-	prepared, err := hs.Prepare(context.Background())
+	prepared, err := hs.Prepare(t.Context())
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, prepared.Close()) })
-	before, err := database.ListSessions(context.Background(), db.SessionFilter{Limit: 10})
+	before, err := database.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
 	require.NoError(t, err)
 	assert.Empty(t, before.Sessions, "Prepare must not import active sessions")
 
-	stats, err := prepared.ImportActive(context.Background())
+	stats, err := prepared.ImportActive(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.SessionsSynced)
-	after, err := database.ListSessions(context.Background(), db.SessionFilter{Limit: 10})
+	after, err := database.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, after.Sessions, 1)
 	assert.Equal(t, "devbox", after.Sessions[0].Machine)
 }
 
 func TestImporterImportsExtractedRemoteFiles(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
@@ -279,7 +284,7 @@ func TestImporterImportsExtractedRemoteFiles(t *testing.T) {
 	stats, err := Importer{
 		Host: "devbox",
 		DB:   database,
-	}.ImportExtracted(context.Background(), TargetSet{
+	}.ImportExtracted(t.Context(), TargetSet{
 		Dirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {remoteDir},
 		},
@@ -287,11 +292,11 @@ func TestImporterImportsExtractedRemoteFiles(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.SessionsSynced)
-	page, err := database.ListSessions(context.Background(), db.SessionFilter{Limit: 10})
+	page, err := database.ListSessions(t.Context(), db.SessionFilter{Limit: 10})
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)
 	assert.Equal(t, "devbox", page.Sessions[0].Machine)
-	full, err := database.GetSessionFull(context.Background(), page.Sessions[0].ID)
+	full, err := database.GetSessionFull(t.Context(), page.Sessions[0].ID)
 	require.NoError(t, err)
 	require.NotNil(t, full)
 	require.NotNil(t, full.FilePath)
@@ -299,7 +304,7 @@ func TestImporterImportsExtractedRemoteFiles(t *testing.T) {
 }
 
 func TestImporterAppliesDBOwnedToolResultImagePolicy(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	database.SetToolResultImages(config.ToolResultImagesDrop)
@@ -365,7 +370,7 @@ func TestImporterAppliesDBOwnedToolResultImagePolicy(t *testing.T) {
 }
 
 func TestImporterHonorsUsageOnlyStorageBoundary(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 	database.SetArchiveContent(config.ArchiveContentUsage)
@@ -426,7 +431,7 @@ func TestRequireCompleteRejectsDeferredWithoutHardFailure(t *testing.T) {
 }
 
 func TestImporterHydratesIcodematePersistedToolResult(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
@@ -470,7 +475,7 @@ func TestImporterHydratesIcodematePersistedToolResult(t *testing.T) {
 }
 
 func TestImporterReturnsPartialStatsWhenOneSourceFails(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
@@ -510,7 +515,7 @@ func TestImporterReturnsPartialStatsWhenOneSourceFails(t *testing.T) {
 }
 
 func TestImporterImportsEveryRemoteProviderTarget(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
@@ -576,7 +581,7 @@ func TestImporterImportsEveryRemoteProviderTarget(t *testing.T) {
 }
 
 func TestImporterImportsHermesDatabaseOnlySession(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
@@ -593,7 +598,7 @@ func TestImporterImportsHermesDatabaseOnlySession(t *testing.T) {
 	stats, err := Importer{
 		Host: "devbox",
 		DB:   database,
-	}.ImportExtracted(context.Background(), TargetSet{
+	}.ImportExtracted(t.Context(), TargetSet{
 		Dirs: map[parser.AgentType][]string{
 			parser.AgentHermes: {remoteSessionsDir},
 		},
@@ -602,7 +607,7 @@ func TestImporterImportsHermesDatabaseOnlySession(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.SessionsSynced)
 	session, err := database.GetSession(
-		context.Background(), "devbox~hermes:database-only",
+		t.Context(), "devbox~hermes:database-only",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, session)
@@ -620,7 +625,7 @@ func writeHermesImportStateDB(t *testing.T, path string) {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, stateDB.Close()) }()
 
-	_, err = stateDB.Exec(`
+	_, err = stateDB.ExecContext(t.Context(), `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
 			source TEXT NOT NULL,
@@ -676,7 +681,7 @@ func writeHermesImportStateDB(t *testing.T, path string) {
 // WAL-only metadata update must invalidate the skip entry even though the main
 // state.db file remains unchanged.
 func TestImporterMapsHermesStateDBExtraFileAndRefreshesWALChanges(t *testing.T) {
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
 
@@ -702,12 +707,12 @@ func TestImporterMapsHermesStateDBExtraFileAndRefreshesWALChanges(t *testing.T) 
 	stats, err := Importer{
 		Host: "devbox",
 		DB:   database,
-	}.ImportExtracted(context.Background(), targets, extracted)
+	}.ImportExtracted(t.Context(), targets, extracted)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.SessionsSynced)
 
 	full, err := database.GetSessionFull(
-		context.Background(), "devbox~hermes:database-only",
+		t.Context(), "devbox~hermes:database-only",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, full)
@@ -725,12 +730,12 @@ func TestImporterMapsHermesStateDBExtraFileAndRefreshesWALChanges(t *testing.T) 
 	second, err := Importer{
 		Host: "devbox",
 		DB:   database,
-	}.ImportExtracted(context.Background(), targets, extracted)
+	}.ImportExtracted(t.Context(), targets, extracted)
 	require.NoError(t, err)
 	assert.Zero(t, second.SessionsSynced,
 		"unchanged state.db must not re-sync on the second import")
 
-	remoteCache, err := database.LoadRemoteSkippedFiles("devbox")
+	remoteCache, err := database.LoadRemoteSkippedFiles(t.Context(), "devbox")
 	require.NoError(t, err)
 	require.NotEmpty(t, remoteCache,
 		"the state.db skip entry must survive the import, not be discarded")
@@ -741,7 +746,7 @@ func TestImporterMapsHermesStateDBExtraFileAndRefreshesWALChanges(t *testing.T) 
 
 	stateBefore, err := os.Stat(localStateDB)
 	require.NoError(t, err)
-	_, err = writer.Exec(`
+	_, err = writer.ExecContext(t.Context(), `
 		UPDATE sessions
 		SET title = 'WAL-refreshed profile'
 		WHERE id = 'database-only'
@@ -760,12 +765,12 @@ func TestImporterMapsHermesStateDBExtraFileAndRefreshesWALChanges(t *testing.T) 
 	changed, err := Importer{
 		Host: "devbox",
 		DB:   database,
-	}.ImportExtracted(context.Background(), targets, extracted)
+	}.ImportExtracted(t.Context(), targets, extracted)
 	require.NoError(t, err)
 	assert.Equal(t, 1, changed.SessionsSynced,
 		"a WAL-only commit must invalidate the remote archive skip entry")
 	refreshed, err := database.GetSession(
-		context.Background(), "devbox~hermes:database-only",
+		t.Context(), "devbox~hermes:database-only",
 	)
 	require.NoError(t, err)
 	require.NotNil(t, refreshed)
@@ -775,15 +780,16 @@ func TestImporterMapsHermesStateDBExtraFileAndRefreshesWALChanges(t *testing.T) 
 
 func openHermesImportWALWriter(t *testing.T, stateDB string) *sql.DB {
 	t.Helper()
+
 	writer, err := sql.Open("sqlite3", stateDB)
 	require.NoError(t, err)
 	writer.SetMaxOpenConns(1)
 	t.Cleanup(func() { require.NoError(t, writer.Close()) })
 
 	var journalMode string
-	require.NoError(t, writer.QueryRow(`PRAGMA journal_mode = WAL`).Scan(&journalMode))
+	require.NoError(t, writer.QueryRowContext(t.Context(), `PRAGMA journal_mode = WAL`).Scan(&journalMode))
 	assert.Equal(t, "wal", journalMode)
-	_, err = writer.Exec(`PRAGMA wal_autocheckpoint = 0`)
+	_, err = writer.ExecContext(t.Context(), `PRAGMA wal_autocheckpoint = 0`)
 	require.NoError(t, err)
 	return writer
 }
@@ -802,8 +808,7 @@ func TestRemotePathMappingHandlesWindowsDrivePath(t *testing.T) {
 
 	assert.Equal(t, wantLocalDir, RemappedDir(tempDir, remoteDir))
 	assert.Equal(t, wantLocalFile, remappedRemotePath(tempDir, remoteFile))
-	assert.Equal(t,
-		remoteFile,
+	assert.Equal(t, remoteFile,
 		RemapToRemotePath(tempDir, remoteDir, wantLocalFile),
 	)
 }
@@ -822,8 +827,7 @@ func TestRemotePathMappingHandlesForwardSlashUNCPath(t *testing.T) {
 
 	assert.Equal(t, wantLocalDir, RemappedDir(tempDir, remoteDir))
 	assert.Equal(t, wantLocalFile, remappedRemotePath(tempDir, remoteFile))
-	assert.Equal(t,
-		remoteFile,
+	assert.Equal(t, remoteFile,
 		RemapToRemotePath(tempDir, remoteDir, wantLocalFile),
 	)
 }
@@ -831,7 +835,7 @@ func TestRemotePathMappingHandlesForwardSlashUNCPath(t *testing.T) {
 func TestImporterRejectsEscapingRemoteTargets(t *testing.T) {
 	stats, err := Importer{
 		Host: "devbox",
-	}.ImportExtracted(context.Background(), TargetSet{
+	}.ImportExtracted(t.Context(), TargetSet{
 		Dirs: map[parser.AgentType][]string{
 			parser.AgentClaude: {"../../outside"},
 		},
@@ -891,15 +895,15 @@ func TestRemoteSkipCacheRoundTripsQualifiedExtraFile(t *testing.T) {
 	require.Equal(t, map[string]int64{localFile: 123}, translated,
 		"remote translation must preserve the provider qualifier")
 
-	database, err := db.Open(filepath.Join(t.TempDir(), "test.db"))
+	database, err := db.Open(t.Context(), filepath.Join(t.TempDir(), "test.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	engine := syncpkg.NewEngine(database, cfg)
+	engine := syncpkg.NewEngine(t.Context(), database, cfg)
 	t.Cleanup(engine.Close)
 	engine.InjectSkipCache(translated)
-	require.NoError(t, saveEngineSkipCache(database, engine, layout.paths))
+	require.NoError(t, saveEngineSkipCache(t.Context(), database, engine, layout.paths))
 
-	remoteCache, err := database.LoadRemoteSkippedFiles(host)
+	remoteCache, err := database.LoadRemoteSkippedFiles(t.Context(), host)
 	require.NoError(t, err)
 	assert.Equal(t, map[string]int64{qualified: 123}, remoteCache,
 		"temporary translation must restore the identical remote cache key")

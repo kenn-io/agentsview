@@ -187,7 +187,7 @@ func TestUploadServiceDoesNotReportResetOffsetWhenResetFails(t *testing.T) {
 
 	var mismatch *UploadChecksumMismatchError
 	assert.NotErrorAs(t, err, &mismatch)
-	assert.ErrorContains(t, err, "database unavailable")
+	require.ErrorContains(t, err, "database unavailable")
 	assert.Equal(t, object.Length, store.session.Offset)
 }
 
@@ -209,7 +209,7 @@ func TestUploadServiceStopsHashingWhenRequestIsCanceled(t *testing.T) {
 
 	_, err = service.Append(ctx, identity, session.ID, 0, body)
 
-	assert.ErrorIs(t, err, context.Canceled)
+	require.ErrorIs(t, err, context.Canceled)
 	assert.False(t, store.session.Complete)
 }
 
@@ -569,5 +569,7 @@ func (r *cancelAfterFirstRead) Read(buffer []byte) (int, error) {
 	return read, err
 }
 
-var _ UploadSessionStore = (*memoryUploadSessionStore)(nil)
-var _ UploadCustody = (*memoryUploadCustody)(nil)
+var (
+	_ UploadSessionStore = (*memoryUploadSessionStore)(nil)
+	_ UploadCustody      = (*memoryUploadCustody)(nil)
+)

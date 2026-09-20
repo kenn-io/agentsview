@@ -11,7 +11,7 @@ import (
 func TestDirectArchiveReportsResolveMachineAliases(t *testing.T) {
 	database := newTestDB(t)
 	started, ended := "2026-06-15T10:00:00Z", "2026-06-15T10:05:00Z"
-	_, err := database.WriteSessionBatchAtomic([]db.SessionBatchWrite{{
+	_, err := database.WriteSessionBatchAtomic(t.Context(), []db.SessionBatchWrite{{
 		Session: db.Session{
 			ID: "session-a", Project: "project-a", Machine: "installation-a", Agent: "claude",
 			StartedAt: &started, EndedAt: &ended, CreatedAt: started,
@@ -19,14 +19,16 @@ func TestDirectArchiveReportsResolveMachineAliases(t *testing.T) {
 		},
 		Messages: []db.Message{
 			{SessionID: "session-a", Ordinal: 0, Role: "user", Content: "question", Timestamp: started},
-			{SessionID: "session-a", Ordinal: 1, Role: "assistant", Content: "answer", Timestamp: ended,
+			{
+				SessionID: "session-a", Ordinal: 1, Role: "assistant", Content: "answer", Timestamp: ended,
 				Model: "claude-sonnet-4-20250514", OutputTokens: 500, HasOutputTokens: true,
-				TokenUsage: []byte(`{"input_tokens":100,"output_tokens":500}`)},
+				TokenUsage: []byte(`{"input_tokens":100,"output_tokens":500}`),
+			},
 		},
 		ReplaceMessages: true,
 	}})
 	require.NoError(t, err)
-	require.NoError(t, database.SetSyncState(db.MachineAliasKeyPrefix+"old-host", "installation-a"))
+	require.NoError(t, database.SetSyncState(t.Context(), db.MachineAliasKeyPrefix+"old-host", "installation-a"))
 	backend := localArchiveQueryBackend{database: database, offline: true, skipFreshData: true}
 	usage, err := backend.DailyUsage(t.Context(), dailyUsageQuery{
 		Filter: db.UsageFilter{From: "2026-06-15", To: "2026-06-15", Machine: "old-host"},

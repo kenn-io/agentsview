@@ -42,7 +42,7 @@ func TestGeminiProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 2)
 	assert.Equal(t, filepath.Join(root, "tmp"), plan.Roots[0].Path)
@@ -52,13 +52,13 @@ func TestGeminiProviderSourceMethods(t *testing.T) {
 	assert.False(t, plan.Roots[1].Recursive)
 	assert.Equal(t, []string{"projects.json", "trustedFolders.json"}, plan.Roots[1].IncludeGlobs)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, sourcePath, discovered[0].DisplayPath)
 	assert.Equal(t, "my_project", discovered[0].ProjectHint)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~gemini:" + sessionID,
 	})
 	require.NoError(t, err)
@@ -66,7 +66,7 @@ func TestGeminiProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, sourcePath, found.DisplayPath)
 
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "write", WatchRoot: filepath.Join(root, "tmp")},
 	)
 	require.NoError(t, err)
@@ -75,7 +75,7 @@ func TestGeminiProviderSourceMethods(t *testing.T) {
 
 	require.NoError(t, os.Remove(sourcePath))
 	changed, err = provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: sourcePath, EventKind: "remove", WatchRoot: filepath.Join(root, "tmp")},
 	)
 	require.NoError(t, err)
@@ -83,7 +83,7 @@ func TestGeminiProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, sourcePath, changed[0].DisplayPath)
 	assert.Equal(t, "my_project", changed[0].ProjectHint)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.Error(t, err)
 	require.Empty(t, fingerprint)
 }
@@ -257,19 +257,19 @@ func TestGeminiProviderProjectMetadataChangesClassifyAndFingerprint(t *testing.T
 	})
 	require.True(t, ok)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~gemini:" + sessionID,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 	assert.Equal(t, "one", found.ProjectHint)
 
-	fingerprintOne, err := provider.Fingerprint(context.Background(), found)
+	fingerprintOne, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 
 	writeSourceFile(t, projectsPath, `{"projects":{"/Users/alice/code/two":"alias"}}`)
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: projectsPath, EventKind: "write", WatchRoot: root},
 	)
 	require.NoError(t, err)
@@ -277,7 +277,7 @@ func TestGeminiProviderProjectMetadataChangesClassifyAndFingerprint(t *testing.T
 	assert.Equal(t, sourcePath, changed[0].DisplayPath)
 	assert.Equal(t, "two", changed[0].ProjectHint)
 
-	fingerprintTwo, err := provider.Fingerprint(context.Background(), changed[0])
+	fingerprintTwo, err := provider.Fingerprint(t.Context(), changed[0])
 	require.NoError(t, err)
 	assert.NotEqual(t, fingerprintOne.Hash, fingerprintTwo.Hash)
 
@@ -320,7 +320,7 @@ func TestGeminiProviderProjectMetadataChangesClassifyAndFingerprint(t *testing.T
 		},
 	))
 
-	hashFoundBefore, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	hashFoundBefore, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~gemini:" + hashSessionID,
 	})
 	require.NoError(t, err)
@@ -331,7 +331,7 @@ func TestGeminiProviderProjectMetadataChangesClassifyAndFingerprint(t *testing.T
 	writeSourceFile(t, filepath.Join(root, "trustedFolders.json"),
 		fmt.Sprintf(`{"trustedFolders":["%s"]}`, hashProjectPath))
 
-	hashFoundAfter, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	hashFoundAfter, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~gemini:" + hashSessionID,
 	})
 	require.NoError(t, err)
@@ -366,7 +366,7 @@ func writeUnrelatedTrustedFolder(t *testing.T, root string) {
 func fingerprintSource(t *testing.T, provider Provider, source SourceRef) SourceFingerprint {
 	t.Helper()
 
-	fingerprint, err := provider.Fingerprint(context.Background(), source)
+	fingerprint, err := provider.Fingerprint(t.Context(), source)
 	require.NoError(t, err)
 	return fingerprint
 }
@@ -407,7 +407,7 @@ func TestGeminiProviderFingerprintMatchesReconstructedSource(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	discovered, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	discovered, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~gemini:" + sessionID,
 	})
 	require.NoError(t, err)
@@ -456,20 +456,20 @@ func TestGeminiProviderParse(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		FullSessionID: "host~gemini:" + sessionID,
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, sourcePath, fingerprint.Key)
 	assert.Positive(t, fingerprint.Size)
 	assert.Positive(t, fingerprint.MTimeNS)
 	assert.NotEmpty(t, fingerprint.Hash)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      found,
 		Fingerprint: fingerprint,
 	})
@@ -534,9 +534,9 @@ func TestGeminiProviderStreamingDiscoveryPropagatesProjectSymlinkErrors(t *testi
 		_, err := discoverEach(t, root)
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, os.ErrNotExist)
+		require.ErrorIs(t, err, os.ErrNotExist)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(t, err, &incomplete)
+		require.ErrorAs(t, err, &incomplete)
 
 		require.NoError(t, os.Remove(link))
 		yielded, err := discoverEach(t, root)
@@ -565,9 +565,9 @@ func TestGeminiProviderStreamingDiscoveryPropagatesProjectSymlinkErrors(t *testi
 		_, err := discoverEach(t, root)
 
 		require.Error(t, err)
-		assert.ErrorIs(t, err, os.ErrPermission)
+		require.ErrorIs(t, err, os.ErrPermission)
 		var incomplete DiscoveryIncompleteError
-		assert.ErrorAs(t, err, &incomplete)
+		require.ErrorAs(t, err, &incomplete)
 
 		require.NoError(t, os.Chmod(targetParent, 0o755))
 		yielded, err := discoverEach(t, root)
@@ -597,7 +597,7 @@ func TestCopilotProviderSourceMethods(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	plan, err := provider.WatchPlan(context.Background())
+	plan, err := provider.WatchPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, plan.Roots, 2)
 	assert.Equal(t, filepath.Join(root, copilotStateDir), plan.Roots[0].Path)
@@ -608,12 +608,12 @@ func TestCopilotProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, []string{"session-store.db", "session-store.db-wal"},
 		plan.Roots[1].IncludeGlobs)
 
-	discovered, err := provider.Discover(context.Background())
+	discovered, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, discovered, 1)
 	assert.Equal(t, dirEvents, discovered[0].DisplayPath)
 
-	found, ok, err := provider.FindSource(context.Background(), FindSourceRequest{
+	found, ok, err := provider.FindSource(t.Context(), FindSourceRequest{
 		RawSessionID: "copilot-provider",
 	})
 	require.NoError(t, err)
@@ -622,7 +622,7 @@ func TestCopilotProviderSourceMethods(t *testing.T) {
 
 	for _, path := range []string{dirEvents, workspacePath} {
 		changed, err := provider.SourcesForChangedPath(
-			context.Background(),
+			t.Context(),
 			ChangedPathRequest{Path: path, EventKind: "write", WatchRoot: filepath.Join(root, copilotStateDir)},
 		)
 		require.NoError(t, err)
@@ -632,7 +632,7 @@ func TestCopilotProviderSourceMethods(t *testing.T) {
 
 	require.NoError(t, os.Remove(dirEvents))
 	changed, err := provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: dirEvents, EventKind: "remove", WatchRoot: filepath.Join(root, copilotStateDir)},
 	)
 	require.NoError(t, err)
@@ -642,7 +642,7 @@ func TestCopilotProviderSourceMethods(t *testing.T) {
 
 	require.NoError(t, os.Remove(workspacePath))
 	changed, err = provider.SourcesForChangedPath(
-		context.Background(),
+		t.Context(),
 		ChangedPathRequest{Path: workspacePath, EventKind: "remove", WatchRoot: filepath.Join(root, copilotStateDir)},
 	)
 	require.NoError(t, err)
@@ -650,7 +650,7 @@ func TestCopilotProviderSourceMethods(t *testing.T) {
 	assert.Equal(t, dirEvents, changed[0].DisplayPath)
 	writeSourceFile(t, workspacePath, "name: Workspace title\n")
 
-	fingerprint, err := provider.Fingerprint(context.Background(), found)
+	fingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.Equal(t, dirEvents, fingerprint.Key)
 	assert.Positive(t, fingerprint.Size)
@@ -661,14 +661,14 @@ func TestCopilotProviderSourceMethods(t *testing.T) {
 	// Equal-size writes can share a filesystem timestamp tick on Windows.
 	workspaceTime := time.Unix(0, fingerprint.MTimeNS).Add(time.Second)
 	require.NoError(t, os.Chtimes(workspacePath, workspaceTime, workspaceTime))
-	renamedFingerprint, err := provider.Fingerprint(context.Background(), found)
+	renamedFingerprint, err := provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 	assert.NotEqual(t, fingerprint.Hash, renamedFingerprint.Hash)
 	writeSourceFile(t, workspacePath, "name: Workspace title\n")
-	fingerprint, err = provider.Fingerprint(context.Background(), found)
+	fingerprint, err = provider.Fingerprint(t.Context(), found)
 	require.NoError(t, err)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:      found,
 		Fingerprint: fingerprint,
 	})

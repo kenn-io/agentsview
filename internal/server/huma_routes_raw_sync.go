@@ -207,28 +207,28 @@ func rawSyncHTTPError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var headConflict *rawsync.HeadConflictError
-	var offsetConflict *rawsync.UploadOffsetConflictError
-	var checksumMismatch *rawsync.UploadChecksumMismatchError
+	headConflict, hasHeadConflict := errors.AsType[*rawsync.HeadConflictError](err)
+	offsetConflict, hasOffsetConflict := errors.AsType[*rawsync.UploadOffsetConflictError](err)
+	checksumMismatch, hasChecksumMismatch := errors.AsType[*rawsync.UploadChecksumMismatchError](err)
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
 		return apiError(http.StatusGatewayTimeout, "gateway timeout")
 	case errors.Is(err, rawsync.ErrUnauthorized):
 		return apiErrorWithCode(http.StatusUnauthorized, "unauthorized", "Unauthorized")
-	case errors.As(err, &offsetConflict) && offsetConflict != nil:
+	case hasOffsetConflict && offsetConflict != nil:
 		offset := offsetConflict.CurrentOffset
-		return &apiErrorResponse{
+		return &apiResponseError{
 			Status: http.StatusConflict, Code: "upload_offset_conflict",
 			Message: "raw upload offset changed", CurrentUploadOffset: &offset,
 		}
-	case errors.As(err, &checksumMismatch) && checksumMismatch != nil:
+	case hasChecksumMismatch && checksumMismatch != nil:
 		offset := checksumMismatch.CurrentOffset
-		return &apiErrorResponse{
+		return &apiResponseError{
 			Status: http.StatusConflict, Code: "checksum_mismatch",
 			Message: "raw upload checksum did not match", CurrentUploadOffset: &offset,
 		}
-	case errors.As(err, &headConflict) && headConflict != nil:
-		return &apiErrorResponse{
+	case hasHeadConflict && headConflict != nil:
+		return &apiResponseError{
 			Status:            http.StatusConflict,
 			Code:              "head_conflict",
 			Message:           "raw source head changed",

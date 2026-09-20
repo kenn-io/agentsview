@@ -22,7 +22,7 @@ func TestWithTimeout_DisabledTimeout(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/recall/entries", nil)
+	req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/recall/entries", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 

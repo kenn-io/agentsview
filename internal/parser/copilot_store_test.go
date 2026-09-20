@@ -17,7 +17,7 @@ func createCopilotUsageStore(t *testing.T, root string) *sql.DB {
 	store, err := sql.Open("sqlite3", filepath.Join(root, "session-store.db"))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	_, err = store.Exec(`PRAGMA journal_mode=WAL;
+	_, err = store.ExecContext(t.Context(), `PRAGMA journal_mode=WAL;
  CREATE TABLE sessions (id TEXT PRIMARY KEY);
  CREATE TABLE assistant_usage_events (
  id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT, model TEXT,
@@ -46,7 +46,7 @@ func TestCopilotStoreGapRetainsOnlyAggregateOutputRemainder(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			store := createCopilotUsageStore(t, root)
-			_, err := store.Exec(`INSERT INTO sessions VALUES ('gap');
+			_, err := store.ExecContext(t.Context(), `INSERT INTO sessions VALUES ('gap');
 INSERT INTO assistant_usage_events(session_id,model,input_tokens,output_tokens,created_at)
 VALUES ('gap','gpt-5.4',100,?,'2026-09-08T12:00:03Z')`, tc.storeOutput)
 			require.NoError(t, err)
@@ -55,7 +55,7 @@ VALUES ('gap','gpt-5.4',100,?,'2026-09-08T12:00:03Z')`, tc.storeOutput)
 				fmt.Sprintf(`{"type":"assistant.message","timestamp":"2026-09-08T12:00:01Z","data":{"content":"First","model":%q,"outputTokens":3}}`, tc.firstModel),
 				`{"type":"assistant.message","timestamp":"2026-09-08T12:00:02Z","data":{"content":"Later","model":"gpt-5.4","outputTokens":7}}`,
 			)
-			sess, msgs, events, err := newCopilotTestProvider(t).parseSessionWithStore(path, "local", filepath.Join(root, "session-store.db"))
+			sess, msgs, events, err := newCopilotTestProvider(t).parseSessionWithStore(t.Context(), path, "local", filepath.Join(root, "session-store.db"))
 			require.NoError(t, err)
 			require.NotNil(t, sess)
 			assert.Equal(t, tc.wantTotal, sess.TotalOutputTokens)
@@ -82,7 +82,7 @@ func TestParseCopilotSession_StoreUsageSupersedesShutdown(t *testing.T) {
 	store, err := sql.Open("sqlite3", storePath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	_, err = store.Exec(`
+	_, err = store.ExecContext(t.Context(), `
 		CREATE TABLE assistant_usage_events (
 			id INTEGER PRIMARY KEY, session_id TEXT, model TEXT,
 			input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER,
@@ -101,7 +101,7 @@ func TestParseCopilotSession_StoreUsageSupersedesShutdown(t *testing.T) {
 		`{"type":"session.shutdown","data":{"totalNanoAiu":100000000,"modelMetrics":{"gpt-5.6-sol":{"usage":{"inputTokens":10,"outputTokens":3}}}},"timestamp":"2026-09-04T17:00:03Z"}`,
 	)
 
-	sess, _, usage, err := newCopilotTestProvider(t).parseSessionWithStore(
+	sess, _, usage, err := newCopilotTestProvider(t).parseSessionWithStore(t.Context(),
 		path, "local", storePath,
 	)
 	require.NoError(t, err)
@@ -133,7 +133,7 @@ func TestLoadCopilotStoreUsage(t *testing.T) {
 	store, err := sql.Open("sqlite3", storePath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, store.Close()) })
-	_, err = store.Exec(`
+	_, err = store.ExecContext(t.Context(), `
 		CREATE TABLE assistant_usage_events (
 			id INTEGER PRIMARY KEY, session_id TEXT, model TEXT,
 			input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER,
@@ -148,7 +148,7 @@ func TestLoadCopilotStoreUsage(t *testing.T) {
 	`)
 	require.NoError(t, err)
 
-	events, err := loadCopilotStoreUsage(storePath, "session-1")
+	events, err := loadCopilotStoreUsage(t.Context(), storePath, "session-1")
 	require.NoError(t, err)
 	require.Len(t, events, 1)
 	assert.Equal(t, "session-store", events[0].Source)
@@ -172,7 +172,7 @@ func TestParseCopilotSession_StoreWithoutUsageSchema(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, store.Close()) })
 			// Copilot 1.0.60 stores sessions but has no assistant_usage_events.
-			_, err = store.Exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY)`)
+			_, err = store.ExecContext(t.Context(), `CREATE TABLE sessions (id TEXT PRIMARY KEY)`)
 			require.NoError(t, err)
 			lines := []string{
 				`{"type":"session.start","timestamp":"2026-06-05T12:00:00Z","data":{"sessionId":"no-store-usage"}}`,
@@ -182,7 +182,7 @@ func TestParseCopilotSession_StoreWithoutUsageSchema(t *testing.T) {
 				lines = append(lines, `{"type":"session.shutdown","timestamp":"2026-06-05T12:00:02Z","data":{"modelMetrics":{"gpt-5.4":{"usage":{"inputTokens":10,"outputTokens":3}}}}}`)
 			}
 			path := writeCopilotJSONL(t, lines...)
-			sess, messages, usage, err := newCopilotTestProvider(t).parseSessionWithStore(path, "local", storePath)
+			sess, messages, usage, err := newCopilotTestProvider(t).parseSessionWithStore(t.Context(), path, "local", storePath)
 			require.NoError(t, err)
 			require.NotNil(t, sess)
 			require.Len(t, messages, 1)
@@ -216,7 +216,7 @@ func TestCopilotFingerprintRejectsUnreadableStoreState(t *testing.T) {
 			require.NoError(t, err, "a missing optional store is valid")
 
 			store := createCopilotUsageStore(t, root)
-			_, err = store.Exec(`INSERT INTO assistant_usage_events(session_id,model,output_tokens,created_at)
+			_, err = store.ExecContext(t.Context(), `INSERT INTO assistant_usage_events(session_id,model,output_tokens,created_at)
 				VALUES ('fingerprint','gpt-5.4',3,'2026-09-08T12:00:01Z')`)
 			require.NoError(t, err)
 			require.NoError(t, store.Close())
@@ -227,7 +227,7 @@ func TestCopilotFingerprintRejectsUnreadableStoreState(t *testing.T) {
 			// as a header read racing a real WAL checkpoint.
 			require.NoError(t, os.WriteFile(storePath+suffix, make([]byte, 100), 0o644))
 			_, err = provider.Fingerprint(t.Context(), sources[0])
-			assert.Error(t, err, "an unreadable marker must not become a valid fingerprint")
+			require.Error(t, err, "an unreadable marker must not become a valid fingerprint")
 
 			if suffix == "" {
 				require.NoError(t, os.WriteFile(storePath, original, 0o644))

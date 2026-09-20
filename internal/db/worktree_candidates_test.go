@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -15,7 +14,7 @@ import (
 
 func TestListArchiveWorktreeCandidatesFallsBackAndBoundsExamples(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const raw = "branch-label"
 	for i := range 12 {
 		id := "aggregate-" + string(rune('a'+i))
@@ -28,7 +27,7 @@ func TestListArchiveWorktreeCandidatesFallsBackAndBoundsExamples(t *testing.T) {
 	seedCandidateSession(t, d, "unavailable", raw, "host.example", "",
 		"2025-06-02T10:00:00Z")
 	deleteCandidateSnapshot(t, d, "unavailable")
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(t, d.UpsertSession(ctx, Session{
 		ID: "zero-message", Project: raw, Machine: "host.example",
 		Agent: "codex",
 	}), "seed zero-message candidate session")
@@ -134,7 +133,7 @@ func TestBuildWorktreeCandidatesCollapsesObservedPaths(t *testing.T) {
 
 func TestListArchiveWorktreeCandidatesSelectsByProjectIdentity(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const (
 		clickedRaw = "/private/example/repository"
 		otherRaw   = "/another/private/repository"
@@ -176,7 +175,7 @@ func TestListArchiveWorktreeCandidatesExcludesDifferentProjectKeys(
 	t *testing.T,
 ) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const (
 		primary = "current-project-name"
 		alias   = "historical-project-name"
@@ -233,7 +232,7 @@ func TestListArchiveWorktreeCandidatesExcludesDifferentProjectKeys(
 
 func TestListArchiveWorktreeCandidatesIgnoresDateRange(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const raw = "date-spread-project"
 
 	seedCandidateSession(t, d, "old-session", raw, "host-a.example",
@@ -264,7 +263,7 @@ func TestListArchiveWorktreeCandidatesIgnoresDateRange(t *testing.T) {
 
 func TestListArchiveWorktreeCandidatesKeyMismatch(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const raw = "mismatch-project"
 
 	seedCandidateSession(t, d, "session-a", raw, "host-a.example",
@@ -288,7 +287,7 @@ func TestListArchiveWorktreeCandidatesKeyMismatch(t *testing.T) {
 
 func TestListArchiveWorktreeCandidatesBoundsIdentityLookupToClickedLabel(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const raw = "clicked-project"
 
 	seedCandidateSession(t, d, "clicked-a", raw, "host-a.example",
@@ -320,7 +319,7 @@ func TestListArchiveWorktreeCandidatesBoundsIdentityLookupToClickedLabel(t *test
 
 func TestListArchiveWorktreeCandidatesManyCollidingRawLabels(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	const clickedRaw = "/bulk/clicked-project"
 
 	seedCandidateSession(t, d, "clicked", clickedRaw, "host-a.example",
@@ -379,7 +378,7 @@ func seedBulkProjectSessions(t *testing.T, d *DB, n int, projectFormat string) {
 				fmt.Sprintf("bulk-session-%05d", i),
 				fmt.Sprintf(projectFormat, i))
 		}
-		_, err := d.getWriter().Exec(sb.String(), args...)
+		_, err := d.getWriter().Exec(t.Context(), sb.String(), args...)
 		require.NoError(t, err, "seed bulk sessions %d-%d", start, end)
 	}
 }
@@ -389,7 +388,7 @@ func seedCandidateSession(
 ) {
 	t.Helper()
 	ended := started
-	require.NoError(t, d.UpsertSession(Session{
+	require.NoError(t, d.UpsertSession(t.Context(), Session{
 		ID: id, Project: project, Machine: machine, Agent: "codex", Cwd: cwd,
 		StartedAt: &started, EndedAt: &ended, MessageCount: 1,
 	}), "seed candidate session %s", id)
@@ -397,7 +396,7 @@ func seedCandidateSession(
 
 func deleteCandidateSnapshot(t *testing.T, d *DB, id string) {
 	t.Helper()
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(t.Context(),
 		`DELETE FROM session_project_identity_snapshots WHERE session_id = ?`, id)
 	require.NoError(t, err)
 }
@@ -407,7 +406,7 @@ func setCandidateSnapshot(
 ) {
 	t.Helper()
 	deleteCandidateSnapshot(t, d, id)
-	_, err := d.getWriter().Exec(`
+	_, err := d.getWriter().Exec(t.Context(), `
 		INSERT INTO session_project_identity_snapshots (
 			session_id, project, machine, root_path, worktree_root_path, observed_at
 		) VALUES (?, ?, ?, ?, ?, ?)`,

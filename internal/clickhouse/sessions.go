@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"go.kenn.io/agentsview/internal/db"
 )
@@ -306,12 +307,12 @@ func (s *Store) GetChildSessions(ctx context.Context, parentID string) ([]db.Ses
 	return scanSessionRows(rows)
 }
 
-func (s *Store) GetSessionVersion(id string) (int, int64, bool) {
+func (s *Store) GetSessionVersion(ctx context.Context, id string) (int, int64, bool) {
 	var count int
 	var fileMtime sql.NullInt64
 	var fileHash sql.NullString
 	var updated any
-	err := s.queryRowContext(context.Background(),
+	err := s.queryRowContext(ctx,
 		`SELECT message_count, file_mtime, file_hash,
 		        COALESCE(local_modified_at, ended_at, started_at, created_at)
 		 FROM sessions WHERE id = ?`, id,
@@ -321,7 +322,7 @@ func (s *Store) GetSessionVersion(id string) (int, int64, bool) {
 	}
 	fileMtimePart := ""
 	if fileMtime.Valid {
-		fileMtimePart = fmt.Sprintf("%d", fileMtime.Int64)
+		fileMtimePart = strconv.FormatInt(fileMtime.Int64, 10)
 	}
 	fileHashPart := ""
 	if fileHash.Valid {

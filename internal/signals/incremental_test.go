@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -102,7 +103,7 @@ func fullMidTask(calls []ToolCallRow, boundaries []int) int {
 // recompute over the complete history.
 func TestIncrementalFoldParityRandomized(t *testing.T) {
 	for _, initialCalls := range []int{0, 5, 20, 320} {
-		t.Run(fmt.Sprint(initialCalls), func(t *testing.T) {
+		t.Run(strconv.Itoa(initialCalls), func(t *testing.T) {
 			rng := newTestRand(t, 20260813)
 			calls := make([]ToolCallRow, 0, initialCalls+300)
 			boundaries := []int{}
@@ -461,10 +462,14 @@ func TestIncrementalFoldMidTaskAcrossSeed(t *testing.T) {
 	row := ToolHealthRow{}
 	// Appends after the boundary: exec_command then edit_file → overlap 2.
 	appended := []ToolCallRow{
-		{ToolName: "exec_command", Category: "Bash",
-			InputJSON: `{"command":"ls"}`, MessageOrdinal: 11},
-		{ToolName: "edit_file", Category: "Edit",
-			InputJSON: `{"file_path":"/src/b.go"}`, MessageOrdinal: 12},
+		{
+			ToolName: "exec_command", Category: "Bash",
+			InputJSON: `{"command":"ls"}`, MessageOrdinal: 11,
+		},
+		{
+			ToolName: "edit_file", Category: "Edit",
+			InputJSON: `{"file_path":"/src/b.go"}`, MessageOrdinal: 12,
+		},
 	}
 	next, got, ok := state.FoldToolHealth(appended, nil, row)
 	require.True(t, ok)
@@ -696,7 +701,7 @@ func BenchmarkSeedIncrementalStateToolOutputs(b *testing.B) {
 
 func TestIncrementalRunawayMinimumSessionSize(t *testing.T) {
 	for _, initial := range []int{0, 5, 6, 11, 12} {
-		t.Run(fmt.Sprint(initial), func(t *testing.T) {
+		t.Run(strconv.Itoa(initial), func(t *testing.T) {
 			calls := make([]ToolCallRow, 0, 13)
 			for i := range 13 {
 				call := ToolCallRow{ToolName: "read_file", Category: "Read", InputJSON: fmt.Sprintf(`{"path":"file-%d"}`, i), MessageOrdinal: i}

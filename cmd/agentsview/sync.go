@@ -7,7 +7,6 @@ import (
 	"encoding/json/v2"
 	"errors"
 	"fmt"
-	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 	"io"
 	"log"
 	"net/http"
@@ -15,6 +14,8 @@ import (
 	"strings"
 	stdsync "sync"
 	"time"
+
+	"github.com/doordash-oss/oapi-codegen-dd/v3/pkg/runtime"
 
 	"go.kenn.io/agentsview/internal/apiclient"
 	"go.kenn.io/agentsview/internal/config"
@@ -477,7 +478,7 @@ var httpRemoteCleanupRegistry = new(remotesync.CleanupRegistry)
 var errUnifiedRebuildAborted = sync.ErrUnifiedRebuildAborted
 
 type preparedHTTPRebuildCLI interface {
-	BorrowRebuildOptions() (sync.RebuildOptions, func(), error)
+	BorrowRebuildOptions(ctx context.Context) (sync.RebuildOptions, func(), error)
 	Close() error
 }
 
@@ -487,9 +488,11 @@ var prepareHTTPRebuildCLI = func(
 	return remotesync.PrepareAvailableHTTPSyncs(ctx, syncs)
 }
 
-var runLocalSyncWithRebuildCLI = runLocalSyncWithRebuild
-var runLocalSyncWithFallbackCLI = runLocalSyncWithFallback
-var coordinateLocalSyncRunner = coordinateLocalSync
+var (
+	runLocalSyncWithRebuildCLI  = runLocalSyncWithRebuild
+	runLocalSyncWithFallbackCLI = runLocalSyncWithFallback
+	coordinateLocalSyncRunner   = coordinateLocalSync
+)
 
 type preparedHTTPRebuildLeaseCLI struct {
 	prepared  preparedHTTPRebuildCLI
@@ -697,7 +700,7 @@ func runConfiguredLocalAndRemotes(
 				if prepared == nil {
 					return sync.RebuildOptions{}, nil, nil
 				}
-				options, release, err := prepared.BorrowRebuildOptions()
+				options, release, err := prepared.BorrowRebuildOptions(ctx)
 				if err != nil {
 					return sync.RebuildOptions{}, prepared, err
 				}
@@ -842,9 +845,13 @@ func primaryCoordinatorError(err error) error {
 			err = first
 			continue
 		}
-		switch err.(type) {
-		case *sync.RebuildContributorError, *remotesync.HostError:
-			return err
+		{
+			_, hasErrCase0 := errors.AsType[*sync.RebuildContributorError](err)
+			_, hasErrCase1 := errors.AsType[*remotesync.HostError](err)
+			switch {
+			case hasErrCase0, hasErrCase1:
+				return err
+			}
 		}
 		unwrapped := errors.Unwrap(err)
 		if unwrapped == nil {
@@ -984,7 +991,7 @@ func coordinateLocalSync(
 
 	cleanResyncTemp(appCfg.DBPath)
 
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(ctx, database, sync.EngineConfig{
 		AgentDirs:               appCfg.AgentDirs,
 		SourceMachines:          appCfg.SourceMachines,
 		ProviderMetadata:        appCfg.ProviderMetadata,
@@ -1054,7 +1061,7 @@ func runDaemonSync(
 	full bool,
 	onProgress sync.ProgressFunc,
 ) (sync.SyncStats, error) {
-	api, err := apiclient.NewHTTPClient(tr.URL, authToken, http.DefaultClient)
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return sync.SyncStats{}, err
 	}
@@ -1108,7 +1115,7 @@ func runDaemonRemoteSync(
 	includeLocal bool,
 	onProgress sync.ProgressFunc,
 ) ([]remoteHostFailure, error) {
-	api, err := apiclient.NewHTTPClient(tr.URL, authToken, http.DefaultClient)
+	api, err := apiclient.NewHTTPClient(tr.URL, authToken, &http.Client{Timeout: 0})
 	if err != nil {
 		return nil, err
 	}
@@ -1145,7 +1152,8 @@ func daemonRemoteSyncResult(
 ) ([]remoteHostFailure, error) {
 	failures := remoteFailuresFromResponse(out)
 	if out.ErrorData != nil && *out.ErrorData != "" {
-		if *out.ErrorData == sync.ErrUnifiedRebuildAborted.Error() {
+		if (out.ErrorCode != nil && *out.ErrorCode == "unified_rebuild_aborted") ||
+			(out.LocalStats != nil && out.LocalStats.Aborted != nil && *out.LocalStats.Aborted) {
 			return failures, sync.ErrUnifiedRebuildAborted
 		}
 		return failures, errors.New(*out.ErrorData)
@@ -1209,7 +1217,7 @@ func consumeDaemonRemoteSyncEvents(stream *runtime.Stream[[]byte], onProgress sy
 	if lastNonDoneData != "" {
 		return nil, fmt.Errorf("daemon remote sync error: %s", lastNonDoneData)
 	}
-	return nil, fmt.Errorf("daemon remote sync response missing done event")
+	return nil, errors.New("daemon remote sync response missing done event")
 }
 
 func consumeDaemonSyncEvents(stream *runtime.Stream[[]byte], progressFns ...sync.ProgressFunc) (sync.SyncStats, error) {
@@ -1246,7 +1254,7 @@ func consumeDaemonSyncEvents(stream *runtime.Stream[[]byte], progressFns ...sync
 	if lastNonDoneData != "" {
 		return sync.SyncStats{}, fmt.Errorf("daemon sync error: %s", lastNonDoneData)
 	}
-	return sync.SyncStats{}, fmt.Errorf("daemon sync response missing done event")
+	return sync.SyncStats{}, errors.New("daemon sync response missing done event")
 }
 
 func reportDaemonSyncProgress(raw string, onProgress sync.ProgressFunc) error {

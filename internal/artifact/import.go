@@ -374,10 +374,9 @@ func (c *StoreImportCoordinator) processImportClaim(
 			result.More = true
 			return nil
 		}
-		page, nextOffset, done, decodeErr :=
-			decodeImportCheckpointSessionPage(
-				sessionsRaw, work.Origin, state.DecodeOffset, *sessionBudget,
-			)
+		page, nextOffset, done, decodeErr := decodeImportCheckpointSessionPage(
+			sessionsRaw, work.Origin, state.DecodeOffset, *sessionBudget,
+		)
 		if decodeErr != nil {
 			if future, ok := errors.AsType[*futureArtifactVersionError](decodeErr); ok {
 				updated := work

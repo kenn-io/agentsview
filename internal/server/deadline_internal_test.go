@@ -22,7 +22,7 @@ func TestHandlers_Internal_DeadlineExceeded(t *testing.T) {
 		Project:   "test-proj",
 		StartedAt: &started,
 	}
-	require.NoError(t, s.db.UpsertSession(sess))
+	require.NoError(t, s.db.UpsertSession(t.Context(), sess))
 
 	tests := []struct {
 		name        string
@@ -42,13 +42,13 @@ func TestHandlers_Internal_DeadlineExceeded(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if tt.requiresFTS && !s.db.HasFTS() {
+			if tt.requiresFTS && !s.db.HasFTS(t.Context()) {
 				t.Skip("skipping test: no FTS support")
 			}
 			ctx, cancel := expiredCtx(t)
 			defer cancel()
 
-			req := httptest.NewRequest(http.MethodGet, tt.path, nil)
+			req := httptest.NewRequestWithContext(ctx, http.MethodGet, tt.path, nil)
 			req = req.WithContext(ctx)
 
 			w := httptest.NewRecorder()

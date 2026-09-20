@@ -90,8 +90,10 @@ const (
 // vector leg's chunk anchor) and whose snippet centers on the keyword text.
 func TestPGHybridBothLegsFuseKeywordAnchor(t *testing.T) {
 	f := &hybridFakeSearcher{hits: []db.VectorHit{
-		{SessionID: "s1", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
-			Score: 0.9, Snippet: "first step of the answer"},
+		{
+			SessionID: "s1", Ordinal: 1, OrdinalStart: 1, OrdinalEnd: 2,
+			Score: 0.9, Snippet: "first step of the answer",
+		},
 	}}
 	store := wireHybrid(t, f)
 	insertCSSession(t, store, "s1", "proj", "claude", hybridStart, hybridEnd)

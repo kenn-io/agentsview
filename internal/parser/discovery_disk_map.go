@@ -55,7 +55,7 @@ func WithDiscoveryDiskMapCleanupError(ctx context.Context, err error) context.Co
 }
 
 func newDiscoveryDiskMapForContext(ctx context.Context) (*discoveryDiskMap, error) {
-	index, err := newDiscoveryDiskMap()
+	index, err := newDiscoveryDiskMap(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +73,7 @@ func newDiscoveryDiskMapForContext(ctx context.Context) (*discoveryDiskMap, erro
 	return index, nil
 }
 
-func newDiscoveryDiskMap() (*discoveryDiskMap, error) {
+func newDiscoveryDiskMap(ctx context.Context) (*discoveryDiskMap, error) {
 	file, err := os.CreateTemp("", "agentsview-discovery-map-*.db")
 	if err != nil {
 		return nil, err
@@ -89,7 +89,7 @@ func newDiscoveryDiskMap() (*discoveryDiskMap, error) {
 		return nil, err
 	}
 	database.SetMaxOpenConns(1)
-	if _, err := database.Exec(`
+	if _, err := database.ExecContext(ctx, `
 		CREATE TABLE entries (
 			key TEXT NOT NULL,
 			ordinal INTEGER NOT NULL,

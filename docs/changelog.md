@@ -22,6 +22,10 @@ The latest published release is
     failing the request.
 - Remote ClickHouse URLs that skip TLS certificate checks (`skip_verify=true`)
     are rejected unless `allow_insecure` is set.
+- Codex `codex exec` sessions show as automated from
+    `originator=codex_exec`. Sessions tagged `thread_source=roborev` keep that
+    more specific kind so roborev reviews are identifiable as code review.
+    Restart or run `agentsview sync` so existing exec sessions reparse.
 
 ## 0.43.0
 

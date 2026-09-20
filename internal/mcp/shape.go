@@ -43,18 +43,18 @@ const (
 
 // truncate cuts s to at most max runes on a rune boundary, returning
 // the (possibly shortened) string and whether truncation occurred.
-func truncate(s string, max int) (string, bool) {
-	if max <= 0 {
+func truncate(s string, maximum int) (string, bool) {
+	if maximum <= 0 {
 		return s, false
 	}
-	prefix := stringutil.TruncateRunes(s, max, "")
+	prefix := stringutil.TruncateRunes(s, maximum, "")
 	return prefix, len(prefix) < len(s)
 }
 
 // clampLimit normalizes a requested page size into [1, max], using
 // def when the request is unset or out of range.
-func clampLimit(requested, def, max int) int {
-	if requested <= 0 || requested > max {
+func clampLimit(requested, def, maximum int) int {
+	if requested <= 0 || requested > maximum {
 		return def
 	}
 	return requested

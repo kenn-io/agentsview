@@ -877,42 +877,49 @@ func (db *DB) ArtifactImportedManifestHashes(
 	}
 	const gidChunkSize = maxSQLVars - 1 // origin occupies one bind variable.
 	for start := 0; start < len(unique); start += gidChunkSize {
-		chunk := unique[start:min(start+gidChunkSize, len(unique))]
-		placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
-		args := make([]any, 0, len(chunk)+1)
-		args = append(args, origin)
-		for _, gid := range chunk {
-			args = append(args, gid)
-		}
-		rows, err := db.getReader().QueryContext(ctx, `
+		if err := func() error {
+			chunk := unique[start:min(start+gidChunkSize, len(unique))]
+			placeholders := strings.TrimSuffix(strings.Repeat("?,", len(chunk)), ",")
+			args := make([]any, 0, len(chunk)+1)
+			args = append(args, origin)
+			for _, gid := range chunk {
+				args = append(args, gid)
+			}
+			rows, err := db.getReader().QueryContext(ctx, `
 			SELECT gid, manifest_hash
 			FROM artifact_imported_sessions
 			WHERE origin = ? AND gid IN (`+placeholders+`)`, args...)
-		if err != nil {
-			return nil, fmt.Errorf(
-				"reading artifact imported-session provenance: %w", err,
-			)
-		}
-		for rows.Next() {
-			var gid, manifestHash string
-			if err := rows.Scan(&gid, &manifestHash); err != nil {
-				_ = rows.Close()
-				return nil, fmt.Errorf(
-					"scanning artifact imported-session provenance: %w", err,
+			if err != nil {
+				return fmt.Errorf(
+					"reading artifact imported-session provenance: %w", err,
 				)
 			}
-			result[gid] = manifestHash
-		}
-		if err := rows.Err(); err != nil {
-			_ = rows.Close()
-			return nil, fmt.Errorf(
-				"iterating artifact imported-session provenance: %w", err,
-			)
-		}
-		if err := rows.Close(); err != nil {
-			return nil, fmt.Errorf(
-				"closing artifact imported-session provenance: %w", err,
-			)
+			defer rows.Close()
+			for rows.Next() {
+				var gid, manifestHash string
+				if err := rows.Scan(&gid, &manifestHash); err != nil {
+					_ = rows.Close()
+					return fmt.Errorf(
+						"scanning artifact imported-session provenance: %w", err,
+					)
+				}
+				result[gid] = manifestHash
+			}
+			if err := rows.Err(); err != nil {
+				_ = rows.Close()
+				return fmt.Errorf(
+					"iterating artifact imported-session provenance: %w", err,
+				)
+			}
+			if err := rows.Close(); err != nil {
+				return fmt.Errorf(
+					"closing artifact imported-session provenance: %w", err,
+				)
+			}
+
+			return nil
+		}(); err != nil {
+			return nil, err
 		}
 	}
 	return result, nil

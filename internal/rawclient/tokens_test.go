@@ -1,7 +1,6 @@
 package rawclient
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -92,7 +91,7 @@ func TestTokenProviderSingleFlight(t *testing.T) {
 		go func() {
 			// assert, not require: the send must be unconditional so the
 			// result loop below always drains.
-			token, err := client.tokens.token(context.Background())
+			token, err := client.tokens.token(t.Context())
 			assert.NoError(t, err)
 			results <- token
 		}()
@@ -133,7 +132,7 @@ func TestDoRetriesWithRefreshedTokenAfterUnauthorized(t *testing.T) {
 			assert.Equal(t, "Bearer avdt_2", r.Header.Get("Authorization"))
 			fmt.Fprint(w, `{"missing":[]}`)
 		default:
-			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+			assert.Failf(t, "test failed", "unexpected request %s %s", r.Method, r.URL.Path)
 		}
 	}))
 	t.Cleanup(server.Close)

@@ -11,9 +11,11 @@ import (
 
 func TestJointActivityModelSwitchDoesNotDoubleCountSession(t *testing.T) {
 	start := mustStart(t, "2026-07-28T12:00:00Z")
-	p := Params{RangeStart: start, RangeEnd: start.Add(10 * time.Minute),
+	p := Params{
+		RangeStart: start, RangeEnd: start.Add(10 * time.Minute),
 		EffectiveEnd: start.Add(10 * time.Minute), Loc: time.UTC,
-		GapCapSeconds: 300, Bucket: BucketSpec{Unit: BucketMinute, NominalSeconds: 300}}
+		GapCapSeconds: 300, Bucket: BucketSpec{Unit: BucketMinute, NominalSeconds: 300},
+	}
 	sessions := []SessionMeta{{SessionID: "a", Project: "project-a", Agent: "agent-a"}}
 	candidates := []IntervalCandidate{
 		{SessionID: "a", Start: start, End: start.Add(2 * time.Minute), ClosingRole: "assistant", ClosingModel: "model-a"},
@@ -24,7 +26,7 @@ func TestJointActivityModelSwitchDoesNotDoubleCountSession(t *testing.T) {
 	report, err := AggregateCandidatesWithJointActivity(t.Context(), p, sessions, candidates, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, report.Buckets[0].MaxAgents)
-	assert.Equal(t, 5.0, report.Totals.AgentMinutes)
+	assert.InDelta(t, 5.0, report.Totals.AgentMinutes, 0)
 	assert.Equal(t, []JointActivityCell{
 		{BucketStart: start, Project: "project-a", Agent: "agent-a", Model: "model-a", Category: "interactive", AgentMinutes: 2, MaxAgents: 1},
 		{BucketStart: start, Project: "project-a", Agent: "agent-a", Model: "model-b", Category: "interactive", AgentMinutes: 3, MaxAgents: 1},
@@ -33,9 +35,11 @@ func TestJointActivityModelSwitchDoesNotDoubleCountSession(t *testing.T) {
 
 func TestJointActivityKeepsDimensionsAndClipsAtBuckets(t *testing.T) {
 	start := mustStart(t, "2026-07-28T12:00:00Z")
-	p := Params{RangeStart: start, RangeEnd: start.Add(10 * time.Minute),
+	p := Params{
+		RangeStart: start, RangeEnd: start.Add(10 * time.Minute),
 		EffectiveEnd: start.Add(10 * time.Minute), Loc: time.UTC,
-		GapCapSeconds: 300, Bucket: BucketSpec{Unit: BucketMinute, NominalSeconds: 300}}
+		GapCapSeconds: 300, Bucket: BucketSpec{Unit: BucketMinute, NominalSeconds: 300},
+	}
 	sessions := []SessionMeta{
 		{SessionID: "a", Project: "project-a", Agent: "agent-a"},
 		{SessionID: "b", Project: "project-a", Agent: "agent-a"},
@@ -63,9 +67,11 @@ func TestJointActivityKeepsDimensionsAndClipsAtBuckets(t *testing.T) {
 
 func TestJointActivityCanonicalProjectAliasesSharePeak(t *testing.T) {
 	start := mustStart(t, "2026-07-28T12:00:00Z")
-	p := Params{RangeStart: start, RangeEnd: start.Add(5 * time.Minute),
+	p := Params{
+		RangeStart: start, RangeEnd: start.Add(5 * time.Minute),
 		EffectiveEnd: start.Add(5 * time.Minute), Loc: time.UTC,
-		GapCapSeconds: 300, Bucket: BucketSpec{Unit: BucketMinute, NominalSeconds: 300}}
+		GapCapSeconds: 300, Bucket: BucketSpec{Unit: BucketMinute, NominalSeconds: 300},
+	}
 	sessions := []SessionMeta{
 		{SessionID: "a", Project: "alias-a", ProjectKey: "canonical-project", Agent: "unknown"},
 		{SessionID: "b", Project: "alias-b", ProjectKey: "canonical-project"},
@@ -78,6 +84,6 @@ func TestJointActivityCanonicalProjectAliasesSharePeak(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, report.JointActivity, 1)
 	assert.Equal(t, "canonical-project", report.JointActivity[0].ProjectKey)
-	assert.Equal(t, 2.0, report.JointActivity[0].AgentMinutes)
+	assert.InDelta(t, 2.0, report.JointActivity[0].AgentMinutes, 0)
 	assert.Equal(t, 1, report.JointActivity[0].MaxAgents)
 }

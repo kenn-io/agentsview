@@ -26,24 +26,24 @@ import (
 // explicitly below.
 var errHTTPNotFound = errors.New("http: not found")
 
-// errHTTPNotImplemented is returned (wrapped in *errNotImplementedBody) by
+// errHTTPNotImplemented is returned (wrapped in *notImplementedBodyError) by
 // the generated client adapter for 501 responses so callers can map a capability-absent daemon
 // (e.g. search with no FTS index) to a typed sentinel instead of
 // string-matching the status.
 var errHTTPNotImplemented = errors.New("http: not implemented")
 
-// errNotImplementedBody wraps errHTTPNotImplemented with the 501 response's
+// notImplementedBodyError wraps errHTTPNotImplemented with the 501 response's
 // error message, so callers that need cause-specific detail — e.g.
 // SearchContent's "index is building: N% complete" or "index is stale ...
 // --full-rebuild" remediation — can recover it instead of seeing only the
 // bare sentinel. errors.Is(err, errHTTPNotImplemented) still holds for every
 // caller that only cares about the status.
-type errNotImplementedBody struct {
+type notImplementedBodyError struct {
 	message string
 }
 
-func (e *errNotImplementedBody) Error() string { return errHTTPNotImplemented.Error() }
-func (e *errNotImplementedBody) Unwrap() error { return errHTTPNotImplemented }
+func (e *notImplementedBodyError) Error() string { return errHTTPNotImplemented.Error() }
+func (e *notImplementedBodyError) Unwrap() error { return errHTTPNotImplemented }
 
 type httpStatusError struct {
 	method     string
@@ -729,7 +729,7 @@ func (b *httpBackend) SearchContent(
 	out := response.JSON200
 	err = serviceResponseError(response.HTTPResponse, response.Body, err)
 	if err != nil {
-		if notImpl, ok := errors.AsType[*errNotImplementedBody](err); ok {
+		if notImpl, ok := errors.AsType[*notImplementedBodyError](err); ok {
 			return nil, wrapSemanticUnavailable(notImpl.message)
 		}
 		return nil, err
@@ -1065,7 +1065,7 @@ func (b *httpBackend) QueryRecallEntries(
 		return nil, err
 	}
 	if req.StrictRecording {
-		return nil, fmt.Errorf("strict recall recording requires a direct backend")
+		return nil, errors.New("strict recall recording requires a direct backend")
 	}
 	mode := db.NormalizeRecallQuery(db.RecallQuery{Mode: req.Mode}).Mode
 	httpClient := b.client
@@ -1083,10 +1083,10 @@ func (b *httpBackend) QueryRecallEntries(
 	out := response.JSON200
 	if err := serviceResponseError(response.HTTPResponse, response.Body, err); err != nil {
 		if errors.Is(err, errHTTPNotImplemented) {
-			var notImpl *errNotImplementedBody
+			notImpl, hasNotImpl := errors.AsType[*notImplementedBodyError](err)
 			if (mode == db.RecallQueryModeVector ||
 				mode == db.RecallQueryModeHybrid) &&
-				errors.As(err, &notImpl) &&
+				hasNotImpl &&
 				notImpl.message != "not available in remote mode" {
 				return nil, wrapSemanticUnavailable(notImpl.message)
 			}
@@ -1094,10 +1094,10 @@ func (b *httpBackend) QueryRecallEntries(
 				"recall query: daemon at %s: %w", b.baseURL, db.ErrReadOnly,
 			)
 		}
-		var statusErr *httpStatusError
+		statusErr, hasStatusErr := errors.AsType[*httpStatusError](err)
 		if (mode == db.RecallQueryModeVector ||
 			mode == db.RecallQueryModeHybrid) &&
-			errors.As(err, &statusErr) &&
+			hasStatusErr &&
 			statusErr.statusCode == http.StatusServiceUnavailable {
 			return nil, wrapSemanticTransient(statusErr.message())
 		}
@@ -1399,7 +1399,7 @@ func serviceResponseError(response *http.Response, body []byte, err error) error
 	case http.StatusNotFound:
 		return errHTTPNotFound
 	case http.StatusNotImplemented:
-		return &errNotImplementedBody{message: notImplementedMessage(body)}
+		return &notImplementedBodyError{message: notImplementedMessage(body)}
 	case http.StatusOK:
 		if err != nil {
 			return err

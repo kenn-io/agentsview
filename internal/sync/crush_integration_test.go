@@ -1,7 +1,6 @@
 package sync
 
 import (
-	"context"
 	"database/sql"
 	"os"
 	"path/filepath"
@@ -56,7 +55,7 @@ func TestSyncCrushReparsesWhenRegistryProjectPathChanges(t *testing.T) {
 	require.NoError(t, os.WriteFile(registryPath, []byte(registry), 0o600))
 
 	database := openTestDB(t)
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCrush: {registryDir},
 		},
@@ -65,7 +64,7 @@ func TestSyncCrushReparsesWhenRegistryProjectPathChanges(t *testing.T) {
 	t.Cleanup(engine.Close)
 	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
 
-	session, err := database.GetSession(context.Background(), "crush:sess-001")
+	session, err := database.GetSession(t.Context(), "crush:sess-001")
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, oldProjectDir, session.Cwd)
@@ -76,7 +75,7 @@ func TestSyncCrushReparsesWhenRegistryProjectPathChanges(t *testing.T) {
 	require.NoError(t, os.WriteFile(registryPath, []byte(registry), 0o600))
 	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
 
-	session, err = database.GetSession(context.Background(), "crush:sess-001")
+	session, err = database.GetSession(t.Context(), "crush:sess-001")
 	require.NoError(t, err)
 	require.NotNil(t, session)
 	assert.Equal(t, newProjectDir, session.Cwd)
@@ -88,7 +87,7 @@ func TestReconcileProviderRootsCrushDBFileRootPreservesDeletedSourceSession(t *t
 	database := openTestDB(t)
 	// Configure the database-file root that normalizeCrushRoots accepts and
 	// ResolveReconciliationScopes must map onto the data directory.
-	engine := NewEngine(database, EngineConfig{
+	engine := NewEngine(t.Context(), database, EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentCrush: {dbPath},
 		},
@@ -97,7 +96,7 @@ func TestReconcileProviderRootsCrushDBFileRootPreservesDeletedSourceSession(t *t
 	t.Cleanup(engine.Close)
 	runSyncAndAssert(t, engine, SyncStats{TotalSessions: 1, Synced: 1})
 
-	_, err := sourceDB.Exec(`
+	_, err := sourceDB.ExecContext(t.Context(), `
 		DELETE FROM messages WHERE session_id = 'sess-001';
 		DELETE FROM sessions WHERE id = 'sess-001';
 	`)
@@ -107,13 +106,13 @@ func TestReconcileProviderRootsCrushDBFileRootPreservesDeletedSourceSession(t *t
 	// Reconcile with the original crush.db request root: the provider must
 	// expand it to the data directory so virtual members are in scope.
 	require.NoError(t, engine.ReconcileProviderRoots(
-		context.Background(), parser.AgentCrush, []string{dbPath},
+		t.Context(), parser.AgentCrush, []string{dbPath},
 	))
 
-	active, err := database.GetSession(context.Background(), "crush:sess-001")
+	active, err := database.GetSession(t.Context(), "crush:sess-001")
 	require.NoError(t, err)
 	assert.NotNil(t, active)
-	archived, err := database.GetSessionFull(context.Background(), "crush:sess-001")
+	archived, err := database.GetSessionFull(t.Context(), "crush:sess-001")
 	require.NoError(t, err)
 	require.NotNil(t, archived)
 	assert.Nil(t, archived.SourceMissingAt,
@@ -122,6 +121,7 @@ func TestReconcileProviderRootsCrushDBFileRootPreservesDeletedSourceSession(t *t
 
 func writeSyncCrushDB(t *testing.T) (string, string, *sql.DB) {
 	t.Helper()
+
 	projectDir := t.TempDir()
 	dataDir := filepath.Join(projectDir, ".crush")
 	require.NoError(t, os.MkdirAll(dataDir, 0o755))
@@ -129,9 +129,9 @@ func writeSyncCrushDB(t *testing.T) (string, string, *sql.DB) {
 	database, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, database.Close()) })
-	_, err = database.Exec(crushSyncTestSchema)
+	_, err = database.ExecContext(t.Context(), crushSyncTestSchema)
 	require.NoError(t, err)
-	_, err = database.Exec(`
+	_, err = database.ExecContext(t.Context(), `
 		INSERT INTO sessions (
 			id, title, created_at, updated_at,
 			prompt_tokens, completion_tokens, cost
@@ -153,13 +153,13 @@ func insertSyncCrushMessage(
 	t *testing.T, database *sql.DB, id, role, parts string, created int64, model string,
 ) {
 	t.Helper()
-	_, err := database.Exec(`
+	_, err := database.ExecContext(t.Context(), `
 		INSERT INTO messages (
 			id, session_id, role, parts, model, created_at, updated_at
 		) VALUES (?, 'sess-001', ?, ?, ?, ?, ?)
 	`, id, role, parts, model, created, created)
 	require.NoError(t, err)
-	_, err = database.Exec(`
+	_, err = database.ExecContext(t.Context(), `
 		UPDATE sessions SET message_count = (
 			SELECT COUNT(*) FROM messages WHERE session_id = 'sess-001'
 		) WHERE id = 'sess-001'

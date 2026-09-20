@@ -37,7 +37,7 @@ func createWarpDB(t *testing.T, dir string) *warpTestDB {
 	d, err := sql.Open("sqlite3", path)
 	require.NoError(t, err, "opening warp test db")
 	t.Cleanup(func() { _ = d.Close() })
-	_, err = d.Exec(`
+	_, err = d.ExecContext(t.Context(), `
 		CREATE TABLE agent_conversations (
 			id INTEGER PRIMARY KEY NOT NULL,
 			conversation_id TEXT NOT NULL,
@@ -70,7 +70,7 @@ func (w *warpTestDB) addConversation(
 	t *testing.T, convID, lastModified string, prompts ...string,
 ) {
 	t.Helper()
-	_, err := w.db.Exec(
+	_, err := w.db.ExecContext(t.Context(),
 		`INSERT INTO agent_conversations
 			(conversation_id, conversation_data, last_modified_at)
 		 VALUES (?, '{}', ?)`,
@@ -79,7 +79,7 @@ func (w *warpTestDB) addConversation(
 	require.NoError(t, err, "insert warp conversation")
 	for i, p := range prompts {
 		input := fmt.Sprintf(`[{"Query":{"text":%q,"context":[]}}]`, p)
-		_, err := w.db.Exec(
+		_, err := w.db.ExecContext(t.Context(),
 			`INSERT INTO ai_queries
 				(exchange_id, conversation_id, start_ts, input,
 				 working_directory, output_status, model_id)
@@ -94,22 +94,22 @@ func (w *warpTestDB) addConversation(
 
 func createWindsurfWorkspaceDB(t *testing.T, root, payload string) string {
 	t.Helper()
+
 	workspaceDir := filepath.Join(root, "workspaceStorage", "workspace-hash")
 	require.NoError(t, os.MkdirAll(workspaceDir, 0o755))
-	require.NoError(t,
-		os.WriteFile(
-			filepath.Join(workspaceDir, "workspace.json"),
-			[]byte(`{"folder":"file:///work/demo"}`),
-			0o644,
-		),
+	require.NoError(t, os.WriteFile(
+		filepath.Join(workspaceDir, "workspace.json"),
+		[]byte(`{"folder":"file:///work/demo"}`),
+		0o644,
+	),
 	)
 	dbPath := filepath.Join(workspaceDir, "state.vscdb")
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
-	_, err = conn.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
+	_, err = conn.ExecContext(t.Context(), `CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
 	require.NoError(t, err)
-	_, err = conn.Exec(
+	_, err = conn.ExecContext(t.Context(),
 		`INSERT INTO ItemTable (key, value) VALUES (?, ?)`,
 		"workbench.panel.aichat.view.aichat.chatdata",
 		payload,
@@ -120,17 +120,18 @@ func createWindsurfWorkspaceDB(t *testing.T, root, payload string) string {
 
 func createTraeStateDB(t *testing.T, root string, sessions []any) string {
 	t.Helper()
+
 	storageDir := filepath.Join(root, "globalStorage")
 	require.NoError(t, os.MkdirAll(storageDir, 0o755))
 	dbPath := filepath.Join(storageDir, "state.vscdb")
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
-	_, err = conn.Exec(`CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
+	_, err = conn.ExecContext(t.Context(), `CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT)`)
 	require.NoError(t, err)
 	value, err := json.Marshal(map[string]any{"list": sessions})
 	require.NoError(t, err)
-	_, err = conn.Exec(
+	_, err = conn.ExecContext(t.Context(),
 		`INSERT INTO ItemTable (key, value) VALUES (?, ?)`,
 		"memento/icube-ai-agent-storage",
 		string(value),
@@ -423,7 +424,7 @@ func TestParseDiffTraePartialRemovalUsesContainerPresenceSweep(t *testing.T) {
 		"list": []any{traeParseDiffSession("trae-a", "Answer A.")},
 	})
 	require.NoError(t, err)
-	_, err = conn.Exec(
+	_, err = conn.ExecContext(t.Context(),
 		`UPDATE ItemTable SET value = ? WHERE key = ?`,
 		string(value), "memento/icube-ai-agent-storage",
 	)

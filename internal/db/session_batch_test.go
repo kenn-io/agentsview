@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"testing"
@@ -36,7 +35,7 @@ func messageCountWrite(id string, count int) SessionBatchWrite {
 
 func requireSessionMessageCount(t *testing.T, d *DB, id string, want int) {
 	t.Helper()
-	messages, err := d.GetAllMessages(context.Background(), id)
+	messages, err := d.GetAllMessages(t.Context(), id)
 	require.NoError(t, err)
 	require.Len(t, messages, want)
 }
@@ -56,14 +55,14 @@ func TestWriteSessionBatchMessageCountCondition(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			d := testDB(t)
-			_, err := d.WriteSessionBatchAtomic([]SessionBatchWrite{
+			_, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{
 				messageCountWrite("session", 96),
 			})
 			require.NoError(t, err)
 
 			write := messageCountWrite("session", tt.incoming)
 			write.RejectMessageCountDecrease = tt.guard
-			_, err = d.WriteSessionBatchAtomic([]SessionBatchWrite{write})
+			_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{write})
 			if !tt.wantErr {
 				require.NoError(t, err)
 				requireSessionMessageCount(t, d, "session", tt.incoming)
@@ -86,7 +85,7 @@ func TestWriteSessionBatchAtomicShorterMemberRollsBack(t *testing.T) {
 	child := messageCountWrite("child", 30)
 	child.Session.ParentSessionID = Ptr("root")
 	child.Session.RelationshipType = "subagent"
-	_, err := d.WriteSessionBatchAtomic([]SessionBatchWrite{root, child})
+	_, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{root, child})
 	require.NoError(t, err)
 
 	root = messageCountWrite("root", 120)
@@ -94,7 +93,7 @@ func TestWriteSessionBatchAtomicShorterMemberRollsBack(t *testing.T) {
 	root.RejectMessageCountDecrease = true
 	child.RejectMessageCountDecrease = true
 	callbackCalled := false
-	result, err := d.WriteSessionBatchAtomic(
+	result, err := d.WriteSessionBatchAtomic(t.Context(),
 		[]SessionBatchWrite{root, child},
 		func() error {
 			callbackCalled = true
@@ -112,7 +111,7 @@ func TestWriteSessionBatchAtomicShorterMemberRollsBack(t *testing.T) {
 
 func TestWriteSessionBatchMessageCountDecisionIsSerialized(t *testing.T) {
 	d := testDB(t)
-	_, err := d.WriteSessionBatchAtomic([]SessionBatchWrite{
+	_, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{
 		messageCountWrite("session", 96),
 	})
 	require.NoError(t, err)
@@ -123,7 +122,7 @@ func TestWriteSessionBatchMessageCountDecisionIsSerialized(t *testing.T) {
 	first := messageCountWrite("session", 120)
 	first.RejectMessageCountDecrease = true
 	go func() {
-		_, err := d.WriteSessionBatchAtomic(
+		_, err := d.WriteSessionBatchAtomic(t.Context(),
 			[]SessionBatchWrite{first},
 			func() error {
 				close(entered)
@@ -136,14 +135,14 @@ func TestWriteSessionBatchMessageCountDecisionIsSerialized(t *testing.T) {
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
-		t.Fatal("first writer did not reach beforeCommit")
+		require.Fail(t, "first writer did not reach beforeCommit")
 	}
 
 	secondDone := make(chan error, 1)
 	second := messageCountWrite("session", 24)
 	second.RejectMessageCountDecrease = true
 	go func() {
-		_, err := d.WriteSessionBatchAtomic([]SessionBatchWrite{second})
+		_, err := d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{second})
 		secondDone <- err
 	}()
 	close(release)
@@ -158,7 +157,7 @@ func TestWriteSessionBatchMessageCountDecisionIsSerialized(t *testing.T) {
 
 func TestWriteSessionBatchInsertSkipsRedundantModifiedTouch(t *testing.T) {
 	d := testDB(t)
-	_, err := d.getWriter().Exec(`
+	_, err := d.getWriter().Exec(t.Context(), `
 		CREATE TABLE modified_touch_log(session_id TEXT);
 		CREATE TRIGGER trg_modified_touch_log
 		AFTER UPDATE OF local_modified_at ON sessions
@@ -168,13 +167,13 @@ func TestWriteSessionBatchInsertSkipsRedundantModifiedTouch(t *testing.T) {
 	require.NoError(t, err, "install touch-counting trigger")
 	touches := func() int {
 		var count int
-		require.NoError(t, d.getReader().QueryRow(
+		require.NoError(t, d.getReader().QueryRow(t.Context(),
 			`SELECT count(*) FROM modified_touch_log`,
 		).Scan(&count), "count local_modified_at touches")
 		return count
 	}
 	resetTouches := func() {
-		_, err := d.getWriter().Exec(`DELETE FROM modified_touch_log`)
+		_, err := d.getWriter().Exec(t.Context(), `DELETE FROM modified_touch_log`)
 		require.NoError(t, err, "reset touch log")
 	}
 
@@ -182,14 +181,14 @@ func TestWriteSessionBatchInsertSkipsRedundantModifiedTouch(t *testing.T) {
 	// trigger, so its revision bump must not touch local_modified_at.
 	// Replacing an existing transcript must add exactly that one touch
 	// so push targets re-select the session.
-	_, err = d.WriteSessionBatchAtomic([]SessionBatchWrite{
+	_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{
 		messageCountWrite("session", 4),
 	})
 	require.NoError(t, err)
 	insertTouches := touches()
 
 	resetTouches()
-	_, err = d.WriteSessionBatchAtomic([]SessionBatchWrite{
+	_, err = d.WriteSessionBatchAtomic(t.Context(), []SessionBatchWrite{
 		messageCountWrite("session", 6),
 	})
 	require.NoError(t, err)
@@ -197,7 +196,7 @@ func TestWriteSessionBatchInsertSkipsRedundantModifiedTouch(t *testing.T) {
 		"revision bump must touch local_modified_at only for replacements")
 
 	var modifiedAt sql.NullString
-	require.NoError(t, d.getReader().QueryRow(
+	require.NoError(t, d.getReader().QueryRow(t.Context(),
 		`SELECT local_modified_at FROM sessions WHERE id = 'session'`,
 	).Scan(&modifiedAt), "read local_modified_at")
 	require.True(t, modifiedAt.Valid && modifiedAt.String != "",

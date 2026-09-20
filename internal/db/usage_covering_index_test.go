@@ -14,7 +14,7 @@ import (
 func TestUsageSessionCoveringIndexColumns(t *testing.T) {
 	database := testDB(t)
 
-	rows, err := database.getReader().Query(
+	rows, err := database.getReader().Query(t.Context(),
 		`SELECT name FROM pragma_index_info('idx_messages_usage_session_covering')
 		 ORDER BY seqno`,
 	)
@@ -38,7 +38,7 @@ func TestUsageSessionCoveringIndexColumns(t *testing.T) {
 
 func TestUsageIndexesConcurrentRepair(t *testing.T) {
 	database := testDB(t)
-	_, err := database.getWriter().Exec(`
+	_, err := database.getWriter().Exec(t.Context(), `
 		DROP INDEX idx_messages_usage_session_covering;
 		CREATE INDEX idx_messages_usage_session_covering
 		ON messages(session_id, ordinal, timestamp, model)
@@ -51,7 +51,7 @@ func TestUsageIndexesConcurrentRepair(t *testing.T) {
 	for range 2 {
 		wait.Go(func() {
 			<-start
-			errors <- ensureUsageIndexesLocked(database.getWriter())
+			errors <- ensureUsageIndexesLocked(t.Context(), database.getWriter())
 		})
 	}
 	close(start)
@@ -60,7 +60,7 @@ func TestUsageIndexesConcurrentRepair(t *testing.T) {
 	for err := range errors {
 		require.NoError(t, err)
 	}
-	rows, err := database.getReader().Query(
+	rows, err := database.getReader().Query(t.Context(),
 		`SELECT name FROM pragma_index_info('idx_messages_usage_session_covering')
 		 ORDER BY seqno`)
 	require.NoError(t, err)
@@ -71,6 +71,7 @@ func TestUsageIndexesConcurrentRepair(t *testing.T) {
 		require.NoError(t, rows.Scan(&column))
 		columns = append(columns, column)
 	}
+	require.NoError(t, rows.Err())
 	assert.Equal(t, usageSessionCoveringIndexColumns, columns)
 }
 
@@ -78,7 +79,7 @@ func TestUsageIndexesMigration(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.db")
 
-	d, err := Open(path)
+	d, err := Open(t.Context(), path)
 	requireNoError(t, err, "initial open")
 	insertSession(t, d, "s1", "proj")
 	d.Close()
@@ -91,30 +92,30 @@ func TestUsageIndexesMigration(t *testing.T) {
 
 	conn, err := sql.Open("sqlite3", path)
 	requireNoError(t, err, "raw open")
-	_, err = conn.Exec(`DROP INDEX IF EXISTS idx_messages_usage_covering`)
+	_, err = conn.ExecContext(t.Context(), `DROP INDEX IF EXISTS idx_messages_usage_covering`)
 	requireNoError(t, err, "drop covering index")
-	_, err = conn.Exec(`CREATE INDEX idx_messages_usage_covering
+	_, err = conn.ExecContext(t.Context(), `CREATE INDEX idx_messages_usage_covering
 		ON messages(timestamp, session_id, ordinal, model,
 		            claude_message_id, claude_request_id, token_usage)
 		WHERE token_usage != '' AND model != '' AND model != '<synthetic>'`)
 	requireNoError(t, err, "recreate stale covering index")
-	_, err = conn.Exec(`DROP INDEX IF EXISTS idx_messages_claude_snapshot`)
+	_, err = conn.ExecContext(t.Context(), `DROP INDEX IF EXISTS idx_messages_claude_snapshot`)
 	requireNoError(t, err, "drop Claude snapshot index")
-	_, err = conn.Exec(`DROP INDEX IF EXISTS idx_messages_usage_timestamp`)
+	_, err = conn.ExecContext(t.Context(), `DROP INDEX IF EXISTS idx_messages_usage_timestamp`)
 	requireNoError(t, err, "drop current timestamp index")
-	_, err = conn.Exec(`CREATE INDEX idx_messages_usage_timestamp
+	_, err = conn.ExecContext(t.Context(), `CREATE INDEX idx_messages_usage_timestamp
 		ON messages(timestamp, session_id, ordinal)
 		WHERE token_usage != '' AND model != '' AND model != '<synthetic>'`)
 	requireNoError(t, err, "recreate legacy index")
-	_, err = conn.Exec(`DROP INDEX IF EXISTS idx_messages_activity_timestamp`)
+	_, err = conn.ExecContext(t.Context(), `DROP INDEX IF EXISTS idx_messages_activity_timestamp`)
 	requireNoError(t, err, "drop current activity index")
-	_, err = conn.Exec(`CREATE INDEX idx_messages_activity_timestamp
+	_, err = conn.ExecContext(t.Context(), `CREATE INDEX idx_messages_activity_timestamp
 		ON messages(timestamp, session_id, ordinal)
 		WHERE role = 'assistant' AND model != '<synthetic>'`)
 	requireNoError(t, err, "recreate stale activity index")
 	conn.Close()
 
-	d, err = Open(path)
+	d, err = Open(t.Context(), path)
 	requireNoError(t, err, "reopen")
 	defer d.Close()
 
@@ -124,7 +125,7 @@ func TestUsageIndexesMigration(t *testing.T) {
 	requireIndexPresence(t, path, "idx_messages_usage_session_covering", 1)
 	requireIndexPresence(t, path, "idx_messages_usage_timestamp", 1)
 
-	rows, err := d.getReader().Query(
+	rows, err := d.getReader().Query(t.Context(),
 		`SELECT name FROM pragma_index_info('idx_messages_usage_session_covering')
 		 ORDER BY seqno`,
 	)
@@ -145,7 +146,7 @@ func TestUsageIndexesMigration(t *testing.T) {
 		[]string{"timestamp", "session_id", "ordinal", "model"})
 
 	var sessions int
-	row := d.reader.Load().QueryRow(`SELECT count(*) FROM sessions`)
+	row := d.reader.Load().QueryRowContext(t.Context(), `SELECT count(*) FROM sessions`)
 	requireNoError(t, row.Scan(&sessions), "count sessions")
 	require.Equal(t, 1, sessions, "session row must survive migration")
 }
@@ -162,7 +163,7 @@ func TestDropAndRebuildBulkImportIndexes(t *testing.T) {
 	}
 	countIndex := func(name string) int {
 		var got int
-		require.NoError(t, database.getReader().QueryRow(
+		require.NoError(t, database.getReader().QueryRow(t.Context(),
 			`SELECT count(*) FROM sqlite_master
 			 WHERE type = 'index' AND name = ?`, name,
 		).Scan(&got), "query sqlite_master for %s", name)
@@ -172,7 +173,7 @@ func TestDropAndRebuildBulkImportIndexes(t *testing.T) {
 		require.Equal(t, 1, countIndex(name), "index %s before drop", name)
 	}
 
-	require.NoError(t, database.DropBulkImportIndexes())
+	require.NoError(t, database.DropBulkImportIndexes(t.Context()))
 	for _, name := range usageIndexes {
 		assert.Equal(t, 0, countIndex(name), "index %s after drop", name)
 	}
@@ -191,7 +192,7 @@ func TestDropAndRebuildBulkImportIndexes(t *testing.T) {
 		TokenUsage: json.RawMessage(`{"input_tokens":1000,"output_tokens":500}`),
 	})
 
-	require.NoError(t, database.RebuildBulkImportIndexes())
+	require.NoError(t, database.RebuildBulkImportIndexes(t.Context()))
 	for _, name := range usageIndexes {
 		assert.Equal(t, 1, countIndex(name), "index %s after rebuild", name)
 	}
@@ -199,7 +200,7 @@ func TestDropAndRebuildBulkImportIndexes(t *testing.T) {
 		"idx_messages_usage_session_covering", usageSessionCoveringIndexColumns)
 
 	var indexed int
-	require.NoError(t, database.getReader().QueryRow(
+	require.NoError(t, database.getReader().QueryRow(t.Context(),
 		`SELECT count(*) FROM messages
 		 INDEXED BY idx_messages_usage_session_covering
 		 WHERE session_id = 's1'
@@ -211,7 +212,7 @@ func TestDropAndRebuildBulkImportIndexes(t *testing.T) {
 
 func assertUsageIndexColumns(t *testing.T, d *DB, index string, want []string) {
 	t.Helper()
-	rows, err := d.getReader().Query(
+	rows, err := d.getReader().Query(t.Context(),
 		`SELECT name FROM pragma_index_info(?) ORDER BY seqno`, index)
 	requireNoError(t, err, "read index columns")
 	defer rows.Close()
@@ -232,7 +233,7 @@ func requireIndexPresence(t *testing.T, path, name string, want int) {
 	defer conn.Close()
 
 	var got int
-	err = conn.QueryRow(
+	err = conn.QueryRowContext(t.Context(),
 		`SELECT count(*) FROM sqlite_master
 		 WHERE type = 'index' AND name = ?`, name,
 	).Scan(&got)

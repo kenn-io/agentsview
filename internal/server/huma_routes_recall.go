@@ -47,7 +47,7 @@ func (s *Server) registerRecallRoutes() {
 			op.Responses["200"] = &huma.Response{Description: "OK", Content: map[string]*huma.MediaType{"application/json": {Schema: schemas.Schema(route.response, true, "")}}}
 		}
 		for _, status := range []string{"400", "401", "403", "404", "409", "500", "501", "503", "504"} {
-			op.Responses[status] = &huma.Response{Description: "API error", Content: map[string]*huma.MediaType{"application/json": {Schema: schemas.Schema(reflect.TypeFor[apiErrorResponse](), true, "")}}}
+			op.Responses[status] = &huma.Response{Description: "API error", Content: map[string]*huma.MediaType{"application/json": {Schema: schemas.Schema(reflect.TypeFor[apiResponseError](), true, "")}}}
 		}
 		for _, params := range []struct{ kind, names string }{{"string", route.strings}, {"integer", route.integers}, {"boolean", route.booleans}} {
 			for name := range strings.FieldsSeq(params.names) {

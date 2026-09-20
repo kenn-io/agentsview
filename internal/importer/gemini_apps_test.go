@@ -1,7 +1,6 @@
 package importer
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -31,7 +30,7 @@ func TestImportGeminiApps(t *testing.T) {
 
 	d := testDB(t)
 	stats, err := ImportGeminiApps(
-		context.Background(), d, root, nil, "test-machine",
+		t.Context(), d, root, nil, "test-machine",
 	)
 	require.NoError(t, err)
 	assert.Equal(t, 2, stats.Imported)
@@ -39,7 +38,7 @@ func TestImportGeminiApps(t *testing.T) {
 	assert.Equal(t, 3, stats.Skipped)
 	assert.Zero(t, stats.Errors)
 
-	sessions, err := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+	sessions, err := d.ListSessions(t.Context(), db.SessionFilter{Agent: "gemini-apps"})
 	require.NoError(t, err)
 	assert.Len(t, sessions.Sessions, 2)
 	assert.Equal(t, "test-machine", sessions.Sessions[0].Machine)
@@ -57,16 +56,16 @@ func TestImportGeminiAppsIgnoresOtherProductsThroughPublicPath(t *testing.T) {
 	))
 
 	d := testDB(t)
-	stats, err := ImportGeminiApps(context.Background(), d, root, nil)
+	stats, err := ImportGeminiApps(t.Context(), d, root, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Imported)
 	assert.Zero(t, stats.Skipped)
 	assert.Zero(t, stats.Errors)
 
-	page, err := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+	page, err := d.ListSessions(t.Context(), db.SessionFilter{Agent: "gemini-apps"})
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)
-	messages, err := d.GetAllMessages(context.Background(), page.Sessions[0].ID)
+	messages, err := d.GetAllMessages(t.Context(), page.Sessions[0].ID)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, "See source for details", messages[0].Content)
@@ -95,27 +94,27 @@ func TestImportGeminiAppsReimportUpdatesResponseWithStableID(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
 
 	d := testDB(t)
-	first, err := ImportGeminiApps(context.Background(), d, root, nil)
+	first, err := ImportGeminiApps(t.Context(), d, root, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, first.Imported)
-	initialPage, err := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+	initialPage, err := d.ListSessions(t.Context(), db.SessionFilter{Agent: "gemini-apps"})
 	require.NoError(t, err)
 	require.Len(t, initialPage.Sessions, 1)
 	initialID := initialPage.Sessions[0].ID
 
 	updated := strings.ReplaceAll(initial, "first answer", "updated answer")
 	require.NoError(t, os.WriteFile(path, []byte(updated), 0o644))
-	second, err := ImportGeminiApps(context.Background(), d, root, nil)
+	second, err := ImportGeminiApps(t.Context(), d, root, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, second.Imported)
 	assert.Equal(t, 1, second.Updated)
 	assert.Zero(t, second.Skipped)
 
-	page, err := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+	page, err := d.ListSessions(t.Context(), db.SessionFilter{Agent: "gemini-apps"})
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)
 	assert.Equal(t, initialID, page.Sessions[0].ID)
-	messages, err := d.GetAllMessages(context.Background(), page.Sessions[0].ID)
+	messages, err := d.GetAllMessages(t.Context(), page.Sessions[0].ID)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, "first prompt\n\nupdated answer", messages[0].Content)
@@ -133,7 +132,7 @@ func geminiAppsImportDocument(cells ...string) string {
 
 func geminiAppsSessionIDs(t *testing.T, d *db.DB) map[string]bool {
 	t.Helper()
-	page, err := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+	page, err := d.ListSessions(t.Context(), db.SessionFilter{Agent: "gemini-apps"})
 	require.NoError(t, err)
 	ids := make(map[string]bool, len(page.Sessions))
 	for _, session := range page.Sessions {
@@ -151,20 +150,20 @@ func TestImportGeminiAppsReimportAfterPrependKeepsExistingSessions(t *testing.T)
 	require.NoError(t, os.WriteFile(path, []byte(geminiAppsImportDocument(first, second)), 0o644))
 
 	d := testDB(t)
-	initial, err := ImportGeminiApps(context.Background(), d, root, nil)
+	initial, err := ImportGeminiApps(t.Context(), d, root, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 2, initial.Imported)
 	initialIDs := geminiAppsSessionIDs(t, d)
 
 	require.NoError(t, os.WriteFile(path, []byte(geminiAppsImportDocument(prepended, first, second)), 0o644))
-	secondImport, err := ImportGeminiApps(context.Background(), d, root, nil)
+	secondImport, err := ImportGeminiApps(t.Context(), d, root, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, secondImport.Imported)
 	assert.Zero(t, secondImport.Updated)
 	assert.Equal(t, 2, secondImport.Skipped)
 	assert.Zero(t, secondImport.Errors)
 
-	page, err := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+	page, err := d.ListSessions(t.Context(), db.SessionFilter{Agent: "gemini-apps"})
 	require.NoError(t, err)
 	assert.Len(t, page.Sessions, 3)
 	finalIDs := geminiAppsSessionIDs(t, d)
@@ -181,20 +180,20 @@ func TestImportGeminiAppsReimportAfterReorderKeepsExistingSessions(t *testing.T)
 	require.NoError(t, os.WriteFile(path, []byte(geminiAppsImportDocument(first, second)), 0o644))
 
 	d := testDB(t)
-	initial, err := ImportGeminiApps(context.Background(), d, root, nil)
+	initial, err := ImportGeminiApps(t.Context(), d, root, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 2, initial.Imported)
 	initialIDs := geminiAppsSessionIDs(t, d)
 
 	require.NoError(t, os.WriteFile(path, []byte(geminiAppsImportDocument(second, first)), 0o644))
-	reordered, err := ImportGeminiApps(context.Background(), d, root, nil)
+	reordered, err := ImportGeminiApps(t.Context(), d, root, nil)
 	require.NoError(t, err)
 	assert.Zero(t, reordered.Imported)
 	assert.Zero(t, reordered.Updated)
 	assert.Equal(t, 2, reordered.Skipped)
 	assert.Zero(t, reordered.Errors)
 
-	page, err := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+	page, err := d.ListSessions(t.Context(), db.SessionFilter{Agent: "gemini-apps"})
 	require.NoError(t, err)
 	assert.Len(t, page.Sessions, 2)
 	finalIDs := geminiAppsSessionIDs(t, d)
@@ -229,10 +228,10 @@ func TestImportGeminiAppsUnknownZoneDoesNotWriteSession(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(html), 0o644))
 
 	d := testDB(t)
-	stats, err := ImportGeminiApps(context.Background(), d, root, nil)
-	assert.Error(t, err)
+	stats, err := ImportGeminiApps(t.Context(), d, root, nil)
+	require.Error(t, err)
 	assert.Zero(t, stats.Errors)
-	page, listErr := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+	page, listErr := d.ListSessions(t.Context(), db.SessionFilter{Agent: "gemini-apps"})
 	require.NoError(t, listErr)
 	assert.Empty(t, page.Sessions)
 }
@@ -249,31 +248,31 @@ func TestImportGeminiAppsWholeHourZonePersistsCorrectTimestamp(t *testing.T) {
 	require.NoError(t, os.WriteFile(path, []byte(geminiAppsImportDocument(valid)), 0o644))
 
 	d := testDB(t)
-	stats, err := ImportGeminiApps(context.Background(), d, root, nil)
+	stats, err := ImportGeminiApps(t.Context(), d, root, nil)
 	require.NoError(t, err)
 	assert.Equal(t, 1, stats.Imported)
 
-	page, err := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+	page, err := d.ListSessions(t.Context(), db.SessionFilter{Agent: "gemini-apps"})
 	require.NoError(t, err)
 	require.Len(t, page.Sessions, 1)
-	stored, err := d.GetSessionFull(context.Background(), page.Sessions[0].ID)
+	stored, err := d.GetSessionFull(t.Context(), page.Sessions[0].ID)
 	require.NoError(t, err)
 	require.NotNil(t, stored.StartedAt)
 	require.NotNil(t, stored.EndedAt)
 	assert.Equal(t, "2025-01-02T07:04:05Z", *stored.StartedAt)
 	assert.Equal(t, *stored.StartedAt, *stored.EndedAt)
-	messages, err := d.GetAllMessages(context.Background(), page.Sessions[0].ID)
+	messages, err := d.GetAllMessages(t.Context(), page.Sessions[0].ID)
 	require.NoError(t, err)
 	require.Len(t, messages, 1)
 	assert.Equal(t, *stored.StartedAt, messages[0].Timestamp)
 
 	require.NoError(t, os.WriteFile(path, []byte(geminiAppsImportDocument(malformed)), 0o644))
-	stats, err = ImportGeminiApps(context.Background(), d, root, nil)
-	assert.Error(t, err)
+	stats, err = ImportGeminiApps(t.Context(), d, root, nil)
+	require.Error(t, err)
 	assert.Zero(t, stats.Imported)
 	assert.Zero(t, stats.Updated)
 	assert.Zero(t, stats.Errors)
-	page, err = d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+	page, err = d.ListSessions(t.Context(), db.SessionFilter{Agent: "gemini-apps"})
 	require.NoError(t, err)
 	assert.Len(t, page.Sessions, 1)
 }
@@ -301,46 +300,46 @@ func TestImportGeminiAppsPersistenceGuards(t *testing.T) {
 		)
 		require.NoError(t, os.WriteFile(path, []byte(initial), 0o644))
 		d := testDB(t)
-		require.True(t, d.HasFTS())
+		require.True(t, d.HasFTS(t.Context()))
 		indexing := 0
-		first, err := ImportGeminiApps(context.Background(), d, root, &ImportCallbacks{
+		first, err := ImportGeminiApps(t.Context(), d, root, &ImportCallbacks{
 			OnIndexing: func() { indexing++ },
 		})
 		require.NoError(t, err)
 		assert.Equal(t, 1, first.Imported)
 		assert.Equal(t, 1, indexing)
 
-		page, err := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+		page, err := d.ListSessions(t.Context(), db.SessionFilter{Agent: "gemini-apps"})
 		require.NoError(t, err)
 		require.Len(t, page.Sessions, 1)
 		id := page.Sessions[0].ID
-		stored, err := d.GetSessionFull(context.Background(), id)
+		stored, err := d.GetSessionFull(t.Context(), id)
 		require.NoError(t, err)
 		require.NotNil(t, stored.TranscriptRevision)
 		revision := *stored.TranscriptRevision
 
 		indexing = 0
-		unchanged, err := ImportGeminiApps(context.Background(), d, root, &ImportCallbacks{
+		unchanged, err := ImportGeminiApps(t.Context(), d, root, &ImportCallbacks{
 			OnIndexing: func() { indexing++ },
 		})
 		require.NoError(t, err)
 		assert.Equal(t, 1, unchanged.Skipped)
 		assert.Zero(t, indexing)
-		stored, err = d.GetSessionFull(context.Background(), id)
+		stored, err = d.GetSessionFull(t.Context(), id)
 		require.NoError(t, err)
 		require.NotNil(t, stored.TranscriptRevision)
 		assert.Equal(t, revision, *stored.TranscriptRevision)
 
 		require.NoError(t, os.WriteFile(path, []byte(sanitizedGeminiAppsImportHTML), 0o644))
 		indexing = 0
-		superset, err := ImportGeminiApps(context.Background(), d, root, &ImportCallbacks{
+		superset, err := ImportGeminiApps(t.Context(), d, root, &ImportCallbacks{
 			OnIndexing: func() { indexing++ },
 		})
 		require.NoError(t, err)
 		assert.Equal(t, 1, superset.Imported)
 		assert.Equal(t, 4, superset.Skipped)
 		assert.Equal(t, 1, indexing)
-		stored, err = d.GetSessionFull(context.Background(), id)
+		stored, err = d.GetSessionFull(t.Context(), id)
 		require.NoError(t, err)
 		require.NotNil(t, stored.TranscriptRevision)
 		assert.Equal(t, revision, *stored.TranscriptRevision)
@@ -368,24 +367,24 @@ func TestImportGeminiAppsPersistenceGuards(t *testing.T) {
 		)
 		require.NoError(t, os.WriteFile(path, []byte(fixture), 0o644))
 		d := testDB(t)
-		_, err := ImportGeminiApps(context.Background(), d, root, nil)
+		_, err := ImportGeminiApps(t.Context(), d, root, nil)
 		require.NoError(t, err)
-		page, err := d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+		page, err := d.ListSessions(t.Context(), db.SessionFilter{Agent: "gemini-apps"})
 		require.NoError(t, err)
 		require.Len(t, page.Sessions, 1)
 		id := page.Sessions[0].ID
-		require.NoError(t, d.DeleteSession(id))
-		assert.True(t, d.IsSessionExcluded(id))
+		require.NoError(t, d.DeleteSession(t.Context(), id))
+		assert.True(t, d.IsSessionExcluded(t.Context(), id))
 
 		indexing := 0
-		stats, err := ImportGeminiApps(context.Background(), d, root, &ImportCallbacks{
+		stats, err := ImportGeminiApps(t.Context(), d, root, &ImportCallbacks{
 			OnIndexing: func() { indexing++ },
 		})
 		require.NoError(t, err)
 		assert.Equal(t, 1, stats.Skipped)
 		assert.Zero(t, stats.Errors)
 		assert.Zero(t, indexing)
-		page, err = d.ListSessions(context.Background(), db.SessionFilter{Agent: "gemini-apps"})
+		page, err = d.ListSessions(t.Context(), db.SessionFilter{Agent: "gemini-apps"})
 		require.NoError(t, err)
 		assert.Empty(t, page.Sessions)
 	})

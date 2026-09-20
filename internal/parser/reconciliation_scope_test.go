@@ -29,8 +29,7 @@ func TestDirectoryPlanExactConfiguredRootIsOneAtomicScope(t *testing.T) {
 	require.Len(t, plan.Scopes, 1)
 	scope := plan.Scopes[0]
 	assert.Equal(t, []string{root}, scope.TraversalRoots)
-	assert.Equal(t,
-		[]StoredSourceHintScope{{Path: filepath.Clean(root)}},
+	assert.Equal(t, []StoredSourceHintScope{{Path: filepath.Clean(root)}},
 		scope.PhysicalProofScopes)
 	assert.Equal(t, []string{filepath.Clean(root)}, scope.CoverageIdentities)
 	assert.Equal(t, []string{root}, scope.RetryRoots)
@@ -47,8 +46,7 @@ func TestDirectoryPlanDescendantTraversesGatewayAndProvesDescendant(t *testing.T
 	scope := plan.Scopes[0]
 	assert.Equal(t, []string{root}, scope.TraversalRoots,
 		"traversal must come from the configured gateway")
-	assert.Equal(t,
-		[]StoredSourceHintScope{{Path: descendant}},
+	assert.Equal(t, []StoredSourceHintScope{{Path: descendant}},
 		scope.PhysicalProofScopes,
 		"proof must stay bounded to the requested descendant")
 	assert.Empty(t, scope.CoverageIdentities,
@@ -80,8 +78,7 @@ func TestDirectoryPlanAncestorClaimKeepsSiblingDescendantProof(t *testing.T) {
 		"the covered configured root is claimed fully")
 	descendant := plan.Scopes[1]
 	assert.Equal(t, []string{outer}, descendant.TraversalRoots)
-	assert.Equal(t,
-		[]StoredSourceHintScope{{Path: requested}},
+	assert.Equal(t, []StoredSourceHintScope{{Path: requested}},
 		descendant.PhysicalProofScopes,
 		"the request still proves itself under its configured ancestor")
 	assert.Empty(t, descendant.CoverageIdentities)
@@ -178,6 +175,7 @@ func TestDirectoryPlanEmptyConfigurationIsEmptyPlan(t *testing.T) {
 // state.db content is irrelevant.
 func writeHermesPlanArchive(t *testing.T, dir string) (stateDB, sessionsDir string) {
 	t.Helper()
+
 	require.NoError(t, os.MkdirAll(dir, 0o755))
 	stateDB = filepath.Join(dir, "state.db")
 	sessionsDir = filepath.Join(dir, "sessions")
@@ -243,8 +241,7 @@ func TestHermesReconciliationPlanFlatRootDescendantProvesItself(t *testing.T) {
 		"a flat root must resolve a descendant generically, not to nothing")
 	scope := plan.Scopes[0]
 	assert.Equal(t, []string{root}, scope.TraversalRoots)
-	assert.Equal(t,
-		[]StoredSourceHintScope{{Path: requested}},
+	assert.Equal(t, []StoredSourceHintScope{{Path: requested}},
 		scope.PhysicalProofScopes,
 		"proof stays bounded to the requested transcript")
 	assert.Empty(t, scope.CoverageIdentities,
@@ -268,8 +265,7 @@ func TestHermesReconciliationPlanProfileRequestIsolatesSiblings(t *testing.T) {
 	scope := plan.Scopes[0]
 	assert.Equal(t, []string{profileA}, scope.TraversalRoots)
 	for _, proof := range scope.PhysicalProofScopes {
-		assert.True(t,
-			hermesPathWithinOrSame(absoluteHermesPath(proof.Path), profileA),
+		assert.True(t, hermesPathWithinOrSame(absoluteHermesPath(proof.Path), profileA),
 			"proof %q must stay inside the requested profile", proof.Path)
 	}
 	assert.Empty(t, scope.CoverageIdentities,
@@ -325,8 +321,7 @@ func TestHermesReconciliationPlanContainerRequestCoversContainer(t *testing.T) {
 	require.Len(t, plan.Scopes, 1)
 	scope := plan.Scopes[0]
 	assert.Equal(t, []string{container}, scope.TraversalRoots)
-	assert.Equal(t,
-		[]StoredSourceHintScope{{Path: filepath.Clean(container)}},
+	assert.Equal(t, []StoredSourceHintScope{{Path: filepath.Clean(container)}},
 		scope.PhysicalProofScopes)
 	assert.Equal(t, []string{absoluteHermesPath(container)},
 		scope.CoverageIdentities)
@@ -362,8 +357,7 @@ func TestDirectoryPlanProvesARelativeRootInItsConfiguredSpelling(t *testing.T) {
 
 	require.Len(t, plan.Scopes, 1)
 	scope := plan.Scopes[0]
-	assert.Equal(t,
-		[]StoredSourceHintScope{{Path: "archive"}},
+	assert.Equal(t, []StoredSourceHintScope{{Path: "archive"}},
 		scope.PhysicalProofScopes,
 		"proof must carry the spelling stored sources were written under")
 	assert.Equal(t, []string{"archive"}, scope.TraversalRoots)
@@ -385,8 +379,7 @@ func TestDirectoryPlanProvesADescendantInItsGatewaySpelling(t *testing.T) {
 
 	require.Len(t, plan.Scopes, 1)
 	scope := plan.Scopes[0]
-	assert.Equal(t,
-		[]StoredSourceHintScope{{Path: filepath.Join("archive", "project")}},
+	assert.Equal(t, []StoredSourceHintScope{{Path: filepath.Join("archive", "project")}},
 		scope.PhysicalProofScopes)
 	assert.Equal(t, []string{"archive"}, scope.TraversalRoots)
 	assert.Empty(t, scope.CoverageIdentities)
@@ -528,8 +521,7 @@ func TestHermesReconciliationPlanWidensAnUnownedChildToItsContainer(t *testing.T
 			scope := plan.Scopes[0]
 			assert.Equal(t, []string{container}, scope.TraversalRoots,
 				"traversal must be the configured container, never the request")
-			assert.Equal(t,
-				[]StoredSourceHintScope{{Path: container}},
+			assert.Equal(t, []StoredSourceHintScope{{Path: container}},
 				scope.PhysicalProofScopes)
 			assert.Empty(t, scope.CoverageIdentities,
 				"a child request cannot cover the container")
@@ -600,10 +592,9 @@ func TestOpenCodePlanWidensAContainerAliasToItsVirtualMembers(t *testing.T) {
 			scope := plan.Scopes[0]
 			assert.Equal(t, []string{root}, scope.TraversalRoots,
 				"traversal must come from the configured gateway")
-			assert.Equal(t,
-				[]StoredSourceHintScope{{
-					Path: dbPath, IncludeVirtualMembers: true,
-				}},
+			assert.Equal(t, []StoredSourceHintScope{{
+				Path: dbPath, IncludeVirtualMembers: true,
+			}},
 				scope.PhysicalProofScopes,
 				"every container alias proves the container's whole membership")
 			assert.Empty(t, scope.CoverageIdentities,
@@ -714,11 +705,10 @@ func TestOpenCodePlanProvesAContainerInItsConfiguredSpelling(t *testing.T) {
 	)
 
 	require.Len(t, plan.Scopes, 1)
-	assert.Equal(t,
-		[]StoredSourceHintScope{{
-			Path:                  filepath.Join("ocroot", "opencode.db"),
-			IncludeVirtualMembers: true,
-		}},
+	assert.Equal(t, []StoredSourceHintScope{{
+		Path:                  filepath.Join("ocroot", "opencode.db"),
+		IncludeVirtualMembers: true,
+	}},
 		plan.Scopes[0].PhysicalProofScopes,
 		"proof must carry the spelling stored sources were written under")
 	assert.Equal(t, []string{"ocroot"}, plan.Scopes[0].TraversalRoots)
@@ -753,10 +743,9 @@ func TestMultiSessionPlanWidensContainerAliasesToVirtualMembership(
 		require.Len(t, plan.Scopes, 1, requested)
 		scope := plan.Scopes[0]
 		assert.Equal(t, []string{root}, scope.TraversalRoots, requested)
-		assert.Equal(t,
-			[]StoredSourceHintScope{{
-				Path: container, IncludeVirtualMembers: true,
-			}},
+		assert.Equal(t, []StoredSourceHintScope{{
+			Path: container, IncludeVirtualMembers: true,
+		}},
 			scope.PhysicalProofScopes,
 			"request %q must prove the container's whole membership", requested)
 		assert.Empty(t, scope.CoverageIdentities,
@@ -770,8 +759,7 @@ func TestMultiSessionPlanWidensContainerAliasesToVirtualMembership(
 	)
 	require.NoError(t, err)
 	require.Len(t, unrelated.Scopes, 1)
-	assert.Equal(t,
-		[]StoredSourceHintScope{{Path: filepath.Join(root, "settings.json")}},
+	assert.Equal(t, []StoredSourceHintScope{{Path: filepath.Join(root, "settings.json")}},
 		unrelated.Scopes[0].PhysicalProofScopes,
 		"a non-container descendant keeps the exact generic proof")
 }

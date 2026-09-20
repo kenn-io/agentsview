@@ -26,7 +26,7 @@ base64blob: aGVsbG8gd29ybGQgdGhpcyBpcyBub3QgYSBzZWNyZXQgYnV0IGxvb2tzIHJhbmRvbQ==
 func BenchmarkScan(b *testing.B) {
 	b.SetBytes(int64(len(benchCorpus)))
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_ = Scan(benchCorpus)
 	}
 }
@@ -37,7 +37,7 @@ func BenchmarkScan(b *testing.B) {
 func BenchmarkScanDefinite(b *testing.B) {
 	b.SetBytes(int64(len(benchCorpus)))
 	b.ReportAllocs()
-	for i := 0; i < b.N; i++ {
+	for range b.N {
 		_ = ScanDefinite(benchCorpus)
 	}
 }

@@ -510,8 +510,7 @@ func TestExtractAssistantContentCursorApplyPatch(t *testing.T) {
 	require.Len(t, toolCalls, 1)
 	assert.Equal(t, "ApplyPatch", toolCalls[0].ToolName)
 	assert.Equal(t, "Edit", toolCalls[0].Category)
-	assert.JSONEq(t,
-		`{"patch":"@@ -1,1 +1,1 @@\n-old\n+new","path":"src/app.ts"}`,
+	assert.JSONEq(t, `{"patch":"@@ -1,1 +1,1 @@\n-old\n+new","path":"src/app.ts"}`,
 		toolCalls[0].InputJSON)
 }
 

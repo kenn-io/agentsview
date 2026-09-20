@@ -157,7 +157,7 @@ func TestQuackStoreReattachesAfterServerRestart(t *testing.T) {
 	)
 	require.NoError(t, err, "insert seed row")
 
-	store, err := NewQuackStore(uri, token, false, 0)
+	store, err := NewQuackStore(ctx, uri, token, false, 0)
 	require.NoError(t, err, "open quack store")
 	t.Cleanup(func() {
 		require.NoError(t, store.Close(), "close quack store")
@@ -207,7 +207,7 @@ func TestQuackStoreReattachesAfterFailedReattach(t *testing.T) {
 	)
 	require.NoError(t, err, "insert seed row")
 
-	store, err := NewQuackStore(uri, token, false, 0)
+	store, err := NewQuackStore(ctx, uri, token, false, 0)
 	require.NoError(t, err, "open quack store")
 	t.Cleanup(func() {
 		require.NoError(t, store.Close(), "close quack store")
@@ -259,7 +259,7 @@ func TestQuackStoreAnalyticsDashboardReads(t *testing.T) {
 
 	openQuackMirrorServer(t, ctx, path, uri, token)
 
-	store, err := NewQuackStore(uri, token, false, 0)
+	store, err := NewQuackStore(ctx, uri, token, false, 0)
 	require.NoError(t, err, "open Quack-backed store")
 	t.Cleanup(func() {
 		require.NoError(t, store.Close(), "close Quack-backed store")
@@ -367,7 +367,7 @@ func openQuackMirrorServer(
 	t *testing.T, ctx context.Context, path, uri, token string,
 ) *sql.DB {
 	t.Helper()
-	server, err := Open(path)
+	server, err := Open(ctx, path)
 	require.NoError(t, err, "open server DuckDB file")
 	t.Cleanup(func() {
 		require.NoError(t, server.Close(), "close server DuckDB file")

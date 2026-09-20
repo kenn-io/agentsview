@@ -36,7 +36,7 @@ func TestReconcileProviderRootsZedContainerPassReclaimsRemovedMember(
 		},
 	})
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{parser.AgentZed: {zedDir}},
 		Machine:   "local",
 	})
@@ -45,7 +45,7 @@ func TestReconcileProviderRootsZedContainerPassReclaimsRemovedMember(
 
 	conn, err := sql.Open("sqlite3", dbPath)
 	require.NoError(t, err)
-	_, err = conn.Exec("DELETE FROM threads WHERE id = 'removed'")
+	_, err = conn.ExecContext(t.Context(), "DELETE FROM threads WHERE id = 'removed'")
 	require.NoError(t, conn.Close())
 	require.NoError(t, err)
 
@@ -84,7 +84,7 @@ func TestReconcileProviderRootsZedContainerPassPreservesMovedMember(
 	createZedThreadsDB(t, secondDB, nil)
 
 	database := dbtest.OpenTestDB(t)
-	engine := sync.NewEngine(database, sync.EngineConfig{
+	engine := sync.NewEngine(t.Context(), database, sync.EngineConfig{
 		AgentDirs: map[parser.AgentType][]string{
 			parser.AgentZed: {firstDir, secondDir},
 		},
@@ -97,12 +97,12 @@ func TestReconcileProviderRootsZedContainerPassPreservesMovedMember(
 	// reconciled, so the pass cannot see the destination's membership.
 	firstConn, err := sql.Open("sqlite3", firstDB)
 	require.NoError(t, err)
-	_, err = firstConn.Exec("DELETE FROM threads WHERE id = 'moved'")
+	_, err = firstConn.ExecContext(t.Context(), "DELETE FROM threads WHERE id = 'moved'")
 	require.NoError(t, firstConn.Close())
 	require.NoError(t, err)
 	secondConn, err := sql.Open("sqlite3", secondDB)
 	require.NoError(t, err)
-	_, err = secondConn.Exec(`INSERT INTO threads (
+	_, err = secondConn.ExecContext(t.Context(), `INSERT INTO threads (
 		id, summary, updated_at, data_type, data,
 		parent_id, folder_paths, created_at
 	) VALUES ('moved', 'Moved thread', '2026-06-09T02:32:00Z', 'json',

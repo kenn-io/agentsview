@@ -1133,8 +1133,7 @@ func addMessageToCacheTotals(
 	sessionID, model, tokenJSON, timestamp string,
 	pricing *export.PricingResolver,
 ) error {
-	inputTok, outputTok, cacheCrTok, cacheRdTok :=
-		clampedUsageTokenCounters(tokenJSON)
+	inputTok, outputTok, cacheCrTok, cacheRdTok := clampedUsageTokenCounters(tokenJSON)
 	cacheCr1hTok := clampedCacheCreation1hTokens(tokenJSON)
 
 	totals, ok := perSession[sessionID]

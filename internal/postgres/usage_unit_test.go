@@ -263,7 +263,7 @@ func TestPGGetDailyUsageReturnsDedupedSessionCounts(t *testing.T) {
 		pg: newUsageProbeDB(t, &usageProbeState{}),
 	}
 
-	result, err := store.GetDailyUsage(context.Background(), db.UsageFilter{
+	result, err := store.GetDailyUsage(t.Context(), db.UsageFilter{
 		From: "2024-06-15",
 		To:   "2024-06-15",
 	})
@@ -504,7 +504,7 @@ func TestPGGetUsageMatchingSessionCountUsesSessionQuery(t *testing.T) {
 		pg: newUsageProbeDB(t, state),
 	}
 
-	count, err := store.GetUsageMatchingSessionCount(context.Background(), db.UsageFilter{
+	count, err := store.GetUsageMatchingSessionCount(t.Context(), db.UsageFilter{
 		Agent: "copilot",
 		Model: "gpt-5.3-codex",
 	})

@@ -102,8 +102,8 @@ func TestPushTokenUsageToPostgres(t *testing.T) {
 		HasTotalOutputTokens: true,
 		HasPeakContextTokens: true,
 	}
-	require.NoError(t, local.UpsertSession(sess), "UpsertSession")
-	require.NoError(t, local.InsertMessages([]db.Message{{
+	require.NoError(t, local.UpsertSession(t.Context(), sess), "UpsertSession")
+	require.NoError(t, local.InsertMessages(t.Context(), []db.Message{{
 		SessionID:        "token-push-001",
 		Ordinal:          0,
 		Role:             "assistant",

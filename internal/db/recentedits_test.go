@@ -1,7 +1,6 @@
 package db
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -28,7 +27,7 @@ func seedEdit(
 		Agent:        defaultAgent,
 		MessageCount: 1,
 	}
-	require.NoError(t, d.UpsertSession(s), "seedEdit upsertSession %s", sessionID)
+	require.NoError(t, d.UpsertSession(t.Context(), s), "seedEdit upsertSession %s", sessionID)
 
 	msg := Message{
 		SessionID:     sessionID,
@@ -48,7 +47,7 @@ func seedEdit(
 			},
 		},
 	}
-	require.NoError(t, d.InsertMessages([]Message{msg}), "seedEdit insertMessages %s/%d", sessionID, ordinal)
+	require.NoError(t, d.InsertMessages(t.Context(), []Message{msg}), "seedEdit insertMessages %s/%d", sessionID, ordinal)
 }
 
 // seedEditTrashed is like seedEdit but marks the session as deleted.
@@ -60,7 +59,7 @@ func seedEditTrashed(
 ) {
 	t.Helper()
 	seedEdit(t, d, project, sessionID, ordinal, callIndex, filePath, ts)
-	_, err := d.getWriter().Exec(
+	_, err := d.getWriter().Exec(t.Context(),
 		`UPDATE sessions SET deleted_at = ? WHERE id = ?`,
 		time.Now().UTC().Format(time.RFC3339), sessionID,
 	)
@@ -69,7 +68,7 @@ func seedEditTrashed(
 
 func TestRecentEditsGroupingAndOrdering(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// projA: edits config.go twice (newer ts), projB: edits config.go once.
 	seedEdit(t, d, "projA", "sA1", 1, 0, "config.go", "2026-06-24T10:00:00Z")
@@ -91,7 +90,7 @@ func TestRecentEditsGroupingAndOrdering(t *testing.T) {
 
 func TestRecentEditsExcludesTrash(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedEdit(t, d, "proj", "sLive", 1, 0, "main.go", "2026-06-24T10:00:00Z")
 	seedEditTrashed(t, d, "proj", "sDead", 1, 0, "deleted.go", "2026-06-24T11:00:00Z")
@@ -104,7 +103,7 @@ func TestRecentEditsExcludesTrash(t *testing.T) {
 
 func TestRecentEditsProjectFilter(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedEdit(t, d, "alpha", "sAlpha", 1, 0, "a.go", "2026-06-24T10:00:00Z")
 	seedEdit(t, d, "beta", "sBeta", 1, 0, "b.go", "2026-06-24T10:00:00Z")
@@ -118,7 +117,7 @@ func TestRecentEditsProjectFilter(t *testing.T) {
 
 func TestRecentEditsSearchFilter(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	seedEdit(t, d, "proj", "s1", 1, 0, "internal/db/Recent.go", "2026-06-24T10:00:00Z")
 	seedEdit(t, d, "proj", "s2", 1, 0, "internal/server/handler.go", "2026-06-24T09:00:00Z")
@@ -154,7 +153,7 @@ func TestRecentEditsSearchFilter(t *testing.T) {
 
 func TestRecentEditsTruncationAndHasMore(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Three distinct files in same project.
 	seedEdit(t, d, "proj", "s1", 1, 0, "a.go", "2026-06-24T10:00:00Z")
@@ -183,9 +182,8 @@ func TestRecentEditsTruncationAndHasMore(t *testing.T) {
 }
 
 func TestRecentEditsNullTimestampsSortLast(t *testing.T) {
-
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// File with a real timestamp.
 	seedEdit(t, d, "proj", "sReal", 1, 0, "real.go", "2026-06-24T10:00:00Z")
@@ -202,7 +200,7 @@ func TestRecentEditsNullTimestampsSortLast(t *testing.T) {
 
 func TestRecentEditsTieByCallIndex(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Same session, same ordinal, two Edit calls: callIndex 1 and 0.
 	// Higher call_index (1) should rank first (rn=1).
@@ -216,13 +214,17 @@ func TestRecentEditsTieByCallIndex(t *testing.T) {
 		Timestamp:     "2026-06-24T10:00:00Z",
 		HasToolUse:    true,
 		ToolCalls: []ToolCall{
-			{SessionID: "sTie", ToolName: "Edit", Category: "Edit",
-				FilePath: "tie.go", CallIndex: 0},
-			{SessionID: "sTie", ToolName: "Edit", Category: "Edit",
-				FilePath: "tie.go", CallIndex: 1},
+			{
+				SessionID: "sTie", ToolName: "Edit", Category: "Edit",
+				FilePath: "tie.go", CallIndex: 0,
+			},
+			{
+				SessionID: "sTie", ToolName: "Edit", Category: "Edit",
+				FilePath: "tie.go", CallIndex: 1,
+			},
 		},
 	}
-	require.NoError(t, d.InsertMessages([]Message{msg}), "insert tie message")
+	require.NoError(t, d.InsertMessages(ctx, []Message{msg}), "insert tie message")
 
 	res, err := d.RecentEdits(ctx, RecentEditsParams{MaxEditsPerFile: 5})
 	require.NoError(t, err)
@@ -235,7 +237,7 @@ func TestRecentEditsTieByCallIndex(t *testing.T) {
 
 func TestRecentEditsFileGroupTieByCallIndex(t *testing.T) {
 	d := testDB(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// One message edits two files at the same timestamp/ordinal. The later
 	// tool call (call_index 1) must rank its file ahead, even though its path
@@ -250,13 +252,17 @@ func TestRecentEditsFileGroupTieByCallIndex(t *testing.T) {
 		Timestamp:     "2026-06-24T10:00:00Z",
 		HasToolUse:    true,
 		ToolCalls: []ToolCall{
-			{SessionID: "sGroup", ToolName: "Edit", Category: "Edit",
-				FilePath: "zzz.go"},
-			{SessionID: "sGroup", ToolName: "Edit", Category: "Edit",
-				FilePath: "aaa.go"},
+			{
+				SessionID: "sGroup", ToolName: "Edit", Category: "Edit",
+				FilePath: "zzz.go",
+			},
+			{
+				SessionID: "sGroup", ToolName: "Edit", Category: "Edit",
+				FilePath: "aaa.go",
+			},
 		},
 	}
-	require.NoError(t, d.InsertMessages([]Message{msg}), "insert group message")
+	require.NoError(t, d.InsertMessages(ctx, []Message{msg}), "insert group message")
 
 	res, err := d.RecentEdits(ctx, RecentEditsParams{})
 	require.NoError(t, err)

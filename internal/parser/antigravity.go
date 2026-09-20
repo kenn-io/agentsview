@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"database/sql"
 	"encoding/binary"
 	"fmt"
@@ -70,7 +71,7 @@ func antigravityIDECompanionPaths(path string) []string {
 // parseSession parses one IDE session DB. It is owned by the
 // antigravityProvider; the package-level ParseAntigravitySession
 // entrypoint was folded onto the provider.
-func (p *antigravityProvider) parseSession(
+func (p *antigravityProvider) parseSession(ctx context.Context,
 	path, project, machine string,
 ) (*ParsedSession, []ParsedMessage, []ParsedUsageEvent, error) {
 	info, err := os.Stat(path)
@@ -98,9 +99,9 @@ func (p *antigravityProvider) parseSession(
 	// Schema-fingerprint label for the producing agy build. Computed from
 	// the open DB so IDE and CLI classify identically; empty when the
 	// schema cannot be read.
-	sourceVersion := antigravitySourceVersion(db)
+	sourceVersion := antigravitySourceVersion(ctx, db)
 
-	dbResult, err := loadAntigravityStepsWithRawCount(db)
+	dbResult, err := loadAntigravityStepsWithRawCount(ctx, db)
 	if err != nil {
 		// Fail closed on an unreadable steps table, deliberately: a
 		// covering sidecar cannot rescue an unreadable DB because
@@ -353,17 +354,17 @@ func roleForAntigravityStepKind(kind antigravityStepKind) RoleType {
 	}
 }
 
-func loadAntigravityStepsWithRawCount(
+func loadAntigravityStepsWithRawCount(ctx context.Context,
 	db *sql.DB,
 ) (antigravityStepLoadResult, error) {
-	generations := loadAntigravityGenerationMetadata(db)
-	executors := loadAntigravityExecutorMetadata(db)
+	generations := loadAntigravityGenerationMetadata(ctx, db)
+	executors := loadAntigravityExecutorMetadata(ctx, db)
 	result := antigravityStepLoadResult{
 		executors:      executors,
 		hasGenMetadata: len(generations) > 0,
 	}
-	rows, err := db.Query(
-		`SELECT idx, step_type, step_payload FROM steps ` +
+	rows, err := db.QueryContext(ctx,
+		`SELECT idx, step_type, step_payload FROM steps `+
 			`ORDER BY idx`,
 	)
 	if err != nil {
@@ -465,10 +466,10 @@ type antigravityExecutorMetadata struct {
 	modelName     string
 }
 
-func loadAntigravityGenerationMetadata(
+func loadAntigravityGenerationMetadata(ctx context.Context,
 	db *sql.DB,
 ) []antigravityGenerationMetadata {
-	rows, err := db.Query("SELECT idx, data FROM gen_metadata ORDER BY idx")
+	rows, err := db.QueryContext(ctx, "SELECT idx, data FROM gen_metadata ORDER BY idx")
 	if err != nil {
 		return nil
 	}
@@ -482,17 +483,19 @@ func loadAntigravityGenerationMetadata(
 		}
 		generation.stepIndices,
 			generation.hasStepIndices,
-			generation.stepIndicesValid =
-			extractAntigravityStepIndices(generation.data)
+			generation.stepIndicesValid = extractAntigravityStepIndices(generation.data)
 		generations = append(generations, generation)
+	}
+	if rows.Err() != nil {
+		return nil
 	}
 	return generations
 }
 
-func loadAntigravityExecutorMetadata(
+func loadAntigravityExecutorMetadata(ctx context.Context,
 	db *sql.DB,
 ) []antigravityExecutorMetadata {
-	rows, err := db.Query("SELECT data FROM executor_metadata ORDER BY idx")
+	rows, err := db.QueryContext(ctx, "SELECT data FROM executor_metadata ORDER BY idx")
 	if err != nil {
 		return nil
 	}
@@ -508,6 +511,9 @@ func loadAntigravityExecutorMetadata(
 		if ok {
 			executors = append(executors, executor)
 		}
+	}
+	if rows.Err() != nil {
+		return nil
 	}
 	sort.SliceStable(executors, func(i, j int) bool {
 		return executors[i].lastStepIndex < executors[j].lastStepIndex
@@ -937,8 +943,7 @@ func extractModelNameFromFields(
 func resolveAntigravityGenerationModel(
 	data []byte, executorModel string,
 ) string {
-	generationModel, hasDisplayLabel :=
-		extractAntigravityGenerationModel(data)
+	generationModel, hasDisplayLabel := extractAntigravityGenerationModel(data)
 	return resolveAntigravityModelName(
 		generationModel, executorModel, hasDisplayLabel,
 	)

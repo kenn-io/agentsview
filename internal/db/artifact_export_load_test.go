@@ -21,7 +21,7 @@ func smallArtifactExportLoadLimits() ArtifactExportLoadLimits {
 func TestLoadArtifactExportDataCardinalityBoundaries(t *testing.T) {
 	t.Run("messages", func(t *testing.T) {
 		database := artifactExportLoadTestDB(t)
-		require.NoError(t, database.ReplaceSessionMessages("session", []Message{
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{
 			artifactExportLoadMessage(0),
 			artifactExportLoadMessage(1),
 		}))
@@ -31,7 +31,7 @@ func TestLoadArtifactExportDataCardinalityBoundaries(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, data.Messages, 2)
 
-		require.NoError(t, database.ReplaceSessionMessages("session", []Message{
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{
 			artifactExportLoadMessage(0),
 			artifactExportLoadMessage(1),
 			artifactExportLoadMessage(2),
@@ -44,7 +44,7 @@ func TestLoadArtifactExportDataCardinalityBoundaries(t *testing.T) {
 
 	t.Run("usage events", func(t *testing.T) {
 		database := artifactExportLoadTestDB(t)
-		require.NoError(t, database.ReplaceSessionUsageEvents("session", []UsageEvent{
+		require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "session", []UsageEvent{
 			artifactExportLoadUsageEvent(0),
 			artifactExportLoadUsageEvent(1),
 		}))
@@ -54,7 +54,7 @@ func TestLoadArtifactExportDataCardinalityBoundaries(t *testing.T) {
 		require.NoError(t, err)
 		assert.Len(t, data.UsageEvents, 2)
 
-		require.NoError(t, database.ReplaceSessionUsageEvents("session", []UsageEvent{
+		require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "session", []UsageEvent{
 			artifactExportLoadUsageEvent(0),
 			artifactExportLoadUsageEvent(1),
 			artifactExportLoadUsageEvent(2),
@@ -67,7 +67,7 @@ func TestLoadArtifactExportDataCardinalityBoundaries(t *testing.T) {
 
 	t.Run("tool calls per message", func(t *testing.T) {
 		database := artifactExportLoadTestDB(t)
-		require.NoError(t, database.ReplaceSessionMessages("session", []Message{{
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{
 			SessionID: "session", Ordinal: 0, Role: "assistant", Content: "calls",
 			ToolCalls: []ToolCall{
 				artifactExportLoadToolCall(0),
@@ -81,7 +81,7 @@ func TestLoadArtifactExportDataCardinalityBoundaries(t *testing.T) {
 		require.Len(t, data.Messages, 1)
 		assert.Len(t, data.Messages[0].ToolCalls, 2)
 
-		require.NoError(t, database.ReplaceSessionMessages("session", []Message{{
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{
 			SessionID: "session", Ordinal: 0, Role: "assistant", Content: "calls",
 			ToolCalls: []ToolCall{
 				artifactExportLoadToolCall(0),
@@ -97,7 +97,7 @@ func TestLoadArtifactExportDataCardinalityBoundaries(t *testing.T) {
 
 	t.Run("tool calls per session", func(t *testing.T) {
 		database := artifactExportLoadTestDB(t)
-		require.NoError(t, database.ReplaceSessionMessages("session", []Message{
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{
 			{
 				SessionID: "session", Ordinal: 0, Role: "assistant", Content: "first",
 				ToolCalls: []ToolCall{
@@ -118,7 +118,7 @@ func TestLoadArtifactExportDataCardinalityBoundaries(t *testing.T) {
 		assert.Len(t, data.Messages[0].ToolCalls, 2)
 		assert.Len(t, data.Messages[1].ToolCalls, 1)
 
-		require.NoError(t, database.ReplaceSessionMessages("session", []Message{
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{
 			{
 				SessionID: "session", Ordinal: 0, Role: "assistant", Content: "first",
 				ToolCalls: []ToolCall{
@@ -147,7 +147,7 @@ func TestLoadArtifactExportDataCardinalityBoundaries(t *testing.T) {
 			artifactExportLoadResultEvent(0),
 			artifactExportLoadResultEvent(1),
 		}
-		require.NoError(t, database.ReplaceSessionMessages("session", []Message{{
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{
 			SessionID: "session", Ordinal: 0, Role: "assistant", Content: "results",
 			ToolCalls: []ToolCall{call},
 		}}))
@@ -162,7 +162,7 @@ func TestLoadArtifactExportDataCardinalityBoundaries(t *testing.T) {
 		call.ResultEvents = append(
 			call.ResultEvents, artifactExportLoadResultEvent(2),
 		)
-		require.NoError(t, database.ReplaceSessionMessages("session", []Message{{
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{
 			SessionID: "session", Ordinal: 0, Role: "assistant", Content: "results",
 			ToolCalls: []ToolCall{call},
 		}}))
@@ -181,7 +181,7 @@ func TestLoadArtifactExportDataCardinalityBoundaries(t *testing.T) {
 		}
 		second := artifactExportLoadToolCall(1)
 		second.ResultEvents = []ToolResultEvent{artifactExportLoadResultEvent(0)}
-		require.NoError(t, database.ReplaceSessionMessages("session", []Message{{
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{
 			SessionID: "session", Ordinal: 0, Role: "assistant", Content: "results",
 			ToolCalls: []ToolCall{first, second},
 		}}))
@@ -197,7 +197,7 @@ func TestLoadArtifactExportDataCardinalityBoundaries(t *testing.T) {
 		second.ResultEvents = append(
 			second.ResultEvents, artifactExportLoadResultEvent(1),
 		)
-		require.NoError(t, database.ReplaceSessionMessages("session", []Message{{
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{
 			SessionID: "session", Ordinal: 0, Role: "assistant", Content: "results",
 			ToolCalls: []ToolCall{first, second},
 		}}))
@@ -211,7 +211,7 @@ func TestLoadArtifactExportDataCardinalityBoundaries(t *testing.T) {
 func TestLoadArtifactExportDataRawByteBoundaries(t *testing.T) {
 	t.Run("message data", func(t *testing.T) {
 		database := artifactExportLoadTestDB(t)
-		require.NoError(t, database.ReplaceSessionMessages("session", []Message{{
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{
 			SessionID: "session", Ordinal: 0, Role: "user", Content: "abcd",
 		}}))
 		limits := smallArtifactExportLoadLimits()
@@ -227,7 +227,7 @@ func TestLoadArtifactExportDataRawByteBoundaries(t *testing.T) {
 
 	t.Run("prompt source data", func(t *testing.T) {
 		database := artifactExportLoadTestDB(t)
-		require.NoError(t, database.ReplaceSessionMessages("session", []Message{{
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{
 			SessionID: "session", Ordinal: 0, Role: "user", Content: "abcd",
 			PromptSource: "typed",
 		}}))
@@ -244,7 +244,7 @@ func TestLoadArtifactExportDataRawByteBoundaries(t *testing.T) {
 
 	t.Run("usage data", func(t *testing.T) {
 		database := artifactExportLoadTestDB(t)
-		require.NoError(t, database.ReplaceSessionUsageEvents("session", []UsageEvent{{
+		require.NoError(t, database.ReplaceSessionUsageEvents(t.Context(), "session", []UsageEvent{{
 			SessionID: "session", Source: "src", Model: "model",
 		}}))
 		limits := smallArtifactExportLoadLimits()
@@ -260,7 +260,7 @@ func TestLoadArtifactExportDataRawByteBoundaries(t *testing.T) {
 
 	t.Run("tool call data", func(t *testing.T) {
 		database := artifactExportLoadTestDB(t)
-		require.NoError(t, database.ReplaceSessionMessages("session", []Message{{
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{
 			SessionID: "session", Ordinal: 0,
 			ToolCalls: []ToolCall{{
 				ToolName: "Read", Category: "file", InputJSON: "abcd",
@@ -280,7 +280,7 @@ func TestLoadArtifactExportDataRawByteBoundaries(t *testing.T) {
 
 	t.Run("result event data", func(t *testing.T) {
 		database := artifactExportLoadTestDB(t)
-		require.NoError(t, database.ReplaceSessionMessages("session", []Message{{
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{
 			SessionID: "session", Ordinal: 0,
 			ToolCalls: []ToolCall{{
 				ResultEvents: []ToolResultEvent{{
@@ -303,7 +303,7 @@ func TestLoadArtifactExportDataRawByteBoundaries(t *testing.T) {
 
 	t.Run("message and nested aggregate", func(t *testing.T) {
 		database := artifactExportLoadTestDB(t)
-		require.NoError(t, database.ReplaceSessionMessages("session", []Message{{
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{
 			SessionID: "session", Ordinal: 0, Role: "user", Content: "a",
 			ToolCalls: []ToolCall{{
 				ToolName: "Read", Category: "file",
@@ -328,16 +328,16 @@ func TestLoadArtifactExportDataRawByteBoundaries(t *testing.T) {
 
 func TestLoadArtifactExportDataDoesNotHydrateMismatchedNestedRows(t *testing.T) {
 	database := artifactExportLoadTestDB(t)
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(t, database.UpsertSession(t.Context(), Session{
 		ID: "foreign", Project: "project", Machine: "local", Agent: "claude",
 	}))
-	require.NoError(t, database.ReplaceSessionMessages("session", []Message{{
+	require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", []Message{{
 		SessionID: "session", Ordinal: 0, Role: "user", Content: "message",
 	}}))
-	message, err := database.GetMessageByOrdinal("session", 0)
+	message, err := database.GetMessageByOrdinal(t.Context(), "session", 0)
 	require.NoError(t, err)
 	require.NotNil(t, message)
-	_, err = database.getWriter().Exec(`
+	_, err = database.getWriter().Exec(t.Context(), `
 		INSERT INTO tool_calls(
 			message_id, session_id, tool_name, category, input_json, call_index
 		) VALUES (?, 'foreign', 'Read', 'file', ?, 0)`,
@@ -363,7 +363,7 @@ func TestLoadArtifactExportDataAllocationIsBoundedByLimit(t *testing.T) {
 		for i := range messages {
 			messages[i] = artifactExportLoadMessage(i)
 		}
-		require.NoError(t, database.ReplaceSessionMessages("session", messages))
+		require.NoError(t, database.ReplaceSessionMessages(t.Context(), "session", messages))
 		return database
 	}
 	small := makeDatabase(t, 3)
@@ -384,7 +384,7 @@ func TestLoadArtifactExportDataAllocationIsBoundedByLimit(t *testing.T) {
 func artifactExportLoadTestDB(t *testing.T) *DB {
 	t.Helper()
 	database := testDB(t)
-	require.NoError(t, database.UpsertSession(Session{
+	require.NoError(t, database.UpsertSession(t.Context(), Session{
 		ID: "session", Project: "project", Machine: "local", Agent: "claude",
 	}))
 	return database
