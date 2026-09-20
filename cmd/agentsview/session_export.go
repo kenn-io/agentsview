@@ -177,16 +177,14 @@ func newSessionExportCommand() *cobra.Command {
 				if rawSessionID == "" {
 					rawSessionID, _ = rawHermesSessionID(id, agent)
 				}
-				roots := cfg.AgentDirs[agent]
-				if len(roots) == 0 {
-					// The fork reuses the Hermes provider, so its
-					// transcript fallback searches the same layout.
-					roots = cfg.AgentDirs[parser.AgentHermes]
-				}
+				// Search only the session's own agent roots. The fork's raw
+				// IDs are a separate namespace from Hermes, so falling back
+				// to Hermes roots could export an unrelated session that
+				// happens to share the raw ID.
 				err := parser.WriteHermesSessionJSONL(
 					cmd.OutOrStdout(),
 					storedPath,
-					roots,
+					cfg.AgentDirs[agent],
 					rawSessionID,
 				)
 				if errors.Is(err, os.ErrNotExist) {
