@@ -13,16 +13,6 @@ import (
 	"go.kenn.io/agentsview/internal/storage"
 )
 
-// replicaVectorDisabledReason explains a [vector]-disabled config for a
-// replica read surface: the operator must enable vectors locally and push a
-// generation before the replica can serve semantic search.
-func replicaVectorDisabledReason(backend storage.Replica) string {
-	return fmt.Sprintf(
-		"semantic search: %s requires [vector] enabled with a matching "+
-			"[vector.embeddings] config and a generation pushed by "+
-			"'agentsview %s push'", backend.DisplayName(), backend.Name())
-}
-
 // replicaVectorUnavailableReason explains why the replica could not serve the
 // local embeddings config: unavailable is the backend's own description of
 // the miss (no matching generation, or one that is not fully written) and
@@ -81,7 +71,10 @@ func wireReplicaVectorSearch(
 		return nil
 	}
 	if !appCfg.Vector.Enabled {
-		vectorStore.SetSemanticUnavailableReason(replicaVectorDisabledReason(backend))
+		vectorStore.SetSemanticUnavailableReason(fmt.Sprintf(
+			"semantic search: %s requires [vector] enabled with a matching "+
+				"[vector.embeddings] config and a generation pushed by "+
+				"'agentsview %s push'", backend.DisplayName(), backend.Name()))
 		return nil
 	}
 	gen := vectorGeneration(appCfg.Vector.Embeddings)

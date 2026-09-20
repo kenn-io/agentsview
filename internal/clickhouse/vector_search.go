@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json/v2"
 	"fmt"
+	"slices"
 	"strings"
 
 	"go.kenn.io/agentsview/internal/db"
@@ -12,8 +13,7 @@ import (
 	"go.kenn.io/agentsview/internal/vector"
 )
 
-// vectorLookupChunk bounds the doc keys or message refs one hydration or
-// unit-resolution query carries.
+// vectorLookupChunk caps the keys one hydration or unit-resolution query carries.
 const vectorLookupChunk = 200
 
 // LookupVectorGeneration resolves a config fingerprint to the dimension of
@@ -227,8 +227,7 @@ func (v *vectorSearcher) lookupDocs(
 	ctx context.Context, docKeys []string,
 ) (map[string]vectorDoc, error) {
 	docs := make(map[string]vectorDoc, len(docKeys))
-	for start := 0; start < len(docKeys); start += vectorLookupChunk {
-		chunk := docKeys[start:min(start+vectorLookupChunk, len(docKeys))]
+	for chunk := range slices.Chunk(docKeys, vectorLookupChunk) {
 		placeholders, args := inArgs(chunk)
 		if err := func() error {
 			rows, err := v.conn.QueryContext(ctx, `

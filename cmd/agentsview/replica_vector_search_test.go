@@ -17,10 +17,6 @@ import (
 func TestReplicaVectorReasons(t *testing.T) {
 	backend := pgReplica{}
 	assert.Equal(t,
-		"semantic search: PostgreSQL requires [vector] enabled with a matching "+
-			"[vector.embeddings] config and a generation pushed by 'agentsview pg push'",
-		replicaVectorDisabledReason(backend))
-	assert.Equal(t,
 		"semantic search: PostgreSQL has no embedding generation matching fingerprint "+
 			"abc123 (present: def456, ghi789); run 'agentsview pg push' from a machine "+
 			"with a matching [vector.embeddings] config",
@@ -48,11 +44,9 @@ func TestWireReplicaVectorSearchRecordsVectorDisabledReason(t *testing.T) {
 }
 
 // nonVectorReplica is a replica that does not implement
-// storage.VectorSearchProvider; only the naming methods are reachable from
-// the gate.
+// storage.VectorSearchProvider; only DisplayName is reachable from the gate.
 type nonVectorReplica struct{ storage.Replica }
 
-func (nonVectorReplica) Name() string        { return "other" }
 func (nonVectorReplica) DisplayName() string { return "Other" }
 
 // TestWireReplicaVectorSearchRecordsUnsupportedBackend pins that a replica

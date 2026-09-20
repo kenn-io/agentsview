@@ -138,17 +138,17 @@ func (s *Sync) pushVectors(
 		if err != nil {
 			return res, err
 		}
-		if outcome.deferred {
+		if !outcome.pushed {
 			res.SessionsDeferred++
+			if examined%vectorProgressStride == 0 {
+				report()
+			}
+			continue
 		}
-		if outcome.pushed {
-			res.SessionsPushed++
-			res.DocsPushed += outcome.docs
-			res.ChunksPushed += outcome.chunks
-			report()
-		} else if examined%vectorProgressStride == 0 {
-			report()
-		}
+		res.SessionsPushed++
+		res.DocsPushed += outcome.docs
+		res.ChunksPushed += outcome.chunks
+		report()
 	}
 	report()
 
@@ -290,10 +290,9 @@ func (s *Sync) archiveResidentSessionIDs(ctx context.Context, ids []string) (map
 }
 
 type vectorSessionOutcome struct {
-	pushed   bool
-	deferred bool
-	docs     int
-	chunks   int
+	pushed bool
+	docs   int
+	chunks int
 }
 
 // pushVectorSession rewrites one session's documents, chunks, and push state
@@ -316,7 +315,7 @@ func (s *Sync) pushVectorSession(
 	// refilling the generation) and the docs may be a partial view. Defer:
 	// the next push re-derives the delta from the settled index.
 	if exportHash != aggHash {
-		return vectorSessionOutcome{deferred: true}, nil
+		return vectorSessionOutcome{}, nil
 	}
 	version := newPushVersion()
 	docRows := make([][]any, 0, len(docs))
@@ -388,17 +387,11 @@ func (s *Sync) evictVectorSession(ctx context.Context, fingerprint, sessionID st
 		s.archiveID, fingerprint, sessionID); err != nil {
 		return fmt.Errorf("evicting clickhouse vector push state for %s: %w", sessionID, err)
 	}
-	var remaining int
-	if err := s.conn.QueryRowContext(ctx,
-		`SELECT count() FROM vector_chunks WHERE session_id = ?`, sessionID,
-	).Scan(&remaining); err != nil {
-		return fmt.Errorf("counting clickhouse vector chunks for %s: %w", sessionID, err)
-	}
-	if remaining > 0 {
-		return nil
-	}
-	if _, err := s.conn.ExecContext(ctx,
-		`DELETE FROM vector_documents WHERE session_id = ?`, sessionID); err != nil {
+	if _, err := s.conn.ExecContext(ctx, `
+		DELETE FROM vector_documents
+		WHERE session_id = ? AND session_id NOT IN (
+			SELECT session_id FROM vector_chunks WHERE session_id = ?)`,
+		sessionID, sessionID); err != nil {
 		return fmt.Errorf("evicting clickhouse vector documents for %s: %w", sessionID, err)
 	}
 	return nil
