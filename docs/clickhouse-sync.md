@@ -211,6 +211,84 @@ as `Vectors: N session(s) pushed, ...` or `Vectors: skipped (<reason>)`. See
 [semantic search: ClickHouse](/docs/semantic-search/#clickhouse) for how serve
 matches a pushed generation.
 
+#### Enabling Semantic Search
+
+Follow these steps on the machine that owns the sessions. Every step names the
+output that confirms it, so an operator or an agent can run the sequence
+unattended and stop at the first step that does not confirm.
+
+1. Enable vectors in `~/.agentsview/config.toml`. `model`, `dimension`, and one
+   `[vector.embeddings.servers.<name>]` entry with an `endpoint` are required;
+   the full key list is in
+   [Enabling `[vector]`](/docs/semantic-search/#enabling-vector).
+
+    ```toml
+    [vector]
+    enabled = true
+
+    [vector.embeddings]
+    model = "nomic-embed-text"
+    dimension = 768
+    default_server = "local"
+
+    [vector.embeddings.servers.local]
+    endpoint = "http://localhost:11434/v1"
+    ```
+
+1. Build the local index and confirm an active generation exists:
+
+    ```bash
+    agentsview embeddings build --yes
+    agentsview embeddings list
+    ```
+
+    `embeddings list` prints one row per generation with a `STATE` column; the
+    generation to push shows `active` with `MISSING` at `0`. Note its
+    `FINGERPRINT` prefix.
+
+1. Push to ClickHouse and confirm the vector phase ran:
+
+    ```bash
+    agentsview clickhouse push
+    ```
+
+    The summary ends with
+    `Vectors: N session(s) pushed, M unchanged, D docs, C chunks`.
+    `Vectors: skipped (<reason>)` means the phase did not run; the reason names
+    the cause (`[vector]` disabled, no active local generation, or the local
+    index not ready). A `Warning: deferred vectors` line means the next push
+    finishes the remaining sessions.
+
+1. Serve and confirm the searcher attached. Run this on the machine that will
+   serve; its `[vector]` and `[vector.embeddings]` config must match the
+   pushing machine's, and its embeddings endpoint must be reachable because
+   queries are embedded at search time.
+
+    ```bash
+    agentsview clickhouse serve --no-browser
+    ```
+
+    The startup log contains
+    `clickhouse serve: semantic search enabled (fingerprint <fp>, model <model>)`.
+    A line starting
+    `clickhouse serve: semantic search: ClickHouse has no embedding generation matching fingerprint`
+    means the serving config differs from the pushed one; the same line lists
+    the fingerprints ClickHouse does hold, and serve still starts with lexical
+    search only.
+
+1. Run one semantic search against the server:
+
+    ```bash
+    agentsview session search --server http://127.0.0.1:8080 --semantic "your query"
+    ```
+
+    Ranked hits confirm the setup. An HTTP 501 carrying the reason from the
+    previous step means the searcher did not attach.
+
+To keep vectors current, use the same watcher or service as the session push
+(`clickhouse push --watch` or `clickhouse service install`); the vector phase
+runs inside every push. There is no separate vector command to schedule.
+
 ### `agentsview clickhouse status`
 
 Show the current sync state.

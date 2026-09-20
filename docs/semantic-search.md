@@ -874,17 +874,20 @@ differ between the backends.
 ## ClickHouse
 
 `agentsview clickhouse serve` supports semantic and hybrid search the same way
-`pg serve` does. `clickhouse push` runs a vector phase after the session phase
-when `[vector]` is enabled locally and the target has not set
-`push_vectors = false`; `--no-vectors` skips it for one run. The phase copies
-the machine's active embedding generation into four ClickHouse tables
-(`vector_generations`, `vector_documents`, `vector_chunks`,
-`vector_push_state`), keyed by the generation's config fingerprint and by the
-pushing archive, so several machines share one generation and each keeps its own
-delta state. Only changed sessions are re-sent, and a session's vectors are
-evicted when its session row leaves the mirror and no other archive still
-records them. A change-scoped watch push widens to the whole generation until
-the pushing archive has recorded one clean generation-wide pass.
+`pg serve` does. For the step-by-step setup with the output that confirms each
+step, see
+[ClickHouse sync: Enabling Semantic Search](/docs/clickhouse-sync/#enabling-semantic-search).
+`clickhouse push` runs a vector phase after the session phase when `[vector]` is
+enabled locally and the target has not set `push_vectors = false`;
+`--no-vectors` skips it for one run. The phase copies the machine's active
+embedding generation into four ClickHouse tables (`vector_generations`,
+`vector_documents`, `vector_chunks`, `vector_push_state`), keyed by the
+generation's config fingerprint and by the pushing archive, so several machines
+share one generation and each keeps its own delta state. Only changed sessions
+are re-sent, and a session's vectors are evicted when its session row leaves the
+mirror and no other archive still records them. A change-scoped watch push
+widens to the whole generation until the pushing archive has recorded one clean
+generation-wide pass.
 
 On startup, `clickhouse serve` looks for a pushed generation whose fingerprint
 matches the local `[vector.embeddings]` config. A match installs the searcher; a
