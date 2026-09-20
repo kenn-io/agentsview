@@ -1,7 +1,6 @@
 package parser
 
 import (
-	"context"
 	"database/sql"
 	"fmt"
 	"os"
@@ -23,7 +22,7 @@ func createAugureDesktopStateDB(t *testing.T, root string) string {
 	db, err := sql.Open("sqlite3", filepath.Join(root, "state.db"))
 	require.NoError(t, err)
 	defer func() { _ = db.Close() }()
-	_, err = db.Exec(`
+	_, err = db.ExecContext(t.Context(), `
 		CREATE TABLE sessions (
 			id TEXT PRIMARY KEY,
 			source TEXT NOT NULL,
@@ -120,13 +119,13 @@ func TestAugureDesktopProviderParsesStateDB(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1)
 	assert.Equal(t, AgentAugureDesktop, sources[0].Provider)
 	assert.Equal(t, stateDB, sources[0].DisplayPath)
 
-	outcome, err := provider.Parse(context.Background(), ParseRequest{
+	outcome, err := provider.Parse(t.Context(), ParseRequest{
 		Source:  sources[0],
 		Machine: "devbox",
 	})
@@ -192,7 +191,7 @@ func TestAugureDesktopAcceptsConfiguredCustomRoot(t *testing.T) {
 	})
 	require.True(t, ok)
 
-	sources, err := provider.Discover(context.Background())
+	sources, err := provider.Discover(t.Context())
 	require.NoError(t, err)
 	require.Len(t, sources, 1,
 		"a configured custom root must be parsed, not silently dropped")
@@ -231,7 +230,7 @@ func TestAugureDesktopProjectRelabel(t *testing.T) {
 	// Explicit hints survive verbatim, including hermes-prefixed names.
 	assert.Equal(t, "hermes-tools", relabel("hermes-tools", false))
 	assert.Equal(t, "my-project", relabel("my-project", false))
-	assert.Equal(t, "", relabel("", false))
+	assert.Empty(t, relabel("", false))
 }
 
 // TestAugureDesktopTranscriptProjectRelabel covers the transcript parse

@@ -19,8 +19,7 @@ const augureDesktopIDPrefix = string(AgentAugureDesktop) + ":"
 // session IDs follow so per-model rows stay attached to the session.
 func relabelHermesResultAsAugureDesktop(result *ParseResult) {
 	result.Session.ID = augureDesktopSessionID(result.Session.ID)
-	result.Session.ParentSessionID =
-		augureDesktopSessionID(result.Session.ParentSessionID)
+	result.Session.ParentSessionID = augureDesktopSessionID(result.Session.ParentSessionID)
 	result.Session.SourceSessionID = strings.TrimPrefix(
 		augureDesktopSessionID(result.Session.SourceSessionID),
 		augureDesktopIDPrefix,
@@ -46,10 +45,9 @@ func relabelHermesResultAsAugureDesktop(result *ParseResult) {
 				call.SubagentSessionID,
 			)
 			for k := range call.ResultEvents {
-				call.ResultEvents[k].SubagentSessionID =
-					augureDesktopSessionID(
-						call.ResultEvents[k].SubagentSessionID,
-					)
+				call.ResultEvents[k].SubagentSessionID = augureDesktopSessionID(
+					call.ResultEvents[k].SubagentSessionID,
+				)
 			}
 		}
 	}

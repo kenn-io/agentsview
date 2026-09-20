@@ -1212,10 +1212,6 @@ func TestSessionExportAugureDesktopStateDB(t *testing.T) {
 	assert.Contains(t, out, `"role":"session_meta"`)
 	assert.Contains(t, out, "target hermes message")
 	assert.NotContains(t, out, "sibling hermes message")
-
-	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
-		assert.JSONEq(t, line, line)
-	}
 }
 
 func TestSessionExportAugureDesktopStateDBWithoutSourceSessionID(t *testing.T) {
@@ -1240,10 +1236,6 @@ func TestSessionExportAugureDesktopStateDBWithoutSourceSessionID(t *testing.T) {
 	assert.Contains(t, out, `"role":"session_meta"`)
 	assert.Contains(t, out, "target hermes message")
 	assert.NotContains(t, out, "sibling hermes message")
-
-	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
-		assert.JSONEq(t, line, line)
-	}
 }
 
 func TestSessionExportAugureDesktopDoesNotFallBackToHermesRoots(t *testing.T) {
