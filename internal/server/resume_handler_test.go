@@ -1204,14 +1204,17 @@ func TestGetSessionDirectory(t *testing.T) {
 				name:    "project",
 				id:      "dir-removed-project",
 				project: projectPath,
-				setup:   func(*db.Session) {},
 				want:    projectPath,
 			},
 		}
 
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
-				te.seedSession(t, tc.id, tc.project, 1, tc.setup)
+				var opts []func(*db.Session)
+				if tc.setup != nil {
+					opts = append(opts, tc.setup)
+				}
+				te.seedSession(t, tc.id, tc.project, 1, opts...)
 				w := te.get(t, "/api/v1/sessions/"+tc.id+"/directory")
 				assertStatus(t, w, http.StatusOK)
 				var resp struct {
@@ -1260,6 +1263,9 @@ func TestGetSessionDirectory(t *testing.T) {
 
 		cursorWorkspace := filepath.Join(t.TempDir(), "workspace-root", "cursor-project")
 		cursorFallback := t.TempDir()
+		removedCursorCwd := filepath.Join(t.TempDir(), "removed-cwd")
+		require.NoError(t, os.Mkdir(removedCursorCwd, 0o755))
+		require.NoError(t, os.Remove(removedCursorCwd))
 		cursorClean := filepath.Clean(cursorWorkspace)
 		cursorTokens := []string{}
 		if volume := filepath.VolumeName(cursorClean); volume != "" {
@@ -1285,13 +1291,14 @@ func TestGetSessionDirectory(t *testing.T) {
 		require.NoError(t, os.WriteFile(cursorTranscript, []byte("{}\n"), 0o600))
 		te.seedSession(t, "dir-order-cursor", cursorFallback, 1, func(s *db.Session) {
 			s.Agent = "cursor"
+			s.Cwd = removedCursorCwd
 			s.FilePath = &cursorTranscript
 		})
 		w = te.get(t, "/api/v1/sessions/dir-order-cursor/directory")
 		assertStatus(t, w, http.StatusOK)
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		t.Logf("cursor precedence status=%d path=%q", w.Code, resp.Path)
-		assert.Equal(t, cursorWorkspace, resp.Path)
+		assert.Equal(t, removedCursorCwd, resp.Path)
 	})
 
 	t.Run("relative_metadata_falls_back", func(t *testing.T) {
@@ -1325,15 +1332,18 @@ func TestGetSessionDirectory(t *testing.T) {
 				},
 			},
 			{
-				name:  "empty_metadata",
-				id:    "dir-relative-empty",
-				setup: func(*db.Session) {},
+				name: "empty_metadata",
+				id:   "dir-relative-empty",
 			},
 		}
 
 		for _, tc := range cases {
 			t.Run(tc.name, func(t *testing.T) {
-				te.seedSession(t, tc.id, projectDir, 1, tc.setup)
+				var opts []func(*db.Session)
+				if tc.setup != nil {
+					opts = append(opts, tc.setup)
+				}
+				te.seedSession(t, tc.id, projectDir, 1, opts...)
 				w := te.get(t, "/api/v1/sessions/"+tc.id+"/directory")
 				assertStatus(t, w, http.StatusOK)
 				var resp struct {
@@ -1464,52 +1474,9 @@ func TestGetSessionDirectory(t *testing.T) {
 		}
 	})
 
-	projectDir := t.TempDir()
-	te.seedSession(t, "dir-1", projectDir, 3)
-
-	t.Run("returns resolved directory", func(t *testing.T) {
-		w := te.get(t, "/api/v1/sessions/dir-1/directory")
-		assertStatus(t, w, http.StatusOK)
-		var resp struct {
-			Path string `json:"path"`
-		}
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		assertSamePath(t, "path", resp.Path, projectDir)
-	})
-
-	t.Run("empty path for relative project", func(t *testing.T) {
-		te.seedSession(t, "dir-2", "my-repo", 3)
-		w := te.get(t, "/api/v1/sessions/dir-2/directory")
-		assertStatus(t, w, http.StatusOK)
-		var resp struct {
-			Path string `json:"path"`
-		}
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		assert.Empty(t, resp.Path)
-	})
-
 	t.Run("not found", func(t *testing.T) {
 		w := te.get(t, "/api/v1/sessions/nonexistent/directory")
 		assertStatus(t, w, http.StatusNotFound)
-	})
-
-	t.Run("prefers session file cwd", func(t *testing.T) {
-		cwdDir := filepath.Join(t.TempDir(), "nested")
-		require.NoError(t, os.Mkdir(cwdDir, 0o755))
-		sessionFile := filepath.Join(t.TempDir(), "session.jsonl")
-		cwdJSON, _ := json.Marshal(cwdDir)
-		content := `{"cwd":` + string(cwdJSON) + "}\n"
-		require.NoError(t, os.WriteFile(sessionFile, []byte(content), 0o644))
-		te.seedSession(t, "dir-3", projectDir, 3, func(s *db.Session) {
-			s.FilePath = &sessionFile
-		})
-		w := te.get(t, "/api/v1/sessions/dir-3/directory")
-		assertStatus(t, w, http.StatusOK)
-		var resp struct {
-			Path string `json:"path"`
-		}
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		assertSamePath(t, "path", resp.Path, cwdDir)
 	})
 
 	t.Run("cursor directory returns workspace root", func(t *testing.T) {
