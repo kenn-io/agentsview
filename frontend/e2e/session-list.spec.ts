@@ -1,7 +1,18 @@
+import { createRequire } from "node:module";
 import { test, expect } from "@playwright/test";
 import { SessionsPage } from "./pages/sessions-page";
 import { clickNavTab } from "./helpers/nav";
 import { createMockSessions, handleSessionsRoute, sessionsRoutePattern } from "./helpers/mock-sessions";
+
+type RenderLintModule = {
+  renderLintSnippet: (scopeSelector: string, options?: Record<string, unknown>) => string;
+};
+
+const require = createRequire(import.meta.url);
+const renderLintPath = process.env.PR_RENDER_LINT_PATH;
+const renderLint = renderLintPath
+  ? (require(renderLintPath) as RenderLintModule)
+  : undefined;
 
 // Test-fixture assumptions: project-alpha has 2 sessions,
 // project-beta has 3, project-duration has 1 (the duration UX
@@ -56,6 +67,14 @@ test("session previews hide a leading system-reminder envelope", async ({ page }
     const name = sp.sessionItems.first().locator(".session-name");
     await expect(name).toHaveText("refactor the auth guard");
     await expect(name).toHaveAttribute("title", "refactor the auth guard");
+    if (renderLint) {
+      const violations = await page.evaluate(
+        (snippet) => (0, eval)(snippet),
+        renderLint.renderLintSnippet("#session-sidebar"),
+      );
+      console.log(`render-lint width=${width}px violations=${JSON.stringify(violations)}`);
+      expect(violations).toEqual([]);
+    }
   }
 });
 
