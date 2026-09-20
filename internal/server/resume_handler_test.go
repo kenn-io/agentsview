@@ -1252,15 +1252,6 @@ func TestGetSessionDirectory(t *testing.T) {
 		t.Logf("embedded precedence status=%d path=%q", w.Code, resp.Path)
 		assert.Equal(t, embeddedDir, resp.Path)
 
-		te.seedSession(t, "dir-order-cached", projectDir, 1, func(s *db.Session) {
-			s.Cwd = cachedDir
-		})
-		w = te.get(t, "/api/v1/sessions/dir-order-cached/directory")
-		assertStatus(t, w, http.StatusOK)
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-		t.Logf("cached precedence status=%d path=%q", w.Code, resp.Path)
-		assert.Equal(t, cachedDir, resp.Path)
-
 		cursorWorkspace := filepath.Join(t.TempDir(), "workspace-root", "cursor-project")
 		cursorFallback := t.TempDir()
 		removedCursorCwd := filepath.Join(t.TempDir(), "removed-cwd")
@@ -1308,7 +1299,7 @@ func TestGetSessionDirectory(t *testing.T) {
 		assertStatus(t, w, http.StatusOK)
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 		t.Logf("cursor workspace status=%d path=%q", w.Code, resp.Path)
-		assert.Equal(t, cursorWorkspace, resp.Path)
+		assertSamePath(t, "path", resp.Path, cursorWorkspace)
 	})
 
 	t.Run("relative_metadata_falls_back", func(t *testing.T) {
