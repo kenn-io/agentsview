@@ -37,6 +37,10 @@ type Sync struct {
 	// session row and used to scope the mirror's push cursor.
 	archiveID string
 
+	// pricer prices the current push's session batches with the catalog
+	// snapshot syncUsagePrices loaded.
+	pricer *usagePricer
+
 	// hooks is nil in production; tests inject failures at push boundaries.
 	hooks *pushHooks
 

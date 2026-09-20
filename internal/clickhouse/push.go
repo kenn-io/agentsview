@@ -98,6 +98,9 @@ func (s *Sync) PushWithOptions(
 	if err := s.syncCursorUsageEvents(ctx); err != nil {
 		return result, err
 	}
+	if s.pricer, err = s.syncUsagePrices(ctx, full); err != nil {
+		return result, err
+	}
 	if !full {
 		if err := s.applyDeletionDelta(ctx, storedDeletion, localDeletion, &result); err != nil {
 			return result, err
@@ -571,6 +574,20 @@ func (s *Sync) pushSessionBatch(
 		return nil, err
 	}
 	ids := sessionIDs(batch)
+	// Price the new usage rows right after they become readable. Until this
+	// returns, a usage read prices the updated session's events per request.
+	if s.pricer == nil {
+		pricer, err := s.newUsagePricer(ctx)
+		if err != nil {
+			return nil, err
+		}
+		s.pricer = pricer
+	}
+	for batchIDs := range idBatches(ids) {
+		if err := s.priceUsage(ctx, s.pricer, usagePriceScope{sessionIDs: batchIDs}); err != nil {
+			return nil, err
+		}
+	}
 	for batchIDs := range idBatches(ids) {
 		placeholders, args := inArgs(batchIDs)
 		for _, table := range dependentTables {

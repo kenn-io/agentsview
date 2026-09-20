@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"go.kenn.io/agentsview/internal/config"
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/export"
 	"go.kenn.io/agentsview/internal/money"
@@ -33,8 +34,13 @@ type chRates struct {
 	bands           []export.PricingBand
 }
 
-func (s *Store) loadPricing(ctx context.Context) (map[string]chRates, error) {
-	rows, err := readModelPricing(ctx, s.conn)
+// chLoadPricing reads the mirrored model catalog and layers the reader's
+// custom rates on top. Push passes no custom rates.
+func chLoadPricing(
+	ctx context.Context, conn *sql.DB,
+	customPricing map[string]config.CustomModelRate,
+) (map[string]chRates, error) {
+	rows, err := readModelPricing(ctx, conn)
 	if err != nil {
 		return nil, err
 	}
@@ -68,7 +74,7 @@ func (s *Store) loadPricing(ctx context.Context) (map[string]chRates, error) {
 			out[model] = rates
 		}
 	}
-	for model, custom := range s.customPricing {
+	for model, custom := range customPricing {
 		rates := chRates{
 			input:  money.Money{Microdollars: custom.InputMicrodollarsPerMTok},
 			output: money.Money{Microdollars: custom.OutputMicrodollarsPerMTok},
@@ -88,25 +94,35 @@ func (s *Store) loadPricing(ctx context.Context) (map[string]chRates, error) {
 	return out, nil
 }
 
-func (s *Store) loadPricingResolver(
-	ctx context.Context,
-) (*export.PricingResolver, error) {
-	pricing, err := s.loadPricing(ctx)
+// chLoadPricingRows returns the effective pricing rows plus the raw GenAI
+// document they were built from; document is nil when the mirror has none.
+func chLoadPricingRows(
+	ctx context.Context, conn *sql.DB,
+	customPricing map[string]config.CustomModelRate,
+) ([]export.EffectivePricingRow, *db.GenAIPricingDocument, error) {
+	pricing, err := chLoadPricing(ctx, conn, customPricing)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	document, err := scanGenAIPricing(s.queryRowContext(ctx, `
-		SELECT version, source_ref, source, data_json, updated_at
-		FROM genai_pricing WHERE singleton = 1`))
+	document, err := loadGenAIPricing(ctx, conn)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	genAI, err := genAIEffectivePricingRow(document)
 	if err != nil {
+		return nil, nil, err
+	}
+	return append(chPricingRows(pricing), genAI), document, nil
+}
+
+func (s *Store) loadPricingResolver(
+	ctx context.Context,
+) (*export.PricingResolver, error) {
+	rows, _, err := chLoadPricingRows(ctx, s.conn, s.customPricing)
+	if err != nil {
 		return nil, err
 	}
-	rows := chPricingRows(pricing)
-	return export.NewPricingResolver(append(rows, genAI)), nil
+	return export.NewPricingResolver(rows), nil
 }
 
 func chCustomPricingSource() export.PricingRowSource {
@@ -524,7 +540,17 @@ func chUsageSourceWheres(
 func chUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 	messageWhere, messageArgs, eventWhere, eventArgs := chUsageSourceWheres(
 		f, sessionID, chUsageMessageEligibility, chUsageBoundsForFilter(f))
+	return chUsageRawSQLFromWheres(
+		"JOIN", messageWhere, messageArgs, eventWhere, eventArgs)
+}
 
+// chUsageRawSQLFromWheres renders the message and usage-event raw rows.
+// sessionJoin is "JOIN" for readers; push pricing uses "LEFT JOIN" because
+// it prices a batch before that batch's session rows exist.
+func chUsageRawSQLFromWheres(
+	sessionJoin, messageWhere string, messageArgs []any,
+	eventWhere string, eventArgs []any,
+) (string, []any) {
 	query := fmt.Sprintf(`
 		SELECT m.session_id AS session_id, toNullable(m.ordinal) AS message_ordinal,
 			'message' AS source, COALESCE(m.timestamp, s.started_at) AS ts,
@@ -544,8 +570,8 @@ func chUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
 		FROM messages m
-		JOIN sessions s ON s.id = m.session_id
-		WHERE %s
+		%[1]s sessions s ON s.id = m.session_id
+		WHERE %[2]s
 		UNION ALL
 		SELECT ue.session_id AS session_id, ue.message_ordinal AS message_ordinal,
 			ue.source AS source, COALESCE(ue.occurred_at, s.started_at) AS ts,
@@ -569,9 +595,9 @@ func chUsageRawSQL(f db.UsageFilter, sessionID string) (string, []any) {
 			s.started_at AS started_at,
 			COALESCE(s.ended_at, s.started_at, s.created_at) AS activity_at
 		FROM usage_events ue
-		JOIN sessions s ON s.id = ue.session_id
-		WHERE %s`,
-		messageWhere, eventWhere)
+		%[1]s sessions s ON s.id = ue.session_id
+		WHERE %[3]s`,
+		sessionJoin, messageWhere, eventWhere)
 	args := make([]any, 0, len(messageArgs)+len(eventArgs))
 	args = append(args, messageArgs...)
 	args = append(args, eventArgs...)
@@ -836,6 +862,7 @@ func chUsageCTEFromRaw(
 				ranked.dedup_group,
 				ranked.local_date,
 				ranked.price_model,
+				ranked.price_key,
 				ranked.snapshot_deduplicated_output_tokens,
 				if(attributed.id = '', ranked.project, attributed.project) AS project,
 				if(attributed.id = '', ranked.agent, attributed.agent) AS agent,
@@ -903,7 +930,8 @@ func chUsageCTEFromRaw(
 					)
 				) AS dedup_group,
 				%[2]s AS local_date,
-				%[5]s AS price_model
+				%[5]s AS price_model,
+				%[14]s AS price_key
 			FROM usage_raw
 		),
 		usage_windowed AS (
@@ -932,6 +960,7 @@ func chUsageCTEFromRaw(
 		chClampedJSONInt("token_json", "cache_creation", "ephemeral_1h_input_tokens"),
 		chClampedJSONInt("token_json", "cache_read_input_tokens"),
 		chClampedJSONInt("token_json", "reasoning_tokens"),
+		chUsagePriceKeySQL,
 	)
 	args = append(args, localDateArg)
 	args = append(args, dateArgs...)
@@ -1246,49 +1275,149 @@ const chUsageBillableSelect = `
 			CASE WHEN cost_microdollars IS NOT NULL AND cost_source = 'copilot-reported' THEN cost_microdollars ELSE 0 END AS authoritative_cost,
 			CASE WHEN cost_microdollars IS NOT NULL AND cost_source = 'copilot-reported' THEN 1 ELSE 0 END AS authoritative_cost_rows`
 
-func (s *Store) forEachDailyUsageAggregateRow(
+// chDailyUsageGroupRow is one row of the daily usage query. A group sums
+// every event that shares a session, day, breakdown key, and pricing
+// context, priced at push time. An explicit row is a single event that Go
+// must still see whole: a Copilot authoritative cost, whose selection order
+// decides the session's cost, an event the reader's custom rates reprice, or
+// an event with no price record under the current digest. The last is an
+// ordinary cache miss that Go prices for this read; only push writes records.
+type chDailyUsageGroupRow struct {
+	chUsageAggregateRow
+	explicit   bool
+	kind       string
+	contextID  string
+	bandAbove  int64
+	events     int
+	tokenCost  int64
+	savings    int64
+	priceError string
+	overflow   bool
+}
+
+func (s *Store) forEachDailyUsageGroupRow(
 	ctx context.Context,
 	f db.UsageFilter,
-	visit func(chUsageAggregateRow) error,
+	pricingDigest string,
+	customModels [][2]string,
+	visit func(chDailyUsageGroupRow) error,
 ) error {
 	cte, args := chDailyUsageCTE(f)
-	machineSelect := "'' AS machine"
-	machineOrder := ""
+	machineSelect := "''"
 	if f.Breakdowns {
 		machineSelect = "machine"
-		machineOrder = ", machine ASC"
 	}
-	query := cte + `
-		SELECT session_id, local_date, project, agent, ` + machineSelect + `, model, provider_id, price_model,
-			source, message_ordinal, ts, pricing_ts,
-			input_tokens_norm AS input_tokens,
-			output_tokens_norm AS output_tokens,
-			cache_create_norm AS cache_creation_tokens,
-			cache_create_1h_norm AS cache_creation_1h_tokens,
-			cache_read_norm AS cache_read_tokens,` + chUsageBillableSelect + `
-		FROM usage_localized
-		ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC` + machineOrder + `, model ASC, price_model ASC, ts ASC, COALESCE(message_ordinal, -1) ASC, source ASC, usage_dedup_key ASC`
+	customPred := "0"
+	var customArgs []any
+	if len(customModels) > 0 {
+		tuples := make([]string, len(customModels))
+		for i, pair := range customModels {
+			tuples[i] = "(?, ?)"
+			customArgs = append(customArgs, pair[0], pair[1])
+		}
+		customPred = "(model, price_model) IN (" + strings.Join(tuples, ", ") + ")"
+	}
+	query := cte + `,
+		usage_priced AS (
+			SELECT u.*,` + chUsageBillableSelect + `,
+				p.p_priced AS p_priced,
+				p.p_token_cost AS p_token_cost,
+				p.p_savings AS p_savings,
+				p.p_billed_context_id AS p_billed_context_id,
+				p.p_unbilled_context_id AS p_unbilled_context_id,
+				p.p_request_scoped AS p_request_scoped,
+				p.p_band AS p_band,
+				p.p_price_error AS p_price_error
+			FROM usage_localized u
+			LEFT JOIN (
+				SELECT price_key AS p_price_key, priced AS p_priced,
+					token_cost_microdollars AS p_token_cost,
+					cache_savings_microdollars AS p_savings,
+					billed_context_id AS p_billed_context_id,
+					unbilled_context_id AS p_unbilled_context_id,
+					request_scoped AS p_request_scoped,
+					band_above_input_tokens AS p_band,
+					price_error AS p_price_error
+				FROM usage_event_prices
+				WHERE pricing_digest = ?
+			) p ON p.p_price_key = u.price_key
+		),
+		usage_classified AS (
+			SELECT *,
+				` + machineSelect + ` AS group_machine,
+				authoritative_cost_rows = 1 OR p_priced != 1 OR ` + customPred + ` AS explicit_row,
+				multiIf(
+					reported_cost_rows = 1, '` + chUsagePriceKindReported + `',
+					input_tokens_norm = 0 AND output_tokens_norm = 0
+						AND reasoning_tokens_norm = 0 AND cache_create_norm = 0
+						AND cache_read_norm = 0 AND web_search_requests_norm = 0,
+						'` + chUsagePriceKindZero + `',
+					p_request_scoped, '` + chUsagePriceKindRequest + `',
+					'` + chUsagePriceKindAggregate + `'
+				) AS price_kind
+			FROM usage_priced
+		)
+		SELECT session_id, local_date, project, agent, group_machine, model, provider_id,
+			if(explicit_row, dedup_group, '') AS explicit_key,
+			if(explicit_row, '', price_kind) AS group_kind,
+			if(explicit_row, '', if(
+				price_kind IN ('` + chUsagePriceKindReported + `', '` + chUsagePriceKindZero + `'),
+				p_unbilled_context_id, p_billed_context_id)) AS group_context,
+			if(explicit_row OR price_kind != '` + chUsagePriceKindRequest + `', toInt64(-1), p_band) AS group_band,
+			toInt64(count()) AS events,
+			sum(input_tokens_norm), sum(output_tokens_norm),
+			sum(cache_create_norm), sum(cache_read_norm),
+			sum(p_token_cost), sum(p_savings),
+			sum(explicit_cost), sum(billable_web_search_requests),
+			max(if(explicit_row OR price_kind = '` + chUsagePriceKindZero + `', '', p_price_error)),
+			sum(toFloat64(abs(p_token_cost))) + sum(toFloat64(abs(explicit_cost))) >= 9e18
+				OR sum(toFloat64(abs(p_savings))) >= 9e18,
+			any(price_model) AS row_price_model, any(source) AS row_source,
+			any(message_ordinal) AS row_message_ordinal,
+			any(ts) AS row_ts, any(pricing_ts),
+			any(usage_dedup_key) AS row_usage_dedup_key,
+			any(cache_create_1h_norm),
+			any(billable_input_tokens), any(billable_output_tokens),
+			any(billable_reasoning_tokens), any(billable_cache_creation_tokens),
+			any(billable_cache_creation_1h_tokens), any(billable_cache_read_tokens),
+			toInt64(any(reported_cost_rows)),
+			any(authoritative_cost), toInt64(any(authoritative_cost_rows))
+		FROM usage_classified
+		GROUP BY session_id, local_date, project, agent, group_machine, model, provider_id,
+			explicit_key, group_kind, group_context, group_band
+		ORDER BY session_id ASC, local_date ASC, project ASC, agent ASC, group_machine ASC,
+			model ASC, row_price_model ASC, row_ts ASC, COALESCE(row_message_ordinal, -1) ASC,
+			row_source ASC, row_usage_dedup_key ASC`
+	args = append(args, pricingDigest)
+	args = append(args, customArgs...)
 	rows, err := s.queryContext(ctx, query, args...)
 	if err != nil {
 		return fmt.Errorf("querying clickhouse daily usage aggregates: %w", err)
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var r chUsageAggregateRow
+		var r chDailyUsageGroupRow
+		var explicitKey string
 		var ts, pricingTS any
 		if err := rows.Scan(
 			&r.sessionID, &r.date, &r.project, &r.agent, &r.machine, &r.model,
 			&r.providerID,
+			&explicitKey, &r.kind, &r.contextID, &r.bandAbove, &r.events,
+			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheRd,
+			&r.tokenCost, &r.savings,
+			&r.explicitCost, &r.billableWebSearch,
+			&r.priceError, &r.overflow,
 			&r.priceModel, &r.source, &r.messageOrdinal, &ts, &pricingTS,
-			&r.inputTok, &r.outputTok, &r.cacheCr, &r.cacheCr1h, &r.cacheRd,
+			new(string),
+			&r.cacheCr1h,
 			&r.billableInput, &r.billableOutput, &r.billableReason,
 			&r.billableCacheCr, &r.billableCacheCr1h, &r.billableCacheRd,
-			&r.billableWebSearch,
-			&r.explicitCost, &r.reportedCostRows,
+			&r.reportedCostRows,
 			&r.authoritativeCost, &r.authoritativeCostRows,
 		); err != nil {
 			return fmt.Errorf("scanning clickhouse daily usage aggregate: %w", err)
 		}
+		r.explicit = explicitKey != ""
 		r.ts = formatDBTime(ts)
 		r.pricingTS = formatDBTime(pricingTS)
 		if err := visit(r); err != nil {
@@ -1301,10 +1430,125 @@ func (s *Store) forEachDailyUsageAggregateRow(
 	return nil
 }
 
+// chPricedUsageGroupCost turns one priced group into its cost and cache
+// savings and replays the group's pricing context into the pricing block.
+func chPricedUsageGroupCost(
+	r chDailyUsageGroupRow,
+	contexts map[string]chUsagePriceContext,
+	pricingDigest string,
+	pricing *export.PricingResolver,
+) (money.Money, money.Money, error) {
+	if r.priceError != "" {
+		return money.Money{}, money.Money{}, errors.New(r.priceError)
+	}
+	if r.overflow {
+		return money.Money{}, money.Money{}, fmt.Errorf(
+			"summing clickhouse usage for model %q: %w", r.model, money.ErrOverflow)
+	}
+	priceContext, ok := contexts[r.contextID]
+	if !ok {
+		return money.Money{}, money.Money{}, fmt.Errorf(
+			"clickhouse mirror has no usage price context %q for model %q "+
+				"under pricing digest %s", r.contextID, r.model, pricingDigest)
+	}
+	if err := priceContext.record(pricing, r.kind, r.bandAbove, r.events); err != nil {
+		return money.Money{}, money.Money{}, err
+	}
+	cost, err := money.Add(
+		money.Money{Microdollars: r.explicitCost},
+		money.Money{Microdollars: r.tokenCost})
+	if err != nil {
+		return money.Money{}, money.Money{},
+			fmt.Errorf("summing clickhouse usage for model %q: %w", r.model, err)
+	}
+	cost, err = export.AddWebSearchFee(cost, r.billableWebSearch)
+	if err != nil {
+		return money.Money{}, money.Money{},
+			fmt.Errorf("pricing clickhouse usage for model %q: %w", r.model, err)
+	}
+	return cost, money.Money{Microdollars: r.savings}, nil
+}
+
+// chCustomPricedModels returns the (model, price_model) pairs of contexts the
+// reader's own custom rates can reach. Persisted prices come from the shared
+// catalog, so events of these pairs are priced at request time instead.
+func chCustomPricedModels(
+	contexts map[string]chUsagePriceContext, pricing *export.PricingResolver,
+) [][2]string {
+	var out [][2]string
+	seen := map[[2]string]bool{}
+	for _, priceContext := range contexts {
+		pair := [2]string{priceContext.ReportedModel, priceContext.CanonicalModel}
+		if !seen[pair] && priceContext.customPriced(pricing) {
+			seen[pair] = true
+			out = append(out, pair)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i][0] != out[j][0] {
+			return out[i][0] < out[j][0]
+		}
+		return out[i][1] < out[j][1]
+	})
+	return out
+}
+
+// chDailyUsageLoadAttempts bounds how often a read restarts because a push
+// added price contexts between the context load and the usage query.
+const chDailyUsageLoadAttempts = 3
+
+// loadDailyUsageGroupRows returns the daily usage rows and every context
+// they refer to. Rows are buffered rather than streamed: a concurrent push
+// can add a context after the contexts were loaded, and the read must then
+// start over before anything was recorded into the pricing block. Push
+// writes a context before the prices that refer to it, so a reload sees it.
+func (s *Store) loadDailyUsageGroupRows(
+	ctx context.Context, f db.UsageFilter, pricingDigest string,
+	pricing *export.PricingResolver,
+) ([]chDailyUsageGroupRow, map[string]chUsagePriceContext, error) {
+	for attempt := 1; ; attempt++ {
+		contexts, err := loadUsagePriceContexts(ctx, s.conn, pricingDigest)
+		if err != nil {
+			return nil, nil, err
+		}
+		var customModels [][2]string
+		if len(s.customPricing) > 0 {
+			customModels = chCustomPricedModels(contexts, pricing)
+		}
+		var groupRows []chDailyUsageGroupRow
+		missing := ""
+		err = s.forEachDailyUsageGroupRow(ctx, f, pricingDigest, customModels,
+			func(r chDailyUsageGroupRow) error {
+				if _, ok := contexts[r.contextID]; !ok && !r.explicit && r.priceError == "" {
+					missing = r.contextID
+				}
+				groupRows = append(groupRows, r)
+				return nil
+			})
+		if err != nil {
+			return nil, nil, err
+		}
+		if missing == "" {
+			return groupRows, contexts, nil
+		}
+		if attempt == chDailyUsageLoadAttempts {
+			return nil, nil, fmt.Errorf(
+				"clickhouse mirror has no usage price context %q under "+
+					"pricing digest %s", missing, pricingDigest)
+		}
+	}
+}
+
 func (s *Store) GetDailyUsage(
 	ctx context.Context, f db.UsageFilter,
 ) (db.DailyUsageResult, error) {
-	rateResolver, err := s.loadPricingResolver(ctx)
+	catalog, err := chLoadPricingCatalog(ctx, s.conn, s.customPricing)
+	if err != nil {
+		return db.DailyUsageResult{}, err
+	}
+	rateResolver := export.NewPricingResolver(catalog.rows)
+	groupRows, priceContexts, err := s.loadDailyUsageGroupRows(
+		ctx, f, catalog.digest, rateResolver)
 	if err != nil {
 		return db.DailyUsageResult{}, err
 	}
@@ -1329,7 +1573,7 @@ func (s *Store) GetDailyUsage(
 		seenSessions = map[string]db.UsageSessionInfo{}
 	}
 	var totalSavings money.Money
-	err = s.forEachDailyUsageAggregateRow(ctx, f, func(r chUsageAggregateRow) error {
+	for _, r := range groupRows {
 		key := usageAccumKey{
 			date: r.date, project: r.project, agent: r.agent,
 			machine: r.machine, model: r.model, providerID: r.providerID,
@@ -1348,23 +1592,31 @@ func (s *Store) GetDailyUsage(
 			b = &chUsageBucket{}
 			accum[key] = b
 		}
-		cost, savings, _, _, priceErr := chUsageAggregateResolvedCost(
-			r.model, r.priceModel, r.providerID, chUsagePricingTimestamp(r.pricingTS),
-			r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
-			r.billableInput, r.billableOutput, r.billableReason,
-			r.billableCacheCr, r.billableCacheCr1h, r.billableCacheRd,
-			r.billableWebSearch,
-			r.explicitCost,
-			r.reportedCostRows > 0,
-			db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid,
-			rateResolver,
-		)
+		var cost, savings money.Money
+		var priceErr error
+		if r.explicit {
+			cost, savings, _, _, priceErr = chUsageAggregateResolvedCost(
+				r.model, r.priceModel, r.providerID, chUsagePricingTimestamp(r.pricingTS),
+				r.inputTok, r.outputTok, r.cacheCr, r.cacheCr1h, r.cacheRd,
+				r.billableInput, r.billableOutput, r.billableReason,
+				r.billableCacheCr, r.billableCacheCr1h, r.billableCacheRd,
+				r.billableWebSearch,
+				r.explicitCost,
+				r.reportedCostRows > 0,
+				db.UsageSourceIsRequestScoped(r.source) || r.messageOrdinal.Valid,
+				rateResolver,
+			)
+		} else {
+			cost, savings, priceErr = chPricedUsageGroupCost(
+				r, priceContexts, catalog.digest, rateResolver)
+		}
 		if priceErr != nil {
-			return priceErr
+			return db.DailyUsageResult{}, priceErr
 		}
 		totalSavings, priceErr = money.Add(totalSavings, savings)
 		if priceErr != nil {
-			return fmt.Errorf("summing clickhouse cache savings: %w", priceErr)
+			return db.DailyUsageResult{}, fmt.Errorf(
+				"summing clickhouse cache savings: %w", priceErr)
 		}
 		b.inputTok += r.inputTok
 		b.outputTok += r.outputTok
@@ -1376,7 +1628,8 @@ func (s *Store) GetDailyUsage(
 		}
 		sc.estimated[key], priceErr = money.Add(sc.estimated[key], cost)
 		if priceErr != nil {
-			return fmt.Errorf("summing clickhouse usage: %w", priceErr)
+			return db.DailyUsageResult{}, fmt.Errorf(
+				"summing clickhouse usage: %w", priceErr)
 		}
 		if useAuthoritativeCost && r.authoritativeCostRows > 0 {
 			v := money.Money{Microdollars: r.authoritativeCost}
@@ -1384,10 +1637,6 @@ func (s *Store) GetDailyUsage(
 			rateResolver.RecordUnattributedReported()
 		}
 		sessionCosts[r.sessionID] = sc
-		return nil
-	})
-	if err != nil {
-		return db.DailyUsageResult{}, err
 	}
 	sessionIDs := make([]string, 0, len(sessionCosts))
 	for sessionID := range sessionCosts {

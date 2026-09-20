@@ -27,13 +27,16 @@ Add a `[clickhouse]` section to `~/.agentsview/config.toml`:
 local_machine_name = "Laptop"
 
 [clickhouse]
-url = "clickhouse://user:pass@host:9000/agentsview?secure=true"
+url = "clickhouse://user:pass@host:9440/agentsview?secure=true&compress=lz4"
 ```
 
 `url` is a clickhouse-go DSN. Native protocol uses `clickhouse://` on port 9000
 (or 9440 with TLS). HTTP uses `http://` or `https://`. The optional `database`
 key overrides the database in the URL path; when both are empty the mirror uses
 `agentsview`.
+
+Use `compress=lz4` to compress native-protocol transfers. This is independent of
+the codecs ClickHouse uses to compress columns on disk.
 
 Sessions retain their source installation ID. `local_machine_name` supplies the
 display label after a daemon restart and the next push. The optional

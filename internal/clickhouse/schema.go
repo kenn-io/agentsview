@@ -15,7 +15,7 @@ import (
 // added later ship as ADD COLUMN IF NOT EXISTS entries in the table specs,
 // so an older mirror upgrades in place; the version tells operators and
 // status output which shape a mirror has.
-const SchemaVersion = 1
+const SchemaVersion = 2
 
 // Metadata keys shared by every archive that pushes into the mirror.
 const (
@@ -325,6 +325,35 @@ var mirrorTables = []tableSpec{
 			col("updated_at", tString),
 		},
 		orderBy: []string{"singleton"},
+	},
+	{
+		// usage_event_prices holds what Go priced for one distinct set of
+		// normalized usage inputs under one catalog digest. price_key is
+		// computed by chUsagePriceKeySQL, never in Go, so the usage reader's
+		// join matches by construction.
+		name: "usage_event_prices",
+		columns: []columnSpec{
+			col("pricing_digest", tString),
+			col("price_key", tString),
+			col("token_cost_microdollars", tInt),
+			col("cache_savings_microdollars", tInt),
+			col("billed_context_id", tString),
+			col("unbilled_context_id", tString),
+			col("request_scoped", tBool),
+			col("band_above_input_tokens", tInt),
+			col("price_error", tString),
+			col("priced", tInt),
+		},
+		orderBy: []string{"pricing_digest", "price_key"},
+	},
+	{
+		name: "usage_price_contexts",
+		columns: []columnSpec{
+			col("pricing_digest", tString),
+			col("context_id", tString),
+			col("context_json", tString),
+		},
+		orderBy: []string{"pricing_digest", "context_id"},
 	},
 	{
 		name: "source_project_identity_observations",

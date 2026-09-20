@@ -111,6 +111,27 @@ PostgreSQL watcher.
   PostgreSQL's. Shared pieces are `db.Store`, dialect hooks, named-target
   parsing, and `serviceKind`.
 
+## Stored usage prices
+
+Push stores exact Go-computed request prices and their pricing contexts in
+ClickHouse. Daily usage queries deduplicate events within the requested window,
+join those prices, and return grouped totals. Request rounding, historical
+rates, token tiers, and provider adjustments still use the Go pricing rules.
+
+Price records are keyed by their normalized inputs and a digest of the shared
+pricing catalog, billing policy, and price format. A catalog change causes the
+next push to price the existing mirror again without re-exporting sessions.
+Unchanged pushes price new session batches and Cursor events. Old pricing
+generations remain available to readers and exporters using them.
+
+Serve stays read-only. Missing prices and reader-specific custom rates are
+computed for that request using the current pricing rules while push fills the
+shared records. A response never mixes prices from different catalog digests.
+Copilot authoritative costs retain their per-session selection and allocation.
+
+The first push after the schema upgrade creates and fills the price tables.
+These are derived data; SQLite remains the archive.
+
 ## Tradeoffs
 
 Push copies stars and pins from SQLite, but the ClickHouse UI cannot change
