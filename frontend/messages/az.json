@@ -1531,7 +1531,6 @@
   "recall_page_generation_retire_message": "{model} ({fingerprint}) istifadədən çıxarılsın? Onun avtomatik qeydləri arxivdə qalacaq.",
   "recall_page_generation_action_error": "Biliklərin çıxarılması üçün yaratmanı yeniləmək mümkün olmadı: {error}",
   "session_vitals_title": "Təhlil",
-  "session_vitals_subtitle": "Sessiyanın həyati göstəriciləri",
   "session_vitals_close": "Sessiya təhlilini bağla",
   "session_vitals_resize": "Sessiya təhlili panelinin ölçüsünü dəyişdir",
   "session_vitals_session": "Sessiya",
