@@ -23,6 +23,7 @@ func TestWorkBuddyProviderCapabilities(t *testing.T) {
 	assert.Equal(t, CapabilitySupported, caps.Source.FindSource)
 	assert.Equal(t, CapabilitySupported, caps.Source.CompositeFingerprint)
 	assert.Equal(t, CapabilitySupported, caps.Content.FirstMessage)
+	assert.Equal(t, CapabilitySupported, caps.Content.SessionName)
 	assert.Equal(t, CapabilitySupported, caps.Content.Cwd)
 	assert.Equal(t, CapabilitySupported, caps.Content.Relationships)
 	assert.Equal(t, CapabilitySupported, caps.Content.Subagents)

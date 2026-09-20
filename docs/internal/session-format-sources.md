@@ -2788,13 +2788,18 @@ schemas keep their existing ordering behavior.
 ## WorkBuddy (`workbuddy`)
 
 - **Format:** Session JSONL with provider-specific raw usage embedded under
-  message provider data.
+  message provider data. Issue [#1860](https://github.com/kenn-io/agentsview/issues/1860)
+  reports `ai-title` records with an `aiTitle` string. Agentsview selects the
+  last nonblank value after trimming whitespace. Synthetic parser tests cover
+  the reported shape and boundary values; they do not verify a producer.
 - **Evidence:** `no-public-source`.
 - **Upstream:** WorkBuddy's first-party product site, documentation, and public
-  repositories were searched 2026-07-19; no authoritative persistence producer
-  or versioned schema was found. For reproducible independent format and
-  accounting evidence, clone `https://github.com/mm7894215/TokenTracker.git`
-  at `eaf6048b07729f3ae1224def6011ea22f80cd035` and inspect its pinned
+  repositories were searched 2026-09-20; no authoritative persistence producer
+  or versioned schema was found. Issue [#1860](https://github.com/kenn-io/agentsview/issues/1860)
+  is reporter evidence for the `ai-title` shape, without producer-version
+  evidence. For reproducible independent format and accounting evidence, clone
+  `https://github.com/mm7894215/TokenTracker.git` at
+  `eaf6048b07729f3ae1224def6011ea22f80cd035` and inspect its pinned
   [WorkBuddy reader](https://github.com/mm7894215/TokenTracker/blob/eaf6048b07729f3ae1224def6011ea22f80cd035/src/lib/rollout.js),
   which documents the recursive JSONL layout, raw usage variants, cache and
   reasoning normalization, model fallback, and newer `workbuddy.db` aggregate

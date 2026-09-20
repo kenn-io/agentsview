@@ -116,6 +116,7 @@ func workBuddyProviderCapabilities() Capabilities {
 		Source: jsonlFileProviderSourceCapabilities(),
 		Content: ContentCapabilities{
 			FirstMessage:         CapabilitySupported,
+			SessionName:          CapabilitySupported,
 			Cwd:                  CapabilitySupported,
 			Relationships:        CapabilitySupported,
 			Subagents:            CapabilitySupported,
