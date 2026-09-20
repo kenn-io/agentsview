@@ -134,6 +134,58 @@ it("shows machine labels without full IDs crowding the menu and filters by ID", 
   }
 });
 
+it("distinguishes machines that share a label by a short ID and selects the right one", async () => {
+  stubActivityPageCollaborators();
+  const first = "aaaaaaaa111111111111111111111111";
+  const second = "bbbbbbbb222222222222222222222222";
+  const unique = "cccccccc333333333333333333333333";
+  activity.machines = [first, second, unique];
+  sessions.machineLabels = { [first]: "Workstation", [second]: "Workstation", [unique]: "Laptop" };
+  const component = mount(ActivityPage, { target: document.body });
+  try {
+    await flushEffects();
+    await fireEvent.click(screen.getByTitle("Filter by machine"));
+    expect(screen.getByRole("option", { name: "Workstation aaaaaaaa" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Laptop" })).toBeTruthy();
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "Workstation bbbbbbbb" }));
+    expect(activity.machine).toBe(second);
+    await flushEffects();
+    expect(screen.getByTitle("Filter by machine").textContent).toContain("Workstation (bbbbbbbb)");
+  } finally {
+    await unmount(component);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+    activity.machines = [];
+    activity.setMachine("");
+    sessions.machineLabels = {};
+  }
+});
+
+it("falls back to the ID tail when same-label machines share an ID prefix", async () => {
+  stubActivityPageCollaborators();
+  const first = "host-prod-east-00000001";
+  const second = "host-prod-east-00000002";
+  activity.machines = [first, second];
+  sessions.machineLabels = { [first]: "Build box", [second]: "Build box" };
+  const component = mount(ActivityPage, { target: document.body });
+  try {
+    await flushEffects();
+    await fireEvent.click(screen.getByTitle("Filter by machine"));
+    expect(screen.getByRole("option", { name: "Build box …00000001" })).toBeTruthy();
+    await fireEvent.mouseDown(screen.getByRole("option", { name: "Build box …00000002" }));
+    expect(activity.machine).toBe(second);
+  } finally {
+    await unmount(component);
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    document.body.innerHTML = "";
+    activity.machines = [];
+    activity.setMachine("");
+    sessions.machineLabels = {};
+  }
+});
+
 describe("ActivityPage refresh control", () => {
   it("shows report progress in the refresh status instead of the report body", async () => {
     stubActivityPageCollaborators();

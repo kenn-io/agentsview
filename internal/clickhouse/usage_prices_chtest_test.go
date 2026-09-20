@@ -242,17 +242,19 @@ func dailyUsageGroupRowStats(
 	t.Helper()
 	catalog, err := chLoadPricingCatalog(t.Context(), store.conn, store.customPricing)
 	require.NoError(t, err)
-	rows, _, err := store.loadDailyUsageGroupRows(
-		t.Context(), filter, catalog.digest, export.NewPricingResolver(catalog.rows))
+	contexts, err := loadUsagePriceContexts(t.Context(), store.conn, catalog.digest)
 	require.NoError(t, err)
+	customModels := chCustomPricedModels(contexts, export.NewPricingResolver(catalog.rows))
 	var stats usageGroupRowStats
-	for _, r := range rows {
+	err = store.forEachDailyUsageGroupRow(t.Context(), filter, catalog.digest, customModels, func(r chDailyUsageGroupRow) error {
 		stats.rows++
 		stats.events += r.events
 		if r.explicit {
 			stats.explicit++
 		}
-	}
+		return nil
+	})
+	require.NoError(t, err)
 	return stats
 }
 

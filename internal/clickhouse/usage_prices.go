@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -22,7 +23,51 @@ import (
 // binaries that still read them; the next push prices the mirror under the
 // new digest. Provider billing policies carry their own version in the
 // digest and need no bump here.
-const chUsagePriceFormatVersion = 1
+const chUsagePriceFormatVersion = 2
+
+// Persist error identity with its diagnostic text. The format version in the
+// digest keeps readers from decoding records written in the old string format.
+type chUsagePriceError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func (e chUsagePriceError) Error() string { return e.Message }
+
+func (e chUsagePriceError) Unwrap() error {
+	switch e.Code {
+	case "overflow":
+		return money.ErrOverflow
+	case "negative":
+		return money.ErrNegative
+	case "invalid_decimal":
+		return money.ErrInvalidDecimal
+	default:
+		return nil
+	}
+}
+
+func encodeUsagePriceError(err error) (string, error) {
+	record := chUsagePriceError{Message: err.Error()}
+	switch {
+	case errors.Is(err, money.ErrOverflow):
+		record.Code = "overflow"
+	case errors.Is(err, money.ErrNegative):
+		record.Code = "negative"
+	case errors.Is(err, money.ErrInvalidDecimal):
+		record.Code = "invalid_decimal"
+	}
+	data, encodeErr := json.Marshal(record)
+	return string(data), encodeErr
+}
+
+func decodeUsagePriceError(data string) error {
+	var record chUsagePriceError
+	if err := json.Unmarshal([]byte(data), &record); err != nil {
+		return fmt.Errorf("decoding clickhouse usage price error: %w", err)
+	}
+	return record
+}
 
 // chUsagePriceKeySQL identifies one distinct set of pricing inputs over the
 // usage_normalized columns. It covers every value chPriceUsageInput reads
@@ -59,22 +104,28 @@ func chLoadPricingCatalog(
 	ctx context.Context, conn *sql.DB,
 	customPricing map[string]config.CustomModelRate,
 ) (chPricingCatalog, error) {
-	shared, document, err := chLoadPricingRows(ctx, conn, nil)
+	pricing, err := chLoadPricing(ctx, conn, nil)
 	if err != nil {
 		return chPricingCatalog{}, err
 	}
+	document, err := loadGenAIPricing(ctx, conn)
+	if err != nil {
+		return chPricingCatalog{}, err
+	}
+	genAI, err := genAIEffectivePricingRow(document)
+	if err != nil {
+		return chPricingCatalog{}, err
+	}
+	shared := append(chPricingRows(pricing), genAI)
 	digest, err := chUsagePricingDigest(shared, document)
 	if err != nil {
 		return chPricingCatalog{}, err
 	}
-	rows := shared
-	if len(customPricing) > 0 {
-		rows, _, err = chLoadPricingRows(ctx, conn, customPricing)
-		if err != nil {
-			return chPricingCatalog{}, err
-		}
+	if len(customPricing) == 0 {
+		return chPricingCatalog{rows: shared, digest: digest}, nil
 	}
-	return chPricingCatalog{rows: rows, digest: digest}, nil
+	chApplyCustomPricing(pricing, customPricing)
+	return chPricingCatalog{rows: append(chPricingRows(pricing), genAI), digest: digest}, nil
 }
 
 // chUsagePricingDigest changes when any rate, band, source classification,
@@ -351,11 +402,11 @@ func chPriceUsageInput(
 	case priceErr != nil:
 		// Reads selecting this event report the failure. Unrelated sessions
 		// can still be exported.
-		rec.priceError = priceErr.Error()
+		rec.priceError, err = encodeUsagePriceError(priceErr)
 	case billedErr != nil && !in.reported:
 		// This pass omits web searches, which the reader adds. Preserve the
 		// billing failure even when no token was billed here.
-		rec.priceError = billedErr.Error()
+		rec.priceError, err = encodeUsagePriceError(billedErr)
 	default:
 		rec.tokenCost, rec.savings = cost, savings
 		if rec.requestScoped && !in.reported && billedErr == nil && billed.OK {
@@ -368,7 +419,7 @@ func chPriceUsageInput(
 			}
 		}
 	}
-	return rec, nil
+	return rec, err
 }
 
 func decodeUsagePriceContext(data string) (chUsagePriceContext, error) {

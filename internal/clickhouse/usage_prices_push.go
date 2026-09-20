@@ -9,7 +9,7 @@ import (
 	"go.kenn.io/agentsview/internal/export"
 )
 
-// usagePriceInsertBatch bounds one price-row insert block.
+// usagePriceInsertBatch bounds retained pricing inputs and one insert block.
 const usagePriceInsertBatch = 20000
 
 // usagePricedDigestKey records the pricing digest the whole mirror was last
@@ -75,11 +75,12 @@ func usagePricingRawSQL(scope usagePriceScope) (string, []any) {
 	return rawSQL + "\n\t\tUNION ALL\n" + cursorSQL, append(args, cursorArgs...)
 }
 
-// unpricedUsageInputs returns the distinct pricing inputs in scope that have
-// no price row under digest.
-func (s *Sync) unpricedUsageInputs(
+// forEachUnpricedUsageBatch streams distinct missing pricing inputs in bounded
+// batches. The callback must finish consuming a batch before returning.
+func (s *Sync) forEachUnpricedUsageBatch(
 	ctx context.Context, scope usagePriceScope, digest string,
-) ([]chUsagePriceInput, error) {
+	visit func([]chUsagePriceInput) error,
+) error {
 	rawSQL, args := usagePricingRawSQL(scope)
 	cte, args := chUsageCTEFromRaw(
 		db.UsageFilter{Timezone: "UTC"}, rawSQL, args, false)
@@ -97,10 +98,10 @@ func (s *Sync) unpricedUsageInputs(
 		GROUP BY price_key
 		ORDER BY price_key`, append(args, digest)...)
 	if err != nil {
-		return nil, fmt.Errorf("querying unpriced clickhouse usage: %w", err)
+		return fmt.Errorf("querying unpriced clickhouse usage: %w", err)
 	}
 	defer rows.Close()
-	var out []chUsagePriceInput
+	batch := make([]chUsagePriceInput, 0, usagePriceInsertBatch)
 	for rows.Next() {
 		var in chUsagePriceInput
 		var pricingTS any
@@ -110,15 +111,25 @@ func (s *Sync) unpricedUsageInputs(
 			&in.inputTok, &in.outputTok, &in.reasoningTok, &in.cacheCr,
 			&in.cacheCr1h, &in.cacheRd, &in.reported,
 		); err != nil {
-			return nil, fmt.Errorf("scanning unpriced clickhouse usage: %w", err)
+			return fmt.Errorf("scanning unpriced clickhouse usage: %w", err)
 		}
 		in.pricingTS = formatDBTime(pricingTS)
-		out = append(out, in)
+		batch = append(batch, in)
+		if len(batch) == usagePriceInsertBatch {
+			if err := visit(batch); err != nil {
+				return err
+			}
+			clear(batch)
+			batch = batch[:0]
+		}
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterating unpriced clickhouse usage: %w", err)
+		return fmt.Errorf("iterating unpriced clickhouse usage: %w", err)
 	}
-	return out, nil
+	if len(batch) > 0 {
+		return visit(batch)
+	}
+	return nil
 }
 
 // priceUsage writes a price row for every unpriced input in scope. Contexts
@@ -127,13 +138,14 @@ func (s *Sync) unpricedUsageInputs(
 func (s *Sync) priceUsage(
 	ctx context.Context, pricer *usagePricer, scope usagePriceScope,
 ) error {
-	inputs, err := s.unpricedUsageInputs(ctx, scope, pricer.digest)
-	if err != nil {
-		return err
-	}
-	if len(inputs) == 0 {
-		return nil
-	}
+	return s.forEachUnpricedUsageBatch(ctx, scope, pricer.digest, func(inputs []chUsagePriceInput) error {
+		return s.insertUsagePrices(ctx, pricer, inputs)
+	})
+}
+
+func (s *Sync) insertUsagePrices(
+	ctx context.Context, pricer *usagePricer, inputs []chUsagePriceInput,
+) error {
 	version := newPushVersion()
 	contexts := map[string]string{}
 	priceRows := make([][]any, 0, len(inputs))
@@ -164,15 +176,7 @@ func (s *Sync) priceUsage(
 	if err := insertRows(ctx, s.conn, "usage_price_contexts", contextRows); err != nil {
 		return err
 	}
-	for start := 0; start < len(priceRows); start += usagePriceInsertBatch {
-		end := min(start+usagePriceInsertBatch, len(priceRows))
-		if err := insertRows(
-			ctx, s.conn, "usage_event_prices", priceRows[start:end],
-		); err != nil {
-			return err
-		}
-	}
-	return nil
+	return insertRows(ctx, s.conn, "usage_event_prices", priceRows)
 }
 
 // syncUsagePrices returns the pricer for this push's session batches after

@@ -74,6 +74,11 @@ func chLoadPricing(
 			out[model] = rates
 		}
 	}
+	chApplyCustomPricing(out, customPricing)
+	return out, nil
+}
+
+func chApplyCustomPricing(out map[string]chRates, customPricing map[string]config.CustomModelRate) {
 	for model, custom := range customPricing {
 		rates := chRates{
 			input:  money.Money{Microdollars: custom.InputMicrodollarsPerMTok},
@@ -91,7 +96,6 @@ func chLoadPricing(
 		rates.source = chCustomPricingSource()
 		out[model] = rates
 	}
-	return out, nil
 }
 
 // chLoadPricingRows returns the effective pricing rows plus the raw GenAI
@@ -1367,11 +1371,12 @@ func (s *Store) forEachDailyUsageGroupRow(
 			toInt64(count()) AS events,
 			sum(input_tokens_norm), sum(output_tokens_norm),
 			sum(cache_create_norm), sum(cache_read_norm),
-			sum(p_token_cost), sum(p_savings),
-			sum(explicit_cost), sum(billable_web_search_requests),
+			toInt64(sum(toInt128(p_token_cost))), toInt64(sum(toInt128(p_savings))),
+			toInt64(sum(toInt128(explicit_cost))), sum(billable_web_search_requests),
 			max(if(explicit_row OR price_kind = '` + chUsagePriceKindZero + `', '', p_price_error)),
-			sum(toFloat64(abs(p_token_cost))) + sum(toFloat64(abs(explicit_cost))) >= 9e18
-				OR sum(toFloat64(abs(p_savings))) >= 9e18,
+			arrayExists(total -> total < toInt128('-9223372036854775808')
+				OR total > toInt128('9223372036854775807'),
+				[sum(toInt128(p_token_cost)), sum(toInt128(p_savings)), sum(toInt128(explicit_cost))]),
 			any(price_model) AS row_price_model, any(source) AS row_source,
 			any(message_ordinal) AS row_message_ordinal,
 			any(ts) AS row_ts, any(pricing_ts),
@@ -1439,7 +1444,7 @@ func chPricedUsageGroupCost(
 	pricing *export.PricingResolver,
 ) (money.Money, money.Money, error) {
 	if r.priceError != "" {
-		return money.Money{}, money.Money{}, errors.New(r.priceError)
+		return money.Money{}, money.Money{}, decodeUsagePriceError(r.priceError)
 	}
 	if r.overflow {
 		return money.Money{}, money.Money{}, fmt.Errorf(
@@ -1448,8 +1453,8 @@ func chPricedUsageGroupCost(
 	priceContext, ok := contexts[r.contextID]
 	if !ok {
 		return money.Money{}, money.Money{}, fmt.Errorf(
-			"clickhouse mirror has no usage price context %q for model %q "+
-				"under pricing digest %s", r.contextID, r.model, pricingDigest)
+			"%w: missing context %q for model %q under pricing digest %s",
+			errUsagePriceContextChanged, r.contextID, r.model, pricingDigest)
 	}
 	if err := priceContext.record(pricing, r.kind, r.bandAbove, r.events); err != nil {
 		return money.Money{}, money.Money{}, err
@@ -1497,47 +1502,7 @@ func chCustomPricedModels(
 // added price contexts between the context load and the usage query.
 const chDailyUsageLoadAttempts = 3
 
-// loadDailyUsageGroupRows returns the daily usage rows and every context
-// they refer to. Rows are buffered rather than streamed: a concurrent push
-// can add a context after the contexts were loaded, and the read must then
-// start over before anything was recorded into the pricing block. Push
-// writes a context before the prices that refer to it, so a reload sees it.
-func (s *Store) loadDailyUsageGroupRows(
-	ctx context.Context, f db.UsageFilter, pricingDigest string,
-	pricing *export.PricingResolver,
-) ([]chDailyUsageGroupRow, map[string]chUsagePriceContext, error) {
-	for attempt := 1; ; attempt++ {
-		contexts, err := loadUsagePriceContexts(ctx, s.conn, pricingDigest)
-		if err != nil {
-			return nil, nil, err
-		}
-		var customModels [][2]string
-		if len(s.customPricing) > 0 {
-			customModels = chCustomPricedModels(contexts, pricing)
-		}
-		var groupRows []chDailyUsageGroupRow
-		missing := ""
-		err = s.forEachDailyUsageGroupRow(ctx, f, pricingDigest, customModels,
-			func(r chDailyUsageGroupRow) error {
-				if _, ok := contexts[r.contextID]; !ok && !r.explicit && r.priceError == "" {
-					missing = r.contextID
-				}
-				groupRows = append(groupRows, r)
-				return nil
-			})
-		if err != nil {
-			return nil, nil, err
-		}
-		if missing == "" {
-			return groupRows, contexts, nil
-		}
-		if attempt == chDailyUsageLoadAttempts {
-			return nil, nil, fmt.Errorf(
-				"clickhouse mirror has no usage price context %q under "+
-					"pricing digest %s", missing, pricingDigest)
-		}
-	}
-}
+var errUsagePriceContextChanged = errors.New("usage price context changed during read")
 
 func (s *Store) GetDailyUsage(
 	ctx context.Context, f db.UsageFilter,
@@ -1546,11 +1511,27 @@ func (s *Store) GetDailyUsage(
 	if err != nil {
 		return db.DailyUsageResult{}, err
 	}
+	for attempt := 1; ; attempt++ {
+		result, err := s.dailyUsageForCatalog(ctx, f, catalog)
+		if !errors.Is(err, errUsagePriceContextChanged) || attempt == chDailyUsageLoadAttempts {
+			return result, err
+		}
+	}
+}
+
+// Each attempt owns its accumulator and resolver. If a push adds a context
+// during the query, retry with fresh contexts instead of retaining raw rows.
+func (s *Store) dailyUsageForCatalog(
+	ctx context.Context, f db.UsageFilter, catalog chPricingCatalog,
+) (db.DailyUsageResult, error) {
 	rateResolver := export.NewPricingResolver(catalog.rows)
-	groupRows, priceContexts, err := s.loadDailyUsageGroupRows(
-		ctx, f, catalog.digest, rateResolver)
+	priceContexts, err := loadUsagePriceContexts(ctx, s.conn, catalog.digest)
 	if err != nil {
 		return db.DailyUsageResult{}, err
+	}
+	var customModels [][2]string
+	if len(s.customPricing) > 0 {
+		customModels = chCustomPricedModels(priceContexts, rateResolver)
 	}
 	type usageAccumKey struct {
 		date       string
@@ -1573,7 +1554,7 @@ func (s *Store) GetDailyUsage(
 		seenSessions = map[string]db.UsageSessionInfo{}
 	}
 	var totalSavings money.Money
-	for _, r := range groupRows {
+	err = s.forEachDailyUsageGroupRow(ctx, f, catalog.digest, customModels, func(r chDailyUsageGroupRow) error {
 		key := usageAccumKey{
 			date: r.date, project: r.project, agent: r.agent,
 			machine: r.machine, model: r.model, providerID: r.providerID,
@@ -1611,11 +1592,11 @@ func (s *Store) GetDailyUsage(
 				r, priceContexts, catalog.digest, rateResolver)
 		}
 		if priceErr != nil {
-			return db.DailyUsageResult{}, priceErr
+			return priceErr
 		}
 		totalSavings, priceErr = money.Add(totalSavings, savings)
 		if priceErr != nil {
-			return db.DailyUsageResult{}, fmt.Errorf(
+			return fmt.Errorf(
 				"summing clickhouse cache savings: %w", priceErr)
 		}
 		b.inputTok += r.inputTok
@@ -1628,7 +1609,7 @@ func (s *Store) GetDailyUsage(
 		}
 		sc.estimated[key], priceErr = money.Add(sc.estimated[key], cost)
 		if priceErr != nil {
-			return db.DailyUsageResult{}, fmt.Errorf(
+			return fmt.Errorf(
 				"summing clickhouse usage: %w", priceErr)
 		}
 		if useAuthoritativeCost && r.authoritativeCostRows > 0 {
@@ -1637,6 +1618,10 @@ func (s *Store) GetDailyUsage(
 			rateResolver.RecordUnattributedReported()
 		}
 		sessionCosts[r.sessionID] = sc
+		return nil
+	})
+	if err != nil {
+		return db.DailyUsageResult{}, err
 	}
 	sessionIDs := make([]string, 0, len(sessionCosts))
 	for sessionID := range sessionCosts {
