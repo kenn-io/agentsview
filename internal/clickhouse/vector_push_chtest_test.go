@@ -139,7 +139,6 @@ func TestVectorPushRoundTripDeltaAndEviction(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, first.Vectors.GenerationID, second.Vectors.GenerationID,
 		"the generation id is stable for one fingerprint")
-	require.NoError(t, err)
 	assert.Zero(t, second.Vectors.SessionsPushed)
 	assert.Equal(t, 2, second.Vectors.SessionsUnchanged, "unchanged hashes are not re-pushed")
 

@@ -285,9 +285,14 @@ unattended and stop at the first step that does not confirm.
     Ranked hits confirm the setup. An HTTP 501 carrying the reason from the
     previous step means the searcher did not attach.
 
-To keep vectors current, use the same watcher or service as the session push
-(`clickhouse push --watch` or `clickhouse service install`); the vector phase
-runs inside every push. There is no separate vector command to schedule.
+Keeping vectors current is two jobs. Embedding new sessions happens locally: the
+`agentsview` daemon does it after each sync while `[vector.embed]`
+`run_after_sync` is on (the default), and without a running daemon you run
+`agentsview embeddings build --yes` before each push. Replicating the result is
+the vector phase inside every `clickhouse push`, so the same watcher or service
+as the session push (`clickhouse push --watch` or `clickhouse service install`)
+carries new vectors once they exist locally. There is no separate vector command
+to schedule, and the watcher never generates embeddings itself.
 
 ### `agentsview clickhouse status`
 

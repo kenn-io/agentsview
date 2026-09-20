@@ -420,32 +420,36 @@ func (s *Sync) pushVectorSession(
 // generation. The session's chunks, and its document rows once no
 // generation references them, go only when no other archive still records
 // the session for this generation: after an ownership handoff the new owner's
-// rows must survive the former owner's reconciliation.
+// rows must survive the former owner's reconciliation. The state row goes
+// last so a failure midway leaves the session discoverable for the next
+// push to finish.
 func (s *Sync) evictVectorSession(ctx context.Context, fingerprint, sessionID string) error {
+	otherOwners, err := s.rowExists(ctx, "vector owners for "+sessionID, `
+		SELECT count() FROM vector_push_state
+		WHERE generation_fingerprint = ? AND session_id = ? AND source_archive_id <> ?`,
+		fingerprint, sessionID, s.archiveID)
+	if err != nil {
+		return err
+	}
+	if !otherOwners {
+		if _, err := s.conn.ExecContext(ctx, `
+			DELETE FROM vector_chunks WHERE session_id = ? AND generation_fingerprint = ?`,
+			sessionID, fingerprint); err != nil {
+			return fmt.Errorf("evicting clickhouse vector chunks for %s: %w", sessionID, err)
+		}
+		if _, err := s.conn.ExecContext(ctx, `
+			DELETE FROM vector_documents
+			WHERE session_id = ? AND session_id NOT IN (
+				SELECT session_id FROM vector_chunks WHERE session_id = ?)`,
+			sessionID, sessionID); err != nil {
+			return fmt.Errorf("evicting clickhouse vector documents for %s: %w", sessionID, err)
+		}
+	}
 	if _, err := s.conn.ExecContext(ctx, `
 		DELETE FROM vector_push_state
 		WHERE source_archive_id = ? AND generation_fingerprint = ? AND session_id = ?`,
 		s.archiveID, fingerprint, sessionID); err != nil {
 		return fmt.Errorf("evicting clickhouse vector push state for %s: %w", sessionID, err)
-	}
-	otherOwners, err := s.rowExists(ctx, "vector owners for "+sessionID, `
-		SELECT count() FROM vector_push_state
-		WHERE generation_fingerprint = ? AND session_id = ? AND source_archive_id <> ?`,
-		fingerprint, sessionID, s.archiveID)
-	if err != nil || otherOwners {
-		return err
-	}
-	if _, err := s.conn.ExecContext(ctx, `
-		DELETE FROM vector_chunks WHERE session_id = ? AND generation_fingerprint = ?`,
-		sessionID, fingerprint); err != nil {
-		return fmt.Errorf("evicting clickhouse vector chunks for %s: %w", sessionID, err)
-	}
-	if _, err := s.conn.ExecContext(ctx, `
-		DELETE FROM vector_documents
-		WHERE session_id = ? AND session_id NOT IN (
-			SELECT session_id FROM vector_chunks WHERE session_id = ?)`,
-		sessionID, sessionID); err != nil {
-		return fmt.Errorf("evicting clickhouse vector documents for %s: %w", sessionID, err)
 	}
 	return nil
 }
