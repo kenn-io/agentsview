@@ -522,6 +522,10 @@ func prepareReplicaServeImpl(
 		}
 		cleanupStore()
 	}
+	if err := wireReplicaVectorSearch(ctx, appCfg, backend, store, name+" serve"); err != nil {
+		cleanup()
+		return replicaServeStartup{}, fmt.Errorf("%s serve: %w", name, err)
+	}
 
 	rtOpts := serveRuntimeOptions{
 		Mode:          name + "-serve",

@@ -199,3 +199,60 @@ func valueOrNever(v string) string {
 	}
 	return v
 }
+
+// VectorGenerations lists the embedding generations pushed to store, oldest
+// first. A database where pgvector was never installed has no
+// vector_generations table and reports none.
+func (Backend) VectorGenerations(
+	ctx context.Context, store storage.ReplicaStore,
+) ([]storage.VectorGenerationInfo, error) {
+	pgStore, err := asStore(store)
+	if err != nil {
+		return nil, err
+	}
+	return ListVectorGenerationInfo(ctx, pgStore.DB())
+}
+
+// OpenVectorSearcher serves the pushed generation matching gen.Fingerprint.
+// A registered generation whose chunk table is missing (a push interrupted
+// between registering the generation and creating the table) degrades like
+// a fingerprint miss: wiring a searcher against it would fail every query
+// with a missing-relation error instead of a clear unavailable reason.
+func (Backend) OpenVectorSearcher(
+	ctx context.Context, store storage.ReplicaStore, gen storage.VectorGenerationInfo,
+	maxInputChars int, encode storage.VectorQueryEncoder,
+) (db.VectorSearcher, string, error) {
+	pgStore, err := asStore(store)
+	if err != nil {
+		return nil, "", err
+	}
+	genID, dim, ok, err := LookupVectorGeneration(ctx, pgStore.DB(), gen.Fingerprint)
+	if err != nil {
+		return nil, "", fmt.Errorf("looking up PG vector generation: %w", err)
+	}
+	if !ok {
+		return nil, "PostgreSQL has no embedding generation matching fingerprint " + gen.Fingerprint, nil
+	}
+	tableOK, err := VectorChunkTableExists(ctx, pgStore.DB(), genID)
+	if err != nil {
+		return nil, "", fmt.Errorf("probing PG vector chunk table: %w", err)
+	}
+	if !tableOK {
+		return nil, fmt.Sprintf(
+			"PG generation %d matches fingerprint %s but its chunk table is "+
+				"missing (interrupted push?)", genID, gen.Fingerprint), nil
+	}
+	return NewVectorSearcher(pgStore.DB(), genID, dim, maxInputChars, encode), "", nil
+}
+
+// asStore unwraps the concrete PostgreSQL store a replica-neutral caller
+// holds. The contract passes stores as storage.ReplicaStore so shared code
+// never imports this package; only this backend opens them, so any other
+// type is a programming error.
+func asStore(store storage.ReplicaStore) (*Store, error) {
+	pgStore, ok := store.(*Store)
+	if !ok {
+		return nil, fmt.Errorf("pg store is %T, not *postgres.Store", store)
+	}
+	return pgStore, nil
+}

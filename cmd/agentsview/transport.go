@@ -568,8 +568,9 @@ func appendDaemonCompatibilityHint(tr transport, err error) error {
 // configured PostgreSQL sync store. It shares the same store
 // construction path as pg serve, but leaves schema repair/migration
 // to pg push/serve because CLI read commands never mutate PG. Like
-// pg serve, it runs the PG vector gate so `session search --pg
+// pg serve, it runs the replica vector gate so `session search --pg
 // --semantic|--hybrid` and `mcp --pg` get the same semantic search
+// the SQLite direct path wires via installDirectVectorSearcher.|--hybrid` and `mcp --pg` get the same semantic search
 // the SQLite direct path wires via installDirectVectorSearcher.
 func newPGReadService(
 	cfg config.Config, pgCfg config.PGConfig,
@@ -586,6 +587,6 @@ func newPGReadService(
 			priced.SetCustomPricing(cfg.CustomModelPricing)
 		}
 	}
-	wirePGReadVectorSearchFn(cfg, store)
+	wireReplicaReadVectorSearchFn(cfg, pgReplica{}, store)
 	return service.NewReadOnlyBackend(store), cleanup, nil
 }

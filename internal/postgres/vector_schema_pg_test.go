@@ -9,6 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 const vectorSchemaTestSchema = "agentsview_vector_schema_test"
@@ -112,7 +114,7 @@ func TestVectorChunkTableExists(t *testing.T) {
 // TestVectorGenerationLookupTolerateMissingTable verifies that the read-side
 // gate degrades cleanly when the vector_generations table never existed
 // (pgvector never installed): LookupVectorGeneration reports not-found and
-// ListVectorGenerationFingerprints returns empty, both without error, so pg
+// ListVectorGenerationInfo returns empty, both without error, so pg
 // serve records a "semantic unavailable" reason instead of aborting startup.
 func TestVectorGenerationLookupTolerateMissingTable(t *testing.T) {
 	pgURL := testPGURL(t)
@@ -136,15 +138,15 @@ func TestVectorGenerationLookupTolerateMissingTable(t *testing.T) {
 	require.NoError(t, err, "missing table must be tolerated as not-found")
 	assert.False(t, ok)
 
-	fingerprints, err := ListVectorGenerationFingerprints(ctx, pg)
+	gens, err := ListVectorGenerationInfo(ctx, pg)
 	require.NoError(t, err, "missing table must yield an empty list, not an error")
-	assert.Empty(t, fingerprints)
+	assert.Empty(t, gens)
 }
 
-// TestListVectorGenerationFingerprints verifies fingerprints come back in id
-// order (oldest generation first), the order pg serve's startup notice lists
-// the generations PG already has.
-func TestListVectorGenerationFingerprints(t *testing.T) {
+// TestListVectorGenerationInfo verifies generations come back in id order
+// (oldest generation first), the order the serve startup notice lists the
+// generations PG already has, with their model and dimension.
+func TestListVectorGenerationInfo(t *testing.T) {
 	pgURL := testPGURL(t)
 	cleanVectorSchemaTestPG(t, pgURL)
 	t.Cleanup(func() { cleanVectorSchemaTestPG(t, pgURL) })
@@ -166,9 +168,12 @@ func TestListVectorGenerationFingerprints(t *testing.T) {
 	_, err = ensureVectorGeneration(ctx, pg, "fp-beta", "model-b", 8)
 	require.NoError(t, err)
 
-	fingerprints, err := ListVectorGenerationFingerprints(ctx, pg)
+	gens, err := ListVectorGenerationInfo(ctx, pg)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"fp-alpha", "fp-beta"}, fingerprints)
+	assert.Equal(t, []storage.VectorGenerationInfo{
+		{Fingerprint: "fp-alpha", Model: "model-a", Dimension: 4},
+		{Fingerprint: "fp-beta", Model: "model-b", Dimension: 8},
+	}, gens)
 }
 
 // tableExistsPG reports whether a base table exists in the connection's

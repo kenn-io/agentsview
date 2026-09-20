@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // searchMaxInputChars is the chunk size the searcher re-splits content with to
@@ -21,10 +22,10 @@ import (
 // re-splits into multiple chunks (see runContent), exercising member anchoring.
 const searchMaxInputChars = 20
 
-// fixedEncoder returns a QueryEncodeFunc that always emits vec, ignoring the
+// fixedEncoder returns a storage.VectorQueryEncoder that always emits vec, ignoring the
 // query text: the fixture's chunk vectors are chosen so a fixed query yields a
 // deterministic cosine ranking.
-func fixedEncoder(vec []float32) QueryEncodeFunc {
+func fixedEncoder(vec []float32) storage.VectorQueryEncoder {
 	return func(context.Context, string) ([]float32, error) { return vec, nil }
 }
 

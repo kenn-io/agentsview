@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"log"
+
+	"go.kenn.io/agentsview/internal/storage"
 )
 
 // vectorBaseDDL creates the backend-agnostic vector tables. Chunk tables
@@ -259,16 +261,16 @@ func VectorChunkTableExists(
 	return present, nil
 }
 
-// ListVectorGenerationFingerprints returns every registered generation's
-// fingerprint ordered by id (oldest first), for pg serve's startup notice
-// when no generation matches the local config. A missing vector_generations
-// table (SQLSTATE 42P01) yields an empty slice, not an error, matching
-// LookupVectorGeneration's tolerance for a database without pgvector.
-func ListVectorGenerationFingerprints(
+// ListVectorGenerationInfo returns every registered generation's identity
+// ordered by id (oldest first), for the serve startup notice when no generation matches
+// the local config. A missing vector_generations table (SQLSTATE 42P01)
+// yields an empty slice, not an error, matching LookupVectorGeneration's
+// tolerance for a database without pgvector.
+func ListVectorGenerationInfo(
 	ctx context.Context, pg *sql.DB,
-) ([]string, error) {
+) ([]storage.VectorGenerationInfo, error) {
 	rows, err := pg.QueryContext(ctx,
-		`SELECT fingerprint FROM vector_generations ORDER BY id`)
+		`SELECT fingerprint, model, dimension FROM vector_generations ORDER BY id`)
 	if isUndefinedTable(err) {
 		return nil, nil
 	}
@@ -277,16 +279,16 @@ func ListVectorGenerationFingerprints(
 	}
 	defer func() { _ = rows.Close() }()
 
-	var fingerprints []string
+	var gens []storage.VectorGenerationInfo
 	for rows.Next() {
-		var fp string
-		if err := rows.Scan(&fp); err != nil {
-			return nil, fmt.Errorf("scanning vector generation fingerprint: %w", err)
+		var g storage.VectorGenerationInfo
+		if err := rows.Scan(&g.Fingerprint, &g.Model, &g.Dimension); err != nil {
+			return nil, fmt.Errorf("scanning vector generation: %w", err)
 		}
-		fingerprints = append(fingerprints, fp)
+		gens = append(gens, g)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterating vector generations: %w", err)
 	}
-	return fingerprints, nil
+	return gens, nil
 }

@@ -9,15 +9,9 @@ import (
 	"sync"
 
 	"go.kenn.io/agentsview/internal/db"
+	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/vector"
 )
-
-// QueryEncodeFunc embeds a single query string into the generation's vector
-// space. It is the read-side counterpart of the build-time encoder, supplied
-// by pg serve when it wires the searcher; a returned error means the
-// embeddings endpoint failed for this request (transient), not that semantic
-// search is unconfigured.
-type QueryEncodeFunc func(ctx context.Context, text string) ([]float32, error)
 
 // vectorSearcher is the PG-backed db.VectorSearcher: chunk-level KNN over one
 // generation's pgvector chunk table, doc-level rollup, and hydration against
@@ -28,7 +22,7 @@ type vectorSearcher struct {
 	genID         int64
 	dimension     int
 	maxInputChars int
-	encode        QueryEncodeFunc
+	encode        storage.VectorQueryEncoder
 	chunkTable    string
 
 	// schemaMu guards the lazily resolved, quoted pgvector extension schema.
@@ -45,7 +39,7 @@ type vectorSearcher struct {
 // phase created; maxInputChars is the build-time chunk size, threaded into
 // vector.DocAnchor so anchor/snippet re-splitting matches how chunks were cut.
 func NewVectorSearcher(
-	pg *sql.DB, genID int64, dimension, maxInputChars int, encode QueryEncodeFunc,
+	pg *sql.DB, genID int64, dimension, maxInputChars int, encode storage.VectorQueryEncoder,
 ) db.VectorSearcher {
 	return &vectorSearcher{
 		pg:            pg,

@@ -20,8 +20,8 @@ type pgReplica struct {
 var _ replicaServeExtras = pgReplica{}
 
 // serveOptions wires the raw-upload ingestion services when the connected
-// role may write the raw sync schema, and the pgvector-backed semantic
-// search when a pushed generation matches the local embeddings config.
+// role may write the raw sync schema. Semantic search is wired by the shared
+// replica gate; PostgreSQL contributes through storage.VectorSearchProvider.
 func (pgReplica) serveOptions(
 	ctx context.Context, appCfg config.Config,
 	target storage.ReplicaTarget, store storage.ReplicaStore,
@@ -36,9 +36,6 @@ func (pgReplica) serveOptions(
 		ctx, pgStore.DB(), target.Schema,
 	)
 	if err != nil {
-		return nil, nil, err
-	}
-	if err := wirePGVectorSearch(ctx, appCfg, pgStore, "pg serve"); err != nil {
 		return nil, nil, err
 	}
 	rawSyncOption, closeRawSync, err := preparePGRawSyncServicesIfWritable(
