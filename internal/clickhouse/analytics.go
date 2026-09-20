@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1552,7 +1553,9 @@ func (s *Store) GetAnalyticsSessionShape(
 		}
 	}
 	autonomy := map[string]int{}
-	if modelFilter && len(ids) > 0 {
+	switch {
+	case len(ids) == 0:
+	case modelFilter:
 		stats, err := s.getAnalyticsFilteredMessageStats(ctx, ids, f)
 		if err != nil {
 			return db.SessionShapeResponse{}, err
@@ -1567,8 +1570,8 @@ func (s *Store) GetAnalyticsSessionShape(
 				autonomy[autonomyBucket(ratio)]++
 			}
 		}
-	} else {
-		autonomy, err = s.analyticsAutonomyBuckets(ctx, ids)
+	default:
+		autonomy, err = s.analyticsAutonomyBuckets(ctx, chAnalyticsSessionSet(f))
 		if err != nil {
 			return db.SessionShapeResponse{}, err
 		}
@@ -1656,25 +1659,17 @@ func mapBuckets(values map[string]int, order map[string]int) []db.DistributionBu
 }
 
 func (s *Store) analyticsAutonomyBuckets(
-	ctx context.Context, sessionIDs []string,
+	ctx context.Context, sessions chSessionSet,
 ) (map[string]int, error) {
 	counts := map[string]int{}
-	if len(sessionIDs) == 0 {
-		return counts, nil
-	}
-	args := make([]any, len(sessionIDs))
-	placeholders := make([]string, len(sessionIDs))
-	for i, id := range sessionIDs {
-		args[i] = id
-		placeholders[i] = "?"
-	}
+	sessionIn, args := sessions.in("session_id")
 	rows, err := s.queryContext(ctx, `
 		SELECT session_id,
 			toInt64(countIf(role = 'user' AND is_system = false
 				AND COALESCE(source_subtype, '') != 'tool_result')) AS user_count,
 			toInt64(countIf(role = 'assistant' AND has_tool_use = true)) AS tool_count
 		FROM messages
-		WHERE session_id IN (`+strings.Join(placeholders, ",")+`)
+		WHERE `+sessionIn+`
 		GROUP BY session_id`,
 		args...,
 	)
@@ -1707,6 +1702,48 @@ func chInPlaceholders(ids []string) (string, []any) {
 		args[i] = id
 	}
 	return "(" + strings.Join(ph, ",") + ")", args
+}
+
+// chSessionSet is a relation of session IDs that a query embeds as
+// `col IN (...)`. clickhouse-go inlines every bound argument into the
+// statement text and the server rejects statements over max_query_size
+// (256 KiB by default), so sets the database already knows are selected in
+// SQL instead of being round-tripped through Go as placeholder lists.
+type chSessionSet struct {
+	body string
+	args []any
+}
+
+// chSessionSetFromWhere selects session IDs with a WHERE clause written
+// against the alias `s`.
+func chSessionSetFromWhere(where string, args []any) chSessionSet {
+	return chSessionSet{
+		body: "SELECT s.id FROM sessions s WHERE " + where,
+		args: args,
+	}
+}
+
+// chSessionSetFromIDs embeds an explicit ID list. It exists for callers
+// that pin exact sessions, such as contract tests; the list still grows the
+// statement, so production paths derive the set in SQL instead.
+func chSessionSetFromIDs(ids []string) chSessionSet {
+	ph, args := chInPlaceholders(ids)
+	return chSessionSet{body: strings.Trim(ph, "()"), args: args}
+}
+
+// in returns `col IN (...)` with a fresh copy of the bound arguments so
+// callers can embed the set more than once in one statement.
+func (set chSessionSet) in(col string) (string, []any) {
+	return col + " IN (" + set.body + ")", slices.Clone(set.args)
+}
+
+// chAnalyticsSessionSet is the SQL form of analyticsSessions for filters
+// without a model, which is the only case analyticsSessions answers from
+// chBuildAnalyticsWhere alone.
+func chAnalyticsSessionSet(f db.AnalyticsFilter) chSessionSet {
+	where, args := chBuildAnalyticsWhere(
+		f, "COALESCE(s.started_at, s.created_at)", "s.", true, true)
+	return chSessionSetFromWhere(where, args)
 }
 
 func chQueryChunked(ids []string, fn func(chunk []string) error) error {
@@ -1928,7 +1965,7 @@ func (s *Store) GetAnalyticsVelocity(
 		)
 	} else {
 		sessionMsgs, err = s.velocityMessages(
-			ctx, sessionIDs, analyticsLocation(f.Timezone),
+			ctx, chAnalyticsSessionSet(f), analyticsLocation(f.Timezone),
 		)
 	}
 	if err != nil {
@@ -1940,7 +1977,7 @@ func (s *Store) GetAnalyticsVelocity(
 			ctx, sessionIDs, f,
 		)
 	} else {
-		toolCounts, err = s.velocityToolCounts(ctx, sessionIDs)
+		toolCounts, err = s.velocityToolCounts(ctx, chAnalyticsSessionSet(f))
 	}
 	if err != nil {
 		return db.VelocityResponse{}, err
@@ -2030,18 +2067,15 @@ type chVelocityAccumulator struct {
 
 func (s *Store) velocityMessages(
 	ctx context.Context,
-	sessionIDs []string,
+	sessions chSessionSet,
 	loc *time.Location,
 ) (map[string][]chVelocityMsg, error) {
-	out := make(map[string][]chVelocityMsg, len(sessionIDs))
-	if len(sessionIDs) == 0 {
-		return out, nil
-	}
-	args, placeholders := stringInArgs(sessionIDs)
+	out := make(map[string][]chVelocityMsg)
+	sessionIn, args := sessions.in("session_id")
 	rows, err := s.queryContext(ctx, `
 		SELECT session_id, ordinal, role, timestamp, content_length
 		FROM messages
-		WHERE session_id IN (`+strings.Join(placeholders, ",")+`)
+		WHERE `+sessionIn+`
 		ORDER BY session_id, ordinal`,
 		args...,
 	)
@@ -2100,17 +2134,14 @@ func (s *Store) filteredVelocityMessages(
 
 func (s *Store) velocityToolCounts(
 	ctx context.Context,
-	sessionIDs []string,
+	sessions chSessionSet,
 ) (map[string]int, error) {
-	out := make(map[string]int, len(sessionIDs))
-	if len(sessionIDs) == 0 {
-		return out, nil
-	}
-	args, placeholders := stringInArgs(sessionIDs)
+	out := make(map[string]int)
+	sessionIn, args := sessions.in("session_id")
 	rows, err := s.queryContext(ctx, `
 		SELECT session_id, toInt64(COUNT(*))
 		FROM tool_calls
-		WHERE session_id IN (`+strings.Join(placeholders, ",")+`)
+		WHERE `+sessionIn+`
 		GROUP BY session_id`,
 		args...,
 	)
@@ -2127,16 +2158,6 @@ func (s *Store) velocityToolCounts(
 		out[sid] = count
 	}
 	return out, rows.Err()
-}
-
-func stringInArgs(values []string) ([]any, []string) {
-	args := make([]any, len(values))
-	placeholders := make([]string, len(values))
-	for i, value := range values {
-		args[i] = value
-		placeholders[i] = "?"
-	}
-	return args, placeholders
 }
 
 func chLocalTime(ts string, loc *time.Location) (time.Time, bool) {

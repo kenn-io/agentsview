@@ -4,8 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"sort"
-	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -61,8 +61,13 @@ func (s *Store) BuildActivityReportArtifacts(
 	lowerBound := chUsagePaddedUTCBound(q.RangeStart.UTC().Format(time.RFC3339), -14)
 	upperBound := chUsagePaddedUTCBound(q.RangeEnd.UTC().Format(time.RFC3339), 14)
 
-	sessions, ids, err := s.activityReportSessions(
-		ctx, f, rangeStartUTC, rangeEndUTC)
+	// The same predicate selects the session metadata and, as a subquery,
+	// the candidate set inside the usage and interval queries, so the
+	// statement size does not grow with the number of matching sessions.
+	candidateWhere, candidateArgs := clickActivityReportCandidateWhere(
+		f, rangeStartUTC, rangeEndUTC)
+	candidates := chSessionSetFromWhere(candidateWhere, candidateArgs)
+	sessions, ids, err := s.activityReportSessions(ctx, candidateWhere, candidateArgs)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
@@ -71,13 +76,13 @@ func (s *Store) BuildActivityReportArtifacts(
 	})
 
 	usage, pricing, err := s.activityReportUsage(
-		ctx, ids, lowerBound, upperBound, q)
+		ctx, candidates, ids, lowerBound, upperBound, q)
 	if err != nil {
 		return activity.CandidateArtifacts{}, err
 	}
 
 	rowsProcessed := int64(0)
-	source := s.activityReportCandidateSource(ids, q)
+	source := s.activityReportCandidateSource(candidates, ids, q)
 	artifacts, err := activity.BuildCandidateArtifactsFromSourceWithSurvivorUsage(ctx, activity.Params{
 		RangeStart:    q.RangeStart,
 		RangeEnd:      q.RangeEnd,
@@ -150,11 +155,8 @@ func sortedBoolKeys(m map[string]bool) []string {
 }
 
 func (s *Store) activityReportSessions(
-	ctx context.Context, f db.AnalyticsFilter, rangeStartUTC, rangeEndUTC string,
+	ctx context.Context, where string, args []any,
 ) ([]activity.SessionMeta, []string, error) {
-	where, args := clickActivityReportCandidateWhere(
-		f, rangeStartUTC, rangeEndUTC)
-
 	query := `SELECT
 		s.id,
 		COALESCE(NULLIF(s.display_name, ''), NULLIF(s.session_name, ''), NULLIF(s.project, ''), s.id) AS display_name,
@@ -218,8 +220,13 @@ func clickActivityReportCandidateWhere(
 	return where, append(args, rangeStartUTC, rangeStartUTC, rangeEndUTC)
 }
 
+// activityReportCandidateSource streams interval candidates for the sessions
+// selected by `candidates`. The set is evaluated inside each statement; `ids`
+// is the session list the caller already loaded, and candidates for any
+// session outside it are dropped so the stream matches the metadata the
+// aggregator was given even if a push lands between the two queries.
 func (s *Store) activityReportCandidateSource(
-	ids []string, q activity.Query,
+	candidates chSessionSet, ids []string, q activity.Query,
 ) activity.CandidateSource {
 	return func(
 		ctx context.Context,
@@ -228,10 +235,16 @@ func (s *Store) activityReportCandidateSource(
 		if len(ids) == 0 {
 			return nil
 		}
+		known := make(map[string]struct{}, len(ids))
+		for _, id := range ids {
+			known[id] = struct{}{}
+		}
 		lower := q.RangeStart.Add(
 			-time.Duration(q.GapCapSeconds) * time.Second,
 		)
-		inList, inArgs := chInPlaceholders(ids)
+		terminalIn, terminalArgs := candidates.in("tre.session_id")
+		assistantIn, assistantArgs := candidates.in("session_id")
+		stampedIn, stampedArgs := candidates.in("session_id")
 		scanCandidate := func(
 			row interface{ Scan(dest ...any) error },
 		) (activity.IntervalCandidate, error) {
@@ -268,7 +281,7 @@ func (s *Store) activityReportCandidateSource(
 			SELECT tre.session_id, tre.tool_call_message_ordinal AS ordinal,
 				tre.call_index, tre.event_index, tre.timestamp
 			FROM tool_result_events tre
-			WHERE tre.session_id IN ` + inList + `
+			WHERE ` + terminalIn + `
 				AND tre.source = 'tool_execution'
 				AND tre.status IN ('completed', 'errored')
 				AND tre.timestamp IS NOT NULL
@@ -373,7 +386,7 @@ func (s *Store) activityReportCandidateSource(
 		), assistant_models AS (
 			SELECT session_id, ordinal, model
 			FROM messages
-			WHERE session_id IN ` + inList + `
+			WHERE ` + assistantIn + `
 				AND role = 'assistant'
 				AND model != ''
 		)
@@ -390,9 +403,8 @@ func (s *Store) activityReportCandidateSource(
 			AND candidate.start_timestamp < ` + chTimestampSQL + `
 		ORDER BY candidate.start_timestamp, candidate.session_id,
 			candidate.start_ordinal, candidate.call_index, candidate.event_index`
-		terminalArgs := append([]any{}, inArgs...)
 		terminalArgs = append(terminalArgs, lower.UTC().Format(time.RFC3339Nano))
-		terminalArgs = append(terminalArgs, inArgs...)
+		terminalArgs = append(terminalArgs, assistantArgs...)
 		terminalArgs = append(terminalArgs, q.EffectiveEnd.UTC().Format(time.RFC3339Nano))
 
 		terminalRows, err := s.queryContext(ctx, terminalQuery, terminalArgs...)
@@ -405,6 +417,9 @@ func (s *Store) activityReportCandidateSource(
 			candidate, scanErr := scanCandidate(terminalRows)
 			if scanErr != nil {
 				return scanErr
+			}
+			if _, ok := known[candidate.SessionID]; !ok {
+				continue
 			}
 			terminal = append(terminal, candidate)
 		}
@@ -428,7 +443,7 @@ func (s *Store) activityReportCandidateSource(
 					leadInFrame(CAST(model AS Nullable(String)), 1, CAST(NULL AS Nullable(String))) OVER w AS successor_model,
 					lagInFrame(CAST(timestamp AS Nullable(DateTime64(6, 'UTC'))), 1, CAST(NULL AS Nullable(DateTime64(6, 'UTC')))) OVER w AS prev_timestamp
 				FROM messages
-				WHERE session_id IN ` + inList + `
+				WHERE ` + stampedIn + `
 					AND timestamp IS NOT NULL
 				WINDOW w AS (
 					PARTITION BY session_id ORDER BY ordinal
@@ -453,12 +468,11 @@ func (s *Store) activityReportCandidateSource(
 				AND m.timestamp >= ` + chTimestampSQL + `
 				AND m.timestamp < ` + chTimestampSQL + `
 			ORDER BY m.timestamp, m.session_id, m.ordinal`
-			args := append([]any{}, inArgs...)
-			args = append(args,
+			stampedArgs = append(stampedArgs,
 				lower.UTC().Format(time.RFC3339Nano),
 				q.EffectiveEnd.UTC().Format(time.RFC3339Nano),
 			)
-			rows, queryErr := s.queryContext(ctx, query, args...)
+			rows, queryErr := s.queryContext(ctx, query, stampedArgs...)
 			if queryErr != nil {
 				return fmt.Errorf(
 					"querying clickhouse activity report candidates: %w", queryErr)
@@ -471,6 +485,9 @@ func (s *Store) activityReportCandidateSource(
 				candidate, scanErr := scanCandidate(rows)
 				if scanErr != nil {
 					return scanErr
+				}
+				if _, ok := known[candidate.SessionID]; !ok {
+					continue
 				}
 				if err := yield(candidate); err != nil {
 					return err
@@ -488,7 +505,7 @@ func (s *Store) activityReportCandidateSource(
 func (s *Store) ActivityReportCandidateSource(
 	ids []string, q activity.Query,
 ) activity.CandidateSource {
-	return s.activityReportCandidateSource(ids, q)
+	return s.activityReportCandidateSource(chSessionSetFromIDs(ids), ids, q)
 }
 
 type clickActivityReportUsageRow struct {
@@ -522,11 +539,6 @@ type clickSessionUsageOrderedRow struct {
 	ordinal int64
 }
 
-type clickSnapshotKey struct {
-	messageID string
-	requestID string
-}
-
 func (s *Store) GetSessionUsageRows(
 	ctx context.Context, ids []string,
 ) (*activity.SessionUsageRows, error) {
@@ -541,14 +553,25 @@ func (s *Store) GetSessionUsageRows(
 	for i, id := range ids {
 		sessionOrder[id] = i
 	}
-	inList, inArgs := chInPlaceholders(ids)
-	query := clickUsageNormalizedQuery(
-		chUsageMessageEligibility+" AND s.id IN "+inList,
-		chUsageEventEligibility+" AND s.id IN "+inList,
-	)
-	queryArgs := append([]any{}, inArgs...)
-	queryArgs = append(queryArgs, inArgs...)
-	rowsAcc, err := s.scanActivityUsageRows(ctx, query, queryArgs)
+	// Load every chunk before selecting survivors: the cross-session
+	// snapshot and dedup passes below need the complete row set, the same
+	// way the SQLite and PostgreSQL stores chunk this load.
+	var rowsAcc []clickSessionUsageOrderedRow
+	err = chQueryChunked(ids, func(chunk []string) error {
+		inList, inArgs := chInPlaceholders(chunk)
+		query := clickUsageNormalizedQuery(
+			chUsageMessageEligibility+" AND s.id IN "+inList,
+			chUsageEventEligibility+" AND s.id IN "+inList,
+		)
+		queryArgs := append([]any{}, inArgs...)
+		queryArgs = append(queryArgs, inArgs...)
+		chunkRows, err := s.scanActivityUsageRows(ctx, query, queryArgs)
+		if err != nil {
+			return err
+		}
+		rowsAcc = append(rowsAcc, chunkRows...)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -657,8 +680,15 @@ func (s *Store) GetSessionUsageRows(
 	}, nil
 }
 
+// activityReportUsage loads the usage rows of the candidate sessions plus the
+// cross-session Claude snapshot peers needed to pick complete snapshots, all
+// in one statement. Candidate sessions and their snapshot keys are relations
+// inside the query, so neither the session count nor the key count changes
+// the statement size. `ids` is the candidate list already loaded by the
+// caller and only limits which survivors are attributed to the report.
 func (s *Store) activityReportUsage(
 	ctx context.Context,
+	candidates chSessionSet,
 	ids []string,
 	lowerBound, upperBound string,
 	q activity.Query,
@@ -676,70 +706,10 @@ func (s *Store) activityReportUsage(
 		return out, &block, nil
 	}
 
-	inList, inArgs := chInPlaceholders(ids)
-	messageBound := " AND COALESCE(m.timestamp, s.started_at) >= " + chTimestampSQL +
-		" AND COALESCE(m.timestamp, s.started_at) <= " + chTimestampSQL
-	eventBound := " AND COALESCE(ue.occurred_at, s.started_at) >= " + chTimestampSQL +
-		" AND COALESCE(ue.occurred_at, s.started_at) <= " + chTimestampSQL
-	query := clickUsageNormalizedQuery(
-		chUsageMessageEligibility+" AND s.id IN "+inList+messageBound,
-		chUsageEventEligibility+" AND s.id IN "+inList+eventBound,
-	)
-	args := append([]any{}, inArgs...)
-	args = append(args, lowerBound, upperBound)
-	args = append(args, inArgs...)
-	args = append(args, lowerBound, upperBound)
+	query, args := clickActivityReportUsageQuery(candidates, lowerBound, upperBound)
 	rowsAcc, err := s.scanActivityUsageRows(ctx, query, args)
 	if err != nil {
 		return nil, nil, err
-	}
-
-	type snapshotKey = clickSnapshotKey
-	keySet := make(map[snapshotKey]struct{})
-	for _, candidate := range rowsAcc {
-		if candidate.scan.claudeMessageID == "" || candidate.scan.claudeRequestID == "" {
-			continue
-		}
-		keySet[snapshotKey{
-			messageID: candidate.scan.claudeMessageID,
-			requestID: candidate.scan.claudeRequestID,
-		}] = struct{}{}
-	}
-	keys := make([]snapshotKey, 0, len(keySet))
-	for key := range keySet {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].messageID != keys[j].messageID {
-			return keys[i].messageID < keys[j].messageID
-		}
-		return keys[i].requestID < keys[j].requestID
-	})
-	candidateIDs := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		candidateIDs[id] = struct{}{}
-	}
-	if len(keys) > 0 {
-		pairSQL, pairArgs := clickPairPlaceholders(keys)
-		peerQuery := clickUsageNormalizedQuery(
-			chUsageMessageEligibility+`
-				AND (m.claude_message_id, m.claude_request_id) IN `+pairSQL+`
-				AND s.id NOT IN `+inList+messageBound,
-			chUsageEventEligibility+" AND false",
-		)
-		peerArgs := append([]any{}, pairArgs...)
-		peerArgs = append(peerArgs, inArgs...)
-		peerArgs = append(peerArgs, lowerBound, upperBound)
-		peerRows, peerErr := s.scanActivityUsageRows(ctx, peerQuery, peerArgs)
-		if peerErr != nil {
-			return nil, nil, peerErr
-		}
-		for _, row := range peerRows {
-			if _, skip := candidateIDs[row.scan.sessionID]; skip {
-				continue
-			}
-			rowsAcc = append(rowsAcc, row)
-		}
 	}
 
 	sort.SliceStable(rowsAcc, func(i, j int) bool {
@@ -808,7 +778,58 @@ func (s *Store) activityReportUsage(
 	return out, &block, nil
 }
 
+// clickActivityReportUsageQuery builds the activity report usage statement.
+// candidate_sessions evaluates the report's session predicate,
+// candidate_snapshot_keys collects the distinct Claude (message_id,
+// request_id) pairs those sessions carry inside the padded bounds, and the
+// message branch keeps a row when its session is a candidate or its pair
+// matches one of those keys. Rows from non-candidate sessions are the peers
+// the survivor selection compares against; it never attributes them to the
+// report unless the earliest snapshot belongs to a candidate.
+func clickActivityReportUsageQuery(
+	candidates chSessionSet, lowerBound, upperBound string,
+) (string, []any) {
+	messageBound := " AND COALESCE(m.timestamp, s.started_at) >= " + chTimestampSQL +
+		" AND COALESCE(m.timestamp, s.started_at) <= " + chTimestampSQL
+	eventBound := " AND COALESCE(ue.occurred_at, s.started_at) >= " + chTimestampSQL +
+		" AND COALESCE(ue.occurred_at, s.started_at) <= " + chTimestampSQL
+	const candidateIn = "s.id IN (SELECT id FROM candidate_sessions)"
+	ctes := `candidate_sessions AS (
+			SELECT id FROM (` + candidates.body + `)
+		),
+		candidate_snapshot_keys AS (
+			SELECT DISTINCT m.claude_message_id AS claude_message_id,
+				m.claude_request_id AS claude_request_id
+			FROM messages m
+			JOIN sessions s ON s.id = m.session_id
+			WHERE ` + chUsageMessageEligibility + `
+				AND ` + candidateIn + `
+				AND m.claude_message_id != ''
+				AND m.claude_request_id != ''` + messageBound + `
+		),
+		`
+	query := clickUsageNormalizedQueryWith(ctes,
+		chUsageMessageEligibility+`
+			AND (`+candidateIn+`
+				OR (m.claude_message_id, m.claude_request_id) IN (
+					SELECT claude_message_id, claude_request_id
+					FROM candidate_snapshot_keys))`+messageBound,
+		chUsageEventEligibility+" AND "+candidateIn+eventBound,
+	)
+	args := slices.Clone(candidates.args)
+	args = append(args, lowerBound, upperBound)
+	args = append(args, lowerBound, upperBound)
+	args = append(args, lowerBound, upperBound)
+	return query, args
+}
+
 func clickUsageNormalizedQuery(messageWhere, eventWhere string) string {
+	return clickUsageNormalizedQueryWith("", messageWhere, eventWhere)
+}
+
+// clickUsageNormalizedQueryWith prepends extra common table expressions
+// (each terminated by a comma) ahead of usage_raw.
+func clickUsageNormalizedQueryWith(ctes, messageWhere, eventWhere string) string {
 	maxTok := db.MaxPlausibleTokens
 	clamp := func(expr string) string {
 		return fmt.Sprintf("least(greatest(%s, toInt64(0)), toInt64(%d))", expr, maxTok)
@@ -821,7 +842,7 @@ func clickUsageNormalizedQuery(messageWhere, eventWhere string) string {
 	msgReasoning := clamp("JSONExtractInt(token_json, 'reasoning_tokens')")
 	msgWeb := "greatest(JSONExtractInt(token_json, 'server_tool_use', 'web_search_requests'), toInt64(0))"
 	return fmt.Sprintf(`
-		WITH usage_raw AS (
+		WITH %[15]susage_raw AS (
 			SELECT m.session_id AS session_id,
 				CAST(m.ordinal AS Nullable(Int64)) AS message_ordinal,
 				'message' AS source,
@@ -914,6 +935,7 @@ func clickUsageNormalizedQuery(messageWhere, eventWhere string) string {
 		msgInput, msgOutput, msgCacheCr, msgCacheCr1h, msgCacheRd,
 		clamp("input_tokens"), clamp("output_tokens"), clamp("cache_create"),
 		clamp("cache_read"), msgReasoning, clamp("reasoning_tokens"), msgWeb,
+		ctes,
 	)
 }
 
@@ -1080,14 +1102,4 @@ func clickActivityReportRowStatus(
 		pricing.RecordResolvedComputedAggregate(r.model, pricedModel, lookup)
 	}
 	return cost, true, true, nil
-}
-
-func clickPairPlaceholders(keys []clickSnapshotKey) (string, []any) {
-	parts := make([]string, len(keys))
-	args := make([]any, 0, len(keys)*2)
-	for i, key := range keys {
-		parts[i] = "(?, ?)"
-		args = append(args, key.messageID, key.requestID)
-	}
-	return "(" + strings.Join(parts, ", ") + ")", args
 }

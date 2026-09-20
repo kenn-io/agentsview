@@ -151,3 +151,33 @@ func TestGetAnalyticsSummaryEmptyMedian(t *testing.T) {
 		assert.Equal(t, 1, summary.MedianMessages)
 	})
 }
+
+// TestAnalyticsSessionSetQueriesMatchSQLite covers the reads that select
+// their sessions with a SQL subquery rather than an ID list: session shape
+// autonomy buckets and velocity messages and tool counts.
+func TestAnalyticsSessionSetQueriesMatchSQLite(t *testing.T) {
+	store, _, local := newPushedStore(t)
+	ctx := t.Context()
+	filter := db.AnalyticsFilter{
+		From:     "2026-01-01",
+		To:       "2026-01-31",
+		Timezone: "UTC",
+	}
+
+	wantShape, err := local.GetAnalyticsSessionShape(ctx, filter)
+	require.NoError(t, err)
+	gotShape, err := store.GetAnalyticsSessionShape(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, wantShape.Count, gotShape.Count)
+	assert.Equal(t, wantShape.AutonomyDistribution, gotShape.AutonomyDistribution)
+	assert.NotEmpty(t, gotShape.AutonomyDistribution,
+		"fixture sessions have user messages, so autonomy buckets must be populated")
+
+	wantVelocity, err := local.GetAnalyticsVelocity(ctx, filter)
+	require.NoError(t, err)
+	gotVelocity, err := store.GetAnalyticsVelocity(ctx, filter)
+	require.NoError(t, err)
+	assert.Equal(t, wantVelocity, gotVelocity)
+	assert.NotEmpty(t, gotVelocity.ByAgent,
+		"fixture sessions have paired user and assistant messages, so velocity must have data")
+}

@@ -415,6 +415,14 @@ own metadata, which is why the docs below call the database a mirror.
 - Design ClickHouse SQL for MergeTree. Do not paste PostgreSQL or DuckDB queries
   unchanged. Orphan filters must treat `parent_session_id IS NULL` as an
   orphan (`NULL NOT IN (...)` is unknown).
+- clickhouse-go inlines every bound argument into the statement text, and the
+  server rejects statements over `max_query_size` (256 KiB by default). Never
+  build an `IN (...)` list from a set the database already selected, such as
+  the sessions matching a filter or the Claude snapshot keys of those
+  sessions. Embed the selecting predicate as a subquery (`chSessionSet`) or
+  derive the keys in a CTE instead. Chunked lists (`chQueryChunked`) are for
+  sets that arrive from outside the database, and they bound entry count, not
+  bytes.
 - Tests use the `chtest` build tag. Run `make test-clickhouse` against a
   dedicated test server (`TEST_CLICKHOUSE_URL` or the compose service). Do not
   point those tests at a live mirror.

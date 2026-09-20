@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
-	"strings"
 	"time"
 
 	"go.kenn.io/agentsview/internal/activity"
@@ -756,115 +755,73 @@ func (s *Store) activityReportUsage(
 		ts      time.Time
 		ordinal int64
 	}
-	var rowsAcc []ordered
-	loadRows := func(
-		rowsSQL string,
-		pb *paramBuilder,
-		skipSessionIDs map[string]struct{},
-	) error {
-		lower := pb.add(lowerBound)
-		upper := pb.add(upperBound)
-		query := pgDailyUsageRowSelectFromRows(rowsSQL) + `
-			AND u.ts >= ` + lower + `::timestamptz
-			AND u.ts <= ` + upper + `::timestamptz`
-		rows, queryErr := s.pg.QueryContext(ctx, query, pb.args...)
-		if queryErr != nil {
-			return fmt.Errorf("querying activity report usage: %w", queryErr)
-		}
-		defer rows.Close()
-		for rows.Next() {
-			r, scanErr := scanPGDailyUsageRow(rows)
-			if scanErr != nil {
-				return fmt.Errorf(
-					"scanning activity report usage: %w", scanErr)
-			}
-			if _, skip := skipSessionIDs[r.sessionID]; skip {
-				continue
-			}
-			ord := int64(-1)
-			if r.messageOrdinal.Valid {
-				ord = r.messageOrdinal.Int64
-			}
-			rowsAcc = append(rowsAcc, ordered{
-				ts:      r.ts.Time,
-				ordinal: ord,
-				scan:    r,
-				row: activity.UsageRow{
-					SessionID:       r.sessionID,
-					Model:           r.model,
-					Timestamp:       startedAtString(r.ts),
-					Agent:           r.agent,
-					ProviderID:      r.providerID,
-					ClaudeMessageID: r.claudeMessageID,
-					ClaudeRequestID: r.claudeRequestID,
-					SourceUUID:      r.sourceUUID,
-					UsageDedupKey:   r.usageDedupKey,
-				},
-			})
-		}
-		return rows.Err()
-	}
-
-	err = pgQueryChunked(ids, func(chunk []string) error {
-		pb := &paramBuilder{}
-		ph := pgInPlaceholders(chunk, pb)
-		rowsSQL := pgDailyUsageRowsSQLWithWhere(
-			pgUsageMessageEligibility+" AND m.session_id IN "+ph,
-			pgUsageEventEligibility+" AND ue.session_id IN "+ph)
-		return loadRows(rowsSQL, pb, nil)
-	})
+	// One text[] parameter names the candidate sessions, so the statement
+	// shape and bind count do not depend on how many sessions the report
+	// selected. The message branch also keeps cross-session Claude peers
+	// whose snapshot keys match a candidate row inside the bounds; those
+	// keys are derived in the query instead of being round-tripped through
+	// Go.
+	pb := &paramBuilder{}
+	candidateSessions := pb.add(ids)
+	peerSessions := pb.add(ids)
+	peerLower := pb.add(lowerBound)
+	peerUpper := pb.add(upperBound)
+	eventSessions := pb.add(ids)
+	lower := pb.add(lowerBound)
+	upper := pb.add(upperBound)
+	rowsSQL := pgDailyUsageRowsSQLWithWhere(
+		pgUsageMessageEligibility+`
+			AND (m.session_id = ANY(`+candidateSessions+`)
+				OR (m.claude_message_id, m.claude_request_id) IN (
+					SELECT m.claude_message_id, m.claude_request_id
+					FROM messages m
+					JOIN sessions s ON s.id = m.session_id
+					WHERE `+pgUsageMessageEligibility+`
+						AND m.session_id = ANY(`+peerSessions+`)
+						AND m.claude_message_id != ''
+						AND m.claude_request_id != ''
+						AND COALESCE(m.timestamp, s.started_at) >= `+peerLower+`::timestamptz
+						AND COALESCE(m.timestamp, s.started_at) <= `+peerUpper+`::timestamptz
+				))`,
+		pgUsageEventEligibility+" AND ue.session_id = ANY("+eventSessions+")")
+	query := pgDailyUsageRowSelectFromRows(rowsSQL) + `
+		AND u.ts >= ` + lower + `::timestamptz
+		AND u.ts <= ` + upper + `::timestamptz`
+	rows, err := s.pg.QueryContext(ctx, query, pb.args...)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("querying activity report usage: %w", err)
 	}
-
-	type snapshotKey struct {
-		messageID string
-		requestID string
-	}
-	keySet := make(map[snapshotKey]struct{})
-	for _, candidate := range rowsAcc {
-		if candidate.row.ClaudeMessageID == "" || candidate.row.ClaudeRequestID == "" {
-			continue
+	defer rows.Close()
+	var rowsAcc []ordered
+	for rows.Next() {
+		r, scanErr := scanPGDailyUsageRow(rows)
+		if scanErr != nil {
+			return nil, nil, fmt.Errorf(
+				"scanning activity report usage: %w", scanErr)
 		}
-		keySet[snapshotKey{
-			messageID: candidate.row.ClaudeMessageID,
-			requestID: candidate.row.ClaudeRequestID,
-		}] = struct{}{}
-	}
-	keys := make([]snapshotKey, 0, len(keySet))
-	for key := range keySet {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].messageID != keys[j].messageID {
-			return keys[i].messageID < keys[j].messageID
+		ord := int64(-1)
+		if r.messageOrdinal.Valid {
+			ord = r.messageOrdinal.Int64
 		}
-		return keys[i].requestID < keys[j].requestID
-	})
-	candidateIDs := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		candidateIDs[id] = struct{}{}
+		rowsAcc = append(rowsAcc, ordered{
+			ts:      r.ts.Time,
+			ordinal: ord,
+			scan:    r,
+			row: activity.UsageRow{
+				SessionID:       r.sessionID,
+				Model:           r.model,
+				Timestamp:       startedAtString(r.ts),
+				Agent:           r.agent,
+				ProviderID:      r.providerID,
+				ClaudeMessageID: r.claudeMessageID,
+				ClaudeRequestID: r.claudeRequestID,
+				SourceUUID:      r.sourceUUID,
+				UsageDedupKey:   r.usageDedupKey,
+			},
+		})
 	}
-	const peerChunk = (maxPGVars - 2) / 2
-	for i := 0; i < len(keys); i += peerChunk {
-		end := min(i+peerChunk, len(keys))
-		pb := &paramBuilder{}
-		pairs := make([]string, 0, end-i)
-		for _, key := range keys[i:end] {
-			pairs = append(pairs,
-				"("+pb.add(key.messageID)+", "+pb.add(key.requestID)+")")
-		}
-		rowsSQL := pgDailyUsageRowsSQLWithWhere(
-			pgUsageMessageEligibility+` AND EXISTS (
-				SELECT 1
-				FROM (VALUES `+strings.Join(pairs, ", ")+`) AS peer_keys(message_id, request_id)
-				WHERE peer_keys.message_id = m.claude_message_id
-				  AND peer_keys.request_id = m.claude_request_id
-			)`,
-			pgUsageEventEligibility+" AND FALSE")
-		if err := loadRows(rowsSQL, pb, candidateIDs); err != nil {
-			return nil, nil, err
-		}
+	if err := rows.Err(); err != nil {
+		return nil, nil, fmt.Errorf("iterating activity report usage: %w", err)
 	}
 
 	sort.SliceStable(rowsAcc, func(i, j int) bool {

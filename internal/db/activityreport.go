@@ -1028,131 +1028,88 @@ func (db *DB) loadActivityReportUsageCandidatesFrom(
 		return []activityReportUsageCandidate{}, pricing, rateResolver, nil
 	}
 
-	var candidates []activityReportUsageCandidate
-	loadRows := func(
-		rowsSQL string, args []any, skipSessionIDs map[string]struct{},
-	) error {
-		query := dailyUsageRowSelectFromRowsWithMachine(rowsSQL, true) + `
-			AND u.ts >= ? AND u.ts <= ?`
-		args = append(args, lowerBound, upperBound)
-
-		rows, err := source.QueryContext(ctx, query, args...)
-		if err != nil {
-			return fmt.Errorf("querying activity report usage: %w", err)
-		}
-		defer rows.Close()
-
-		for rows.Next() {
-			r, scanErr := scanDailyUsageRowWithMachine(rows, true)
-			if scanErr != nil {
-				return fmt.Errorf(
-					"scanning activity report usage: %w", scanErr)
-			}
-			if _, skip := skipSessionIDs[r.sessionID]; skip {
-				continue
-			}
-			ord := int64(-1)
-			if r.messageOrdinal.Valid {
-				ord = r.messageOrdinal.Int64
-			}
-			parsedTS, tsErr := parseTimestamp(r.ts)
-			candidates = append(candidates, activityReportUsageCandidate{
-				ordinal: ord,
-				scan:    r,
-				ts:      parsedTS,
-				validTS: tsErr == nil,
-				row: activity.UsageRow{
-					SessionID:       r.sessionID,
-					Model:           r.model,
-					Timestamp:       r.ts,
-					Project:         r.project,
-					Machine:         r.machine,
-					MessageOrdinal:  ord,
-					UsageSource:     r.usageSource,
-					Agent:           r.agent,
-					ProviderID:      r.providerID,
-					ClaudeMessageID: r.claudeMessageID,
-					ClaudeRequestID: r.claudeRequestID,
-					SourceUUID:      r.sourceUUID,
-					UsageDedupKey:   r.usageDedupKey,
-				},
-			})
-		}
-		return rows.Err()
-	}
-
-	// Load only rows owned by candidate sessions first. Reporting export stops
-	// here because it combines multiple candidate sets before selecting usage.
-	// Ordinary reports then fetch only cross-session Claude peers needed to
-	// choose complete snapshots for those candidates.
-	const usageVarChunk = (maxSQLVars - 2) / 2
-	err = queryChunkedSize(ids, usageVarChunk, func(chunk []string) error {
-		ph, chunkArgs := inPlaceholders(chunk)
-		rowsSQL := dailyUsageRowsSQLWithWhere(
-			usageMessageEligibility+" AND m.session_id IN "+ph,
-			usageEventEligibility+" AND ue.session_id IN "+ph)
-		args := make([]any, 0, len(chunkArgs)*2)
-		args = append(args, chunkArgs...)
-		args = append(args, chunkArgs...)
-		return loadRows(rowsSQL, args, nil)
-	})
+	// One bound JSON array names the candidate sessions, so the statement
+	// shape and bind count do not depend on how many sessions the report
+	// selected. Reporting export stops at the candidate rows because it
+	// combines multiple candidate sets before selecting usage. Ordinary
+	// reports also load the cross-session Claude peers whose snapshot keys
+	// match a candidate row inside the bounds; those keys are derived in the
+	// query instead of being round-tripped through Go.
+	encodedIDs, err := json.Marshal(ids)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf(
+			"encoding activity report session IDs: %w", err)
 	}
-	if restrictToIDs {
-		return candidates, pricing, rateResolver, nil
+	const candidateSessions = "(SELECT value FROM json_each(?))"
+	messageWhere := usageMessageEligibility +
+		" AND m.session_id IN " + candidateSessions
+	args := []any{string(encodedIDs)}
+	if !restrictToIDs {
+		messageWhere = usageMessageEligibility + `
+			AND (m.session_id IN ` + candidateSessions + `
+				OR (m.claude_message_id, m.claude_request_id) IN (
+					SELECT m.claude_message_id, m.claude_request_id
+					FROM messages m
+					JOIN sessions s ON s.id = m.session_id
+					WHERE ` + usageMessageEligibility + `
+						AND m.session_id IN ` + candidateSessions + `
+						AND m.claude_message_id != ''
+						AND m.claude_request_id != ''
+						AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') >= ?
+						AND COALESCE(NULLIF(m.timestamp, ''), s.started_at, '') <= ?
+				))`
+		args = append(args, string(encodedIDs), lowerBound, upperBound)
 	}
+	args = append(args, string(encodedIDs), lowerBound, upperBound)
+	query := dailyUsageRowSelectFromRowsWithMachine(
+		dailyUsageRowsSQLWithWhere(
+			messageWhere,
+			usageEventEligibility+" AND ue.session_id IN "+candidateSessions,
+		), true) + `
+			AND u.ts >= ? AND u.ts <= ?`
 
-	type snapshotKey struct {
-		messageID string
-		requestID string
+	rows, err := source.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("querying activity report usage: %w", err)
 	}
-	keySet := make(map[snapshotKey]struct{})
-	for _, candidate := range candidates {
-		if candidate.row.ClaudeMessageID == "" || candidate.row.ClaudeRequestID == "" {
-			continue
-		}
-		keySet[snapshotKey{
-			messageID: candidate.row.ClaudeMessageID,
-			requestID: candidate.row.ClaudeRequestID,
-		}] = struct{}{}
-	}
-	keys := make([]snapshotKey, 0, len(keySet))
-	for key := range keySet {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		if keys[i].messageID != keys[j].messageID {
-			return keys[i].messageID < keys[j].messageID
-		}
-		return keys[i].requestID < keys[j].requestID
-	})
-	candidateIDs := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		candidateIDs[id] = struct{}{}
-	}
-	if len(keys) > 0 {
-		pairs := make([][2]string, len(keys))
-		for i, key := range keys {
-			pairs[i] = [2]string{key.messageID, key.requestID}
-		}
-		encodedPairs, marshalErr := json.Marshal(pairs)
-		if marshalErr != nil {
+	defer rows.Close()
+
+	var candidates []activityReportUsageCandidate
+	for rows.Next() {
+		r, scanErr := scanDailyUsageRowWithMachine(rows, true)
+		if scanErr != nil {
 			return nil, nil, nil, fmt.Errorf(
-				"encoding activity report Claude snapshot keys: %w", marshalErr)
+				"scanning activity report usage: %w", scanErr)
 		}
-		rowsSQL := dailyUsageRowsSQLWithWhere(
-			usageMessageEligibility+` AND m.claude_message_id != ''
-				AND m.claude_request_id != ''
-				AND (m.claude_message_id, m.claude_request_id) IN (
-					SELECT json_extract(peer.value, '$[0]'),
-					       json_extract(peer.value, '$[1]')
-					FROM json_each(?) AS peer
-				)`,
-			usageEventEligibility+" AND 1 = 0")
-		if err := loadRows(rowsSQL, []any{string(encodedPairs)}, candidateIDs); err != nil {
-			return nil, nil, nil, err
+		ord := int64(-1)
+		if r.messageOrdinal.Valid {
+			ord = r.messageOrdinal.Int64
 		}
+		parsedTS, tsErr := parseTimestamp(r.ts)
+		candidates = append(candidates, activityReportUsageCandidate{
+			ordinal: ord,
+			scan:    r,
+			ts:      parsedTS,
+			validTS: tsErr == nil,
+			row: activity.UsageRow{
+				SessionID:       r.sessionID,
+				Model:           r.model,
+				Timestamp:       r.ts,
+				Project:         r.project,
+				Machine:         r.machine,
+				MessageOrdinal:  ord,
+				UsageSource:     r.usageSource,
+				Agent:           r.agent,
+				ProviderID:      r.providerID,
+				ClaudeMessageID: r.claudeMessageID,
+				ClaudeRequestID: r.claudeRequestID,
+				SourceUUID:      r.sourceUUID,
+				UsageDedupKey:   r.usageDedupKey,
+			},
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, nil, fmt.Errorf("iterating activity report usage: %w", err)
 	}
 	return candidates, pricing, rateResolver, nil
 }
