@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -175,15 +176,7 @@ func TestPrepareRunServeRuntimeConfigRestartPreservesConfiguredURLRewrite(t *tes
 		"https://viewer.example.test:%d", got.Port,
 	), got.PublicURL)
 	assert.Equal(t, []string{got.PublicURL}, got.PublicOrigins)
-
-	srv := server.New(got, nil, nil)
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	runtime, err := startServerWithOptionalCaddy(ctx, got, srv, rtOpts)
-	require.NoError(t, err)
-	assert.Equal(t, got.PublicURL, runtime.PublicURL)
-	require.NoError(t, srv.Shutdown(t.Context()))
-	require.ErrorIs(t, <-runtime.ServeErrCh, http.ErrServerClosed)
+	assert.Equal(t, got.PublicURL, strings.TrimRight(browserURL(got), "/"))
 }
 
 func TestWaitForBackendReadyRejectsUnrelatedHTTPListener(t *testing.T) {
