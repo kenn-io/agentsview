@@ -570,7 +570,6 @@ func appendDaemonCompatibilityHint(tr transport, err error) error {
 // to pg push/serve because CLI read commands never mutate PG. Like
 // pg serve, it runs the replica vector gate so `session search --pg
 // --semantic|--hybrid` and `mcp --pg` get the same semantic search
-// the SQLite direct path wires via installDirectVectorSearcher.|--hybrid` and `mcp --pg` get the same semantic search
 // the SQLite direct path wires via installDirectVectorSearcher.
 func newPGReadService(
 	cfg config.Config, pgCfg config.PGConfig,

@@ -1,6 +1,7 @@
-## | `push_vectors` | Run the vector phase on push; default `true` | | `--no-vectors` | `false` | Skip the semantic-search vector phase for this run |
-
-## title: ClickHouse Sync description: Push the SQLite archive into ClickHouse and serve a read-only web UI from it
+---
+title: ClickHouse Sync
+description: Push the SQLite archive into ClickHouse and serve a read-only web UI from it
+---
 
 AgentsView stores sessions locally in SQLite. `agentsview clickhouse push`
 copies those sessions into ClickHouse. `agentsview clickhouse serve` runs the
@@ -103,6 +104,7 @@ agentsview clickhouse push [target] [flags]
 | `--watch`            | `false` | Run continuously, pushing on change plus a periodic floor                 |
 | `--debounce`         | `30s`   | Coalesce window after a filesystem change before pushing (`--watch` only) |
 | `--interval`         | `15m`   | Periodic floor push interval (`--watch` only)                             |
+| `--no-vectors`       | `false` | Skip the semantic-search vector phase for this run                        |
 
 Without `--watch`, push is on-demand. With `--watch`, the command stays in the
 foreground and keeps pushing until interrupted.
@@ -200,10 +202,12 @@ the session phase, copying the machine's active embedding generation from
 `vectors.db` into ClickHouse so `clickhouse serve` can answer
 `--semantic`/`--hybrid`. Only changed sessions are re-sent; a session's vectors
 follow its session row, so a session that leaves the push scope loses its
-vectors with it. Skip the phase for one run with `--no-vectors`, or disable it
-persistently with `push_vectors = false` under `[clickhouse]`. The push summary
-reports the phase as `Vectors: N session(s) pushed, ...` or
-`Vectors: skipped (<reason>)`. See
+vectors with it. A watch push scoped to changed sessions widens itself to the
+whole generation until this machine has completed one clean generation-wide
+pass, so an interrupted first push finishes on the next push. Skip the phase for
+one run with `--no-vectors`, or disable it persistently with
+`push_vectors = false` under `[clickhouse]`. The push summary reports the phase
+as `Vectors: N session(s) pushed, ...` or `Vectors: skipped (<reason>)`. See
 [semantic search: ClickHouse](/docs/semantic-search/#clickhouse) for how serve
 matches a pushed generation.
 
@@ -314,6 +318,7 @@ ______________________________________________________________________
 | `allow_insecure`     | Allow plaintext or unverified TLS to a non-loopback host              |
 | `projects`           | Inclusive project filter                                              |
 | `exclude_projects`   | Exclusive project filter                                              |
+| `push_vectors`       | Run the vector phase on push; default `true`                          |
 | `default_clickhouse` | Named target used when more than one `[clickhouse.NAME]` block exists |
 
 Environment overrides for the effective default target:

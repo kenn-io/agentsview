@@ -35,12 +35,18 @@ type fakeVectorSource struct {
 	docs       map[string][]storage.VectorPushDoc
 	genScopes  [][]string
 	hashScopes [][]string
+	// notReadyUnscoped makes a generation-wide export report the local index
+	// as not ready, the state a promoted scoped push can run into.
+	notReadyUnscoped bool
 }
 
 func (f *fakeVectorSource) BeginExport(
 	_ context.Context, sessionIDs []string,
 ) (storage.VectorExport, bool, error) {
 	f.genScopes = append(f.genScopes, append([]string(nil), sessionIDs...))
+	if sessionIDs == nil && f.notReadyUnscoped {
+		return nil, false, storage.ErrVectorSourceNotReady
+	}
 	if !f.hasGen {
 		return nil, false, nil
 	}
@@ -122,9 +128,17 @@ func TestVectorPushRoundTripDeltaAndEviction(t *testing.T) {
 	assert.Equal(t, 1, chtest.Count(t, conn, "vector_generations", "fingerprint = ?", vectorFixtureFP))
 	assert.Equal(t, 3, chtest.Count(t, conn, "vector_documents", ""))
 	assert.Equal(t, 4, chtest.Count(t, conn, "vector_chunks", "generation_fingerprint = ?", vectorFixtureFP))
-	assert.Equal(t, 2, chtest.Count(t, conn, "vector_push_state", "source_archive_id = ?", s.archiveID))
+	assert.Equal(t, 2, chtest.Count(t, conn, "vector_push_state",
+		"source_archive_id = ? AND session_id <> ''", s.archiveID))
+	assert.Equal(t, 1, chtest.Count(t, conn, "vector_push_state",
+		"source_archive_id = ? AND session_id = ''", s.archiveID),
+		"a clean generation-wide pass records its completion marker")
+	assert.NotZero(t, first.Vectors.GenerationID)
 
 	second, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, first.Vectors.GenerationID, second.Vectors.GenerationID,
+		"the generation id is stable for one fingerprint")
 	require.NoError(t, err)
 	assert.Zero(t, second.Vectors.SessionsPushed)
 	assert.Equal(t, 2, second.Vectors.SessionsUnchanged, "unchanged hashes are not re-pushed")
@@ -229,15 +243,17 @@ func TestVectorPushFollowsMirrorResidency(t *testing.T) {
 	assert.Equal(t, 3, chtest.Count(t, conn, "vector_chunks", "session_id = ?", fixtureAlphaID))
 }
 
-// TestVectorPushScopedPromotesUntilGenerationRegistered pins the watch-mode
-// contract: a change-scoped push against a mirror that has not registered
-// the generation reconciles generation-wide, and once registered a scoped
-// push reads only its changed sessions.
-func TestVectorPushScopedPromotesUntilGenerationRegistered(t *testing.T) {
+// TestVectorPushScopedPromotesUntilArchiveCompletes pins the watch-mode
+// contract: a change-scoped push reconciles generation-wide until this
+// archive has recorded a clean generation-wide pass, then reads only its
+// changed sessions. Losing the marker (an interrupted pass) promotes again
+// even though the generation row itself is registered.
+func TestVectorPushScopedPromotesUntilArchiveCompletes(t *testing.T) {
 	ctx := context.Background()
 	local, target := seedFixture(t)
 	source := newFixtureVectorSource()
 	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
+	conn := chtest.Open(t, target.URL, target.Database)
 
 	res, err := s.PushWithOptions(ctx, storage.PushOptions{ScopeVectorsToChangedSessions: true}, nil)
 	require.NoError(t, err)
@@ -255,6 +271,73 @@ func TestVectorPushScopedPromotesUntilGenerationRegistered(t *testing.T) {
 	assert.Equal(t, 1, res.Vectors.SessionsPushed)
 	assert.Equal(t, []string{fixtureBetaID}, source.hashScopes[len(source.hashScopes)-1],
 		"a scoped push reads local hashes only for the changed sessions")
+
+	_, err = conn.ExecContext(ctx,
+		`DELETE FROM vector_push_state WHERE source_archive_id = ? AND session_id = ''`, s.archiveID)
+	require.NoError(t, err)
+	assert.Equal(t, 1, chtest.Count(t, conn, "vector_generations", "fingerprint = ?", vectorFixtureFP))
+	appendMessage(t, local, fixtureBetaID, "beta third", "2026-01-11T00:20:00.000Z")
+	source.hashes[fixtureBetaID] = "beta-v3"
+	res, err = s.PushWithOptions(ctx, storage.PushOptions{ScopeVectorsToChangedSessions: true}, nil)
+	require.NoError(t, err)
+	assert.Nil(t, source.hashScopes[len(source.hashScopes)-1],
+		"a registered generation without this archive's completion marker still promotes")
+	assert.Equal(t, 1, chtest.Count(t, conn, "vector_push_state",
+		"source_archive_id = ? AND session_id = ''", s.archiveID))
+}
+
+// TestVectorPushPromotedExportNotReady pins that a scoped push whose
+// promotion to generation-wide finds the local index not ready reports the
+// phase skipped instead of failing or panicking on the unopened export.
+func TestVectorPushPromotedExportNotReady(t *testing.T) {
+	ctx := context.Background()
+	local, target := seedFixture(t)
+	source := newFixtureVectorSource()
+	source.notReadyUnscoped = true
+	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
+
+	res, err := s.PushWithOptions(ctx, storage.PushOptions{ScopeVectorsToChangedSessions: true}, nil)
+	require.NoError(t, err)
+	assert.True(t, res.Vectors.Skipped)
+	assert.Equal(t, storage.ErrVectorSourceNotReady.Error(), res.Vectors.SkippedReason)
+	require.Len(t, source.genScopes, 2, "scoped export, then the promoted export that was not ready")
+}
+
+// TestVectorPushEvictionKeepsOtherArchiveVectors pins that reconciliation
+// by one archive only drops its own push state when another archive still
+// records the session for the generation, so an ownership handoff does not
+// let the former owner delete the new owner's vectors.
+func TestVectorPushEvictionKeepsOtherArchiveVectors(t *testing.T) {
+	ctx := context.Background()
+	local, target := seedFixture(t)
+	source := newFixtureVectorSource()
+	s := newTestSync(t, local, target, storage.PusherOptions{VectorSource: source})
+	conn := chtest.Open(t, target.URL, target.Database)
+	_, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+
+	// Another archive now records beta for this generation with its own rows.
+	version := newPushVersion()
+	require.NoError(t, insertRows(ctx, conn, "vector_chunks", [][]any{{
+		vectorFixtureFP, "beta-other", int64(0), fixtureBetaID, vecBeta0, version,
+	}}))
+	require.NoError(t, insertRows(ctx, conn, "vector_push_state", [][]any{{
+		"other-archive", vectorFixtureFP, fixtureBetaID, "beta-other-v1", version,
+	}}))
+
+	delete(source.hashes, fixtureBetaID)
+	delete(source.docs, fixtureBetaID)
+	res, err := s.Push(ctx, false, nil)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Vectors.SessionsEvicted)
+	assert.Equal(t, 0, chtest.Count(t, conn, "vector_push_state",
+		"source_archive_id = ? AND session_id = ?", s.archiveID, fixtureBetaID))
+	assert.Equal(t, 1, chtest.Count(t, conn, "vector_push_state",
+		"source_archive_id = 'other-archive' AND session_id = ?", fixtureBetaID))
+	assert.Equal(t, 1, chtest.Count(t, conn, "vector_chunks", "doc_key = ?", "beta-other"),
+		"the other archive's chunk survives the former owner's eviction")
+	assert.Equal(t, 1, chtest.Count(t, conn, "vector_documents", "session_id = ?", fixtureBetaID),
+		"documents stay while any generation still holds chunks for the session")
 }
 
 func fixedEncoder(vec []float32) storage.VectorQueryEncoder {

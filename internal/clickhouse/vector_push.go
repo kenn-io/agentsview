@@ -2,9 +2,12 @@ package clickhouse
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"time"
 
 	"go.kenn.io/agentsview/internal/storage"
@@ -13,6 +16,11 @@ import (
 // vectorProgressStride bounds how many unchanged sessions the delta scan
 // examines between progress reports; pushed sessions always report.
 const vectorProgressStride = 2000
+
+// vectorCompleteMarker is the session_id of the vector_push_state row that
+// records this archive finished one clean generation-wide pass over a
+// generation. Session ids are never empty, so the key cannot collide.
+const vectorCompleteMarker = ""
 
 // pushVectors replicates the local active embedding generation into the
 // mirror for this archive: it pushes sessions whose aggregate document hash
@@ -27,13 +35,15 @@ const vectorProgressStride = 2000
 //
 // scope, when non-nil, limits the reconciliation to those session ids (a
 // change-triggered watch push); eviction and vector-only changes then wait
-// for the next generation-wide push. A scoped push against a generation the
-// mirror does not hold yet (first push, or tables recreated) promotes itself
-// to generation-wide so search never reads a partial generation until the
-// interval floor. full re-sends every session's vectors, repairing state
-// rows that wrongly report a session current. failed names sessions whose
-// session-phase push failed this run; their vectors are deferred so vector
-// rows never run ahead of the session rows.
+// for the next generation-wide push. A scoped push promotes itself to
+// generation-wide until this archive has recorded one clean generation-wide
+// pass over the generation (first push, tables recreated, or an earlier
+// pass interrupted or deferred sessions), so a partial generation is always
+// completed by the next push rather than only when its sessions change.
+// full re-sends every session's vectors, repairing state rows that wrongly
+// report a session current. failed names sessions whose session-phase push
+// failed this run; their vectors are deferred so vector rows never run
+// ahead of the session rows.
 func (s *Sync) pushVectors(
 	ctx context.Context, full bool, scope []string,
 	failed map[string]struct{}, onProgress func(storage.PushProgress),
@@ -51,16 +61,23 @@ func (s *Sync) pushVectors(
 	if err != nil || !ok {
 		return res, err
 	}
-	defer func() { _ = export.Close() }()
+	// export is reassigned on promotion below, and the promoted export may
+	// not open; the deferred close must follow the variable, not the value.
+	defer func() {
+		if export != nil {
+			_ = export.Close()
+		}
+	}()
 	gen := export.Generation()
+	res.GenerationID = vectorGenerationID(gen.Fingerprint)
 
 	if scope != nil {
-		registered, err := s.vectorGenerationRegistered(ctx, gen.Fingerprint)
+		completed, err := s.archiveCompletedGeneration(ctx, gen.Fingerprint)
 		if err != nil {
 			return res, err
 		}
-		if !registered {
-			log.Printf("clickhouse vector push: generation %q is not registered in the mirror; promoting scoped push to generation-wide reconciliation",
+		if !completed {
+			log.Printf("clickhouse vector push: this archive has not completed a generation-wide pass over %q; promoting scoped push to generation-wide reconciliation",
 				gen.Fingerprint)
 			_ = export.Close()
 			scope = nil
@@ -168,6 +185,13 @@ func (s *Sync) pushVectors(
 		}
 		res.SessionsEvicted++
 	}
+	if scope == nil && res.SessionsDeferred == 0 {
+		if err := insertRows(ctx, s.conn, "vector_push_state", [][]any{{
+			s.archiveID, gen.Fingerprint, vectorCompleteMarker, "", newPushVersion(),
+		}}); err != nil {
+			return res, err
+		}
+	}
 	log.Printf("clickhouse vector push: %d session(s) pushed, %d unchanged, %d deferred, %d evicted, %d chunks",
 		res.SessionsPushed, res.SessionsUnchanged, res.SessionsDeferred,
 		res.SessionsEvicted, res.ChunksPushed)
@@ -211,6 +235,33 @@ func (s *Sync) vectorGenerationRegistered(ctx context.Context, fingerprint strin
 	return n > 0, nil
 }
 
+// vectorGenerationID folds a generation fingerprint into the nonzero int64
+// the watch orchestrator memoizes to decide whether a scoped push may stay
+// scoped. ClickHouse keys generations by fingerprint, so the id is derived
+// from it rather than allocated.
+func vectorGenerationID(fingerprint string) int64 {
+	sum := sha256.Sum256([]byte(fingerprint))
+	id := int64(binary.BigEndian.Uint64(sum[:8]) & math.MaxInt64)
+	if id == 0 {
+		return 1
+	}
+	return id
+}
+
+// archiveCompletedGeneration reports whether this archive has recorded a
+// clean generation-wide pass over the generation.
+func (s *Sync) archiveCompletedGeneration(ctx context.Context, fingerprint string) (bool, error) {
+	var n int
+	if err := s.conn.QueryRowContext(ctx, `
+		SELECT count() FROM vector_push_state
+		WHERE source_archive_id = ? AND generation_fingerprint = ? AND session_id = ?`,
+		s.archiveID, fingerprint, vectorCompleteMarker,
+	).Scan(&n); err != nil {
+		return false, fmt.Errorf("reading clickhouse vector completion marker: %w", err)
+	}
+	return n > 0, nil
+}
+
 // ensureVectorGeneration registers gen when the mirror does not hold it.
 // Machines with matching embedding configs share one generation.
 func (s *Sync) ensureVectorGeneration(ctx context.Context, gen storage.VectorGenerationInfo) error {
@@ -225,7 +276,8 @@ func (s *Sync) ensureVectorGeneration(ctx context.Context, gen storage.VectorGen
 }
 
 // readVectorPushState returns this archive's per-session aggregate hashes
-// for the generation, limited to scope when non-nil.
+// for the generation, limited to scope when non-nil. The completion marker
+// row is not a session and is excluded.
 func (s *Sync) readVectorPushState(
 	ctx context.Context, fingerprint string, scope []string,
 ) (map[string]string, error) {
@@ -233,8 +285,8 @@ func (s *Sync) readVectorPushState(
 	read := func(where string, args []any) error {
 		rows, err := s.conn.QueryContext(ctx, `
 			SELECT session_id, doc_agg_hash FROM vector_push_state
-			WHERE source_archive_id = ? AND generation_fingerprint = ?`+where,
-			append([]any{s.archiveID, fingerprint}, args...)...)
+			WHERE source_archive_id = ? AND generation_fingerprint = ? AND session_id <> ?`+where,
+			append([]any{s.archiveID, fingerprint, vectorCompleteMarker}, args...)...)
 		if err != nil {
 			return fmt.Errorf("reading clickhouse vector push state: %w", err)
 		}
@@ -373,19 +425,33 @@ func (s *Sync) pushVectorSession(
 	return vectorSessionOutcome{pushed: true, docs: len(docs), chunks: len(chunkRows)}, nil
 }
 
-// evictVectorSession removes one session's chunks and push state for the
-// generation, and its document rows once no generation references them.
+// evictVectorSession drops this archive's push state for one session and
+// generation. The session's chunks, and its document rows once no
+// generation references them, go only when no other archive still records
+// the session for this generation: after an ownership handoff the new owner's
+// rows must survive the former owner's reconciliation.
 func (s *Sync) evictVectorSession(ctx context.Context, fingerprint, sessionID string) error {
-	if _, err := s.conn.ExecContext(ctx, `
-		DELETE FROM vector_chunks WHERE session_id = ? AND generation_fingerprint = ?`,
-		sessionID, fingerprint); err != nil {
-		return fmt.Errorf("evicting clickhouse vector chunks for %s: %w", sessionID, err)
-	}
 	if _, err := s.conn.ExecContext(ctx, `
 		DELETE FROM vector_push_state
 		WHERE source_archive_id = ? AND generation_fingerprint = ? AND session_id = ?`,
 		s.archiveID, fingerprint, sessionID); err != nil {
 		return fmt.Errorf("evicting clickhouse vector push state for %s: %w", sessionID, err)
+	}
+	var otherOwners int
+	if err := s.conn.QueryRowContext(ctx, `
+		SELECT count() FROM vector_push_state
+		WHERE generation_fingerprint = ? AND session_id = ? AND source_archive_id <> ?`,
+		fingerprint, sessionID, s.archiveID,
+	).Scan(&otherOwners); err != nil {
+		return fmt.Errorf("reading clickhouse vector owners for %s: %w", sessionID, err)
+	}
+	if otherOwners > 0 {
+		return nil
+	}
+	if _, err := s.conn.ExecContext(ctx, `
+		DELETE FROM vector_chunks WHERE session_id = ? AND generation_fingerprint = ?`,
+		sessionID, fingerprint); err != nil {
+		return fmt.Errorf("evicting clickhouse vector chunks for %s: %w", sessionID, err)
 	}
 	if _, err := s.conn.ExecContext(ctx, `
 		DELETE FROM vector_documents
