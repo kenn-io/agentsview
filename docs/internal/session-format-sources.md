@@ -2794,7 +2794,7 @@ schemas keep their existing ordering behavior.
   the reported shape and boundary values; they do not verify a producer.
 - **Evidence:** `no-public-source`.
 - **Upstream:** WorkBuddy's first-party product site, documentation, and public
-  repositories were searched 2026-09-20; no authoritative persistence producer
+  repositories were searched 2026-07-19; no authoritative persistence producer
   or versioned schema was found. Issue [#1860](https://github.com/kenn-io/agentsview/issues/1860)
   is reporter evidence for the `ai-title` shape, without producer-version
   evidence. For reproducible independent format and accounting evidence, clone
