@@ -45,8 +45,12 @@ test("session previews hide a leading system-reminder envelope", async ({ page }
   for (const width of [1280, 768, 400]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto("/sessions");
-    if (!(await sp.sessionItems.first().isVisible())) {
-      await page.getByRole("button", { name: /sidebar/i }).click();
+    if (width === 400) {
+      const drawer = page.locator("#session-sidebar");
+      if (!(await drawer.evaluate((sidebar) => sidebar.classList.contains("open")))) {
+        await page.locator("button.hamburger").click();
+      }
+      await expect(drawer).toHaveClass(/open/);
     }
     await expect(sp.sessionItems.first()).toBeVisible();
     const name = sp.sessionItems.first().locator(".session-name");

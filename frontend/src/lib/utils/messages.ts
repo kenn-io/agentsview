@@ -153,7 +153,13 @@ export function previewMessage(text: string | null | undefined): MessagePreview 
       body.trim(),
     );
   if (source !== text && !out.trim()) {
-    return { text, isShell: /<bash-(?:input|stdout|stderr)>/.test(text) };
+    const originalIsShell = /<bash-(?:input|stdout|stderr)>/.test(text);
+    const originalOut = text
+      .replace(/<bash-input>([\s\S]*?)<\/bash-input>/g, (_, cmd: string) => `!${cmd.trim()}`)
+      .replace(/<bash-(?:stdout|stderr)>([\s\S]*?)<\/bash-(?:stdout|stderr)>/g, (_, body: string) =>
+        body.trim(),
+      );
+    return { text: originalOut, isShell: originalIsShell };
   }
   return { text: out, isShell };
 }
