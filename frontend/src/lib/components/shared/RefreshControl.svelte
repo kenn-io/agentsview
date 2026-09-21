@@ -43,6 +43,22 @@
   // so the samples are computed once per mount.
   const ageWidthSamples = refreshStatusWidthSamples();
   const showSteps = $derived(status === undefined && querySteps.length > 0);
+
+  // Shared time axis for the waterfall: the whole query, or the last step's
+  // end if a step outran the recorded total.
+  const axisMs = $derived(
+    Math.max(
+      queryDurationMs ?? 0,
+      ...querySteps.map((step) => step.startMs + step.durationMs),
+      1,
+    ),
+  );
+
+  function barStyle(step: QueryStep): string {
+    const left = ((100 * step.startMs) / axisMs).toFixed(2);
+    const width = ((100 * step.durationMs) / axisMs).toFixed(2);
+    return `left: ${left}%; width: ${width}%`;
+  }
 </script>
 
 <KitRefreshControl
@@ -63,12 +79,19 @@
         {formatDateTime(lastUpdatedAt, { dateStyle: "medium", timeStyle: "medium" })}
       </div>
     {/if}
-    <dl class="query-steps__list">
+    <div class="query-steps__list" role="table">
       {#each querySteps as step (step.name)}
-        <dt>{formatQueryStepLabel(step.name)}</dt>
-        <dd>{formatQueryDuration(step.durationMs)}</dd>
+        <div class="query-steps__row" role="row">
+          <span class="query-steps__name" role="cell">{formatQueryStepLabel(step.name)}</span>
+          <span class="query-steps__track" role="cell" aria-hidden="true">
+            <span class="query-steps__bar" style={barStyle(step)}></span>
+          </span>
+          <span class="query-steps__duration" role="cell">
+            {formatQueryDuration(step.durationMs)}
+          </span>
+        </div>
       {/each}
-    </dl>
+    </div>
   </div>
 {/snippet}
 
@@ -84,20 +107,40 @@
     color: var(--text-muted);
   }
 
+  /* Devtools-style waterfall: name, a bar on the shared time axis, duration. */
   .query-steps__list {
     display: grid;
-    grid-template-columns: auto max-content;
-    column-gap: var(--space-5);
+    grid-template-columns: max-content 140px max-content;
+    column-gap: var(--space-4);
     row-gap: var(--space-1);
-    margin: 0;
+    align-items: center;
   }
 
-  .query-steps__list dt {
+  .query-steps__row {
+    display: contents;
+  }
+
+  .query-steps__name {
     color: var(--text-secondary);
   }
 
-  .query-steps__list dd {
-    margin: 0;
+  .query-steps__track {
+    position: relative;
+    height: 6px;
+    background: var(--bg-inset);
+    border-radius: 3px;
+  }
+
+  .query-steps__bar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    min-width: 2px;
+    background: var(--accent-blue);
+    border-radius: 3px;
+  }
+
+  .query-steps__duration {
     text-align: end;
     font-variant-numeric: tabular-nums;
     color: var(--text-primary);

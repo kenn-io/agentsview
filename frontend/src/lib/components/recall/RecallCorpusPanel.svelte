@@ -66,8 +66,9 @@
   // an entries load on its own, or the entries and status pair on refresh.
   let queryDurationMs = $state<number | null>(null);
   let querySteps = $state<QueryStep[]>([]);
-  // Latest successful duration per loader, read when a query completes.
-  const stepDurations = new Map<"entries" | "status" | "progress", number>();
+  // Latest successful timing per loader, read when a refresh completes.
+  // Offsets are relative to the refresh that started them.
+  const stepTimings = new Map<"entries" | "status", { startedAt: number; durationMs: number }>();
   let progress = $state<RecallExtractProgress[]>([]);
   let progressExpanded = $state(false);
   let progressState = $state<"" | RecallExtractProgressState>("");
@@ -187,8 +188,8 @@
       resultCap = page.result_cap ?? 0;
       entriesUpdatedAt = Date.now();
       queryDurationMs = performance.now() - startedAt;
-      stepDurations.set("entries", queryDurationMs);
-      querySteps = [{ name: "entries", durationMs: queryDurationMs }];
+      stepTimings.set("entries", { startedAt, durationMs: queryDurationMs });
+      querySteps = [{ name: "entries", startMs: 0, durationMs: queryDurationMs }];
     } catch (error) {
       if (isAbortError(error) || !entriesRead.isCurrent(signal)) return;
       if (appending && error instanceof ApiError && error.status === 409) {
@@ -216,7 +217,7 @@
       if (!statusRead.isCurrent(signal)) return;
       status = next;
       statusUpdatedAt = Date.now();
-      stepDurations.set("status", performance.now() - startedAt);
+      stepTimings.set("status", { startedAt, durationMs: performance.now() - startedAt });
     } catch (error) {
       if (isAbortError(error) || !statusRead.isCurrent(signal)) return;
       status = null;
@@ -270,10 +271,12 @@
     // applied fresh data counts as a completed query.
     if ((entriesUpdatedAt ?? -1) >= startedAtEpoch && (statusUpdatedAt ?? -1) >= startedAtEpoch) {
       queryDurationMs = performance.now() - startedAt;
-      querySteps = (["entries", "status"] as const).map((name) => ({
-        name,
-        durationMs: stepDurations.get(name) ?? 0,
-      }));
+      querySteps = (["entries", "status"] as const).flatMap((name) => {
+        const timing = stepTimings.get(name);
+        return timing === undefined
+          ? []
+          : [{ name, startMs: timing.startedAt - startedAt, durationMs: timing.durationMs }];
+      });
     }
     if (progressExpanded) await loadProgress();
   }

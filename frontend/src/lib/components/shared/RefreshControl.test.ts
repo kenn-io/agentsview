@@ -92,15 +92,15 @@ describe("RefreshControl", () => {
     document.body.innerHTML = "";
   });
 
-  it("lists each query step with its duration when the label is focused", async () => {
+  it("draws each query step on a shared time axis when the label is focused", async () => {
     const component = mount(RefreshControl, {
       target: document.body,
       props: {
         lastUpdatedAt: Date.now(),
-        queryDurationMs: 2400,
+        queryDurationMs: 2000,
         querySteps: [
-          { name: "summary", durationMs: 120 },
-          { name: "topSessions", durationMs: 2400 },
+          { name: "summary", startMs: 0, durationMs: 500 },
+          { name: "topSessions", startMs: 500, durationMs: 1500 },
         ],
         onRefresh: vi.fn(),
       },
@@ -113,10 +113,22 @@ describe("RefreshControl", () => {
       .dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
     await tick();
 
-    const rows = Array.from(
-      document.querySelectorAll('[role="tooltip"] dt, [role="tooltip"] dd'),
-    ).map((node) => node.textContent);
-    expect(rows).toEqual(["Summary", "120 ms", "Top sessions", "2 s"]);
+    const rows = Array.from(document.querySelectorAll('[role="tooltip"] [role="row"]')).map(
+      (row) => ({
+        name: row.querySelector(".query-steps__name")?.textContent,
+        duration: row.querySelector(".query-steps__duration")?.textContent?.trim(),
+        bar: (() => {
+          const bar = row.querySelector<HTMLElement>(".query-steps__bar");
+          return `${bar?.style.left} ${bar?.style.width}`;
+        })(),
+      }),
+    );
+    // Bars sit at their start offset and span their duration against the
+    // 2000 ms query, so the second step starts where the first ends.
+    expect(rows).toEqual([
+      { name: "Summary", duration: "500 ms", bar: "0% 25%" },
+      { name: "Top sessions", duration: "2 s", bar: "25% 75%" },
+    ]);
 
     unmount(component);
     document.body.innerHTML = "";

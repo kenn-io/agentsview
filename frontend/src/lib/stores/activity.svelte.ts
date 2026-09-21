@@ -92,12 +92,16 @@ class ReportPhaseTimer {
     this.close(at);
     return this.steps.length > 0
       ? this.steps
-      : [{ name: "report", durationMs: at - this.startedAt }];
+      : [{ name: "report", startMs: 0, durationMs: at - this.startedAt }];
   }
 
   private close(at: number): void {
     if (this.current === null) return;
-    this.steps.push({ name: this.current, durationMs: at - this.currentStartedAt });
+    this.steps.push({
+      name: this.current,
+      startMs: this.currentStartedAt - this.startedAt,
+      durationMs: at - this.currentStartedAt,
+    });
     this.current = null;
   }
 }
@@ -319,7 +323,7 @@ class ActivityStore {
         this.lastUpdatedAt = Date.now();
         const durationMs = performance.now() - startedAt;
         this.lastQueryDurationMs = durationMs;
-        this.lastQuerySteps = [{ name: "report", durationMs }];
+        this.lastQuerySteps = [{ name: "report", startMs: 0, durationMs }];
         this.hasNewData = false;
         return true;
       }

@@ -106,9 +106,11 @@ class AnalyticsStore {
   // Per-panel timings behind the durations above, in PANEL_ORDER.
   lastQuerySteps: QueryStep[] = $state([]);
   qualityLastQuerySteps: QueryStep[] = $state([]);
-  // Latest successful duration per panel, collected while a refresh runs
-  // and snapshotted into lastQuerySteps when the refresh completes.
-  private stepDurations = new Map<Panel, number>();
+  // Latest successful timing per panel, collected while a refresh runs and
+  // snapshotted into lastQuerySteps when the refresh completes. Offsets are
+  // relative to refreshStartedAt.
+  private stepTimings = new Map<Panel, { startMs: number; durationMs: number }>();
+  private refreshStartedAt = 0;
   hasNewData: boolean = $state(false);
 
   loading = $state({
@@ -525,7 +527,9 @@ class AnalyticsStore {
         durationMs,
         status,
       });
-      if (status === "ok") this.stepDurations.set(panel, durationMs);
+      if (status === "ok") {
+        this.stepTimings.set(panel, { startMs: started - this.refreshStartedAt, durationMs });
+      }
       this.clearAbortSignal(panel, signal);
       if (this.versions[panel] === v) {
         this.querying[panel] = false;
@@ -567,8 +571,8 @@ class AnalyticsStore {
 
   private snapshotSteps(): QueryStep[] {
     return PANEL_ORDER.flatMap((name) => {
-      const durationMs = this.stepDurations.get(name);
-      return durationMs === undefined ? [] : [{ name, durationMs }];
+      const timing = this.stepTimings.get(name);
+      return timing === undefined ? [] : [{ name, ...timing }];
     });
   }
 
@@ -582,7 +586,8 @@ class AnalyticsStore {
   async fetchAll() {
     this.fetchStartHandler?.();
     const startedAt = performance.now();
-    this.stepDurations.clear();
+    this.stepTimings.clear();
+    this.refreshStartedAt = startedAt;
     const fetchVersion = ++this.fetchAllVersion;
     this.rollDates();
     const results = await Promise.all([
@@ -815,7 +820,7 @@ class AnalyticsStore {
       this.qualityLastUpdatedAt = Date.now();
       const durationMs = performance.now() - startedAt;
       this.qualityLastQueryDurationMs = durationMs;
-      this.qualityLastQuerySteps = [{ name: "signals", durationMs }];
+      this.qualityLastQuerySteps = [{ name: "signals", startMs: 0, durationMs }];
     }
   }
 

@@ -648,10 +648,10 @@ describe("freshness state", () => {
 
       // Request latency before the first event belongs to the first phase.
       expect(activity.lastQuerySteps).toEqual([
-        { name: "sessions", durationMs: 150 },
-        { name: "usage", durationMs: 300 },
-        { name: "scan", durationMs: 20 },
-        { name: "finalize", durationMs: 30 },
+        { name: "sessions", startMs: 0, durationMs: 150 },
+        { name: "usage", startMs: 150, durationMs: 300 },
+        { name: "scan", startMs: 450, durationMs: 20 },
+        { name: "finalize", startMs: 470, durationMs: 30 },
       ]);
       expect(activity.lastQueryDurationMs).toBe(500);
     } finally {
@@ -667,7 +667,7 @@ describe("freshness state", () => {
         return makeReport();
       });
       await activity.load();
-      expect(activity.lastQuerySteps).toEqual([{ name: "report", durationMs: 80 }]);
+      expect(activity.lastQuerySteps).toEqual([{ name: "report", startMs: 0, durationMs: 80 }]);
     } finally {
       vi.useRealTimers();
     }

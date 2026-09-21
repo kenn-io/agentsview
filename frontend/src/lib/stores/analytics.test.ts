@@ -493,7 +493,11 @@ describe("AnalyticsStore freshness state", () => {
         "topSessions",
         "signals",
       ]);
-      expect(analytics.lastQuerySteps).toContainEqual({ name: "velocity", durationMs: 700 });
+      expect(analytics.lastQuerySteps).toContainEqual({
+        name: "velocity",
+        startMs: 0,
+        durationMs: 700,
+      });
 
       vi.mocked(analyticsService.getApiV1AnalyticsSignals).mockImplementationOnce(async () => {
         vi.advanceTimersByTime(90);
@@ -501,7 +505,9 @@ describe("AnalyticsStore freshness state", () => {
       });
       await analytics.fetchSignalsForQuality();
       expect(analytics.qualityLastQueryDurationMs).toBe(90);
-      expect(analytics.qualityLastQuerySteps).toEqual([{ name: "signals", durationMs: 90 }]);
+      expect(analytics.qualityLastQuerySteps).toEqual([
+        { name: "signals", startMs: 0, durationMs: 90 },
+      ]);
       expect(analytics.lastQueryDurationMs).toBe(700);
     } finally {
       vi.useRealTimers();

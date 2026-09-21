@@ -83,10 +83,11 @@ App-level glue that remains local:
   `RefreshControl`, injecting the localized label (`formatRefreshStatus`: the
   age plus the last-query duration as one phrase, "Updated just now · 2 s"),
   the app locale, the localized width samples that keep the label box a
-  constant width, and a hover list of the query's steps with their timings.
-  Pages pass `lastUpdatedAt`, `queryDurationMs`, and `querySteps` from their
-  store; each store measures the fetch from request start to data applied and
-  records one step per panel or report phase.
+  constant width, and a hover waterfall of the query's steps on a shared time
+  axis with their durations. Pages pass `lastUpdatedAt`, `queryDurationMs`,
+  and `querySteps` from their store; each store measures the fetch from
+  request start to data applied and records one step per panel or report
+  phase.
 - kit-ui components with a `locale` prop (DateRangePicker, RefreshControl,
   Calendar) should receive `locale={getLocale()}` from the i18n facade so
   their date formatting follows the app language setting instead of the

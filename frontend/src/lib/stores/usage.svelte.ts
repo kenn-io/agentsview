@@ -358,9 +358,11 @@ class UsageStore {
   lastQueryDurationMs: number | null = $state(null);
   // Per-panel timings behind lastQueryDurationMs, in execution order.
   lastQuerySteps: QueryStep[] = $state([]);
-  // Latest successful duration per panel, collected while a full refresh
-  // runs and snapshotted into lastQuerySteps when it completes.
-  private stepDurations = new Map<UsagePanel, number>();
+  // Latest successful timing per panel, collected while a full refresh runs
+  // and snapshotted into lastQuerySteps when it completes. Offsets are
+  // relative to refreshStartedAt.
+  private stepTimings = new Map<UsagePanel, { startMs: number; durationMs: number }>();
+  private refreshStartedAt = 0;
   hasNewData: boolean = $state(false);
 
   loading = $state({
@@ -823,7 +825,8 @@ class UsageStore {
 
   private async fetchAllWithResult(options: FetchAllOptions = {}): Promise<FetchResult> {
     const startedAt = performance.now();
-    this.stepDurations.clear();
+    this.stepTimings.clear();
+    this.refreshStartedAt = startedAt;
     const selectedRangeAtStart = this.selectedTimeRange ? { ...this.selectedTimeRange } : null;
     if (!options.preserveTimeRange && this.selectedTimeRange !== null) {
       this.selectedTimeRange = null;
@@ -1014,7 +1017,7 @@ class UsageStore {
         }
       }
     } finally {
-      this.recordStep("summary", performance.now() - started, status);
+      this.recordStep("summary", started, status);
       this.clearAbortSignal("summary", signal);
       if (this.versions.summary === v) {
         this.loading.summary = false;
@@ -1056,7 +1059,7 @@ class UsageStore {
       }
       return "error";
     } finally {
-      this.recordStep("comparison", performance.now() - started, status);
+      this.recordStep("comparison", started, status);
       this.clearAbortSignal("comparison", signal);
     }
   }
@@ -1115,7 +1118,7 @@ class UsageStore {
       }
       return "error";
     } finally {
-      this.recordStep("pairwise", performance.now() - started, status);
+      this.recordStep("pairwise", started, status);
       this.clearAbortSignal("pairwise", signal);
       if (this.versions.summary === summaryVersion && this.versions.pairwise === pairwiseVersion) {
         this.loading.pairwise = false;
@@ -1164,7 +1167,7 @@ class UsageStore {
       }
       return "error";
     } finally {
-      this.recordStep("topSessions", performance.now() - started, status);
+      this.recordStep("topSessions", started, status);
       this.clearAbortSignal("topSessions", signal);
       if (this.versions.topSessions === v) {
         this.loading.topSessions = false;
@@ -1222,19 +1225,22 @@ class UsageStore {
     this.lastUpdatedAt = Date.now();
     this.lastQueryDurationMs = performance.now() - startedAt;
     this.lastQuerySteps = USAGE_STEP_ORDER.flatMap((name) => {
-      const durationMs = this.stepDurations.get(name);
-      return durationMs === undefined ? [] : [{ name, durationMs }];
+      const timing = this.stepTimings.get(name);
+      return timing === undefined ? [] : [{ name, ...timing }];
     });
     this.hasNewData = false;
   }
 
   private recordStep(
     panel: UsagePanel,
-    durationMs: number,
+    startedAt: number,
     status: "ok" | "error" | "aborted",
   ): void {
+    const durationMs = performance.now() - startedAt;
     perf.recordPanel({ route: "usage", name: panel, durationMs, status });
-    if (status === "ok") this.stepDurations.set(panel, durationMs);
+    if (status === "ok") {
+      this.stepTimings.set(panel, { startMs: startedAt - this.refreshStartedAt, durationMs });
+    }
   }
 }
 

@@ -50,9 +50,12 @@ export function refreshAgeWidthSamples(): string[] {
 const SECOND_MS = 1000;
 
 /** One measured step of a page's last data query. `name` is a stable key
- * (see `formatQueryStepLabel`), never user-facing on its own. */
+ * (see `formatQueryStepLabel`), never user-facing on its own. `startMs` is
+ * the offset from the query's start, so parallel steps can be drawn on one
+ * time axis. */
 export interface QueryStep {
   name: string;
+  startMs: number;
   durationMs: number;
 }
 

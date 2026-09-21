@@ -898,7 +898,11 @@ describe("UsageStore session filter params", () => {
 
       expect(usage.lastQueryDurationMs).toBe(400);
       expect(usage.lastQuerySteps[0]?.name).toBe("summary");
-      expect(usage.lastQuerySteps).toContainEqual({ name: "topSessions", durationMs: 400 });
+      expect(usage.lastQuerySteps).toContainEqual({
+        name: "topSessions",
+        startMs: 0,
+        durationMs: 400,
+      });
     } finally {
       vi.useRealTimers();
     }
