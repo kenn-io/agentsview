@@ -103,6 +103,14 @@ server configurations retain their document-count batching until their model and
 provider limits are declared. These settings only shape build and repair
 requests; they do not alter input text or the vector-generation fingerprint.
 
+Any `agentsview` command that loads the config, including `sync` and
+`embeddings build`, fails if `[vector]` or its subtables contain an unknown key.
+This check also applies when vector search is disabled, so a misspelled
+`enabled` key cannot silently leave it off. The error names the key. For a
+per-server key written in the parent `[vector.embeddings]` table, it also names
+`[vector.embeddings.servers.<name>]` as the table that owns it. Fix or remove
+the key before running the command again.
+
 This split exists so you can encode search queries against a fast local server
 while offloading bulk index builds to a bigger remote machine:
 

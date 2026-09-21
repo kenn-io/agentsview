@@ -21,6 +21,10 @@ The latest published release is
 - Correct saved Codex prompts and message counts when injected context shares
     a record with user text. The next startup reparses available source files;
     sessions whose sources are gone remain in the archive.
+- Commands that load config now report unknown keys under `[vector]`, including
+    misspellings and misplaced per-server settings, instead of silently ignoring
+    them. This applies even when vector search is disabled. Configs that loaded
+    before may now fail; fix or remove the named key before retrying.
 - ClickHouse analytics summaries return zeros when no sessions match, instead of
     failing the request.
 - Remote ClickHouse URLs that skip TLS certificate checks (`skip_verify=true`)

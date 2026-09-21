@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"runtime"
 	"slices"
@@ -345,6 +346,42 @@ func sortedServerNames(servers map[string]VectorEmbeddingsServerConfig) []string
 	}
 	sort.Strings(names)
 	return names
+}
+
+// embeddingsServerKey reports whether name is a toml key of
+// VectorEmbeddingsServerConfig, read from the struct tags so the answer
+// follows the type.
+func embeddingsServerKey(name string) bool {
+	for field := range reflect.TypeFor[VectorEmbeddingsServerConfig]().Fields() {
+		tag, _, _ := strings.Cut(field.Tag.Get("toml"), ",")
+		if tag == name {
+			return true
+		}
+	}
+	return false
+}
+
+// rejectUnknownVectorKeys errors on any key under [vector] that no config
+// field decodes. The TOML decoder accepts such keys and the loader then
+// drops them, so the setting looks applied and has no effect; #1866 is
+// max_batch_tokens written under [vector.embeddings] doing exactly that.
+// Check disabled sections too so a misspelled enabled key cannot bypass this.
+func rejectUnknownVectorKeys(meta toml.MetaData) error {
+	for _, key := range meta.Undecoded() {
+		if key[0] != "vector" {
+			continue
+		}
+		if len(key) == 3 && key[1] == "embeddings" && embeddingsServerKey(key[2]) {
+			return fmt.Errorf(
+				"[vector.embeddings] %s belongs under [vector.embeddings.servers.<name>]; "+
+					"a value written here has no effect",
+				key[2])
+		}
+		return fmt.Errorf(
+			"%s: unknown config key; a value written here has no effect",
+			key.String())
+	}
+	return nil
 }
 
 // VectorEmbedConfig configures when the daemon runs embedding work.
@@ -1566,6 +1603,11 @@ func (c *Config) applyConfigTOML(data string) error {
 	meta, err := toml.Decode(data, &file)
 	if err != nil {
 		return fmt.Errorf("parsing config: %w", err)
+	}
+	if meta.IsDefined("vector") {
+		if err := rejectUnknownVectorKeys(meta); err != nil {
+			return err
+		}
 	}
 	if file.ZoomLevel != nil {
 		if err := file.ZoomLevel.Validate(); err != nil {
