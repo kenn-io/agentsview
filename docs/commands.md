@@ -1682,10 +1682,13 @@ ______________________________________________________________________
 
 ### `agentsview skills`
 
-Install or list the bundled skill files that teach coding-agent harnesses
-(Claude Code, Codex, and other `.agents/skills` readers) to search AgentsView
-history. See [Semantic Search](/docs/semantic-search/#skills-for-coding-agents)
-for what the skill does and when to re-run it.
+Install or list the bundled recall artifacts that teach coding-agent harnesses
+to consult AgentsView conversation history. Claude Code receives the
+`agentsview-finding-history` skill and the
+`agentsview-search-conversations` agent. Codex and other `.agents/skills`
+readers receive the skill with the same direct MCP workflow as its fallback.
+See [Semantic Search](/docs/semantic-search/#skills-for-coding-agents) for the
+workflow and upgrade guidance.
 
 ```bash
 agentsview skills install [--harness claude|agents] [--project] [--force]
@@ -1694,26 +1697,28 @@ agentsview skills list [--project] [--format json]
     [--server URL] [--server-token-file PATH]
 ```
 
-`install` renders the embedded `agentsview-finding-history` skill for each
-`--harness` (default both) and writes `SKILL.md` under
-`~/.claude/skills/agentsview-finding-history/` and/or
-`~/.agents/skills/agentsview-finding-history/`, or under `.claude/skills/` /
-`.agents/skills/` at the current git root with `--project`. It overwrites an
-unmodified generated file, refuses a hand-edited or foreign file unless
-`--force` is passed, and exits non-zero on any refusal. `list` reports HARNESS,
+`install` renders the package for each `--harness` (default both). Skills land
+under `~/.claude/skills/agentsview-finding-history/` and/or
+`~/.agents/skills/agentsview-finding-history/`; Claude's search agent lands at
+`~/.claude/agents/agentsview-search-conversations.md`. `--project` uses the
+equivalent paths at the current git root. Each artifact has its own generated
+hash: install updates safe generated files, refuses hand-edited or foreign
+files unless `--force` is passed, continues processing the other artifacts,
+and exits non-zero if anything was refused. `list` reports HARNESS, ARTIFACT,
 LEVEL, STATE (`missing`, `current`, `stale`, `modified`, `foreign`), and PATH
-for every harness.
+for every artifact.
 
 `--server` / `--server-token-file` (or `AGENTSVIEW_SKILLS_SERVER` /
 `AGENTSVIEW_SKILLS_SERVER_TOKEN_FILE`) bake those flags into every example
 command so a remote-daemon install does not teach the local SQLite default.
 Values are shell-quoted, so a token path with a space stays one argument.
 
-Precedence is explicit flags, then whatever the installed file already bakes,
-then the environment. An installed file therefore decides even when it bakes no
-remote, so exporting `AGENTSVIEW_SKILLS_SERVER` never marks existing skills
-stale in `list`; the variables only seed a file that is not installed yet. Pass
-`--server ""` to un-bake a remote and go back to a local-SQLite skill.
+Precedence is explicit flags, then whatever the installed skill already bakes,
+then the environment. An installed skill therefore decides even when it bakes
+no remote, so exporting `AGENTSVIEW_SKILLS_SERVER` never marks an existing
+package stale in `list`; the variables only seed a package whose skill is not
+installed yet. The endpoint-neutral Claude agent never contains server flags.
+Pass `--server ""` to un-bake a remote and return the skill to local SQLite.
 
 These variables are skills-only and named apart from `AGENTSVIEW_SERVER_TOKEN`
 on purpose: they do not change the CLI's default read path, and `session search`

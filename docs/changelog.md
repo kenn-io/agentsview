@@ -25,6 +25,15 @@ The latest published release is
     when searching conversation history through MCP. Exact session, branch, and
     current-session filters narrow recall before the result limit, and each
     response reports the search mode, filters, exclusions, and truncation.
+- Coding agents can now consult prior conversation evidence proactively when
+    earlier decisions or solutions may help. `agentsview skills install`
+    upgrades the existing recall skill for Claude and Agents/Codex, and Claude
+    also receives a bounded `agentsview-search-conversations` agent whose
+    frontmatter denies built-in shell, file, network, dispatch, and
+    MCP-discovery tools; tools from other registered MCP servers are still
+    inherited, and the agent is instructed to use only AgentsView's read-only
+    tools. Every generated
+    artifact is listed and protected independently from local edits.
 - Push the local SQLite archive into ClickHouse and serve the read-only web UI
     from it. Configure `[clickhouse]` or named `[clickhouse.NAME]` targets, then
     run `agentsview clickhouse push`, `status`, `serve`, or `service`. Push
