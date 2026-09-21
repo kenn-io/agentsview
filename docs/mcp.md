@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-21
 title: MCP Server
 description: Connect assistant clients to your AgentsView session history with MCP
 ---
@@ -124,6 +125,21 @@ Every match carries a conversation-unit citation: an `ordinal_range` of
 runs and subagent or fork sessions. The response also reports requested and
 effective modes, applied filters, default and exact exclusions, and whether the
 candidate page was truncated.
+
+SQLite and PostgreSQL search matches also carry `transcript_revision`, captured
+by the same storage query as the evidence. A `revision_bound` response flag says
+whether every returned match has that guarantee. Pass a match's revision as
+`expected_revision` when calling `get_messages`. If the transcript changed in
+between, the read returns `source_changed`; repeat the search and use the new
+citation.
+
+`get_messages` returns the revision observed for its page. A message longer than
+`max_chars_per_message` has a `body_cursor`; keep calling `get_messages` with
+that cursor before following `next_from`. The opaque cursor stays bound to the
+archive instance, session, revision, message ordinal, and next content offset,
+so it cannot silently continue against replaced transcript content. Role and
+system filtering still happens after each scanned page, so an empty or short
+page can have a `next_from` and should be continued.
 
 ## Daemon-Backed Reads
 

@@ -37,4 +37,12 @@ export type GetApiV1SessionsByIdMessagesParams = {
    * Comma-separated roles to include, e.g. user,assistant
    */
   roles?: string;
+  /**
+   * Reject the read when the transcript revision no longer matches
+   */
+  expected_revision?: string;
+  /**
+   * Opaque archive binding returned by an earlier evidence read
+   */
+  evidence_source?: string;
 };

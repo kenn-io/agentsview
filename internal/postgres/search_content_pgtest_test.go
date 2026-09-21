@@ -148,6 +148,7 @@ func TestPGSearchContentSubstringMessages(t *testing.T) {
 	assert.Equal(t, "message", m.Location)
 	assert.Equal(t, 0, m.Ordinal)
 	assert.Equal(t, "user", m.Role)
+	assert.Equal(t, "0", m.TranscriptRevision)
 	assert.NotEmpty(t, m.Snippet)
 	parsed, err := time.Parse(time.RFC3339Nano, m.Timestamp)
 	require.NoError(t, err, "match timestamp must be RFC3339Nano, got %q", m.Timestamp)

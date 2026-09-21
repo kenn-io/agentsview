@@ -5,9 +5,12 @@ package mcp
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -417,6 +420,8 @@ type getMessagesIn struct {
 	After              *int     `json:"after,omitempty" jsonschema:"Messages of context after the around anchor, default 5. Requires around; replaces limit on that path."`
 	Roles              []string `json:"roles,omitempty" jsonschema:"Roles to include, e.g. tool. Default: user and assistant only. System messages are always excluded."`
 	MaxCharsPerMessage int      `json:"max_chars_per_message,omitempty" jsonschema:"Truncate each message to this many characters, default 2000, max 20000."`
+	ExpectedRevision   string   `json:"expected_revision,omitempty" jsonschema:"Transcript revision cited by search or an earlier read. Returns source_changed when it no longer matches."`
+	BodyCursor         string   `json:"body_cursor,omitempty" jsonschema:"Opaque continuation for the remainder of one oversized message. Use before advancing next_from."`
 }
 
 type messageOut struct {
@@ -428,6 +433,7 @@ type messageOut struct {
 	HasToolUse bool   `json:"has_tool_use,omitempty"`
 	FullLength int    `json:"full_length,omitempty"`
 	Truncated  bool   `json:"truncated,omitempty"`
+	BodyCursor string `json:"body_cursor,omitempty"`
 }
 
 type getMessagesOut struct {
@@ -436,7 +442,37 @@ type getMessagesOut struct {
 	// NextFrom is set off the last scanned ordinal (not the last visible
 	// one), so paging stays reliable even though filtering can make a page
 	// return fewer than the limit.
-	NextFrom *int `json:"next_from,omitempty" jsonschema:"Anchor for the next page's from parameter when more messages may remain; absent means the end. Filtering can make a page return fewer than limit messages, so keep paging until next_from is absent, not until a page comes back short."`
+	NextFrom           *int   `json:"next_from,omitempty" jsonschema:"Anchor for the next page's from parameter when more messages may remain; absent means the end. Filtering can make a page return fewer than limit messages, so keep paging until next_from is absent, not until a page comes back short."`
+	TranscriptRevision string `json:"transcript_revision"`
+}
+
+type messageBodyCursor struct {
+	Version        int    `json:"v"`
+	EvidenceSource string `json:"s"`
+	SessionID      string `json:"i"`
+	Revision       string `json:"r"`
+	Ordinal        int    `json:"o"`
+	Offset         int    `json:"p"`
+	NextFrom       *int   `json:"n,omitempty"`
+}
+
+func encodeMessageBodyCursor(cursor messageBodyCursor) string {
+	raw, _ := json.Marshal(cursor)
+	return base64.RawURLEncoding.EncodeToString(raw)
+}
+
+func decodeMessageBodyCursor(raw string) (messageBodyCursor, error) {
+	payload, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil {
+		return messageBodyCursor{}, errors.New("invalid body_cursor")
+	}
+	var cursor messageBodyCursor
+	if err := json.Unmarshal(payload, &cursor); err != nil || cursor.Version != 1 ||
+		cursor.EvidenceSource == "" || cursor.SessionID == "" || cursor.Revision == "" ||
+		cursor.Ordinal < 0 || cursor.Offset <= 0 {
+		return messageBodyCursor{}, errors.New("invalid body_cursor")
+	}
+	return cursor, nil
 }
 
 // filterAndMapMessage applies the get_messages role/system contract to one
@@ -460,7 +496,7 @@ func filterAndMapMessage(m db.Message, roles []string, maxChars int) (messageOut
 		Truncated:  cut,
 	}
 	if cut {
-		mo.FullLength = m.ContentLength
+		mo.FullLength = utf8.RuneCountInString(m.Content)
 	}
 	return mo, true
 }
@@ -468,6 +504,9 @@ func filterAndMapMessage(m db.Message, roles []string, maxChars int) (messageOut
 func (t *toolset) getMessages(
 	ctx context.Context, _ *mcp.CallToolRequest, in getMessagesIn,
 ) (*mcp.CallToolResult, getMessagesOut, error) {
+	if in.BodyCursor != "" {
+		return t.getMessageBodyContinuation(ctx, in)
+	}
 	if in.Around != nil {
 		return t.getMessagesAround(ctx, in)
 	}
@@ -479,18 +518,22 @@ func (t *toolset) getMessages(
 	// around" when set without Around.
 	limit := clampLimit(in.Limit, defaultMessageLimit, maxMessageLimit)
 	res, err := t.svc.Messages(ctx, in.SessionID, service.MessageFilter{
-		From:      in.From,
-		Direction: in.Direction,
-		Limit:     limit,
-		Before:    in.Before,
-		After:     in.After,
+		From:             in.From,
+		Direction:        in.Direction,
+		Limit:            limit,
+		Before:           in.Before,
+		After:            in.After,
+		ExpectedRevision: in.ExpectedRevision,
 	})
 	if err != nil {
 		return nil, getMessagesOut{}, err
 	}
 	maxChars := clampLimit(
 		in.MaxCharsPerMessage, defaultMaxCharsPerMessage, maxMaxCharsPerMessage)
-	out := getMessagesOut{Messages: make([]messageOut, 0, len(res.Messages))}
+	out := getMessagesOut{
+		Messages:           make([]messageOut, 0, len(res.Messages)),
+		TranscriptRevision: res.TranscriptRevision,
+	}
 	for _, m := range res.Messages {
 		mo, ok := filterAndMapMessage(m, in.Roles, maxChars)
 		if !ok {
@@ -513,6 +556,7 @@ func (t *toolset) getMessages(
 			out.NextFrom = &next
 		}
 	}
+	attachBodyCursors(&out, res.EvidenceSource, in.SessionID)
 	return nil, out, nil
 }
 
@@ -537,19 +581,23 @@ func (t *toolset) getMessagesAround(
 		roles = []string{"user", "assistant"}
 	}
 	res, err := t.svc.Messages(ctx, in.SessionID, service.MessageFilter{
-		From:      in.From,
-		Direction: in.Direction,
-		Around:    in.Around,
-		Before:    in.Before,
-		After:     in.After,
-		Roles:     roles,
+		From:             in.From,
+		Direction:        in.Direction,
+		Around:           in.Around,
+		Before:           in.Before,
+		After:            in.After,
+		Roles:            roles,
+		ExpectedRevision: in.ExpectedRevision,
 	})
 	if err != nil {
 		return nil, getMessagesOut{}, err
 	}
 	maxChars := clampLimit(
 		in.MaxCharsPerMessage, defaultMaxCharsPerMessage, maxMaxCharsPerMessage)
-	out := getMessagesOut{Messages: make([]messageOut, 0, len(res.Messages))}
+	out := getMessagesOut{
+		Messages:           make([]messageOut, 0, len(res.Messages)),
+		TranscriptRevision: res.TranscriptRevision,
+	}
 	for _, m := range res.Messages {
 		mo, ok := filterAndMapMessage(m, roles, maxChars)
 		if !ok {
@@ -561,6 +609,74 @@ func (t *toolset) getMessagesAround(
 	if len(out.Messages) > 0 {
 		next := out.Messages[len(out.Messages)-1].Ordinal + 1
 		out.NextFrom = &next
+	}
+	attachBodyCursors(&out, res.EvidenceSource, in.SessionID)
+	return nil, out, nil
+}
+
+func attachBodyCursors(out *getMessagesOut, evidenceSource, sessionID string) {
+	nextFrom := out.NextFrom
+	hasBodyCursor := false
+	for i := range out.Messages {
+		if !out.Messages[i].Truncated {
+			continue
+		}
+		hasBodyCursor = true
+		out.Messages[i].BodyCursor = encodeMessageBodyCursor(messageBodyCursor{
+			Version: 1, EvidenceSource: evidenceSource, SessionID: sessionID,
+			Revision: out.TranscriptRevision, Ordinal: out.Messages[i].Ordinal,
+			Offset: utf8.RuneCountInString(out.Messages[i].Content), NextFrom: nextFrom,
+		})
+	}
+	if hasBodyCursor {
+		out.NextFrom = nil
+	}
+}
+
+func (t *toolset) getMessageBodyContinuation(
+	ctx context.Context, in getMessagesIn,
+) (*mcp.CallToolResult, getMessagesOut, error) {
+	if in.From != nil || in.Around != nil || in.Direction != "" ||
+		in.Before != nil || in.After != nil || len(in.Roles) > 0 {
+		return nil, getMessagesOut{}, errors.New("body_cursor is mutually exclusive with message navigation and roles")
+	}
+	cursor, err := decodeMessageBodyCursor(in.BodyCursor)
+	if err != nil {
+		return nil, getMessagesOut{}, err
+	}
+	if cursor.SessionID != in.SessionID ||
+		(in.ExpectedRevision != "" && in.ExpectedRevision != cursor.Revision) {
+		return nil, getMessagesOut{}, fmt.Errorf("%w: body cursor does not match request", service.ErrSourceChanged)
+	}
+	zero := 0
+	res, err := t.svc.Messages(ctx, in.SessionID, service.MessageFilter{
+		Around: &cursor.Ordinal, Before: &zero, After: &zero,
+		ExpectedRevision: cursor.Revision, EvidenceSource: cursor.EvidenceSource,
+	})
+	if err != nil {
+		return nil, getMessagesOut{}, err
+	}
+	if len(res.Messages) != 1 || res.Messages[0].Ordinal != cursor.Ordinal {
+		return nil, getMessagesOut{}, fmt.Errorf("%w: cited message no longer exists", service.ErrSourceChanged)
+	}
+	message := res.Messages[0]
+	runes := []rune(message.Content)
+	if cursor.Offset >= len(runes) {
+		return nil, getMessagesOut{}, errors.New("invalid body_cursor offset")
+	}
+	maxChars := clampLimit(in.MaxCharsPerMessage, defaultMaxCharsPerMessage, maxMaxCharsPerMessage)
+	end := min(cursor.Offset+maxChars, len(runes))
+	mo := messageOut{
+		Ordinal: message.Ordinal, Role: message.Role, Content: string(runes[cursor.Offset:end]),
+		Timestamp: message.Timestamp, Model: message.Model, HasToolUse: message.HasToolUse,
+		FullLength: len(runes), Truncated: end < len(runes),
+	}
+	out := getMessagesOut{Messages: []messageOut{mo}, TranscriptRevision: res.TranscriptRevision}
+	if end < len(runes) {
+		cursor.Offset = end
+		out.Messages[0].BodyCursor = encodeMessageBodyCursor(cursor)
+	} else {
+		out.NextFrom = cursor.NextFrom
 	}
 	return nil, out, nil
 }
@@ -627,8 +743,9 @@ type contentMatch struct {
 	// ContextBefore/ContextAfter are populated when Context > 0: the N
 	// messages immediately before/after this match, content truncated to
 	// 500 characters.
-	ContextBefore []contextMessage `json:"context_before,omitempty"`
-	ContextAfter  []contextMessage `json:"context_after,omitempty"`
+	ContextBefore      []contextMessage `json:"context_before,omitempty"`
+	ContextAfter       []contextMessage `json:"context_after,omitempty"`
+	TranscriptRevision string           `json:"transcript_revision,omitempty" jsonschema:"Transcript revision observed with this evidence; pass it as expected_revision to get_messages."`
 }
 
 type searchContentOut struct {
@@ -640,6 +757,7 @@ type searchContentOut struct {
 	AppliedFilters     searchContentAppliedFilters `json:"applied_filters"`
 	Exclusions         searchContentExclusions     `json:"exclusions"`
 	CandidateTruncated bool                        `json:"candidate_truncated"`
+	RevisionBound      bool                        `json:"revision_bound" jsonschema:"True when every returned match was captured with a transcript revision and can be opened with a revision-bound get_messages call."`
 }
 
 type searchContentAppliedFilters struct {
@@ -749,6 +867,7 @@ func (t *toolset) searchContent(
 			RecentActive:     in.CurrentSessionID == "" && !in.IncludeActive,
 			OneShot:          !in.IncludeOneShot, Automated: !in.IncludeAutomated,
 		},
+		RevisionBound: res.RevisionBound,
 	}
 	for _, m := range res.Matches {
 		if in.CurrentSessionID == "" && !in.IncludeActive {
@@ -769,9 +888,10 @@ func (t *toolset) searchContent(
 			Timestamp: m.Timestamp, Snippet: m.Snippet, Score: m.Score,
 			OrdinalRange: m.OrdinalRange, Subordinate: m.Subordinate,
 			Relationship: m.Relationship, ParentSessionID: m.ParentSessionID,
-			Sidechain:     m.Sidechain,
-			ContextBefore: toContextMessages(m.ContextBefore),
-			ContextAfter:  toContextMessages(m.ContextAfter),
+			Sidechain:          m.Sidechain,
+			ContextBefore:      toContextMessages(m.ContextBefore),
+			ContextAfter:       toContextMessages(m.ContextAfter),
+			TranscriptRevision: m.TranscriptRevision,
 		})
 	}
 	if res.NextCursor > 0 && len(res.Matches) > 0 {

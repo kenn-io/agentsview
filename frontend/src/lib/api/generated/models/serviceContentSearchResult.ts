@@ -6,4 +6,5 @@ import type { DbContentMatch } from "./dbContentMatch.ts";
 export interface ServiceContentSearchResult {
   matches: DbContentMatch[];
   next_cursor?: number;
+  revision_bound: boolean;
 }

@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-21
 title: Changelog
 description: Release history for AgentsView
 ---
@@ -10,6 +11,9 @@ The latest published release is
 
 **New features**
 
+- Agents can open recalled evidence against the exact transcript revision that
+    produced it. MCP message reads reject stale citations with `source_changed`,
+    and oversized messages now provide a revision-bound continuation cursor.
 - Agents can require several literal terms within one user/assistant exchange
     when searching conversation history through MCP. Exact session, branch, and
     current-session filters narrow recall before the result limit, and each
