@@ -11,6 +11,10 @@ The latest published release is
 
 **New features**
 
+- Conversation-memory clients can check archive and search readiness through
+    MCP `get_memory_status` or `GET /api/v1/memory/status`. Search responses
+    carry the same compact lexical and semantic coverage snapshot, including
+    active vector-generation counts and explicit unknown source telemetry.
 - Install the native AgentsView Memory package in Claude Code or Codex to get
     the recall skill, focused MCP server, Claude search agent, and a fail-open
     session-start hook from one package. Local and hosted targets stay in local

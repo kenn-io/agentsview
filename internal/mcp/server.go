@@ -30,6 +30,7 @@ const (
 	ToolGetSessionOverview = "get_session_overview"
 	ToolGetMessages        = "get_messages"
 	ToolSearchContent      = "search_content"
+	ToolGetMemoryStatus    = "get_memory_status"
 	ToolGetUsageSummary    = "get_usage_summary"
 )
 
@@ -92,7 +93,7 @@ func newServer(opts ServeOptions) *mcp.Server {
 		Version: version,
 	}, &mcp.ServerOptions{Instructions: "Use returned web_url values when linking to recorded sessions."})
 
-	t := &toolset{svc: opts.Service, now: opts.Now}
+	t := &toolset{svc: opts.Service, now: opts.Now, version: version}
 	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true}
 	memoryOnly := opts.Profile == ProfileMemory
 
@@ -154,6 +155,13 @@ func newServer(opts ServeOptions) *mcp.Server {
 			"system included).",
 		Annotations: readOnly,
 	}, t.getMessages)
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name: ToolGetMemoryStatus,
+		Description: "Report whether conversation memory is ready, including archive backend, lexical " +
+			"and semantic search capability, vector generation coverage, and source telemetry availability.",
+		Annotations: readOnly,
+	}, t.getMemoryStatus)
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: ToolSearchContent,

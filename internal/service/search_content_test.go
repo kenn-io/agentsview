@@ -80,6 +80,10 @@ type fakeContentStore struct {
 	windows    map[string][]db.Message // keyed by contextWindowKey
 }
 
+func (f *fakeContentStore) HasFTS(context.Context) bool { return true }
+func (f *fakeContentStore) HasSemantic() bool           { return false }
+func (f *fakeContentStore) ReadOnly() bool              { return true }
+
 func contextWindowKey(sessionID string, anchor int) string {
 	return fmt.Sprintf("%s:%d", sessionID, anchor)
 }

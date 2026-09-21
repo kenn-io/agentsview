@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	stdsync "sync"
 	"sync/atomic"
 	"time"
 
@@ -39,6 +40,9 @@ type directBackend struct {
 	local          *db.DB
 	engine         *sync.Engine
 	evidenceSource string
+	memoryStatusMu stdsync.Mutex
+	memoryStatus   MemoryStatus
+	memoryStatusAt time.Time
 }
 
 // NewDirectBackend returns a full read/write SessionService
@@ -68,6 +72,76 @@ func newEvidenceSource() string {
 var evidenceSourceFallback atomic.Uint64
 
 func (b *directBackend) SupportsRecallQueries() bool { return b.local != nil }
+
+func (b *directBackend) MemoryStatus(ctx context.Context) (MemoryStatus, error) {
+	status, err := b.computeMemoryStatus(ctx)
+	if err != nil {
+		return MemoryStatus{}, err
+	}
+	b.memoryStatusMu.Lock()
+	b.memoryStatus = status
+	b.memoryStatusAt = time.Now()
+	b.memoryStatusMu.Unlock()
+	return status, nil
+}
+
+func (b *directBackend) computeMemoryStatus(ctx context.Context) (MemoryStatus, error) {
+	now := time.Now().UTC()
+	backend := "unknown"
+	if named, ok := b.db.(db.MemoryBackendNamer); ok {
+		backend = named.MemoryBackendName()
+	}
+	archive := MemoryArchiveStatus{Backend: backend, ReadOnly: b.db.ReadOnly()}
+	if b.local != nil {
+		identity, err := b.local.GetSyncState(ctx, "artifact_local_installation_id")
+		if err != nil {
+			return MemoryStatus{}, fmt.Errorf("read memory archive identity: %w", err)
+		}
+		archive.Identity = identity
+	}
+	// Every production Store supports bounded substring and terms content
+	// search even when its optional FTS index is absent.
+	lexical := MemoryCapabilityStatus{Status: MemoryReady}
+	semantic := MemoryVectorStatus{Status: MemoryUnknown, Reason: "status_unsupported"}
+	if provider, ok := b.db.(db.SemanticReadinessProvider); ok {
+		status, err := provider.SemanticReadiness(ctx)
+		if err != nil {
+			return MemoryStatus{}, fmt.Errorf("read semantic readiness: %w", err)
+		}
+		semantic = vectorStatusFromDB(status)
+	} else if !b.db.HasSemantic() {
+		semantic = MemoryVectorStatus{Status: MemoryUnavailable, Reason: "not_configured"}
+	}
+	return MemoryStatus{
+		Status:     aggregateMemoryStatus(lexical, semantic),
+		ObservedAt: now,
+		Archive:    archive,
+		Lexical:    lexical,
+		Semantic:   semantic,
+		Sources: MemorySourceStatus{
+			Status: MemoryUnknown, Reason: "source_telemetry_unavailable",
+		},
+	}, nil
+}
+
+const memorySearchStatusTTL = 30 * time.Second
+
+func (b *directBackend) memoryStatusForSearch(
+	ctx context.Context,
+) (MemoryStatus, error) {
+	b.memoryStatusMu.Lock()
+	defer b.memoryStatusMu.Unlock()
+	if !b.memoryStatusAt.IsZero() && time.Since(b.memoryStatusAt) < memorySearchStatusTTL {
+		return b.memoryStatus, nil
+	}
+	status, err := b.computeMemoryStatus(ctx)
+	if err != nil {
+		return MemoryStatus{}, err
+	}
+	b.memoryStatus = status
+	b.memoryStatusAt = time.Now()
+	return status, nil
+}
 
 func (b *directBackend) MachineLabels(
 	ctx context.Context,
@@ -953,10 +1027,20 @@ func (b *directBackend) SearchContent(
 			return nil, err
 		}
 	}
+	status, statusErr := b.memoryStatusForSearch(ctx)
+	coverage := status.Coverage()
+	if statusErr != nil {
+		unknown := MemoryCapabilityStatus{Status: MemoryUnknown, Reason: "status_probe_failed"}
+		coverage = MemoryCoverage{
+			Status: MemoryUnknown, Lexical: unknown,
+			Semantic: MemoryVectorStatus{Status: unknown.Status, Reason: unknown.Reason},
+		}
+	}
 	return &ContentSearchResult{
 		Matches:       page.Matches,
 		NextCursor:    page.NextCursor,
 		RevisionBound: revisionBound,
+		Coverage:      coverage,
 	}, nil
 }
 

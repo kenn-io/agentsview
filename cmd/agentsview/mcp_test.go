@@ -289,6 +289,36 @@ func TestMCPDaemonServiceStartsDaemonForEachOperation(t *testing.T) {
 	assert.NoFileExists(t, cfg.DBPath)
 }
 
+func TestMCPDaemonServiceForwardsMemoryStatus(t *testing.T) {
+	dataDir := t.TempDir()
+	cfg := config.Config{DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db")}
+	expected := service.MemoryStatus{
+		Status: service.MemoryReady,
+		Archive: service.MemoryArchiveStatus{
+			Backend: "postgres", ReadOnly: true,
+		},
+		Lexical:  service.MemoryCapabilityStatus{Status: service.MemoryReady},
+		Semantic: service.MemoryVectorStatus{Status: service.MemoryReady},
+		Sources:  service.MemorySourceStatus{Status: service.MemoryUnknown},
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/api/v1/memory/status", r.URL.Path)
+		assert.NoError(t, json.MarshalWrite(w, expected))
+	}))
+	t.Cleanup(server.Close)
+	host, port := splitTestServerURL(t, server.URL)
+	stubStartBackgroundServeForTransport(t, func(
+		context.Context, *config.Config, time.Duration,
+	) (*DaemonRuntime, error) {
+		return &DaemonRuntime{Host: host, Port: port}, nil
+	})
+
+	status, err := service.GetMemoryStatus(t.Context(), newMCPDaemonService(cfg))
+	require.NoError(t, err)
+	assert.Equal(t, expected, status)
+	assert.NoFileExists(t, cfg.DBPath)
+}
+
 func TestMCPDaemonServiceRawSuffixResolvesDaemonPerCall(t *testing.T) {
 	dataDir := t.TempDir()
 	cfg := config.Config{DataDir: dataDir, DBPath: filepath.Join(dataDir, "sessions.db")}

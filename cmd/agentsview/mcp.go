@@ -36,10 +36,11 @@ func newMCPCommand() *cobra.Command {
 		Long: `Start an MCP (Model Context Protocol) server over stdio (default) or
 StreamableHTTP, exposing read-only tools for searching and reading
 recorded agent sessions: search_sessions, list_sessions,
-get_session_overview, get_messages, search_content, and
+get_session_overview, get_messages, get_memory_status, search_content, and
 get_usage_summary, plus query_recall for distilled session knowledge.
-Use --profile memory to advertise only search_content and get_messages for
-focused conversation-memory clients. The default full profile is unchanged.
+Use --profile memory to advertise only get_memory_status, search_content, and
+get_messages for focused conversation-memory clients. The default full profile
+is unchanged.
 
 The server reads through the daemon path. By default each tool call talks to
 the local agentsview daemon, starting it when needed so a long-lived MCP server
@@ -386,6 +387,16 @@ func (s *mcpDaemonService) SearchContent(
 		return nil, err
 	}
 	return svc.SearchContent(ctx, req)
+}
+
+func (s *mcpDaemonService) MemoryStatus(
+	ctx context.Context,
+) (service.MemoryStatus, error) {
+	svc, err := s.daemonService(ctx)
+	if err != nil {
+		return service.MemoryStatus{}, err
+	}
+	return service.GetMemoryStatus(ctx, svc)
 }
 
 func (s *mcpDaemonService) UsageSummary(

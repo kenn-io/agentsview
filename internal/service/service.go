@@ -192,6 +192,7 @@ type ContentSearchResult struct {
 	Matches       []db.ContentMatch `json:"matches"`
 	NextCursor    int               `json:"next_cursor,omitempty"`
 	RevisionBound bool              `json:"revision_bound"`
+	Coverage      MemoryCoverage    `json:"coverage"`
 }
 
 // RecallFilter mirrors GET /api/v1/recall/entries query parameters.

@@ -43,7 +43,7 @@ func callParams(name string, args map[string]any) *mcp.CallToolParams {
 	return &mcp.CallToolParams{Name: name, Arguments: args}
 }
 
-func TestNewServer_RegistersSevenReadOnlyTools(t *testing.T) {
+func TestNewServer_RegistersEightReadOnlyTools(t *testing.T) {
 	d := dbtest.OpenTestDB(t)
 	srv := newServer(ServeOptions{
 		Service: service.NewDirectBackend(d, nil),
@@ -54,7 +54,7 @@ func TestNewServer_RegistersSevenReadOnlyTools(t *testing.T) {
 	st, ct := newInMemoryPair(t, srv)
 	tools, err := ct.ListTools(t.Context(), nil)
 	require.NoError(t, err)
-	require.Len(t, tools.Tools, 7)
+	require.Len(t, tools.Tools, 8)
 	for _, tl := range tools.Tools {
 		require.NotNil(t, tl.Annotations, "tool %s missing annotations", tl.Name)
 		require.True(t, tl.Annotations.ReadOnlyHint,
@@ -75,7 +75,7 @@ func TestNewServer_MemoryProfileRegistersOnlyEvidenceTools(t *testing.T) {
 	st, ct := newInMemoryPair(t, srv)
 	tools, err := ct.ListTools(t.Context(), nil)
 	require.NoError(t, err)
-	require.Len(t, tools.Tools, 2)
+	require.Len(t, tools.Tools, 3)
 	names := make([]string, 0, len(tools.Tools))
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
@@ -87,9 +87,36 @@ func TestNewServer_MemoryProfileRegistersOnlyEvidenceTools(t *testing.T) {
 				"memory-profile tools must not refer to unavailable tools")
 		}
 	}
-	assert.ElementsMatch(t, []string{ToolSearchContent, ToolGetMessages}, names)
+	assert.ElementsMatch(t, []string{ToolSearchContent, ToolGetMessages, ToolGetMemoryStatus}, names)
 	require.NoError(t, ct.Close())
 	require.NoError(t, st.Wait())
+}
+
+func TestServer_GetMemoryStatus(t *testing.T) {
+	d := dbtest.OpenTestDB(t)
+	srv := newServer(ServeOptions{
+		Service: service.NewDirectBackend(d, nil),
+		Version: "v-test",
+		Now:     func() time.Time { return fixedNow },
+	})
+
+	st, ct := newInMemoryPair(t, srv)
+	defer func() {
+		require.NoError(t, ct.Close())
+		require.NoError(t, st.Wait())
+	}()
+	res, err := ct.CallTool(t.Context(), callParams(ToolGetMemoryStatus, nil))
+	require.NoError(t, err)
+	require.False(t, res.IsError)
+	var status service.MemoryStatus
+	raw, err := json.Marshal(res.StructuredContent)
+	require.NoError(t, err)
+	require.NoError(t, json.Unmarshal(raw, &status))
+	assert.Equal(t, "v-test", status.ServerVersion)
+	assert.Equal(t, "sqlite", status.Archive.Backend)
+	assert.Equal(t, service.MemoryReady, status.Lexical.Status)
+	assert.Equal(t, service.MemoryUnavailable, status.Semantic.Status)
+	assert.Equal(t, service.MemoryPartial, status.Status)
 }
 
 func TestParseProfile(t *testing.T) {
@@ -120,7 +147,7 @@ func TestNewServer_OmitsRecallToolForUnsupportedBackend(t *testing.T) {
 	st, ct := newInMemoryPair(t, srv)
 	tools, err := ct.ListTools(t.Context(), nil)
 	require.NoError(t, err)
-	require.Len(t, tools.Tools, 6)
+	require.Len(t, tools.Tools, 7)
 	for _, tool := range tools.Tools {
 		assert.NotEqual(t, ToolQueryRecall, tool.Name)
 	}

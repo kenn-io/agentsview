@@ -161,6 +161,28 @@ func ProbeHTTPServerCapabilities(
 
 func (b *httpBackend) SupportsRecallQueries() bool { return b.recallQueries }
 
+func (b *httpBackend) MemoryStatus(ctx context.Context) (service.MemoryStatus, error) {
+	api, err := b.apiClient(b.client)
+	if err != nil {
+		return service.MemoryStatus{}, err
+	}
+	response, err := api.GetAPIV1MemoryStatusWithResponse(ctx)
+	if response == nil {
+		return service.MemoryStatus{}, err
+	}
+	err = serviceResponseError(response.HTTPResponse, response.Body, err)
+	if errors.Is(err, errHTTPNotFound) || errors.Is(err, errHTTPNotImplemented) {
+		return service.UnsupportedMemoryStatus(time.Now()), nil
+	}
+	if err != nil {
+		return service.MemoryStatus{}, err
+	}
+	if response.JSON200 == nil {
+		return service.MemoryStatus{}, errors.New("memory status: empty response")
+	}
+	return *response.JSON200, nil
+}
+
 func (b *httpBackend) MachineLabels(
 	ctx context.Context,
 ) (service.MachineLabelCatalog, error) {
@@ -756,6 +778,7 @@ func (b *httpBackend) SearchContent(
 	for i := range out.Matches {
 		out.Matches[i].WebURL = b.sessionWebURL(out.Matches[i].SessionID)
 	}
+	out.Coverage = service.NormalizeMemoryCoverage(out.Coverage)
 	return out, nil
 }
 

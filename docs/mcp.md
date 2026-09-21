@@ -63,6 +63,7 @@ client will see these tools:
 | `list_sessions`        | List recent or filtered sessions                                         |
 | `get_session_overview` | Fetch metadata and a compact message preview                             |
 | `get_messages`         | Read paginated message bodies from one session                           |
+| `get_memory_status`    | Report archive, lexical, semantic, and source readiness                  |
 | `search_content`       | Substring, regex, terms, semantic, or hybrid search over session text    |
 | `get_usage_summary`    | Aggregate token and cost usage                                           |
 | `query_recall`         | Search extracted Recall entries when the backend supports Recall queries |
@@ -83,10 +84,16 @@ profile:
 }
 ```
 
-This profile advertises only `search_content` and `get_messages`. The tools use
-the same schemas and backend selection as the full profile, over either stdio or
-StreamableHTTP. Omitting `--profile` or choosing `--profile full` preserves the
-complete tool list above.
+This profile advertises only `get_memory_status`, `search_content`, and
+`get_messages`. The status tool reports the authenticated archive backend,
+read-only mode, server version, lexical availability, semantic generation
+coverage, and whether per-source freshness telemetry is available. Its
+`ready`, `partial`, `unavailable`, or `unknown` states come from the same
+provider as the compact `coverage` object on every successful
+`search_content` response. Older remote servers report `unknown` with an
+`unsupported` reason. The tools use the same schemas and backend selection as
+the full profile, over either stdio or StreamableHTTP. Omitting `--profile` or
+choosing `--profile full` preserves the complete tool list above.
 
 The repository's `plugins/agentsview-memory` package registers this profile for
 Claude Code and Codex and bundles the generated recall skill. Its MCP process

@@ -4535,6 +4535,7 @@ type ClientInterface interface {
 	PostAPIV1EmbeddingsGenerationsIDRetireWithResponse(ctx context.Context, options *PostAPIV1EmbeddingsGenerationsIDRetireRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1EmbeddingsGenerationsIDRetireResp, error)
 	GetAPIV1EmbeddingsStatusWithResponse(ctx context.Context, options *GetAPIV1EmbeddingsStatusRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1EmbeddingsStatusResp, error)
 	GetAPIV1MachinesWithResponse(ctx context.Context, options *GetAPIV1MachinesRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1MachinesResp, error)
+	GetAPIV1MemoryStatusWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1MemoryStatusResp, error)
 	GetAPIV1ProjectsWithResponse(ctx context.Context, options *GetAPIV1ProjectsRequestOptions, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1ProjectsResp, error)
 	PostAPIV1PushClickhouseWithResponse(ctx context.Context, options *PostAPIV1PushClickhouseRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1PushClickhouseResp, error)
 	PostAPIV1PushClickhouseStreamWithResponse(ctx context.Context, options *PostAPIV1PushClickhouseRequestOptions, reqEditors ...runtime.RequestEditorFn) (*PostAPIV1PushClickhouseResp, error)
@@ -6684,6 +6685,212 @@ func (c *Client) GetAPIV1MachinesWithResponse(ctx context.Context, options *GetA
 					ContentType:   resp.Headers.Get("Content-Type"),
 					ContentLength: len(bodyBytes),
 					TargetType:    "GetAPIV1MachinesErrorResponseJSON504",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	default:
+		return out, runtime.NewClientAPIError(fmt.Errorf("unexpected status code: %d", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	}
+}
+
+// GetAPIV1MemoryStatus Get memory readiness
+func (c *Client) GetAPIV1MemoryStatusWithResponse(ctx context.Context, reqEditors ...runtime.RequestEditorFn) (*GetAPIV1MemoryStatusResp, error) {
+	var err error
+	reqParams := runtime.RequestOptionsParameters{
+		RequestURL: c.apiClient.GetBaseURL() + "/api/v1/memory/status",
+		Method:     "GET",
+	}
+
+	req, err := c.apiClient.CreateRequest(ctx, reqParams, reqEditors...)
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %w", err)
+	}
+
+	resp, err := c.apiClient.ExecuteRequest(ctx, req, "/api/v1/memory/status")
+	if err != nil {
+		return nil, fmt.Errorf("error executing request: %w", err)
+	}
+
+	out := &GetAPIV1MemoryStatusResp{
+		HTTPResponse: resp.Raw,
+		Body:         resp.Content,
+		StatusCode:   resp.StatusCode,
+	}
+
+	switch resp.StatusCode {
+	case 200:
+		out.JSON200 = new(GetAPIV1MemoryStatusResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON200); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1MemoryStatusResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, nil
+	case 400:
+		out.JSON400 = new(GetAPIV1MemoryStatusErrorResponse)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON400); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1MemoryStatusErrorResponse",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 401:
+		out.JSON401 = new(GetAPIV1MemoryStatusErrorResponseJSON)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON401); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1MemoryStatusErrorResponseJSON",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 403:
+		out.JSON403 = new(GetAPIV1MemoryStatusErrorResponseJSON403)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON403); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1MemoryStatusErrorResponseJSON403",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 404:
+		out.JSON404 = new(GetAPIV1MemoryStatusErrorResponseJSON404)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON404); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1MemoryStatusErrorResponseJSON404",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 409:
+		out.JSON409 = new(GetAPIV1MemoryStatusErrorResponseJSON409)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON409); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1MemoryStatusErrorResponseJSON409",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 500:
+		out.JSON500 = new(GetAPIV1MemoryStatusErrorResponseJSON500)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON500); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1MemoryStatusErrorResponseJSON500",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 501:
+		out.JSON501 = new(GetAPIV1MemoryStatusErrorResponseJSON501)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON501); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1MemoryStatusErrorResponseJSON501",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 502:
+		out.JSON502 = new(GetAPIV1MemoryStatusErrorResponseJSON502)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON502); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1MemoryStatusErrorResponseJSON502",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 503:
+		out.JSON503 = new(GetAPIV1MemoryStatusErrorResponseJSON503)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON503); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1MemoryStatusErrorResponseJSON503",
+					Body:          bodyBytes,
+					Err:           err,
+				}
+			}
+		}
+		return out, runtime.NewClientAPIError(fmt.Errorf("API error (status %d)", resp.StatusCode), runtime.WithStatusCode(resp.StatusCode))
+	case 504:
+		out.JSON504 = new(GetAPIV1MemoryStatusErrorResponseJSON504)
+		bodyBytes := resp.Content
+		if len(bodyBytes) > 0 {
+			if err := json.Unmarshal(bodyBytes, out.JSON504); err != nil {
+				return out, &runtime.ResponseDecodeError{
+					StatusCode:    resp.StatusCode,
+					ContentType:   resp.Headers.Get("Content-Type"),
+					ContentLength: len(bodyBytes),
+					TargetType:    "GetAPIV1MemoryStatusErrorResponseJSON504",
 					Body:          bodyBytes,
 					Err:           err,
 				}
@@ -14683,6 +14890,82 @@ func (c *Client) GetAPIV1VersionWithResponse(ctx context.Context, reqEditors ...
 
 var _ ClientInterface = (*Client)(nil)
 
+type ServiceMemoryCapabilityStatusStatus string
+
+const (
+	Partial     ServiceMemoryCapabilityStatusStatus = "partial"
+	Ready       ServiceMemoryCapabilityStatusStatus = "ready"
+	Unavailable ServiceMemoryCapabilityStatusStatus = "unavailable"
+	Unknown     ServiceMemoryCapabilityStatusStatus = "unknown"
+)
+
+// Validate checks if the ServiceMemoryCapabilityStatusStatus value is valid
+func (s ServiceMemoryCapabilityStatusStatus) Validate() error {
+	switch s {
+	case Partial, Ready, Unavailable, Unknown:
+		return nil
+	default:
+		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid ServiceMemoryCapabilityStatusStatus value, got: %v", s))
+	}
+}
+
+type ServiceMemoryCoverageStatus string
+
+const (
+	ServiceMemoryCoverageStatusPartial     ServiceMemoryCoverageStatus = "partial"
+	ServiceMemoryCoverageStatusReady       ServiceMemoryCoverageStatus = "ready"
+	ServiceMemoryCoverageStatusUnavailable ServiceMemoryCoverageStatus = "unavailable"
+	ServiceMemoryCoverageStatusUnknown     ServiceMemoryCoverageStatus = "unknown"
+)
+
+// Validate checks if the ServiceMemoryCoverageStatus value is valid
+func (s ServiceMemoryCoverageStatus) Validate() error {
+	switch s {
+	case ServiceMemoryCoverageStatusPartial, ServiceMemoryCoverageStatusReady, ServiceMemoryCoverageStatusUnavailable, ServiceMemoryCoverageStatusUnknown:
+		return nil
+	default:
+		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid ServiceMemoryCoverageStatus value, got: %v", s))
+	}
+}
+
+type ServiceMemorySourceStatusStatus string
+
+const (
+	ServiceMemorySourceStatusStatusPartial     ServiceMemorySourceStatusStatus = "partial"
+	ServiceMemorySourceStatusStatusReady       ServiceMemorySourceStatusStatus = "ready"
+	ServiceMemorySourceStatusStatusUnavailable ServiceMemorySourceStatusStatus = "unavailable"
+	ServiceMemorySourceStatusStatusUnknown     ServiceMemorySourceStatusStatus = "unknown"
+)
+
+// Validate checks if the ServiceMemorySourceStatusStatus value is valid
+func (s ServiceMemorySourceStatusStatus) Validate() error {
+	switch s {
+	case ServiceMemorySourceStatusStatusPartial, ServiceMemorySourceStatusStatusReady, ServiceMemorySourceStatusStatusUnavailable, ServiceMemorySourceStatusStatusUnknown:
+		return nil
+	default:
+		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid ServiceMemorySourceStatusStatus value, got: %v", s))
+	}
+}
+
+type ServiceMemoryVectorStatusStatus string
+
+const (
+	ServiceMemoryVectorStatusStatusPartial     ServiceMemoryVectorStatusStatus = "partial"
+	ServiceMemoryVectorStatusStatusReady       ServiceMemoryVectorStatusStatus = "ready"
+	ServiceMemoryVectorStatusStatusUnavailable ServiceMemoryVectorStatusStatus = "unavailable"
+	ServiceMemoryVectorStatusStatusUnknown     ServiceMemoryVectorStatusStatus = "unknown"
+)
+
+// Validate checks if the ServiceMemoryVectorStatusStatus value is valid
+func (s ServiceMemoryVectorStatusStatus) Validate() error {
+	switch s {
+	case ServiceMemoryVectorStatusStatusPartial, ServiceMemoryVectorStatusStatusReady, ServiceMemoryVectorStatusStatusUnavailable, ServiceMemoryVectorStatusStatusUnknown:
+		return nil
+	default:
+		return runtime.NewValidationErrorsFromString("Enum", fmt.Sprintf("must be a valid ServiceMemoryVectorStatusStatus value, got: %v", s))
+	}
+}
+
 // GetAPIV1ActivityReportQueryPreset Range preset
 type GetAPIV1ActivityReportQueryPreset string
 
@@ -16315,6 +16598,28 @@ type GetAPIV1MachinesErrorResponseJSON503 = APIErrorResponse
 
 type GetAPIV1MachinesErrorResponseJSON504 = APIErrorResponse
 
+type GetAPIV1MemoryStatusResponse = service.MemoryStatus
+
+type GetAPIV1MemoryStatusErrorResponse = APIErrorResponse
+
+type GetAPIV1MemoryStatusErrorResponseJSON = APIErrorResponse
+
+type GetAPIV1MemoryStatusErrorResponseJSON403 = APIErrorResponse
+
+type GetAPIV1MemoryStatusErrorResponseJSON404 = APIErrorResponse
+
+type GetAPIV1MemoryStatusErrorResponseJSON409 = APIErrorResponse
+
+type GetAPIV1MemoryStatusErrorResponseJSON500 = APIErrorResponse
+
+type GetAPIV1MemoryStatusErrorResponseJSON501 = APIErrorResponse
+
+type GetAPIV1MemoryStatusErrorResponseJSON502 = APIErrorResponse
+
+type GetAPIV1MemoryStatusErrorResponseJSON503 = APIErrorResponse
+
+type GetAPIV1MemoryStatusErrorResponseJSON504 = APIErrorResponse
+
 type GetAPIV1ProjectsResponse = ProjectsResponse
 
 type GetAPIV1ProjectsErrorResponse = APIErrorResponse
@@ -17401,6 +17706,23 @@ type GetAPIV1MachinesResp struct {
 	JSON502      *GetAPIV1MachinesErrorResponseJSON502
 	JSON503      *GetAPIV1MachinesErrorResponseJSON503
 	JSON504      *GetAPIV1MachinesErrorResponseJSON504
+}
+
+type GetAPIV1MemoryStatusResp struct {
+	HTTPResponse *http.Response
+	Body         []byte
+	StatusCode   int
+	JSON200      *GetAPIV1MemoryStatusResponse
+	JSON400      *GetAPIV1MemoryStatusErrorResponse
+	JSON401      *GetAPIV1MemoryStatusErrorResponseJSON
+	JSON403      *GetAPIV1MemoryStatusErrorResponseJSON403
+	JSON404      *GetAPIV1MemoryStatusErrorResponseJSON404
+	JSON409      *GetAPIV1MemoryStatusErrorResponseJSON409
+	JSON500      *GetAPIV1MemoryStatusErrorResponseJSON500
+	JSON501      *GetAPIV1MemoryStatusErrorResponseJSON501
+	JSON502      *GetAPIV1MemoryStatusErrorResponseJSON502
+	JSON503      *GetAPIV1MemoryStatusErrorResponseJSON503
+	JSON504      *GetAPIV1MemoryStatusErrorResponseJSON504
 }
 
 type GetAPIV1ProjectsResp struct {
@@ -20086,6 +20408,104 @@ func (s SearchResponse) Validate() error {
 }
 
 type ServiceContentSearchResult = service.ContentSearchResult
+
+type ServiceMemoryArchiveStatus struct {
+	Backend  string  `json:"backend" validate:"required"`
+	Identity *string `json:"identity,omitempty"`
+	ReadOnly bool    `json:"read_only"`
+}
+
+func (s ServiceMemoryArchiveStatus) Validate() error {
+	return runtime.ConvertValidatorError(typesValidator.Struct(s))
+}
+
+type ServiceMemoryCapabilityStatus struct {
+	Reason *string                             `json:"reason,omitempty"`
+	Status ServiceMemoryCapabilityStatusStatus `json:"status" validate:"required"`
+}
+
+func (s ServiceMemoryCapabilityStatus) Validate() error {
+	var errors runtime.ValidationErrors
+	if v, ok := any(s.Status).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Status", err)
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type ServiceMemoryCoverage struct {
+	Lexical  ServiceMemoryCapabilityStatus `json:"lexical"`
+	Semantic ServiceMemoryVectorStatus     `json:"semantic"`
+	Status   ServiceMemoryCoverageStatus   `json:"status" validate:"required"`
+}
+
+func (s ServiceMemoryCoverage) Validate() error {
+	var errors runtime.ValidationErrors
+	if v, ok := any(s.Lexical).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Lexical", err)
+		}
+	}
+	if v, ok := any(s.Semantic).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Semantic", err)
+		}
+	}
+	if v, ok := any(s.Status).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Status", err)
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type ServiceMemorySourceStatus struct {
+	Reason *string                         `json:"reason,omitempty"`
+	Status ServiceMemorySourceStatusStatus `json:"status" validate:"required"`
+}
+
+func (s ServiceMemorySourceStatus) Validate() error {
+	var errors runtime.ValidationErrors
+	if v, ok := any(s.Status).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Status", err)
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
+
+type ServiceMemoryStatus = service.MemoryStatus
+
+type ServiceMemoryVectorStatus struct {
+	Embedded   *int64                          `json:"embedded,omitempty"`
+	Generation *string                         `json:"generation,omitempty"`
+	Missing    *int64                          `json:"missing,omitempty"`
+	Reason     *string                         `json:"reason,omitempty"`
+	Status     ServiceMemoryVectorStatusStatus `json:"status" validate:"required"`
+}
+
+func (s ServiceMemoryVectorStatus) Validate() error {
+	var errors runtime.ValidationErrors
+	if v, ok := any(s.Status).(runtime.Validator); ok {
+		if err := v.Validate(); err != nil {
+			errors = errors.Append("Status", err)
+		}
+	}
+	if len(errors) == 0 {
+		return nil
+	}
+	return errors
+}
 
 type ServiceMessageList = service.MessageList
 

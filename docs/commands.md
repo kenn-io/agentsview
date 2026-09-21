@@ -1630,7 +1630,9 @@ after the daemon exits due to idleness. The MCP server does not fall back to
 opening the local SQLite archive directly.
 
 Use `--profile memory` when the client should discover only the
-`search_content` and `get_messages` conversation-memory tools. The default
+`get_memory_status`, `search_content`, and `get_messages` conversation-memory
+tools. `get_memory_status` reports archive, lexical, semantic, vector coverage,
+and source-telemetry readiness without running a search probe. The default
 `full` profile preserves the complete MCP tool surface. Profile selection works
 with both stdio and StreamableHTTP and does not change backend selection.
 
