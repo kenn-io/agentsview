@@ -61,6 +61,9 @@
   let statusFailed = $state(false);
   let entriesUpdatedAt = $state<number | null>(null);
   let statusUpdatedAt = $state<number | null>(null);
+  // Wall-clock ms of the most recent query, request start to data applied:
+  // an entries load on its own, or the entries and status pair on refresh.
+  let queryDurationMs = $state<number | null>(null);
   let progress = $state<RecallExtractProgress[]>([]);
   let progressExpanded = $state(false);
   let progressState = $state<"" | RecallExtractProgressState>("");
@@ -157,6 +160,7 @@
   ]);
 
   async function loadEntries(cursor = "") {
+    const startedAt = performance.now();
     const signal = entriesRead.begin();
     const appending = cursor !== "";
     entriesLoading = true;
@@ -178,6 +182,7 @@
       nextCursor = page.next_cursor ?? "";
       resultCap = page.result_cap ?? 0;
       entriesUpdatedAt = Date.now();
+      queryDurationMs = performance.now() - startedAt;
     } catch (error) {
       if (isAbortError(error) || !entriesRead.isCurrent(signal)) return;
       if (appending && error instanceof ApiError && error.status === 409) {
@@ -250,7 +255,14 @@
   }
 
   async function refreshRecall() {
+    const startedAt = performance.now();
+    const startedAtEpoch = Date.now();
     await Promise.all([loadEntries(), loadStatus()]);
+    // Both loads swallow their own failures; only a refresh where each one
+    // applied fresh data counts as a completed query.
+    if ((entriesUpdatedAt ?? -1) >= startedAtEpoch && (statusUpdatedAt ?? -1) >= startedAtEpoch) {
+      queryDurationMs = performance.now() - startedAt;
+    }
     if (progressExpanded) await loadProgress();
   }
 
@@ -404,6 +416,7 @@
       {/if}
       <RefreshControl
         {lastUpdatedAt}
+        {queryDurationMs}
         busy={entriesLoading || statusLoading || progressLoading}
         onRefresh={refreshRecall}
         label={m.shared_refresh()}

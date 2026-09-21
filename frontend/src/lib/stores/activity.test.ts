@@ -100,6 +100,7 @@ beforeEach(() => {
   activity.loading = false;
   activity.error = null;
   activity.lastUpdatedAt = null;
+  activity.lastQueryDurationMs = null;
   activity.hasNewData = false;
   activity.projects = [];
   activity.agents = [];
@@ -604,6 +605,28 @@ describe("freshness state", () => {
     }
   });
 
+  it("records how long the report query took, from request to data applied", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    try {
+      expect(activity.lastQueryDurationMs).toBeNull();
+      api.getActivityReport.mockImplementationOnce(async () => {
+        vi.advanceTimersByTime(250);
+        return makeReport();
+      });
+      await activity.load();
+      expect(activity.lastQueryDurationMs).toBe(250);
+
+      api.getActivityReport.mockImplementationOnce(async () => {
+        vi.advanceTimersByTime(1800);
+        return makeReport();
+      });
+      await activity.load({ background: true });
+      expect(activity.lastQueryDurationMs).toBe(1800);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("markNewData is a no-op before the first report loads", () => {
     expect(activity.lastUpdatedAt).toBeNull();
     activity.markNewData();
@@ -617,6 +640,7 @@ describe("freshness state", () => {
       api.getActivityReport.mockRejectedValueOnce(new Error("network down"));
       await activity.load();
       expect(activity.lastUpdatedAt).toBeNull();
+      expect(activity.lastQueryDurationMs).toBeNull();
       activity.markNewData();
       expect(activity.hasNewData).toBe(false);
     } finally {

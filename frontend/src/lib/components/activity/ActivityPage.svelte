@@ -436,6 +436,7 @@
     <div class="activity-refresh" aria-live="polite">
       <RefreshControl
         lastUpdatedAt={activity.lastUpdatedAt}
+        queryDurationMs={activity.lastQueryDurationMs}
         busy={activity.loading}
         status={refreshStatus}
         onRefresh={() => activity.load({ background: true })}
@@ -537,28 +538,13 @@
     --typeahead-max-width: 150px;
   }
 
+  /* The control reserves its own text widths (see shared/RefreshControl),
+   * so it needs no clamp here: the age box clips a long progress status
+   * instead of pushing the toolbar around. */
   .activity-refresh {
-    flex: 0 0 132px;
-    width: 132px;
+    flex: 0 0 auto;
     max-width: 100%;
     min-width: 0;
-    overflow: hidden;
-  }
-
-  .activity-refresh :global(.kit-refresh-control) {
-    width: 100%;
-    max-width: 100%;
-    min-width: 0;
-  }
-
-  .activity-refresh :global(.kit-refresh-control__status) {
-    min-width: 0;
-    overflow: hidden;
-  }
-
-  .activity-refresh :global(.kit-refresh-control__status span) {
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
 
   .activity-content {

@@ -608,6 +608,7 @@ import type { DbSignalCalibration as SignalCalibration, DbSignalSessionExample a
 
     <RefreshControl
       lastUpdatedAt={analytics.qualityLastUpdatedAt}
+      queryDurationMs={analytics.qualityLastQueryDurationMs}
       busy={querying}
       onRefresh={handleRefresh}
       label={m.quality_page_refresh()}

@@ -883,6 +883,25 @@ describe("UsageStore session filter params", () => {
     }
   });
 
+  it("records how long the full refresh took, from request to data applied", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    try {
+      const { usage } = await loadStore();
+      expect(usage.lastQueryDurationMs).toBeNull();
+
+      // The slowest panel bounds the refresh: top sessions lands 400 ms in.
+      usageServiceMocks.getApiV1UsageTopSessions.mockImplementationOnce(async () => {
+        vi.advanceTimersByTime(400);
+        return [];
+      });
+      await usage.fetchAll();
+
+      expect(usage.lastQueryDurationMs).toBe(400);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not mark cached partial refresh failures as current", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});

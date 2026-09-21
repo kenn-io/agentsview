@@ -84,6 +84,10 @@ class AnalyticsStore {
   topMetric: TopSessionsMetric = $state("messages");
   lastUpdatedAt: number | null = $state(null);
   qualityLastUpdatedAt: number | null = $state(null);
+  // Wall-clock ms of the most recent refresh, request start to data applied,
+  // shown next to each page's refresh label. null until the first load.
+  lastQueryDurationMs: number | null = $state(null);
+  qualityLastQueryDurationMs: number | null = $state(null);
   hasNewData: boolean = $state(false);
 
   loading = $state({
@@ -531,8 +535,9 @@ class AnalyticsStore {
     }
   }
 
-  private markRefreshComplete(): void {
+  private markRefreshComplete(startedAt: number): void {
     this.lastUpdatedAt = Date.now();
+    this.lastQueryDurationMs = performance.now() - startedAt;
     this.hasNewData = false;
   }
 
@@ -545,6 +550,7 @@ class AnalyticsStore {
 
   async fetchAll() {
     this.fetchStartHandler?.();
+    const startedAt = performance.now();
     const fetchVersion = ++this.fetchAllVersion;
     this.rollDates();
     const results = await Promise.all([
@@ -561,7 +567,7 @@ class AnalyticsStore {
       this.fetchSignals(),
     ]);
     if (fetchVersion === this.fetchAllVersion && results.every((result) => result === "ok")) {
-      this.markRefreshComplete();
+      this.markRefreshComplete(startedAt);
     }
   }
 
@@ -771,9 +777,11 @@ class AnalyticsStore {
     // The Quality page has no model control and the model filter is an
     // Analytics-only scope; omit it so a model selected on Analytics does not
     // silently narrow the Quality signal facts.
+    const startedAt = performance.now();
     const result = await this.fetchSignals({ includeModel: false });
     if (result === "ok") {
       this.qualityLastUpdatedAt = Date.now();
+      this.qualityLastQueryDurationMs = performance.now() - startedAt;
     }
   }
 

@@ -615,6 +615,7 @@
     />
     <RefreshControl
       lastUpdatedAt={analytics.lastUpdatedAt}
+      queryDurationMs={analytics.lastQueryDurationMs}
       busy={analytics.isQuerying}
       onRefresh={refreshAnalytics}
       label={m.analytics_refresh()}

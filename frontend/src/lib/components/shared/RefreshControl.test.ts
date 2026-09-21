@@ -39,6 +39,68 @@ describe("RefreshControl", () => {
     document.body.innerHTML = "";
   });
 
+  it("renders the last-query duration to the right of the age label", async () => {
+    const component = mount(RefreshControl, {
+      target: document.body,
+      props: {
+        lastUpdatedAt: Date.now() - 3 * 60_000,
+        queryDurationMs: 1234,
+        onRefresh: vi.fn(),
+      },
+    });
+    await tick();
+
+    const age = document.querySelector(".kit-refresh-control__age > .kit-refresh-control__text");
+    const detail = document.querySelector(
+      ".kit-refresh-control__detail > .kit-refresh-control__text",
+    );
+    expect(age?.textContent).toBe("Updated 3m ago");
+    expect(detail?.textContent).toBe("1.2 s");
+    expect(age!.compareDocumentPosition(detail!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    unmount(component);
+    document.body.innerHTML = "";
+  });
+
+  it("leaves the duration box empty before the first query completes", async () => {
+    const component = mount(RefreshControl, {
+      target: document.body,
+      props: { lastUpdatedAt: null, onRefresh: vi.fn() },
+    });
+    await tick();
+
+    const detail = document.querySelector(
+      ".kit-refresh-control__detail > .kit-refresh-control__text",
+    );
+    expect(detail).not.toBeNull();
+    expect(detail?.textContent).toBe("");
+
+    unmount(component);
+    document.body.innerHTML = "";
+  });
+
+  it("reserves width with the widest localized age and duration variants", async () => {
+    setLocale("zh-CN");
+    const component = mount(RefreshControl, {
+      target: document.body,
+      props: { lastUpdatedAt: Date.now(), queryDurationMs: 8, onRefresh: vi.fn() },
+    });
+    await tick();
+
+    const samples = Array.from(document.querySelectorAll(".kit-refresh-control__sample")).map(
+      (node) => node.textContent,
+    );
+    expect(samples).toContain("999 天前更新");
+    expect(samples).toContain("99 分 59 秒");
+    expect(
+      document.querySelector(".kit-refresh-control__age > .kit-refresh-control__text")?.textContent,
+    ).toBe("刚刚更新");
+
+    unmount(component);
+    setLocale("en");
+    document.body.innerHTML = "";
+  });
+
   it("replaces the age with a transient status", async () => {
     const component = mount(RefreshControl, {
       target: document.body,

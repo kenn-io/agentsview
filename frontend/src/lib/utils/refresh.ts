@@ -1,4 +1,4 @@
-import { m } from "../i18n/index.js";
+import { getLocale, m } from "../i18n/index.js";
 
 const MINUTE_MS = 60_000;
 const HOUR_MS = 60 * MINUTE_MS;
@@ -30,6 +30,75 @@ export function formatRefreshAge(updatedAt: number | null | undefined, now = Dat
   return m.shared_refresh_days_ago({
     count: Math.floor(ageMs / DAY_MS),
   });
+}
+
+/**
+ * Label variants the refresh control's age box must fit without resizing.
+ * Covers every branch of `formatRefreshAge` at its widest digit budget so
+ * the box is measured once against the widest localized rendering.
+ */
+export function refreshAgeWidthSamples(): string[] {
+  return [
+    m.shared_refresh_not_updated(),
+    m.shared_refresh_just_now(),
+    m.shared_refresh_minutes_ago({ count: 59 }),
+    m.shared_refresh_hours_ago({ count: 23 }),
+    m.shared_refresh_days_ago({ count: 999 }),
+  ];
+}
+
+const SECOND_MS = 1000;
+
+/**
+ * How long the last data query took, in a short fixed-format string:
+ * whole milliseconds under a second, seconds with one decimal under a
+ * minute, then minutes plus zero-padded seconds. Each unit boundary is
+ * applied after rounding so a value like 999.6 ms reads "1.0 s" rather
+ * than "1000 ms". Returns "" for a missing duration so the reserved box
+ * stays empty instead of showing a placeholder.
+ */
+export function formatQueryDuration(durationMs: number | null | undefined): string {
+  if (durationMs == null || !Number.isFinite(durationMs)) return "";
+  const locale = getLocale();
+  const ms = Math.max(0, durationMs);
+  const wholeMs = Math.round(ms);
+  if (wholeMs < SECOND_MS) {
+    return m.shared_refresh_duration_ms({
+      value: new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(wholeMs),
+    });
+  }
+  const tenths = Math.round(ms / 100);
+  if (tenths < 600) {
+    return m.shared_refresh_duration_seconds({
+      value: new Intl.NumberFormat(locale, {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 1,
+      }).format(tenths / 10),
+    });
+  }
+  const totalSeconds = Math.round(ms / SECOND_MS);
+  return m.shared_refresh_duration_minutes({
+    minutes: new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(
+      Math.floor(totalSeconds / 60),
+    ),
+    seconds: new Intl.NumberFormat(locale, {
+      minimumIntegerDigits: 2,
+      maximumFractionDigits: 0,
+    }).format(totalSeconds % 60),
+  });
+}
+
+/**
+ * Widest rendering of each `formatQueryDuration` unit, so the duration box
+ * keeps one width from the first millisecond reading up to a 99-minute
+ * query.
+ */
+export function queryDurationWidthSamples(): string[] {
+  return [
+    formatQueryDuration(999),
+    formatQueryDuration(59_900),
+    formatQueryDuration(99 * MINUTE_MS + 59 * SECOND_MS),
+  ];
 }
 
 export function createRefreshScheduler(refresh: () => void | Promise<void>, intervalMs: number) {

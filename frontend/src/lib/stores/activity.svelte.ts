@@ -80,6 +80,9 @@ class ActivityStore {
   // Epoch ms of the last successful report fetch, powering the "Updated Xm ago"
   // refresh label. null until the first load completes.
   lastUpdatedAt: number | null = $state(null);
+  // Wall-clock ms of the most recent report fetch, request start to data
+  // applied, shown next to the refresh label. null until the first load.
+  lastQueryDurationMs: number | null = $state(null);
   // Set when an SSE event arrives after the first load, signalling that newer
   // data exists. Mirrors the analytics/usage stores: marking is cheap, and the
   // actual refetch is left to the manual refresh button and the periodic
@@ -165,6 +168,7 @@ class ActivityStore {
 
   async load({ background = false }: { background?: boolean } = {}): Promise<boolean> {
     const v = ++this.loadVersion;
+    const startedAt = performance.now();
     const signal = this.reportRead.begin();
     if (this.materializeRollingWindow()) {
       this.writeUrl();
@@ -196,6 +200,7 @@ class ActivityStore {
       this.report = res;
       this.reportGeneration++;
       this.lastUpdatedAt = Date.now();
+      this.lastQueryDurationMs = performance.now() - startedAt;
       this.hasNewData = false;
       return true;
     } catch (e) {
@@ -223,6 +228,7 @@ class ActivityStore {
   async loadSessionPage(options: ActivitySessionPageOptions = {}): Promise<boolean> {
     const report = this.report;
     if (!report?.report_id) return false;
+    const startedAt = performance.now();
     const signal = this.sessionsRead.begin();
     const sort = options.sort ?? this.sessionsSort;
     const direction = options.direction ?? this.sessionsDirection;
@@ -254,6 +260,7 @@ class ActivityStore {
         this.sessionsDirection = "desc";
         this.sessionsBucketRange = null;
         this.lastUpdatedAt = Date.now();
+        this.lastQueryDurationMs = performance.now() - startedAt;
         this.hasNewData = false;
         return true;
       }

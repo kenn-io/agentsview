@@ -345,6 +345,9 @@ class UsageStore {
   pairwiseSelection = $state<UsagePairwiseSelection>(emptyPairwiseSelection());
   topSessions = $state<DbTopSessionEntry[] | null>(null);
   lastUpdatedAt: number | null = $state(null);
+  // Wall-clock ms of the most recent full refresh, request start to data
+  // applied, shown next to the refresh label. null until the first load.
+  lastQueryDurationMs: number | null = $state(null);
   hasNewData: boolean = $state(false);
 
   loading = $state({
@@ -806,6 +809,7 @@ class UsageStore {
   }
 
   private async fetchAllWithResult(options: FetchAllOptions = {}): Promise<FetchResult> {
+    const startedAt = performance.now();
     const selectedRangeAtStart = this.selectedTimeRange ? { ...this.selectedTimeRange } : null;
     if (!options.preserveTimeRange && this.selectedTimeRange !== null) {
       this.selectedTimeRange = null;
@@ -870,7 +874,7 @@ class UsageStore {
       comparisonResult === "ok" &&
       pairwiseResult === "ok"
     ) {
-      this.markRefreshComplete();
+      this.markRefreshComplete(startedAt);
       return "ok";
     }
     if (
@@ -1220,8 +1224,9 @@ class UsageStore {
     this.loading.topSessions = false;
   }
 
-  private markRefreshComplete(): void {
+  private markRefreshComplete(startedAt: number): void {
     this.lastUpdatedAt = Date.now();
+    this.lastQueryDurationMs = performance.now() - startedAt;
     this.hasNewData = false;
   }
 }

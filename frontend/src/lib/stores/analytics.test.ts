@@ -247,6 +247,8 @@ function resetStore() {
   analytics.signals = null;
   analytics.lastUpdatedAt = null;
   analytics.qualityLastUpdatedAt = null;
+  analytics.lastQueryDurationMs = null;
+  analytics.qualityLastQueryDurationMs = null;
   analytics.hasNewData = false;
   sessions.filters.date = "";
   sessions.filters.dateFrom = "";
@@ -457,6 +459,32 @@ describe("AnalyticsStore freshness state", () => {
 
       expect(analytics.lastUpdatedAt).toBe(new Date("2026-06-15T15:05:00Z").getTime());
       expect(analytics.hasNewData).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("records dashboard and Quality query durations separately", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance"] });
+    try {
+      expect(analytics.lastQueryDurationMs).toBeNull();
+      expect(analytics.qualityLastQueryDurationMs).toBeNull();
+
+      vi.mocked(analyticsService.getApiV1AnalyticsVelocity).mockImplementationOnce(async () => {
+        vi.advanceTimersByTime(700);
+        return makeVelocity();
+      });
+      await analytics.fetchAll();
+      expect(analytics.lastQueryDurationMs).toBe(700);
+      expect(analytics.qualityLastQueryDurationMs).toBeNull();
+
+      vi.mocked(analyticsService.getApiV1AnalyticsSignals).mockImplementationOnce(async () => {
+        vi.advanceTimersByTime(90);
+        return makeSignals();
+      });
+      await analytics.fetchSignalsForQuality();
+      expect(analytics.qualityLastQueryDurationMs).toBe(90);
+      expect(analytics.lastQueryDurationMs).toBe(700);
     } finally {
       vi.useRealTimers();
     }
