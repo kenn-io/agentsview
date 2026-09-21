@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -146,6 +147,76 @@ func (s *recordingUnwatchedPollSyncer) snapshot() [][]string {
 		result[i] = append([]string(nil), s.calls[i]...)
 	}
 	return result
+}
+
+func TestFormatUnwatchedPollScopes(t *testing.T) {
+	rootA := filepath.Join(t.TempDir(), "sessions")
+	rootB := filepath.Join(t.TempDir(), "projects")
+	for _, tc := range []struct {
+		name   string
+		groups map[parser.AgentType][]string
+		want   string
+	}{
+		{name: "empty"},
+		{name: "named", groups: map[parser.AgentType][]string{"codex": {rootA}}, want: "codex=[" + rootA + "]"},
+		{name: "unscoped", groups: map[parser.AgentType][]string{"": {rootA}}, want: "unscoped=[" + rootA + "]"},
+		{
+			name:   "mixed",
+			groups: map[parser.AgentType][]string{"codex": {rootA, rootB}, "": {rootB}, "claude": {rootA}},
+			want:   "unscoped=[" + rootB + "] claude=[" + rootA + "] codex=[" + rootA + " " + rootB + "]",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, formatUnwatchedPollScopes(tc.groups))
+		})
+	}
+}
+
+func TestUnwatchedPollLogsPolledScopesAndDuration(t *testing.T) {
+	var output syncBuffer
+	originalWriter := log.Writer()
+	originalFlags := log.Flags()
+	originalPrefix := log.Prefix()
+	log.SetOutput(&output)
+	log.SetFlags(0)
+	log.SetPrefix("")
+	t.Cleanup(func() {
+		log.SetOutput(originalWriter)
+		log.SetFlags(originalFlags)
+		log.SetPrefix(originalPrefix)
+	})
+	synctest.Test(t, func(t *testing.T) {
+		parent := t.TempDir()
+		rootA := requireExistingPollRoot(t, parent, "root-a")
+		rootB := requireExistingPollRoot(t, parent, "root-b")
+		ticks := make(chan time.Time)
+		syncer := &recordingUnwatchedPollSyncer{wake: make(chan struct{}, 2)}
+		coordinator := newUnwatchedPollCoordinatorWithTicks(
+			t.Context(), syncer, ticks, func() {},
+			func(run func()) {
+				run()
+				time.Sleep(125 * time.Millisecond)
+			},
+			nil, time.Now, time.After,
+		)
+		defer coordinator.Stop()
+		require.NoError(t, coordinator.AddObligation(pollingObligation{
+			Key: "selected", Scopes: []pollingScope{
+				{Agent: "codex", Root: rootB},
+				{Agent: "claude", Root: rootA},
+				{Agent: "codex", Root: rootA},
+			},
+		}))
+		require.NoError(t, coordinator.AddObligation(pollingObligation{
+			Key: "deferred", Probe: filepath.Join(parent, "missing"),
+			Scopes: []pollingScope{{Agent: "gemini", Root: parent}},
+		}))
+		ticks <- time.Now()
+		time.Sleep(125 * time.Millisecond)
+		synctest.Wait()
+		assert.Equal(t, [][]string{{rootA}, {rootA, rootB}}, syncer.snapshot())
+		assert.Equal(t, "polling 2 unwatched root(s): claude=["+rootA+"] codex=["+rootA+" "+rootB+"]\npolled 2 unwatched root(s) in 125ms\n", output.String())
+	})
 }
 
 func TestUnwatchedPollConcurrentAddDeduplicatesUpdatedRootSet(t *testing.T) {

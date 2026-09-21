@@ -417,12 +417,13 @@ func TestProcessFileProviderPiebaldMemoizesStableFailuresByDBIdentity(t *testing
 
 	first := engine.processFile(t.Context(), file)
 	require.ErrorIs(t, first.err, stableErr)
-	assert.False(t, first.suppressedFailure)
+	assert.False(t, first.cachedFailure)
 	assert.Equal(t, []string{"find-source", "fingerprint", "parse"}, provider.calls)
 
 	second := engine.processFile(t.Context(), file)
-	require.ErrorIs(t, second.err, stableErr)
-	assert.True(t, second.suppressedFailure)
+	require.NoError(t, second.err)
+	assert.True(t, second.skip)
+	assert.True(t, second.cachedFailure)
 	assert.Equal(t,
 		[]string{"find-source", "fingerprint", "parse", "find-source"},
 		provider.calls,
@@ -431,7 +432,8 @@ func TestProcessFileProviderPiebaldMemoizesStableFailuresByDBIdentity(t *testing
 	firstStats := collectProcessFixtureResult(t, engine, file, first)
 	secondStats := collectProcessFixtureResult(t, engine, file, second)
 	assert.Equal(t, 1, firstStats.Failed)
-	assert.Equal(t, firstStats.Failed, secondStats.Failed)
+	assert.Zero(t, secondStats.Failed)
+	assert.Equal(t, 1, secondStats.Skipped)
 	assert.Equal(t, firstStats.Synced, secondStats.Synced)
 
 	info, err := os.Stat(dbPath)
@@ -441,7 +443,7 @@ func TestProcessFileProviderPiebaldMemoizesStableFailuresByDBIdentity(t *testing
 	))
 	changed := engine.processFile(t.Context(), file)
 	require.ErrorIs(t, changed.err, stableErr)
-	assert.False(t, changed.suppressedFailure)
+	assert.False(t, changed.cachedFailure)
 	assert.Equal(t, 2, countProcessFixtureCalls(provider.calls, "parse"))
 	require.Len(t, provider.parseRequests, 2)
 	assert.True(t, provider.parseRequests[1].ForceParse)
@@ -454,21 +456,21 @@ func TestProcessFileProviderPiebaldMemoizesStableFailuresByDBIdentity(t *testing
 	provider.fingerprintErr = errors.New("fingerprint unavailable")
 	fingerprintFailure := engine.processFile(t.Context(), file)
 	require.Error(t, fingerprintFailure.err)
-	assert.False(t, fingerprintFailure.suppressedFailure)
+	assert.False(t, fingerprintFailure.cachedFailure)
 	assert.Equal(t, 2, countProcessFixtureCalls(provider.calls, "parse"))
 
 	provider.fingerprintErr = nil
 	provider.parseErr = context.Canceled
 	interrupted := engine.processFile(t.Context(), file)
 	require.ErrorIs(t, interrupted.err, context.Canceled)
-	assert.False(t, interrupted.suppressedFailure)
+	assert.False(t, interrupted.cachedFailure)
 	assert.Equal(t, 3, countProcessFixtureCalls(provider.calls, "parse"))
 	assert.True(t, provider.parseRequests[2].ForceParse)
 
 	provider.parseErr = nil
 	retried := engine.processFile(t.Context(), file)
 	require.NoError(t, retried.err)
-	assert.False(t, retried.suppressedFailure)
+	assert.False(t, retried.cachedFailure)
 	assert.Equal(t, 4, countProcessFixtureCalls(provider.calls, "parse"))
 	assert.True(t, provider.parseRequests[3].ForceParse)
 	assert.Empty(t, engine.piebaldFailureMemo)
@@ -515,7 +517,7 @@ func TestProcessFileProviderPiebaldFailureMemoTracksWALButIgnoresSHM(t *testing.
 
 	second := engine.processFile(t.Context(), file)
 	require.ErrorIs(t, second.err, provider.parseErr)
-	assert.False(t, second.suppressedFailure)
+	assert.False(t, second.cachedFailure)
 	assert.Equal(t, 2, countProcessFixtureCalls(provider.calls, "parse"))
 
 	shmPath := dbPath + "-shm"
@@ -525,8 +527,9 @@ func TestProcessFileProviderPiebaldFailureMemoTracksWALButIgnoresSHM(t *testing.
 		shmPath, shmBefore.ModTime().Add(time.Second), shmBefore.ModTime().Add(time.Second),
 	))
 	third := engine.processFile(t.Context(), file)
-	require.ErrorIs(t, third.err, provider.parseErr)
-	assert.True(t, third.suppressedFailure)
+	require.NoError(t, third.err)
+	assert.True(t, third.skip)
+	assert.True(t, third.cachedFailure)
 	assert.Equal(t, 2, countProcessFixtureCalls(provider.calls, "parse"))
 }
 
@@ -558,14 +561,14 @@ func TestProcessFileProviderPiebaldFailureMemoRetainsRetryAfterStatFailure(t *te
 
 	first := engine.processFile(t.Context(), file)
 	require.ErrorIs(t, first.err, provider.parseErr)
-	assert.False(t, first.suppressedFailure)
+	assert.False(t, first.cachedFailure)
 
 	engine.stat = func(string) (os.FileInfo, error) {
 		return nil, errors.New("stat unavailable")
 	}
 	second := engine.processFile(t.Context(), file)
 	require.ErrorIs(t, second.err, provider.parseErr)
-	assert.False(t, second.suppressedFailure)
+	assert.False(t, second.cachedFailure)
 	assert.True(t, engine.piebaldFailureMemo[virtualPath].retryNeeded)
 	assert.Equal(t, 2, countProcessFixtureCalls(provider.calls, "parse"))
 
@@ -573,7 +576,7 @@ func TestProcessFileProviderPiebaldFailureMemoRetainsRetryAfterStatFailure(t *te
 	provider.parseErr = nil
 	third := engine.processFile(t.Context(), file)
 	require.NoError(t, third.err)
-	assert.False(t, third.suppressedFailure)
+	assert.False(t, third.cachedFailure)
 	assert.True(t, provider.parseRequests[2].ForceParse)
 	assert.Empty(t, engine.piebaldFailureMemo)
 }
@@ -602,7 +605,7 @@ func TestProcessFileProviderPiebaldFailureMemoIsSourceScoped(t *testing.T) {
 		ProviderSource: &siblingSource,
 	})
 	require.Error(t, sibling.err)
-	assert.False(t, sibling.suppressedFailure)
+	assert.False(t, sibling.cachedFailure)
 
 	otherRoot := t.TempDir()
 	otherDB, otherFingerprint := writeProcessProviderSource(t, otherRoot, "app.db")
@@ -616,7 +619,7 @@ func TestProcessFileProviderPiebaldFailureMemoIsSourceScoped(t *testing.T) {
 		ProviderSource: &otherSource,
 	})
 	require.Error(t, other.err)
-	assert.False(t, other.suppressedFailure)
+	assert.False(t, other.cachedFailure)
 	assert.Equal(t, 3, countProcessFixtureCalls(provider.calls, "parse"))
 }
 
@@ -640,13 +643,13 @@ func TestProcessFileProviderPiebaldForcePathsBypassFailureMemo(t *testing.T) {
 	forceParse.ForceParse = true
 	forced := engine.processFile(t.Context(), forceParse)
 	require.Error(t, forced.err)
-	assert.False(t, forced.suppressedFailure)
+	assert.False(t, forced.cachedFailure)
 
 	forceFullParse := file
 	forceFullParse.ForceFullParse = true
 	forcedFull := engine.processFile(t.Context(), forceFullParse)
 	require.Error(t, forcedFull.err)
-	assert.False(t, forcedFull.suppressedFailure)
+	assert.False(t, forcedFull.cachedFailure)
 	require.Len(t, provider.parseRequests, 3)
 	assert.True(t, provider.parseRequests[1].ForceParse)
 	assert.True(t, provider.parseRequests[2].ForceParse)
@@ -659,12 +662,85 @@ func TestProcessFileProviderPiebaldForcePathsBypassFailureMemo(t *testing.T) {
 	provider.parseErr = errors.New("forced Piebald parse failure")
 	repeated := engine.processFile(t.Context(), file)
 	require.Error(t, repeated.err)
-	assert.False(t, repeated.suppressedFailure)
+	assert.False(t, repeated.cachedFailure)
 
 	repeated = engine.processFile(t.Context(), file)
-	require.Error(t, repeated.err)
-	assert.True(t, repeated.suppressedFailure)
+	require.NoError(t, repeated.err)
+	assert.True(t, repeated.skip)
+	assert.True(t, repeated.cachedFailure)
 	assert.Equal(t, 5, countProcessFixtureCalls(provider.calls, "parse"))
+
+	provider.parseErr = os.ErrPermission
+	forcedTransient := engine.processFile(t.Context(), forceParse)
+	require.ErrorIs(t, forcedTransient.err, os.ErrPermission)
+	retried := engine.processFile(t.Context(), file)
+	require.ErrorIs(t, retried.err, os.ErrPermission)
+	retried = engine.processFile(t.Context(), file)
+	require.ErrorIs(t, retried.err, os.ErrPermission)
+	assert.Equal(t, 8, countProcessFixtureCalls(provider.calls, "parse"))
+}
+
+func TestPiebaldFailureInvalidationRetriesUnchangedSource(t *testing.T) {
+	for _, mode := range []string{"reset", "bare-path", "process-key"} {
+		t.Run(mode, func(t *testing.T) {
+			root := t.TempDir()
+			dbPath, fingerprint := writeProcessProviderSource(t, root, "app.db")
+			path := dbPath + "#42"
+			fingerprint.Key = path
+			provider := newPiebaldProcessFixtureProvider(
+				processFixturePiebaldSource(path), fingerprint, parser.ParseOutcome{},
+			)
+			provider.parseErr = errors.New("stable Piebald failure")
+			engine := newPiebaldProcessFixtureEngine(t, root, provider)
+			file := parser.DiscoveredFile{Path: path, Agent: parser.AgentPiebald}
+			require.Error(t, engine.processFile(t.Context(), file).err)
+			require.True(t, engine.processFile(t.Context(), file).skip)
+			switch mode {
+			case "reset":
+				engine.ResetFailureCache(t.Context())
+			case "bare-path":
+				engine.clearSkipInMemory(path)
+			case "process-key":
+				engine.clearSkipInMemory(providerAgentSkipCacheKey(path, parser.AgentPiebald) + sourceHashSkipMarker + "hash")
+			}
+			require.Error(t, engine.processFile(t.Context(), file).err)
+			assert.Equal(t, 2, countProcessFixtureCalls(provider.calls, "parse"))
+		})
+	}
+}
+
+func TestPiebaldForcedTransientFailureAfterRestartRetainsRetry(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "app.db")
+	sourceDB := openProcessProviderPiebaldDB(t, path)
+	seedProcessProviderPiebaldChat(t, sourceDB)
+	virtualPath := path + "#42"
+	provider := newPiebaldProcessFixtureProvider(
+		processFixturePiebaldSource(virtualPath),
+		parser.SourceFingerprint{Key: virtualPath, MTimeNS: 1},
+		parser.ParseOutcome{ResultSetComplete: true},
+	)
+	provider.parseErr = errors.New("malformed Piebald source")
+	engine := newPiebaldProcessFixtureEngine(t, root, provider)
+	file := parser.DiscoveredFile{Path: virtualPath, Agent: parser.AgentPiebald}
+	first := engine.processFile(t.Context(), file)
+	require.True(t, first.cacheFailure)
+	require.Equal(t, 1, collectProcessFixtureResult(t, engine, file, first).Failed)
+	engine.flushFailureCache(t.Context())
+	restarted := NewEngine(t.Context(), engine.db, EngineConfig{
+		AgentDirs:         map[parser.AgentType][]string{parser.AgentPiebald: {root}},
+		Machine:           "devbox",
+		ProviderFactories: []parser.ProviderFactory{processFixtureFactory{provider: provider}},
+	})
+	t.Cleanup(restarted.Close)
+	provider.parseErr = sqlite3.Error{Code: sqlite3.ErrBusy}
+	forced := file
+	forced.ForceParse = true
+	require.Error(t, restarted.processFile(t.Context(), forced).err)
+	provider.parseErr = nil
+	require.NoError(t, restarted.processFile(t.Context(), file).err)
+	require.Len(t, provider.parseRequests, 3)
+	assert.True(t, provider.parseRequests[2].ForceParse, "retry intent must survive the transient forced attempt")
 }
 
 func TestParseDiffPiebaldFailureBypassesMemo(t *testing.T) {

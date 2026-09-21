@@ -5,9 +5,12 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"io"
 	"log"
 	"maps"
 	"os"
@@ -29,6 +32,7 @@ import (
 	"go.kenn.io/agentsview/internal/pathutil"
 	"go.kenn.io/agentsview/internal/secrets"
 	"go.kenn.io/agentsview/internal/signals"
+	"go.kenn.io/agentsview/internal/sync/failurecache"
 	"go.kenn.io/agentsview/internal/timeutil"
 	"go.kenn.io/agentsview/internal/usagefacts"
 )
@@ -584,6 +588,11 @@ type Engine struct {
 	// in-memory source fingerprint when one is available.
 	skipMu    gosync.RWMutex
 	skipCache map[string]int64
+	// failures remembers sources whose parse failed and will keep failing
+	// until the file changes. It is separate from skipCache: a failure is
+	// recorded by a pass that did not complete, and skipCache persists only
+	// after a complete one.
+	failures failurecache.Cache
 	// skipCacheDirty is protected by skipMu and cleared only for a persistence attempt.
 	skipCacheDirty   bool
 	skipFingerprints map[string]string
@@ -1007,6 +1016,11 @@ func NewEngine(ctx context.Context,
 		reconciliationSpoolFactory: func(ctx context.Context, path string) (reconciliationSpoolStore, error) {
 			return newReconciliationSpool(ctx, path)
 		},
+	}
+	if !cfg.Ephemeral {
+		if err := e.failures.Load(ctx, database); err != nil {
+			log.Printf("%v", err)
+		}
 	}
 	if len(cfg.InitialSkipCache) > 0 {
 		e.InjectSkipCache(cfg.InitialSkipCache)
@@ -1785,7 +1799,6 @@ func (e *Engine) applyChangedPathSyncLocked(
 		syncWriteDefault,
 	)
 	e.anomalies.applyTo(&stats)
-	e.persistSkipCache(ctx)
 	complete := prepared.classificationErr == nil && ctx.Err() == nil &&
 		stats.ProcessingComplete()
 	tombstoned := 0
@@ -1794,6 +1807,9 @@ func (e *Engine) applyChangedPathSyncLocked(
 		tombstoned, tombstoneErr = e.tombstoneMissingWatchSourcesLocked(
 			ctx, prepared.missingPaths, nil,
 		)
+	}
+	if ctx.Err() == nil {
+		e.persistSkipCache(ctx)
 	}
 	// The pass stays open through tombstoning so a late pass-level failure
 	// still reaches finalization. Such failures cannot be attributed to a
@@ -2852,6 +2868,15 @@ func (e *Engine) resyncAllWithOptionsLocked(
 	// double-closed or prematurely reopened.
 	ownedBarrier := false
 	swapStageReached := false
+	// Registered first so it runs after the recovery below reopens the writer.
+	// A build that was discarded flushed its source failures only into the
+	// replacement; this makes them survive a restart. It writes nothing after
+	// a successful swap, which already reloaded the cache from the new archive.
+	defer func() {
+		if ctx.Err() == nil {
+			e.flushFailureCache(ctx)
+		}
+	}()
 	defer func() {
 		// The successful swap's Reopen already restored the writer and cleared
 		// the barrier; recover here only when we still own a closed writer
@@ -3082,6 +3107,10 @@ func (e *Engine) resyncBuildLocked(
 	e.skipCacheDirty = true
 	e.skipHashKeys = make(map[string]string)
 	e.skipMu.Unlock()
+	// A resync parses every source again, so the failures it records replace
+	// the old ones. They describe source files, not archive rows, and stay
+	// valid when the build is discarded; they are not restored with the rest.
+	e.failures.Reset()
 
 	restoreSkipCache := func() {
 		e.skipMu.Lock()
@@ -3089,6 +3118,9 @@ func (e *Engine) resyncBuildLocked(
 		e.skipCacheDirty = true
 		e.skipHashKeys = savedSkipHashKeys
 		e.skipMu.Unlock()
+		if ctx.Err() == nil {
+			e.flushFailureCacheInto(ctx, origDB)
+		}
 	}
 
 	// 2. Open a fresh DB at the temp path.
@@ -3308,6 +3340,7 @@ func (e *Engine) resyncBuildLocked(
 			ctx, contributorProgress, time.Time{}, nil,
 			syncWriteBulk, true, contributor.ForceParse,
 		)
+		e.failures.Merge(&contributorEngine.failures)
 		contributorEngine.phaseStats.Log("resync contributor " + contributor.Name)
 		phase := phaseSnapshot(contributor.Name, &contributorEngine.phaseStats)
 		contributorSafetyAbort := shouldAbortResyncSwap(
@@ -3325,6 +3358,7 @@ func (e *Engine) resyncBuildLocked(
 			stats.RebuildPhases = append(stats.RebuildPhases, phase)
 		}
 		runAfterFailure := func() error {
+			defer e.failures.Merge(&contributorEngine.failures)
 			if restoreActiveWriterOnAbort && origDB.WriterClosed() {
 				if err := origDB.ReopenWriter(); err != nil {
 					return fmt.Errorf(
@@ -4011,6 +4045,9 @@ func (e *Engine) ReloadSkipCache(ctx context.Context) error {
 			return fmt.Errorf("reloading skip cache after swap: %w", err)
 		}
 		skipCache = loaded
+		if err := e.failures.Load(ctx, e.db); err != nil {
+			return fmt.Errorf("reloading failure cache: %w", err)
+		}
 	}
 	skipHashKeys, _ := normalizeSourceHashSkipCache(skipCache, nil)
 
@@ -4943,6 +4980,8 @@ func (e *Engine) ReconcileProviderRootsGrouped(
 		}
 		if persistEligible {
 			e.persistSkipCache(ctx)
+		} else if len(errs) > 0 {
+			e.flushFailureCache(ctx)
 		}
 	}()
 	if changed {
@@ -5488,6 +5527,9 @@ func (e *Engine) reconcileWatchRootsStreamedLocked(
 				retErr = tombstoneErr
 			}
 		}
+	}
+	if ctx.Err() == nil && !passEpilogueDeferred(ctx) {
+		e.flushFailureCache(ctx)
 	}
 	metrics = mergeMetrics(spool.Metrics())
 	if cleanupErr := spool.CloseAndRemove(ctx); cleanupErr != nil {
@@ -9456,14 +9498,12 @@ func (e *Engine) syncProviderDBBacked(
 		}
 		var piebaldFailure piebaldFailureLookup
 		piebaldRetry := false
-		if agent == parser.AgentPiebald &&
-			!e.forceParse && !e.forceFullParse {
+		if agent == parser.AgentPiebald {
 			var found bool
-			piebaldFailure, found = e.preparePiebaldFailure(source)
+			piebaldFailure, found = e.preparePiebaldFailure(ctx, source, e.forceParseBypassesCache(parser.DiscoveredFile{}))
 			if found {
 				if piebaldFailure.err != nil {
-					sourceFailures++
-					return nil //nolint:nilerr // Count the cached failure and continue discovering other sources.
+					return nil //nolint:nilerr // Skip the unchanged failure without promoting its source baseline.
 				}
 				piebaldRetry = piebaldFailure.retry
 			}
@@ -9482,6 +9522,13 @@ func (e *Engine) syncProviderDBBacked(
 		) {
 			return queueBaseline(source)
 		}
+		file := parser.DiscoveredFile{Path: providerDiscoveredPath(source), Agent: agent}
+		failureIdentity, failureIdentityOK := e.sourceFailureCacheIdentity(file, fingerprint)
+		if failureIdentityOK {
+			if _, cached := e.cachedSourceFailure(ctx, file, failureIdentity); cached {
+				return nil
+			}
+		}
 		outcome, err := provider.Parse(ctx, parser.ParseRequest{
 			Source:      source,
 			Fingerprint: fingerprint,
@@ -9495,6 +9542,9 @@ func (e *Engine) syncProviderDBBacked(
 					ctx, source, piebaldFailure, err,
 				)
 			}
+			if ctx.Err() == nil && failureIdentityOK && sourceParseFailureCacheable(err, file.Path) {
+				e.failures.Record(providerAgentSkipCacheKey(file.Path, agent), failureIdentity)
+			}
 			log.Printf("sync %s parse: %v", agent, err)
 			sourceFailures++
 			return nil
@@ -9502,6 +9552,7 @@ func (e *Engine) syncProviderDBBacked(
 		if agent == parser.AgentPiebald {
 			e.clearPiebaldFailure(source)
 		}
+		e.failures.Clear(providerAgentSkipCacheKey(file.Path, agent))
 		complete := providerOutcomeAllowsCleanSkipCache(outcome)
 		if !complete {
 			sourceFailures++
@@ -10252,12 +10303,13 @@ func (e *Engine) collectAndBatchWithOptions(
 				stats.RecordCwdUpdated(1)
 			}
 			e.noteSQLiteContainerResult(r.containerResultPath(), false)
+			if r.cacheFailure {
+				e.failures.Record(r.failureCacheKey, r.failureIdentity)
+			}
 			if r.cacheSkip && r.mtime != 0 && !r.noCacheSkip {
 				e.cacheSkip(r.skipCacheKey(), r.mtime, r.sourceFingerprint)
 			}
-			if !r.suppressedFailure {
-				log.Printf("sync error: %v", r.err)
-			}
+			log.Printf("sync error: %v", r.err)
 			r.releaseAll()
 			continue
 		}
@@ -11054,6 +11106,10 @@ type processResult struct {
 	// kept results.
 	providerStatHash *pendingProviderStatHash
 	cacheSkip        bool
+	cacheFailure     bool
+	cachedFailure    bool
+	failureCacheKey  string
+	failureIdentity  failurecache.Identity
 	// claudeRowlessFreshnessKey is staged by a successful complete Claude
 	// parse. The collector promotes it only when the parse leaves no admitted
 	// session row and a CWD-rejected stale fork still needs filter-scoped
@@ -11075,8 +11131,6 @@ type processResult struct {
 	// retrying it.
 	noCacheSkip bool
 	needsRetry  bool
-	// suppressedFailure keeps a memoized parse error visible in stats without logging it again.
-	suppressedFailure bool
 	// forceReplace requests full message replacement on write,
 	// even when the existing rows would otherwise be left in
 	// place. Set when a fall-through to full parse is recovering
@@ -11170,7 +11224,7 @@ func (r *processResult) suppressesPresenceSweepForRetry() bool {
 }
 
 func (r *processResult) sourceProofWithheld(hardFailure bool) bool {
-	return hardFailure || r.providerFailureCount > 0 || r.deferredCount > 0 ||
+	return hardFailure || r.cachedFailure || r.providerFailureCount > 0 || r.deferredCount > 0 ||
 		len(r.retrySessionIDs) > 0 || r.needsRetry
 }
 
@@ -11367,6 +11421,129 @@ func (e *Engine) pathInStaleIdentitySet(
 	return stale
 }
 
+// sourceFailureCacheIdentity uses the provider's pre-parse fingerprint. Virtual
+// SQLite sources also include container state: repairing a schema need not
+// change a session's own timestamp.
+func (e *Engine) sourceFailureCacheIdentity(
+	file parser.DiscoveredFile, fingerprint parser.SourceFingerprint,
+) (failurecache.Identity, bool) {
+	id := failurecache.Identity{
+		MTimeNS: fingerprint.MTimeNS, Size: fingerprint.Size, Fingerprint: fingerprint.Hash,
+	}
+	if file.Path == "" || file.Agent == "" || strings.HasPrefix(file.Path, "s3://") {
+		return id, false
+	}
+	if physical, _, virtual := parser.ParseVirtualSourcePath(file.Path); virtual {
+		state, ok := parser.StatSQLiteContainerState(physical)
+		if !ok {
+			return id, false
+		}
+		id.Fingerprint += fmt.Sprint(state)
+		return id, true
+	}
+	if !e.shouldCacheSkip(file) && fingerprint.Hash == "" {
+		return id, false
+	}
+	factory := e.providerFactories[file.Agent]
+	if factory == nil {
+		return id, false
+	}
+	caps := factory.Capabilities()
+	if (caps.Source.CompositeFingerprint == parser.CapabilitySupported ||
+		caps.Source.MultiFileStatHash == parser.CapabilitySupported) && fingerprint.Hash == "" &&
+		!isCodexFormatAgent(file.Agent) {
+		return id, false
+	}
+	return id, true
+}
+
+func (e *Engine) sourcePathMissing(file parser.DiscoveredFile) bool {
+	if file.Path == "" || strings.HasPrefix(file.Path, "s3://") {
+		return false
+	}
+	if _, _, virtual := parser.ParseVirtualSourcePath(file.Path); virtual {
+		return false
+	}
+	_, err := e.lstatSource(file.Path)
+	return os.IsNotExist(err)
+}
+
+func sourceParseFailureCacheable(err error, paths ...string) bool {
+	if err == nil || errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) || os.IsTimeout(err) ||
+		errors.Is(err, os.ErrPermission) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return false
+	}
+	// Classify structured causes before inspecting wrappers, which can include
+	// companion paths as well as the primary source path.
+	if _, ok := errors.AsType[*os.PathError](err); ok {
+		return false
+	}
+	if _, ok := errors.AsType[*jsontext.SyntacticError](err); ok {
+		return true
+	}
+	if _, ok := errors.AsType[*json.SemanticError](err); ok {
+		return true
+	}
+	message := err.Error()
+	// Parser wrappers include source paths. Directory names must not classify
+	// an otherwise transient error as malformed (or vice versa).
+	for _, path := range paths {
+		if path != "" {
+			message = strings.ReplaceAll(message, path, "")
+		}
+	}
+	lower := strings.ToLower(message)
+	for _, marker := range []string{
+		"permission", "access is denied", "temporary", "temporarily",
+		"timed out", "timeout", "database is locked", "database is busy",
+		"resource temporarily unavailable", "try again", "read ", "reading ",
+		"scan ", "scanning ", "open ", "stat ", "i/o", "input/output",
+		"unexpected eof", "truncated", "incomplete",
+	} {
+		if strings.Contains(lower, marker) {
+			return false
+		}
+	}
+	for _, marker := range []string{
+		"malformed", "invalid", "syntax", "unexpected token",
+		"no such column", "no such table",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func markSourceFailure(
+	file parser.DiscoveredFile, result processResult, id failurecache.Identity, cacheable bool,
+) processResult {
+	if cacheable && result.err != nil && !errors.Is(result.err, context.Canceled) &&
+		!errors.Is(result.err, context.DeadlineExceeded) {
+		result.cacheFailure = true
+		result.failureCacheKey = providerAgentSkipCacheKey(file.Path, file.Agent)
+		result.failureIdentity = id
+	}
+	return result
+}
+
+func (e *Engine) cachedSourceFailure(
+	ctx context.Context, file parser.DiscoveredFile, id failurecache.Identity,
+) (processResult, bool) {
+	key := providerAgentSkipCacheKey(file.Path, file.Agent)
+	if !e.failures.Check(key, id) {
+		return processResult{}, false
+	}
+	if e.forceParseBypassesCache(file) || e.pathNeedsCachedSkipBypass(ctx, file.Agent, file.Path) {
+		e.failures.Clear(key)
+		return processResult{}, false
+	}
+	return processResult{
+		skip: true, cachedFailure: true, suppressPresenceSweep: true,
+	}, true
+}
+
 func (e *Engine) processProviderFile(
 	ctx context.Context,
 	file parser.DiscoveredFile,
@@ -11396,6 +11573,25 @@ func (e *Engine) processProviderFile(
 	// which handles object fetch, fingerprinting, and per-agent skip logic.
 	if strings.HasPrefix(file.Path, "s3://") {
 		return processResult{}, false
+	}
+	failureKey := providerAgentSkipCacheKey(file.Path, file.Agent)
+	if id, exists := e.failures.Lookup(failureKey); exists {
+		if e.forceParseBypassesCache(file) {
+			if file.Agent == parser.AgentPiebald && !e.forceParse {
+				// Keep retry intent even if source lookup fails before the Piebald
+				// memo is consulted; the invalidated durable entry must stay gone.
+				e.setPiebaldRetry(file.Path, piebaldFailureIdentity{})
+			}
+			e.failures.Clear(failureKey)
+		} else if id.Missing {
+			if e.sourcePathMissing(file) {
+				if cached, ok := e.cachedSourceFailure(ctx, file, id); ok {
+					return cached, true
+				}
+			} else {
+				e.failures.Clear(failureKey)
+			}
+		}
 	}
 	if file.ProviderSource != nil && !file.ProviderProcess && !usesProvider {
 		return processResult{}, false
@@ -11449,7 +11645,9 @@ func (e *Engine) processProviderFile(
 	e.discardFailedSQLiteProviderSource(&file)
 	source, found, err := e.providerSourceForDiscoveredFile(ctx, provider, file)
 	if err != nil {
-		return processResult{err: err}, true
+		return markSourceFailure(
+			file, processResult{err: err}, failurecache.Identity{Missing: true}, e.sourcePathMissing(file),
+		), true
 	}
 	if !found {
 		// A forced parse on a deleted shared SQLite database (Zed, ZCode, Shelley)
@@ -11461,13 +11659,13 @@ func (e *Engine) processProviderFile(
 			providerDeletedPhysicalSQLiteSource(file.Agent, file.Path) {
 			return processResult{forceReplace: true}, true
 		}
-		return processResult{
+		return markSourceFailure(file, processResult{
 			err: fmt.Errorf(
 				"%s provider source not found for %s",
 				file.Agent,
 				file.Path,
 			),
-		}, true
+		}, failurecache.Identity{Missing: true}, e.sourcePathMissing(file)), true
 	}
 	if source.ConfiguredRoot != "" {
 		if sourceMachine, ok := e.configuredMachineForPath(
@@ -11499,18 +11697,16 @@ func (e *Engine) processProviderFile(
 	if cwdAgent == "" {
 		cwdAgent = file.Agent
 	}
-	explicitForce := e.forceParseRequested(file)
+	explicitForce := e.forceParseBypassesCache(file) || file.ForceFullParse
 	forceSourceCwdParse := cwdDecision.forceParse
 	var piebaldFailure piebaldFailureLookup
-	if file.Agent == parser.AgentPiebald && !explicitForce {
+	if file.Agent == parser.AgentPiebald {
 		var found bool
-		piebaldFailure, found = e.preparePiebaldFailure(source)
+		piebaldFailure, found = e.preparePiebaldFailure(ctx, source, explicitForce || forceSourceCwdParse)
 		if found {
 			if piebaldFailure.err != nil {
 				return processResult{
-					err:               piebaldFailure.err,
-					noCacheSkip:       true,
-					suppressedFailure: true,
+					skip: true, cachedFailure: true, suppressPresenceSweep: true,
 				}, true
 			}
 			if piebaldFailure.retry {
@@ -11745,7 +11941,10 @@ func (e *Engine) processProviderFile(
 			skipBase := providerAgentSkipCacheKey(file.Path, file.Agent)
 			_, hasSkipEntry := e.skipHashKeys[skipBase]
 			e.skipMu.RUnlock()
-			if !hasHash && !hasSkipEntry {
+			// A cold parse failure has no captured content hash. Its entry forces
+			// a full fingerprint on the retry before it can become a cache hit.
+			_, hasFailure := e.failures.Lookup(failureKey)
+			if !hasHash && !hasSkipEntry && !hasFailure {
 				if info, statErr := os.Stat(file.Path); statErr == nil {
 					inode, device := getFileIdentity(file.Path, info)
 					mtime := info.ModTime().UnixNano()
@@ -11788,7 +11987,8 @@ func (e *Engine) processProviderFile(
 					forceReplace:       true,
 				}, true
 			}
-			return processResult{err: err}, true
+			return markSourceFailure(file, processResult{err: err},
+				failurecache.Identity{Missing: true}, errors.Is(err, os.ErrNotExist) && e.sourcePathMissing(file)), true
 		}
 	}
 	cacheKey := providerProcessCacheKey(
@@ -12000,6 +12200,23 @@ func (e *Engine) processProviderFile(
 		}, true
 	}
 
+	failureIdentity, failureIdentityOK := e.sourceFailureCacheIdentity(file, fingerprint)
+	if failureIdentityOK {
+		cacheFile := file
+		forceFailureRefresh := forceSourceCwdParse
+		if piebaldFailure.retry && !explicitForce && !cwdDecision.forceParse {
+			// Internal retry intent bypasses archive freshness, but an unchanged
+			// durable failure still skips. Explicit refreshes bypass both.
+			cacheFile.ForceParse = false
+			forceFailureRefresh = false
+		}
+		if forceFailureRefresh || codexForceFullParse || codexAuditDeepVerify {
+			e.failures.Clear(failureKey)
+		} else if cached, ok := e.cachedSourceFailure(ctx, cacheFile, failureIdentity); ok {
+			return cached, true
+		}
+	}
+
 	// Provider parse seam: every gate above returns a lease-free skip. From
 	// here the provider parses the source, so acquire the retention lease that
 	// bounds the parsed payload and attach it to every result carrying that
@@ -12084,7 +12301,7 @@ func (e *Engine) processProviderFile(
 			if reconcileErr != nil {
 				err = errors.Join(err, reconcileErr)
 			}
-			return processResult{
+			return markSourceFailure(file, processResult{
 				err:              err,
 				sourceCwdChanged: cwdChanged,
 				mtime:            fingerprint.MTimeNS,
@@ -12092,16 +12309,16 @@ func (e *Engine) processProviderFile(
 				cacheKey:         cacheKey,
 				noCacheSkip:      true,
 				retentionLease:   lease,
-			}, true
+			}, failureIdentity, failureIdentityOK && sourceParseFailureCacheable(err, file.Path)), true
 		}
-		return processResult{
+		return markSourceFailure(file, processResult{
 			err:            err,
 			mtime:          fingerprint.MTimeNS,
 			cacheSkip:      cacheSkip,
 			cacheKey:       cacheKey,
 			noCacheSkip:    true,
 			retentionLease: lease,
-		}, true
+		}, failureIdentity, failureIdentityOK && sourceParseFailureCacheable(err, file.Path)), true
 	}
 	if file.Agent == parser.AgentPiebald && !e.forceParse {
 		e.clearPiebaldFailure(source)
@@ -12118,14 +12335,14 @@ func (e *Engine) processProviderFile(
 		if stagedGCRelease != nil {
 			stagedGCRelease()
 		}
-		return processResult{
+		return markSourceFailure(file, processResult{
 			err:            err,
 			mtime:          fingerprint.MTimeNS,
 			cacheSkip:      cacheSkip,
 			cacheKey:       cacheKey,
 			noCacheSkip:    true,
 			retentionLease: lease,
-		}, true
+		}, failureIdentity, failureIdentityOK), true
 	}
 	if isCodexFormatAgent(file.Agent) && stagedSink == nil {
 		for i := range outcome.Results {
@@ -13087,7 +13304,8 @@ func (e *Engine) claudeRowlessFreshnessMarked(
 	defer e.skipMu.RUnlock()
 	for _, path := range paths {
 		key := e.claudeRowlessFreshnessCacheKey(path, contentHash)
-		if key != "" && e.skipCache[key] == mtime {
+		cachedMtime, cached := e.skipCache[key]
+		if key != "" && cached && cachedMtime == mtime {
 			return true
 		}
 	}
@@ -14054,8 +14272,17 @@ func (e *Engine) clearSkip(ctx context.Context, path string) int {
 }
 
 func (e *Engine) clearSkipInMemory(path string) int {
+	base, _, _ := strings.Cut(path, sourceHashSkipMarker)
+	e.failures.Clear(base)
+	if _, suffix := SplitProviderSkipCachePath(base); suffix == "" {
+		for agent := range e.providerFactories {
+			e.failures.Clear(providerAgentSkipCacheKey(base, agent))
+		}
+	}
 	e.skipMu.Lock()
 	defer e.skipMu.Unlock()
+	failurePath, _ := SplitProviderSkipCachePath(base)
+	delete(e.piebaldFailureMemo, failurePath)
 	before := len(e.skipCache)
 	work := e.removeSkipHashSiblingsLocked(path)
 	delete(e.skipCache, path)
@@ -14126,7 +14353,7 @@ func (e *Engine) clearWatcherOverflowCaches(ctx context.Context) {
 	e.skipFingerprints = make(map[string]string)
 	e.skipHashKeys = make(map[string]string)
 	e.skipMu.Unlock()
-	e.clearPiebaldFailureMemo()
+	e.ResetFailureCache(ctx)
 	if !e.ephemeral {
 		if err := e.db.ReplaceSkippedFiles(ctx, map[string]int64{}); err != nil {
 			log.Printf("clearing skipped files after watcher overflow: %v", err)
@@ -14214,6 +14441,34 @@ func (e *Engine) persistSkipCache(ctx context.Context) int {
 	return e.persistSkipCacheInto(ctx, e.db)
 }
 
+// ResetFailureCache forgets every cached source failure and makes that durable.
+// A resync retries sources that failed under the previous parser; the daemon
+// also calls this before the incremental catch-up after a worker rebuild is
+// discarded, because that reset lived only in the worker process.
+func (e *Engine) ResetFailureCache(ctx context.Context) {
+	e.clearPiebaldFailureMemo()
+	e.failures.Reset()
+	e.flushFailureCache(ctx)
+}
+
+// flushFailureCache makes recorded source failures durable. Passes that end
+// incomplete call it directly: a failed pass is exactly when new failures were
+// recorded, and it must not promote that pass's ordinary skip entries.
+func (e *Engine) flushFailureCache(ctx context.Context) {
+	e.flushFailureCacheInto(ctx, e.db)
+}
+
+func (e *Engine) flushFailureCacheInto(ctx context.Context, target *db.DB) {
+	// An unwritable target is not an error: the cache stays in memory and the
+	// next flush to a writable archive carries it.
+	if e.ephemeral || target.ReadOnly() || target.WriterClosed() {
+		return
+	}
+	if err := e.failures.Flush(ctx, target); err != nil {
+		log.Printf("%v", err)
+	}
+}
+
 // persistSkipCacheInto writes the current skip cache into target. A resync build
 // persists into the replacement database (not the active one) so the post-swap
 // engine reloads warm skip state.
@@ -14221,6 +14476,7 @@ func (e *Engine) persistSkipCacheInto(ctx context.Context, target *db.DB) int {
 	if e.ephemeral {
 		return 0
 	}
+	e.flushFailureCacheInto(ctx, target)
 	e.skipMu.Lock()
 	if target == e.db && !e.skipCacheDirty {
 		count := len(e.skipCache)
@@ -20973,6 +21229,11 @@ func (e *Engine) SyncSingleSessionContext(
 func (e *Engine) processAndWriteSessionFile(
 	ctx context.Context, file parser.DiscoveredFile, requestedSessionID string,
 ) (preserved bool, sessionsChanged bool, err error) {
+	defer func() {
+		if ctx.Err() == nil {
+			e.flushFailureCache(ctx)
+		}
+	}()
 	path := file.Path
 	res := e.processFile(ctx, file)
 	defer e.retentionBudget().scavengeIfNeeded()
@@ -20980,6 +21241,9 @@ func (e *Engine) processAndWriteSessionFile(
 	defer res.releaseStaged()
 	if res.err != nil {
 		sessionsChanged = res.sourceCwdChanged
+		if res.cacheFailure && ctx.Err() == nil {
+			e.failures.Record(res.failureCacheKey, res.failureIdentity)
+		}
 		if res.cacheSkip && res.mtime != 0 && !res.noCacheSkip {
 			e.cacheSkip(res.skipCacheKey(path), res.mtime, res.sourceFingerprint)
 		}

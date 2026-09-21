@@ -2446,7 +2446,10 @@ schemas keep their existing ordering behavior.
   is absent. Issue [#1819](https://github.com/kenn-io/agentsview/issues/1819)
   reports an older schema, but no database was attached, so that
   release-specific claim is unverified. The pinned analyzer reads the current
-  store and does not prove the historical schema.
+  store and does not prove the historical schema. Reverified 2026-09-20: the
+  pinned analyzer joins `chats` to `projects` without selecting
+  `chats.current_directory`. Sync remembers schema failures until database or
+  WAL state changes.
 
 ## Warp (`warp`)
 

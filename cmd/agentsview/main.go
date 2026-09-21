@@ -1075,6 +1075,12 @@ func newForegroundResyncRunner(
 					// "aborted" verdict takes this path: operational build
 					// failures report "failed" and must surface their error
 					// rather than masquerade as a successful incremental sync.
+					//
+					// The worker reset its own failure cache. That copy died
+					// with the discarded rebuild, so forget the parent's copy
+					// too. Otherwise previously failed sources stay skipped
+					// and a parser upgrade cannot reach them.
+					engine.ResetFailureCache(ctx)
 					return syncAllReleasingStartupMaintenance(
 						ctx, engine, progress,
 					), nil

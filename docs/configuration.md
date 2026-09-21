@@ -1447,6 +1447,7 @@ its triggers.
 | `pinned_messages`    | Pinned message references with session linkage                               |
 | `stats`              | Aggregate counts (session_count, message_count)                              |
 | `skipped_files`      | Cache of non-interactive session files                                       |
+| `source_failures`    | Cache of session files whose last parse failed                               |
 | `messages_fts`       | FTS5 virtual table for full-text search                                      |
 | `messages_cjk_fts`   | Optional CJK FTS5 index using the `simple` character tokenizer               |
 
@@ -1501,8 +1502,19 @@ For `s3://` Claude, Codex, and Cursor roots, change detection uses object size,
 checksums from listing or stat calls. Object content is downloaded only after
 that metadata shows a parse may be needed.
 
-Files that fail to parse or contain no interactive content are cached in the
-`skipped_files` table and skipped on subsequent syncs until their mtime changes.
+Files that produce no session, such as those with no interactive content, are
+cached in the `skipped_files` table. Source files that are missing or whose
+content is malformed are cached in the `source_failures` table, even when the
+sync pass that found them did not complete. An unchanged cached failure counts
+as a skip, allowing watcher retries to finish. Failure identities include the
+provider's pre-parse fingerprint, including content hashes and companion files
+where available. SQLite schema failures also track database and WAL changes, so
+repairing a schema retries the source even if its session timestamps stay the
+same. Missing files are retried when they appear. A full resync retries cached
+failures so a parser upgrade can reach a source that never produced a session.
+If that rebuild is discarded, the incremental catch-up still retries them.
+Failures that can clear up on their own, such as a timeout or a permission error,
+are not cached and are retried on every pass.
 
 Sync summaries include a `Parser anomalies (this run)` section whenever the
 current run observes parser or sanitizer anomalies. The section can include

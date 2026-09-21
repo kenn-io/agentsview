@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -36,11 +37,39 @@ type piebaldFailureLookup struct {
 }
 
 func (e *Engine) preparePiebaldFailure(
-	source parser.SourceRef,
+	ctx context.Context, source parser.SourceRef, force bool,
 ) (piebaldFailureLookup, bool) {
+	if e.forceParse {
+		return piebaldFailureLookup{}, false // Report-only parse-diff leaves caches untouched.
+	}
 	key, dbPath, ok := piebaldFailureSourcePaths(source)
 	if !ok {
 		return piebaldFailureLookup{}, false
+	}
+	failureKey := providerAgentSkipCacheKey(key, parser.AgentPiebald)
+	_, durable := e.failures.Lookup(failureKey)
+	e.skipMu.RLock()
+	_, remembered := e.piebaldFailureMemo[key]
+	e.skipMu.RUnlock()
+	retry := durable
+	if force || (durable || remembered) && e.pathNeedsCachedSkipBypass(ctx, parser.AgentPiebald, key) {
+		retry = durable || remembered
+		e.clearPiebaldFailure(source)
+		e.failures.Clear(failureKey)
+	}
+	if retry {
+		// A persisted failure must reach the fingerprint check before archive
+		// freshness shortcuts, including after a restart. Keep retry intent if
+		// stat, fingerprinting, or a transient parse fails along the way.
+		e.skipMu.Lock()
+		if e.piebaldFailureMemo == nil {
+			e.piebaldFailureMemo = make(map[string]piebaldFailureMemoEntry)
+		}
+		entry := e.piebaldFailureMemo[key]
+		entry.err = nil
+		entry.retryNeeded = true
+		e.piebaldFailureMemo[key] = entry
+		e.skipMu.Unlock()
 	}
 	identity, err := e.capturePiebaldFailureIdentity(dbPath)
 	if err != nil {
@@ -244,10 +273,15 @@ func piebaldFailureIsTransient(ctx context.Context, err error) bool {
 	}
 	if errors.Is(err, context.Canceled) ||
 		errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, os.ErrPermission) || os.IsTimeout(err) ||
+		errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, sql.ErrNoRows) ||
 		errors.Is(err, sql.ErrConnDone) ||
 		errors.Is(err, driver.ErrBadConn) ||
 		errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	if _, ok := errors.AsType[*os.PathError](err); ok {
 		return true
 	}
 

@@ -745,6 +745,16 @@ CREATE TABLE IF NOT EXISTS skipped_files (
     file_path  TEXT PRIMARY KEY,
     file_mtime INTEGER NOT NULL
 );
+-- Source failures cache: source files whose last parse failed for a reason
+-- that will not change until the file does. Sync skips them while the recorded
+-- identity still matches. missing = 1 records a source that did not exist.
+CREATE TABLE IF NOT EXISTS source_failures (
+    cache_key   TEXT PRIMARY KEY,
+    file_mtime  INTEGER NOT NULL,
+    file_size   INTEGER NOT NULL DEFAULT 0,
+    fingerprint TEXT NOT NULL DEFAULT '',
+    missing     INTEGER NOT NULL DEFAULT 0
+);
 
 -- Machine-local watcher proof. This deliberately stays outside the shared
 -- session model: remote stores must not authorize source tombstones for paths

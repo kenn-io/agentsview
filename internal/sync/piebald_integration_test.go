@@ -374,7 +374,8 @@ func TestSyncPiebaldFullSyncSuppressesStableParseFailure(t *testing.T) {
 
 	logs.Reset()
 	second := env.engine.SyncAll(t.Context(), nil)
-	require.Equal(t, 1, second.Failed)
+	require.Zero(t, second.Failed)
+	require.True(t, second.ProcessingComplete())
 	assert.NotContains(t, logs.String(), "sync piebald parse")
 	afterMessages, err := env.db.GetAllMessages(t.Context(), "piebald:42")
 	require.NoError(t, err)
@@ -431,6 +432,48 @@ func TestSyncPiebaldFullSyncSuppressesStableParseFailure(t *testing.T) {
 	assertSessionMessageCount(t, env.db, "piebald:42", 2)
 }
 
+func TestPiebaldFailureRepairAfterRestart(t *testing.T) {
+	for _, mode := range []string{"full-sync", "changed-path"} {
+		t.Run(mode, func(t *testing.T) {
+			env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
+			piebald := createPiebaldDB(t, env.piebaldDir)
+			piebald.addChat(t, 42, "Repair", "A prompt.", "An answer.", "2026-05-01T10:05:00Z")
+			require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Synced)
+			_, mtime, ok := env.db.GetSessionFileInfo(t.Context(), "piebald:42")
+			require.True(t, ok)
+			require.NoError(t, env.db.Update(t.Context(), func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET file_mtime = file_mtime + 1 WHERE id = 'piebald:42'")
+				return err
+			}))
+			piebald.mustExec(t, "break schema", `ALTER TABLE messages RENAME TO unavailable_messages`)
+			require.Equal(t, 1, env.engine.SyncAll(t.Context(), nil).Failed)
+			failures, err := env.db.LoadSourceFailures(t.Context())
+			require.NoError(t, err)
+			require.Len(t, failures, 1)
+
+			restarted := sync.NewEngine(t.Context(), env.db, sync.EngineConfig{
+				AgentDirs: map[parser.AgentType][]string{parser.AgentPiebald: {env.piebaldDir}},
+				Machine:   "local",
+			})
+			t.Cleanup(restarted.Close)
+			piebald.mustExec(t, "repair schema", `ALTER TABLE unavailable_messages RENAME TO messages`)
+			piebald.mustExec(t, "repair content", `UPDATE message_node_text SET content = 'Recovered answer.' WHERE content = 'An answer.'`)
+			require.NoError(t, env.db.Update(t.Context(), func(tx *sql.Tx) error {
+				_, err := tx.ExecContext(t.Context(), "UPDATE sessions SET file_mtime = ? WHERE id = 'piebald:42'", mtime)
+				return err
+			}))
+			if mode == "full-sync" {
+				stats := restarted.SyncAll(t.Context(), nil)
+				require.True(t, stats.ProcessingComplete())
+				require.Equal(t, 1, stats.Synced)
+			} else {
+				require.NoError(t, restarted.SyncPathsContext(t.Context(), []string{piebald.path}))
+			}
+			assertMessageContent(t, env.db, "piebald:42", "A prompt.", "Recovered answer.")
+		})
+	}
+}
+
 func TestResyncBuildPiebaldFailureBypassesMemo(t *testing.T) {
 	env := setupSingleAgentTestEnv(t, parser.AgentPiebald)
 	piebald := createPiebaldDB(t, env.piebaldDir)
@@ -449,7 +492,8 @@ func TestResyncBuildPiebaldFailureBypassesMemo(t *testing.T) {
 	require.Equal(t, 1, first.Failed)
 	logs.Reset()
 	second := env.engine.SyncAll(t.Context(), nil)
-	require.Equal(t, 1, second.Failed)
+	require.Zero(t, second.Failed)
+	require.True(t, second.ProcessingComplete())
 	assert.NotContains(t, logs.String(), "sync piebald parse")
 
 	logs.Reset()
