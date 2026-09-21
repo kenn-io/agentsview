@@ -118,7 +118,7 @@
             </a>
           </figure>
         </div>
-        <p class="hero-meta">Local-first · MIT · Single Go binary · Desktop · Web · CLI · MCP · SQLite / PostgreSQL / DuckDB</p>
+        <p class="hero-meta">Local-first · MIT · Single Go binary · Desktop · Web · CLI · MCP · SQLite / PostgreSQL / DuckDB / ClickHouse</p>
       </section>
 
       <section class="site-section" aria-labelledby="record-title">
@@ -188,6 +188,9 @@
         <div class="agent-grid">
           <a class="agent-chip" href="https://www.anthropic.com/claude-code" target="_blank" rel="noopener"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-claude"/></svg></span><span class="agent-chip-name">Claude Code</span></a>
           <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-claude"/></svg></span><span class="agent-chip-name">OpenClaude</span></a>
+          <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph">AC</span><span class="agent-chip-name">Augure Code</span></a>
+          <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph">AD</span><span class="agent-chip-name">Augure Desktop</span></a>
+          <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph">CB</span><span class="agent-chip-name">CodeBuddy CN</span></a>
           <a class="agent-chip" href="https://openai.com/codex/" target="_blank" rel="noopener"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-openai"/></svg></span><span class="agent-chip-name">Codex</span></a>
           <a class="agent-chip" href="https://github.com/google-gemini/gemini-cli" target="_blank" rel="noopener"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-gemini"/></svg></span><span class="agent-chip-name">Gemini</span></a>
           <a class="agent-chip" href="https://github.com/features/copilot" target="_blank" rel="noopener"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-copilot"/></svg></span><span class="agent-chip-name">Copilot</span></a>
@@ -220,7 +223,7 @@
           <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-zai"/></svg></span><span class="agent-chip-name">ZCode</span></a>
           <a class="agent-chip" href="https://zencoder.ai" target="_blank" rel="noopener"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-zencoder"/></svg></span><span class="agent-chip-name">Zencoder</span></a>
           <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-commandcode"/></svg></span><span class="agent-chip-name">Command Code</span></a>
-          <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-cline"/></svg></span><span class="agent-chip-name">Cline</span></a>
+          <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-cline"/></svg></span><span class="agent-chip-name">Cline CLI</span></a>
           <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-codebuff"/></svg></span><span class="agent-chip-name">Codebuff</span></a>
           <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-snowflake"/></svg></span><span class="agent-chip-name">Cortex Code</span></a>
           <a class="agent-chip" href="/docs/configuration/#session-discovery"><span class="agent-chip-glyph"><svg viewBox="0 0 24 24" aria-hidden="true"><use xlink:href="#i-crush"/></svg></span><span class="agent-chip-name">Crush</span></a>
@@ -307,13 +310,13 @@
             <p class="section-index">04 / Understand</p>
             <h2 id="understand-title">Search and score every transcript.</h2>
           </div>
-          <p>Full-text search finds words in the message content you retain. Opt-in semantic and hybrid search match by meaning when you don't remember the exact words, and every match cites the conversation unit it came from. Session intelligence adds health scores, outcome classification, and deterministic quality signals with evidence links back to the source transcript.</p>
+          <p>Find a conversation by project and date in the command palette, or open it by ID with Ctrl/Cmd+G. Full-text search matches words; opt-in semantic and hybrid search match by meaning. Health scores and quality signals link back to the transcript so you can check the evidence.</p>
         </div>
         <figure class="capture">
-          <a href="/docs/assets/generated/screenshots/search-results.png" data-lightbox>
-            <img src="/docs/assets/generated/screenshots/search-results.png" alt="AgentsView search results across agent session transcripts" loading="lazy">
+          <a href="/docs/assets/generated/screenshots/search-filters.png" data-lightbox>
+            <img src="/docs/assets/generated/screenshots/search-filters.png" alt="AgentsView command palette with project and date filters" loading="lazy">
           </a>
-          <figcaption class="caption">Search across the whole archive. <a href="/docs/semantic-search/">Semantic search</a> · <a href="/docs/session-intelligence/">Session intelligence</a> · <a href="/docs/quality/">Quality signals</a>.</figcaption>
+          <figcaption class="caption">Choose a project and date range without changing the sidebar. <a href="/docs/usage/#command-palette">Search controls</a> · <a href="/docs/semantic-search/">Semantic search</a> · <a href="/docs/session-intelligence/">Session intelligence</a> · <a href="/docs/quality/">Quality signals</a>.</figcaption>
         </figure>
       </section>
 
@@ -369,7 +372,7 @@
             <p class="section-index">07 / Share</p>
             <h2 id="share-title">One machine or the whole team.</h2>
           </div>
-          <p>SQLite is the local archive of record. From there, push parsed sessions to PostgreSQL, mirror into DuckDB, read provider files from S3, or keep original source files in hosted storage.</p>
+          <p>SQLite is the local archive of record. From there, push parsed sessions to PostgreSQL or ClickHouse, mirror into DuckDB, read provider files from S3, or keep original source files in hosted storage.</p>
         </div>
         <div class="proof-grid">
           <article class="proof">
@@ -378,9 +381,9 @@
             <p>An installable auto-push service mirrors each machine's archive into PostgreSQL; a read-only server presents the merged fleet. <a href="/docs/pg-sync/">PostgreSQL sync</a>.</p>
           </article>
           <article class="proof">
-            <p class="proof-tag">DuckDB</p>
-            <h3>Mirror for analytics.</h3>
-            <p>Push the archive into a DuckDB file or serve it over the Quack protocol for remote analytical reads. <a href="/docs/duckdb/">DuckDB mirror</a>.</p>
+            <p class="proof-tag">DuckDB / ClickHouse</p>
+            <h3>Choose a reporting backend.</h3>
+            <p>Mirror into <a href="/docs/duckdb/">DuckDB</a> for local or Quack reads, or push to <a href="/docs/clickhouse-sync/">ClickHouse</a> and serve the dashboard there. Keep session edits in SQLite.</p>
           </article>
           <article class="proof">
             <p class="proof-tag">Filesystem</p>
@@ -422,7 +425,7 @@
           <article class="boundary">
             <p class="proof-tag">Your choice</p>
             <h3>Share only for a clear purpose.</h3>
-            <p>Configure PostgreSQL, remote DuckDB, Generated Insights, GitHub publishing, or hosted raw sync only when that outcome is worth sending data.</p>
+            <p>Configure PostgreSQL, ClickHouse, remote DuckDB, Generated Insights, GitHub publishing, or hosted raw sync only when that outcome is worth sending data.</p>
           </article>
           <article class="boundary">
             <p class="proof-tag">Visible boundaries</p>

@@ -1,25 +1,40 @@
 ---
 title: Data
-description: Project inventory and worktree mapping rules
+description: Correct project assignments with worktree rules and an opt-in project workspace
 ---
 
-The **Data** page is where you inspect and clean project classification across
-the whole archive. It is the home of the worktree mapping rules that previously
-lived in the Settings **Worktree mappings** section.
+Use **Data** to group sessions under the right project name. Open the Data tab
+in the header to manage [project mapping rules](#rules), which match session
+folders to projects.
 
-Open it from the **Data** tab in the header, or follow a project link from the
-[Activity breakdown](/docs/activity/#breakdowns). Deep links are stable:
-`/data?project_key=<key>` selects a project, and `/data?view=rules` opens the
-[Rules view](#rules).
+## Enable the project workspace
+
+Version 0.44.0 includes a project workspace with folder suggestions, transcript
+previews, and bulk corrections. It is **off by default**: standard builds show
+the rules editor without the inventory or workspace pictured below.
+
+To enable it, [build from source](/docs/quickstart/#build-from-source) with:
+
+```bash
+VITE_PROJECT_MAPPING_WORKSPACE=true make build
+```
+
+This is a build-time choice, not a `config.toml` or browser setting. Run the
+resulting build to use the workspace.
+
+With the workspace enabled, open a project from **Data** or from the
+[Activity breakdown](/docs/activity/#breakdowns). The link
+`/data?project_key=<key>` selects a project; `/data?view=rules` opens the rules
+editor. The screenshots below use an enabled build.
 
 ![Project inventory in the Data workspace](/docs/assets/generated/screenshots/data-inventory.png)
 
 ## Project Inventory
 
-The default view lists every project in the archive with its session, machine,
-agent, and working-directory counts plus first and last activity timestamps. A
-summary strip totals the projects, sessions, and the sessions currently governed
-by classification rules.
+With the workspace enabled, the inventory lists every project with its session,
+machine, agent, and working-directory counts plus first and last activity
+timestamps. A summary strip totals the projects, sessions, and the sessions
+currently governed by classification rules.
 
 - The table is sortable by any column and filterable by project name.
 - Projects targeted by enabled rules carry a rule badge; projects recorded as a
@@ -48,9 +63,9 @@ The workspace creates
 [worktree project mappings](/docs/configuration/#worktree-project-mappings)
 directly:
 
-- **Observed folders** lists every session folder associated with the selected
-  project. Each folder stays visible instead of being hidden behind a worktree
-  selector.
+- **Folder suggestions** lists the session folders associated with the selected
+  project. Choose **One folder** to correct a single path, or **All folders**
+  to prepare corrections for the whole project.
 - Selecting a folder opens one mapping row: **Folder path → Project**. The
   suggested folder path covers that group's working directories and remains
   editable, so it can be shortened to cover sibling folders when appropriate.
@@ -63,8 +78,8 @@ directly:
   usually a sign the prefix is too broad. A prefix matching zero sessions
   cannot be applied.
 
-**Save and apply mapping** saves the rule and rewrites the matching sessions in
-one atomic step, then reloads the inventory. If the applied rule renamed the
+**Save correction** saves the rule and rewrites the matching sessions in one
+atomic step, then reloads the inventory. If the applied rule renamed the
 selected project, the selection follows the new name. If mappings changed
 between preview and apply, the apply is rejected and a fresh preview is
 required.
@@ -75,6 +90,17 @@ which are hidden by default. Navigation loads another page of session records
 only when needed, and loads transcript messages only for the selected session.
 Sessions without stored messages remain available for mapping, with a notice
 instead of a transcript. Collapse folder suggestions to give previews more room.
+
+To correct only the session you are previewing, choose a target under **Session
+project** and click **Assign session**. This creates a manual override for that
+session without changing folder rules. Choose **Use automatic** to remove the
+override and restore automatic assignment.
+
+Select multiple projects in the inventory to open **Bulk project correction**.
+Review the folder suggestions and target project for each correction before
+saving. You can also use **All folders** within one project.
+
+![Bulk project correction in the opt-in workspace](/docs/assets/generated/screenshots/project-mapping-bulk.png)
 
 During a bulk correction, the Save button shows the number of completed
 corrections and a progress bar. Each correction applies separately. Overlapping
@@ -90,9 +116,9 @@ do not interrupt the rest of the batch.
 
 ## Rules
 
-The **Rules** toggle shows the worktree mapping rules for one machine at a time,
-with the same add, edit, apply, and delete controls that Settings previously
-offered — see
+The rules editor is the default Data view. In builds with the workspace enabled,
+choose **Project mapping rules** to open it. Add, edit, apply, or delete rules
+for one machine at a time — see
 [Worktree Project Mappings](/docs/configuration/#worktree-project-mappings) for
 the full rule semantics. Each rule row also shows its **governed sessions**
 count (how many sessions the rule currently classifies) and the **original
@@ -101,10 +127,10 @@ targets link back to the corresponding inventory row.
 
 ## Read-Only Servers
 
-On a read-only server (`pg serve` or `duckdb serve`) the inventory, the
-candidate evidence, and the Rules table remain fully readable, but the editor
-and rule mutations are replaced by a notice: classification rules are managed
-from the writable archive that ingests the machine's sessions.
+On a read-only server (`pg serve`, `duckdb serve`, or `clickhouse serve`),
+manage rules and session assignments from the writable SQLite archive. The rules
+table remains readable; enabled workspace builds also show the inventory and
+folder suggestions, with editing controls replaced by a notice.
 
 ## Storage maintenance
 

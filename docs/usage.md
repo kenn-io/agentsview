@@ -152,9 +152,8 @@ are hours. Color intensity represents message volume.
 
 ### Activity Timeline
 
-A stacked chart showing messages, sessions, tool calls, and thinking blocks over
-time. Toggle between daily, weekly, and monthly granularity. Includes breakdown
-by agent.
+Compare message or session counts over time. Switch between Day, Week, and
+Month to change how the chart groups activity.
 
 ![Activity timeline](/docs/assets/generated/screenshots/activity-timeline.png)
 
@@ -351,8 +350,8 @@ Each session item shows:
 - **Agent-provided session names** — several agents record a session title
   themselves (Claude Code's `/rename`, Codex `session_index.jsonl` thread
   names, Claude.ai and ChatGPT conversation names, Forge, Hermes, Kiro,
-  Piebald, Cortex Code, and Command Code's `.meta.json` titles). As of 0.33.0,
-  the sidebar shows these titles automatically when present. Manual in-app
+  Piebald, Cortex Code, WorkBuddy, and Command Code's `.meta.json` titles). The
+  sidebar shows these titles automatically when present. Manual in-app
   renames always take precedence and are never overwritten by an
   agent-provided name. As of 0.34.0, Codex titles renamed by the agent are
   imported from `session_index.jsonl` for both current and archived sessions.
@@ -482,15 +481,27 @@ persisted to localStorage and serialized into the URL.
 ### Direct Session Links
 
 Click **Copy link to session** in the detail header to copy a shareable URL.
-Clicking the **Session ID** copies only the ID. You can also bookmark the
-current URL:
+Clicking the **Session ID** copies only the ID. Session links give the provider
+and native ID separate path segments, for example:
 
 ```
-/sessions/550e8400-e29b-41d4-a716-446655440000
+/sessions/codex/550e8400-e29b-41d4-a716-446655440000
 ```
+
+Older links with an encoded provider prefix still open. IDs without a provider
+prefix use a single segment after `/sessions/`.
 
 Session URLs work as bookmarks and can be shared with teammates when using
 [PostgreSQL sync](/docs/pg-sync/) for shared deployments.
+
+### Open a session by ID
+
+Press `Cmd+G` on macOS or `Ctrl+G` elsewhere. Paste a complete session ID or
+UUID, then press Enter. This opens the session without changing the sidebar
+filters. If the UUID matches more than one session, use its full ID with the
+provider prefix, such as `codex:550e8400-e29b-41d4-a716-446655440000`.
+
+![Open a session by ID or UUID](/docs/assets/generated/screenshots/open-session.png)
 
 ### URL Filters
 
@@ -828,9 +839,8 @@ state instead of a score. See
 
 ### Session Vital Signs
 
-The right column of an open session shows a **Session Vital Signs** panel with
-elapsed turn time and measured tool durations. Toggle it from the session
-header.
+Open **Analysis** from the session header to see Session Vitals in the right
+column. It shows elapsed turn time and measured tool durations.
 
 ![Session Vital Signs in context](/docs/assets/generated/screenshots/session-vital-signs.png)
 
@@ -846,7 +856,9 @@ The panel contains these sections, including experimental Recall when available:
     matching entries.
 - **Turn activity** — each visible user prompt starts a window that ends at the
     next prompt or the session boundary. Bars separate measured tool execution
-    from unattributed time. Thinking and response generation are not measured.
+    from unattributed time, which has no measured phase boundaries. Thinking
+    and response generation are not measured. Click a row to jump to its prompt
+    in the transcript.
 - **Time spent** — per-category aggregate bars across the normalized taxonomy
     (`Read`, `Edit`, `Write`, `Bash`, `Grep`, `Glob`, `Task`, `Tool`, `Other`,
     and other provider categories). Click a row to filter the rest of the panel
@@ -922,12 +934,14 @@ overlay.
 
 ### Recent Sessions
 
-With an empty or short query (under 3 characters), the palette shows your 10
-most recent sessions. Type to filter by project name or first message.
+With an empty query, the palette shows up to 10 recent sessions from the
+sidebar's current list. A short query filters that list by project, session
+name, or first message. Search begins at 3 characters, or 2 characters for
+Chinese, Japanese, and Korean text.
 
 ### Search Modes
 
-Type 3 or more characters to search in one of three modes:
+Search in one of three modes:
 
 - **Full text** searches indexed message content with FTS5. It also matches
   session display names and first messages.
@@ -977,6 +991,18 @@ Results use a compact row:
 
 Select a result to jump to that session and scroll directly to the matching
 message.
+
+### Project and date filters
+
+Once your query is long enough to search, the palette shows project and date
+controls. Search starts with the sidebar's selected project; choose another
+project or **All Projects** without changing the sidebar.
+
+Choose a relative period, calendar period, or custom dates. The filters apply
+to Full text, Semantic, and Hybrid searches. Closing the palette clears its date
+range; the next opening starts with the sidebar's current project again.
+
+![Command palette with project and date filters](/docs/assets/generated/screenshots/search-filters.png)
 
 ### Keyboard Navigation
 
@@ -1032,6 +1058,12 @@ agents, the menu can launch the configured terminal, use the default terminal,
 or copy the exact resume command. Cursor resume resolves the original workspace
 path and passes it as `--workspace` to `cursor agent --resume`. The same menu
 can copy the session directory and open it in detected editors or file browsers.
+
+Pi sessions use `pi --session` with the transcript path when available, or the
+native session ID. For Pi, **Copy command** includes the working directory so
+you can paste the complete command into a shell. Augure Code sessions use
+`augure resume`. Copying a session's directory path also works when that
+directory has been deleted.
 
 Local Codex sessions add **Open in Codex Desktop**, which deep-links to the
 stored thread. Local Claude sessions add **Open in Claude Code**, which opens a
@@ -1179,6 +1211,7 @@ Press `?` to see all shortcuts in a modal overlay.
 | Key       | Action                            |
 | --------- | --------------------------------- |
 | `Cmd+K`   | Open command palette              |
+| `Cmd+G`   | Open a session by ID or UUID       |
 | `Cmd+F`   | Search within current session     |
 | `Esc`     | Close modal / deselect session    |
 | `j` / `↓` | Next message                      |
@@ -1196,7 +1229,8 @@ Press `?` to see all shortcuts in a modal overlay.
 | `p`       | Publish to Gist                   |
 | `?`       | Show shortcuts                    |
 
-Shortcuts are disabled when typing in an input field. `Esc` always works.
+Use `Ctrl` in place of `Cmd` on Windows and Linux. Most shortcuts are disabled
+when typing in an input field. `Esc` always works.
 
 ______________________________________________________________________
 
@@ -1209,7 +1243,7 @@ organized into sections:
 
 | Section            | What You Can Configure                                                                                   |
 | ------------------ | -------------------------------------------------------------------------------------------------------- |
-| Language           | Interface language (English, French, Japanese, Korean, Spanish, Simplified or Traditional Chinese)       |
+| Language           | Interface language (Azerbaijani, English, French, Japanese, Korean, Spanish, Simplified Chinese, or Traditional Chinese)       |
 | Appearance         | Theme (light/dark), high-contrast mode, chart colors, message layout, zoom, block visibility             |
 | Date ranges        | Browser-local checkbox for linking date selections across Sessions, Usage, Activity, Trends, and Quality |
 | Session Providers  | Enable session providers, inspect their session directories, and add alternate agent homes               |
@@ -1219,6 +1253,8 @@ organized into sections:
 | Embeddings         | Current semantic-index build phase, progress, throughput, ETA, last result, and local generations        |
 | GitHub             | Personal access token for Gist publishing                                                                |
 | Remote Access      | Remote connections toggle, auth token, connect to remote server                                          |
+
+Spanish is available in builds from `main` after version 0.44.0.
 
 ![Embedding build progress](/docs/assets/generated/screenshots/settings-embeddings.png)
 

@@ -4,8 +4,8 @@ Browse, search, and track costs across your AI coding agents. Your session
 archive stays on your machine unless you choose a feature that shares it.
 
 This README and the [documentation](https://agentsview.io/docs/) follow `main`.
-Check the [changelog](https://agentsview.io/docs/changelog/) for released
-features.
+The latest release is **v0.44.0**. Check the
+[changelog](https://agentsview.io/docs/changelog/) for what it includes.
 
 <p align="center">
   <img src="https://agentsview.io/assets/generated/screenshots/dashboard.png" alt="Analytics dashboard" width="720">
@@ -307,9 +307,10 @@ agentsview stats --include-git-outcomes
 | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | ![Search](https://agentsview.io/assets/generated/screenshots/search-results.png) | ![Heatmap](https://agentsview.io/assets/generated/screenshots/heatmap.png) |
 
-- **Full-text search** across all message content (FTS5), with optional CJK
-  character and phrase search for Chinese, Japanese, and Korean text in
-  SQLite, including Chinese word segmentation through `simple`/cppjieba
+- **Full-text search** across all message content (FTS5), with project and date
+  filters in the command palette and optional CJK character and phrase search
+  for Chinese, Japanese, and Korean text in SQLite, including Chinese word
+  segmentation through `simple`/cppjieba
 - **Semantic search** (opt-in) -- index session content with any
   OpenAI-compatible embeddings endpoint and search by meaning with
   `agentsview session search --semantic` or `--hybrid`; every content-search
@@ -322,13 +323,14 @@ agentsview stats --include-git-outcomes
 - **Recent Edits feed** -- the files your agents changed most recently across
   every session, grouped by project and path, each linking to the message that
   made the change
-- **Data workspace** -- inspect project inventory and observed folders, preview
-  reclassification impact, and manage worktree mapping rules
+- **Project mapping** -- manage worktree rules from Data. An
+  [opt-in workspace](https://agentsview.io/docs/data/#enable-the-project-workspace)
+  adds folder suggestions, session previews, and bulk corrections
 - **Recall corpus browser** -- explore experimental distilled knowledge and jump
   from entries to their supporting transcript evidence
 - **Live updates** via SSE as active sessions receive new messages
-- **Keyboard-first** navigation (`j`/`k`/`[`/`]`, `Cmd+K` search, `?` for all
-  shortcuts)
+- **Keyboard-first** navigation (`j`/`k`/`[`/`]`, `Ctrl/Cmd+K` search,
+  `Ctrl/Cmd+G` to open a session by ID or UUID, `?` for all shortcuts)
 - **Export** sessions as HTML or publish to GitHub Gist
 
 ## Supported Agents
@@ -343,9 +345,11 @@ local Amp thread JSON files.
 | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Aider                 | `<repo>/.aider.chat.history.md` (per repo; opt in with `AIDER_DIR` or `agents.aider.dirs`)                                                                                                                                                           |
 | Amp (deprecated)      | `~/.local/share/amp/threads/` (historical local thread JSON only)                                                                                                                                                                                    |
+| Augure Code           | `~/.augure/sessions/`                                                                                                                                                                                                                                |
 | Augure Desktop        | `~/.augure-desktop/` (macOS/Linux), `%LOCALAPPDATA%\augure-desktop\` (Windows)                                                                                                                                                                       |
 | Antigravity           | `~/.gemini/antigravity/`                                                                                                                                                                                                                             |
 | Antigravity CLI       | `~/.gemini/antigravity-cli/` (see note below)                                                                                                                                                                                                        |
+| Cline CLI             | `~/.cline/data/sessions/` (CLI sessions only)                                                                                                                                                                                                        |
 | Claude Code           | `~/.claude/projects/`                                                                                                                                                                                                                                |
 | OpenClaude            | `~/.openclaude/projects/`                                                                                                                                                                                                                            |
 | Claude Cowork         | `~/Library/Application Support/Claude/local-agent-mode-sessions/` (macOS)                                                                                                                                                                            |
@@ -399,7 +403,7 @@ local Amp thread JSON files.
 | TraeX (TRAE CLI)      | `~/.trae/cli/sessions/`, `~/.trae/cli/archived_sessions/`                                                                                                                                                                                            |
 | Warp                  | `~/.warp/` (platform-dependent)                                                                                                                                                                                                                      |
 | WorkBuddy             | `~/.workbuddy/projects/`                                                                                                                                                                                                                             |
-| CodeBuddy             | `%LOCALAPPDATA%\\CodeBuddyExtension\\Data\\` (Windows), `~/Library/Application Support/CodeBuddyExtension/Data/` (macOS), `~/.config/CodeBuddyExtension/Data/` (Linux)                                                                               |
+| CodeBuddy CN          | `%LOCALAPPDATA%\\CodeBuddyExtension\\Data\\` (Windows), `~/Library/Application Support/CodeBuddyExtension/Data/` (macOS), `~/.config/CodeBuddyExtension/Data/` (Linux)                                                                               |
 | ZCode                 | `~/.zcode/cli/db/`, `~/.zcode/cli/`                                                                                                                                                                                                                  |
 | Zed                   | `~/Library/Application Support/Zed/` (macOS)                                                                                                                                                                                                         |
 | Zencoder              | `~/.zencoder/sessions/`                                                                                                                                                                                                                              |
@@ -419,11 +423,19 @@ one or more data or sessions directories.
 
 Crush sessions are read from each project's SQLite `.crush/crush.db`, including
 transcript content, thinking, tool calls and results, session relationships,
-models, and recorded session costs. The project registry lives at
+models, and recorded session totals. Per-message tokens and cache breakdowns are
+not available. The project registry lives at
 `~/.local/share/crush/projects.json` (macOS and Linux) or
 `%LOCALAPPDATA%\crush\projects.json` (Windows). Set `CRUSH_DIR` or
 `agents.crush.dirs` to one or more Crush data directories, `.crush` directories,
 or `crush.db` files.
+
+Cline support covers the CLI, not the VS Code extension. Augure Code is tracked
+separately from Codex and resumes through the Augure CLI; its proprietary models
+remain unpriced. Augure Desktop support covers version 3 beta and does not
+include remote sync. See
+[session discovery](https://agentsview.io/docs/configuration/#session-discovery)
+for provider details and limits.
 
 Each directory can be overridden with an environment variable. See the
 [configuration docs](https://agentsview.io/configuration/) for details. Cursor

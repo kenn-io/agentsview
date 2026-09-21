@@ -13,10 +13,14 @@ archive stays current while you work. [Quick start](/docs/quickstart/).
 
 ## 02. Browse the full conversation
 
-Read the prompts, responses, reasoning, and tool calls recorded by each agent
-and retained in your archive. Filter sessions by project, agent, date, and
-message count. Subagent trees, resume chains, and edited files stay connected to
-their parent session. [Usage guide](/docs/usage/).
+Read the prompts, responses, reasoning, and tool calls recorded by each agent.
+Filter by project, agent, date, and message count, or press `Ctrl/Cmd+G` to open
+a session by ID. The Resume menu lets supported agents, including Pi, pick up
+where they left off. [Usage guide](/docs/usage/).
+
+Use the opt-in [project workspace](/docs/data/#enable-the-project-workspace) to
+correct project names with folder suggestions, transcript previews, and bulk
+corrections.
 
 ## 03. Monitor the fleet
 
@@ -36,17 +40,19 @@ Codex CI run. [Token usage and costs](/docs/token-usage/).
 
 ## 05. Search by words or by meaning
 
-Full-text search finds the conversation where you discussed a specific function
-or error, even months later. Opt-in semantic and hybrid search match by meaning
-over conversation units, cite the unit behind every result, and can pull the
-surrounding context on demand. [Semantic search](/docs/semantic-search/).
+Press `Ctrl/Cmd+K` to search, then choose a project and date range in the
+palette. Select **All Projects** to widen the search without changing the
+sidebar. Full-text search finds exact words; opt-in semantic and hybrid search
+find related meaning and cite the matching conversation.
+[Search controls](/docs/usage/#command-palette) ·
+[Semantic search](/docs/semantic-search/).
 
 ## 06. Assess session health
 
-Session intelligence classifies outcomes and scores health from the transcript
-itself: tool failures, context pressure, and loop signals. Deterministic quality
-rules turn recurring patterns into recommendations, each backed by the source
-sessions that triggered it. [Session intelligence](/docs/session-intelligence/).
+Health scores point to tool failures, context pressure, and repeated loops in
+the transcript. Open **Analysis** to see Session Vitals: measured tool execution
+and time that cannot be assigned to a phase. Click an activity row to inspect
+its transcript entry. [Session intelligence](/docs/session-intelligence/).
 
 ## 07. Keep what the sessions learned
 
@@ -65,10 +71,11 @@ tried before repeating it. [MCP server](/docs/mcp/) ·
 
 ## 09. Extend beyond one machine
 
-Push each machine's archive to PostgreSQL for a merged team view, mirror into
-DuckDB for analytical queries, read source files through the filesystem or S3,
-or keep original files in hosted storage. SQLite on your disk remains the local
-archive of record. [PostgreSQL sync](/docs/pg-sync/) ·
+Push each machine's archive to PostgreSQL for a merged team view, use ClickHouse
+for a remote dashboard, mirror into DuckDB for analytical queries, read source
+files through the filesystem or S3, or keep original files in hosted storage.
+SQLite on your disk remains the local archive of record.
+[PostgreSQL sync](/docs/pg-sync/) · [ClickHouse sync](/docs/clickhouse-sync/) ·
 [DuckDB mirror](/docs/duckdb/) · [Hosted raw sync](/docs/hosted-raw-sync/).
 
 ## Next

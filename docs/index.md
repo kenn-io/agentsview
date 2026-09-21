@@ -15,7 +15,8 @@ New here? The [product overview](/) explains what AgentsView is for, and the
 here explain how to use and maintain each feature.
 
 These guides follow `main` and may include changes newer than the latest
-release. Check the [changelog](/docs/changelog/) for what each release includes.
+release, **v0.44.0**. Check the [changelog](/docs/changelog/) for what each
+release includes.
 
 <p class="hero-actions">
   <a class="md-button md-button--primary" href="/docs/quickstart/">Quick Start</a>
@@ -31,6 +32,7 @@ release. Check the [changelog](/docs/changelog/) for what each release includes.
 | See when agents ran, overlapped, and what it cost | [Activity](/docs/activity/)                                                                                                                                                                                |
 | Get daily token and cost reports                  | [Token Usage & Costs](/docs/token-usage/)                                                                                                                                                                  |
 | Search transcripts by meaning, not just words     | [Semantic Search](/docs/semantic-search/)                                                                                                                                                                  |
+| Correct project names and worktree assignments | [Data](/docs/data/) |
 | Score session health and outcomes                 | [Session Intelligence](/docs/session-intelligence/)                                                                                                                                                        |
 | Browse extracted, provenance-linked knowledge     | [Recall](/docs/recall/)                                                                                                                                                                                    |
 | Give agents and scripts access to the archive     | [MCP Server](/docs/mcp/) and [Session API](/docs/session-api/)                                                                                                                                             |

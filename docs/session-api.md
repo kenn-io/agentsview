@@ -7,11 +7,10 @@ The `agentsview session` command group is a stable, programmatic surface for
 reading and writing session data. It is designed for shell scripts, automation
 agents, and CI jobs that need structured output rather than the web UI.
 
-When an AgentsView daemon is running, the CLI proxies supported operations to it
-over HTTP. On a cold archive, read-only commands open local SQLite directly in
-read-only mode, while commands that need fresh data or need to write start or
-reuse the detached local daemon. This keeps one-off reads fast and keeps SQLite
-writes owned by one process.
+Local session reads use the AgentsView daemon over HTTP and start it when
+needed. This keeps reads and writes under the same archive owner. Explicit
+`--server` and `--pg` options select another backend; raw `session export`
+always runs locally.
 
 ## Quick examples
 
@@ -39,8 +38,9 @@ agentsview session search "regression" --pg --json
 - **Unknown fields are safe to ignore.** Well-behaved consumers tolerate
   forward-compatible additions.
 
-HTTP and CLI share DTOs for bounded responses (same JSON object). The CLI
-`watch` command emits NDJSON whose lines mirror the underlying SSE events.
+HTTP and CLI share response schemas. The CLI adds browser links when it knows
+the server address. The CLI `watch` command emits NDJSON whose lines mirror
+the underlying SSE events.
 
 ## Transport
 
@@ -61,17 +61,17 @@ owner.
 - If both a writable local daemon and a `pg serve` daemon advertise the same
   data directory, the writable one wins so sync/write operations don't
   silently land on a read-only target.
-- If no daemon is running, read-only commands open the local archive directly in
-  read-only mode.
-- If a command requires fresh data or needs to write and no daemon is running,
-  the CLI starts `agentsview serve --background`, waits for readiness, and
-  proxies the operation to that daemon.
+- If no daemon is running, ordinary local session reads and writes start
+  `agentsview serve --background`, wait for readiness, and proxy the
+  operation to that daemon.
 - If `AGENTSVIEW_NO_DAEMON=1` is set, the CLI never auto-starts a daemon. Read
-  commands use direct read-only SQLite. Write commands run directly only after
-  acquiring the per-data-dir write-owner lock.
+  commands require an existing compatible daemon. The
+  [`session usage`](#agentsview-session-usage) refresh path can still run
+  directly after acquiring the write-owner lock; its `--no-sync` path requires
+  a daemon.
 - If a writable daemon is known to own the local archive but is not reachable,
-  write commands refuse instead of opening SQLite as a second writer. Read
-  commands may still fall back to direct read-only SQLite.
+  session commands report the connection or compatibility error instead of
+  opening a second archive handle.
 - `session export` always runs locally regardless of daemon state, and rejects
   `--server`, `--pg`, and `--format`/`--json` because it streams raw source
   bytes.
@@ -88,6 +88,13 @@ does not appear in process arguments.
 automation running away from the UI server, but it is read-only: `session sync`
 and `session export` reject it. If `AGENTSVIEW_PG_URL` or `[pg].url` is
 configured, read commands still use local SQLite unless `--pg` is supplied.
+
+When the CLI reads through HTTP, session list, detail, sync, and search JSON
+include `web_url` links to the selected server's browser view. The links retain
+the server's base path and separate the provider and session ID into URL
+segments, for example `/sessions/codex/<uuid>`. Use the returned link instead of
+constructing one. Direct `--pg` reads omit it because no browser address is
+known.
 
 ## Common flags
 
@@ -240,10 +247,14 @@ to describe the filtered result, not the excluded sessions. Use the
 
 In JSON output, `sessions[].machine` keeps the machine key. Look it up in the
 top-level `machine_labels` map when a display name is needed. A key without a
-stored label is absent from the map, and labels for machines outside the
-current page are omitted. If the catalog cannot be read, the
-command keeps the session result and emits `machine_labels: {}` with a warning
-on stderr. Human output does not read the catalog.
+stored label is absent from the map, and labels for machines outside the current
+page are omitted. If the catalog cannot be read, the command keeps the session
+result and emits `machine_labels: {}` with a warning on stderr. Human output
+does not read the catalog.
+
+Use `session list --json --include-source` to include each session's recorded
+`file_path`. Paths are omitted by default; this option does not add a column to
+human output. HTTP callers use `include_source=true`.
 
 Date filters match a session when its activity window overlaps the selected date
 or range. Sessions that start before midnight and remain active after it
@@ -469,7 +480,7 @@ Contract:
 The scheme is registered by the installed desktop app; it is not
 available when only the CLI or server is installed.
 
----
+______________________________________________________________________
 
 ### `agentsview session export`
 

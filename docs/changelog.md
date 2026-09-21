@@ -3,39 +3,189 @@ title: Changelog
 description: Release history for AgentsView
 ---
 
-The latest published release is
-[0.43.0](https://github.com/kenn-io/agentsview/releases/tag/v0.43.0).
+Release notes for
+[0.44.0](https://github.com/kenn-io/agentsview/releases/tag/v0.44.0).
 
-## Unreleased
+## 0.44.0
+
+<small>2026-09-21</small>
 
 **New features**
 
-- Push the local SQLite archive into ClickHouse and serve the read-only web UI
-    from it. Configure `[clickhouse]` or named `[clickhouse.NAME]` targets, then
-    run `agentsview clickhouse push`, `status`, `serve`, or `service`. Push
-    writes the copy; serve queries it. Rename, trash, and similar stay on
-    SQLite. See [ClickHouse Sync](/docs/clickhouse-sync/).
+- Filter searches by project and date directly in the command palette. Switch to
+  All Projects without changing the sidebar, or choose relative, calendar, or
+  custom dates.
+- Open a session by ID or UUID with Ctrl/Cmd+G.
+- Push your archive to ClickHouse with `agentsview clickhouse push`, then serve
+  the read-only dashboard with `agentsview clickhouse serve`. Keep the copy
+  current with `push --watch` or `clickhouse service`. Session edits remain in
+  SQLite. Vector search and hosted raw sync are not included. See
+  [ClickHouse Sync](/docs/clickhouse-sync/).
+- Browse Cline CLI sessions with transcripts, token usage, costs, and remote
+  sync. Teammate runs appear beneath their parent; continued runs remain
+  separate sessions. Cline VS Code extension sessions are not included.
+- Browse Charm Crush and Tencent CodeBuddy CN sessions with their recorded
+  conversations and usage. Crush reports session totals without per-message
+  token or cache breakdowns.
+- Track Augure Code separately from Codex and resume sessions through the Augure
+  CLI. Proprietary Augure models remain unpriced.
+- Browse, search, and export Augure Desktop 3 beta sessions with recorded usage
+  and cost information. Remote sync is not supported for this agent.
+- Read DeepSeek Harness session formats through version 3, including compressed
+  logs. AgentsView selects the newest supported generation and excludes
+  inherited parent transcripts from child sessions.
+- Resume Pi sessions from AgentsView or copy a complete `pi --session` command.
+- Export changes to stored user and assistant messages with
+  `export conversations changes`, then fetch selected text with
+  `export conversations message`. Save a checkpoint to retrieve later
+  additions, edits, and deletions, including from imported archives or
+  sessions whose source files are gone. Only the latest message version is
+  retained. After an archive rebuild, start a new export. See
+  [Conversation Export](/docs/conversation-export/).
+- Find the earliest recorded activity and latest complete reporting hour with
+  `export range`.
+- Generate and inspect Activity Insights from scripts with
+  `agentsview insight generate`, `insight list`, and `insight get`.
+- Query archived usage without refreshing source files with
+  `session usage --no-sync`.
+- Look up sessions by UUID through MCP `search_sessions`, including active
+  sessions. MCP `search_content` also accepts `include_one_shot` and
+  `include_automated` to include single-prompt runs and automated sessions.
+- Include transcript paths in session-list JSON with
+  `session list --include-source`.
+- Inspect hosted raw sync through `GET /api/v1/raw-sync/status`, which reports
+  source versions, parse-job counts, active devices, and upload backlog.
+- Choose Azerbaijani in language settings.
+- Hide AgentsView from the macOS Dock and Cmd-Tab when its window is closed
+  using a new tray option. The setting is off by default and persists across
+  relaunches. The app also adds a standard Window menu.
+- Preview a project mapping workspace in builds made with
+  `VITE_PROJECT_MAPPING_WORKSPACE=true`. Review folder suggestions and session
+  previews, filter by date, and correct individual sessions or whole groups.
+  This workspace is disabled in default builds.
+
+**Improvements**
+
+- Session Vitals, the session timing view, separates measured tool execution
+  from time that cannot be assigned to a phase. Activity rows link to the
+  corresponding transcript entries; the view does not infer thinking or
+  response-generation time.
+- Export large session archives and multi-day digests with fewer repeated
+  database reads.
+- ClickHouse daily usage reports calculate totals in the database instead of
+  transferring every usage event to AgentsView.
+- Load Activity reports without scanning unrelated SQLite usage history.
+- Startup sync and usage-cache backfills use less background CPU.
+- Database upgrades show opening, schema, index, and migration progress before
+  session syncing begins.
+- Session list, detail, sync, and search JSON include browser links when
+  connected to a server. MCP session results preserve those links.
+- Session links give the provider and UUID separate URL segments, so replacing
+  the UUID is easier. Existing encoded links still open.
+- JSON output from `session list --json` and `usage daily --json --breakdown`
+  includes machine labels. The Activity machine filter keeps friendly labels
+  visible and adds a short ID only when labels collide.
+- Failed pricing refreshes retry after about 1.5 hours, with increasing delays
+  after further failures, instead of waiting a full day.
+- Repeated requests for image files reuse cached data to reduce disk reads. The
+  cache has size and age limits.
+- Profile `export sessions`, `export hour`, `export day`, and `export digest`
+  with `--cpuprofile`, `--memprofile`, and `--trace`.
 
 **Bug fixes**
 
-- Correct saved Codex prompts and message counts when injected context shares
-    a record with user text. The next startup reparses available source files;
-    sessions whose sources are gone remain in the archive.
-- Commands that load config now report unknown keys under `[vector]`, including
-    misspellings and misplaced per-server settings, instead of silently ignoring
-    them. This applies even when vector search is disabled. Configs that loaded
-    before may now fail; fix or remove the named key before retrying.
+- Devin usage totals no longer discard messages from different sessions that
+  share the same message number. Startup corrects stored message identities
+  and then runs the usual full resync.
+- StepFun `step-5-preview` sessions receive cost estimates, including in
+  existing archives without a resync.
+- Codex prompts no longer mix user text with injected context. Startup resync
+  refreshes affected text, previews, and message counts when source files
+  remain available. Sessions whose sources are gone retain their archived
+  content.
+- Session previews skip complete leading injected-context blocks. WorkBuddy
+  sessions also use their generated titles when present.
+- `codex exec` sessions are classified as automated. Roborev-tagged sessions are
+  identified as automated code reviews. Restart or run `agentsview sync` to
+  update existing sessions.
+- Grok child sessions appear beneath their spawning parent and count as subagent
+  activity. Native Pi branches regain parent links when the parent session can
+  be resolved.
+- Older Piebald and Kilo databases import despite missing columns that
+  previously caused discovery or parsing failures.
+- Cursor IDE imports accept structured tool results, including object-valued
+  `todo_write` results.
+- VS Code Copilot assistant messages retain the model used for each request,
+  including model changes within a session.
+- Healthy archived sessions continue copying to PostgreSQL and DuckDB when
+  daemon-managed incremental pushes encounter a local ingestion failure.
+- Sync avoids repeatedly parsing unchanged malformed or missing source files
+  where failure caching applies. Unrelated file events no longer bypass retry
+  delays, and temporary lock-file changes no longer trigger session syncing.
+- Configuration loading rejects unknown keys under `[vector]`, including
+  misspelled or misplaced settings. Previously accepted configurations may now
+  fail; correct or remove the named keys, even if vector search is disabled.
+- An explicit nonzero `--port` fails when occupied instead of silently choosing
+  another port. Updates preserve the explicit port choice.
+- PostgreSQL and DuckDB servers mounted under `--base-path` are discoverable,
+  and API requests retain the path prefix.
+- Version-mismatch errors identify whether to restart the daemon or upgrade and
+  restart a stale command or background service.
+- Clicking the macOS Dock icon or activating AgentsView through Cmd-Tab restores
+  a hidden main window.
+- Copying a session's directory path works after the directory has been deleted.
+- Quality-page excerpts preserve complete Unicode characters when shortened.
+- Activity concurrency tooltips clear when the date changes or the report
+  refreshes.
+- The Analysis panel header stays on one line.
 - ClickHouse analytics summaries return zeros when no sessions match, instead of
-    failing the request.
+  failing the request.
 - Remote ClickHouse URLs that skip TLS certificate checks (`skip_verify=true`)
-    are rejected unless `allow_insecure` is set.
-- Codex `codex exec` sessions show as automated from
-    `originator=codex_exec`. Sessions tagged `thread_source=roborev` keep that
-    more specific kind so roborev reviews are identifiable as code review.
-    Restart or run `agentsview sync` so existing exec sessions reparse.
-- Price StepFun `step-5-preview` sessions from the supplemental rates instead of
-    leaving them unpriced. The pinned LiteLLM snapshot has no `stepfun` rows, so
-    existing databases reseed the new row on startup.
+  are rejected unless `allow_insecure` is set.
+
+**Acknowledgements**
+
+- Thanks to [@rodboev](https://github.com/rodboev) for Session Vitals timing,
+  session navigation and Pi resume, CLI insights, MCP search, faster exports,
+  hosted raw-sync status, and parser and sync fixes.
+- Thanks to [@mariusvniekerk](https://github.com/mariusvniekerk) for project
+  mapping, search filters, browser links, ClickHouse usage performance, server
+  discovery, and Codex automation classification.
+- Thanks to [@cpcloud](https://github.com/cpcloud) for ClickHouse support,
+  Activity query improvements, Grok subagent links, and concurrency tooltips.
+- Thanks to [@wesm](https://github.com/wesm) for conversation and
+  reporting-range exports, database upgrade progress, and lower startup and
+  Activity overhead.
+- Thanks to [@scross01](https://github.com/scross01) for Crush, Augure Code, and
+  Augure Desktop support.
+- Thanks to [@brynjmsdlnn](https://github.com/brynjmsdlnn) for Cline CLI
+  support.
+- Thanks to [@tunglambk](https://github.com/tunglambk) for StepFun pricing,
+  vector configuration checks, and VS Code Copilot model attribution.
+- Thanks to [@dqtz5vpvj9-create](https://github.com/dqtz5vpvj9-create) for
+  DeepSeek Harness version 3 support.
+- Thanks to [@prateek](https://github.com/prateek) for macOS window restoration
+  and the optional hidden-window Dock setting.
+- Thanks to [@jamalkamaladdin](https://github.com/jamalkamaladdin) for the
+  Azerbaijani translation.
+- Thanks to [@greenz138](https://github.com/greenz138) for Tencent CodeBuddy CN
+  support.
+- Thanks to [@BUKOWSKIREAL](https://github.com/BUKOWSKIREAL) for correcting
+  Devin usage totals.
+- Thanks to [@jzila](https://github.com/jzila) for shared background scheduling
+  and faster pricing-refresh retries.
+- Thanks to [@AshleyJackson](https://github.com/AshleyJackson) for preventing
+  transient lock files from triggering sync.
+- Thanks to [@nathanloisel](https://github.com/nathanloisel) for restoring
+  native Pi parent links.
+- Thanks to [@oeggl](https://github.com/oeggl) for clearer stale-client errors.
+- Thanks to [@MaxFreedomPollard](https://github.com/MaxFreedomPollard) for
+  preserving Unicode characters in Quality excerpts.
+- Thanks to [@shunkakinoki](https://github.com/shunkakinoki) for querying
+  session usage without syncing source files.
+- Thanks to [@kidonng](https://github.com/kidonng) for the macOS Window menu.
+
+______________________________________________________________________
 
 ## 0.43.0
 
@@ -184,11 +334,6 @@ The latest published release is
 
 **Bug fixes**
 
-- Count every Devin session in Usage. Devin numbers its messages per session,
-    and AgentsView treated equal numbers in different sessions as duplicates,
-    so later sessions lost most of their tokens. The next start rewrites the
-    stored Devin message identities once and then runs the usual full resync.
-    (#1812)
 - Session transcripts load again under `duckdb serve`, fixing blank transcripts
     in 0.42.0.
 

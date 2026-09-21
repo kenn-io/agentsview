@@ -135,14 +135,14 @@ model charges, but they still sum to the displayed total.
 
 ## Create A Project Mapping
 
-Worktree layouts the parser does not recognize can surface a branch or worktree
-directory name as a project. Each row in the **Project** breakdown links to that
-project on the [Data page](/docs/data/), where the mapping editor lists the project's
-observed session folders, previews the full-archive impact of a folder-path →
-project rule, and applies a
-[worktree project mapping](/docs/configuration/#worktree-project-mappings) rule in
-one atomic step. Cleaning always evaluates the complete archive; the current
-Activity range and filters do not carry over.
+If a branch or worktree directory appears as its own project, correct the
+assignment with [project mapping rules](/docs/data/#rules).
+
+When the [opt-in project workspace](/docs/data/#enable-the-project-workspace) is
+enabled, each row in the **Project** breakdown links to that project's folder
+suggestions and session previews. Review the impact before saving a correction.
+The Activity range and filters do not carry over, and mapping rules always apply
+across the complete archive.
 
 ## Activity Insight
 
@@ -156,6 +156,8 @@ Codex, Copilot, Gemini, or Kiro.
 The **Open in Generated insights** link opens the
 [Generated insights](/docs/recall/?tab=generated) tab prefilled with the same range.
 Generation is disabled when the connected server cannot run an agent CLI.
+Scripts can generate and inspect the same reports with
+[`agentsview insight`](/docs/commands/#agentsview-insight).
 
 ## CLI And API
 

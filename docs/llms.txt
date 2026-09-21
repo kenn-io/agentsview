@@ -16,7 +16,7 @@ The Markdown pages are canonical for machine readers; the HTML routes drop the
 - [Documentation overview](https://agentsview.io/docs/index.md): Mental model and documentation map.
 - [Quick Start](https://agentsview.io/docs/quickstart.md): Get AgentsView running in under a minute.
 - [Configuration](https://agentsview.io/docs/configuration.md): Config file, default paths, and runtime settings.
-- [Usage Guide](https://agentsview.io/docs/usage.md): Complete guide to the AgentsView web interface.
+- [Usage Guide](https://agentsview.io/docs/usage.md): Browse and resume sessions, search by project and date, open sessions by ID, and inspect session timing.
 - [CLI Reference](https://agentsview.io/docs/commands.md): All AgentsView commands, flags, and environment variables.
 
 ## Monitor and Account
@@ -35,7 +35,7 @@ The Markdown pages are canonical for machine readers; the HTML routes drop the
 - [Semantic Search Internals](https://agentsview.io/docs/semantic-search-internals.md): Architecture and invariants behind the vector index.
 - [Recall](https://agentsview.io/docs/recall.md): Experimental, provenance-linked durable knowledge over the local session archive.
 - [Recent Edits](https://agentsview.io/docs/recent-edits.md): Browse the files your agents edited most recently across every session.
-- [Data](https://agentsview.io/docs/data.md): Project inventory and worktree mapping rules.
+- [Data](https://agentsview.io/docs/data.md): Project mapping rules and an opt-in workspace for folder suggestions, session previews, and bulk corrections.
 
 ## Automate and Integrate
 

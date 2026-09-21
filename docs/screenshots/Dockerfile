@@ -22,7 +22,8 @@ COPY agentsview/ .
 # Build frontend and Go binary. Pass version info resolved on
 # the host (the .git dir is excluded from the build context).
 RUN cd frontend && npm ci
-RUN make build VERSION="$AV_VERSION" COMMIT="$AV_COMMIT"
+# Include the opt-in mapping workspace shown in its documentation.
+RUN VITE_PROJECT_MAPPING_WORKSPACE=true make build VERSION="$AV_VERSION" COMMIT="$AV_COMMIT"
 RUN cp agentsview /bin/agentsview
 
 # Stage 2: Run Playwright screenshots

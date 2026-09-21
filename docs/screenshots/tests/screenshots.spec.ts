@@ -137,6 +137,7 @@ test.describe('Dashboard', () => {
     const clickable = page.locator('.heatmap-cell.clickable');
     if (await clickable.count() > 0) {
       await clickable.first().click();
+      await page.mouse.move(0, 0);
       await page.waitForTimeout(2000);
       await snap(page, 'heatmap-filtered');
       // Click again to deselect
@@ -149,15 +150,9 @@ test.describe('Dashboard', () => {
   });
 
   test('hour of week heatmap', async ({ page }) => {
-    const panels = page.locator('.chart-panel');
-    const count = await panels.count();
-    for (let i = 0; i < count; i++) {
-      const text = await panels.nth(i).textContent();
-      if (text && (text.includes('Hour') || text.includes('Week'))) {
-        await snapEl(panels.nth(i), 'hour-of-week');
-        break;
-      }
-    }
+    const heatmap = page.locator('.how-container');
+    await expect(heatmap.locator('.how-chart')).toBeVisible();
+    await snapEl(heatmap, 'hour-of-week');
   });
 
   test('activity timeline', async ({ page }) => {
@@ -168,13 +163,7 @@ test.describe('Dashboard', () => {
         timeout: 10_000,
       });
       await page.waitForTimeout(500);
-      // Capture the parent chart-panel that wraps the timeline
-      const panel = page.locator(
-        '.chart-panel:has(.timeline-container)'
-      );
-      if (await panel.count() > 0) {
-        await snapEl(panel, 'activity-timeline');
-      }
+      await snapEl(timeline, 'activity-timeline');
     }
   });
 
@@ -233,7 +222,12 @@ test.describe('Dashboard', () => {
       if (text && (text.includes('Shape') || text.includes('Distribution'))) {
         await panels.nth(i).scrollIntoViewIfNeeded();
         await page.waitForTimeout(300);
-        await snapEl(panels.nth(i), 'session-shape');
+        await snapRange(
+          page,
+          panels.nth(i).locator('.shape-header'),
+          panels.nth(i).locator('.shape-footer'),
+          'session-shape'
+        );
         break;
       }
     }
@@ -322,7 +316,7 @@ test.describe('Dashboard', () => {
   test('dashboard model filter', async ({ page }) => {
     // The dashboard toolbar Model dropdown reuses the shared
     // FilterDropdown (label "Model") in include mode. Open it and
-    // include the first listed model so the screenshot shows the open
+    // include a Claude model so the screenshot shows the open
     // panel, the resulting "Model: <name>" trigger label, and the
     // active-filter chip the ActiveFilters row renders beneath it.
     const modelDropdown = page.locator(
@@ -336,14 +330,9 @@ test.describe('Dashboard', () => {
       { state: 'visible', timeout: 5_000 }
     );
 
-    // In include mode the first dropdown item is the "All models"
-    // reset row; the actual models follow. Include the first real
-    // model if one exists so a filter chip appears.
     const rows = modelDropdown.locator('.kit-filter-dropdown__item');
-    if (await rows.count() > 1) {
-      await rows.nth(1).click();
-      await page.waitForTimeout(1500);
-    }
+    await rows.filter({ hasText: /claude/i }).first().click();
+    await page.waitForTimeout(1500);
     await snap(page, 'analytics-model-filter');
 
     // Clean up: clicking the "All models" row clears the filter.
@@ -426,6 +415,17 @@ test.describe('Activity dashboard', () => {
   });
 
   test('activity insight', async ({ page }) => {
+    // Use a fixed example instead of invoking an external agent CLI.
+    await page.route('**/api/v1/insights?*', async (route) => {
+      const params = new URL(route.request().url()).searchParams;
+      await route.fulfill({ json: { insights: [{
+        id: 1, type: 'daily_activity', project: null,
+        date_from: params.get('date_from'),
+        date_to: params.get('date_to'),
+        agent: 'claude', model: 'claude-opus-4-1',
+        content: '## Activity summary\n\nWork focused on AgentsView documentation and the roborev review engine.\n\n### What changed\n\n- Clarified setup instructions and refreshed the documentation screenshots.\n- Improved how review findings are grouped before they reach the reader.\n\n### Follow up\n\nReview the updated guides alongside the release notes before publishing.',
+      }] } });
+    });
     await navigateToActivity(page, '/activity?preset=week');
     const panel = page.locator(
       '.activity-page .chart-panel:has(.activity-insight)'
@@ -433,6 +433,7 @@ test.describe('Activity dashboard', () => {
     await expect(panel).toBeVisible({ timeout: 10_000 });
     await panel.scrollIntoViewIfNeeded();
     await page.waitForTimeout(500);
+    await expect(panel.locator('.markdown-body')).toBeVisible();
     await snapEl(panel, 'activity-insight');
   });
 });
@@ -533,6 +534,11 @@ test.describe('Data workspace', () => {
       page.getByText('Finding session folders…', { exact: true })
     ).toBeHidden({ timeout: 10_000 });
     await snap(page, 'data-workspace');
+    await page.getByRole('radio', { name: 'All folders', exact: true }).click();
+    await expect(
+      page.getByRole('button', { name: 'Save 3 corrections' })
+    ).toBeVisible();
+    await snap(page, 'project-mapping-bulk');
   });
 });
 
@@ -691,6 +697,8 @@ test.describe('Session browser', () => {
     if (await filterBtn.count() > 0) {
       await filterBtn.click();
       await page.waitForTimeout(300);
+      await page.getByRole('button', { name: '10', exact: true })
+        .scrollIntoViewIfNeeded();
       await snap(page, 'session-filters');
     }
   });
@@ -1227,6 +1235,26 @@ test.describe('Command palette', () => {
     await expect(setup).toContainText('[vector]');
     await expect(setup).toContainText('agentsview embeddings build');
     await snapEl(setup, 'semantic-search-setup');
+  });
+
+  test('project and date search filters', async ({ page }) => {
+    await page.keyboard.press('Control+k');
+    const palette = page.locator('.palette-overlay');
+    await palette.locator('.palette-input').fill('implement');
+    await palette.getByTitle('Select project', { exact: true }).click();
+    await page.getByRole('option', { name: /^agentsview \(/ }).first().click();
+    await expect(palette.locator('.palette-item').first()).toBeVisible();
+    await palette.getByRole('button', { name: 'All time', exact: true }).click();
+    await expect(page.getByRole('radio', { name: 'Calendar', exact: true })).toBeVisible();
+    await snap(page, 'search-filters');
+  });
+
+  test('open session by ID', async ({ page }) => {
+    await page.keyboard.press('Control+g');
+    const dialog = page.getByRole('dialog');
+    await expect(dialog.getByRole('textbox', { name: 'Session ID or UUID' })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Open session', exact: true })).toBeVisible();
+    await snap(page, 'open-session');
   });
 });
 

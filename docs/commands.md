@@ -1343,9 +1343,14 @@ first line, then one session row per following line. Current builds emit
 the v1 and transitional 0.38 release history. The default and maximum page size
 is `db.MaxSessionLimit`, currently 500.
 
-When `--cursor` is present, only `--format`, `--json`, and `--limit` may be
-combined with it. Cursor reset errors write structured JSON to stderr, leave
-stdout empty, and exit with code 4:
+For performance diagnosis, `export sessions`, `export hour`, `export day`, and
+`export digest` accept `--cpuprofile <file>`, `--memprofile <file>`, and
+`--trace <file>`. These write profiling data to files and keep the export on
+stdout.
+
+When `--cursor` is present, only `--format`, `--json`, `--limit`, and the
+profiling flags may be combined with it. Cursor reset errors write structured
+JSON to stderr, leave stdout empty, and exit with code 4:
 
 ```json
 {"error":"cursor_reset","message":"session export cursor is no longer valid; restart the export","database_id":"..."}
@@ -1699,6 +1704,8 @@ agentsview help
 | `ANTIGRAVITY_DIR`                     | `~/.gemini/antigravity`                              | Google Antigravity IDE sessions directory                                                           |
 | `ANTIGRAVITY_CLI_DIR`                 | `~/.gemini/antigravity-cli`                          | Google Antigravity CLI sessions directory                                                           |
 | `ANTIGRAVITY_KEY`                     |                                                      | Optional key for decrypting Antigravity CLI `.pb` transcripts (defaults to summary mode without it) |
+| `AUGURE_CODE_SESSIONS_DIR`            | `~/.augure/sessions`                                 | Augure Code sessions directory                                                                      |
+| `AUGURE_DESKTOP_DIR`                  | (platform-specific)                                  | Augure Desktop data root containing `state.db` and `sessions/`                                      |
 | `CLAUDE_PROJECTS_DIR`                 | `~/.claude/projects`                                 | Claude Code projects directory                                                                      |
 | `CLAUDE_CONFIG_DIR`                   | unset                                                | Claude Code config home that re-roots the default `projects/` discovery path                        |
 | `OPENCLAUDE_PROJECTS_DIR`             | `~/.openclaude/projects`                             | OpenClaude projects directory                                                                       |
@@ -1706,9 +1713,11 @@ agentsview help
 | `COWORK_DIR`                          | (platform-specific)                                  | Claude Desktop cowork sessions directory                                                            |
 | `CODEX_SESSIONS_DIR`                  | `~/.codex/sessions`                                  | Codex sessions directory                                                                            |
 | `CODEX_HOME`                          | unset                                                | Codex home that re-roots the default `sessions/` and `archived_sessions/` discovery paths           |
-| `CLINE_DIR`                           | `~/.cline`                                           | Cline sessions directory (discovers under `<root>/data/sessions/` or direct sessions root)          |
+| `CLINE_DIR`                           | `~/.cline`                                           | Cline CLI sessions directory (discovers under `<root>/data/sessions/` or direct sessions root)      |
 | `COMMANDCODE_PROJECTS_DIR`            | `~/.commandcode/projects`                            | Command Code projects directory                                                                     |
 | `COPILOT_DIR`                         | `~/.copilot`                                         | Copilot CLI sessions directory                                                                      |
+| `CRUSH_DIR`                           | (platform-specific)                                  | Crush registry, project data directory, or `crush.db` path                                          |
+| `CRUSH_GLOBAL_DATA`                   | unset                                                | Absolute path overriding the default Crush global data directory                                   |
 | `CORTEX_DIR`                          | `~/.snowflake/cortex/conversations`                  | Cortex Code conversations directory                                                                 |
 | `CURSOR_PROJECTS_DIR`                 | `~/.cursor/projects`                                 | Cursor transcripts directory                                                                        |
 | `DEEPSEEK_TUI_SESSIONS_DIR`           | `~/.codewhale/sessions` and `~/.deepseek/sessions`   | DeepSeek TUI sessions directory                                                                     |
@@ -1755,6 +1764,7 @@ agentsview help
 | `WINDSURF_DIR`                        | (platform-specific)                                  | Windsurf user-data directory                                                                        |
 | `WARP_DIR`                            | (platform-specific)                                  | Warp database directory                                                                             |
 | `WORKBUDDY_PROJECTS_DIR`              | `~/.workbuddy/projects`                              | WorkBuddy projects directory                                                                        |
+| `CODEBUDDY_DIR`                       | (platform-specific)                                  | Tencent CodeBuddy CN data directory                                                                 |
 | `ZCODE_DIR`                           | `~/.zcode/cli/db` and `~/.zcode/cli`                 | ZCode data directory (contains `db.sqlite`)                                                         |
 | `ZED_DIR`                             | (platform-specific)                                  | Zed data directory (contains `threads/threads.db`)                                                  |
 | `ZENCODER_DIR`                        | `~/.zencoder/sessions`                               | Zencoder sessions directory                                                                         |

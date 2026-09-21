@@ -81,23 +81,6 @@ SQL
 
 echo "PG data ready (two machines)."
 
-# ── Seed usage pricing via CLI ───────────────────────────
-# Workaround for a 0.21.0 bug where the /usage dashboard can
-# load before pricing is populated. Running `usage daily` here
-# synchronously fills the model_pricing table so the web UI
-# renders cost numbers on first load. Use --offline so we rely
-# on the embedded fallback catalog instead of reaching the
-# network from inside the container.
-echo "Seeding usage pricing..."
-# Same in-process requirement as the pg push above: never auto-start the
-# background daemon that would later block `serve --port 8090`.
-AGENTSVIEW_NO_DAEMON=1 \
-AGENTSVIEW_DATA_DIR="$DATA_DIR" \
-CLAUDE_PROJECTS_DIR="$EMPTY_DIR" \
-CODEX_SESSIONS_DIR="$EMPTY_DIR" \
-GEMINI_DIR="$EMPTY_DIR" \
-agentsview usage daily --offline --no-sync > /dev/null
-
 # ── Start agentsview (SQLite mode) ───────────────────────
 # 0.23.0 requires the explicit `serve` subcommand; plain
 # `agentsview` now prints help instead of starting the server.
@@ -146,6 +129,18 @@ for i in $(seq 1 30); do
   fi
   sleep 1
 done
+
+# ── Warm usage through the fixture server ────────────────
+# The filtered archive has no source files to reparse. Offline direct reads
+# reject its pending parser resync; use the running server as the UI does.
+echo "Warming usage reports..."
+# Read the fixture without starting another background daemon.
+AGENTSVIEW_NO_DAEMON=1 \
+AGENTSVIEW_DATA_DIR="$DATA_DIR" \
+CLAUDE_PROJECTS_DIR="$EMPTY_DIR" \
+CODEX_SESSIONS_DIR="$EMPTY_DIR" \
+GEMINI_DIR="$EMPTY_DIR" \
+agentsview usage daily --no-sync > /dev/null
 
 # ── Run Playwright ───────────────────────────────────────
 echo ""

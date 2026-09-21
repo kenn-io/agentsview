@@ -253,6 +253,12 @@ effective configuration from this file and supported environment variables; they
 accept no serve-specific flags. `--no-sync` is a runtime-only `serve` option and
 cannot be stored in `config.toml`.
 
+Unknown keys anywhere under `[vector]` stop configuration loading, even when
+vector search is disabled. After upgrading, correct misspelled keys and move
+endpoint settings such as `max_batch_tokens` under
+`[vector.embeddings.servers.<name>]`. See the
+[vector configuration reference](/docs/semantic-search/#enabling-vector).
+
 When `require_auth` is enabled, the browser login prompt accepts the configured
 `auth_token`. The value can come from `~/.agentsview/config.toml` or from the
 `AGENTSVIEW_AUTH_TOKEN` environment variable; the environment variable wins when
@@ -404,12 +410,14 @@ keeps its default directories.
 | Amp (deprecated)      | `~/.local/share/amp/threads/`                                                                                                                                    | Historical local JSON thread files                                                                                                                            |
 | Antigravity (IDE)     | `~/.gemini/antigravity/`                                                                                                                                         | SQLite database per session                                                                                                                                   |
 | Antigravity CLI       | `~/.gemini/antigravity-cli/`                                                                                                                                     | SQLite `conversations/<uuid>.db`, `<uuid>.trajectory.json` sidecars, or encrypted `.pb` files plus `brain/` and `history.jsonl`                               |
+| Augure Code           | `~/.augure/sessions/`                                                                                                                                            | Codex-format JSONL per session                                                                                                                                |
+| Augure Desktop 3 beta | (platform-specific, see below)                                                                                                                                   | Hermes-format `state.db` and `sessions/` transcripts                                                                                                          |
 | Claude Code           | `~/.claude/projects/`                                                                                                                                            | JSONL per session                                                                                                                                             |
 | OpenClaude            | `~/.openclaude/projects/`                                                                                                                                        | JSONL per session                                                                                                                                             |
 | Claude Cowork         | (platform-specific, see below)                                                                                                                                   | Claude Desktop cowork sessions                                                                                                                                |
 | Codebuff / Freebuff   | `~/.config/manicode/projects/`                                                                                                                                   | Per-session `chat-messages.json` + `run-state.json` with subagent transcripts                                                                                 |
 | Codex                 | `~/.codex/sessions/` and `~/.codex/archived_sessions/`                                                                                                           | JSONL per session                                                                                                                                             |
-| Cline                 | `~/.cline/data/sessions/` or `~/.cline/`                                                                                                                         | Paired `<id>.json` metadata and `<id>.messages.json` transcript files                                                                                         |
+| Cline CLI             | `~/.cline/data/sessions/` or `~/.cline/`                                                                                                                         | Paired `<id>.json` metadata and `<id>.messages.json` transcript files                                                                                         |
 | Command Code          | `~/.commandcode/projects/`                                                                                                                                       | JSONL per session, optional `.meta.json` sidecar                                                                                                              |
 | Copilot CLI           | `~/.copilot/`                                                                                                                                                    | JSONL per session under `session-state/`                                                                                                                      |
 | Crush                 | (platform-specific, see below)                                                                                                                                   | Per-project SQLite `crush.db` with transcripts, tool activity, relationships, and recorded session costs                                                      |
@@ -468,14 +476,33 @@ keeps its default directories.
 | Zed                   | (platform-specific, see below)                                                                                                                                   | SQLite database (`threads/threads.db`)                                                                                                                        |
 | Zencoder              | `~/.zencoder/sessions/`                                                                                                                                          | JSONL per session                                                                                                                                             |
 
+**Augure Code** reads Codex-format JSONL from `~/.augure/sessions/` and appears
+under the separate `augure-code` agent ID. Set `AUGURE_CODE_SESSIONS_DIR` or
+`agents.augure-code.dirs` for another sessions root. Resume these sessions with
+`augure resume`, not `codex resume`.
+
+**Augure Desktop 3 beta** reads `state.db` and its `sessions/` sibling from
+`~/.augure-desktop/` on macOS and Linux, or `~/AppData/Local/augure-desktop/` on
+Windows. Set `AUGURE_DESKTOP_DIR` or `agents.augure-desktop.dirs` to use another
+data root. These sessions appear as `augure-desktop`, separately from Augure
+Code and Hermes. Local browsing, search, exports, and recorded usage are
+supported; remote source-file sync is disabled for this provider.
+
+**Cline support covers the CLI**, not the VS Code extension. Set `CLINE_DIR` or
+`agents.cline.dirs` to its data root or directly to its sessions directory.
+AgentsView reads the CLI's conversations, tool activity, usage, and recorded
+costs, including through remote sync. Continued teammate runs remain separate
+sessions, matching Cline's own store.
+
 DeepSeek Harness sessions are read from its default JSONL persistence backend,
-including the released `session.jsonl[.zstd]` generation-0 layout and the
-`session.vN.jsonl[.zstd]` generation layout used by later releases. When a
-session directory retains multiple immutable generations, Agentsview reads the
-numerically newest canonical generation. `DSH_HOME` re-roots the default
-`<home>/sessions` path; set `DEEPSEEK_HARNESS_SESSIONS_DIR` or
-`agents.deepseek-harness.dirs` to point directly at one or more session roots.
-The optional SQLite persistence backend is not supported.
+including released format versions 0 through 3 in plain or zstd-compressed
+files. Version 0 uses `session.jsonl[.zstd]`; later versions use
+`session.vN.jsonl[.zstd]`. When a session directory retains multiple immutable
+generations, AgentsView reads the numerically newest supported generation.
+Inherited parent transcript content is excluded from child sessions. `DSH_HOME`
+re-roots the default `<home>/sessions` path; set `DEEPSEEK_HARNESS_SESSIONS_DIR`
+or `agents.deepseek-harness.dirs` to point directly at one or more session
+roots. The optional SQLite persistence backend is not supported.
 
 Prime Agent support targets the current flat session layout in v0.7.0. That
 release migrates the older per-project layout when Prime Agent opens its session
@@ -931,10 +958,11 @@ export ZENCODER_DIR=~/custom/zencoder
 
 ### CodeBuddy
 
-CodeBuddy reads `history` beneath the configured `CodeBuddyExtension/Data`
-directory. On Windows the default data directory follows `%LOCALAPPDATA%`, with
-`~/AppData/Local` as a fallback when that variable is unset or not absolute.
-macOS uses `~/Library/Application Support/CodeBuddyExtension/Data`; Linux uses
+Tencent CodeBuddy CN uses the `codebuddy` agent ID and reads `history` beneath
+the configured `CodeBuddyExtension/Data` directory. On Windows the default data
+directory follows `%LOCALAPPDATA%`, with `~/AppData/Local` as a fallback when
+that variable is unset or not absolute. macOS uses
+`~/Library/Application Support/CodeBuddyExtension/Data`; Linux uses
 `~/.config/CodeBuddyExtension/Data`. `CODEBUDDY_DIR` replaces these defaults.
 
 Session projects use the working directory when present, falling back to the
@@ -994,11 +1022,11 @@ remote imports, and it does not restrict HTTP, SSH, PostgreSQL, DuckDB, or
 archive exports. `RemoteSyncExcluded` is the separate provider capability that
 keeps unsafe source trees out of remote exports.
 
-Restart the AgentsView daemon and any separate `pg push --watch` or
-`duckdb push --watch` process after changing the setting. Previously archived
-sessions from a disabled provider remain available and exportable, including
-during archive rebuilds. The setting does not disable that provider as a Recall
-execution backend.
+Restart the AgentsView daemon and any separate `pg push --watch`,
+`clickhouse push --watch`, or `duckdb push --watch` process after changing the
+setting. Previously archived sessions from a disabled provider remain available
+and exportable, including during archive rebuilds. The setting does not disable
+that provider as a Recall execution backend.
 
 ### Multiple Directories
 
@@ -1325,12 +1353,14 @@ record is preserved through the bulk-resync rebuild-and-copy path.
 
 ## Automated Session Detection
 
-AgentsView classifies a session as "automated" when it has one or fewer real
-user messages and its first user message matches the automation classifier.
-Automated sessions (roborev reviews, title generation, warmup pings, changelog
-generation, and similar scripted runs) are filtered out of session lists,
-counts, and analytics by default — the **Include automated** toggle in the
-session filter dropdown opts them back in.
+AgentsView classifies every `codex exec` run as automated, including runs with
+multiple user messages. Roborev-tagged runs are classified as automated code
+reviews. Other sessions are classified as automated when they have one or fewer
+real user messages and their first user message matches the automation
+classifier. Automated sessions (roborev reviews, title generation, warmup pings,
+changelog generation, and similar scripted runs) are filtered out of session
+lists, counts, and analytics by default — the **Include automated** toggle in
+the session filter dropdown opts them back in.
 
 A set of built-in patterns covers the roborev family and AgentsView's own
 internal prompts. To teach AgentsView about first-message patterns unique to
@@ -1679,7 +1709,9 @@ Optional features that send data externally when you enable them:
 - [Hosted Raw Sync](/docs/hosted-raw-sync/) sends original provider files to a
     hosted custody service configured by your deployment operator.
 - [PostgreSQL sync](/docs/pg-sync/) (`pg push`) sends session data to a
-    PostgreSQL database you configure.
+  PostgreSQL database you configure.
+- [ClickHouse sync](/docs/clickhouse-sync/) (`clickhouse push`) sends session
+  data to a ClickHouse database you configure.
 - The [DuckDB mirror](/docs/duckdb/) writes a local DuckDB file by default; data
     only leaves the machine if you expose the mirror over a remote Quack
     endpoint.

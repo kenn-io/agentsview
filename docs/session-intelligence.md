@@ -28,6 +28,12 @@ Session intelligence shows up in four places:
 - **CLI health view** — `agentsview health` shows either a recent session list
     with grade and outcome columns, or detailed signals for a single session.
 
+For elapsed turn time and measured tool execution, open **Analysis** in a
+session. Its [Session Vitals view](/docs/usage/#session-vital-signs) separates
+measured tool time from unattributed time and links activity rows to the
+transcript. Timing and health scores answer different questions: where time
+went, and what patterns deserve attention.
+
 ## Health Score
 
 The health score is a penalty-based score out of 100. AgentsView

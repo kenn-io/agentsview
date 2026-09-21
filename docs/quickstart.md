@@ -28,6 +28,11 @@ auto-update support.
 On macOS, closing the desktop window hides it instead of quitting AgentsView.
 Use the AgentsView menu-bar status item to show the window again, open the logs
 folder, check for updates, or quit the desktop app and its managed backend.
+Clicking its Dock icon or selecting it with Cmd-Tab restores the hidden window.
+
+To keep AgentsView out of the Dock and Cmd-Tab while its window is closed, turn
+on **Hide from Dock and Cmd-Tab when window closed** in the menu-bar menu. This
+option is off by default and stays set across relaunches.
 
 ### pip / uvx
 
@@ -320,11 +325,16 @@ Once running, the web UI provides:
 - **Session list** with filtering by project, agent, date, and message count
 - **Message viewer** with full content, tool calls, and thinking blocks
 - **Session intelligence** with health grades, outcomes, and signal panels
-- **Full-text search** across all message content
+- **Full-text search** with project and date filters in `Ctrl/Cmd+K`
+- **Open session** by full ID or UUID with `Ctrl/Cmd+G`
 - **Analytics** including activity heatmaps, tool usage, and velocity charts
 - **Activity reporting** with concurrency, agent-minutes, cost, and session rows
 - **Session export** to standalone HTML, markdown export links for agent
   handoff, or GitHub Gist
+
+Use the [Usage Guide](/docs/usage/) for navigation and resume controls. To
+correct project assignments, see the [Data page](/docs/data/) and its opt-in
+project workspace.
 
 Beyond full-text search, opt-in semantic search lets
 `agentsview session search --semantic` (or `--hybrid`) match session content by

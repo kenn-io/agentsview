@@ -28,11 +28,12 @@ Desktop app, pip/uvx, and Docker installs are covered in the
 A background server watches the session directories your agents already write
 and imports supported formats into a local SQLite archive. It finds the default
 directories automatically. You can configure other locations. Supported
-harnesses include Claude Code, OpenClaude, Codex, Gemini, Copilot (CLI, VS Code,
-and Visual Studio), Cursor, Cursor IDE, IcodeMate, Qwen Code, DeepSeek TUI and
-Harness, Mistral Vibe, Zed, Warp, OpenCode, Positron, Posit Assistant, Claude
-Cowork, Aider, Antigravity, gptme, Kilo, Kimi, Kiro, OpenHands, Goose, Grok,
-RooCode, Trae, Windsurf, and dozens more. Every supported source is listed in
+harnesses include Claude Code, OpenClaude, Codex, Augure Code, Augure Desktop,
+Cline CLI, Crush, CodeBuddy CN, Gemini, Copilot (CLI, VS Code, and Visual
+Studio), Cursor, Cursor IDE, IcodeMate, Qwen Code, DeepSeek TUI and Harness,
+Mistral Vibe, Zed, Warp, OpenCode, Positron, Posit Assistant, Claude Cowork,
+Aider, Antigravity, gptme, Kilo, Kimi, Kiro, OpenHands, Goose, Grok, RooCode,
+Trae, Windsurf, and dozens more. Every supported source is listed in
 [session discovery](/docs/configuration/#session-discovery).
 
 - **60+** agent formats parsed
@@ -62,13 +63,13 @@ agentsview capture run -- claude -p "fix the tests"
 
 ## Search and score every transcript
 
-Full-text search finds words in the message content you retain. Opt-in
-[semantic and hybrid search](/docs/semantic-search/) match by meaning when you
-don't remember the exact words, and every match cites the conversation unit it
-came from. [Session intelligence](/docs/session-intelligence/) adds health
-scores, outcome classification, and deterministic
-[quality signals](/docs/quality/) with evidence links back to the source
-transcript.
+Find a conversation by project and date in the
+[command palette](/docs/usage/#command-palette), or open it by ID with
+`Ctrl/Cmd+G`. Full-text search matches words; opt-in
+[semantic and hybrid search](/docs/semantic-search/) match by meaning.
+[Health scores](/docs/session-intelligence/) and
+[quality signals](/docs/quality/) link back to the transcript so you can check
+the evidence.
 
 ## Turn transcripts into durable knowledge
 
@@ -96,6 +97,8 @@ SQLite is the archive of record. From there:
 
 - [PostgreSQL sync](/docs/pg-sync/) pushes each machine's archive to a shared
   team backend with per-machine labels and a read-only merged server.
+- [ClickHouse sync](/docs/clickhouse-sync/) serves the dashboard from a remote
+  copy. Session edits stay in SQLite.
 - [DuckDB mirror](/docs/duckdb/) serves analytical reads locally or over the
   Quack protocol.
 - [Filesystem sync](/docs/filesystem-sync/) and
@@ -111,9 +114,9 @@ SQLite is the archive of record. From there:
 
 Your agent transcripts are some of the most sensitive data on your machine.
 AgentsView starts with one local SQLite archive and a loopback-only server. Data
-leaves the machine only when you choose a feature such as PostgreSQL sync,
-remote DuckDB access, Generated Insights, GitHub publishing, or hosted raw sync.
-Each feature documents what it sends and where it goes.
+leaves the machine only when you choose a feature such as PostgreSQL or
+ClickHouse sync, remote DuckDB access, Generated Insights, GitHub publishing, or
+hosted raw sync. Each feature documents what it sends and where it goes.
 
 ## Start
 

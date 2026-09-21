@@ -134,7 +134,8 @@
         <li class="guide-stop" id="browse">
           <div class="guide-copy">
             <h2>Browse the full conversation</h2>
-            <p>Read the prompts, responses, reasoning, and tool calls recorded by each agent and retained in your archive. Filter sessions by project, agent, date, and message count. Subagent trees, resume chains, and edited files stay connected to their parent session.</p>
+            <p>Read the prompts, responses, reasoning, and tool calls recorded by each agent. Filter by project, agent, date, and message count, or press Ctrl/Cmd+G to open a session by ID. The Resume menu lets supported agents, including Pi, pick up where they left off.</p>
+            <p>Use the opt-in <a href="/docs/data/#enable-the-project-workspace">project workspace</a> to correct project names with folder suggestions, transcript previews, and bulk corrections.</p>
             <a href="/docs/usage/">Usage guide</a>
           </div>
           <div class="guide-media">
@@ -187,15 +188,15 @@
         <li class="guide-stop" id="search">
           <div class="guide-copy">
             <h2>Search by words or by meaning</h2>
-            <p>Full-text search finds the conversation where you discussed a specific function or error, even months later. Opt-in semantic and hybrid search match by meaning over conversation units, cite the unit behind every result, and can pull the surrounding context on demand.</p>
-            <a href="/docs/semantic-search/">Semantic search</a>
+            <p>Press Ctrl/Cmd+K to search, then choose a project and date range in the palette. Select All Projects to widen the search without changing the sidebar. Full-text search finds exact words; opt-in semantic and hybrid search find related meaning and cite the matching conversation.</p>
+            <a href="/docs/usage/#command-palette">Search controls</a> · <a href="/docs/semantic-search/">Semantic search</a>
           </div>
           <div class="guide-media">
             <figure class="capture">
-              <a href="/docs/assets/generated/screenshots/search-grouped.png" data-lightbox>
-                <img src="/docs/assets/generated/screenshots/search-grouped.png" alt="AgentsView grouped search results across sessions" loading="lazy">
+              <a href="/docs/assets/generated/screenshots/search-filters.png" data-lightbox>
+                <img src="/docs/assets/generated/screenshots/search-filters.png" alt="AgentsView search results with project and date controls" loading="lazy">
               </a>
-              <figcaption class="caption">Results grouped by session.</figcaption>
+              <figcaption class="caption">Choose a project and date range for your search.</figcaption>
             </figure>
           </div>
         </li>
@@ -203,15 +204,15 @@
         <li class="guide-stop" id="assess">
           <div class="guide-copy">
             <h2>Assess session health</h2>
-            <p>Session intelligence classifies outcomes and scores health from the transcript itself: tool failures, context pressure, and loop signals. Deterministic quality rules turn recurring patterns into recommendations, each backed by the source sessions that triggered it.</p>
+            <p>Health scores point to tool failures, context pressure, and repeated loops in the transcript. Open Analysis to see Session Vitals: measured tool execution and time that cannot be assigned to a phase. Click an activity row to inspect its transcript entry.</p>
             <a href="/docs/session-intelligence/">Session intelligence</a>
           </div>
           <div class="guide-media">
             <figure class="capture">
-              <a href="/docs/assets/generated/screenshots/session-health.png" data-lightbox>
-                <img src="/docs/assets/generated/screenshots/session-health.png" alt="AgentsView session health score and vital signs panel" loading="lazy">
+              <a href="/docs/assets/generated/screenshots/session-vital-signs.png" data-lightbox>
+                <img src="/docs/assets/generated/screenshots/session-vital-signs.png" alt="AgentsView session transcript with Analysis timing panel" loading="lazy">
               </a>
-              <figcaption class="caption">Health score and vital signs for one session.</figcaption>
+              <figcaption class="caption">Measured tool execution and unattributed turn time.</figcaption>
             </figure>
           </div>
         </li>
@@ -248,8 +249,8 @@
         <li class="guide-stop" id="sync">
           <div class="guide-copy">
             <h2>Extend beyond one machine</h2>
-            <p>Push each machine's archive to PostgreSQL for a merged team view, mirror into DuckDB for analytical queries, read source files through the filesystem or S3, or keep original files in hosted storage. SQLite on your disk remains the local archive of record.</p>
-            <a href="/docs/pg-sync/">PostgreSQL sync</a> · <a href="/docs/duckdb/">DuckDB mirror</a>
+            <p>Push each machine's archive to PostgreSQL for a merged team view, use ClickHouse for a remote dashboard, mirror into DuckDB for analytical queries, read source files through the filesystem or S3, or keep original files in hosted storage. SQLite on your disk remains the local archive of record.</p>
+            <a href="/docs/pg-sync/">PostgreSQL sync</a> · <a href="/docs/clickhouse-sync/">ClickHouse sync</a> · <a href="/docs/duckdb/">DuckDB mirror</a>
           </div>
           <div class="guide-media">
             <figure class="capture capture-narrow">

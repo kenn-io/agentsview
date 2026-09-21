@@ -14,16 +14,16 @@ across all supported agents and imported archives, including sessions whose
 source files are no longer available. They do not contact an agent, reparse its
 transcripts, start a server, or read the DuckDB mirror.
 
-On the first writable open with this version, AgentsView builds the conversation
-change index from existing database records. Existing session and reporting
-exports keep their current formats. If initialization is interrupted,
+On the first writable open after upgrading to 0.44.0, AgentsView builds the
+conversation change index from existing database records. Existing session and
+reporting exports keep their current formats. If initialization is interrupted,
 conversation exports fail without returning a checkpoint. Run
 `agentsview daemon restart` to finish initialization.
 
-This version also corrects how Codex prompts are stored. Existing archives need
-the normal startup resync to refresh those records before read-only exports can
-run. Sessions whose source files are gone retain their stored content. See the
-[changelog](/docs/changelog/#unreleased) for the parser correction.
+Version 0.44.0 also corrects how Codex prompts are stored. Existing archives
+need the normal startup resync to refresh those records before read-only exports
+can run. Sessions whose source files are gone retain their stored content. See
+the [changelog](/docs/changelog/#0440) for the parser correction.
 
 ## Start a copy and keep it current
 

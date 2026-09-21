@@ -74,7 +74,8 @@ bash docs/screenshots/update-generated-assets-branch.sh --skip-generate
 
 1. Copy the source into a temporary build directory.
 1. Open the source database read-only and take a consistent SQLite snapshot.
-   Filter and redact that disposable copy before passing it to Docker.
+   Filter and redact that disposable copy before passing it to Docker. Home
+   paths are redacted in both normal paths and encoded Claude project folders.
 1. Build the current frontend and Go binary, then assemble a runner image with
    Chromium, Playwright, PostgreSQL, and the filtered database.
 1. Start isolated SQLite and PostgreSQL servers inside the container. The
@@ -82,7 +83,9 @@ bash docs/screenshots/update-generated-assets-branch.sh --skip-generate
 1. Capture the UI and write PNG files to `docs/assets/generated/screenshots/`.
 
 The capture uses a 1440×900 viewport, dark mode, and the `America/Chicago`
-timezone. Some captures use fixed response fixtures to illustrate states such as
-image-cleanup totals and token usage. Captures hide session IDs because imported
-IDs can contain original machine names. See `playwright.config.ts` and
-`tests/screenshots.spec.ts` for the exact setup.
+timezone. Its frontend build enables `VITE_PROJECT_MAPPING_WORKSPACE=true` to
+show the opt-in project mapping workspace. Some captures use fixed response
+fixtures to illustrate states such as image-cleanup totals and token usage.
+Captures hide session IDs because imported IDs can contain original machine
+names. See `playwright.config.ts` and `tests/screenshots.spec.ts` for the exact
+setup.

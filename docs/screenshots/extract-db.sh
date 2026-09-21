@@ -305,27 +305,28 @@ DELETE FROM worktree_project_mappings;
 -- multi-machine UI remains covered with deterministic example identities.
 UPDATE sessions SET machine = 'dev-laptop';
 
+-- Claude project folders encode home paths with hyphens instead of slashes.
 UPDATE sessions
-SET first_message = replace(first_message, r.from_text, r.to_text),
-    display_name = replace(display_name, r.from_text, r.to_text),
-    session_name = replace(session_name, r.from_text, r.to_text),
-    cwd = replace(cwd, r.from_text, r.to_text),
-    file_path = replace(file_path, r.from_text, r.to_text)
+SET first_message = replace(replace(first_message, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user'),
+    display_name = replace(replace(display_name, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user'),
+    session_name = replace(replace(session_name, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user'),
+    cwd = replace(replace(cwd, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user'),
+    file_path = replace(replace(file_path, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user')
 FROM screenshot_redactions r;
 
 UPDATE messages
-SET content = replace(content, r.from_text, r.to_text),
-    thinking_text = replace(thinking_text, r.from_text, r.to_text)
+SET content = replace(replace(content, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user'),
+    thinking_text = replace(replace(thinking_text, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user')
 FROM screenshot_redactions r;
 
 UPDATE tool_calls
-SET file_path = replace(file_path, r.from_text, r.to_text),
-    input_json = replace(input_json, r.from_text, r.to_text),
-    result_content = replace(result_content, r.from_text, r.to_text)
+SET file_path = replace(replace(file_path, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user'),
+    input_json = replace(replace(input_json, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user'),
+    result_content = replace(replace(result_content, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user')
 FROM screenshot_redactions r;
 
 UPDATE tool_result_events
-SET content = replace(content, r.from_text, r.to_text)
+SET content = replace(replace(content, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user')
 FROM screenshot_redactions r;
 
 -- Rebuild FTS index from the surviving messages.

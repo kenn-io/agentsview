@@ -17,11 +17,11 @@ flowchart LR
     Client --> Checkpoint["Local upload checkpoint"]
 ```
 
-The hosted copy retains source files for later processing. Capture and upload
-shipped in 0.42.0. Hosted parsing and embedding generation are not connected to
-server startup in 0.43.0. Use the authenticated status route to inspect raw
-custody metadata, or use [`agentsview pg push`](/docs/pg-sync/) to make sessions
-browsable on a shared server.
+The hosted copy retains source files for later processing. Server startup does
+not yet run hosted parsing or embedding generation. Use the authenticated status
+route to inspect raw custody metadata, or use
+[`agentsview pg push`](/docs/pg-sync/) to make sessions browsable on a shared
+server.
 
 !!! note "You need provisioned device credentials"
 
