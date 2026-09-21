@@ -51,6 +51,11 @@ Release notes for
 - Look up sessions by UUID through MCP `search_sessions`, including active
   sessions. MCP `search_content` also accepts `include_one_shot` and
   `include_automated` to include single-prompt runs and automated sessions.
+- Require several literal terms within one user/assistant exchange when
+  searching conversation history through MCP `search_content`. Exact session,
+  branch, and current-session filters narrow recall before the result limit,
+  and each response reports the effective search mode, scope, and default
+  exclusions.
 - Include transcript paths in session-list JSON with
   `session list --include-source`.
 - Inspect hosted raw sync through `GET /api/v1/raw-sync/status`, which reports

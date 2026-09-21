@@ -1177,11 +1177,7 @@ func (s *Store) SearchContent(ctx context.Context, f db.ContentSearchFilter) (db
 	if err != nil {
 		return db.ContentSearchPage{}, err
 	}
-	page := db.ContentSearchPage{Matches: matches}
-	if len(matches) > f.Limit {
-		page.Matches = matches[:f.Limit]
-		page.NextCursor = f.Cursor + f.Limit
-	}
+	page := f.Page(matches)
 	// Post-truncation derivation, O(page): every lexical match gets its
 	// conversation-unit OrdinalRange and lineage fields via the shared
 	// batched pass, matching the SQLite and PG backends.
@@ -1195,7 +1191,7 @@ func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFil
 	if f.Mode != "regex" {
 		return s.collectContentSubstringMatches(ctx, f)
 	}
-	scopeWhere, scopeArgs := db.BuildSessionFilterSQL(contentSessionFilter(f), db.DuckDBQueryDialect())
+	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, db.DuckDBQueryDialect())
 	scopeWhere, scopeArgs = db.AppendExcludeSessionIDs(
 		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	pattern := ""
@@ -1241,7 +1237,7 @@ func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFil
 func (s *Store) collectContentSubstringMatches(
 	ctx context.Context, f db.ContentSearchFilter,
 ) ([]db.ContentMatch, error) {
-	scopeWhere, scopeArgs := db.BuildSessionFilterSQL(contentSessionFilter(f), db.DuckDBQueryDialect())
+	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, db.DuckDBQueryDialect())
 	scopeWhere, scopeArgs = db.AppendExcludeSessionIDs(
 		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	var branches []string
@@ -1458,19 +1454,6 @@ func contentCandidateMatches(candidates []duckContentCandidate) []db.ContentMatc
 		out[i] = candidate.match
 	}
 	return out
-}
-
-func contentSessionFilter(f db.ContentSearchFilter) db.SessionFilter {
-	return db.SessionFilter{
-		Project: f.Project, ExcludeProject: f.ExcludeProject,
-		Machine: f.Machine, GitBranch: f.GitBranch, Agent: f.Agent,
-		Date: f.Date, DateFrom: f.DateFrom, DateTo: f.DateTo,
-		Timezone:         f.Timezone,
-		ActiveSince:      f.ActiveSince,
-		ExcludeOneShot:   !f.IncludeOneShot,
-		ExcludeAutomated: !f.IncludeAutomated,
-		IncludeChildren:  f.IncludeChildren,
-	}
 }
 
 func (s *Store) collectContentSource(

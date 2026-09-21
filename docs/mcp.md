@@ -62,7 +62,7 @@ client will see these tools:
 | `list_sessions`        | List recent or filtered sessions                                         |
 | `get_session_overview` | Fetch metadata and a compact message preview                             |
 | `get_messages`         | Read paginated message bodies from one session                           |
-| `search_content`       | Substring, regex, semantic, or hybrid search over raw session text       |
+| `search_content`       | Substring, regex, terms, semantic, or hybrid search over session text    |
 | `get_usage_summary`    | Aggregate token and cost usage                                           |
 | `query_recall`         | Search extracted Recall entries when the backend supports Recall queries |
 
@@ -90,7 +90,10 @@ full stored ID with an older server.
 
 `search_sessions` and `search_content` exclude sessions active in the last ten
 minutes by default, including the current conversation. Set
-`include_active: true` when you need that recent work.
+`include_active: true` when you need that recent work. For recall from a known
+conversation, pass its full ID as `current_session_id`; `search_content` then
+excludes only that session before applying the result limit and does not hide
+other recent work.
 
 `search_content` also excludes one-shot and automated sessions by default. Set
 `include_one_shot: true` or `include_automated: true` to include those classes.
@@ -104,15 +107,35 @@ If the index is unavailable, use `search_sessions` for keyword search, or
 `search_content` with substring/regex for exact errors, identifiers, and code
 fragments. The default search mode remains substring.
 
-`search_content` accepts a `mode` of `substring` (default), `regex`, `semantic`,
-or `hybrid`, plus a `scope` of `top`, `all` (default), or `subordinate` that is
-only valid with the semantic and hybrid modes. The `semantic` and `hybrid` modes
-need the opt-in [semantic search](/docs/semantic-search/) index on the local
-SQLite archive; without it they return a "not available" error. In every mode,
-each match carries a conversation-unit citation: an `ordinal_range` of
+`search_content` accepts a `mode` of `substring` (default), `regex`, `terms`,
+`semantic`, or `hybrid`. `terms` splits `pattern` on whitespace and requires
+every literal term to occur within one exchange: a user message and its ensuing
+assistant run on the same main or sidechain branch. Terms can appear on opposite
+sides of that exchange. Assistant messages before a session's first user message
+belong to no exchange and never match. `%`, `_`, and backslashes stay literal;
+tool and system content is outside this mode. The `terms` mode currently
+requires a SQLite or PostgreSQL backend.
+
+`scope` can be `top`, `all` (default), or `subordinate` for terms, semantic, and
+hybrid searches. The semantic and hybrid modes need the opt-in
+[semantic search](/docs/semantic-search/) index on the local SQLite archive;
+without it they return a "not available" error. Exact `session_id`,
+`git_branch`, `project`, `agent`, `date_from`, and `date_to` filters apply
+before the final limit. Limits default to 10 and go up to 50; a value outside
+that range falls back to the default.
+
+A `terms` snippet shows about 60 characters of context around the first
+occurrence of each term. Terms that sit far apart in a long exchange produce
+separate windows joined by `...`, so snippet size follows the number of terms,
+not the length of the exchange.
+
+Every match carries a conversation-unit citation: an `ordinal_range` of
 `[start, end]` ordinals around the match, plus `subordinate`, `relationship`,
 `parent_session_id`, and `is_sidechain` fields that flag hits from sidechain
-runs and subagent or fork sessions.
+runs and subagent or fork sessions. The response also reports the
+`effective_mode`, the `effective_scope` for modes that support scope, and the
+`exclusions` that applied by default. `next_cursor` is present when another page
+exists.
 
 ## Daemon-Backed Reads
 

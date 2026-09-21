@@ -23,8 +23,12 @@ const (
 	maxMessageLimit           = 100
 	defaultSearchLimit        = 10
 	maxSearchLimit            = 30
-	defaultListLimit          = 20
-	maxListLimit              = 100
+	// maxContentSearchLimit is higher than maxSearchLimit: search_content
+	// matches are short snippets, and recall callers page fewer times when
+	// a filtered search can return more of them at once.
+	maxContentSearchLimit = 50
+	defaultListLimit      = 20
+	maxListLimit          = 100
 
 	// overviewTailFetch is how many trailing messages the overview
 	// tool fetches to find the last few non-system, role-allowed ones.

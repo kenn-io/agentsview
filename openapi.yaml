@@ -15614,15 +15614,16 @@ paths:
               - substring
               - regex
               - fts
+              - terms
               - semantic
               - hybrid
             type: string
-        - description: "Semantic/hybrid result scope: top, all, or subordinate (default all)"
+        - description: "Semantic/hybrid/terms result scope: top, all, or subordinate (default all)"
           explode: false
           in: query
           name: scope
           schema:
-            description: "Semantic/hybrid result scope: top, all, or subordinate (default all)"
+            description: "Semantic/hybrid/terms result scope: top, all, or subordinate (default all)"
             enum:
               - top
               - all
@@ -15682,6 +15683,20 @@ paths:
           name: git_branch
           schema:
             description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            type: string
+        - description: Filter by exact full stored session ID
+          explode: false
+          in: query
+          name: session_id
+          schema:
+            description: Filter by exact full stored session ID
+            type: string
+        - description: Filter by exact raw git branch
+          explode: false
+          in: query
+          name: git_branch_exact
+          schema:
+            description: Filter by exact raw git branch
             type: string
         - description: Filter by agent
           explode: false

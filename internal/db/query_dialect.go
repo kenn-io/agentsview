@@ -678,6 +678,9 @@ func sessionFilterPredicates(
 	f SessionFilter, b *QueryBuilder, q func(string) string,
 ) ([]string, string) {
 	var preds []string
+	if f.SessionID != "" {
+		preds = append(preds, q("id")+" = "+b.Add(f.SessionID))
+	}
 	if f.ProjectLabels != nil {
 		preds = append(preds,
 			inPredicate(q("project"), f.ProjectLabels, b))
@@ -696,6 +699,10 @@ func sessionFilterPredicates(
 		preds = append(preds, BranchPairPredicate(
 			q("project"), q("git_branch"), f.GitBranch,
 			func(s string) string { return b.Add(s) }))
+	}
+	if f.GitBranchExact != "" {
+		preds = append(preds,
+			q("git_branch")+" = "+b.Add(f.GitBranchExact))
 	}
 	if f.Agent != "" {
 		preds = append(preds,

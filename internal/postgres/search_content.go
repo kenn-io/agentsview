@@ -53,6 +53,9 @@ func (s *Store) SearchContent(
 		}
 		return s.searchContentHybridPG(ctx, f)
 	}
+	if f.Mode == "terms" {
+		return s.searchContentTermsPG(ctx, f)
+	}
 
 	if len(f.Sources) == 0 {
 		f.Sources = []string{"messages", "tool_input", "tool_result"}
@@ -82,18 +85,34 @@ func pgHasSource(f db.ContentSearchFilter, src string) bool {
 	return slices.Contains(f.Sources, src)
 }
 
-// pgSessionFilter builds a db.SessionFilter from a ContentSearchFilter.
-func pgSessionFilter(f db.ContentSearchFilter) db.SessionFilter {
-	return db.SessionFilter{
-		Project: f.Project, ExcludeProject: f.ExcludeProject,
-		Machine: f.Machine, GitBranch: f.GitBranch, Agent: f.Agent,
-		Date: f.Date, DateFrom: f.DateFrom, DateTo: f.DateTo,
-		Timezone:         f.Timezone,
-		ActiveSince:      f.ActiveSince,
-		ExcludeOneShot:   !f.IncludeOneShot,
-		ExcludeAutomated: !f.IncludeAutomated,
-		IncludeChildren:  f.IncludeChildren,
+// searchContentTermsPG runs the shared terms-mode query
+// (db.BuildTermsSearchSQL) against PostgreSQL.
+func (s *Store) searchContentTermsPG(
+	ctx context.Context, f db.ContentSearchFilter,
+) (db.ContentSearchPage, error) {
+	if err := db.ValidateTermsFilter(f); err != nil {
+		return db.ContentSearchPage{}, err
 	}
+	terms := db.ParseContentSearchTerms(f.Pattern)
+	if len(terms) == 0 {
+		return db.ContentSearchPage{}, nil
+	}
+	query, args, err := db.BuildTermsSearchSQL(f, terms, db.PostgresQueryDialect())
+	if err != nil {
+		return db.ContentSearchPage{}, err
+	}
+	rows, err := s.pg.QueryContext(ctx, query, args...)
+	if err != nil {
+		return db.ContentSearchPage{}, fmt.Errorf("pg terms search: %w", err)
+	}
+	defer rows.Close()
+	var timestamp *time.Time
+	return db.ScanTermsMatches(rows, f, terms, &timestamp, func() string {
+		if timestamp == nil {
+			return ""
+		}
+		return FormatISO8601(*timestamp)
+	})
 }
 
 // appendExcludeSessionIDsPG adds `NOT (col = ANY($n))` using a Postgres text
@@ -117,7 +136,7 @@ func appendExcludeSessionIDsPG(
 func (s *Store) searchContentSubstringPG(
 	ctx context.Context, f db.ContentSearchFilter,
 ) (db.ContentSearchPage, error) {
-	scopeWhere, scopeArgs := buildPGSessionFilter(pgSessionFilter(f))
+	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, db.PostgresQueryDialect())
 	scopeWhere, scopeArgs = appendExcludeSessionIDsPG(
 		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	escapedPat := escapeLike(f.Pattern)
@@ -402,11 +421,7 @@ func (s *Store) searchContentRegexPG(
 	if err := rows.Close(); err != nil {
 		return db.ContentSearchPage{}, fmt.Errorf("closing pg regex candidates: %w", err)
 	}
-	page := db.ContentSearchPage{Matches: out}
-	if len(out) > f.Limit {
-		page.Matches = out[:f.Limit]
-		page.NextCursor = f.Cursor + f.Limit
-	}
+	page := f.Page(out)
 	if err := s.deriveLexicalUnitsPG(ctx, page.Matches); err != nil {
 		return db.ContentSearchPage{}, err
 	}
@@ -417,7 +432,7 @@ func (s *Store) searchContentRegexPG(
 func (s *Store) pgRegexCandidateRows(
 	ctx context.Context, f db.ContentSearchFilter, lit string,
 ) (*sql.Rows, error) {
-	scopeWhere, scopeArgs := buildPGSessionFilter(pgSessionFilter(f))
+	scopeWhere, scopeArgs := db.BuildContentScopeSQL(f, db.PostgresQueryDialect())
 	scopeWhere, scopeArgs = appendExcludeSessionIDsPG(
 		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 

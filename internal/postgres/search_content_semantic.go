@@ -116,12 +116,12 @@ func pgUniqueSessionIDs(hits []db.VectorHit) []string {
 }
 
 // semanticPGSessionFilter maps a ContentSearchFilter for the semantic/hybrid
-// session scope: the shared pgSessionFilter mapping plus the child one-shot
+// session scope: the shared db.ContentSessionFilter mapping plus the child one-shot
 // exemption (SessionFilter.ChildExemptOneShot) -- child sessions must not be
 // dropped by the one-shot gate in these modes, while top-level one-shots keep
 // today's exclusion. It mirrors internal/db.semanticContentSessionFilter.
 func semanticPGSessionFilter(f db.ContentSearchFilter) db.SessionFilter {
-	sf := pgSessionFilter(f)
+	sf := db.ContentSessionFilter(f)
 	sf.ChildExemptOneShot = true
 	return sf
 }

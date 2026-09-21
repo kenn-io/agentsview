@@ -28,11 +28,12 @@ const (
 // include-children / one-shot / orphan logic is shared, not reimplemented.
 type ContentSearchFilter struct {
 	Pattern       string
-	Mode          string   // "substring" (default) | "regex" | "fts" | "semantic" | "hybrid"
+	Mode          string   // "substring" (default) | "regex" | "fts" | "terms" | "semantic" | "hybrid"
 	Sources       []string // subset of {"messages","tool_input","tool_result"}
 	ExcludeSystem bool
 
 	Project, ExcludeProject, Machine, Agent           string
+	SessionID, GitBranchExact                         string
 	Date, DateFrom, DateTo, Timezone, ActiveSince     string
 	IncludeChildren, IncludeAutomated, IncludeOneShot bool
 	// ExcludeSessionIDs drops matches from these session IDs before LIMIT,
@@ -119,17 +120,17 @@ func searchInputErrorf(format string, a ...any) error {
 	return &SearchInputError{Msg: fmt.Sprintf(format, a...)}
 }
 
-// contentSessionFilter maps a ContentSearchFilter's session-scoping fields to
+// ContentSessionFilter maps a ContentSearchFilter's session-scoping fields to
 // a SessionFilter. Mirroring session list: one-shot and automated sessions
 // are excluded by default, and IncludeOneShot/IncludeAutomated opt them back
 // in. Comprehensive secret coverage comes from the secrets subsystem
-// (scanned over every session at sync), not from search defaults. Shared by
-// sessionScopeSubquery (substring/regex/fts) and the semantic-mode
-// allowed-session-id lookup so the mapping cannot drift between them.
-func contentSessionFilter(f ContentSearchFilter) SessionFilter {
+// (scanned over every session at sync), not from search defaults. Every
+// backend's content-search scope uses this one mapping so it cannot drift.
+func ContentSessionFilter(f ContentSearchFilter) SessionFilter {
 	return SessionFilter{
 		Project: f.Project, ExcludeProject: f.ExcludeProject,
 		Machine: f.Machine, GitBranch: f.GitBranch, Agent: f.Agent,
+		SessionID: f.SessionID, GitBranchExact: f.GitBranchExact,
 		Date: f.Date, DateFrom: f.DateFrom, DateTo: f.DateTo,
 		Timezone:         f.Timezone,
 		ActiveSince:      f.ActiveSince,
@@ -139,12 +140,30 @@ func contentSessionFilter(f ContentSearchFilter) SessionFilter {
 	}
 }
 
+// BuildContentScopeSQL returns the sessions-table WHERE clause that scopes a
+// substring/regex/fts content search, without the ExcludeSessionIDs
+// predicate (its bind syntax is backend-specific).
+//
+// Child sessions are hidden the same way the session list hides them, with
+// one exception: naming an exact SessionID asks for that session whatever its
+// relationship, so the child exclusion is dropped. Every other predicate
+// (one-shot, automated, project, dates) still applies to the named session.
+func BuildContentScopeSQL(
+	f ContentSearchFilter, dialect QueryDialect,
+) (string, []any) {
+	sf := ContentSessionFilter(f)
+	if f.SessionID != "" {
+		return BuildSessionBaseFilterSQL(sf, dialect)
+	}
+	return BuildSessionFilterSQL(sf, dialect)
+}
+
 // sessionScopeSubquery returns "session_id IN (SELECT id FROM sessions
-// WHERE <buildSessionFilter where>)" plus its args, reusing the session
+// WHERE <BuildContentScopeSQL where>)" plus its args, reusing the session
 // filter machinery. The Limit/Cursor on the inner filter are irrelevant
 // (no LIMIT in a SELECT id subquery), so they are left unset.
 func sessionScopeSubquery(f ContentSearchFilter) (string, []any) {
-	where, args := buildSessionFilter(contentSessionFilter(f))
+	where, args := BuildContentScopeSQL(f, SQLiteQueryDialect())
 	where, args = AppendExcludeSessionIDs(where, args, "id", f.ExcludeSessionIDs)
 	return "session_id IN (SELECT id FROM sessions WHERE " + where + ")", args
 }
@@ -192,12 +211,12 @@ func AppendExcludeSessionIDs(
 }
 
 // semanticContentSessionFilter maps a ContentSearchFilter for the
-// semantic/hybrid session scope: the shared contentSessionFilter mapping
+// semantic/hybrid session scope: the shared ContentSessionFilter mapping
 // plus the child one-shot exemption (SessionFilter.ChildExemptOneShot) —
 // child sessions must not be dropped by the one-shot gate in these modes,
 // while top-level one-shots keep today's exclusion.
 func semanticContentSessionFilter(f ContentSearchFilter) SessionFilter {
-	sf := contentSessionFilter(f)
+	sf := ContentSessionFilter(f)
 	sf.ChildExemptOneShot = true
 	return sf
 }
@@ -233,6 +252,8 @@ func (db *DB) SearchContent(
 		return db.searchContentSemantic(ctx, f)
 	case "hybrid":
 		return db.searchContentHybrid(ctx, f)
+	case "terms":
+		return db.searchContentTerms(ctx, f)
 	}
 
 	if len(f.Sources) == 0 {
@@ -415,6 +436,32 @@ func (db *DB) scanContentMatches(
 	return page, nil
 }
 
+// searchContentTerms runs the shared terms-mode query (BuildTermsSearchSQL)
+// against the SQLite archive.
+func (db *DB) searchContentTerms(
+	ctx context.Context, f ContentSearchFilter,
+) (ContentSearchPage, error) {
+	if err := ValidateTermsFilter(f); err != nil {
+		return ContentSearchPage{}, err
+	}
+	terms := ParseContentSearchTerms(f.Pattern)
+	if len(terms) == 0 {
+		return ContentSearchPage{}, nil
+	}
+	query, args, err := BuildTermsSearchSQL(f, terms, SQLiteQueryDialect())
+	if err != nil {
+		return ContentSearchPage{}, err
+	}
+	rows, err := db.getReader().QueryContext(ctx, query, args...)
+	if err != nil {
+		return ContentSearchPage{}, fmt.Errorf("terms search: %w", err)
+	}
+	defer rows.Close()
+	var timestamp string
+	return ScanTermsMatches(rows, f, terms, &timestamp,
+		func() string { return timestamp })
+}
+
 // searchContentRegex compiles the pattern, narrows candidate rows with a
 // LIKE prefilter on any required literal substring (full scan when none),
 // streams candidates, and keeps RE2 matches. Snippets are built in Go.
@@ -471,11 +518,7 @@ func (db *DB) searchContentRegex(
 	if err := rows.Close(); err != nil {
 		return ContentSearchPage{}, fmt.Errorf("closing regex candidates: %w", err)
 	}
-	page := ContentSearchPage{Matches: out}
-	if len(out) > f.Limit {
-		page.Matches = out[:f.Limit]
-		page.NextCursor = f.Cursor + f.Limit
-	}
+	page := f.Page(out)
 	if err := db.deriveLexicalUnits(ctx, page.Matches); err != nil {
 		return ContentSearchPage{}, err
 	}
@@ -604,11 +647,43 @@ func snippetBounds(text string, start, end, radius int) (int, int) {
 // (which also catches secrets straddling the window edges).
 func (f ContentSearchFilter) buildSnippet(body string, start, end int) string {
 	lo, hi := snippetBounds(body, start, end, contentSnippetRadius)
+	return f.redactedWindow(body, lo, hi)
+}
+
+// redactedWindow returns body[lo:hi] with secrets masked unless the filter
+// opts into reveal.
+func (f ContentSearchFilter) redactedWindow(body string, lo, hi int) string {
 	if f.RevealSecrets {
 		return body[lo:hi]
 	}
 	return secrets.RedactWindow(body, lo, hi)
 }
+
+// Page trims matches fetched with a Limit+1 probe to one page and sets
+// NextCursor when the probe row shows more results exist.
+func (f ContentSearchFilter) Page(matches []ContentMatch) ContentSearchPage {
+	page := ContentSearchPage{Matches: matches}
+	if len(matches) > f.Limit {
+		page.Matches = matches[:f.Limit]
+		page.NextCursor = f.Cursor + f.Limit
+	}
+	return page
+}
+
+// ContentSearchModeSupportsScope reports whether Scope is meaningful for a
+// mode. Only the modes that return conversation units (terms, semantic,
+// hybrid) can separate top-level from subordinate results.
+func ContentSearchModeSupportsScope(mode string) bool {
+	switch mode {
+	case "terms", "semantic", "hybrid":
+		return true
+	}
+	return false
+}
+
+// ContentSearchScopeUnsupportedMsg is the transport-neutral message for a
+// Scope sent with a mode that ContentSearchModeSupportsScope rejects.
+const ContentSearchScopeUnsupportedMsg = "scope is only supported for semantic, hybrid, and terms search modes"
 
 // substringSnippet builds the snippet for a substring match: it locates the
 // case-insensitive pattern in body (the LIKE already matched, so it is present;

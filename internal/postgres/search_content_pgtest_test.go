@@ -724,6 +724,171 @@ func TestPGSearchContentFTSMatchesNonContiguousTerms(t *testing.T) {
 	assert.Equal(t, "message", got.Matches[0].Location)
 }
 
+func TestPGSearchContentTermsAcrossExchangeAndLiterals(t *testing.T) {
+	store := setupContentSearch(t)
+	insertCSSession(t, store, "cs-terms", "proj", "claude",
+		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSMessage(t, store, "cs-terms", 0, "user",
+		"deploy alpha%_\\ marker", "2026-05-01T10:00:00Z", false)
+	insertCSMessage(t, store, "cs-terms", 1, "assistant",
+		"the beta setting is required", "2026-05-01T10:01:00Z", false)
+	insertCSMessage(t, store, "cs-terms", 2, "user",
+		"alpha appears again", "2026-05-01T10:02:00Z", false)
+	insertCSMessage(t, store, "cs-terms", 3, "assistant",
+		"gamma only", "2026-05-01T10:03:00Z", false)
+
+	got, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "alpha beta", Mode: "terms", Scope: "all", Limit: 50,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Matches, 1)
+	assert.Equal(t, [2]int{0, 1}, got.Matches[0].OrdinalRange)
+	assert.Contains(t, got.Matches[0].Snippet, "alpha")
+	assert.Contains(t, got.Matches[0].Snippet, "beta")
+
+	literal, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: `alpha%_\ beta`, Mode: "terms", Scope: "all", Limit: 50,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, literal.Matches, 1, "wildcard characters must be literal")
+
+	missing, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "alpha missing", Mode: "terms", Scope: "all", Limit: 50,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, missing.Matches)
+}
+
+func TestPGSearchContentTermsRequiresOneExchange(t *testing.T) {
+	store := setupContentSearch(t)
+	insertCSSession(t, store, "cs-terms-split", "proj", "claude",
+		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSMessage(t, store, "cs-terms-split", 0, "user",
+		"first mentions alpha", "2026-05-01T10:00:00Z", false)
+	insertCSMessage(t, store, "cs-terms-split", 1, "assistant",
+		"plain reply", "2026-05-01T10:01:00Z", false)
+	insertCSMessage(t, store, "cs-terms-split", 2, "user",
+		"second mentions beta", "2026-05-01T10:02:00Z", false)
+
+	got, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "alpha beta", Mode: "terms", Limit: 50, IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, got.Matches,
+		"terms in different exchanges of one session must not match")
+}
+
+func TestPGSearchContentTermsIgnoresAssistantPrelude(t *testing.T) {
+	store := setupContentSearch(t)
+	insertCSSession(t, store, "cs-terms-prelude", "proj", "claude",
+		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSMessage(t, store, "cs-terms-prelude", 0, "assistant",
+		"prelude alpha", "2026-05-01T10:00:00Z", false)
+	insertCSMessage(t, store, "cs-terms-prelude", 1, "assistant",
+		"carries beta too", "2026-05-01T10:01:00Z", false)
+	insertCSMessage(t, store, "cs-terms-prelude", 2, "user",
+		"asks about alpha", "2026-05-01T10:02:00Z", false)
+	insertCSMessage(t, store, "cs-terms-prelude", 3, "assistant",
+		"plain answer", "2026-05-01T10:03:00Z", false)
+
+	// An exchange is a user message plus its ensuing assistant run, so the
+	// assistant rows before the first user message form no exchange even when
+	// every term occurs among them.
+	got, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "alpha beta", Mode: "terms", Limit: 50, IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	assert.Empty(t, got.Matches,
+		"assistant messages before the first user message must not match")
+
+	anchored, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "alpha asks", Mode: "terms", Limit: 50, IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, anchored.Matches, 1, "the user-anchored exchange still matches")
+	assert.Equal(t, 2, anchored.Matches[0].Ordinal)
+}
+
+func TestPGSearchContentTermsSnippetStaysBoundedForDistantTerms(t *testing.T) {
+	store := setupContentSearch(t)
+	insertCSSession(t, store, "cs-terms-long", "proj", "claude",
+		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSMessage(t, store, "cs-terms-long", 0, "user",
+		"alpha "+strings.Repeat("filler ", 400), "2026-05-01T10:00:00Z", false)
+	insertCSMessage(t, store, "cs-terms-long", 1, "assistant",
+		strings.Repeat("padding ", 400)+"beta", "2026-05-01T10:01:00Z", false)
+
+	got, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "alpha beta", Mode: "terms", Limit: 50, IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Matches, 1)
+	snippet := got.Matches[0].Snippet
+	assert.True(t, strings.HasPrefix(snippet, "alpha filler"), snippet)
+	assert.True(t, strings.HasSuffix(snippet, "padding beta"), snippet)
+	assert.Contains(t, snippet, " ... ")
+	// Two windows of at most 60 bytes of context per side, one separator.
+	assert.LessOrEqual(t, len(snippet), 260)
+}
+
+func TestPGSearchContentTermsScopeExactFiltersAndPaging(t *testing.T) {
+	store := setupContentSearch(t)
+	for _, session := range []struct {
+		id, project, branch, ended string
+		sidechain                  bool
+	}{
+		{"cs-terms-top-new", "proj", "feature/memory", "2026-05-01T12:00:00Z", false},
+		{"cs-terms-side-newest", "proj", "feature/memory", "2026-05-01T13:00:00Z", true},
+		{"cs-terms-top-old", "proj", "main", "2026-05-01T11:00:00Z", false},
+	} {
+		insertCSSession(t, store, session.id, session.project, "claude",
+			"2026-05-01T10:00:00Z", session.ended)
+		setCSSessionBranch(t, store, session.id, session.branch)
+		insertCSMessage(t, store, session.id, 0, "user", "alpha", session.ended, false)
+		insertCSMessage(t, store, session.id, 1, "assistant", "beta", session.ended, false)
+		if session.sidechain {
+			_, err := store.DB().Exec(
+				`UPDATE messages SET is_sidechain = TRUE WHERE session_id = $1`, session.id)
+			require.NoError(t, err)
+		}
+	}
+
+	all, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "alpha beta", Mode: "terms", Scope: "all", Limit: 50,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, all.Matches, 3)
+	assert.Equal(t, []string{"cs-terms-top-new", "cs-terms-top-old", "cs-terms-side-newest"},
+		[]string{all.Matches[0].SessionID, all.Matches[1].SessionID, all.Matches[2].SessionID})
+
+	exact, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "alpha beta", Mode: "terms", Scope: "top", Limit: 1,
+		SessionID: "cs-terms-top-new", GitBranchExact: "feature/memory",
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, exact.Matches, 1)
+	assert.Equal(t, "cs-terms-top-new", exact.Matches[0].SessionID)
+
+	first, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "alpha beta", Mode: "terms", Scope: "top", Limit: 1,
+		IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.NotZero(t, first.NextCursor)
+	second, err := store.SearchContent(t.Context(), db.ContentSearchFilter{
+		Pattern: "alpha beta", Mode: "terms", Scope: "top", Limit: 1,
+		Cursor: first.NextCursor, IncludeOneShot: true,
+	})
+	require.NoError(t, err)
+	require.Len(t, second.Matches, 1)
+	assert.Equal(t, "cs-terms-top-old", second.Matches[0].SessionID)
+}
+
 // TestPGSearchContentUnknownSource verifies that an unknown source name
 // returns a SearchInputError.
 func TestPGSearchContentUnknownSource(t *testing.T) {
@@ -856,6 +1021,26 @@ func TestPGSearchContentIncludeChildren(t *testing.T) {
 		assert.NotContains(t, []string{"ic-child", "ic-child2"}, m.SessionID,
 			"IncludeChildren=false: child session %q appeared in results", m.SessionID)
 	}
+}
+
+func TestPGSearchContentExactSessionIncludesChild(t *testing.T) {
+	store := setupContentSearch(t)
+	insertCSSession(t, store, "exact-parent", "proj", "claude",
+		"2026-05-01T10:00:00Z", "2026-05-01T10:30:00Z")
+	insertCSChildSession(t, store, "exact-child", "proj", "claude",
+		"exact-parent", "2026-05-01T10:05:00Z", "2026-05-01T10:25:00Z")
+	setCSSessionBranch(t, store, "exact-child", "feature/memory")
+	insertCSMessage(t, store, "exact-child", 0, "user",
+		"EXACTCHILDNEEDLE", "2026-05-01T10:05:00Z", false)
+
+	got, err := store.SearchContent(context.Background(), db.ContentSearchFilter{
+		Pattern: "EXACTCHILDNEEDLE", Mode: "substring",
+		Sources: []string{"messages"}, SessionID: "exact-child",
+		GitBranchExact: "feature/memory", IncludeOneShot: true, Limit: 50,
+	})
+	require.NoError(t, err)
+	require.Len(t, got.Matches, 1)
+	assert.Equal(t, "exact-child", got.Matches[0].SessionID)
 }
 
 func TestPGSearchContentExcludeSession(t *testing.T) {

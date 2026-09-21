@@ -955,6 +955,16 @@ func isSubordinateSession(
 	return hasParent && relationshipType != "continuation"
 }
 
+// SubordinateSessionSQL is isSubordinateSession as a SQL predicate over the
+// sessions row aliased sessionAlias, for queries that must filter or order by
+// the classification before rows reach Go. Keep the two in step.
+func SubordinateSessionSQL(sessionAlias string) string {
+	rel := "COALESCE(" + sessionAlias + ".relationship_type,'')"
+	parent := "COALESCE(" + sessionAlias + ".parent_session_id,'')"
+	return "(" + rel + " IN ('subagent','fork') OR (" +
+		parent + " <> '' AND " + rel + " <> 'continuation'))"
+}
+
 // unitRow is one scanned ScanEmbeddableUnits row, carrying the
 // session-level subordinate classification alongside the per-message fields
 // needed to build either a user doc or a run member.

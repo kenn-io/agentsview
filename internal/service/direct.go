@@ -825,11 +825,11 @@ const maxContentSearchContext = 10
 func (b *directBackend) SearchContent(
 	ctx context.Context, req ContentSearchRequest,
 ) (*ContentSearchResult, error) {
-	if req.Mode == "fts" {
+	if req.Mode == "fts" || req.Mode == "terms" {
 		for _, s := range req.Sources {
 			if s != "messages" {
 				return nil, &db.SearchInputError{Msg: fmt.Sprintf(
-					"search: --fts searches messages only (got source %q)", s)}
+					"search: %s searches messages only (got source %q)", req.Mode, s)}
 			}
 		}
 		req.Sources = []string{"messages"}
@@ -861,6 +861,8 @@ func (b *directBackend) SearchContent(
 		ExcludeProject:    req.ExcludeProject,
 		Machine:           req.Machine,
 		GitBranch:         req.GitBranch,
+		SessionID:         req.SessionID,
+		GitBranchExact:    req.GitBranchExact,
 		Agent:             req.Agent,
 		Date:              req.Date,
 		DateFrom:          req.DateFrom,
