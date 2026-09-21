@@ -11,6 +11,7 @@ import (
 	"go.kenn.io/agentsview/internal/db"
 	"go.kenn.io/agentsview/internal/storage"
 	"go.kenn.io/agentsview/internal/vector"
+	kitvec "go.kenn.io/kit/vector"
 )
 
 // vectorLookupChunk caps the keys one hydration or unit-resolution query carries.
@@ -110,7 +111,10 @@ func (v *vectorSearcher) SemanticSearch(
 	if err != nil {
 		return nil, err
 	}
-	docs := rollupChunkHits(chunks, limit)
+	docs := kitvec.RollupByDocument(chunks)
+	if limit >= 0 && len(docs) > limit {
+		docs = docs[:limit]
+	}
 	if len(docs) == 0 {
 		return nil, nil
 	}
@@ -119,11 +123,7 @@ func (v *vectorSearcher) SemanticSearch(
 
 // chunkHit is one ranked chunk: its document, which chunk matched, and its
 // cosine similarity (higher is better).
-type chunkHit struct {
-	docKey     string
-	chunkIndex int
-	score      float32
-}
+type chunkHit = kitvec.Hit[string]
 
 // nearestChunks returns up to exactly limit chunks ordered nearest first.
 // Fetching exactly limit chunks matches the local searcher's candidate pool
@@ -151,32 +151,14 @@ func (v *vectorSearcher) nearestChunks(
 		var h chunkHit
 		var chunkIndex int64
 		var score float64
-		if err := rows.Scan(&h.docKey, &chunkIndex, &score); err != nil {
+		if err := rows.Scan(&h.Doc, &chunkIndex, &score); err != nil {
 			return nil, fmt.Errorf("scanning clickhouse chunk ranking: %w", err)
 		}
-		h.chunkIndex = int(chunkIndex)
-		h.score = float32(score)
+		h.ChunkIndex = int(chunkIndex)
+		h.Score = float32(score)
 		hits = append(hits, h)
 	}
 	return hits, rows.Err()
-}
-
-// rollupChunkHits collapses chunk hits to one per document, keeping the
-// first (best) chunk per doc_key in rank order, then truncates to limit.
-func rollupChunkHits(hits []chunkHit, limit int) []chunkHit {
-	seen := make(map[string]struct{}, len(hits))
-	out := make([]chunkHit, 0, len(hits))
-	for _, h := range hits {
-		if _, ok := seen[h.docKey]; ok {
-			continue
-		}
-		seen[h.docKey] = struct{}{}
-		out = append(out, h)
-	}
-	if limit >= 0 && len(out) > limit {
-		out = out[:limit]
-	}
-	return out
 }
 
 // vectorDoc is the subset of a vector_documents row needed to hydrate a hit.
@@ -196,7 +178,7 @@ func (v *vectorSearcher) hydrateHits(
 ) ([]db.VectorHit, error) {
 	docKeys := make([]string, len(hits))
 	for i, h := range hits {
-		docKeys[i] = h.docKey
+		docKeys[i] = h.Doc
 	}
 	docs, err := v.lookupDocs(ctx, docKeys)
 	if err != nil {
@@ -204,19 +186,19 @@ func (v *vectorSearcher) hydrateHits(
 	}
 	out := make([]db.VectorHit, 0, len(hits))
 	for _, h := range hits {
-		doc, ok := docs[h.docKey]
+		doc, ok := docs[h.Doc]
 		if !ok {
 			continue
 		}
 		anchorOrdinal, snippet := vector.DocAnchor(
-			doc.content, doc.offsets, doc.ordinal, h.chunkIndex, v.maxInputChars)
+			doc.content, doc.offsets, doc.ordinal, h.ChunkIndex, v.maxInputChars)
 		out = append(out, db.VectorHit{
 			SessionID:    doc.sessionID,
 			Ordinal:      anchorOrdinal,
 			OrdinalStart: doc.ordinal,
 			OrdinalEnd:   doc.ordinalEnd,
 			Subordinate:  doc.subordinate,
-			Score:        h.score,
+			Score:        h.Score,
 			Snippet:      snippet,
 		})
 	}

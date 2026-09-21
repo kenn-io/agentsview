@@ -119,13 +119,12 @@ func (ix *Index) SearchPage(
 		return nil, false, ix.noActiveGenerationError(ctx)
 	}
 
-	vectors, err := kitvec.EncodeBatched(ctx, enc,
-		[]kitvec.Chunk{{Index: 0, Text: query}})
+	queryVector, err := kitvec.EncodeOne(ctx, enc, query)
 	if err != nil {
 		return nil, false, &QueryEncodeError{Err: err}
 	}
 
-	hits, err := ix.store.QueryGeneration(ctx, active, vectors[0], limit)
+	hits, err := ix.store.QueryGeneration(ctx, active, queryVector, limit)
 	if err != nil {
 		return nil, false, fmt.Errorf("search: %w", err)
 	}

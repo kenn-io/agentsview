@@ -266,10 +266,11 @@ func TestVectorPushSourceRoundTrip(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer ix.Close()
-	exp, ok, err := ix.ActiveExport(ctx)
+	raw, ok, err := ix.BeginExport(ctx, nil)
 	require.NoError(t, err)
 	require.True(t, ok)
-	want, wantHash, err := ix.ExportSessionDocs(ctx, exp.Ordinal, "session-1")
+	defer raw.Close()
+	want, wantHash, err := raw.SessionDocs(ctx, "session-1")
 	require.NoError(t, err)
 	require.NotEmpty(t, want)
 	assert.Equal(t, wantHash, hashes["session-1"],

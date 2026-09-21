@@ -83,12 +83,7 @@ func wireReplicaVectorSearch(
 		return fmt.Errorf("building query encoder: %w", err)
 	}
 	encodeQuery := func(ctx context.Context, text string) ([]float32, error) {
-		vecs, err := kitvec.EncodeBatched(ctx, enc,
-			[]kitvec.Chunk{{Index: 0, Text: text}})
-		if err != nil {
-			return nil, err
-		}
-		return vecs[0], nil
+		return kitvec.EncodeOne(ctx, enc, text)
 	}
 	info := storage.VectorGenerationInfo{Fingerprint: gen.Fingerprint(), Model: gen.Model}
 	searcher, unavailable, err := provider.OpenVectorSearcher(

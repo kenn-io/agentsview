@@ -3,8 +3,10 @@ package vector
 import (
 	"context"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"sync"
 
@@ -319,6 +321,23 @@ UPDATE `+ix.spec.DocsTable+` AS d
 		return RepairStats{}, fmt.Errorf("commit invalid vector repair batch: %w", err)
 	}
 	return stats, nil
+}
+
+// decodeFloat32Blob decodes sqlite-vec's raw little-endian float32 blob. A
+// nil or empty blob decodes to an empty (non-nil) slice; the guard also proves
+// b is non-nil to NilAway before the slice expression below.
+func decodeFloat32Blob(b []byte) ([]float32, error) {
+	if len(b)%4 != 0 {
+		return nil, fmt.Errorf("embedding blob length %d not a multiple of 4", len(b))
+	}
+	if len(b) == 0 {
+		return []float32{}, nil
+	}
+	out := make([]float32, len(b)/4)
+	for i := range out {
+		out[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
+	}
+	return out, nil
 }
 
 func validateStoredEmbeddingBlob(blob []byte, dimension int) error {

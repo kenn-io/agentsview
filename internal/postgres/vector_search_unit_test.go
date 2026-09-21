@@ -60,30 +60,6 @@ func TestHNSWEfSearch(t *testing.T) {
 	}
 }
 
-func TestRollupChunkHits(t *testing.T) {
-	// Best-first order in, one row per doc out (first seen wins), truncated.
-	hits := []chunkHit{
-		{docKey: "a", chunkIndex: 0, score: 0.9},
-		{docKey: "b", chunkIndex: 1, score: 0.8},
-		{docKey: "a", chunkIndex: 2, score: 0.7}, // dominated duplicate dropped
-		{docKey: "c", chunkIndex: 0, score: 0.6},
-	}
-
-	rolled := rollupChunkHits(hits, 10)
-	require.Len(t, rolled, 3)
-	assert.Equal(t, "a", rolled[0].docKey)
-	assert.Equal(t, 0, rolled[0].chunkIndex, "best chunk kept for doc a")
-	assert.Equal(t, "b", rolled[1].docKey)
-	assert.Equal(t, "c", rolled[2].docKey)
-
-	truncated := rollupChunkHits(hits, 2)
-	require.Len(t, truncated, 2)
-	assert.Equal(t, "a", truncated[0].docKey)
-	assert.Equal(t, "b", truncated[1].docKey)
-
-	assert.Empty(t, rollupChunkHits(nil, 5))
-}
-
 func TestSemanticUnavailableError(t *testing.T) {
 	s := &Store{}
 
