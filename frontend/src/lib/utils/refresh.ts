@@ -85,17 +85,41 @@ export function formatQueryDuration(durationMs: number | null | undefined): stri
   });
 }
 
-/**
- * Widest rendering of each `formatQueryDuration` unit, so the duration box
- * keeps one width from the first millisecond reading up to a 99-minute
- * query.
- */
+/** Widest rendering of each `formatQueryDuration` unit. */
 export function queryDurationWidthSamples(): string[] {
   return [
     formatQueryDuration(999),
     formatQueryDuration(59 * SECOND_MS),
     formatQueryDuration(99 * MINUTE_MS + 59 * SECOND_MS),
   ];
+}
+
+/**
+ * The refresh control's label: the age, followed by how long the last query
+ * took when one has completed ("Updated just now · 2 s"). One phrase so the
+ * number reads as part of the sentence instead of a stray figure.
+ */
+export function formatRefreshStatus(
+  updatedAt: number | null | undefined,
+  durationMs: number | null | undefined,
+  now = Date.now(),
+): string {
+  const age = formatRefreshAge(updatedAt, now);
+  const duration = formatQueryDuration(durationMs);
+  if (duration === "") return age;
+  return m.shared_refresh_age_with_duration({ age, duration });
+}
+
+/**
+ * Every age variant paired with every duration unit at its widest, so the
+ * label box is measured once against the widest localized phrase it can
+ * show and never changes width afterwards.
+ */
+export function refreshStatusWidthSamples(): string[] {
+  const durations = queryDurationWidthSamples();
+  return refreshAgeWidthSamples().flatMap((age) =>
+    durations.map((duration) => m.shared_refresh_age_with_duration({ age, duration })),
+  );
 }
 
 export function createRefreshScheduler(refresh: () => void | Promise<void>, intervalMs: number) {

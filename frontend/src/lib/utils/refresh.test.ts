@@ -5,8 +5,10 @@ import {
   DEFAULT_REFRESH_INTERVAL_MS,
   formatQueryDuration,
   formatRefreshAge,
+  formatRefreshStatus,
   queryDurationWidthSamples,
   refreshAgeWidthSamples,
+  refreshStatusWidthSamples,
 } from "./refresh.js";
 
 describe("formatRefreshAge", () => {
@@ -87,6 +89,44 @@ describe("formatQueryDuration", () => {
 
   it("reserves the widest rendering of every unit", () => {
     expect(queryDurationWidthSamples()).toEqual(["999 ms", "59 s", "99m 59s"]);
+  });
+});
+
+describe("formatRefreshStatus", () => {
+  const now = Date.parse("2026-06-16T12:10:00Z");
+
+  afterEach(() => {
+    setLocale("en");
+  });
+
+  it("appends the last-query duration to the age as one phrase", () => {
+    expect(formatRefreshStatus(Date.parse("2026-06-16T12:09:45Z"), 2400, now)).toBe(
+      "Updated just now · 2 s",
+    );
+    expect(formatRefreshStatus(Date.parse("2026-06-16T12:07:00Z"), 44, now)).toBe(
+      "Updated 3m ago · 44 ms",
+    );
+  });
+
+  it("shows the age alone before a query has completed", () => {
+    expect(formatRefreshStatus(null, null, now)).toBe("Not updated");
+    expect(formatRefreshStatus(Date.parse("2026-06-16T12:09:45Z"), null, now)).toBe(
+      "Updated just now",
+    );
+  });
+
+  it("localizes the phrase and its separator", () => {
+    setLocale("ja");
+    expect(formatRefreshStatus(Date.parse("2026-06-16T12:07:00Z"), 2400, now)).toBe(
+      "3 分前に更新されました・2 秒",
+    );
+  });
+
+  it("reserves every age variant paired with every duration unit", () => {
+    const samples = refreshStatusWidthSamples();
+    expect(samples).toHaveLength(15);
+    expect(samples).toContain("Not updated · 999 ms");
+    expect(samples).toContain("Updated 999d ago · 99m 59s");
   });
 });
 

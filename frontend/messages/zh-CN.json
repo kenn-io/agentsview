@@ -504,6 +504,7 @@
   "shared_refresh_duration_ms": "{value} 毫秒",
   "shared_refresh_duration_seconds": "{value} 秒",
   "shared_refresh_duration_minutes": "{minutes} 分 {seconds} 秒",
+  "shared_refresh_age_with_duration": "{age} · {duration}",
   "shared_relative_just_now": "刚刚",
   "shared_relative_minutes_ago": "{count} 分钟前",
   "shared_relative_hours_ago": "{count} 小时前",

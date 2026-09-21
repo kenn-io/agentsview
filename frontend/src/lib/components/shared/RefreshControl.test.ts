@@ -39,7 +39,7 @@ describe("RefreshControl", () => {
     document.body.innerHTML = "";
   });
 
-  it("renders the last-query duration to the right of the age label", async () => {
+  it("renders the last-query duration as part of the age label", async () => {
     const component = mount(RefreshControl, {
       target: document.body,
       props: {
@@ -50,30 +50,22 @@ describe("RefreshControl", () => {
     });
     await tick();
 
-    const age = document.querySelector(".kit-refresh-control__age > .kit-refresh-control__text");
-    const detail = document.querySelector(
-      ".kit-refresh-control__detail > .kit-refresh-control__text",
-    );
-    expect(age?.textContent).toBe("Updated 3m ago");
-    expect(detail?.textContent).toBe("2 s");
-    expect(age!.compareDocumentPosition(detail!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const label = document.querySelector(".kit-refresh-control__age > .kit-refresh-control__text");
+    expect(label?.textContent).toBe("Updated 3m ago · 2 s");
 
     unmount(component);
     document.body.innerHTML = "";
   });
 
-  it("leaves the duration box empty before the first query completes", async () => {
+  it("shows nothing for the duration before the first query completes", async () => {
     const component = mount(RefreshControl, {
       target: document.body,
       props: { lastUpdatedAt: null, onRefresh: vi.fn() },
     });
     await tick();
 
-    const detail = document.querySelector(
-      ".kit-refresh-control__detail > .kit-refresh-control__text",
-    );
-    expect(detail).not.toBeNull();
-    expect(detail?.textContent).toBe("");
+    const label = document.querySelector(".kit-refresh-control__age > .kit-refresh-control__text");
+    expect(label?.textContent).toBe("Not updated");
 
     unmount(component);
     document.body.innerHTML = "";
@@ -90,11 +82,10 @@ describe("RefreshControl", () => {
     const samples = Array.from(document.querySelectorAll(".kit-refresh-control__sample")).map(
       (node) => node.textContent,
     );
-    expect(samples).toContain("999 天前更新");
-    expect(samples).toContain("99 分 59 秒");
+    expect(samples).toContain("999 天前更新 · 99 分 59 秒");
     expect(
       document.querySelector(".kit-refresh-control__age > .kit-refresh-control__text")?.textContent,
-    ).toBe("刚刚更新");
+    ).toBe("刚刚更新 · 8 毫秒");
 
     unmount(component);
     setLocale("en");

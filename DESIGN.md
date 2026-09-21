@@ -80,12 +80,11 @@ App-level glue that remains local:
   maps the app's selection API; date-range resolution stays in
   `frontend/src/lib/components/shared/rangeSelection.ts`.
 - `frontend/src/lib/components/shared/RefreshControl.svelte` wraps kit-ui
-  `RefreshControl`, injecting the localized age formatter, the last-query
-  duration readout (`queryDurationMs`, formatted by `formatQueryDuration`),
-  the app locale, and the localized width samples that keep the age and
-  duration boxes a constant width. Pages pass `lastUpdatedAt` and
-  `queryDurationMs` from their store; each store measures the fetch from
-  request start to data applied.
+  `RefreshControl`, injecting the localized label (`formatRefreshStatus`: the
+  age plus the last-query duration as one phrase, "Updated just now · 2 s"),
+  the app locale, and the localized width samples that keep the label box a
+  constant width. Pages pass `lastUpdatedAt` and `queryDurationMs` from their
+  store; each store measures the fetch from request start to data applied.
 - kit-ui components with a `locale` prop (DateRangePicker, RefreshControl,
   Calendar) should receive `locale={getLocale()}` from the i18n facade so
   their date formatting follows the app language setting instead of the
@@ -126,9 +125,8 @@ props or forked styles.
 Resolved upstream (adopted at the current pin): `RefreshControl` takes a
 `formatAge` prop, `DateRangePicker`'s `weekOfLabel` substitutes a `{date}`
 placeholder, and both take a `locale` prop — the shared wrappers inject all
-three. `RefreshControl` also takes `detail`, `ageWidthSamples`, and
-`detailWidthSamples`, which the shared wrapper uses for the query duration
-readout and fixed-width text boxes.
+three. `RefreshControl` also takes `ageWidthSamples`, which the shared wrapper
+uses to keep the label box a fixed width.
 
 ## Legacy Exceptions
 

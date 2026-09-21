@@ -504,6 +504,7 @@
   "shared_refresh_duration_ms": "{value}ms",
   "shared_refresh_duration_seconds": "{value}초",
   "shared_refresh_duration_minutes": "{minutes}분 {seconds}초",
+  "shared_refresh_age_with_duration": "{age} · {duration}",
   "shared_relative_just_now": "방금 전",
   "shared_relative_minutes_ago": "{count}분 전",
   "shared_relative_hours_ago": "{count}시간 전",
