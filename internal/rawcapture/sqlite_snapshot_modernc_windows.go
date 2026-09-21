@@ -1,6 +1,7 @@
 package rawcapture
 
 import (
+	"errors"
 	"fmt"
 	"unsafe"
 
@@ -25,7 +26,7 @@ func sqliteSnapshotModerncConnectionIdentity(
 	}
 	file := windows.Handle(*(*uintptr)(unsafe.Pointer(argument)))
 	if file == 0 || file == windows.InvalidHandle {
-		return "", fmt.Errorf("rawcapture: SQLite source has no open file")
+		return "", errors.New("rawcapture: SQLite source has no open file")
 	}
 	var info windows.ByHandleFileInformation
 	if err := windows.GetFileInformationByHandle(file, &info); err != nil {

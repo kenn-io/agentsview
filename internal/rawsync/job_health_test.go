@@ -13,7 +13,7 @@ func TestJobHealthQueryRequiresPositiveThresholds(t *testing.T) {
 	t.Parallel()
 
 	valid := JobHealthQuery{MaxAttempts: 5, StaleAfterSeconds: 3600}
-	assert.NoError(t, valid.Validate())
+	require.NoError(t, valid.Validate())
 
 	for _, query := range []JobHealthQuery{
 		{MaxAttempts: 0, StaleAfterSeconds: 1},

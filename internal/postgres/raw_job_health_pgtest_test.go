@@ -18,33 +18,6 @@ import (
 	"go.kenn.io/agentsview/internal/rawsync"
 )
 
-func loosenRawIngestJobStageCheck(t *testing.T, pg *sql.DB) {
-	t.Helper()
-	rows, err := pg.QueryContext(t.Context(), `
-		SELECT format(
-			'ALTER TABLE %I.raw_ingest_jobs DROP CONSTRAINT %I',
-			$1::text, conname)
-		FROM pg_catalog.pg_constraint
-		WHERE conrelid = to_regclass(format('%I.raw_ingest_jobs', $1::text))
-			AND contype = 'c'
-			AND pg_get_constraintdef(oid) LIKE '%stage%'
-			AND pg_get_constraintdef(oid) LIKE '%parse%'`,
-		schemaTestSchema)
-	require.NoError(t, err)
-	defer rows.Close()
-	var drops []string
-	for rows.Next() {
-		var ddl string
-		require.NoError(t, rows.Scan(&ddl))
-		drops = append(drops, ddl)
-	}
-	require.NoError(t, rows.Err())
-	require.Len(t, drops, 1,
-		"a fresh test schema must carry exactly one raw_ingest_jobs stage CHECK")
-	_, err = pg.ExecContext(t.Context(), drops[0])
-	require.NoError(t, err)
-}
-
 func TestRawJobHealthOrphans(t *testing.T) {
 	pg, store := newRawIngestTestStore(t)
 	identity := rawIngestIdentity(t, "tenant-a")
@@ -88,7 +61,6 @@ func TestRawJobHealthOrphans(t *testing.T) {
 	assert.Equal(t, tombstone.ManifestID, report.OrphanedManifests[0].ManifestID)
 	assert.Equal(t, rawsync.ManifestTombstone, report.OrphanedManifests[0].Kind)
 
-	loosenRawIngestJobStageCheck(t, pg)
 	_, err = pg.ExecContext(t.Context(), `
 		INSERT INTO raw_ingest_jobs (
 			tenant_id, manifest_id, stage, processing_version, state,
@@ -414,7 +386,6 @@ func TestRawJobHealthIsolation(t *testing.T) {
 	insertRawHealthJob(t, pg, identityB, mainB.ManifestID,
 		"health-b-failed", "failed", 1, "b-class", "hidden")
 
-	loosenRawIngestJobStageCheck(t, pg)
 	for _, identity := range []rawsync.AuthIdentity{identityA, identityB} {
 		manifestID := nonParseA.ManifestID
 		if identity == identityB {

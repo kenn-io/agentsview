@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json/v2"
 	"fmt"
 	"time"
@@ -237,13 +236,9 @@ func (s *RawIngestStore) RawJobHealth(
 	return rawJobHealth(ctx, s.db, identity, query)
 }
 
-type rawJobHealthQueryer interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}
-
 func rawJobHealth(
 	ctx context.Context,
-	queryer rawJobHealthQueryer,
+	queryer pgGenAIPricingQuerier,
 	identity rawsync.AuthIdentity,
 	query rawsync.JobHealthQuery,
 ) (rawsync.JobHealthReport, error) {

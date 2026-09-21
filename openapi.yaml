@@ -5284,6 +5284,37 @@ components:
       type:
         - object
         - "null"
+    RawsyncOrphanedManifest:
+      additionalProperties: false
+      properties:
+        accepted_at:
+          format: date-time
+          type: string
+        configured_root_id:
+          type: string
+        device_id:
+          type: string
+        generation:
+          format: int64
+          type: integer
+        kind:
+          type: string
+        manifest_id:
+          type: string
+        provider:
+          type: string
+        source_key_sha256:
+          type: string
+      required:
+        - manifest_id
+        - device_id
+        - provider
+        - configured_root_id
+        - source_key_sha256
+        - generation
+        - kind
+        - accepted_at
+      type: object
     RawsyncParseJobCounts:
       additionalProperties: false
       properties:
@@ -5349,6 +5380,37 @@ components:
         - parse_leased
         - parse_failed
       type: object
+    RawsyncStaleSourceHead:
+      additionalProperties: false
+      properties:
+        configured_root_id:
+          type: string
+        device_id:
+          type: string
+        generation:
+          format: int64
+          type: integer
+        kind:
+          type: string
+        manifest_id:
+          type: string
+        provider:
+          type: string
+        source_key_sha256:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+        - device_id
+        - provider
+        - configured_root_id
+        - source_key_sha256
+        - manifest_id
+        - generation
+        - kind
+        - updated_at
+      type: object
     RawsyncStatus:
       additionalProperties: false
       properties:
@@ -5389,68 +5451,6 @@ components:
         - open_count
         - pending_bytes
         - oldest_open_session
-      type: object
-    RawsyncOrphanedManifest:
-      additionalProperties: false
-      properties:
-        accepted_at:
-          format: date-time
-          type: string
-        configured_root_id:
-          type: string
-        device_id:
-          type: string
-        generation:
-          format: int64
-          type: integer
-        kind:
-          type: string
-        manifest_id:
-          type: string
-        provider:
-          type: string
-        source_key_sha256:
-          type: string
-      required:
-        - manifest_id
-        - device_id
-        - provider
-        - configured_root_id
-        - source_key_sha256
-        - generation
-        - kind
-        - accepted_at
-      type: object
-    RawsyncStaleSourceHead:
-      additionalProperties: false
-      properties:
-        configured_root_id:
-          type: string
-        device_id:
-          type: string
-        generation:
-          format: int64
-          type: integer
-        kind:
-          type: string
-        manifest_id:
-          type: string
-        provider:
-          type: string
-        source_key_sha256:
-          type: string
-        updated_at:
-          format: date-time
-          type: string
-      required:
-        - device_id
-        - provider
-        - configured_root_id
-        - source_key_sha256
-        - manifest_id
-        - generation
-        - kind
-        - updated_at
       type: object
     RecallEntriesResponse:
       additionalProperties: false

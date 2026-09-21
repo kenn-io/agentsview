@@ -87,7 +87,8 @@ func TestPreparePGRawSyncServicesHealthDoesNotOpenRepository(t *testing.T) {
 		WriteTimeout: 30 * time.Second,
 	}, nil, nil, option, server.WithRawSyncServices(rawSyncHealthAuthStub{}, nil))
 	statusToken := "avdt_" + strings.Repeat("a", 43)
-	request := httptest.NewRequest(
+	request := httptest.NewRequestWithContext(
+		t.Context(),
 		http.MethodGet,
 		"/api/v1/raw-sync/health?max_attempts=5&stale_after_seconds=1",
 		nil,
@@ -144,8 +145,10 @@ func TestPreparePGRawSyncServicesDefersRawRepositoryOpen(t *testing.T) {
 	require.NoError(t, cleanup())
 }
 
-var registerEmptyRawUploadDriver sync.Once
-var registerRawSyncHealthDriver sync.Once
+var (
+	registerEmptyRawUploadDriver sync.Once
+	registerRawSyncHealthDriver  sync.Once
+)
 
 func newEmptyRawUploadTestDB(t *testing.T) *sql.DB {
 	t.Helper()
