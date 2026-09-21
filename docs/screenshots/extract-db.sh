@@ -69,11 +69,13 @@ mkdir -p "$(dirname "$OUTPUT")"
 rm -f "$OUTPUT"
 
 {
-  echo "CREATE TEMP TABLE screenshot_redactions(from_text TEXT PRIMARY KEY, to_text TEXT NOT NULL);"
+  echo "CREATE TEMP TABLE screenshot_redactions(from_text TEXT PRIMARY KEY, to_text TEXT NOT NULL, encoded_from_text TEXT NOT NULL);"
   if [ -n "$HOME_PATH" ] && [ "$HOME_PATH" != "/" ]; then
     home_sql="${HOME_PATH//\'/\'\'}"
-    printf "INSERT OR IGNORE INTO screenshot_redactions(from_text, to_text) VALUES ('%s', '~');\n" \
-      "$home_sql"
+    # Claude replaces every character except ASCII letters, digits, and dashes.
+    encoded_home="${HOME_PATH//[^a-zA-Z0-9-]/-}"
+    printf "INSERT OR IGNORE INTO screenshot_redactions(from_text, to_text, encoded_from_text) VALUES ('%s', '~', '%s');\n" \
+      "$home_sql" "$encoded_home"
   fi
 
   echo "CREATE TEMP TABLE screenshot_blocked_patterns(pattern TEXT PRIMARY KEY);"
@@ -305,28 +307,28 @@ DELETE FROM worktree_project_mappings;
 -- multi-machine UI remains covered with deterministic example identities.
 UPDATE sessions SET machine = 'dev-laptop';
 
--- Claude project folders encode home paths with hyphens instead of slashes.
+-- Redact both plain home paths and encoded Claude project folders.
 UPDATE sessions
-SET first_message = replace(replace(first_message, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user'),
-    display_name = replace(replace(display_name, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user'),
-    session_name = replace(replace(session_name, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user'),
-    cwd = replace(replace(cwd, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user'),
-    file_path = replace(replace(file_path, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user')
+SET first_message = replace(replace(first_message, r.from_text, r.to_text), r.encoded_from_text, '-home-user'),
+    display_name = replace(replace(display_name, r.from_text, r.to_text), r.encoded_from_text, '-home-user'),
+    session_name = replace(replace(session_name, r.from_text, r.to_text), r.encoded_from_text, '-home-user'),
+    cwd = replace(replace(cwd, r.from_text, r.to_text), r.encoded_from_text, '-home-user'),
+    file_path = replace(replace(file_path, r.from_text, r.to_text), r.encoded_from_text, '-home-user')
 FROM screenshot_redactions r;
 
 UPDATE messages
-SET content = replace(replace(content, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user'),
-    thinking_text = replace(replace(thinking_text, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user')
+SET content = replace(replace(content, r.from_text, r.to_text), r.encoded_from_text, '-home-user'),
+    thinking_text = replace(replace(thinking_text, r.from_text, r.to_text), r.encoded_from_text, '-home-user')
 FROM screenshot_redactions r;
 
 UPDATE tool_calls
-SET file_path = replace(replace(file_path, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user'),
-    input_json = replace(replace(input_json, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user'),
-    result_content = replace(replace(result_content, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user')
+SET file_path = replace(replace(file_path, r.from_text, r.to_text), r.encoded_from_text, '-home-user'),
+    input_json = replace(replace(input_json, r.from_text, r.to_text), r.encoded_from_text, '-home-user'),
+    result_content = replace(replace(result_content, r.from_text, r.to_text), r.encoded_from_text, '-home-user')
 FROM screenshot_redactions r;
 
 UPDATE tool_result_events
-SET content = replace(replace(content, r.from_text, r.to_text), replace(r.from_text, '/', '-'), '-home-user')
+SET content = replace(replace(content, r.from_text, r.to_text), r.encoded_from_text, '-home-user')
 FROM screenshot_redactions r;
 
 -- Rebuild FTS index from the surviving messages.

@@ -237,8 +237,7 @@ func TestExtractDBRedactsHomePathByDefault(t *testing.T) {
 	require.NoError(t, err)
 	defer conn.Close()
 
-	homePath := filepath.Join(tempDir, "home", "local-user")
-	require.NoError(t, os.MkdirAll(homePath, 0o700))
+	const homePath = "/home/local.user_name"
 
 	const ts = "2026-06-01T12:00:00.000Z"
 	seed := func(id, firstMessage, content string) {
@@ -262,6 +261,11 @@ func TestExtractDBRedactsHomePathByDefault(t *testing.T) {
 		"s_redact",
 		"Review work under "+filepath.Join(homePath, "code", "project-a"),
 		"Inspect "+filepath.Join(homePath, "code", "project-a", "main.go"),
+	)
+	seed(
+		"s_encoded",
+		"Open -home-local-user-name-code-project-a",
+		"Inspect ~/.claude/projects/-home-local-user-name-code-project-a/session.jsonl",
 	)
 
 	_, err = conn.ExecContext(t.Context(), "PRAGMA wal_checkpoint(TRUNCATE)")
@@ -298,7 +302,7 @@ func TestExtractDBRedactsHomePathByDefault(t *testing.T) {
 	}
 	require.NoError(t, rows.Err())
 
-	assert.Equal(t, []string{"s_keep", "s_redact"}, ids)
+	assert.Equal(t, []string{"s_encoded", "s_keep", "s_redact"}, ids)
 
 	var firstMessage, content string
 	require.NoError(t, outConn.QueryRowContext(t.Context(),
@@ -311,6 +315,15 @@ func TestExtractDBRedactsHomePathByDefault(t *testing.T) {
 	assert.Equal(t, "Inspect ~/code/project-a/main.go", content)
 	assert.NotContains(t, firstMessage, homePath)
 	assert.NotContains(t, content, homePath)
+
+	require.NoError(t, outConn.QueryRowContext(t.Context(),
+		`SELECT s.first_message, m.content
+		 FROM sessions s
+		 JOIN messages m ON m.session_id = s.id
+		 WHERE s.id = 's_encoded'`,
+	).Scan(&firstMessage, &content))
+	assert.Equal(t, "Open -home-user-code-project-a", firstMessage)
+	assert.Equal(t, "Inspect ~/.claude/projects/-home-user-code-project-a/session.jsonl", content)
 }
 
 func TestExtractDBUsesPrivateTermsFileWithScreenshotFileOverride(t *testing.T) {
