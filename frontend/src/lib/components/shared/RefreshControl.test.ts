@@ -92,14 +92,23 @@ describe("RefreshControl", () => {
     document.body.innerHTML = "";
   });
 
-  it("draws each query step on a shared time axis when the label is focused", async () => {
+  it("draws a timeline with an axis, phase segments, and a legend when the label is focused", async () => {
     const component = mount(RefreshControl, {
       target: document.body,
       props: {
         lastUpdatedAt: Date.now(),
         queryDurationMs: 2000,
         querySteps: [
-          { name: "summary", startMs: 0, durationMs: 500 },
+          {
+            name: "summary",
+            startMs: 0,
+            durationMs: 500,
+            segments: [
+              { phase: "wait", startMs: 0, durationMs: 400 },
+              { phase: "download", startMs: 400, durationMs: 80 },
+              { phase: "apply", startMs: 480, durationMs: 20 },
+            ],
+          },
           { name: "topSessions", startMs: 500, durationMs: 1500 },
         ],
         onRefresh: vi.fn(),
@@ -113,22 +122,36 @@ describe("RefreshControl", () => {
       .dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
     await tick();
 
-    const rows = Array.from(document.querySelectorAll('[role="tooltip"] [role="row"]')).map(
-      (row) => ({
-        name: row.querySelector(".query-steps__name")?.textContent,
-        duration: row.querySelector(".query-steps__duration")?.textContent?.trim(),
-        bar: (() => {
-          const bar = row.querySelector<HTMLElement>(".query-steps__bar");
-          return `${bar?.style.left} ${bar?.style.width}`;
-        })(),
-      }),
-    );
-    // Bars sit at their start offset and span their duration against the
-    // 2000 ms query, so the second step starts where the first ends.
-    expect(rows).toEqual([
-      { name: "Summary", duration: "500 ms", bar: "0% 25%" },
-      { name: "Top sessions", duration: "2 s", bar: "25% 75%" },
+    const tooltip = document.querySelector('[role="tooltip"]')!;
+    const geometry = (el: Element | null) => {
+      const bar = el as HTMLElement | null;
+      return `${bar?.style.left} ${bar?.style.width}`;
+    };
+    // Axis ticks span the 2000 ms query at 500 ms steps.
+    expect(
+      Array.from(tooltip.querySelectorAll(".query-steps__tick")).map((tick) =>
+        tick.textContent?.trim(),
+      ),
+    ).toEqual(["0", "500 ms", "1 s", "1.5 s", "2 s"]);
+    const rows = Array.from(tooltip.querySelectorAll('[role="row"]')).slice(1);
+    expect(rows.map((row) => row.querySelector(".query-steps__name")?.textContent)).toEqual([
+      "Summary",
+      "Top sessions",
     ]);
+    // Segmented step: wait, download, apply placed end to end.
+    expect(Array.from(rows[0]!.querySelectorAll(".query-steps__bar")).map(geometry)).toEqual([
+      "0% 20%",
+      "20% 4%",
+      "24% 1%",
+    ]);
+    // Unsegmented step: one solid bar at its start offset.
+    expect(Array.from(rows[1]!.querySelectorAll(".query-steps__bar")).map(geometry)).toEqual([
+      "25% 75%",
+    ]);
+    expect(
+      tooltip.querySelector(".query-steps__legend")?.textContent?.replace(/\s+/g, " ").trim(),
+    ).toBe("Waiting on server Download Applied in page");
+    expect(tooltip.querySelector(".query-steps__total")?.textContent).toBe("2 s");
 
     unmount(component);
     document.body.innerHTML = "";

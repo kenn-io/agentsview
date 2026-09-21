@@ -1,11 +1,40 @@
 import { afterEach, describe, expect, it, vi } from "vite-plus/test";
 import { getApiV1Version } from "./generated/metadata/metadata.js";
-import { ApiError, orvalFetch, setAuthToken } from "./runtime.js";
+import { ApiError, orvalFetch, responseTimingOf, setAuthToken } from "./runtime.js";
 
 describe("orvalFetch", () => {
   afterEach(() => {
     localStorage.clear();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  it("records when a JSON response was sent, answered, and read", async () => {
+    vi.useFakeTimers({ toFake: ["performance"] });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        vi.advanceTimersByTime(40);
+        const response = new Response('{"ok":true}', {
+          headers: { "Content-Type": "application/json" },
+        });
+        const text = response.text.bind(response);
+        response.text = async () => {
+          vi.advanceTimersByTime(15);
+          return text();
+        };
+        return response;
+      }),
+    );
+    const before = performance.now();
+
+    const data = await orvalFetch<{ ok: boolean }>("/api/v1/usage/summary", {});
+
+    expect(responseTimingOf(data)).toEqual({
+      sentAt: before,
+      headersAt: before + 40,
+      bodyAt: before + 55,
+    });
   });
 
   it("sends the selected server token with generated requests", async () => {

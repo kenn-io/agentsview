@@ -146,6 +146,8 @@ const apiRuntimeMocks = vi.hoisted(() => {
     ApiError,
 
     isAbortError: vi.fn(() => false),
+    // Service mocks return plain objects, so no request timing is attached.
+    responseTimingOf: () => undefined,
   };
 });
 

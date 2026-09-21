@@ -21,7 +21,7 @@
     RecallExtractProgressState,
     RecallExtractionStatus,
   } from "../../api/types/recall.js";
-  import { ApiError, isAbortError } from "../../api/runtime.js";
+  import { ApiError, isAbortError, responseTimingOf, type ResponseTiming } from "../../api/runtime.js";
   import { formatDateTime, m } from "../../i18n/index.js";
   import { ChevronDownIcon, ChevronRightIcon } from "../../icons.js";
   import { router } from "../../stores/router.svelte.js";
@@ -29,7 +29,7 @@
   import { ui } from "../../stores/ui.svelte.js";
   import { LatestRead } from "../../utils/latest-read.js";
   import RefreshControl from "../shared/RefreshControl.svelte";
-  import type { QueryStep } from "../../utils/refresh.js";
+  import { queryStepFrom, type QueryStep } from "../../utils/refresh.js";
 
   const ENTRY_TYPES = [
     "fact",
@@ -68,7 +68,10 @@
   let querySteps = $state<QueryStep[]>([]);
   // Latest successful timing per loader, read when a refresh completes.
   // Offsets are relative to the refresh that started them.
-  const stepTimings = new Map<"entries" | "status", { startedAt: number; durationMs: number }>();
+  const stepTimings = new Map<
+    "entries" | "status",
+    { startedAt: number; appliedAt: number; timing: ResponseTiming | undefined }
+  >();
   let progress = $state<RecallExtractProgress[]>([]);
   let progressExpanded = $state(false);
   let progressState = $state<"" | RecallExtractProgressState>("");
@@ -187,9 +190,11 @@
       nextCursor = page.next_cursor ?? "";
       resultCap = page.result_cap ?? 0;
       entriesUpdatedAt = Date.now();
-      queryDurationMs = performance.now() - startedAt;
-      stepTimings.set("entries", { startedAt, durationMs: queryDurationMs });
-      querySteps = [{ name: "entries", startMs: 0, durationMs: queryDurationMs }];
+      const appliedAt = performance.now();
+      const timing = responseTimingOf(page);
+      queryDurationMs = appliedAt - startedAt;
+      stepTimings.set("entries", { startedAt, appliedAt, timing });
+      querySteps = [queryStepFrom("entries", timing, startedAt, appliedAt, startedAt)];
     } catch (error) {
       if (isAbortError(error) || !entriesRead.isCurrent(signal)) return;
       if (appending && error instanceof ApiError && error.status === 409) {
@@ -217,7 +222,11 @@
       if (!statusRead.isCurrent(signal)) return;
       status = next;
       statusUpdatedAt = Date.now();
-      stepTimings.set("status", { startedAt, durationMs: performance.now() - startedAt });
+      stepTimings.set("status", {
+        startedAt,
+        appliedAt: performance.now(),
+        timing: responseTimingOf(next),
+      });
     } catch (error) {
       if (isAbortError(error) || !statusRead.isCurrent(signal)) return;
       status = null;
@@ -272,10 +281,10 @@
     if ((entriesUpdatedAt ?? -1) >= startedAtEpoch && (statusUpdatedAt ?? -1) >= startedAtEpoch) {
       queryDurationMs = performance.now() - startedAt;
       querySteps = (["entries", "status"] as const).flatMap((name) => {
-        const timing = stepTimings.get(name);
-        return timing === undefined
+        const load = stepTimings.get(name);
+        return load === undefined
           ? []
-          : [{ name, startMs: timing.startedAt - startedAt, durationMs: timing.durationMs }];
+          : [queryStepFrom(name, load.timing, load.startedAt, load.appliedAt, startedAt)];
       });
     }
     if (progressExpanded) await loadProgress();

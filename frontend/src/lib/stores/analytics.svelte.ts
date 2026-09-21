@@ -1,5 +1,5 @@
 import { m } from "../i18n/index.js";
-import type { QueryStep } from "../utils/refresh.js";
+import { queryStepFrom, type QueryStep } from "../utils/refresh.js";
 import type { AutomatedScope } from "../api/types.js";
 import type {
   DbAnalyticsSummary as AnalyticsSummary,
@@ -17,7 +17,7 @@ import {
   type DbHeatmapResponse,
   type DbTopSessionsResponse,
 } from "../api/generated/index";
-import { isAbortError } from "../api/runtime.js";
+import { isAbortError, responseTimingOf } from "../api/runtime.js";
 import { sessions } from "./sessions.svelte.js";
 import { perf, type PerfEntryStatus } from "./perf.svelte.js";
 import { rollingRange, today } from "../utils/dates.js";
@@ -109,7 +109,7 @@ class AnalyticsStore {
   // Latest successful timing per panel, collected while a refresh runs and
   // snapshotted into lastQuerySteps when the refresh completes. Offsets are
   // relative to refreshStartedAt.
-  private stepTimings = new Map<Panel, { startMs: number; durationMs: number }>();
+  private stepTimings = new Map<Panel, Omit<QueryStep, "name">>();
   private refreshStartedAt = 0;
   hasNewData: boolean = $state(false);
 
@@ -499,6 +499,14 @@ class AnalyticsStore {
       if (this.versions[panel] === v) {
         onSuccess(data);
         this.errors[panel] = null;
+        const { name: _name, ...timing } = queryStepFrom(
+          panel,
+          responseTimingOf(data),
+          started,
+          performance.now(),
+          this.refreshStartedAt,
+        );
+        this.stepTimings.set(panel, timing);
         return "ok";
       }
       return "aborted";
@@ -527,9 +535,6 @@ class AnalyticsStore {
         durationMs,
         status,
       });
-      if (status === "ok") {
-        this.stepTimings.set(panel, { startMs: started - this.refreshStartedAt, durationMs });
-      }
       this.clearAbortSignal(panel, signal);
       if (this.versions[panel] === v) {
         this.querying[panel] = false;
@@ -815,12 +820,14 @@ class AnalyticsStore {
     // Analytics-only scope; omit it so a model selected on Analytics does not
     // silently narrow the Quality signal facts.
     const startedAt = performance.now();
+    this.refreshStartedAt = startedAt;
     const result = await this.fetchSignals({ includeModel: false });
     if (result === "ok") {
       this.qualityLastUpdatedAt = Date.now();
       const durationMs = performance.now() - startedAt;
       this.qualityLastQueryDurationMs = durationMs;
-      this.qualityLastQuerySteps = [{ name: "signals", startMs: 0, durationMs }];
+      const timing = this.stepTimings.get("signals") ?? { startMs: 0, durationMs };
+      this.qualityLastQuerySteps = [{ name: "signals", ...timing }];
     }
   }
 

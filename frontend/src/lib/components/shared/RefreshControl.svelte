@@ -4,9 +4,13 @@
   import { formatDateTime, getLocale } from "../../i18n/index.js";
   import {
     formatQueryDuration,
+    formatQueryPhaseLabel,
     formatQueryStepLabel,
+    formatQueryTick,
     formatRefreshStatus,
+    queryAxisTicks,
     refreshStatusWidthSamples,
+    type QueryPhase,
     type QueryStep,
   } from "../../utils/refresh.js";
 
@@ -44,7 +48,7 @@
   const ageWidthSamples = refreshStatusWidthSamples();
   const showSteps = $derived(status === undefined && querySteps.length > 0);
 
-  // Shared time axis for the waterfall: the whole query, or the last step's
+  // Shared time axis for the timeline: the whole query, or the last step's
   // end if a step outran the recorded total.
   const axisMs = $derived(
     Math.max(
@@ -53,11 +57,16 @@
       1,
     ),
   );
+  const ticks = $derived(queryAxisTicks(axisMs));
+  const hasSegments = $derived(querySteps.some((step) => step.segments !== undefined));
+  const PHASES: QueryPhase[] = ["wait", "download", "apply"];
 
-  function barStyle(step: QueryStep): string {
-    const left = ((100 * step.startMs) / axisMs).toFixed(2);
-    const width = ((100 * step.durationMs) / axisMs).toFixed(2);
-    return `left: ${left}%; width: ${width}%`;
+  function percent(ms: number): string {
+    return ((100 * ms) / axisMs).toFixed(2);
+  }
+
+  function barStyle(startMs: number, durationMs: number): string {
+    return `left: ${percent(startMs)}%; width: ${percent(durationMs)}%`;
   }
 </script>
 
@@ -74,17 +83,46 @@
 
 {#snippet querySteps_tooltip()}
   <div class="query-steps">
-    {#if lastUpdatedAt != null}
-      <div class="query-steps__at">
-        {formatDateTime(lastUpdatedAt, { dateStyle: "medium", timeStyle: "medium" })}
-      </div>
-    {/if}
+    <div class="query-steps__head">
+      {#if lastUpdatedAt != null}
+        <span class="query-steps__at">
+          {formatDateTime(lastUpdatedAt, { dateStyle: "medium", timeStyle: "medium" })}
+        </span>
+      {/if}
+      <span class="query-steps__total">{formatQueryDuration(queryDurationMs)}</span>
+    </div>
     <div class="query-steps__list" role="table">
+      <div class="query-steps__row" role="row">
+        <span role="columnheader"></span>
+        <span class="query-steps__axis" role="columnheader" aria-hidden="true">
+          {#each ticks as tick (tick)}
+            <span class="query-steps__tick" style={`left: ${percent(tick)}%`}>
+              {formatQueryTick(tick)}
+            </span>
+          {/each}
+        </span>
+        <span role="columnheader"></span>
+      </div>
       {#each querySteps as step (step.name)}
         <div class="query-steps__row" role="row">
           <span class="query-steps__name" role="cell">{formatQueryStepLabel(step.name)}</span>
           <span class="query-steps__track" role="cell" aria-hidden="true">
-            <span class="query-steps__bar" style={barStyle(step)}></span>
+            {#each ticks as tick (tick)}
+              <span class="query-steps__grid" style={`left: ${percent(tick)}%`}></span>
+            {/each}
+            {#if step.segments}
+              {#each step.segments as segment (segment.phase)}
+                <span
+                  class={`query-steps__bar query-steps__bar--${segment.phase}`}
+                  style={barStyle(segment.startMs, segment.durationMs)}
+                ></span>
+              {/each}
+            {:else}
+              <span
+                class="query-steps__bar query-steps__bar--wait"
+                style={barStyle(step.startMs, step.durationMs)}
+              ></span>
+            {/if}
           </span>
           <span class="query-steps__duration" role="cell">
             {formatQueryDuration(step.durationMs)}
@@ -92,6 +130,16 @@
         </div>
       {/each}
     </div>
+    {#if hasSegments}
+      <div class="query-steps__legend">
+        {#each PHASES as phase (phase)}
+          <span class="query-steps__legend-item">
+            <span class={`query-steps__swatch query-steps__bar--${phase}`}></span>
+            {formatQueryPhaseLabel(phase)}
+          </span>
+        {/each}
+      </div>
+    {/if}
   </div>
 {/snippet}
 
@@ -103,14 +151,24 @@
     font-size: var(--font-size-xs);
   }
 
+  .query-steps__head {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-5);
+  }
+
   .query-steps__at {
     color: var(--text-muted);
   }
 
-  /* Devtools-style waterfall: name, a bar on the shared time axis, duration. */
+  .query-steps__total {
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Devtools-style timeline: name, a track on the shared time axis, duration. */
   .query-steps__list {
     display: grid;
-    grid-template-columns: max-content 140px max-content;
+    grid-template-columns: max-content 200px max-content;
     column-gap: var(--space-4);
     row-gap: var(--space-1);
     align-items: center;
@@ -124,25 +182,79 @@
     color: var(--text-secondary);
   }
 
+  .query-steps__axis {
+    position: relative;
+    height: 1.4em;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .query-steps__tick {
+    position: absolute;
+    bottom: 0;
+    transform: translateX(-50%);
+    white-space: nowrap;
+  }
+
+  .query-steps__tick:first-child {
+    transform: none;
+  }
+
   .query-steps__track {
     position: relative;
-    height: 6px;
-    background: var(--bg-inset);
-    border-radius: 3px;
+    height: 8px;
+  }
+
+  .query-steps__grid {
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    width: 1px;
+    background: var(--border-muted);
   }
 
   .query-steps__bar {
     position: absolute;
     top: 0;
     bottom: 0;
-    min-width: 2px;
+    min-width: 1px;
+  }
+
+  .query-steps__bar--wait {
     background: var(--accent-blue);
-    border-radius: 3px;
+    border-radius: 2px 0 0 2px;
+  }
+
+  .query-steps__bar--download {
+    background: color-mix(in srgb, var(--accent-blue) 45%, transparent);
+  }
+
+  .query-steps__bar--apply {
+    background: color-mix(in srgb, var(--text-muted) 60%, transparent);
+    border-radius: 0 2px 2px 0;
   }
 
   .query-steps__duration {
     text-align: end;
     font-variant-numeric: tabular-nums;
     color: var(--text-primary);
+  }
+
+  .query-steps__legend {
+    display: flex;
+    gap: var(--space-4);
+    color: var(--text-muted);
+  }
+
+  .query-steps__legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  .query-steps__swatch {
+    width: 10px;
+    height: 8px;
+    border-radius: 2px;
   }
 </style>

@@ -4,9 +4,13 @@ import {
   createRefreshScheduler,
   DEFAULT_REFRESH_INTERVAL_MS,
   formatQueryDuration,
+  formatQueryTick,
   formatRefreshAge,
   formatRefreshStatus,
+  queryAxisTicks,
   queryDurationWidthSamples,
+  querySegmentsFrom,
+  queryStepFrom,
   refreshAgeWidthSamples,
   refreshStatusWidthSamples,
 } from "./refresh.js";
@@ -127,6 +131,46 @@ describe("formatRefreshStatus", () => {
     expect(samples).toHaveLength(15);
     expect(samples).toContain("Not updated · 999 ms");
     expect(samples).toContain("Updated 999d ago · 99m 59s");
+  });
+});
+
+describe("query timeline helpers", () => {
+  it.each([
+    { axisMs: 154, ticks: [0, 50, 100, 150] },
+    { axisMs: 2000, ticks: [0, 500, 1000, 1500, 2000] },
+    { axisMs: 9, ticks: [0, 2, 4, 6, 8] },
+    { axisMs: 0, ticks: [0] },
+  ])("spaces axis ticks for $axisMs ms", ({ axisMs, ticks }) => {
+    expect(queryAxisTicks(axisMs)).toEqual(ticks);
+  });
+
+  it("labels ticks exactly instead of rounding them", () => {
+    expect(formatQueryTick(0)).toBe("0");
+    expect(formatQueryTick(50)).toBe("50 ms");
+    expect(formatQueryTick(1500)).toBe("1.5 s");
+  });
+
+  it("splits a request into wait, download, and apply phases from the query start", () => {
+    const timing = { sentAt: 1010, headersAt: 1090, bodyAt: 1100 };
+    expect(querySegmentsFrom(timing, 1104, 1000)).toEqual([
+      { phase: "wait", startMs: 10, durationMs: 80 },
+      { phase: "download", startMs: 90, durationMs: 10 },
+      { phase: "apply", startMs: 100, durationMs: 4 },
+    ]);
+    expect(queryStepFrom("summary", timing, 1005, 1104, 1000)).toEqual({
+      name: "summary",
+      startMs: 10,
+      durationMs: 94,
+      segments: querySegmentsFrom(timing, 1104, 1000),
+    });
+  });
+
+  it("falls back to the caller's own start when a response carried no timing", () => {
+    expect(queryStepFrom("summary", undefined, 1005, 1104, 1000)).toEqual({
+      name: "summary",
+      startMs: 5,
+      durationMs: 99,
+    });
   });
 });
 

@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vite-plus/test";
+import { attachResponseTiming } from "../api/runtime.js";
 import { analytics } from "./analytics.svelte.js";
 import { sessions } from "./sessions.svelte.js";
 import { AnalyticsService } from "../api/generated/index";
@@ -17,7 +18,8 @@ import type {
   DbSignalsAnalyticsResponse as SignalsAnalyticsResponse,
 } from "../api/generated/index.js";
 
-vi.mock("../api/runtime.js", () => ({
+vi.mock("../api/runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../api/runtime.js")>()),
   isAbortError: vi.fn(() => false),
 }));
 
@@ -473,8 +475,13 @@ describe("AnalyticsStore freshness state", () => {
       expect(analytics.qualityLastQueryDurationMs).toBeNull();
 
       vi.mocked(analyticsService.getApiV1AnalyticsVelocity).mockImplementationOnce(async () => {
-        vi.advanceTimersByTime(700);
-        return makeVelocity();
+        const sentAt = performance.now();
+        vi.advanceTimersByTime(600);
+        const headersAt = performance.now();
+        vi.advanceTimersByTime(100);
+        const data = makeVelocity();
+        attachResponseTiming(data, { sentAt, headersAt, bodyAt: performance.now() });
+        return data;
       });
       await analytics.fetchAll();
       expect(analytics.lastQueryDurationMs).toBe(700);
@@ -493,10 +500,17 @@ describe("AnalyticsStore freshness state", () => {
         "topSessions",
         "signals",
       ]);
+      // The velocity request carried phase timings: 600 ms waiting on the
+      // server, 100 ms downloading, applied at once.
       expect(analytics.lastQuerySteps).toContainEqual({
         name: "velocity",
         startMs: 0,
         durationMs: 700,
+        segments: [
+          { phase: "wait", startMs: 0, durationMs: 600 },
+          { phase: "download", startMs: 600, durationMs: 100 },
+          { phase: "apply", startMs: 700, durationMs: 0 },
+        ],
       });
 
       vi.mocked(analyticsService.getApiV1AnalyticsSignals).mockImplementationOnce(async () => {

@@ -124,14 +124,42 @@ export async function orvalRequest<T extends Response = Response>(
   );
 }
 
+/**
+ * When a generated request's phases happened, on the `performance.now()`
+ * clock: request sent, response headers received (the server's share), and
+ * response body read. Pages use it to draw request timelines.
+ */
+export interface ResponseTiming {
+  sentAt: number;
+  headersAt: number;
+  bodyAt: number;
+}
+
+// Keyed by the parsed response object itself, so callers that only see the
+// data can still look up how the request that produced it went.
+const responseTimings = new WeakMap<object, ResponseTiming>();
+
+export function attachResponseTiming(data: unknown, timing: ResponseTiming): void {
+  if (typeof data === "object" && data !== null) responseTimings.set(data, timing);
+}
+
+export function responseTimingOf(data: unknown): ResponseTiming | undefined {
+  return typeof data === "object" && data !== null ? responseTimings.get(data) : undefined;
+}
+
 export async function orvalFetch<T>(url: string, options: ApiRequestOptions): Promise<T> {
+  const sentAt = performance.now();
   const response = await orvalRequest(url, options);
+  const headersAt = performance.now();
   if ([204, 205, 304].includes(response.status)) return undefined as T;
 
   const body = await response.text();
+  const bodyAt = performance.now();
   if (!body) return undefined as T;
   if (response.headers.get("Content-Type")?.includes("json")) {
-    return JSON.parse(body);
+    const data: T = JSON.parse(body);
+    attachResponseTiming(data, { sentAt, headersAt, bodyAt });
+    return data;
   }
   return body as T;
 }

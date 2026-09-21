@@ -1,3 +1,4 @@
+import type { ResponseTiming } from "../api/runtime.js";
 import { getLocale, m } from "../i18n/index.js";
 
 const MINUTE_MS = 60_000;
@@ -49,14 +50,107 @@ export function refreshAgeWidthSamples(): string[] {
 
 const SECOND_MS = 1000;
 
+/** Phases of one request, as the browser's network panel draws them:
+ * waiting on the server, downloading the body, and the page applying it. */
+export type QueryPhase = "wait" | "download" | "apply";
+
+export interface QuerySegment {
+  phase: QueryPhase;
+  startMs: number;
+  durationMs: number;
+}
+
 /** One measured step of a page's last data query. `name` is a stable key
  * (see `formatQueryStepLabel`), never user-facing on its own. `startMs` is
  * the offset from the query's start, so parallel steps can be drawn on one
- * time axis. */
+ * time axis. `segments` split the step into request phases when known. */
 export interface QueryStep {
   name: string;
   startMs: number;
   durationMs: number;
+  segments?: QuerySegment[];
+}
+
+/**
+ * Splits one request into wait, download, and apply segments, offset from
+ * `originMs` (the query's start on the `performance.now()` clock).
+ * `appliedAt` is when the page finished applying the parsed response.
+ */
+export function querySegmentsFrom(
+  timing: ResponseTiming,
+  appliedAt: number,
+  originMs: number,
+): QuerySegment[] {
+  return [
+    {
+      phase: "wait",
+      startMs: timing.sentAt - originMs,
+      durationMs: timing.headersAt - timing.sentAt,
+    },
+    {
+      phase: "download",
+      startMs: timing.headersAt - originMs,
+      durationMs: timing.bodyAt - timing.headersAt,
+    },
+    { phase: "apply", startMs: timing.bodyAt - originMs, durationMs: appliedAt - timing.bodyAt },
+  ];
+}
+
+/**
+ * A query step for one request: from the moment it was sent to the moment
+ * its data was applied, with phase segments. Falls back to the caller's own
+ * start when the request carried no timing (a mocked or non-JSON response).
+ */
+export function queryStepFrom(
+  name: string,
+  timing: ResponseTiming | undefined,
+  startedAt: number,
+  appliedAt: number,
+  originMs: number,
+): QueryStep {
+  const sentAt = timing?.sentAt ?? startedAt;
+  const step: QueryStep = { name, startMs: sentAt - originMs, durationMs: appliedAt - sentAt };
+  if (timing) step.segments = querySegmentsFrom(timing, appliedAt, originMs);
+  return step;
+}
+
+export function formatQueryPhaseLabel(phase: QueryPhase): string {
+  switch (phase) {
+    case "wait":
+      return m.shared_refresh_phase_wait();
+    case "download":
+      return m.shared_refresh_phase_download();
+    case "apply":
+      return m.shared_refresh_phase_apply();
+  }
+}
+
+/**
+ * Tick positions for a time axis spanning `axisMs`: the smallest 1, 2, or 5
+ * times a power of ten step that fits in at most five intervals, from zero.
+ */
+export function queryAxisTicks(axisMs: number): number[] {
+  if (!(axisMs > 0)) return [0];
+  const raw = axisMs / 5;
+  const magnitude = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 5, 10].map((m) => m * magnitude).find((candidate) => candidate >= raw)!;
+  const ticks: number[] = [];
+  for (let tick = 0; tick <= axisMs; tick += step) ticks.push(tick);
+  return ticks;
+}
+
+/** Axis tick label: exact, not rounded like `formatQueryDuration`. */
+export function formatQueryTick(ms: number): string {
+  if (ms === 0) return "0";
+  const locale = getLocale();
+  if (ms < 1000) {
+    return m.shared_refresh_duration_ms({
+      value: new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(ms),
+    });
+  }
+  return m.shared_refresh_duration_seconds({
+    value: new Intl.NumberFormat(locale, { maximumFractionDigits: 1 }).format(ms / 1000),
+  });
 }
 
 const STEP_LABELS: Record<string, () => string> = {
