@@ -30,6 +30,11 @@ configuration. For a named hosted contributor target, set `default_pg` to that
 same target; `AGENTSVIEW_MEMORY_TARGET` selects the lifecycle owner but does not
 retarget MCP reads.
 
+Run `agentsview doctor memory --plugin-root <package-root>` to check the selected
+archive and this package's skill, focused MCP configuration, and SessionStart
+hook. The diagnostic reads metadata only and omits package paths, server URLs,
+and tokens from its output.
+
 The startup diagnostic reports a standalone AgentsView skill installed in the
 same client home because loading both routes would duplicate the skill. It never
 changes or removes that file. Remove the standalone copy manually after reviewing

@@ -11,6 +11,10 @@ The latest published release is
 
 **New features**
 
+- Diagnose conversation-memory setup with `agentsview doctor memory`. It reports
+    the selected archive's lexical and semantic readiness separately, then checks
+    the local native plugin, MCP profile, SessionStart hook, and conflicting
+    standalone skills without starting a daemon or changing the installation.
 - Conversation-memory clients can check archive and search readiness through
     MCP `get_memory_status` or `GET /api/v1/memory/status`. Search responses
     carry the same compact lexical and semantic coverage snapshot, including

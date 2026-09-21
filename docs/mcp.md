@@ -102,6 +102,12 @@ reads `AGENTSVIEW_MEMORY_SERVER`, `AGENTSVIEW_MEMORY_SERVER_TOKEN_FILE`, or
 without a server fails instead of falling back to the local archive. PostgreSQL
 reads use the configured `default_pg` target.
 
+Run `agentsview doctor memory` to inspect this server status together with the
+local client integration. Pass the native package root with `--plugin-root` to
+check its skill, MCP profile, and SessionStart hook. The diagnostic uses
+read-only metadata and does not start a daemon, sync transcripts, or rebuild
+vectors.
+
 `search_sessions` accepts optional `date_from` and `date_to` bounds in
 `YYYY-MM-DD` format, just like `list_sessions` and `search_content`. Dates
 include sessions whose activity overlaps the requested days in UTC. Either bound
