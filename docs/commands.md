@@ -1,4 +1,5 @@
 ---
+last_edited: 2026-09-21
 title: CLI Reference
 description: All AgentsView commands, flags, and environment variables
 ---
@@ -1565,6 +1566,7 @@ and operational guidance.
 
 ```bash
 agentsview mcp
+agentsview mcp --profile memory
 agentsview mcp --http 127.0.0.1:8085
 agentsview mcp --server http://127.0.0.1:8080
 agentsview mcp status --json
@@ -1586,6 +1588,11 @@ daemon and starts it when needed, so a long-lived MCP server can keep working
 after the daemon exits due to idleness. The MCP server does not fall back to
 opening the local SQLite archive directly.
 
+Use `--profile memory` when the client should discover only the
+`search_content` and `get_messages` conversation-memory tools. The default
+`full` profile preserves the complete MCP tool surface. Profile selection works
+with both stdio and StreamableHTTP and does not change backend selection.
+
 Use `--server <url>` to point at an explicit running daemon. When the daemon
 requires auth, provide `AGENTSVIEW_SERVER_TOKEN` or
 `--server-token-file <path>`. Use `--pg` to read from configured PostgreSQL
@@ -1599,6 +1606,7 @@ pass its URL with `--server`.
 | `--server <url>`             |         | Explicit daemon URL for MCP tool calls              |
 | `--server-token-file <path>` |         | Bearer token file for an explicit daemon URL        |
 | `--pg`                       | `false` | Read from configured PostgreSQL                     |
+| `--profile <name>`           | `full`  | Advertise the `full` or focused `memory` tool set    |
 
 ______________________________________________________________________
 

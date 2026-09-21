@@ -1195,7 +1195,7 @@ func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFil
 	if f.Mode != "regex" {
 		return s.collectContentSubstringMatches(ctx, f)
 	}
-	scopeWhere, scopeArgs := db.BuildSessionFilterSQL(contentSessionFilter(f), db.DuckDBQueryDialect())
+	scopeWhere, scopeArgs := contentSessionWhere(f)
 	scopeWhere, scopeArgs = db.AppendExcludeSessionIDs(
 		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	pattern := ""
@@ -1241,7 +1241,7 @@ func (s *Store) collectContentMatches(ctx context.Context, f db.ContentSearchFil
 func (s *Store) collectContentSubstringMatches(
 	ctx context.Context, f db.ContentSearchFilter,
 ) ([]db.ContentMatch, error) {
-	scopeWhere, scopeArgs := db.BuildSessionFilterSQL(contentSessionFilter(f), db.DuckDBQueryDialect())
+	scopeWhere, scopeArgs := contentSessionWhere(f)
 	scopeWhere, scopeArgs = db.AppendExcludeSessionIDs(
 		scopeWhere, scopeArgs, "id", f.ExcludeSessionIDs)
 	var branches []string
@@ -1464,6 +1464,7 @@ func contentSessionFilter(f db.ContentSearchFilter) db.SessionFilter {
 	return db.SessionFilter{
 		Project: f.Project, ExcludeProject: f.ExcludeProject,
 		Machine: f.Machine, GitBranch: f.GitBranch, Agent: f.Agent,
+		SessionID: f.SessionID, GitBranchExact: f.GitBranchExact,
 		Date: f.Date, DateFrom: f.DateFrom, DateTo: f.DateTo,
 		Timezone:         f.Timezone,
 		ActiveSince:      f.ActiveSince,
@@ -1471,6 +1472,14 @@ func contentSessionFilter(f db.ContentSearchFilter) db.SessionFilter {
 		ExcludeAutomated: !f.IncludeAutomated,
 		IncludeChildren:  f.IncludeChildren,
 	}
+}
+
+func contentSessionWhere(f db.ContentSearchFilter) (string, []any) {
+	sessionFilter := contentSessionFilter(f)
+	if f.SessionID != "" {
+		return db.BuildSessionBaseFilterSQL(sessionFilter, db.DuckDBQueryDialect())
+	}
+	return db.BuildSessionFilterSQL(sessionFilter, db.DuckDBQueryDialect())
 }
 
 func (s *Store) collectContentSource(

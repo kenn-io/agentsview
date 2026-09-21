@@ -1855,6 +1855,15 @@ func TestSearchContentGitBranchFilter(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got.Matches, 1)
 	assert.Equal(t, alphaMain.ID, got.Matches[0].SessionID)
+
+	exact, err := store.SearchContent(ctx, db.ContentSearchFilter{
+		Pattern: "BRANCHNEEDLE", Mode: "substring",
+		Sources: []string{"messages"}, SessionID: alphaFeature.ID,
+		GitBranchExact: "feature", IncludeOneShot: true, Limit: 10,
+	})
+	require.NoError(t, err)
+	require.Len(t, exact.Matches, 1)
+	assert.Equal(t, alphaFeature.ID, exact.Matches[0].SessionID)
 }
 
 func TestSearchContentDateFilterUsesRequestedTimezone(t *testing.T) {

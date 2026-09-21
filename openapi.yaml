@@ -1156,6 +1156,8 @@ components:
           type: string
         tool_name:
           type: string
+        transcript_revision:
+          type: string
         web_url:
           type: string
       required:
@@ -5640,8 +5642,11 @@ components:
         next_cursor:
           format: int64
           type: integer
+        revision_bound:
+          type: boolean
       required:
         - matches
+        - revision_bound
       type: object
     ServiceMessageList:
       additionalProperties: false
@@ -5649,6 +5654,8 @@ components:
         count:
           format: int64
           type: integer
+        evidence_source:
+          type: string
         first_ordinal:
           format: int64
           type: integer
@@ -5659,6 +5666,8 @@ components:
           items:
             $ref: "#/components/schemas/DbMessage"
           type: array
+        transcript_revision:
+          type: string
       required:
         - messages
         - count
@@ -15614,15 +15623,16 @@ paths:
               - substring
               - regex
               - fts
+              - terms
               - semantic
               - hybrid
             type: string
-        - description: "Semantic/hybrid result scope: top, all, or subordinate (default all)"
+        - description: "Semantic/hybrid/terms result scope: top, all, or subordinate (default all)"
           explode: false
           in: query
           name: scope
           schema:
-            description: "Semantic/hybrid result scope: top, all, or subordinate (default all)"
+            description: "Semantic/hybrid/terms result scope: top, all, or subordinate (default all)"
             enum:
               - top
               - all
@@ -15682,6 +15692,20 @@ paths:
           name: git_branch
           schema:
             description: Filter by git branch; opaque (project, branch) tokens from the /branches endpoint
+            type: string
+        - description: Filter by exact full stored session ID
+          explode: false
+          in: query
+          name: session_id
+          schema:
+            description: Filter by exact full stored session ID
+            type: string
+        - description: Filter by exact raw git branch
+          explode: false
+          in: query
+          name: git_branch_exact
+          schema:
+            description: Filter by exact raw git branch
             type: string
         - description: Filter by agent
           explode: false
@@ -17957,6 +17981,20 @@ paths:
           name: roles
           schema:
             description: Comma-separated roles to include, e.g. user,assistant
+            type: string
+        - description: Reject the read when the transcript revision no longer matches
+          explode: false
+          in: query
+          name: expected_revision
+          schema:
+            description: Reject the read when the transcript revision no longer matches
+            type: string
+        - description: Opaque archive binding returned by an earlier evidence read
+          explode: false
+          in: query
+          name: evidence_source
+          schema:
+            description: Opaque archive binding returned by an earlier evidence read
             type: string
       responses:
         "200":
