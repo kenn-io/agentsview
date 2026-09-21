@@ -67,6 +67,27 @@ client will see these tools:
 | `get_usage_summary`    | Aggregate token and cost usage                                           |
 | `query_recall`         | Search extracted Recall entries when the backend supports Recall queries |
 
+### Focused memory profile
+
+Clients that use AgentsView only for conversation memory can select the focused
+profile:
+
+```json
+{
+  "mcpServers": {
+    "agentsview-memory": {
+      "command": "agentsview",
+      "args": ["mcp", "--profile", "memory"]
+    }
+  }
+}
+```
+
+This profile advertises only `search_content` and `get_messages`. The tools use
+the same schemas and backend selection as the full profile, over either stdio or
+StreamableHTTP. Omitting `--profile` or choosing `--profile full` preserves the
+complete tool list above.
+
 `search_sessions` accepts optional `date_from` and `date_to` bounds in
 `YYYY-MM-DD` format, just like `list_sessions` and `search_content`. Dates
 include sessions whose activity overlaps the requested days in UTC. Either bound

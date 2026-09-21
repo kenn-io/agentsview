@@ -11,6 +11,9 @@ The latest published release is
 
 **New features**
 
+- MCP clients can use `agentsview mcp --profile memory` to advertise only the
+    conversation evidence search and read tools, reducing unrelated tool
+    choices while leaving the default full MCP surface unchanged.
 - Agents can open recalled evidence against the exact transcript revision that
     produced it. MCP message reads reject stale citations with `source_changed`,
     and oversized messages now provide a revision-bound continuation cursor.
